@@ -185,12 +185,16 @@ def render_collection(
 
 
 def summarize_trajectory(trajectory: Trajectory) -> dict[str, Any]:
+    summary = trajectory.summary.model_dump(mode="json") if trajectory.summary else {}
     return prune_nones(
         {
             "id": str(trajectory.trajectory_id),
             "project": trajectory.project_identifier,
             "task": trajectory.task_reference,
-            "session_count": len(trajectory.sessions),
+            "multi_agent_mode": trajectory.multi_agent_mode,
+            "session_count": summary.get("session_count", len(trajectory.sessions)),
+            "operation_count": len(trajectory.operations),
+            "section_count": len(trajectory.sections),
             "session_ids": [str(session.session_id) for session in trajectory.sessions],
         }
     )
@@ -202,7 +206,14 @@ def serialize_trajectory_detail(trajectory: Trajectory) -> dict[str, Any]:
             "trajectory_id": str(trajectory.trajectory_id),
             "project_identifier": trajectory.project_identifier,
             "task_reference": trajectory.task_reference,
+            "multi_agent_mode": trajectory.multi_agent_mode,
+            "summary": trajectory.summary.model_dump(mode="json") if trajectory.summary else None,
             "session_ids": [str(session.session_id) for session in trajectory.sessions],
+            "session_refs": [item.model_dump(mode="json") for item in trajectory.session_refs],
+            "edges": [item.model_dump(mode="json") for item in trajectory.edges],
+            "operations": [item.model_dump(mode="json") for item in trajectory.operations],
+            "sections": [item.model_dump(mode="json") for item in trajectory.sections],
+            "inference_notes": [item.model_dump(mode="json") for item in trajectory.inference_notes],
         }
     )
 
@@ -464,11 +475,15 @@ def summarize_collection_item(resource: Trajectory | Session, *, no_truncate: bo
 
 
 def pretty_trajectory(trajectory: Trajectory) -> str:
+    summary = trajectory.summary
     lines = [
         f"Trajectory  {trajectory.trajectory_id}",
         f"Project     {trajectory.project_identifier or '-'}",
         f"Task        {trajectory.task_reference or '-'}",
-        f"Sessions    {len(trajectory.sessions)}",
+        f"Mode        {trajectory.multi_agent_mode or '-'}",
+        f"Sessions    {summary.session_count if summary else len(trajectory.sessions)}",
+        f"Operations  {len(trajectory.operations)}",
+        f"Sections    {len(trajectory.sections)}",
     ]
 
     if trajectory.sessions:

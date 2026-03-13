@@ -368,6 +368,10 @@ class CodexAdapter(BaseAdapter):
         meta = state.session_meta
         ctx = state.turn_context
         sandbox_policy = ctx.get("sandbox_policy") or {}
+        normalized_events = [
+            event if event.session_id == state.session_id else event.model_copy(update={"session_id": state.session_id})
+            for event in events
+        ]
 
         extensions = VendorExtensions(
             codex=CodexExtensions(
@@ -385,7 +389,7 @@ class CodexAdapter(BaseAdapter):
         )
         turns = self._group_into_turns(
             state.session_id,
-            events,
+            normalized_events,
             end_at_next_user_prompt=True,
         )
 
@@ -395,8 +399,8 @@ class CodexAdapter(BaseAdapter):
             vendor=Vendor.CODEX_CLI,
             started_at=started_at,
             ended_at=ended_at,
-            timeline=self._build_timeline(events, turns),
-            events=events,
+            timeline=self._build_timeline(normalized_events, turns),
+            events=normalized_events,
             turns=turns,
             extensions=extensions,
         )

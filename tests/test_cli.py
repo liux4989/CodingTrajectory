@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,9 +100,10 @@ def test_trajectory_list_defaults_to_current_project(tmp_path: Path, capsys, mon
     assert exit_code == 0
     captured = capsys.readouterr()
     output = json.loads(captured.out)
-    assert len(output) == 1
-    assert output[0]["project"] == "coding-trajectory"
-    assert output[0]["session_count"] == 2
+    assert len(output) == 2
+    assert all(item["project"] == "coding-trajectory" for item in output)
+    assert all(item["session_count"] == 1 for item in output)
+    assert all(item["multi_agent_mode"] == "in_session" for item in output)
     assert "Discovered coding-agent logs:" in captured.err
 
 
@@ -121,7 +123,10 @@ def test_trajectory_list_global_includes_other_projects(tmp_path: Path, capsys, 
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
-    assert [item["project"] for item in output] == ["coding-trajectory", "other-project"]
+    assert Counter(item["project"] for item in output) == {
+        "coding-trajectory": 2,
+        "other-project": 1,
+    }
 
 
 def test_session_get_summary_uses_current_project_discovery(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -214,35 +219,55 @@ def test_session_get_raw_matches_session_detail_shape(tmp_path: Path, capsys, mo
 def test_trajectory_get_fields(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
-    trajectory_code = main(["trajectory", "list", "--view", "summary"])
-    assert trajectory_code == 0
-    trajectory_output = json.loads(capsys.readouterr().out)
-    trajectory_id = trajectory_output[0]["id"]
+    session_code = main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
+    assert session_code == 0
+    session_output = json.loads(capsys.readouterr().out)
+    trajectory_id = session_output["trajectory"]
 
-    exit_code = main(["trajectory", "get", trajectory_id, "--fields", "id,session_count"])
+    exit_code = main(["trajectory", "get", trajectory_id, "--fields", "id,session_count,multi_agent_mode"])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["id"] == trajectory_id
-    assert output["session_count"] == 2
+    assert output["session_count"] == 1
+    assert output["multi_agent_mode"] == "in_session"
 
 
 def test_session_list_summary_can_filter_by_trajectory(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
-    main(["trajectory", "list", "--view", "summary"])
-    trajectory_output = json.loads(capsys.readouterr().out)
-    trajectory_id = trajectory_output[0]["id"]
+    main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
+    session_output = json.loads(capsys.readouterr().out)
+    trajectory_id = session_output["trajectory"]
 
     exit_code = main(["session", "list", "--trajectory-id", trajectory_id, "--view", "summary"])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
-    assert len(output) == 2
+    assert len(output) == 1
     assert output[0]["id"] == "019c92d8-0250-7291-8585-6f69c1f1e981"
-    assert output[1]["id"] == "019c92d8-0250-7291-8585-6f69c1f1e982"
     assert "timeline" not in output[0]
     assert output[0]["timeline_count"] == 2
+
+
+def test_trajectory_get_raw_includes_graph_fields(tmp_path: Path, capsys, monkeypatch) -> None:
+    setup_project_logs(tmp_path, monkeypatch)
+
+    main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
+    session_output = json.loads(capsys.readouterr().out)
+    trajectory_id = session_output["trajectory"]
+
+    exit_code = main(["trajectory", "get", trajectory_id, "--json"])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["trajectory_id"] == trajectory_id
+    assert output["multi_agent_mode"] == "in_session"
+    assert output["summary"]["session_count"] == 1
+    assert len(output["session_refs"]) == 1
+    assert output["edges"] == []
+    assert len(output["sections"]) >= 1
+    assert len(output["inference_notes"]) >= 1
 
 
 def test_turn_get_raw(tmp_path: Path, capsys, monkeypatch) -> None:

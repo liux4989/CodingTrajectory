@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
-from typing import Literal
 
 
 class EventType(str, Enum):
@@ -208,6 +207,77 @@ class TimelineItem(BaseModel):
     id: UUID
 
 
+class TrajectorySummary(BaseModel):
+    root_session_id: UUID | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    session_count: int = 0
+    turn_count: int = 0
+    event_count: int = 0
+    agent_count: int | None = None
+    vendors: list[Vendor] = Field(default_factory=list)
+
+
+class TrajectorySessionRef(BaseModel):
+    session_id: UUID
+    parent_session_id: UUID | None = None
+    vendor: Vendor
+    role: Literal["primary", "subagent", "teammate", "handoff_target", "resumed"] | None = None
+    agent_name: str | None = None
+    team_name: str | None = None
+    is_sidechain: bool | None = None
+    collaboration_mode: str | None = None
+    started_at: datetime
+    ended_at: datetime | None = None
+
+
+class TrajectoryEdge(BaseModel):
+    type: Literal["spawned_subagent", "sidechain_of", "handoff_to", "resumed_from", "teammate_of"]
+    source_session_id: UUID
+    target_session_id: UUID
+    evidence_event_ids: list[UUID] = Field(default_factory=list)
+    provenance: EventProvenance = EventProvenance.OBSERVED
+    confidence: EventConfidence = EventConfidence.HIGH
+    metadata: dict[str, Any] | None = None
+
+
+class TrajectoryOperation(BaseModel):
+    operation_id: UUID = Field(default_factory=uuid4)
+    kind: Literal["subagent", "handoff", "compact", "teammate", "resume"]
+    scope: Literal["session_graph", "session_span"]
+    status: Literal["started", "completed", "open", "failed"]
+    session_ids: list[UUID] = Field(default_factory=list)
+    event_ids: list[UUID] = Field(default_factory=list)
+    turn_ids: list[UUID] = Field(default_factory=list)
+    start_event_id: UUID
+    end_event_id: UUID | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    provenance: EventProvenance | None = None
+    confidence: EventConfidence | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class TrajectorySection(BaseModel):
+    section_id: UUID = Field(default_factory=uuid4)
+    kind: Literal["main", "subagent", "handoff", "compact", "teammate", "resume"]
+    title: str
+    scope: Literal["session_graph", "session_span"]
+    operation_id: UUID | None = None
+    session_ids: list[UUID] = Field(default_factory=list)
+    event_ids: list[UUID] = Field(default_factory=list)
+    turn_ids: list[UUID] = Field(default_factory=list)
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+
+
+class InferenceNote(BaseModel):
+    subject: str
+    message: str
+    provenance: EventProvenance = EventProvenance.DERIVED
+    confidence: EventConfidence = EventConfidence.MEDIUM
+
+
 class Session(BaseModel):
     # Strict required fields
     session_id: UUID = Field(default_factory=uuid4)
@@ -228,4 +298,11 @@ class Trajectory(BaseModel):
     trajectory_id: UUID = Field(default_factory=uuid4)
     project_identifier: str | None = None
     task_reference: str | None = None
+    multi_agent_mode: Literal["cross_session", "in_session", "hybrid"] | None = None
+    summary: TrajectorySummary | None = None
+    session_refs: list[TrajectorySessionRef] = Field(default_factory=list)
+    edges: list[TrajectoryEdge] = Field(default_factory=list)
+    operations: list[TrajectoryOperation] = Field(default_factory=list)
+    sections: list[TrajectorySection] = Field(default_factory=list)
+    inference_notes: list[InferenceNote] = Field(default_factory=list)
     sessions: list[Session] = Field(default_factory=list)

@@ -13,6 +13,7 @@ from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdap
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.models import Event, Session, TimelineItem, Trajectory, Turn, Vendor
 from coding_trajectory.query import DocumentError, DocumentStore
+from coding_trajectory.trajectory import assemble_project_trajectories
 
 _SEARCH_LIMIT = 100
 
@@ -78,14 +79,7 @@ def discover_store(*, current_dir: Path, global_scope: bool = False) -> Discover
 
     trajectories: list[Trajectory] = []
     for project_identifier, sessions in sorted(sessions_by_project.items()):
-        key = normalize_project_key(project_identifier)
-        trajectories.append(
-            Trajectory(
-                trajectory_id=uuid5(NAMESPACE_URL, f"coding-trajectory:{key}"),
-                project_identifier=key,
-                sessions=sorted(sessions, key=lambda item: (item.started_at, str(item.session_id))),
-            )
-        )
+        trajectories.extend(assemble_project_trajectories(project_identifier, sessions))
 
     return DiscoveryResult(store=DocumentStore.from_trajectories(trajectories), sources=sources)
 

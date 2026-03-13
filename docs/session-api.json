@@ -1,6 +1,6 @@
 {
   "name": "coding-trajectory-api",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "protocol": {
     "transport": "JSON-RPC 2.0",
     "request": {
@@ -28,6 +28,9 @@
   "design_principles": [
     "Use id-driven reads for all canonical resources.",
     "Make session.timeline the primary replay interface.",
+    "Model trajectory as a graph of sessions and operations, not a flat session bag.",
+    "Support both cross-session multi-agent orchestration and in-session multi-agent orchestration.",
+    "Treat trajectory.sections as an ordered presentation view derived from canonical relations and operation boundaries.",
     "Treat turns as grouped event references, not embedded event containers.",
     "Keep collection query methods out of the initial API until concrete query use cases exist."
   ],
@@ -127,6 +130,427 @@
         "id": {
           "type": "string",
           "format": "uuid"
+        }
+      }
+    },
+    "TrajectorySummary": {
+      "type": "object",
+      "required": [
+        "session_count",
+        "turn_count",
+        "event_count",
+        "vendors"
+      ],
+      "properties": {
+        "root_session_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "session_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "turn_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "agent_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "vendors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/shared_types/Vendor"
+          }
+        }
+      }
+    },
+    "TrajectorySessionRef": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "vendor",
+        "started_at"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "parent_session_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "vendor": {
+          "$ref": "#/shared_types/Vendor"
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "primary",
+            "subagent",
+            "teammate",
+            "handoff_target",
+            "resumed",
+            null
+          ]
+        },
+        "agent_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "team_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "is_sidechain": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "collaboration_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "TrajectoryEdge": {
+      "type": "object",
+      "required": [
+        "type",
+        "source_session_id",
+        "target_session_id",
+        "provenance",
+        "confidence",
+        "evidence_event_ids"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "spawned_subagent",
+            "sidechain_of",
+            "handoff_to",
+            "resumed_from",
+            "teammate_of"
+          ]
+        },
+        "source_session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "target_session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "evidence_event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "observed",
+            "derived",
+            "synthetic"
+          ]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "TrajectoryOperation": {
+      "type": "object",
+      "required": [
+        "operation_id",
+        "kind",
+        "status",
+        "session_ids",
+        "start_event_id"
+      ],
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "subagent",
+            "handoff",
+            "compact",
+            "teammate",
+            "resume"
+          ]
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "session_graph",
+            "session_span"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "started",
+            "completed",
+            "open",
+            "failed"
+          ]
+        },
+        "session_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "turn_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "start_event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "end_event_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "provenance": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "observed",
+            "derived",
+            "synthetic",
+            null
+          ]
+        },
+        "confidence": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "high",
+            "medium",
+            "low",
+            null
+          ]
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "TrajectorySection": {
+      "type": "object",
+      "required": [
+        "section_id",
+        "kind",
+        "title",
+        "session_ids",
+        "event_ids",
+        "turn_ids"
+      ],
+      "properties": {
+        "section_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "main",
+            "subagent",
+            "handoff",
+            "compact",
+            "teammate",
+            "resume"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "session_graph",
+            "session_span"
+          ]
+        },
+        "operation_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "session_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "turn_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "InferenceNote": {
+      "type": "object",
+      "required": [
+        "subject",
+        "message",
+        "provenance",
+        "confidence"
+      ],
+      "properties": {
+        "subject": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "observed",
+            "derived",
+            "synthetic"
+          ]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
         }
       }
     },
@@ -293,7 +717,13 @@
       "type": "object",
       "required": [
         "trajectory_id",
-        "session_ids"
+        "session_ids",
+        "summary",
+        "session_refs",
+        "edges",
+        "operations",
+        "sections",
+        "inference_notes"
       ],
       "properties": {
         "trajectory_id": {
@@ -312,11 +742,56 @@
             "null"
           ]
         },
+        "multi_agent_mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "cross_session",
+            "in_session",
+            "hybrid",
+            null
+          ]
+        },
+        "summary": {
+          "$ref": "#/shared_types/TrajectorySummary"
+        },
         "session_ids": {
           "type": "array",
           "items": {
             "type": "string",
             "format": "uuid"
+          }
+        },
+        "session_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/shared_types/TrajectorySessionRef"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/shared_types/TrajectoryEdge"
+          }
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/shared_types/TrajectoryOperation"
+          }
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/shared_types/TrajectorySection"
+          }
+        },
+        "inference_notes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/shared_types/InferenceNote"
           }
         }
       }
@@ -324,7 +799,7 @@
   },
   "methods": {
     "trajectory.get": {
-      "summary": "Fetch one trajectory by id. Returns session ids only; sessions are fetched separately by id.",
+      "summary": "Fetch one trajectory by id. Returns replay-first graph metadata, section boundaries, and session references; sessions are still fetched separately by id.",
       "params": {
         "type": "object",
         "required": [

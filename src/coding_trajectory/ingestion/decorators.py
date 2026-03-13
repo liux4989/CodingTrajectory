@@ -50,6 +50,7 @@ class ClaudeCodeDecorator(VendorDecorator):
         return session.model_copy(update={"parent_session_id": parent.session_id})
 
     def _resolve_parent(self, session: Session, cc: ClaudeCodeExtensions, registry: dict[UUID, Session]) -> Session | None:
+        candidates: list[Session] = []
         for candidate in registry.values():
             if candidate.session_id == session.session_id:
                 continue
@@ -63,5 +64,14 @@ class ClaudeCodeDecorator(VendorDecorator):
                 continue
             if cc.team_name and ccc.team_name and cc.team_name != ccc.team_name:
                 continue
-            return candidate
-        return None
+            candidates.append(candidate)
+
+        # Priority 1: match parent_uuid against event payload "uuid" fields (deterministic)
+        if cc.parent_uuid:
+            for candidate in candidates:
+                for event in candidate.events:
+                    if event.payload.get("uuid") == cc.parent_uuid:
+                        return candidate
+
+        # Priority 2: first team-name-compatible match
+        return candidates[0] if candidates else None
