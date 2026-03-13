@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
-from coding_trajectory.cli import EXIT_NOT_FOUND, main
+from coding_trajectory.cli import EXIT_NOT_FOUND, build_session_preview_context, enrich_preview_payload, main
+from coding_trajectory.ingestion.models import Event, EventType, Vendor
 
 
 def write_codex_log(
@@ -134,18 +137,46 @@ def test_session_get_summary_uses_current_project_discovery(tmp_path: Path, caps
     assert [item["kind"] for item in output["timeline"]] == ["event", "turn"]
     assert output["timeline"][0]["type"] == "session.started"
     assert output["timeline"][1]["preview"] == "fix the bug"
-    assert [event["type"] for event in output["timeline"][1]["events"]] == [
-        "user.prompt.submitted",
-        "tool.call.requested",
-        "tool.call.succeeded",
-    ]
     assert output["timeline"][1]["event_count"] == 3
-    assert output["timeline"][1]["events"][1]["payload_preview"] == {
-        "tool_call_id": "call-1",
-        "tool_name": "exec_command",
-    }
+    assert "events" not in output["timeline"][1]
     assert output["timeline_count"] == 2
     assert "Discovered coding-agent logs:" not in captured.err
+
+
+def test_session_preview_context_backfills_model_from_request_id() -> None:
+    session_id = uuid4()
+    timestamp = datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc)
+    events = [
+        Event(
+            session_id=session_id,
+            timestamp=timestamp,
+            type=EventType.LLM_REQUEST_COMPLETED,
+            vendor_source=Vendor.CLAUDE_CODE,
+            actor="assistant",
+            payload={"request_id": "req-1", "model": "claude-sonnet-4"},
+        ),
+        Event(
+            session_id=session_id,
+            timestamp=timestamp,
+            type=EventType.LLM_STREAM_EVENT,
+            vendor_source=Vendor.CLAUDE_CODE,
+            actor="assistant",
+            payload={"request_id": "req-1"},
+        ),
+    ]
+
+    tool_name_by_call_id, model_by_request_id = build_session_preview_context(events)
+
+    assert tool_name_by_call_id == {}
+    assert model_by_request_id == {"req-1": "claude-sonnet-4"}
+    assert enrich_preview_payload(
+        {"request_id": "req-1"},
+        tool_name_by_call_id=tool_name_by_call_id,
+        model_by_request_id=model_by_request_id,
+    ) == {
+        "request_id": "req-1",
+        "model": "claude-sonnet-4",
+    }
 
 
 def test_session_get_global_can_resolve_other_project_id(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -165,6 +196,19 @@ def test_session_get_global_can_resolve_other_project_id(tmp_path: Path, capsys,
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["id"] == "019c92d8-0250-7291-8585-6f69c1f1e983"
+
+
+def test_session_get_raw_matches_session_detail_shape(tmp_path: Path, capsys, monkeypatch) -> None:
+    setup_project_logs(tmp_path, monkeypatch)
+
+    exit_code = main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981", "--json"])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["session_id"] == "019c92d8-0250-7291-8585-6f69c1f1e981"
+    assert [item["kind"] for item in output["timeline"]] == ["event", "turn"]
+    assert "events" not in output
+    assert "turns" not in output
 
 
 def test_trajectory_get_fields(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -204,9 +248,9 @@ def test_session_list_summary_can_filter_by_trajectory(tmp_path: Path, capsys, m
 def test_turn_get_raw(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
-    main(["turn", "list", "--view", "summary"])
-    turns = json.loads(capsys.readouterr().out)
-    turn_id = turns[0]["id"]
+    main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
+    session = json.loads(capsys.readouterr().out)
+    turn_id = session["timeline"][1]["id"]
 
     exit_code = main(["turn", "get", turn_id, "--json"])
 
@@ -216,34 +260,30 @@ def test_turn_get_raw(tmp_path: Path, capsys, monkeypatch) -> None:
     assert len(output["event_ids"]) >= 1
 
 
-def test_turn_list_summary_can_filter_by_session_and_fields(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_turn_get_summary_includes_event_ids(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
-    exit_code = main(
-        [
-            "turn",
-            "list",
-            "--session-id",
-            "019c92d8-0250-7291-8585-6f69c1f1e982",
-            "--view",
-            "summary",
-            "--fields",
-            "id,status",
-        ]
-    )
+    main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
+    session = json.loads(capsys.readouterr().out)
+    turn_id = session["timeline"][1]["id"]
+
+    exit_code = main(["turn", "get", turn_id, "--view", "summary"])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
-    assert len(output) == 1
-    assert output[0]["status"] == "completed"
+    assert output["id"] == turn_id
+    assert len(output["event_ids"]) >= 1
 
 
 def test_event_get_pretty(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
-    main(["event", "list", "--view", "summary"])
-    events = json.loads(capsys.readouterr().out)
-    event_id = next(item["id"] for item in events if item["type"] == "tool.call.requested")
+    main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
+    session = json.loads(capsys.readouterr().out)
+    turn_id = session["timeline"][1]["id"]
+    main(["turn", "get", turn_id, "--json"])
+    turn = json.loads(capsys.readouterr().out)
+    event_id = turn["event_ids"][1]
 
     exit_code = main(["event", "get", event_id, "--view", "pretty"])
 
@@ -252,21 +292,6 @@ def test_event_get_pretty(tmp_path: Path, capsys, monkeypatch) -> None:
     assert f"Event       {event_id}" in output
     assert "Type        tool.call.requested" in output
     assert "tool_name: exec_command" in output
-
-
-def test_event_list_pretty_can_filter_by_turn(tmp_path: Path, capsys, monkeypatch) -> None:
-    setup_project_logs(tmp_path, monkeypatch)
-
-    main(["turn", "list", "--view", "summary"])
-    turns = json.loads(capsys.readouterr().out)
-    turn_id = next(item["id"] for item in turns if item["preview"] == "fix the bug")
-
-    exit_code = main(["event", "list", "--turn-id", turn_id])
-
-    assert exit_code == 0
-    output = capsys.readouterr().out
-    assert "TIME" in output
-    assert "tool.call.requested" in output
 
 
 def test_missing_resource_returns_not_found(tmp_path: Path, capsys, monkeypatch) -> None:

@@ -1,8 +1,9 @@
 # CLI Output Spec
 
-This document defines human-readable output views for the canonical session API.
-The transport and stored resource schemas remain unchanged. CLI views are a
-presentation layer on top of the canonical objects.
+This document defines output views for the canonical session API. The CLI reads
+from richer stored resource models, then projects them into the API contract
+for `raw` output and into presentation-friendly shapes for `summary` and
+`pretty`.
 
 The CLI auto-discovers coding-agent logs from the supported vendor homes and
 ingests them on demand.
@@ -17,7 +18,8 @@ ingests them on demand.
 
 ### `raw`
 
-Returns the exact canonical API object with no field renaming or projection.
+Returns the canonical API detail object for the requested resource, matching
+`docs/session-api.json`.
 
 Use for:
 
@@ -132,33 +134,7 @@ Return one session and its mixed replay timeline of turn refs and event refs.
       "id": "22222222-2222-2222-2222-222222222222",
       "started_at": "2026-03-13T10:00:10Z",
       "preview": "Fix the failing test",
-      "event_count": 3,
-      "events": [
-        {
-          "idx": 1,
-          "id": "33333333-3333-3333-3333-333333333333",
-          "timestamp": "2026-03-13T10:00:10Z",
-          "type": "user.prompt.submitted",
-          "actor": "user"
-        },
-        {
-          "idx": 2,
-          "id": "44444444-4444-4444-4444-444444444444",
-          "timestamp": "2026-03-13T10:00:15Z",
-          "type": "tool.call.requested",
-          "actor": "assistant",
-          "payload_preview": {
-            "tool_name": "exec_command"
-          }
-        },
-        {
-          "idx": 3,
-          "id": "55555555-5555-5555-5555-555555555555",
-          "timestamp": "2026-03-13T10:00:16Z",
-          "type": "tool.call.succeeded",
-          "actor": "tool"
-        }
-      ]
+      "event_count": 3
     }
   ]
 }
@@ -172,7 +148,8 @@ Derived fields:
 - `turn_count` counts session turns
 - keep `timeline` in canonical order so the summary still explains section flow
 - each top-level timeline item is either a standalone session event or a turn
-  section
+  ref
+- use `turn get` to inspect the full contents of a turn
 
 Timeline item rules:
 
@@ -180,12 +157,10 @@ Timeline item rules:
 - for top-level event items, include `timestamp`, `type`, and optional `actor`
 - include `payload_preview` only when it adds key context, using the same
   preview rules as `event.get`
-- for turn items, include `started_at`, a truncated `preview`, `event_count`,
-  and a compact nested `events` array
-- nested turn events use turn-local `idx` values and omit raw payloads and full
-  event bodies
-- omit `turn.event_ids` from the summary view because the nested event previews
-  already provide the readable sequence
+- for turn items, include `started_at`, a truncated `preview`, and
+  `event_count`
+- do not inline nested turn events in `session.get`; turn expansion belongs to
+  `turn get`
 
 `pretty` example:
 
@@ -228,6 +203,7 @@ Return one turn and its ordered event ids.
   "ended_at": "date-time | null",
   "status": "completed | in_progress",
   "event_count": 2,
+  "event_ids": ["uuid", "uuid"],
   "preview": "Fix the failing test"
 }
 ```
@@ -237,6 +213,7 @@ Derived fields:
 - `preview` is the first line of `user_request`, truncated to a CLI-friendly
   width
 - `status` follows the same rule as session
+- `turn get --view summary` includes `event_ids`
 
 `pretty` example:
 
@@ -289,6 +266,9 @@ Return one event, either standalone or turn-owned.
 - for tool events, prefer `tool_name`, `tool_call_id`, `status`
 - for model events, prefer `model`, `request_id`, token counts
 - for permission events, prefer `tool_name`, `decision`, `scope`
+- for `session.get` timeline summaries, previews may backfill `tool_name` or
+  `model` from other events in the same session when the event payload only
+  includes `tool_call_id` or `request_id`
 - cap preview depth to avoid large nested output
 
 `pretty` example:
@@ -344,9 +324,7 @@ coding-trajectory trajectory list -g
 coding-trajectory session get 3bb69f88-4164-499d-b366-d6a15cb6f88f
 coding-trajectory session list --trajectory-id a8a7f6e5-b3bb-46e5-b2eb-7f7a8ad9545a
 coding-trajectory turn get 22222222-2222-2222-2222-222222222222 --view pretty
-coding-trajectory turn list --session-id 3bb69f88-4164-499d-b366-d6a15cb6f88f
 coding-trajectory event get 44444444-4444-4444-4444-444444444444 --fields id,type,timestamp,actor
-coding-trajectory event list --turn-id 22222222-2222-2222-2222-222222222222
 ```
 
 Avoid exposing raw JSON-RPC in the default CLI UX.
@@ -380,9 +358,7 @@ Supported operations:
 - `session get <uuid> [-g]`
 - `session list [-g] [--trajectory-id <uuid>]`
 - `turn get <uuid> [-g]`
-- `turn list [-g] [--session-id <uuid>]`
 - `event get <uuid> [-g]`
-- `event list [-g] [--session-id <uuid>] [--turn-id <uuid>]`
 
 List output rules:
 
