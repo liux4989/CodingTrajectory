@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
-from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter
+from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter, GeminiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.models import EventType, Vendor
 
@@ -14,6 +15,7 @@ _MAX_LOGS = 3
 _VENDOR_CONFIGS: list[tuple[Vendor, type[BaseAdapter], Path, str]] = [
     (Vendor.CODEX_CLI, CodexAdapter, Path.home() / ".codex" / "sessions", "*.jsonl"),
     (Vendor.CLAUDE_CODE, ClaudeCodeAdapter, Path.home() / ".claude" / "projects", "*.jsonl"),
+    (Vendor.GEMINI_CLI, GeminiAdapter, Path.home() / ".gemini" / "tmp", "session-*.json"),
     (Vendor.AMP, AmpAdapter, Path.home() / ".local" / "share" / "amp" / "threads", "T-*.json"),
 ]
 
@@ -31,11 +33,20 @@ def _file_contains(path: Path, needle: str) -> bool:
         return False
 
 
+def _normalize_project_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _path_matches_project(path: Path) -> bool:
+    project_token = _normalize_project_token(PROJECT_ROOT.name)
+    return any(_normalize_project_token(part) == project_token for part in path.parts)
+
+
 def _find_project_logs(base_dir: Path, pattern: str) -> list[Path]:
     project_root = str(PROJECT_ROOT)
     found: list[Path] = []
     for path in _recent_files(base_dir, pattern)[:100]:
-        if _file_contains(path, project_root):
+        if _file_contains(path, project_root) or _path_matches_project(path):
             found.append(path)
             if len(found) >= _MAX_LOGS:
                 break
