@@ -1,13 +1,13 @@
 {
   "name": "coding-trajectory-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "protocol": "JSON-RPC 2.0",
-  "description": "Read-first JSON-RPC contract for canonical trajectory and session data exposed by the Coding Trajectory platform.",
+  "description": "Replay-first JSON-RPC contract for canonical trajectory, session, turn, and event data.",
   "design_principles": [
-    "Map transport objects directly onto the canonical Session, Turn, Event, and Artifact models.",
-    "Prefer additive evolution. New fields and methods may be added without breaking existing clients.",
-    "Keep session listing lightweight by returning summaries by default and full replay data on detail methods.",
-    "Use cursor pagination for collections that can grow without bound."
+    "Use id-driven reads for all canonical resources.",
+    "Make session.timeline the primary replay interface.",
+    "Treat turns as grouped event references, not embedded event containers.",
+    "Keep collection query methods out of the initial API until concrete query use cases exist."
   ],
   "base_request_shape": {
     "jsonrpc": "2.0",
@@ -45,6 +45,16 @@
       "code": 40401,
       "name": "trajectory_not_found",
       "meaning": "The requested trajectory_id does not exist."
+    },
+    {
+      "code": 40402,
+      "name": "turn_not_found",
+      "meaning": "The requested turn_id does not exist."
+    },
+    {
+      "code": 40403,
+      "name": "event_not_found",
+      "meaning": "The requested event_id does not exist."
     }
   ],
   "shared_types": {
@@ -84,51 +94,111 @@
         "task.completed"
       ]
     },
-    "PageInfo": {
+    "TimelineItem": {
       "type": "object",
       "required": [
-        "has_next_page"
+        "kind",
+        "id"
       ],
       "properties": {
-        "next_cursor": {
-          "type": [
-            "string",
-            "null"
+        "kind": {
+          "type": "string",
+          "enum": [
+            "event",
+            "turn"
           ]
         },
-        "has_next_page": {
-          "type": "boolean"
+        "id": {
+          "type": "string",
+          "format": "uuid"
         }
       }
     },
-    "SessionSummary": {
+    "EventDetail": {
       "type": "object",
       "required": [
+        "event_id",
         "session_id",
-        "trajectory_id",
-        "vendor",
-        "started_at",
-        "turn_count",
-        "event_count"
+        "timestamp",
+        "type",
+        "vendor_source",
+        "payload"
       ],
       "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
         "session_id": {
           "type": "string",
           "format": "uuid"
         },
-        "trajectory_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "parent_session_id": {
+        "turn_id": {
           "type": [
             "string",
             "null"
           ],
           "format": "uuid"
         },
-        "vendor": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "type": {
+          "$ref": "#/shared_types/EventType"
+        },
+        "actor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "observed",
+            "derived",
+            "synthetic"
+          ]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "vendor_source": {
           "$ref": "#/shared_types/Vendor"
+        },
+        "payload": {
+          "type": "object"
+        }
+      }
+    },
+    "TurnDetail": {
+      "type": "object",
+      "required": [
+        "turn_id",
+        "session_id",
+        "started_at",
+        "event_ids"
+      ],
+      "properties": {
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "user_request": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "started_at": {
           "type": "string",
@@ -141,25 +211,12 @@
           ],
           "format": "date-time"
         },
-        "turn_count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "event_count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "first_user_request": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "extensions": {
-          "type": [
-            "object",
-            "null"
-          ]
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
         }
       }
     },
@@ -170,7 +227,7 @@
         "trajectory_id",
         "vendor",
         "started_at",
-        "turns"
+        "timeline"
       ],
       "properties": {
         "session_id": {
@@ -202,166 +259,17 @@
           ],
           "format": "date-time"
         },
+        "timeline": {
+          "type": "array",
+          "items": {
+            "$ref": "#/shared_types/TimelineItem"
+          }
+        },
         "extensions": {
           "type": [
             "object",
             "null"
           ]
-        },
-        "turns": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "turn_id",
-              "session_id",
-              "started_at",
-              "events"
-            ],
-            "properties": {
-              "turn_id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "session_id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "user_request": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "started_at": {
-                "type": "string",
-                "format": "date-time"
-              },
-              "ended_at": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "format": "date-time"
-              },
-              "events": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "required": [
-                    "event_id",
-                    "session_id",
-                    "timestamp",
-                    "type",
-                    "vendor_source",
-                    "payload"
-                  ],
-                  "properties": {
-                    "event_id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "session_id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "turn_id": {
-                      "type": [
-                        "string",
-                        "null"
-                      ],
-                      "format": "uuid"
-                    },
-                    "timestamp": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "type": {
-                      "$ref": "#/shared_types/EventType"
-                    },
-                    "actor": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "provenance": {
-                      "type": "string",
-                      "enum": [
-                        "observed",
-                        "derived",
-                        "synthetic"
-                      ]
-                    },
-                    "confidence": {
-                      "type": "string",
-                      "enum": [
-                        "high",
-                        "medium",
-                        "low"
-                      ]
-                    },
-                    "payload": {
-                      "type": "object"
-                    },
-                    "vendor_source": {
-                      "$ref": "#/shared_types/Vendor"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "TrajectorySummary": {
-      "type": "object",
-      "required": [
-        "trajectory_id",
-        "session_count"
-      ],
-      "properties": {
-        "trajectory_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "task_reference": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "session_count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "started_at": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "format": "date-time"
-        },
-        "ended_at": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "format": "date-time"
-        },
-        "vendors": {
-          "type": "array",
-          "items": {
-            "$ref": "#/shared_types/Vendor"
-          }
-        },
-        "root_session_id": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "format": "uuid"
         }
       }
     },
@@ -369,12 +277,18 @@
       "type": "object",
       "required": [
         "trajectory_id",
-        "sessions"
+        "session_ids"
       ],
       "properties": {
         "trajectory_id": {
           "type": "string",
           "format": "uuid"
+        },
+        "project_identifier": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "task_reference": {
           "type": [
@@ -382,78 +296,19 @@
             "null"
           ]
         },
-        "sessions": {
+        "session_ids": {
           "type": "array",
           "items": {
-            "$ref": "#/shared_types/SessionSummary"
+            "type": "string",
+            "format": "uuid"
           }
         }
       }
     }
   },
   "methods": {
-    "trajectory.list": {
-      "summary": "List trajectories as top-level work containers. Results are lightweight and intended for navigation.",
-      "params": {
-        "type": "object",
-        "properties": {
-          "task_reference": {
-            "type": "string"
-          },
-          "vendor": {
-            "$ref": "#/shared_types/Vendor"
-          },
-          "started_after": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "started_before": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 200,
-            "default": 50
-          },
-          "cursor": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "required": [
-          "items",
-          "page_info"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/shared_types/TrajectorySummary"
-            }
-          },
-          "page_info": {
-            "$ref": "#/shared_types/PageInfo"
-          }
-        }
-      },
-      "example": {
-        "request": {
-          "jsonrpc": "2.0",
-          "id": "req-t1",
-          "method": "trajectory.list",
-          "params": {
-            "limit": 25
-          }
-        }
-      }
-    },
     "trajectory.get": {
-      "summary": "Fetch one trajectory by id. By default this expands to session summaries, not full event replay payloads.",
+      "summary": "Fetch one trajectory by id. Returns session ids only; sessions are fetched separately by id.",
       "params": {
         "type": "object",
         "required": [
@@ -463,19 +318,6 @@
           "trajectory_id": {
             "type": "string",
             "format": "uuid"
-          },
-          "include": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "sessions",
-                "session_extensions"
-              ]
-            },
-            "default": [
-              "sessions"
-            ]
           }
         },
         "additionalProperties": false
@@ -486,7 +328,7 @@
       "example": {
         "request": {
           "jsonrpc": "2.0",
-          "id": "req-t2",
+          "id": "req-t1",
           "method": "trajectory.get",
           "params": {
             "trajectory_id": "a8a7f6e5-b3bb-46e5-b2eb-7f7a8ad9545a"
@@ -494,120 +336,8 @@
         }
       }
     },
-    "trajectory.sessions.list": {
-      "summary": "List sessions belonging to a trajectory without requiring a separate session-level filter call.",
-      "params": {
-        "type": "object",
-        "required": [
-          "trajectory_id"
-        ],
-        "properties": {
-          "trajectory_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "vendor": {
-            "$ref": "#/shared_types/Vendor"
-          },
-          "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 200,
-            "default": 100
-          },
-          "cursor": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "required": [
-          "items",
-          "page_info"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/shared_types/SessionSummary"
-            }
-          },
-          "page_info": {
-            "$ref": "#/shared_types/PageInfo"
-          }
-        }
-      }
-    },
-    "session.list": {
-      "summary": "List canonical sessions with summary fields for indexing, filtering, and navigation.",
-      "params": {
-        "type": "object",
-        "properties": {
-          "trajectory_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "vendor": {
-            "$ref": "#/shared_types/Vendor"
-          },
-          "parent_session_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "started_after": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "started_before": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 200,
-            "default": 50
-          },
-          "cursor": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "required": [
-          "items",
-          "page_info"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/shared_types/SessionSummary"
-            }
-          },
-          "page_info": {
-            "$ref": "#/shared_types/PageInfo"
-          }
-        }
-      },
-      "example": {
-        "request": {
-          "jsonrpc": "2.0",
-          "id": "req-1",
-          "method": "session.list",
-          "params": {
-            "vendor": "codex_cli",
-            "limit": 25
-          }
-        }
-      }
-    },
     "session.get": {
-      "summary": "Fetch one session by id. By default this returns full replay data including turns and events.",
+      "summary": "Fetch one session by id. Returns the mixed replay timeline of event refs and turn refs.",
       "params": {
         "type": "object",
         "required": [
@@ -617,22 +347,6 @@
           "session_id": {
             "type": "string",
             "format": "uuid"
-          },
-          "include": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "turns",
-                "events",
-                "extensions"
-              ]
-            },
-            "default": [
-              "turns",
-              "events",
-              "extensions"
-            ]
           }
         },
         "additionalProperties": false
@@ -643,202 +357,116 @@
       "example": {
         "request": {
           "jsonrpc": "2.0",
-          "id": "req-2",
+          "id": "req-s1",
           "method": "session.get",
           "params": {
             "session_id": "3bb69f88-4164-499d-b366-d6a15cb6f88f"
           }
-        }
-      }
-    },
-    "session.turns.list": {
-      "summary": "List turns for a session without requiring the client to download all events.",
-      "params": {
-        "type": "object",
-        "required": [
-          "session_id"
-        ],
-        "properties": {
-          "session_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 200,
-            "default": 100
-          },
-          "cursor": {
-            "type": "string"
-          }
         },
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "required": [
-          "items",
-          "page_info"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "turn_id",
-                "session_id",
-                "started_at"
-              ],
-              "properties": {
-                "turn_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "session_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "user_request": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "started_at": {
-                  "type": "string",
-                  "format": "date-time"
-                },
-                "ended_at": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "date-time"
-                },
-                "event_count": {
-                  "type": "integer",
-                  "minimum": 0
-                }
-              }
+        "result": {
+          "session_id": "3bb69f88-4164-499d-b366-d6a15cb6f88f",
+          "trajectory_id": "a8a7f6e5-b3bb-46e5-b2eb-7f7a8ad9545a",
+          "vendor": "codex_cli",
+          "started_at": "2026-03-13T10:00:00Z",
+          "ended_at": "2026-03-13T10:05:00Z",
+          "timeline": [
+            {
+              "kind": "event",
+              "id": "11111111-1111-1111-1111-111111111111"
+            },
+            {
+              "kind": "turn",
+              "id": "22222222-2222-2222-2222-222222222222"
+            },
+            {
+              "kind": "event",
+              "id": "33333333-3333-3333-3333-333333333333"
             }
-          },
-          "page_info": {
-            "$ref": "#/shared_types/PageInfo"
-          }
+          ],
+          "extensions": null
         }
       }
     },
-    "session.events.list": {
-      "summary": "List normalized events for a session, optionally scoped to a turn or filtered by event type.",
+    "turn.get": {
+      "summary": "Fetch one turn by id. Returns ordered event ids for that turn only.",
       "params": {
         "type": "object",
         "required": [
-          "session_id"
+          "turn_id"
         ],
         "properties": {
-          "session_id": {
-            "type": "string",
-            "format": "uuid"
-          },
           "turn_id": {
             "type": "string",
             "format": "uuid"
-          },
-          "types": {
-            "type": "array",
-            "items": {
-              "$ref": "#/shared_types/EventType"
-            }
-          },
-          "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 500,
-            "default": 200
-          },
-          "cursor": {
-            "type": "string"
           }
         },
         "additionalProperties": false
       },
       "result": {
+        "$ref": "#/shared_types/TurnDetail"
+      },
+      "example": {
+        "request": {
+          "jsonrpc": "2.0",
+          "id": "req-turn1",
+          "method": "turn.get",
+          "params": {
+            "turn_id": "22222222-2222-2222-2222-222222222222"
+          }
+        },
+        "result": {
+          "turn_id": "22222222-2222-2222-2222-222222222222",
+          "session_id": "3bb69f88-4164-499d-b366-d6a15cb6f88f",
+          "user_request": "Fix the failing test",
+          "started_at": "2026-03-13T10:00:10Z",
+          "ended_at": "2026-03-13T10:01:00Z",
+          "event_ids": [
+            "44444444-4444-4444-4444-444444444444",
+            "55555555-5555-5555-5555-555555555555"
+          ]
+        }
+      }
+    },
+    "event.get": {
+      "summary": "Fetch one event by id. Works for both standalone session events and turn-owned events.",
+      "params": {
         "type": "object",
         "required": [
-          "items",
-          "page_info"
+          "event_id"
         ],
         "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "event_id",
-                "session_id",
-                "timestamp",
-                "type",
-                "vendor_source",
-                "payload"
-              ],
-              "properties": {
-                "event_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "session_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "turn_id": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "uuid"
-                },
-                "timestamp": {
-                  "type": "string",
-                  "format": "date-time"
-                },
-                "type": {
-                  "$ref": "#/shared_types/EventType"
-                },
-                "actor": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "provenance": {
-                  "type": "string",
-                  "enum": [
-                    "observed",
-                    "derived",
-                    "synthetic"
-                  ]
-                },
-                "confidence": {
-                  "type": "string",
-                  "enum": [
-                    "high",
-                    "medium",
-                    "low"
-                  ]
-                },
-                "payload": {
-                  "type": "object"
-                },
-                "vendor_source": {
-                  "$ref": "#/shared_types/Vendor"
-                }
-              }
-            }
-          },
-          "page_info": {
-            "$ref": "#/shared_types/PageInfo"
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "result": {
+        "$ref": "#/shared_types/EventDetail"
+      },
+      "example": {
+        "request": {
+          "jsonrpc": "2.0",
+          "id": "req-event1",
+          "method": "event.get",
+          "params": {
+            "event_id": "44444444-4444-4444-4444-444444444444"
+          }
+        },
+        "result": {
+          "event_id": "44444444-4444-4444-4444-444444444444",
+          "session_id": "3bb69f88-4164-499d-b366-d6a15cb6f88f",
+          "turn_id": "22222222-2222-2222-2222-222222222222",
+          "timestamp": "2026-03-13T10:00:15Z",
+          "type": "tool.call.requested",
+          "actor": "assistant",
+          "provenance": "observed",
+          "confidence": "high",
+          "vendor_source": "codex_cli",
+          "payload": {
+            "tool_name": "exec_command",
+            "tool_call_id": "call-1"
           }
         }
       }
