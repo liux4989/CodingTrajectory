@@ -388,6 +388,7 @@ class ClaudeCodeAdapter(BaseAdapter):
         session_id = events[0].session_id
         started_at = min(event.timestamp for event in events)
         ended_at = max(event.timestamp for event in events)
+        turns = self._group_into_turns(session_id, events)
 
         return Session(
             session_id=session_id,
@@ -395,7 +396,9 @@ class ClaudeCodeAdapter(BaseAdapter):
             vendor=self.vendor,
             started_at=started_at,
             ended_at=ended_at,
-            turns=self._group_into_turns(session_id, events),
+            timeline=self._build_timeline(events, turns),
+            events=events,
+            turns=turns,
             extensions=self._parse_extensions(source),
         )
 

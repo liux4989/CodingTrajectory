@@ -62,7 +62,7 @@ def test_codex_adapter_normalizes_failures_and_task_completion(tmp_path) -> None
     path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
 
     session = CodexAdapter().ingest_file(path)
-    events = [event for turn in session.turns for event in turn.events]
+    events = session.events
 
     assert events[0].type == EventType.SESSION_STARTED
     assert any(event.type == EventType.USER_PROMPT_SUBMITTED for event in events)
@@ -70,6 +70,7 @@ def test_codex_adapter_normalizes_failures_and_task_completion(tmp_path) -> None
     assert failure.payload["exit_code"] == 1
     assert any(event.type == EventType.TASK_COMPLETED for event in events)
     assert any(turn.user_request == "fix the bug" for turn in session.turns)
+    assert any(item.kind == "turn" for item in session.timeline)
 
 
 def test_extract_exit_code_handles_nested_json_without_recursing_forever() -> None:

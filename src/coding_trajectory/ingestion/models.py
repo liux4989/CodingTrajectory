@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
+from typing import Literal
 
 
 class EventType(str, Enum):
@@ -199,7 +200,12 @@ class Turn(BaseModel):
     user_request: str | None = None
     started_at: datetime
     ended_at: datetime | None = None
-    events: list[Event] = Field(default_factory=list)
+    event_ids: list[UUID] = Field(default_factory=list)
+
+
+class TimelineItem(BaseModel):
+    kind: Literal["event", "turn"]
+    id: UUID
 
 
 class Session(BaseModel):
@@ -212,11 +218,14 @@ class Session(BaseModel):
     # Optional fields
     parent_session_id: UUID | None = None
     ended_at: datetime | None = None
+    timeline: list[TimelineItem] = Field(default_factory=list)
+    events: list[Event] = Field(default_factory=list)
     turns: list[Turn] = Field(default_factory=list)
     extensions: VendorExtensions | None = None
 
 
 class Trajectory(BaseModel):
     trajectory_id: UUID = Field(default_factory=uuid4)
+    project_identifier: str | None = None
     task_reference: str | None = None
     sessions: list[Session] = Field(default_factory=list)

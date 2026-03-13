@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from coding_trajectory.ingestion.models import Event, EventType, Session, Turn, Vendor
+from coding_trajectory.ingestion.models import Event, EventType, Session, TimelineItem, Turn, Vendor
 
 
 class BaseAdapter(ABC):
@@ -101,7 +101,7 @@ class BaseAdapter(ABC):
                 user_request=current_user_request,
                 started_at=current_turn_start or current_events[0].timestamp,
                 ended_at=turn_end or current_events[-1].timestamp,
-                events=list(current_events),
+                event_ids=[event.event_id for event in current_events],
             )
             for event in current_events:
                 event.turn_id = turn.turn_id
@@ -113,7 +113,10 @@ class BaseAdapter(ABC):
 
         for event in events:
             if event.type == EventType.USER_PROMPT_SUBMITTED:
-                _flush_turn(event.timestamp if end_at_next_user_prompt else None)
+                # Keep pre-turn session lifecycle events attached to the first real user turn
+                # instead of materializing a synthetic turn with no user_request.
+                if current_user_request is not None:
+                    _flush_turn(event.timestamp if end_at_next_user_prompt else None)
                 current_turn_start = event.timestamp
                 current_user_request = event.payload.get("text")
             elif current_turn_start is None:
@@ -123,6 +126,22 @@ class BaseAdapter(ABC):
 
         _flush_turn()
         return turns
+
+    def _build_timeline(self, events: list[Event], turns: list[Turn]) -> list[TimelineItem]:
+        turn_by_id = {turn.turn_id: turn for turn in turns}
+        turn_seen: set[UUID] = set()
+        timeline: list[TimelineItem] = []
+
+        for event in events:
+            if event.turn_id is None:
+                timeline.append(TimelineItem(kind="event", id=event.event_id))
+                continue
+
+            if event.turn_id in turn_by_id and event.turn_id not in turn_seen:
+                timeline.append(TimelineItem(kind="turn", id=event.turn_id))
+                turn_seen.add(event.turn_id)
+
+        return timeline
 
     def _build_session(self, source: Path, events: list[Event]) -> Session:
         """Assemble a Session from the parsed events list.
@@ -144,4 +163,5 @@ class BaseAdapter(ABC):
             vendor=self.vendor,
             started_at=started_at,
             ended_at=ended_at,
+            events=events,
         )

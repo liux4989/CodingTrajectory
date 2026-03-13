@@ -383,6 +383,11 @@ class CodexAdapter(BaseAdapter):
                 model_context_window=None,
             )
         )
+        turns = self._group_into_turns(
+            state.session_id,
+            events,
+            end_at_next_user_prompt=True,
+        )
 
         return Session(
             session_id=state.session_id,
@@ -390,11 +395,9 @@ class CodexAdapter(BaseAdapter):
             vendor=Vendor.CODEX_CLI,
             started_at=started_at,
             ended_at=ended_at,
-            turns=self._group_into_turns(
-                state.session_id,
-                events,
-                end_at_next_user_prompt=True,
-            ),
+            timeline=self._build_timeline(events, turns),
+            events=events,
+            turns=turns,
             extensions=extensions,
         )
 

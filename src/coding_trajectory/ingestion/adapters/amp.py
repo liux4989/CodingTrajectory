@@ -117,6 +117,7 @@ class AmpAdapter(BaseAdapter):
 
         created_at = parse_timestamp(thread.get("created")) or datetime.now(timezone.utc)
         ended_at = max((event.timestamp for event in events), default=created_at)
+        turns = self._group_into_turns(session_id, events)
 
         return Session(
             session_id=session_id,
@@ -124,7 +125,9 @@ class AmpAdapter(BaseAdapter):
             vendor=self.vendor,
             started_at=created_at,
             ended_at=ended_at,
-            turns=self._group_into_turns(session_id, events),
+            timeline=self._build_timeline(events, turns),
+            events=events,
+            turns=turns,
             extensions=self._parse_extensions(thread),
         )
 

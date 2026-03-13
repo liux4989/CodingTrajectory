@@ -87,7 +87,7 @@ def test_amp_adapter_emits_trace_and_message_lifecycle_events(tmp_path) -> None:
     )
 
     session = AmpAdapter().ingest_file(path)
-    events = [event for turn in session.turns for event in turn.events]
+    events = session.events
 
     assert events[0].type == EventType.SESSION_STARTED
     llm_started = next(event for event in events if event.type == EventType.LLM_REQUEST_STARTED)
@@ -98,6 +98,7 @@ def test_amp_adapter_emits_trace_and_message_lifecycle_events(tmp_path) -> None:
     assert tool_started.confidence == EventConfidence.MEDIUM
     assert any(event.type == EventType.TOOL_CALL_SUCCEEDED for event in events)
     assert any(event.type == EventType.AGENT_RESPONSE_COMPLETED for event in events)
+    assert any(item.kind == "turn" for item in session.timeline)
     assert session.extensions is not None
     assert session.extensions.amp is not None
     assert session.extensions.amp.thread_id == "T-019c3c6b-8e41-7448-8a86-60a4edd6eed2"

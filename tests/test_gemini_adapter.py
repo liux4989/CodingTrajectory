@@ -55,7 +55,7 @@ def test_gemini_adapter_emits_session_thought_and_permission_events(tmp_path) ->
     )
 
     session = GeminiAdapter().ingest_file(path)
-    events = [event for turn in session.turns for event in turn.events]
+    events = session.events
 
     assert events[0].type == EventType.SESSION_STARTED
     assert any(event.type == EventType.LLM_STREAM_EVENT for event in events)

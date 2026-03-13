@@ -55,7 +55,7 @@ def test_claude_adapter_emits_stream_subtask_and_resume_events(tmp_path) -> None
     path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
 
     session = ClaudeCodeAdapter().ingest_file(path)
-    events = [event for turn in session.turns for event in turn.events]
+    events = session.events
 
     assert any(event.type == EventType.LLM_STREAM_EVENT for event in events)
     assert any(event.type == EventType.TOOL_CALL_REQUESTED for event in events)
