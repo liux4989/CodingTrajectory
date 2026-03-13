@@ -99,6 +99,10 @@ def test_amp_adapter_emits_trace_and_message_lifecycle_events(tmp_path) -> None:
     assert any(event.type == EventType.TOOL_CALL_SUCCEEDED for event in events)
     assert any(event.type == EventType.AGENT_RESPONSE_COMPLETED for event in events)
     assert any(item.kind == "turn" for item in session.timeline)
+    assert {item.id for item in session.timeline if item.kind == "event"} == {
+        event.event_id for event in session.events if event.turn_id is None
+    }
+    assert {item.id for item in session.timeline if item.kind == "turn"} == {turn.turn_id for turn in session.turns}
     assert session.extensions is not None
     assert session.extensions.amp is not None
     assert session.extensions.amp.thread_id == "T-019c3c6b-8e41-7448-8a86-60a4edd6eed2"

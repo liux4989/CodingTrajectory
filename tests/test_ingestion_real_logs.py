@@ -118,9 +118,12 @@ def test_ingestion_pipeline_real_project_logs(
         "Turn.event_ids contains IDs not present in session.events"
     )
 
-    # --- Timeline coverage: every turn appears ---
+    # --- Timeline coverage: every turn and every outside-turn event appears ---
     if session.timeline:
         timeline_ids = {item.id for item in session.timeline}
+        for event in session.events:
+            if event.turn_id is None:
+                assert event.event_id in timeline_ids, f"Standalone event {event.event_id} is missing from session.timeline"
         for turn in session.turns:
             assert turn.turn_id in timeline_ids, f"Turn {turn.turn_id} is missing from session.timeline"
 

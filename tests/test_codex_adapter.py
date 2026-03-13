@@ -70,7 +70,11 @@ def test_codex_adapter_normalizes_failures_and_task_completion(tmp_path) -> None
     assert failure.payload["exit_code"] == 1
     assert any(event.type == EventType.TASK_COMPLETED for event in events)
     assert any(turn.user_request == "fix the bug" for turn in session.turns)
-    assert any(item.kind == "turn" for item in session.timeline)
+    assert [item.kind for item in session.timeline] == ["event", "turn"]
+    assert {item.id for item in session.timeline if item.kind == "event"} == {
+        event.event_id for event in session.events if event.turn_id is None
+    }
+    assert {item.id for item in session.timeline if item.kind == "turn"} == {turn.turn_id for turn in session.turns}
 
 
 def test_extract_exit_code_handles_nested_json_without_recursing_forever() -> None:

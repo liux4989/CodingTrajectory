@@ -23,6 +23,7 @@ from coding_trajectory.ingestion import (
     VendorDecorator,
     VendorExtensions,
 )
+from coding_trajectory.query import DocumentStore
 
 __all__ = [
     "AmpAdapter",
@@ -35,6 +36,7 @@ __all__ = [
     "ClaudeCodeExtensions",
     "CodexAdapter",
     "CodexExtensions",
+    "DocumentStore",
     "EventConfidence",
     "Event",
     "EventProvenance",

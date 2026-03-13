@@ -113,15 +113,18 @@ class BaseAdapter(ABC):
 
         for event in events:
             if event.type == EventType.USER_PROMPT_SUBMITTED:
-                # Keep pre-turn session lifecycle events attached to the first real user turn
-                # instead of materializing a synthetic turn with no user_request.
                 if current_user_request is not None:
                     _flush_turn(event.timestamp if end_at_next_user_prompt else None)
                 current_turn_start = event.timestamp
                 current_user_request = event.payload.get("text")
-            elif current_turn_start is None:
-                current_turn_start = event.timestamp
+                current_events = [event]
+                continue
 
+            if current_user_request is None:
+                continue
+
+            if current_turn_start is None:
+                current_turn_start = event.timestamp
             current_events.append(event)
 
         _flush_turn()
