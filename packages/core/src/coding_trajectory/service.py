@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from coding_trajectory.discovery import discover_store, normalize_project_key
+from coding_trajectory.discovery import normalize_project_key
 from coding_trajectory.ingestion.models import Event, Session, Trajectory, Turn
 from coding_trajectory.query import DocumentStore
 

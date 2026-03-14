@@ -5,28 +5,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 from typing import Any
-from uuid import UUID
 
-from coding_trajectory.discovery import discover_store, format_discovery_sources, normalize_project_key
-from coding_trajectory.ingestion.models import Event, Session, Trajectory, Turn
-from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
-from coding_trajectory.service import (
-    format_datetime,
-    prune_nones,
-    resolve_collection,
-    resolve_resource,
-    serialize_event_detail,
-    serialize_session_detail,
-    serialize_timeline_item,
-    serialize_trajectory_detail,
-    serialize_turn_detail,
-)
+from coding_trajectory_cli.rpc_client import RpcClient, RpcError
 
 EXIT_USAGE = 2
 EXIT_NOT_FOUND = 3
 EXIT_DOCUMENT_ERROR = 4
+
+# JSON-RPC error code ranges
+_NOT_FOUND_CODES = {40400, 40401, 40402, 40403}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -77,46 +65,93 @@ def main(argv: list[str] | None = None) -> int:
         args.view = "raw"
 
     try:
-        discovery = discover_store(
-            current_dir=Path.cwd(),
-            global_scope=bool(getattr(args, "global_scope", False)),
-        )
-        store = discovery.store
-        discovery_note = format_discovery_sources(discovery.sources)
-
-        if args.action == "get":
-            resource = resolve_resource(store, args.resource, args.resource_id)
-            payload = render_item(resource, args.view, no_truncate=args.no_truncate)
-        elif args.action == "list":
-            trajectory_id = _extract_trajectory_filter(args)
-            resources = resolve_collection(
-                store,
-                args.resource,
-                global_scope=args.global_scope,
-                trajectory_id=trajectory_id,
-                current_dir=Path.cwd(),
-            )
-            payload = render_collection(resources, args.view, no_truncate=args.no_truncate)
-        else:
-            raise ValueError(f"unsupported action: {args.action}")
+        with RpcClient(global_scope=bool(getattr(args, "global_scope", False))) as client:
+            if args.action == "get":
+                payload = _handle_get(client, args)
+            elif args.action == "list":
+                payload = _handle_list(client, args)
+            else:
+                raise ValueError(f"unsupported action: {args.action}")
 
         if args.fields:
             payload = select_output_fields(payload, args.fields)
 
-        if discovery_note and args.action == "list":
-            print(discovery_note, file=sys.stderr)
         write_output(payload, args.view)
-    except ResourceNotFoundError as exc:
+    except RpcError as exc:
         print(str(exc), file=sys.stderr)
-        return EXIT_NOT_FOUND
-    except DocumentError as exc:
-        print(str(exc), file=sys.stderr)
-        return EXIT_DOCUMENT_ERROR
+        if exc.code in _NOT_FOUND_CODES:
+            return EXIT_NOT_FOUND
+        if exc.code == -32603:
+            return EXIT_DOCUMENT_ERROR
+        return EXIT_USAGE
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
 
     return 0
+
+
+def _handle_get(client: RpcClient, args: argparse.Namespace) -> dict[str, Any]:
+    resource = args.resource
+    resource_id = args.resource_id
+    view = args.view
+    no_truncate = args.no_truncate
+
+    if resource == "trajectory":
+        raw = client.call("trajectory.get", {"trajectory_id": resource_id})
+        if view == "raw":
+            return raw
+        return summarize_trajectory(raw)
+
+    if resource == "session":
+        if view == "raw":
+            return client.call("session.get", {"session_id": resource_id})
+        bundle = client.call("session.bundle", {"session_id": resource_id})
+        return summarize_session(bundle["session"], bundle=bundle, no_truncate=no_truncate, include_timeline=True)
+
+    if resource == "turn":
+        raw = client.call("turn.get", {"turn_id": resource_id})
+        if view == "raw":
+            return raw
+        return summarize_turn_detail(raw, no_truncate=no_truncate)
+
+    if resource == "event":
+        raw = client.call("event.get", {"event_id": resource_id})
+        if view == "raw":
+            return raw
+        return summarize_event(raw, no_truncate=no_truncate)
+
+    raise ValueError(f"unsupported resource: {resource}")
+
+
+def _handle_list(client: RpcClient, args: argparse.Namespace) -> list[dict[str, Any]]:
+    resource = args.resource
+    view = args.view
+    no_truncate = args.no_truncate
+
+    if resource == "trajectory":
+        result = client.call("trajectory.list", {})
+    elif resource == "session":
+        trajectory_id = _extract_trajectory_filter(args)
+        params: dict[str, Any] = {}
+        if trajectory_id:
+            params["trajectory_id"] = trajectory_id
+        result = client.call("session.list", params)
+    else:
+        raise ValueError(f"unsupported list resource: {resource}")
+
+    items = result["items"]
+    discovery_note = result.get("discovery_note", "")
+
+    if discovery_note:
+        print(discovery_note, file=sys.stderr)
+
+    if view == "raw":
+        return items
+
+    if resource == "trajectory":
+        return [summarize_trajectory(item) for item in items]
+    return [summarize_session(item, no_truncate=no_truncate, include_timeline=False) for item in items]
 
 
 def _extract_trajectory_filter(args: argparse.Namespace) -> str | None:
@@ -126,88 +161,99 @@ def _extract_trajectory_filter(args: argparse.Namespace) -> str | None:
     return trajectory_id
 
 
-def render_item(resource: Trajectory | Session | Turn | Event, view: str, *, no_truncate: bool) -> dict[str, Any]:
-    if isinstance(resource, Trajectory):
-        if view == "raw":
-            return serialize_trajectory_detail(resource)
-        return summarize_trajectory(resource)
-
-    if isinstance(resource, Session):
-        if view == "raw":
-            return serialize_session_detail(resource)
-        return summarize_session(resource, no_truncate=no_truncate, include_timeline=True)
-
-    if isinstance(resource, Turn):
-        if view == "raw":
-            return serialize_turn_detail(resource)
-        return summarize_turn_detail(resource, no_truncate=no_truncate)
-
-    if view == "raw":
-        return serialize_event_detail(resource)
-    return summarize_event(resource, no_truncate=no_truncate)
+# ---------------------------------------------------------------------------
+# Pretty rendering — works on plain dicts (JSON-RPC wire payloads)
+# ---------------------------------------------------------------------------
 
 
-def render_collection(
-    resources: list[Trajectory | Session],
-    view: str,
-    *,
-    no_truncate: bool,
-) -> list[dict[str, Any]]:
-    if view == "raw":
-        return [serialize_trajectory_detail(resource) if isinstance(resource, Trajectory) else serialize_session_detail(resource) for resource in resources]
-    return [summarize_collection_item(resource, no_truncate=no_truncate) for resource in resources]
+def prune_nones(payload: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in payload.items() if value is not None}
 
 
-def summarize_trajectory(trajectory: Trajectory) -> dict[str, Any]:
-    summary = trajectory.summary.model_dump(mode="json") if trajectory.summary else {}
+def format_datetime(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.replace("+00:00", "Z")
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def summarize_trajectory(raw: dict[str, Any]) -> dict[str, Any]:
+    summary = raw.get("summary") or {}
     return prune_nones(
         {
-            "id": str(trajectory.trajectory_id),
-            "project": trajectory.project_identifier,
-            "task": trajectory.task_reference,
-            "multi_agent_mode": trajectory.multi_agent_mode,
-            "session_count": summary.get("session_count", len(trajectory.sessions)),
-            "operation_count": len(trajectory.operations),
-            "section_count": len(trajectory.sections),
-            "session_ids": [str(session.session_id) for session in trajectory.sessions],
+            "id": raw["trajectory_id"],
+            "project": raw.get("project_identifier"),
+            "task": raw.get("task_reference"),
+            "multi_agent_mode": raw.get("multi_agent_mode"),
+            "session_count": summary.get("session_count", len(raw.get("session_ids", []))),
+            "operation_count": len(raw.get("operations", [])),
+            "section_count": len(raw.get("sections", [])),
+            "session_ids": raw.get("session_ids", []),
         }
     )
 
 
-def summarize_session(session: Session, *, no_truncate: bool, include_timeline: bool) -> dict[str, Any]:
-    event_count = len(session.events)
-    turn_count = len(session.turns)
-    timeline = summarize_session_timeline(session, no_truncate=no_truncate) if include_timeline else None
+def summarize_session(
+    raw: dict[str, Any],
+    *,
+    no_truncate: bool = False,
+    include_timeline: bool = False,
+    bundle: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    timeline_items = raw.get("timeline", [])
 
-    summary = {
-        "id": str(session.session_id),
-        "trajectory": str(session.trajectory_id),
-        "parent": str(session.parent_session_id) if session.parent_session_id else None,
-        "vendor": session.vendor.value,
-        "started_at": format_datetime(session.started_at),
-        "ended_at": format_datetime(session.ended_at),
-        "status": status_from_end(session.ended_at),
-        "timeline_count": len(session.timeline),
+    if bundle:
+        event_count = len(bundle.get("events", []))
+        turn_count = len(bundle.get("turns", []))
+    else:
+        event_count = raw.get("event_count", 0)
+        turn_count = raw.get("turn_count", 0)
+
+    timeline = None
+    if include_timeline and bundle:
+        timeline = summarize_session_timeline(raw, bundle=bundle, no_truncate=no_truncate)
+
+    summary: dict[str, Any] = {
+        "id": raw["session_id"],
+        "trajectory": raw.get("trajectory_id"),
+        "parent": raw.get("parent_session_id"),
+        "vendor": raw.get("vendor"),
+        "started_at": format_datetime(raw.get("started_at")),
+        "ended_at": format_datetime(raw.get("ended_at")),
+        "status": status_from_end(raw.get("ended_at")),
+        "timeline_count": len(timeline_items),
         "event_count": event_count,
         "turn_count": turn_count,
     }
-    if include_timeline:
+    if include_timeline and timeline is not None:
         summary["timeline"] = timeline
 
     return prune_nones(summary)
 
 
-def summarize_session_timeline(session: Session, *, no_truncate: bool) -> list[dict[str, Any]]:
-    event_by_id = {event.event_id: event for event in session.events}
-    turn_by_id = {turn.turn_id: turn for turn in session.turns}
-    tool_name_by_call_id, model_by_request_id = build_session_preview_context(session.events)
+def summarize_session_timeline(
+    session_raw: dict[str, Any],
+    *,
+    bundle: dict[str, Any],
+    no_truncate: bool,
+) -> list[dict[str, Any]]:
+    events_list = bundle.get("events", [])
+    turns_list = bundle.get("turns", [])
+    event_by_id = {e["event_id"]: e for e in events_list}
+    turn_by_id = {t["turn_id"]: t for t in turns_list}
+
+    tool_name_by_call_id, model_by_request_id = build_session_preview_context(events_list)
     timeline: list[dict[str, Any]] = []
 
-    for index, item in enumerate(session.timeline, start=1):
-        if item.kind == "event":
-            event = event_by_id.get(item.id)
+    for index, item in enumerate(session_raw.get("timeline", []), start=1):
+        kind = item["kind"]
+        item_id = item["id"]
+
+        if kind == "event":
+            event = event_by_id.get(item_id)
             if event is None:
-                timeline.append(prune_nones({"idx": index, "kind": "event", "id": str(item.id)}))
+                timeline.append(prune_nones({"idx": index, "kind": "event", "id": item_id}))
                 continue
             timeline.append(
                 summarize_session_event_item(
@@ -220,9 +266,9 @@ def summarize_session_timeline(session: Session, *, no_truncate: bool) -> list[d
             )
             continue
 
-        turn = turn_by_id.get(item.id)
+        turn = turn_by_id.get(item_id)
         if turn is None:
-            timeline.append(prune_nones({"idx": index, "kind": "turn", "id": str(item.id)}))
+            timeline.append(prune_nones({"idx": index, "kind": "turn", "id": item_id}))
             continue
         timeline.append(
             summarize_session_turn_item(
@@ -235,12 +281,12 @@ def summarize_session_timeline(session: Session, *, no_truncate: bool) -> list[d
     return timeline
 
 
-def build_session_preview_context(events: list[Event]) -> tuple[dict[str, str], dict[str, str]]:
+def build_session_preview_context(events: list[dict[str, Any]]) -> tuple[dict[str, str], dict[str, str]]:
     tool_name_by_call_id: dict[str, str] = {}
     model_by_request_id: dict[str, str] = {}
 
     for event in events:
-        payload = event.payload
+        payload = event.get("payload", {})
         tool_call_id = payload.get("tool_call_id")
         tool_name = payload.get("tool_name")
         if isinstance(tool_call_id, str) and isinstance(tool_name, str):
@@ -278,12 +324,12 @@ def enrich_preview_payload(
 
 
 def summarize_session_turn_item(
-    turn: Turn,
+    turn: dict[str, Any],
     *,
     idx: int,
     no_truncate: bool,
 ) -> dict[str, Any]:
-    preview = turn.user_request
+    preview = turn.get("user_request")
     if preview and not no_truncate:
         preview = shorten_line(preview)
 
@@ -291,33 +337,33 @@ def summarize_session_turn_item(
         {
             "idx": idx,
             "kind": "turn",
-            "id": str(turn.turn_id),
-            "started_at": format_datetime(turn.started_at),
+            "id": turn["turn_id"],
+            "started_at": format_datetime(turn.get("started_at")),
             "preview": preview,
-            "event_count": len(turn.event_ids),
+            "event_count": len(turn.get("event_ids", [])),
         }
     )
 
 
 def summarize_session_event_item(
-    event: Event,
+    event: dict[str, Any],
     *,
     idx: int,
     no_truncate: bool,
     tool_name_by_call_id: dict[str, str],
     model_by_request_id: dict[str, str],
 ) -> dict[str, Any]:
-    entry = {
+    entry: dict[str, Any] = {
         "idx": idx,
         "kind": "event",
-        "id": str(event.event_id),
-        "timestamp": format_datetime(event.timestamp),
-        "type": event.type.value,
-        "actor": event.actor,
+        "id": event["event_id"],
+        "timestamp": format_datetime(event.get("timestamp")),
+        "type": event.get("type"),
+        "actor": event.get("actor"),
     }
     preview = timeline_payload_preview(
         enrich_preview_payload(
-            event.payload,
+            event.get("payload", {}),
             tool_name_by_call_id=tool_name_by_call_id,
             model_by_request_id=model_by_request_id,
         ),
@@ -328,54 +374,48 @@ def summarize_session_event_item(
     return prune_nones(entry)
 
 
-def summarize_turn(turn: Turn, *, no_truncate: bool) -> dict[str, Any]:
-    preview = turn.user_request
+def summarize_turn(turn: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
+    preview = turn.get("user_request")
     if preview and not no_truncate:
         preview = shorten_line(preview)
 
     return prune_nones(
         {
-            "id": str(turn.turn_id),
-            "session": str(turn.session_id),
-            "user_request": turn.user_request,
-            "started_at": format_datetime(turn.started_at),
-            "ended_at": format_datetime(turn.ended_at),
-            "status": status_from_end(turn.ended_at),
-            "event_count": len(turn.event_ids),
+            "id": turn["turn_id"],
+            "session": turn.get("session_id"),
+            "user_request": turn.get("user_request"),
+            "started_at": format_datetime(turn.get("started_at")),
+            "ended_at": format_datetime(turn.get("ended_at")),
+            "status": status_from_end(turn.get("ended_at")),
+            "event_count": len(turn.get("event_ids", [])),
             "preview": preview,
         }
     )
 
 
-def summarize_turn_detail(turn: Turn, *, no_truncate: bool) -> dict[str, Any]:
+def summarize_turn_detail(turn: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
     summary = summarize_turn(turn, no_truncate=no_truncate)
-    summary["event_ids"] = [str(event_id) for event_id in turn.event_ids]
+    summary["event_ids"] = turn.get("event_ids", [])
     return summary
 
 
-def summarize_event(event: Event, *, no_truncate: bool) -> dict[str, Any]:
-    preview = payload_preview(event.payload, no_truncate=no_truncate)
+def summarize_event(event: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
+    preview = payload_preview(event.get("payload", {}), no_truncate=no_truncate)
 
     return prune_nones(
         {
-            "id": str(event.event_id),
-            "session": str(event.session_id),
-            "turn": str(event.turn_id) if event.turn_id else None,
-            "timestamp": format_datetime(event.timestamp),
-            "type": event.type.value,
-            "actor": event.actor,
-            "vendor": event.vendor_source.value,
-            "provenance": event.provenance.value,
-            "confidence": event.confidence.value,
+            "id": event["event_id"],
+            "session": event.get("session_id"),
+            "turn": event.get("turn_id"),
+            "timestamp": format_datetime(event.get("timestamp")),
+            "type": event.get("type"),
+            "actor": event.get("actor"),
+            "vendor": event.get("vendor_source"),
+            "provenance": event.get("provenance"),
+            "confidence": event.get("confidence"),
             "payload_preview": preview,
         }
     )
-
-
-def summarize_collection_item(resource: Trajectory | Session, *, no_truncate: bool) -> dict[str, Any]:
-    if isinstance(resource, Trajectory):
-        return summarize_trajectory(resource)
-    return summarize_session(resource, no_truncate=no_truncate, include_timeline=False)
 
 
 def payload_preview(payload: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:

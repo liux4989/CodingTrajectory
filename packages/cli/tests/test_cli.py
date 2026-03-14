@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from collections import Counter
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from coding_trajectory_cli.cli import EXIT_NOT_FOUND, build_session_preview_context, enrich_preview_payload, main
-from coding_trajectory.ingestion.models import Event, EventType, Vendor
 
 
 def write_codex_log(
@@ -149,25 +147,25 @@ def test_session_get_uses_current_project_discovery(tmp_path: Path, capsys, monk
 
 
 def test_session_preview_context_backfills_model_from_request_id() -> None:
-    session_id = uuid4()
-    timestamp = datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc)
     events = [
-        Event(
-            session_id=session_id,
-            timestamp=timestamp,
-            type=EventType.LLM_REQUEST_COMPLETED,
-            vendor_source=Vendor.CLAUDE_CODE,
-            actor="assistant",
-            payload={"request_id": "req-1", "model": "claude-sonnet-4"},
-        ),
-        Event(
-            session_id=session_id,
-            timestamp=timestamp,
-            type=EventType.LLM_STREAM_EVENT,
-            vendor_source=Vendor.CLAUDE_CODE,
-            actor="assistant",
-            payload={"request_id": "req-1"},
-        ),
+        {
+            "event_id": str(uuid4()),
+            "session_id": str(uuid4()),
+            "timestamp": "2026-03-13T10:00:00Z",
+            "type": "llm.request.completed",
+            "vendor_source": "claude_code",
+            "actor": "assistant",
+            "payload": {"request_id": "req-1", "model": "claude-sonnet-4"},
+        },
+        {
+            "event_id": str(uuid4()),
+            "session_id": str(uuid4()),
+            "timestamp": "2026-03-13T10:00:00Z",
+            "type": "llm.stream.event",
+            "vendor_source": "claude_code",
+            "actor": "assistant",
+            "payload": {"request_id": "req-1"},
+        },
     ]
 
     tool_name_by_call_id, model_by_request_id = build_session_preview_context(events)
