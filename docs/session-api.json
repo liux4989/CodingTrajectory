@@ -103,8 +103,6 @@
         "permission.requested",
         "permission.approved",
         "permission.denied",
-        "subtask.started",
-        "subtask.completed",
         "background_task.started",
         "background_task.completed",
         "context.compaction.started",
@@ -112,6 +110,67 @@
         "agent.response.completed",
         "task.completed"
       ]
+    },
+    "EventCategory": {
+      "type": "string",
+      "description": "High-level logical grouping set by the consumer layer. Links related events (e.g. all events of one tool call) without payload inspection.",
+      "enum": [
+        "session",
+        "user_interaction",
+        "llm_inference",
+        "tool_call",
+        "background_task",
+        "permission",
+        "context_compaction"
+      ]
+    },
+    "ToolCallKind": {
+      "type": "string",
+      "description": "Agent/tool-specific classification within a tool call event. Set by the consumer layer.",
+      "enum": [
+        "regular",
+        "subagent",
+        "oracle",
+        "librarian",
+        "github"
+      ]
+    },
+    "ToolCallDetail": {
+      "type": "object",
+      "description": "Typed detail for TOOL_CALL_* events. Populated by the consumer layer.",
+      "properties": {
+        "tool_call_id": { "type": ["string", "null"] },
+        "tool_name":    { "type": ["string", "null"] },
+        "kind":         { "$ref": "#/shared_types/ToolCallKind" },
+        "input":        { "type": ["object", "null"] },
+        "result":       {},
+        "status":       { "type": ["string", "null"], "enum": ["done", "failed", "in_progress", null] }
+      }
+    },
+    "LLMDetail": {
+      "type": "object",
+      "description": "Typed LLM inference metadata for LLM_REQUEST_* and LLM_STREAM_EVENT events. Populated by the consumer layer.",
+      "properties": {
+        "model":            { "type": ["string", "null"] },
+        "input_tokens":     { "type": ["integer", "null"] },
+        "output_tokens":    { "type": ["integer", "null"] },
+        "total_tokens":     { "type": ["integer", "null"] },
+        "inference_ms":     { "type": ["number", "null"] },
+        "reasoning_effort": { "type": ["string", "null"] },
+        "stop_reason":      { "type": ["string", "null"] }
+      }
+    },
+    "TextDetail": {
+      "type": "object",
+      "description": "Typed text content for USER_PROMPT_SUBMITTED and AGENT_RESPONSE_COMPLETED events. Populated by the consumer layer.",
+      "required": ["text"],
+      "properties": {
+        "text":           { "type": "string" },
+        "active_editor":  { "type": ["string", "null"] },
+        "visible_files":  { "type": ["array", "null"], "items": { "type": "string" } },
+        "cursor_location": {},
+        "interrupted":    { "type": ["boolean", "null"] }
+      }
     },
     "TimelineItem": {
       "type": "object",
@@ -574,10 +633,7 @@
           "format": "uuid"
         },
         "turn_id": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "format": "uuid"
         },
         "timestamp": {
@@ -588,32 +644,60 @@
           "$ref": "#/shared_types/EventType"
         },
         "actor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "provenance": {
           "type": "string",
-          "enum": [
-            "observed",
-            "derived",
-            "synthetic"
-          ]
+          "enum": ["observed", "derived", "synthetic"]
         },
         "confidence": {
           "type": "string",
-          "enum": [
-            "high",
-            "medium",
-            "low"
-          ]
+          "enum": ["high", "medium", "low"]
         },
         "vendor_source": {
           "$ref": "#/shared_types/Vendor"
         },
         "payload": {
-          "type": "object"
+          "type": "object",
+          "description": "Raw vendor payload — always present; full fidelity log data."
+        },
+        "category": {
+          "description": "Consumer-layer: logical operation this event belongs to.",
+          "oneOf": [
+            { "$ref": "#/shared_types/EventCategory" },
+            { "type": "null" }
+          ]
+        },
+        "event_group_id": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "Consumer-layer: shared ID across all events in one logical operation (e.g. a tool call lifecycle)."
+        },
+        "parent_event_id": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "Consumer-layer: direct parent in the tool-call tree. Null for root events."
+        },
+        "tool_call": {
+          "description": "Consumer-layer: typed tool call detail. Populated for TOOL_CALL_* and BACKGROUND_TASK_* events.",
+          "oneOf": [
+            { "$ref": "#/shared_types/ToolCallDetail" },
+            { "type": "null" }
+          ]
+        },
+        "llm": {
+          "description": "Consumer-layer: typed LLM inference detail. Populated for LLM_REQUEST_* and LLM_STREAM_EVENT events.",
+          "oneOf": [
+            { "$ref": "#/shared_types/LLMDetail" },
+            { "type": "null" }
+          ]
+        },
+        "text": {
+          "description": "Consumer-layer: typed text content. Populated for USER_PROMPT_SUBMITTED and AGENT_RESPONSE_COMPLETED events.",
+          "oneOf": [
+            { "$ref": "#/shared_types/TextDetail" },
+            { "type": "null" }
+          ]
         }
       }
     },

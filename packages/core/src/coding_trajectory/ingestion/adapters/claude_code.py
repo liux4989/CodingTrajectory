@@ -176,32 +176,12 @@ class ClaudeCodeAdapter(BaseAdapter):
                 )
             )
 
-            if isinstance(tool_use_result, dict) and tool_use_result.get("task"):
-                task = tool_use_result["task"]
-                events.append(
-                    Event(
-                        session_id=session_id,
-                        timestamp=timestamp,
-                        type=EventType.SUBTASK_STARTED,
-                        vendor_source=self.vendor,
-                        actor="system",
-                        payload=compact_dict(
-                            {
-                                **base,
-                                "task_id": task.get("id"),
-                                "task_content": task.get("content"),
-                                "task_status": task.get("status"),
-                            }
-                        ),
-                    )
-                )
-
             if isinstance(tool_use_result, dict) and tool_use_result.get("team_name"):
                 events.append(
                     Event(
                         session_id=session_id,
                         timestamp=timestamp,
-                        type=EventType.SUBTASK_STARTED,
+                        type=EventType.BACKGROUND_TASK_STARTED,
                         vendor_source=self.vendor,
                         actor="system",
                         payload=compact_dict(
@@ -258,12 +238,12 @@ class ClaudeCodeAdapter(BaseAdapter):
                 )
             )
 
-            if tool.get("name") in {"TaskCreate", "TeamCreate"}:
+            if tool.get("name") == "TeamCreate":
                 events.append(
                     Event(
                         session_id=session_id,
                         timestamp=timestamp,
-                        type=EventType.SUBTASK_STARTED,
+                        type=EventType.BACKGROUND_TASK_STARTED,
                         vendor_source=self.vendor,
                         actor="assistant",
                         payload=payload,

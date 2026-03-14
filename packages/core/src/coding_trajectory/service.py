@@ -86,6 +86,15 @@ def serialize_event_detail(event: Event) -> dict[str, Any]:
             "actor": event.actor,
             "provenance": event.provenance.value,
             "confidence": event.confidence.value,
+            # Consumer-layer tree linkage
+            "category": event.category.value if event.category else None,
+            "event_group_id": str(event.event_group_id) if event.event_group_id else None,
+            "parent_event_id": str(event.parent_event_id) if event.parent_event_id else None,
+            # Consumer-layer typed detail
+            "tool_call": event.tool_call.model_dump(mode="json", exclude_none=True) if event.tool_call else None,
+            "llm": event.llm.model_dump(mode="json", exclude_none=True) if event.llm else None,
+            "text": event.text.model_dump(mode="json", exclude_none=True) if event.text else None,
+            # Raw payload — always present
             "payload": event.payload,
         }
     )

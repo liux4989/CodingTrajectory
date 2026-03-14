@@ -35,10 +35,6 @@ class EventType(str, Enum):
     PERMISSION_APPROVED = "permission.approved"
     PERMISSION_DENIED = "permission.denied"
 
-    # Subtasks
-    SUBTASK_STARTED = "subtask.started"
-    SUBTASK_COMPLETED = "subtask.completed"
-
     # Background Tasks
     BACKGROUND_TASK_STARTED = "background_task.started"
     BACKGROUND_TASK_COMPLETED = "background_task.completed"
@@ -50,6 +46,66 @@ class EventType(str, Enum):
     # Completion
     AGENT_RESPONSE_COMPLETED = "agent.response.completed"
     TASK_COMPLETED = "task.completed"
+
+
+# ---------------------------------------------------------------------------
+# Consumer-layer enums: category + tool kind
+# ---------------------------------------------------------------------------
+
+
+class EventCategory(str, Enum):
+    """High-level grouping that links related events into one logical operation."""
+    SESSION = "session"
+    USER_INTERACTION = "user_interaction"
+    LLM_INFERENCE = "llm_inference"
+    TOOL_CALL = "tool_call"
+    BACKGROUND_TASK = "background_task"
+    PERMISSION = "permission"
+    CONTEXT_COMPACTION = "context_compaction"
+
+
+class ToolCallKind(str, Enum):
+    """Agent/tool-specific classification within a tool call event."""
+    REGULAR   = "regular"    # Bash, Read, Edit, grep — standard tools
+    SUBAGENT  = "subagent"   # Task (Amp), TeamCreate (Claude Code)
+    ORACLE    = "oracle"     # oracle (Amp): synchronous high-reasoning LLM sub-call
+    LIBRARIAN = "librarian"  # librarian (Amp): external repo / doc search agent
+    GITHUB    = "github"     # sub-tools inside librarian: search_github, read_github
+
+
+# ---------------------------------------------------------------------------
+# Typed detail models — one per event category (replace scattered payload keys)
+# ---------------------------------------------------------------------------
+
+
+class ToolCallDetail(BaseModel):
+    """Typed fields for TOOL_CALL_* events."""
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    kind: ToolCallKind = ToolCallKind.REGULAR
+    input: dict[str, Any] | None = None
+    result: Any | None = None
+    status: str | None = None          # done | failed | in_progress
+
+
+class LLMDetail(BaseModel):
+    """Typed fields for LLM_REQUEST_* and LLM_STREAM_EVENT events."""
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    inference_ms: float | None = None
+    reasoning_effort: str | None = None
+    stop_reason: str | None = None
+
+
+class TextDetail(BaseModel):
+    """Typed fields for USER_PROMPT_SUBMITTED and AGENT_RESPONSE_COMPLETED events."""
+    text: str
+    active_editor: str | None = None
+    visible_files: list[str] | None = None
+    cursor_location: Any | None = None
+    interrupted: bool | None = None
 
 
 class EventProvenance(str, Enum):
@@ -180,6 +236,19 @@ class Event(BaseModel):
     actor: str | None = None
     provenance: EventProvenance = EventProvenance.OBSERVED
     confidence: EventConfidence = EventConfidence.HIGH
+
+    # --- consumer layer: tree linkage ---
+    # Set by SessionEnricher after ingestion; adapters leave these None.
+    category: EventCategory | None = None
+    event_group_id: UUID | None = None      # shared across all events in one logical operation
+    parent_event_id: UUID | None = None     # direct parent in the tool-call tree
+
+    # --- consumer layer: typed detail (one populated per event type) ---
+    tool_call: ToolCallDetail | None = None  # TOOL_CALL_* events
+    llm: LLMDetail | None = None            # LLM_REQUEST_* / LLM_STREAM_EVENT
+    text: TextDetail | None = None          # USER_PROMPT_SUBMITTED / AGENT_RESPONSE_COMPLETED
+
+    # Raw vendor payload — always preserved; shrinks as fields are formalised above
     payload: dict[str, Any] = Field(default_factory=dict)
 
 

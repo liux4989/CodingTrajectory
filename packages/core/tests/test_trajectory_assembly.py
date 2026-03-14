@@ -86,7 +86,7 @@ def test_build_trajectory_detects_cross_session_claude_sidechain() -> None:
             Event(
                 session_id=child_session_id,
                 timestamp=timestamp,
-                type=EventType.SUBTASK_STARTED,
+                type=EventType.BACKGROUND_TASK_STARTED,
                 vendor_source=Vendor.CLAUDE_CODE,
                 actor="assistant",
                 payload={"task_id": "task-1"},

@@ -110,10 +110,10 @@ def _handle_get(client: RpcClient, args: argparse.Namespace) -> dict[str, Any]:
         return summarize_session(bundle["session"], bundle=bundle, no_truncate=no_truncate, include_timeline=True)
 
     if resource == "turn":
-        raw = client.call("turn.get", {"turn_id": resource_id})
         if view == "raw":
-            return raw
-        return summarize_turn_detail(raw, no_truncate=no_truncate)
+            return client.call("turn.get", {"turn_id": resource_id})
+        bundle = client.call("turn.bundle", {"turn_id": resource_id})
+        return summarize_turn_by_category(bundle["turn"], bundle=bundle, no_truncate=no_truncate)
 
     if resource == "event":
         raw = client.call("event.get", {"event_id": resource_id})
@@ -242,8 +242,6 @@ def summarize_session_timeline(
     turns_list = bundle.get("turns", [])
     event_by_id = {e["event_id"]: e for e in events_list}
     turn_by_id = {t["turn_id"]: t for t in turns_list}
-
-    tool_name_by_call_id, model_by_request_id = build_session_preview_context(events_list)
     timeline: list[dict[str, Any]] = []
 
     for index, item in enumerate(session_raw.get("timeline", []), start=1):
@@ -255,72 +253,46 @@ def summarize_session_timeline(
             if event is None:
                 timeline.append(prune_nones({"idx": index, "kind": "event", "id": item_id}))
                 continue
-            timeline.append(
-                summarize_session_event_item(
-                    event,
-                    idx=index,
-                    no_truncate=no_truncate,
-                    tool_name_by_call_id=tool_name_by_call_id,
-                    model_by_request_id=model_by_request_id,
-                )
-            )
+            timeline.append(summarize_session_event_item(event, idx=index, no_truncate=no_truncate))
             continue
 
         turn = turn_by_id.get(item_id)
         if turn is None:
             timeline.append(prune_nones({"idx": index, "kind": "turn", "id": item_id}))
             continue
-        timeline.append(
-            summarize_session_turn_item(
-                turn,
-                idx=index,
-                no_truncate=no_truncate,
-            )
-        )
+        timeline.append(summarize_session_turn_item(turn, idx=index, no_truncate=no_truncate))
 
     return timeline
 
 
-def build_session_preview_context(events: list[dict[str, Any]]) -> tuple[dict[str, str], dict[str, str]]:
-    tool_name_by_call_id: dict[str, str] = {}
-    model_by_request_id: dict[str, str] = {}
+def build_typed_preview(event: dict[str, Any], *, no_truncate: bool) -> dict[str, Any] | None:
+    """Build a preview dict from the consumer-layer typed fields — no payload inspection needed."""
+    parts: dict[str, Any] = {}
 
-    for event in events:
-        payload = event.get("payload", {})
-        tool_call_id = payload.get("tool_call_id")
-        tool_name = payload.get("tool_name")
-        if isinstance(tool_call_id, str) and isinstance(tool_name, str):
-            tool_name_by_call_id.setdefault(tool_call_id, tool_name)
+    if tc := event.get("tool_call"):
+        if name := tc.get("tool_name"):
+            parts["tool"] = name
+        if kind := tc.get("kind"):
+            parts["kind"] = kind
+        if status := tc.get("status"):
+            parts["status"] = status
 
-        request_id = payload.get("request_id")
-        model = payload.get("model")
-        if isinstance(request_id, str) and isinstance(model, str):
-            model_by_request_id.setdefault(request_id, model)
+    if llm := event.get("llm"):
+        if model := llm.get("model"):
+            parts["model"] = model
+        if tok_in := llm.get("input_tokens"):
+            parts["tokens_in"] = tok_in
+        if tok_out := llm.get("output_tokens"):
+            parts["tokens_out"] = tok_out
+        if stop := llm.get("stop_reason"):
+            parts["stop_reason"] = stop
 
-    return tool_name_by_call_id, model_by_request_id
+    if txt := event.get("text"):
+        text = txt.get("text") or ""
+        if text:
+            parts["text"] = shorten_line(text) if not no_truncate else text
 
-
-def enrich_preview_payload(
-    payload: dict[str, Any],
-    *,
-    tool_name_by_call_id: dict[str, str],
-    model_by_request_id: dict[str, str],
-) -> dict[str, Any]:
-    enriched = payload
-
-    tool_call_id = payload.get("tool_call_id")
-    if "tool_name" not in payload and isinstance(tool_call_id, str):
-        tool_name = tool_name_by_call_id.get(tool_call_id)
-        if tool_name:
-            enriched = {**enriched, "tool_name": tool_name}
-
-    request_id = payload.get("request_id")
-    if "model" not in enriched and isinstance(request_id, str):
-        model = model_by_request_id.get(request_id)
-        if model:
-            enriched = {**enriched, "model": model}
-
-    return enriched
+    return parts or None
 
 
 def summarize_session_turn_item(
@@ -350,8 +322,6 @@ def summarize_session_event_item(
     *,
     idx: int,
     no_truncate: bool,
-    tool_name_by_call_id: dict[str, str],
-    model_by_request_id: dict[str, str],
 ) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "idx": idx,
@@ -359,16 +329,10 @@ def summarize_session_event_item(
         "id": event["event_id"],
         "timestamp": format_datetime(event.get("timestamp")),
         "type": event.get("type"),
+        "category": event.get("category"),
         "actor": event.get("actor"),
     }
-    preview = timeline_payload_preview(
-        enrich_preview_payload(
-            event.get("payload", {}),
-            tool_name_by_call_id=tool_name_by_call_id,
-            model_by_request_id=model_by_request_id,
-        ),
-        no_truncate=no_truncate,
-    )
+    preview = build_typed_preview(event, no_truncate=no_truncate)
     if preview:
         entry["payload_preview"] = preview
     return prune_nones(entry)
@@ -399,72 +363,84 @@ def summarize_turn_detail(turn: dict[str, Any], *, no_truncate: bool) -> dict[st
     return summary
 
 
-def summarize_event(event: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
-    preview = payload_preview(event.get("payload", {}), no_truncate=no_truncate)
+def summarize_turn_by_category(
+    turn: dict[str, Any],
+    *,
+    bundle: dict[str, Any],
+    no_truncate: bool,
+) -> dict[str, Any]:
+    """Pretty view of a turn: header fields + events grouped by category."""
+    preview = turn.get("user_request")
+    if preview and not no_truncate:
+        preview = shorten_line(preview)
 
-    return prune_nones(
+    summary: dict[str, Any] = prune_nones(
         {
-            "id": event["event_id"],
-            "session": event.get("session_id"),
-            "turn": event.get("turn_id"),
-            "timestamp": format_datetime(event.get("timestamp")),
-            "type": event.get("type"),
-            "actor": event.get("actor"),
-            "vendor": event.get("vendor_source"),
-            "provenance": event.get("provenance"),
-            "confidence": event.get("confidence"),
-            "payload_preview": preview,
+            "id": turn["turn_id"],
+            "session": turn.get("session_id"),
+            "started_at": format_datetime(turn.get("started_at")),
+            "ended_at": format_datetime(turn.get("ended_at")),
+            "status": status_from_end(turn.get("ended_at")),
+            "user_request": preview,
+            "event_count": len(turn.get("event_ids", [])),
         }
     )
 
+    # Group events by category; uncategorised events go under "other"
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for event in bundle.get("events", []):
+        category = event.get("category") or "other"
+        groups.setdefault(category, []).append(
+            _compact_event_entry(event, no_truncate=no_truncate)
+        )
 
-def payload_preview(payload: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
-    preview_keys = (
-        "tool_name",
-        "tool_call_id",
-        "status",
-        "model",
-        "request_id",
-        "input_tokens",
-        "output_tokens",
-        "decision",
-        "scope",
-    )
+    if groups:
+        summary["events_by_category"] = groups
 
-    preview: dict[str, Any] = {}
-    for key in preview_keys:
-        if key in payload:
-            preview[key] = payload[key]
-        if len(preview) == 4:
-            break
-
-    if not preview:
-        for key, value in payload.items():
-            preview[key] = value
-            if len(preview) == 4:
-                break
-
-    if no_truncate:
-        return preview
-
-    return {key: truncate_value(value) for key, value in preview.items()}
+    return summary
 
 
-def timeline_payload_preview(payload: dict[str, Any], *, no_truncate: bool) -> dict[str, Any] | None:
-    preview_keys = {
-        "tool_name",
-        "tool_call_id",
-        "status",
-        "model",
-        "request_id",
-        "input_tokens",
-        "output_tokens",
-        "decision",
-        "scope",
+def _compact_event_entry(event: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
+    """One-line summary of an event, driven by typed consumer fields."""
+    entry: dict[str, Any] = {
+        "id": event["event_id"],
+        "type": event.get("type"),
     }
-    if not any(key in payload for key in preview_keys):
-        return None
-    return payload_preview(payload, no_truncate=no_truncate)
+    if tc := event.get("tool_call"):
+        entry["tool_call"] = {k: v for k, v in tc.items() if v is not None}
+    if llm := event.get("llm"):
+        entry["llm"] = {k: v for k, v in llm.items() if v is not None}
+    if txt := event.get("text"):
+        text_str = txt.get("text") or ""
+        entry["text"] = shorten_line(text_str) if not no_truncate else text_str
+    return prune_nones(entry)
+
+
+def summarize_event(event: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "id": event["event_id"],
+        "session": event.get("session_id"),
+        "turn": event.get("turn_id"),
+        "timestamp": format_datetime(event.get("timestamp")),
+        "type": event.get("type"),
+        "category": event.get("category"),
+        "actor": event.get("actor"),
+        "vendor": event.get("vendor_source"),
+        "provenance": event.get("provenance"),
+        "confidence": event.get("confidence"),
+        "group_id": event.get("event_group_id"),
+        "parent_id": event.get("parent_event_id"),
+    }
+    # Typed detail — richer than a payload preview
+    if tc := event.get("tool_call"):
+        entry["tool_call"] = {k: v for k, v in tc.items() if v is not None}
+    if llm := event.get("llm"):
+        entry["llm"] = {k: v for k, v in llm.items() if v is not None}
+    if txt := event.get("text"):
+        text_str = txt.get("text") or ""
+        entry["text"] = shorten_line(text_str) if not no_truncate else text_str
+    return prune_nones(entry)
+
 
 
 def write_output(payload: dict[str, Any] | list[dict[str, Any]], view: str) -> None:

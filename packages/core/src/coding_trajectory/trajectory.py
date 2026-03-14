@@ -185,12 +185,13 @@ def build_edges(sessions: list[Session]) -> list[TrajectoryEdge]:
 
 def _classify_edge(child: Session, parent: Session | None) -> tuple[str, list]:
     """Return (edge_type, evidence_event_ids) for a child->parent relationship."""
+    _SUBAGENT_TOOL_NAMES = {"TaskCreate", "Agent", "Task", "spawn_agent"}
     if parent is not None:
         for event in parent.events:
             tool_name = event.payload.get("tool_name")
-            if event.type == EventType.TOOL_CALL_REQUESTED and tool_name in {"TaskCreate", "TeamCreate"}:
+            if event.type == EventType.TOOL_CALL_REQUESTED and tool_name in _SUBAGENT_TOOL_NAMES:
                 return "spawned_subagent", [event.event_id]
-            if event.type == EventType.SUBTASK_STARTED:
+            if event.type == EventType.BACKGROUND_TASK_STARTED:
                 return "spawned_subagent", [event.event_id]
     return "sidechain_of", []
 
@@ -371,7 +372,7 @@ def _event_operation_kind(event: Event) -> str | None:
     payload = event.payload
     tool_name = payload.get("tool_name")
 
-    if event.type == EventType.SUBTASK_STARTED:
+    if event.type == EventType.BACKGROUND_TASK_STARTED:
         return "teammate" if payload.get("team_name") or tool_name == "TeamCreate" else "subagent"
     if event.type == EventType.CONTEXT_COMPACTION_STARTED or event.type == EventType.CONTEXT_COMPACTION_COMPLETED:
         return "compact"
@@ -380,19 +381,21 @@ def _event_operation_kind(event: Event) -> str | None:
     if event.type == EventType.TASK_COMPLETED and event.vendor_source == Vendor.CODEX_CLI:
         return "subagent"
     if event.type == EventType.TOOL_CALL_REQUESTED:
-        if tool_name == "spawn_agent":
+        if tool_name in {"spawn_agent", "TaskCreate", "Agent", "Task"}:
             return "subagent"
         if tool_name == "send_input":
             return "handoff"
         if tool_name == "resume_agent":
             return "resume"
+        if tool_name == "handoff":
+            return "handoff"
     return None
 
 
 def _operation_status(event: Event) -> str:
     if event.type == EventType.CONTEXT_COMPACTION_COMPLETED:
         return "completed"
-    if event.type == EventType.SUBTASK_COMPLETED:
+    if event.type == EventType.BACKGROUND_TASK_COMPLETED:
         return "completed"
     if event.type == EventType.TASK_COMPLETED:
         return "completed"

@@ -3,9 +3,8 @@ from __future__ import annotations
 from collections import Counter
 import json
 from pathlib import Path
-from uuid import uuid4
 
-from coding_trajectory_cli.cli import EXIT_NOT_FOUND, build_session_preview_context, enrich_preview_payload, main
+from coding_trajectory_cli.cli import EXIT_NOT_FOUND, build_typed_preview, main
 
 
 def write_codex_log(
@@ -146,40 +145,34 @@ def test_session_get_uses_current_project_discovery(tmp_path: Path, capsys, monk
     assert "Discovered coding-agent logs:" not in captured.err
 
 
-def test_session_preview_context_backfills_model_from_request_id() -> None:
-    events = [
-        {
-            "event_id": str(uuid4()),
-            "session_id": str(uuid4()),
-            "timestamp": "2026-03-13T10:00:00Z",
-            "type": "llm.request.completed",
-            "vendor_source": "claude_code",
-            "actor": "assistant",
-            "payload": {"request_id": "req-1", "model": "claude-sonnet-4"},
-        },
-        {
-            "event_id": str(uuid4()),
-            "session_id": str(uuid4()),
-            "timestamp": "2026-03-13T10:00:00Z",
-            "type": "llm.stream.event",
-            "vendor_source": "claude_code",
-            "actor": "assistant",
-            "payload": {"request_id": "req-1"},
-        },
-    ]
-
-    tool_name_by_call_id, model_by_request_id = build_session_preview_context(events)
-
-    assert tool_name_by_call_id == {}
-    assert model_by_request_id == {"req-1": "claude-sonnet-4"}
-    assert enrich_preview_payload(
-        {"request_id": "req-1"},
-        tool_name_by_call_id=tool_name_by_call_id,
-        model_by_request_id=model_by_request_id,
-    ) == {
-        "request_id": "req-1",
-        "model": "claude-sonnet-4",
+def test_build_typed_preview_extracts_llm_fields() -> None:
+    event = {
+        "llm": {
+            "model": "claude-sonnet-4",
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "stop_reason": "end_turn",
+        }
     }
+    result = build_typed_preview(event, no_truncate=False)
+    assert result == {
+        "model": "claude-sonnet-4",
+        "tokens_in": 100,
+        "tokens_out": 50,
+        "stop_reason": "end_turn",
+    }
+
+
+def test_build_typed_preview_extracts_tool_call_fields() -> None:
+    event = {
+        "tool_call": {
+            "tool_name": "exec_command",
+            "kind": "regular",
+            "status": "done",
+        }
+    }
+    result = build_typed_preview(event, no_truncate=False)
+    assert result == {"tool": "exec_command", "kind": "regular", "status": "done"}
 
 
 def test_session_get_global_can_resolve_other_project_id(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -295,7 +288,9 @@ def test_turn_get_pretty_includes_event_ids(tmp_path: Path, capsys, monkeypatch)
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["id"] == turn_id
-    assert len(output["event_ids"]) >= 1
+    assert output["event_count"] >= 1
+    assert "events_by_category" in output
+    assert "event_ids" not in output
 
 
 def test_event_get_pretty(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -314,7 +309,7 @@ def test_event_get_pretty(tmp_path: Path, capsys, monkeypatch) -> None:
     output = json.loads(capsys.readouterr().out)
     assert output["id"] == event_id
     assert output["type"] == "tool.call.requested"
-    assert output["payload_preview"]["tool_name"] == "exec_command"
+    assert output["tool_call"]["tool_name"] == "exec_command"
 
 
 def test_missing_resource_returns_not_found(tmp_path: Path, capsys, monkeypatch) -> None:

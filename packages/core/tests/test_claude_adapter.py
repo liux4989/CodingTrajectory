@@ -6,7 +6,7 @@ from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
 from coding_trajectory.ingestion.models import EventConfidence, EventProvenance, EventType
 
 
-def test_claude_adapter_emits_stream_subtask_and_resume_events(tmp_path) -> None:
+def test_claude_adapter_emits_stream_tool_and_resume_events(tmp_path) -> None:
     path = tmp_path / "session.jsonl"
     records = [
         {
@@ -59,7 +59,6 @@ def test_claude_adapter_emits_stream_subtask_and_resume_events(tmp_path) -> None
 
     assert any(event.type == EventType.LLM_STREAM_EVENT for event in events)
     assert any(event.type == EventType.TOOL_CALL_REQUESTED for event in events)
-    assert any(event.type == EventType.SUBTASK_STARTED for event in events)
     resumed = next(event for event in events if event.type == EventType.SESSION_RESUMED)
     assert resumed.provenance == EventProvenance.DERIVED
     assert resumed.confidence == EventConfidence.MEDIUM

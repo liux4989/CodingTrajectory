@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from coding_trajectory.consumer import enrich_session
 from coding_trajectory.discovery import discover_store, format_discovery_sources
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import (
@@ -106,6 +107,11 @@ def _dispatch(
         turn = resolve_resource(store, "turn", params["turn_id"])
         return serialize_turn_detail(turn)
 
+    if method == "turn.bundle":
+        turn = resolve_resource(store, "turn", params["turn_id"])
+        events = [serialize_event_detail(store.get_event(eid)) for eid in turn.event_ids]
+        return {"turn": serialize_turn_detail(turn), "events": events}
+
     if method == "event.get":
         event = resolve_resource(store, "event", params["event_id"])
         return serialize_event_detail(event)
@@ -187,6 +193,11 @@ def serve(argv: list[str] | None = None) -> None:
 
     store = discovery.store
     discovery_note = format_discovery_sources(discovery.sources)
+
+    # Enrich all sessions once at startup — populates category, event_group_id,
+    # parent_event_id, tool_call, llm, text on every Event.
+    for session in store.sessions.values():
+        enrich_session(session)
 
     for line in sys.stdin:
         line = line.strip()

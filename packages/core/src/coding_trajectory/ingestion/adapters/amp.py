@@ -131,9 +131,96 @@ class AmpAdapter(BaseAdapter):
             extensions=self._parse_extensions(thread),
         )
 
+    # Tools that spawn subagents / background tasks
+    _SUBAGENT_TOOLS = {"Task"}
+    # Tools that invoke a specialized in-session agent and return a text response
+    _AGENT_QUERY_TOOLS = {"oracle", "librarian"}
+
+    @staticmethod
+    def _parse_debug_usage(debug: dict | None) -> dict:
+        """Extract token / model info from a tool_result's ~debug field."""
+        if not isinstance(debug, dict):
+            return {}
+        inferences = debug.get("inferences") or []
+        first = inferences[0] if inferences else {}
+        usage = first.get("usage") or {}
+        return compact_dict({
+            "model": usage.get("model"),
+            "token_input": usage.get("inputTokens") or None,
+            "token_output": usage.get("outputTokens") or None,
+            "inference_ms": first.get("inferenceTimeMs"),
+            "reasoning_effort": debug.get("reasoningEffort"),
+        })
+
+    def _extract_progress_events(
+        self,
+        session_id: UUID,
+        timestamp: datetime,
+        progress: list,
+        parent_tool_id: str,
+        parent_tool_name: str,
+    ) -> list[Event]:
+        """Emit derived TOOL_CALL_REQUESTED + TOOL_CALL_SUCCEEDED/FAILED for each
+        tool call recorded in an agent's progress trace (librarian, Task subagent).
+        """
+        events: list[Event] = []
+        for step in progress:
+            if not isinstance(step, dict):
+                continue
+            for tool_use in (step.get("tool_uses") or []):
+                if not isinstance(tool_use, dict):
+                    continue
+                tool_name = tool_use.get("tool_name") or ""
+                status = tool_use.get("status") or ""
+                base = compact_dict({
+                    "tool_name": tool_name,
+                    "parent_tool_call_id": parent_tool_id,
+                    "parent_tool_name": parent_tool_name,
+                })
+                events.append(
+                    Event(
+                        session_id=session_id,
+                        timestamp=timestamp,
+                        type=EventType.TOOL_CALL_REQUESTED,
+                        vendor_source=self.vendor,
+                        actor="assistant",
+                        provenance=EventProvenance.DERIVED,
+                        confidence=EventConfidence.MEDIUM,
+                        payload=compact_dict({**base, "tool_input": tool_use.get("input")}),
+                    )
+                )
+                event_type = (
+                    EventType.TOOL_CALL_SUCCEEDED if status == "done" else EventType.TOOL_CALL_FAILED
+                )
+                events.append(
+                    Event(
+                        session_id=session_id,
+                        timestamp=timestamp,
+                        type=event_type,
+                        vendor_source=self.vendor,
+                        actor="tool",
+                        provenance=EventProvenance.DERIVED,
+                        confidence=EventConfidence.MEDIUM,
+                        payload=compact_dict({**base, "tool_status": status}),
+                    )
+                )
+        return events
+
     def _parse_messages(self, session_id: UUID, thread_created: datetime, messages: list[dict]) -> list[Event]:
         events: list[Event] = []
         last_ts = thread_created
+
+        # Build tool_id → name mapping so tool_results can be classified by tool name.
+        # tool_result blocks only carry toolUseID; the name lives in the tool_use block.
+        tool_id_to_name: dict[str, str] = {}
+        tool_id_to_input: dict[str, dict] = {}
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                for block in (msg.get("content") or []):
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tid = block.get("id") or ""
+                        tool_id_to_name[tid] = block.get("name") or ""
+                        tool_id_to_input[tid] = block.get("input") or {}
 
         for msg in messages:
             role = msg.get("role")
@@ -173,25 +260,119 @@ class AmpAdapter(BaseAdapter):
                 for block in tool_results:
                     run = block.get("run") or {}
                     status = run.get("status")
-                    event_type = EventType.TOOL_CALL_SUCCEEDED if status == "done" else EventType.TOOL_CALL_FAILED
-                    events.append(
-                        Event(
-                            session_id=session_id,
-                            timestamp=timestamp,
-                            type=event_type,
-                            vendor_source=self.vendor,
-                            actor="tool",
-                            payload=compact_dict(
-                                {
-                                    "message_id": message_id,
-                                    "tool_call_id": block.get("toolUseID"),
-                                    "tool_status": status,
-                                    "tool_result": run.get("result"),
-                                    "track_files": run.get("trackFiles"),
-                                }
-                            ),
+                    tool_id = block.get("toolUseID") or ""
+                    tool_name = tool_id_to_name.get(tool_id, "")
+
+                    if tool_name in self._SUBAGENT_TOOLS:
+                        # Task tool: map done→BACKGROUND_TASK_COMPLETED, in-progress→skip
+                        if status == "done":
+                            event_type = EventType.BACKGROUND_TASK_COMPLETED
+                        elif status == "in-progress":
+                            # Still running — BACKGROUND_TASK_STARTED was already emitted on
+                            # the tool_use; no additional event needed here.
+                            continue
+                        else:
+                            event_type = EventType.TOOL_CALL_FAILED
+                        events.append(
+                            Event(
+                                session_id=session_id,
+                                timestamp=timestamp,
+                                type=event_type,
+                                vendor_source=self.vendor,
+                                actor="tool",
+                                payload=compact_dict(
+                                    {
+                                        "message_id": message_id,
+                                        "tool_call_id": tool_id,
+                                        "tool_name": tool_name,
+                                        "tool_status": status,
+                                        "tool_result": run.get("result"),
+                                        "track_files": run.get("trackFiles"),
+                                    }
+                                ),
+                            )
                         )
-                    )
+                        # Emit derived events for each tool call the subagent made
+                        if status == "done" and isinstance(run.get("progress"), list):
+                            events.extend(
+                                self._extract_progress_events(
+                                    session_id, timestamp, run["progress"], tool_id, tool_name
+                                )
+                            )
+
+                    elif tool_name in self._AGENT_QUERY_TOOLS:
+                        # oracle: single inference, no tool trace; token info in ~debug
+                        # librarian: full github tool trace in progress
+                        debug_info = self._parse_debug_usage(run.get("~debug"))
+                        event_type = EventType.TOOL_CALL_SUCCEEDED if status == "done" else EventType.TOOL_CALL_FAILED
+                        events.append(
+                            Event(
+                                session_id=session_id,
+                                timestamp=timestamp,
+                                type=event_type,
+                                vendor_source=self.vendor,
+                                actor="tool",
+                                payload=compact_dict(
+                                    {
+                                        "message_id": message_id,
+                                        "tool_call_id": tool_id,
+                                        "tool_name": tool_name,
+                                        "tool_status": status,
+                                        "track_files": run.get("trackFiles"),
+                                        **debug_info,
+                                    }
+                                ),
+                            )
+                        )
+                        # Librarian exposes its github tool calls in progress; emit them as derived events
+                        if status == "done" and tool_name == "librarian" and isinstance(run.get("progress"), list):
+                            events.extend(
+                                self._extract_progress_events(
+                                    session_id, timestamp, run["progress"], tool_id, tool_name
+                                )
+                            )
+                        if status == "done" and run.get("result"):
+                            events.append(
+                                Event(
+                                    session_id=session_id,
+                                    timestamp=timestamp,
+                                    type=EventType.AGENT_RESPONSE_COMPLETED,
+                                    vendor_source=self.vendor,
+                                    actor="assistant",
+                                    provenance=EventProvenance.DERIVED,
+                                    confidence=EventConfidence.MEDIUM,
+                                    payload=compact_dict(
+                                        {
+                                            "tool_call_id": tool_id,
+                                            "tool_name": tool_name,
+                                            "text": run.get("result"),
+                                            **debug_info,
+                                        }
+                                    ),
+                                )
+                            )
+
+                    else:
+                        event_type = EventType.TOOL_CALL_SUCCEEDED if status == "done" else EventType.TOOL_CALL_FAILED
+                        events.append(
+                            Event(
+                                session_id=session_id,
+                                timestamp=timestamp,
+                                type=event_type,
+                                vendor_source=self.vendor,
+                                actor="tool",
+                                payload=compact_dict(
+                                    {
+                                        "message_id": message_id,
+                                        "tool_call_id": tool_id,
+                                        "tool_name": tool_name,
+                                        "tool_status": status,
+                                        "tool_result": run.get("result"),
+                                        "track_files": run.get("trackFiles"),
+                                    }
+                                ),
+                            )
+                        )
 
             elif role == "assistant":
                 timestamp = last_ts
@@ -222,6 +403,7 @@ class AmpAdapter(BaseAdapter):
 
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tool_name = block.get("name") or ""
                         events.append(
                             Event(
                                 session_id=session_id,
@@ -233,13 +415,32 @@ class AmpAdapter(BaseAdapter):
                                     {
                                         **base_payload,
                                         "tool_call_id": block.get("id"),
-                                        "tool_name": block.get("name"),
+                                        "tool_name": tool_name,
                                         "tool_input": block.get("input"),
                                         "tool_complete": block.get("complete"),
                                     }
                                 ),
                             )
                         )
+                        # Task = Amp's subagent spawning tool (manual handoff / parallel tasks)
+                        if tool_name in self._SUBAGENT_TOOLS:
+                            events.append(
+                                Event(
+                                    session_id=session_id,
+                                    timestamp=timestamp,
+                                    type=EventType.BACKGROUND_TASK_STARTED,
+                                    vendor_source=self.vendor,
+                                    actor="assistant",
+                                    payload=compact_dict(
+                                        {
+                                            **base_payload,
+                                            "tool_call_id": block.get("id"),
+                                            "tool_name": tool_name,
+                                            "tool_input": block.get("input"),
+                                        }
+                                    ),
+                                )
+                            )
 
                 text = _content_text(content)
                 if text:
