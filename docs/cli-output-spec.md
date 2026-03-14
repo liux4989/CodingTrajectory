@@ -2,8 +2,7 @@
 
 This document defines output views for the canonical session API. The CLI reads
 from richer stored resource models, then projects them into the API contract
-for `raw` output and into presentation-friendly shapes for `summary` and
-`pretty`.
+for `raw` output and into a presentation-friendly shape for `pretty`.
 
 The CLI auto-discovers coding-agent logs from the supported vendor homes and
 ingests them on demand.
@@ -27,31 +26,22 @@ Use for:
 - debugging
 - schema validation
 
-### `summary`
+### `pretty`
 
-Returns a compact JSON object with the most useful fields for quick inspection.
+Returns curated JSON with the most useful fields. Both human-scannable and
+agent-parseable.
 
 Rules:
 
 - prefer counts over full nested arrays
 - collapse large payloads into previews
-- use short display aliases where they improve readability
-- omit `null` fields unless they explain state
-
-### `pretty`
-
-Returns terminal-optimized text. This may use labels, indentation, tables, and
-sections. It is intended for humans, not for stable parsing.
-
-Rules:
-
-- highlight identity, status, timing, and counts first
-- print nested payloads only when small
+- use short display aliases
+- omit null fields
 - truncate long values by default
 
 ## Field Aliases
 
-Aliases apply only to `summary` and `pretty`.
+Aliases apply only to `pretty`.
 
 | Canonical field | Display alias |
 | --- | --- |
@@ -71,7 +61,7 @@ Aliases apply only to `summary` and `pretty`.
 Canonical purpose:
 Return one trajectory and the ordered session ids associated with it.
 
-`summary` shape:
+`pretty` shape:
 
 ```json
 {
@@ -89,24 +79,12 @@ Notes:
   main navigational output
 - add `session_count` so callers can scan without counting manually
 
-`pretty` example:
-
-```text
-Trajectory  a8a7f6e5-b3bb-46e5-b2eb-7f7a8ad9545a
-Project     coding-trajectory
-Task        task-42
-Sessions    2
-
-1. 3bb69f88-4164-499d-b366-d6a15cb6f88f
-2. 7c4bbd8e-c68f-4234-9c9c-1fa9704d5455
-```
-
 ### `session.get`
 
 Canonical purpose:
 Return one session and its mixed replay timeline of turn refs and event refs.
 
-`summary` shape:
+`pretty` shape:
 
 ```json
 {
@@ -146,7 +124,7 @@ Derived fields:
 - `status = in_progress` when `ended_at` is absent
 - `event_count` counts all session events, including those wrapped by turns
 - `turn_count` counts session turns
-- keep `timeline` in canonical order so the summary still explains section flow
+- keep `timeline` in canonical order so the pretty view still explains section flow
 - each top-level timeline item is either a standalone session event or a turn
   ref
 - use `turn get` to inspect the full contents of a turn
@@ -162,37 +140,12 @@ Timeline item rules:
 - do not inline nested turn events in `session.get`; turn expansion belongs to
   `turn get`
 
-`pretty` example:
-
-```text
-Session     3bb69f88-4164-499d-b366-d6a15cb6f88f
-Trajectory  a8a7f6e5-b3bb-46e5-b2eb-7f7a8ad9545a
-Vendor      codex_cli
-Status      completed
-Started     2026-03-13T10:00:00Z
-Ended       2026-03-13T10:05:00Z
-Timeline    3 items (2 events, 1 turn)
-```
-
-`pretty` intentionally stays text-first and high level. It may show a separate
-timeline table on demand, but it should not replace the structured `summary`
-timeline.
-
-Optional pretty timeline table:
-
-```text
-IDX  KIND   ID
-1    event  11111111-1111-1111-1111-111111111111
-2    turn   22222222-2222-2222-2222-222222222222
-3    event  33333333-3333-3333-3333-333333333333
-```
-
 ### `turn.get`
 
 Canonical purpose:
 Return one turn and its ordered event ids.
 
-`summary` shape:
+`pretty` shape:
 
 ```json
 {
@@ -213,34 +166,14 @@ Derived fields:
 - `preview` is the first line of `user_request`, truncated to a CLI-friendly
   width
 - `status` follows the same rule as session
-- `turn get --view summary` includes `event_ids`
-
-`pretty` example:
-
-```text
-Turn        22222222-2222-2222-2222-222222222222
-Session     3bb69f88-4164-499d-b366-d6a15cb6f88f
-Status      completed
-Started     2026-03-13T10:00:10Z
-Ended       2026-03-13T10:01:00Z
-Events      2
-Request     Fix the failing test
-```
-
-Optional turn events command:
-
-```text
-IDX  EVENT ID
-1    44444444-4444-4444-4444-444444444444
-2    55555555-5555-5555-5555-555555555555
-```
+- `turn get --view pretty` includes `event_ids`
 
 ### `event.get`
 
 Canonical purpose:
 Return one event, either standalone or turn-owned.
 
-`summary` shape:
+`pretty` shape:
 
 ```json
 {
@@ -271,38 +204,19 @@ Return one event, either standalone or turn-owned.
   includes `tool_call_id` or `request_id`
 - cap preview depth to avoid large nested output
 
-`pretty` example:
-
-```text
-Event       44444444-4444-4444-4444-444444444444
-Type        tool.call.requested
-Time        2026-03-13T10:00:15Z
-Actor       assistant
-Session     3bb69f88-4164-499d-b366-d6a15cb6f88f
-Turn        22222222-2222-2222-2222-222222222222
-Vendor      codex_cli
-Source      observed
-Confidence  high
-
-Payload
-  tool_name: exec_command
-  tool_call_id: call-1
-```
-
 ## CLI Defaults
 
 Recommended defaults:
 
-- `get` commands default to `summary`
-- `session get --view summary` should preserve a compact ordered timeline, not
+- both `get` and `list` default to `pretty`
+- `session get --view pretty` should preserve a compact ordered timeline, not
   collapse to counts only
-- `list` or timeline-style commands default to `pretty`
 - `--view raw` always returns canonical JSON
 - `--json` is an alias for `--view raw`
 
 Recommended flags:
 
-- `--view raw|summary|pretty`
+- `--view raw|pretty`
 - `--fields field1,field2,...`
 - `--no-truncate`
 
@@ -365,13 +279,12 @@ List output rules:
 - `trajectory list` defaults to current-project scope by matching the current
   directory name against `project_identifier`
 - `-g` disables current-project scoping and lists all projects
-- `pretty` uses a table view
-- `summary` returns an array of compact JSON objects
+- `pretty` returns an array of compact JSON objects
 - `raw` returns an array of canonical resource objects
 
 ## Implementation Notes
 
-- implement summary/pretty transforms in the CLI layer, not in the canonical
+- implement pretty transforms in the CLI layer, not in the canonical
   storage model
 - keep transforms deterministic and test them directly
 - treat `raw` output as the compatibility contract for machine consumers
