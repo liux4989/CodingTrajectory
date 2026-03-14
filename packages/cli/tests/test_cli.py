@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from coding_trajectory.cli import EXIT_NOT_FOUND, build_session_preview_context, enrich_preview_payload, main
+from coding_trajectory_cli.cli import EXIT_NOT_FOUND, build_session_preview_context, enrich_preview_payload, main
 from coding_trajectory.ingestion.models import Event, EventType, Vendor
 
 
@@ -95,7 +95,7 @@ def setup_project_logs(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
 def test_trajectory_list_defaults_to_current_project(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
-    exit_code = main(["trajectory", "list", "--view", "summary"])
+    exit_code = main(["trajectory", "list"])
 
     assert exit_code == 0
     captured = capsys.readouterr()
@@ -119,7 +119,7 @@ def test_trajectory_list_global_includes_other_projects(tmp_path: Path, capsys, 
         message="task c",
     )
 
-    exit_code = main(["trajectory", "list", "--view", "summary", "-g"])
+    exit_code = main(["trajectory", "list", "-g"])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
@@ -129,7 +129,7 @@ def test_trajectory_list_global_includes_other_projects(tmp_path: Path, capsys, 
     }
 
 
-def test_session_get_summary_uses_current_project_discovery(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_session_get_uses_current_project_discovery(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
     exit_code = main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
@@ -233,14 +233,14 @@ def test_trajectory_get_fields(tmp_path: Path, capsys, monkeypatch) -> None:
     assert output["multi_agent_mode"] == "in_session"
 
 
-def test_session_list_summary_can_filter_by_trajectory(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_session_list_can_filter_by_trajectory(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
     main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
     session_output = json.loads(capsys.readouterr().out)
     trajectory_id = session_output["trajectory"]
 
-    exit_code = main(["session", "list", "--trajectory-id", trajectory_id, "--view", "summary"])
+    exit_code = main(["session", "list", "--trajectory-id", trajectory_id])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
@@ -285,14 +285,14 @@ def test_turn_get_raw(tmp_path: Path, capsys, monkeypatch) -> None:
     assert len(output["event_ids"]) >= 1
 
 
-def test_turn_get_summary_includes_event_ids(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_turn_get_pretty_includes_event_ids(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
     main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
     session = json.loads(capsys.readouterr().out)
     turn_id = session["timeline"][1]["id"]
 
-    exit_code = main(["turn", "get", turn_id, "--view", "summary"])
+    exit_code = main(["turn", "get", turn_id, "--view", "pretty"])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
@@ -313,10 +313,10 @@ def test_event_get_pretty(tmp_path: Path, capsys, monkeypatch) -> None:
     exit_code = main(["event", "get", event_id, "--view", "pretty"])
 
     assert exit_code == 0
-    output = capsys.readouterr().out
-    assert f"Event       {event_id}" in output
-    assert "Type        tool.call.requested" in output
-    assert "tool_name: exec_command" in output
+    output = json.loads(capsys.readouterr().out)
+    assert output["id"] == event_id
+    assert output["type"] == "tool.call.requested"
+    assert output["payload_preview"]["tool_name"] == "exec_command"
 
 
 def test_missing_resource_returns_not_found(tmp_path: Path, capsys, monkeypatch) -> None:

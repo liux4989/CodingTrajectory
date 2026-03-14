@@ -12,6 +12,17 @@ from uuid import UUID
 from coding_trajectory.discovery import discover_store, format_discovery_sources, normalize_project_key
 from coding_trajectory.ingestion.models import Event, Session, Trajectory, Turn
 from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
+from coding_trajectory.service import (
+    format_datetime,
+    prune_nones,
+    resolve_collection,
+    resolve_resource,
+    serialize_event_detail,
+    serialize_session_detail,
+    serialize_timeline_item,
+    serialize_trajectory_detail,
+    serialize_turn_detail,
+)
 
 EXIT_USAGE = 2
 EXIT_NOT_FOUND = 3
@@ -28,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
 
         get_parser = resource_subparsers.add_parser("get")
         get_parser.add_argument("resource_id")
-        add_common_query_arguments(get_parser, default_view="summary")
+        add_common_query_arguments(get_parser, default_view="pretty")
 
         if resource in ("trajectory", "session"):
             list_parser = resource_subparsers.add_parser("list")
@@ -46,7 +57,7 @@ def add_common_query_arguments(parser: argparse.ArgumentParser, *, default_view:
         action="store_true",
         help="Search across all projects instead of scoping to the current project.",
     )
-    parser.add_argument("--view", choices=("summary", "pretty", "raw"), default=default_view)
+    parser.add_argument("--view", choices=("pretty", "raw"), default=default_view)
     parser.add_argument("--json", action="store_true", help="Alias for --view raw.")
     parser.add_argument("--fields", help="Comma-separated fields to include in JSON output.")
     parser.add_argument("--no-truncate", action="store_true", help="Disable text truncation in summary/pretty views.")
@@ -77,14 +88,19 @@ def main(argv: list[str] | None = None) -> int:
             resource = resolve_resource(store, args.resource, args.resource_id)
             payload = render_item(resource, args.view, no_truncate=args.no_truncate)
         elif args.action == "list":
-            resources = resolve_collection(store, args.resource, args)
+            trajectory_id = _extract_trajectory_filter(args)
+            resources = resolve_collection(
+                store,
+                args.resource,
+                global_scope=args.global_scope,
+                trajectory_id=trajectory_id,
+                current_dir=Path.cwd(),
+            )
             payload = render_collection(resources, args.view, no_truncate=args.no_truncate)
         else:
             raise ValueError(f"unsupported action: {args.action}")
 
         if args.fields:
-            if args.view == "pretty":
-                parser.error("--fields is only supported with summary or raw output")
             payload = select_output_fields(payload, args.fields)
 
         if discovery_note and args.action == "list":
@@ -103,72 +119,32 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> Trajectory | Session | Turn | Event:
-    resource_id = UUID(raw_id)
-
-    if resource == "trajectory":
-        return store.get_trajectory(resource_id)
-    if resource == "session":
-        return store.get_session(resource_id)
-    if resource == "turn":
-        return store.get_turn(resource_id)
-    if resource == "event":
-        return store.get_event(resource_id)
-
-    raise ValueError(f"unsupported resource: {resource}")
+def _extract_trajectory_filter(args: argparse.Namespace) -> str | None:
+    trajectory_id = getattr(args, "trajectory_id", None)
+    if not trajectory_id and getattr(args, "parent_id", None):
+        trajectory_id = args.parent_id
+    return trajectory_id
 
 
-def resolve_collection(store: DocumentStore, resource: str, args: argparse.Namespace) -> list[Trajectory | Session]:
-    if resource == "trajectory":
-        trajectories = list(store.trajectories.values())
-        if not args.global_scope:
-            current_project = normalize_project_key(Path.cwd().name)
-            trajectories = [
-                item
-                for item in trajectories
-                if item.project_identifier and normalize_project_key(item.project_identifier) == current_project
-            ]
-        return sorted(trajectories, key=lambda item: (item.project_identifier or "", str(item.trajectory_id)))
-
-    if resource == "session":
-        sessions = list(store.sessions.values())
-        if not args.trajectory_id and getattr(args, "parent_id", None):
-            args.trajectory_id = args.parent_id
-        if args.trajectory_id:
-            trajectory_id = UUID(args.trajectory_id)
-            sessions = [item for item in sessions if item.trajectory_id == trajectory_id]
-        return sorted(sessions, key=lambda item: (item.started_at, str(item.session_id)))
-
-    raise ValueError(f"unsupported resource: {resource}")
-
-
-def render_item(resource: Trajectory | Session | Turn | Event, view: str, *, no_truncate: bool) -> dict[str, Any] | str:
+def render_item(resource: Trajectory | Session | Turn | Event, view: str, *, no_truncate: bool) -> dict[str, Any]:
     if isinstance(resource, Trajectory):
         if view == "raw":
             return serialize_trajectory_detail(resource)
-        if view == "summary":
-            return summarize_trajectory(resource)
-        return pretty_trajectory(resource)
+        return summarize_trajectory(resource)
 
     if isinstance(resource, Session):
         if view == "raw":
             return serialize_session_detail(resource)
-        if view == "summary":
-            return summarize_session(resource, no_truncate=no_truncate, include_timeline=True)
-        return pretty_session(resource)
+        return summarize_session(resource, no_truncate=no_truncate, include_timeline=True)
 
     if isinstance(resource, Turn):
         if view == "raw":
             return serialize_turn_detail(resource)
-        if view == "summary":
-            return summarize_turn_detail(resource, no_truncate=no_truncate)
-        return pretty_turn(resource, no_truncate=no_truncate)
+        return summarize_turn_detail(resource, no_truncate=no_truncate)
 
     if view == "raw":
         return serialize_event_detail(resource)
-    if view == "summary":
-        return summarize_event(resource, no_truncate=no_truncate)
-    return pretty_event(resource, no_truncate=no_truncate)
+    return summarize_event(resource, no_truncate=no_truncate)
 
 
 def render_collection(
@@ -176,12 +152,10 @@ def render_collection(
     view: str,
     *,
     no_truncate: bool,
-) -> list[dict[str, Any]] | str:
+) -> list[dict[str, Any]]:
     if view == "raw":
         return [serialize_trajectory_detail(resource) if isinstance(resource, Trajectory) else serialize_session_detail(resource) for resource in resources]
-    if view == "summary":
-        return [summarize_collection_item(resource, no_truncate=no_truncate) for resource in resources]
-    return pretty_collection(resources, no_truncate=no_truncate)
+    return [summarize_collection_item(resource, no_truncate=no_truncate) for resource in resources]
 
 
 def summarize_trajectory(trajectory: Trajectory) -> dict[str, Any]:
@@ -198,76 +172,6 @@ def summarize_trajectory(trajectory: Trajectory) -> dict[str, Any]:
             "session_ids": [str(session.session_id) for session in trajectory.sessions],
         }
     )
-
-
-def serialize_trajectory_detail(trajectory: Trajectory) -> dict[str, Any]:
-    return prune_nones(
-        {
-            "trajectory_id": str(trajectory.trajectory_id),
-            "project_identifier": trajectory.project_identifier,
-            "task_reference": trajectory.task_reference,
-            "multi_agent_mode": trajectory.multi_agent_mode,
-            "summary": trajectory.summary.model_dump(mode="json") if trajectory.summary else None,
-            "session_ids": [str(session.session_id) for session in trajectory.sessions],
-            "session_refs": [item.model_dump(mode="json") for item in trajectory.session_refs],
-            "edges": [item.model_dump(mode="json") for item in trajectory.edges],
-            "operations": [item.model_dump(mode="json") for item in trajectory.operations],
-            "sections": [item.model_dump(mode="json") for item in trajectory.sections],
-            "inference_notes": [item.model_dump(mode="json") for item in trajectory.inference_notes],
-        }
-    )
-
-
-def serialize_session_detail(session: Session) -> dict[str, Any]:
-    return prune_nones(
-        {
-            "session_id": str(session.session_id),
-            "trajectory_id": str(session.trajectory_id),
-            "parent_session_id": str(session.parent_session_id) if session.parent_session_id else None,
-            "vendor": session.vendor.value,
-            "started_at": format_datetime(session.started_at),
-            "ended_at": format_datetime(session.ended_at),
-            "timeline": [serialize_timeline_item(item) for item in session.timeline],
-            "extensions": session.extensions.model_dump(mode="json") if session.extensions else None,
-        }
-    )
-
-
-def serialize_turn_detail(turn: Turn) -> dict[str, Any]:
-    return prune_nones(
-        {
-            "turn_id": str(turn.turn_id),
-            "session_id": str(turn.session_id),
-            "user_request": turn.user_request,
-            "started_at": format_datetime(turn.started_at),
-            "ended_at": format_datetime(turn.ended_at),
-            "event_ids": [str(event_id) for event_id in turn.event_ids],
-        }
-    )
-
-
-def serialize_event_detail(event: Event) -> dict[str, Any]:
-    return prune_nones(
-        {
-            "event_id": str(event.event_id),
-            "session_id": str(event.session_id),
-            "turn_id": str(event.turn_id) if event.turn_id else None,
-            "timestamp": format_datetime(event.timestamp),
-            "type": event.type.value,
-            "vendor_source": event.vendor_source.value,
-            "actor": event.actor,
-            "provenance": event.provenance.value,
-            "confidence": event.confidence.value,
-            "payload": event.payload,
-        }
-    )
-
-
-def serialize_timeline_item(item: Any) -> dict[str, Any]:
-    return {
-        "kind": item.kind,
-        "id": str(item.id),
-    }
 
 
 def summarize_session(session: Session, *, no_truncate: bool, include_timeline: bool) -> dict[str, Any]:
@@ -474,120 +378,6 @@ def summarize_collection_item(resource: Trajectory | Session, *, no_truncate: bo
     return summarize_session(resource, no_truncate=no_truncate, include_timeline=False)
 
 
-def pretty_trajectory(trajectory: Trajectory) -> str:
-    summary = trajectory.summary
-    lines = [
-        f"Trajectory  {trajectory.trajectory_id}",
-        f"Project     {trajectory.project_identifier or '-'}",
-        f"Task        {trajectory.task_reference or '-'}",
-        f"Mode        {trajectory.multi_agent_mode or '-'}",
-        f"Sessions    {summary.session_count if summary else len(trajectory.sessions)}",
-        f"Operations  {len(trajectory.operations)}",
-        f"Sections    {len(trajectory.sections)}",
-    ]
-
-    if trajectory.sessions:
-        lines.append("")
-        for index, session in enumerate(trajectory.sessions, start=1):
-            lines.append(f"{index}. {session.session_id}")
-
-    return "\n".join(lines)
-
-
-def pretty_session(session: Session) -> str:
-    event_count = sum(1 for item in session.timeline if item.kind == "event")
-    turn_count = sum(1 for item in session.timeline if item.kind == "turn")
-
-    return "\n".join(
-        [
-            f"Session     {session.session_id}",
-            f"Trajectory  {session.trajectory_id}",
-            f"Vendor      {session.vendor.value}",
-            f"Status      {status_from_end(session.ended_at)}",
-            f"Started     {format_datetime(session.started_at)}",
-            f"Ended       {format_datetime(session.ended_at) or '-'}",
-            f"Timeline    {len(session.timeline)} items ({event_count} events, {turn_count} turns)",
-        ]
-    )
-
-
-def pretty_turn(turn: Turn, *, no_truncate: bool) -> str:
-    request = turn.user_request or "-"
-    if request != "-" and not no_truncate:
-        request = shorten_line(request)
-
-    return "\n".join(
-        [
-            f"Turn        {turn.turn_id}",
-            f"Session     {turn.session_id}",
-            f"Status      {status_from_end(turn.ended_at)}",
-            f"Started     {format_datetime(turn.started_at)}",
-            f"Ended       {format_datetime(turn.ended_at) or '-'}",
-            f"Events      {len(turn.event_ids)}",
-            f"Request     {request}",
-        ]
-    )
-
-
-def pretty_event(event: Event, *, no_truncate: bool) -> str:
-    lines = [
-        f"Event       {event.event_id}",
-        f"Type        {event.type.value}",
-        f"Time        {format_datetime(event.timestamp)}",
-        f"Actor       {event.actor or '-'}",
-        f"Session     {event.session_id}",
-        f"Turn        {event.turn_id or '-'}",
-        f"Vendor      {event.vendor_source.value}",
-        f"Source      {event.provenance.value}",
-        f"Confidence  {event.confidence.value}",
-    ]
-
-    preview = payload_preview(event.payload, no_truncate=no_truncate)
-    if preview:
-        lines.append("")
-        lines.append("Payload")
-        for key, value in preview.items():
-            lines.append(f"  {key}: {value}")
-
-    return "\n".join(lines)
-
-
-def pretty_collection(resources: list[Trajectory | Session], *, no_truncate: bool) -> str:
-    if not resources:
-        return "No results."
-
-    first = resources[0]
-    if isinstance(first, Trajectory):
-        headers = ["ID", "PROJECT", "TASK", "SESSIONS"]
-        rows = [
-            [
-                str(item.trajectory_id),
-                item.project_identifier or "-",
-                item.task_reference or "-",
-                str(len(item.sessions)),
-            ]
-            for item in resources
-            if isinstance(item, Trajectory)
-        ]
-        return format_table(headers, rows)
-
-    if isinstance(first, Session):
-        headers = ["ID", "VENDOR", "STATUS", "STARTED", "TRAJECTORY"]
-        rows = [
-            [
-                str(item.session_id),
-                item.vendor.value,
-                status_from_end(item.ended_at),
-                format_datetime(item.started_at) or "-",
-                str(item.trajectory_id),
-            ]
-            for item in resources
-            if isinstance(item, Session)
-        ]
-        return format_table(headers, rows)
-    raise ValueError(f"unsupported collection resource type: {type(first).__name__}")
-
-
 def payload_preview(payload: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
     preview_keys = (
         "tool_name",
@@ -637,11 +427,8 @@ def timeline_payload_preview(payload: dict[str, Any], *, no_truncate: bool) -> d
     return payload_preview(payload, no_truncate=no_truncate)
 
 
-def write_output(payload: dict[str, Any] | list[dict[str, Any]] | str, view: str) -> None:
-    if view == "pretty":
-        print(payload)
-    else:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+def write_output(payload: dict[str, Any] | list[dict[str, Any]], view: str) -> None:
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def select_output_fields(payload: dict[str, Any] | list[dict[str, Any]], fields: str) -> dict[str, Any] | list[dict[str, Any]]:
@@ -659,12 +446,6 @@ def status_from_end(ended_at: object) -> str:
     return "completed" if ended_at is not None else "in_progress"
 
 
-def format_datetime(value: Any) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat().replace("+00:00", "Z")
-
-
 def shorten_line(text: str, width: int = 72) -> str:
     single_line = " ".join(text.splitlines())
     if len(single_line) <= width:
@@ -676,25 +457,6 @@ def truncate_value(value: Any) -> Any:
     if isinstance(value, str):
         return shorten_line(value, width=48)
     return value
-
-
-def prune_nones(payload: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in payload.items() if value is not None}
-
-
-def format_table(headers: list[str], rows: list[list[str]]) -> str:
-    widths = [len(header) for header in headers]
-    for row in rows:
-        for index, value in enumerate(row):
-            widths[index] = max(widths[index], len(value))
-
-    formatted_rows = [
-        "  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)),
-        "  ".join("-" * widths[index] for index in range(len(headers))),
-    ]
-    for row in rows:
-        formatted_rows.append("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
-    return "\n".join(formatted_rows)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,26 @@
+[project]
+name = "coding-trajectory"
+version = "0.1.0"
+description = "CLI for querying canonical trajectory resources"
+requires-python = ">=3.12"
+dependencies = [
+    "coding-trajectory-core",
+]
+
+[project.scripts]
+coding-trajectory = "coding_trajectory_cli.cli:main"
+
+[tool.uv.sources]
+coding-trajectory-core = { workspace = true }
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coding_trajectory_cli"]
