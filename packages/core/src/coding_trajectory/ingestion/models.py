@@ -67,6 +67,11 @@ class CodexExtensions(BaseModel):
     agent_role:         str | None = None
     collaboration_mode: str | None = None
     cwd:                str | None = None
+    forked_from_id:     str | None = None
+    spawn_parent_thread_id: str | None = None
+    spawn_depth:        int | None = None
+    spawn_agent_nickname: str | None = None
+    spawn_agent_role:   str | None = None
 
 
 class GeminiExtensions(BaseModel):
@@ -184,7 +189,13 @@ class TrajectoryEdge(BaseModel):
     type:               Literal["spawned_subagent", "sidechain_of", "handoff_to", "resumed_from", "teammate_of"]
     source_session_id:  UUID
     target_session_id:  UUID
+    source_turn_id:     UUID | None = None
+    source_step_id:     UUID | None = None
+    source_event_id:    UUID | None = None
+    provenance:         Literal["observed", "derived", "synthetic"] = "derived"
+    confidence:         Literal["high", "medium", "low"] = "medium"
     evidence_event_ids: list[UUID] = Field(default_factory=list)
+    metadata:           dict[str, Any] | None = None
 
 
 class TrajectorySummary(BaseModel):

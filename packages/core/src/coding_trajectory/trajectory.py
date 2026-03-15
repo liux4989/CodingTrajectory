@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from coding_trajectory.ingestion.decorators import ClaudeCodeDecorator
 from coding_trajectory.ingestion.models import (
+    EventType,
     Session,
+    Step,
     Trajectory,
     TrajectoryEdge,
     TrajectorySummary,
+    Turn,
     Vendor,
 )
 
@@ -129,29 +133,104 @@ def build_edges(sessions: list[Session]) -> list[TrajectoryEdge]:
         if session.parent_session_id is None:
             continue
         parent = session_map.get(session.parent_session_id)
-        edge_type, evidence_ids = _classify_edge(session, parent)
+        edge = _build_edge(parent, session)
+        if edge is None:
+            continue
         edges.append(
-            TrajectoryEdge(
-                type=edge_type,
-                source_session_id=session.session_id,
-                target_session_id=session.parent_session_id,
-                evidence_event_ids=evidence_ids,
-            )
+            edge
         )
 
     return edges
 
 
-def _classify_edge(child: Session, parent: Session | None) -> tuple[str, list]:
-    """Return (edge_type, evidence_event_ids) for a child->parent relationship."""
-    from coding_trajectory.ingestion.models import EventType
-    _SUBAGENT_TOOL_NAMES = {"Agent", "Task", "spawn_agent"}
-    if parent is not None:
-        for event in parent.events:
-            tool_name = event.payload.get("tool_name")
-            if event.type == EventType.TOOL_CALL_REQUESTED and tool_name in _SUBAGENT_TOOL_NAMES:
-                return "spawned_subagent", [event.event_id]
-    return "sidechain_of", []
+@dataclass(frozen=True)
+class _EdgeOrigin:
+    event_id: UUID
+    turn_id: UUID | None
+    step_id: UUID | None
+    tool_name: str | None
+
+
+def _build_edge(parent: Session | None, child: Session) -> TrajectoryEdge | None:
+    if parent is None:
+        return None
+
+    origin = _find_edge_origin(parent)
+    edge_type = _classify_edge_type(child, parent, origin)
+    evidence_ids = [origin.event_id] if origin is not None else []
+    metadata = {"tool_name": origin.tool_name} if origin and origin.tool_name else None
+
+    return TrajectoryEdge(
+        type=edge_type,
+        source_session_id=parent.session_id,
+        target_session_id=child.session_id,
+        source_turn_id=origin.turn_id if origin else None,
+        source_step_id=origin.step_id if origin else None,
+        source_event_id=origin.event_id if origin else None,
+        provenance="observed" if origin else "derived",
+        confidence="high" if origin else "medium",
+        evidence_event_ids=evidence_ids,
+        metadata=metadata,
+    )
+
+
+def _classify_edge_type(child: Session, parent: Session, origin: _EdgeOrigin | None) -> str:
+    if origin is not None:
+        tool_name = (origin.tool_name or "").strip().lower()
+        if tool_name in {"agent", "task", "spawn_agent", "spawnagent"}:
+            return "spawned_subagent"
+        if tool_name in {"handoff", "handoff_to"}:
+            return "handoff_to"
+        if tool_name in {"resume", "resume_agent"}:
+            return "resumed_from"
+
+    if _is_sidechain(child) and parent.vendor == Vendor.CLAUDE_CODE:
+        return "sidechain_of"
+
+    return "sidechain_of"
+
+
+def _find_edge_origin(session: Session) -> _EdgeOrigin | None:
+    tool_events = [
+        event
+        for event in session.events
+        if event.type == EventType.TOOL_CALL_REQUESTED
+    ]
+    if not tool_events:
+        return None
+
+    step_index = _build_step_event_index(session)
+    for event in reversed(tool_events):
+        turn, step = step_index.get(event.event_id, (None, None))
+        return _EdgeOrigin(
+            event_id=event.event_id,
+            turn_id=turn.turn_id if turn else None,
+            step_id=step.step_id if step else None,
+            tool_name=_event_tool_name(event),
+        )
+
+    return None
+
+
+def _build_step_event_index(session: Session) -> dict[UUID, tuple[Turn | None, Step | None]]:
+    index: dict[UUID, tuple[Turn | None, Step | None]] = {}
+    for turn in session.turns:
+        if turn.user_request_event_id is not None:
+            index.setdefault(turn.user_request_event_id, (turn, None))
+        for step in turn.steps:
+            for event_id in step.event_ids:
+                index[event_id] = (turn, step)
+            for item in step.items:
+                for event_id in item.event_ids:
+                    index[event_id] = (turn, step)
+    return index
+
+
+def _event_tool_name(event: Any) -> str | None:
+    tool_name = event.payload.get("tool_name")
+    if isinstance(tool_name, str) and tool_name.strip():
+        return tool_name
+    return None
 
 
 def _normalize_project_key(value: str) -> str:

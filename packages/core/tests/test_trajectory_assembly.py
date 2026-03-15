@@ -9,6 +9,10 @@ from coding_trajectory.ingestion.models import (
     Event,
     EventType,
     Session,
+    Step,
+    StepToolItem,
+    ToolStatus,
+    Turn,
     Vendor,
     VendorExtensions,
 )
@@ -99,8 +103,91 @@ def test_build_trajectory_detects_cross_session_claude_sidechain() -> None:
 
     assert len(trajectory.edges) == 1
     assert trajectory.edges[0].type == "sidechain_of"
-    assert trajectory.edges[0].source_session_id == child_session_id
-    assert trajectory.edges[0].target_session_id == parent_session_id
+    assert trajectory.edges[0].source_session_id == parent_session_id
+    assert trajectory.edges[0].target_session_id == child_session_id
+    assert trajectory.edges[0].source_event_id is None
+    assert trajectory.edges[0].provenance == "derived"
+
+
+def test_build_trajectory_anchors_cross_session_edge_to_originating_tool_call() -> None:
+    trajectory_id = uuid4()
+    parent_session_id = uuid4()
+    child_session_id = uuid4()
+    turn_id = uuid4()
+    step_id = uuid4()
+    timestamp = datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc)
+    tool_event = Event(
+        session_id=parent_session_id,
+        timestamp=timestamp,
+        type=EventType.TOOL_CALL_REQUESTED,
+        vendor_source=Vendor.CODEX_CLI,
+        actor="assistant",
+        payload={"tool_name": "spawn_agent", "tool_call_id": "call-1"},
+    )
+
+    parent = Session(
+        session_id=parent_session_id,
+        trajectory_id=trajectory_id,
+        vendor=Vendor.CODEX_CLI,
+        started_at=timestamp,
+        ended_at=timestamp,
+        events=[tool_event],
+        turns=[
+            Turn(
+                turn_id=turn_id,
+                session_id=parent_session_id,
+                sequence=0,
+                started_at=timestamp,
+                ended_at=timestamp,
+                steps=[
+                    Step(
+                        step_id=step_id,
+                        session_id=parent_session_id,
+                        turn_id=turn_id,
+                        sequence=0,
+                        timestamp=timestamp,
+                        vendor=Vendor.CODEX_CLI,
+                        items=[
+                            StepToolItem(
+                                tool_name="spawn_agent",
+                                tool_call_id="call-1",
+                                status=ToolStatus.REQUESTED,
+                                event_ids=[tool_event.event_id],
+                            )
+                        ],
+                        event_ids=[tool_event.event_id],
+                    )
+                ],
+            )
+        ],
+    )
+    child = Session(
+        session_id=child_session_id,
+        trajectory_id=trajectory_id,
+        vendor=Vendor.CODEX_CLI,
+        started_at=timestamp,
+        ended_at=timestamp,
+        parent_session_id=parent_session_id,
+    )
+
+    trajectory = build_trajectory(
+        trajectory_id=trajectory_id,
+        project_identifier="coding-trajectory",
+        sessions=[parent, child],
+    )
+
+    assert len(trajectory.edges) == 1
+    edge = trajectory.edges[0]
+    assert edge.type == "spawned_subagent"
+    assert edge.source_session_id == parent_session_id
+    assert edge.target_session_id == child_session_id
+    assert edge.source_turn_id == turn_id
+    assert edge.source_step_id == step_id
+    assert edge.source_event_id == tool_event.event_id
+    assert edge.provenance == "observed"
+    assert edge.confidence == "high"
+    assert edge.evidence_event_ids == [tool_event.event_id]
+    assert edge.metadata == {"tool_name": "spawn_agent"}
 
 
 def test_build_trajectory_summary_counts() -> None:

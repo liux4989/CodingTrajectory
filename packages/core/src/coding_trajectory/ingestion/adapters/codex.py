@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -88,6 +89,103 @@ def _append_text_item(items: list[StepTextItem | StepToolItem], text: str | None
     items.append(StepTextItem(text=cleaned, event_ids=list(event_ids or [])))
 
 
+def _as_non_empty_str(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _extract_nested_map(payload: dict[str, Any], *keys: str) -> dict[str, Any] | None:
+    current: Any = payload
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current if isinstance(current, dict) else None
+
+
+def _parse_uuid_candidate(value: Any) -> UUID | None:
+    if isinstance(value, UUID):
+        return value
+
+    raw = _as_non_empty_str(value)
+    if raw is None:
+        return None
+
+    for candidate in (raw, raw.removeprefix("T-")):
+        try:
+            return UUID(candidate)
+        except ValueError:
+            continue
+
+    match = re.search(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        raw,
+    )
+    if match is None:
+        return None
+
+    try:
+        return UUID(match.group(0))
+    except ValueError:
+        return None
+
+
+def _extract_thread_spawn(meta: dict[str, Any]) -> dict[str, Any] | None:
+    source = meta.get("source")
+    if not isinstance(source, dict):
+        return None
+    return _extract_nested_map(source, "subagent", "thread_spawn")
+
+
+def _extract_codex_parent_session_id(meta: dict[str, Any]) -> UUID | None:
+    forked_parent = _parse_uuid_candidate(meta.get("forked_from_id"))
+    if forked_parent is not None:
+        return forked_parent
+
+    thread_spawn = _extract_thread_spawn(meta)
+    if thread_spawn is None:
+        return None
+
+    return _parse_uuid_candidate(thread_spawn.get("parent_thread_id"))
+
+
+def _extract_codex_agent_nickname(meta: dict[str, Any]) -> str | None:
+    for key in ("nickname", "agent_nickname"):
+        nickname = _as_non_empty_str(meta.get(key))
+        if nickname is not None:
+            return nickname
+
+    thread_spawn = _extract_thread_spawn(meta)
+    if thread_spawn is None:
+        return None
+    return _as_non_empty_str(thread_spawn.get("agent_nickname"))
+
+
+def _extract_codex_agent_role(meta: dict[str, Any]) -> str | None:
+    role = _as_non_empty_str(meta.get("agent_role"))
+    if role is not None:
+        return role
+
+    source = meta.get("source")
+    source_name = _as_non_empty_str(source)
+    if source_name is not None:
+        return source_name
+
+    thread_spawn = _extract_thread_spawn(meta)
+    if thread_spawn is None:
+        return None
+    return _as_non_empty_str(thread_spawn.get("agent_role"))
+
+
+def _extract_collaboration_mode(ctx: dict[str, Any]) -> str | None:
+    collaboration_mode = ctx.get("collaboration_mode")
+    if isinstance(collaboration_mode, dict):
+        return _as_non_empty_str(collaboration_mode.get("mode"))
+    return _as_non_empty_str(collaboration_mode)
+
+
 
 class CodexAdapter(BaseAdapter):
     """Ingest Codex CLI JSONL rollout files from ~/.codex/sessions/."""
@@ -133,7 +231,12 @@ class CodexAdapter(BaseAdapter):
 
         meta = state.session_meta
         ctx = state.turn_context
-        sandbox_policy = ctx.get("sandbox_policy") or {}
+        sandbox_policy = ctx.get("sandbox_policy") if isinstance(ctx.get("sandbox_policy"), dict) else {}
+        thread_spawn = _extract_thread_spawn(meta) or {}
+        parent_session_id = _extract_codex_parent_session_id(meta)
+        forked_from_id = _as_non_empty_str(meta.get("forked_from_id"))
+        spawn_parent_thread_id = _as_non_empty_str(thread_spawn.get("parent_thread_id"))
+        spawn_depth = thread_spawn.get("depth") if isinstance(thread_spawn.get("depth"), int) else None
         normalized_events = [
             event if event.session_id == state.session_id
             else event.model_copy(update={"session_id": state.session_id})
@@ -142,17 +245,18 @@ class CodexAdapter(BaseAdapter):
 
         extensions = VendorExtensions(
             codex=CodexExtensions(
-                sandbox_id=meta.get("id"),
-                sandbox_mode=sandbox_policy.get("type"),
-                approval_policy=ctx.get("approval_policy"),
-                collaboration_mode=(
-                    ctx.get("collaboration_mode", {}).get("mode")
-                    if isinstance(ctx.get("collaboration_mode"), dict)
-                    else None
-                ),
-                agent_nickname=meta.get("nickname") if isinstance(meta.get("nickname"), str) else None,
-                agent_role=meta.get("source"),
-                cwd=meta.get("cwd") if isinstance(meta.get("cwd"), str) else None,
+                sandbox_id=_as_non_empty_str(meta.get("id")),
+                sandbox_mode=_as_non_empty_str(sandbox_policy.get("type")),
+                approval_policy=_as_non_empty_str(ctx.get("approval_policy")),
+                collaboration_mode=_extract_collaboration_mode(ctx),
+                agent_nickname=_extract_codex_agent_nickname(meta),
+                agent_role=_extract_codex_agent_role(meta),
+                cwd=_as_non_empty_str(meta.get("cwd")),
+                forked_from_id=forked_from_id,
+                spawn_parent_thread_id=spawn_parent_thread_id,
+                spawn_depth=spawn_depth,
+                spawn_agent_nickname=_as_non_empty_str(thread_spawn.get("agent_nickname")),
+                spawn_agent_role=_as_non_empty_str(thread_spawn.get("agent_role")),
             )
         )
 
@@ -166,6 +270,7 @@ class CodexAdapter(BaseAdapter):
             agent_name=extensions.codex.agent_nickname if extensions.codex else None,
             started_at=started_at,
             ended_at=ended_at,
+            parent_session_id=parent_session_id,
             events=normalized_events,
             turns=turns,
             extensions=extensions,
@@ -435,6 +540,26 @@ class CodexAdapter(BaseAdapter):
                         "turn_id_raw": payload.get("turn_id"),
                         "last_agent_message": payload.get("last_agent_message"),
                         "raw_type": "task_complete",
+                    }
+                ),
+            )
+
+        if inner_type == "context_compacted":
+            details = {
+                key: value
+                for key, value in payload.items()
+                if key not in {"type", "turn_id"}
+            }
+            return self._event_from(
+                session_id=state.session_id,
+                event_type=EventType.VENDOR_RAW,
+                timestamp=timestamp,
+                actor="assistant",
+                payload=compact_dict(
+                    {
+                        "turn_id_raw": turn_id,
+                        "raw_type": "context_compacted",
+                        "details": details or None,
                     }
                 ),
             )
