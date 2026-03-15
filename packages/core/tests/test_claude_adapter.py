@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
-from coding_trajectory.ingestion.models import EventType, StepTextItem, StepToolItem, StepStatus, ToolStatus
+from coding_trajectory.ingestion.models import EventType, StepTextItem, StepToolItem, ToolStatus
 
 
 def test_claude_adapter_emits_user_prompt_and_tool_events(tmp_path) -> None:
@@ -71,6 +71,7 @@ def test_claude_adapter_emits_user_prompt_and_tool_events(tmp_path) -> None:
     assert len(session.turns) == 1
     turn = session.turns[0]
     assert turn.user_request_event_id is not None
+    assert turn.event_ids
 
     # Verify steps are built within turn
     assert len(turn.steps) >= 1
@@ -165,7 +166,6 @@ def test_claude_adapter_thinking_goes_into_step_vendor_data(tmp_path) -> None:
     step = turn.steps[0]
     assert "thinking" in step.vendor_data
     assert "I should reason carefully" in step.vendor_data["thinking"]
-    assert step.status == StepStatus.COMPLETED
     assert any(isinstance(item, StepTextItem) and item.text == "Here is my answer" for item in step.items)
 
 

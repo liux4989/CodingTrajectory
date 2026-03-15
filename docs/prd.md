@@ -8,6 +8,12 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 
 # Architecture
 
+# Core Layer Boundary
+- `Event`, `Step`, `Turn`, and `Session` are canonical normalized resources.
+- Canonical means agent-agnostic facts and stable references reconstructed from logs, not raw vendor JSONL and not UI-specific interpretation.
+- `Trajectory` is a structural aggregate over canonical sessions. It may derive graph structure such as membership, edges, and summary metadata.
+- Replay/UI-oriented interpretations such as sections, operations, roles, and workflow-specific labels should live in a projection or consumer layer, not the core hierarchy.
+
 # Infrastructural layer
 - Discover : discocer all agent logs
 
@@ -26,3 +32,4 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - the event should be category first instead just show a chain events. 
 - remove nosiy events: the raw logs also has many message for execution recoridng purpose.
 - progressive disclousre: our api desing will be hireachy , we don't show all information via one method. and the details we prefer a deep id query.
+- do not store heuristic or presentation-only interpretation in canonical fields.

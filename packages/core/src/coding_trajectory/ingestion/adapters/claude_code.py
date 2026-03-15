@@ -11,7 +11,6 @@ from uuid import UUID, uuid4
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, infer_tool_success, parse_timestamp
 from coding_trajectory.ingestion.models import (
-    AgentType,
     ClaudeCodeExtensions,
     Event,
     EventType,
@@ -22,7 +21,7 @@ from coding_trajectory.ingestion.models import (
     Vendor,
     VendorExtensions,
 )
-from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, derive_status, update_tool_item
+from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, update_tool_item
 
 logger = logging.getLogger(__name__)
 
@@ -138,11 +137,6 @@ class ClaudeCodeAdapter(BaseAdapter):
             session_id=session_id,
             trajectory_id=uuid4(),
             vendor=self.vendor,
-            agent_type=(
-                AgentType.SUBAGENT
-                if extensions and extensions.claude_code and extensions.claude_code.is_sidechain
-                else AgentType.MAIN
-            ),
             agent_name=extensions.claude_code.agent_name if extensions and extensions.claude_code else None,
             started_at=started_at,
             ended_at=ended_at,
@@ -212,7 +206,6 @@ class ClaudeCodeAdapter(BaseAdapter):
                 sequence=step_sequence,
                 timestamp=current_step_timestamp,
                 vendor=Vendor.CLAUDE_CODE,
-                status=derive_status(current_step_items),
                 items=list(current_step_items),
                 vendor_data=vendor_data,
                 event_ids=list(current_step_event_ids),
@@ -295,6 +288,7 @@ class ClaudeCodeAdapter(BaseAdapter):
                         sequence=turn_sequence,
                         started_at=ts,
                         user_request_event_id=user_event.event_id if user_event else None,
+                        event_ids=[event.event_id for event in rec_events],
                     )
                     current_turn_last_ts = ts  # reset for new turn
                     turn_sequence += 1
@@ -307,6 +301,7 @@ class ClaudeCodeAdapter(BaseAdapter):
                         # Update last seen timestamp for current turn
                         if current_turn_last_ts is None or ts > current_turn_last_ts:
                             current_turn_last_ts = ts
+                        _append_unique_event_ids(current_turn.event_ids, [event.event_id for event in rec_events])
                         tool_result_events = [
                             e for e in rec_events
                             if e.type in (EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED)
@@ -340,6 +335,7 @@ class ClaudeCodeAdapter(BaseAdapter):
                 stop_reason = message.get("stop_reason")
                 usage = message.get("usage")
                 rec_events = _get_events_for_record(record)
+                _append_unique_event_ids(current_turn.event_ids, [event.event_id for event in rec_events])
 
                 # If we were collecting results, flush the previous step before starting a new one
                 if collecting_results and in_step:

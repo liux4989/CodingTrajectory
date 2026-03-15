@@ -26,19 +26,6 @@ class Vendor(str, Enum):
     AMP         = "amp"
 
 
-class AgentType(str, Enum):
-    MAIN       = "main"
-    SUBAGENT   = "subagent"
-    BACKGROUND = "background"
-    TEAMMATE   = "teammate"
-
-
-class StepStatus(str, Enum):
-    IN_PROGRESS = "in_progress"
-    COMPLETED   = "completed"
-    FAILED      = "failed"
-
-
 class ToolStatus(str, Enum):
     REQUESTED   = "requested"
     IN_PROGRESS = "in_progress"
@@ -135,17 +122,6 @@ class StepToolItem(BaseModel):
 StepItem: TypeAlias = Annotated[StepTextItem | StepToolItem, Field(discriminator="kind")]
 
 
-def derive_step_status(items: list[StepItem]) -> StepStatus:
-    if any(isinstance(item, StepToolItem) and item.status == ToolStatus.FAILED for item in items):
-        return StepStatus.FAILED
-    if any(
-        isinstance(item, StepToolItem) and item.status in (ToolStatus.REQUESTED, ToolStatus.IN_PROGRESS)
-        for item in items
-    ):
-        return StepStatus.IN_PROGRESS
-    return StepStatus.COMPLETED
-
-
 class Step(BaseModel):
     """One LLM call/response cycle within a Turn."""
     step_id:     UUID = Field(default_factory=uuid4)
@@ -154,7 +130,6 @@ class Step(BaseModel):
     sequence:    int
     timestamp:   datetime
     vendor:      Vendor
-    status:      StepStatus = StepStatus.COMPLETED
     items:       list[StepItem] = Field(default_factory=list)
     artifacts:   dict[str, Any] = Field(default_factory=dict)
     vendor_data: dict[str, Any] = Field(default_factory=dict)  # secondary vendor-specific metadata
@@ -168,6 +143,7 @@ class Turn(BaseModel):
     started_at:            datetime
     ended_at:              datetime | None = None
     user_request_event_id: UUID | None = None    # ref into Session.events
+    event_ids:             list[UUID] = Field(default_factory=list)
     steps:                 list[Step] = Field(default_factory=list)
 
 
@@ -175,7 +151,6 @@ class Session(BaseModel):
     session_id:        UUID = Field(default_factory=uuid4)
     trajectory_id:     UUID
     vendor:            Vendor
-    agent_type:        AgentType | None = None
     agent_name:        str | None = None
     started_at:        datetime
     ended_at:          datetime | None = None

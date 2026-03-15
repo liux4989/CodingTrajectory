@@ -65,6 +65,7 @@ def test_gemini_adapter_emits_user_tool_and_llm_events(tmp_path) -> None:
     # Turns
     assert len(session.turns) == 1
     turn = session.turns[0]
+    assert turn.event_ids
     assert len(turn.steps) == 1
     step = turn.steps[0]
 

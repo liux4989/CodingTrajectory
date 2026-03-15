@@ -255,6 +255,7 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
                 update={
                     "turn_id": stable_turn_id,
                     "user_request_event_id": stable_user_req_eid,
+                    "event_ids": [event_id_map.get(eid, eid) for eid in turn.event_ids],
                     "steps": stable_steps,
                 }
             )

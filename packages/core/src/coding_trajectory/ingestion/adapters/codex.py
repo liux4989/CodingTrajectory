@@ -20,7 +20,6 @@ from coding_trajectory.ingestion.common import (
     parse_iso_timestamp,
 )
 from coding_trajectory.ingestion.models import (
-    AgentType,
     CodexExtensions,
     Event,
     EventType,
@@ -32,7 +31,6 @@ from coding_trajectory.ingestion.models import (
     ToolStatus,
     Vendor,
     VendorExtensions,
-    derive_step_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -266,7 +264,6 @@ class CodexAdapter(BaseAdapter):
             session_id=state.session_id,
             trajectory_id=uuid4(),
             vendor=Vendor.CODEX_CLI,
-            agent_type=AgentType.MAIN,
             agent_name=extensions.codex.agent_nickname if extensions.codex else None,
             started_at=started_at,
             ended_at=ended_at,
@@ -314,7 +311,6 @@ class CodexAdapter(BaseAdapter):
                 sequence=0,
                 timestamp=current_step_start_ts or current_turn.started_at,
                 vendor=Vendor.CODEX_CLI,
-                status=derive_step_status(current_step_items),
                 items=list(current_step_items),
                 event_ids=list(current_step_event_ids),
             )
@@ -359,6 +355,7 @@ class CodexAdapter(BaseAdapter):
                         sequence=turn_sequence,
                         started_at=ts,
                         user_request_event_id=user_ev.event_id if user_ev else None,
+                        event_ids=[user_ev.event_id] if user_ev else [],
                     )
                     turn_sequence += 1
                     current_step_start_ts = ts
@@ -376,11 +373,18 @@ class CodexAdapter(BaseAdapter):
                         current_step_event_ids,
                         [ev.event_id for ev in event_index.get(ts, [])],
                     )
+                    if current_turn is not None:
+                        _append_unique_event_ids(
+                            current_turn.event_ids,
+                            [ev.event_id for ev in event_index.get(ts, [])],
+                        )
 
                 elif inner_type == "task_complete":
                     last_msg = payload.get("last_agent_message")
                     if current_turn is not None:
                         # Collect task_complete event IDs
+                        turn_event_ids = [ev.event_id for ev in event_index.get(ts, [])]
+                        _append_unique_event_ids(current_turn.event_ids, turn_event_ids)
                         _append_unique_event_ids(
                             current_step_event_ids,
                             [ev.event_id for ev in event_index.get(ts, []) if ev.type == EventType.VENDOR_RAW],
@@ -412,6 +416,8 @@ class CodexAdapter(BaseAdapter):
                     if isinstance(call_id, str) and call_id:
                         current_step_tools_by_call_id[call_id] = tool_item
                     _append_unique_event_ids(current_step_event_ids, request_event_ids)
+                    if current_turn is not None:
+                        _append_unique_event_ids(current_turn.event_ids, request_event_ids)
 
                 elif inner_type == "function_call_output":
                     result_event_ids = [
@@ -420,6 +426,8 @@ class CodexAdapter(BaseAdapter):
                         if ev.type in (EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED)
                     ]
                     _append_unique_event_ids(current_step_event_ids, result_event_ids)
+                    if current_turn is not None:
+                        _append_unique_event_ids(current_turn.event_ids, result_event_ids)
                     call_id = payload.get("call_id")
                     tool_item = current_step_tools_by_call_id.get(call_id) if isinstance(call_id, str) else None
                     if tool_item is not None:
@@ -444,6 +452,8 @@ class CodexAdapter(BaseAdapter):
                         text = _extract_response_text(payload)
                         _append_text_item(current_step_items, text, event_ids=list(response_event_ids))
                         _append_unique_event_ids(current_step_event_ids, response_event_ids)
+                        if current_turn is not None:
+                            _append_unique_event_ids(current_turn.event_ids, response_event_ids)
 
         # Flush any incomplete turn
         if current_turn is not None:

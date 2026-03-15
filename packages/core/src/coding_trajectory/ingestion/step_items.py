@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from coding_trajectory.ingestion.models import StepItem, StepTextItem, StepToolItem, StepStatus, ToolStatus
+from coding_trajectory.ingestion.models import StepItem, StepTextItem, StepToolItem, ToolStatus
 
 
 def append_text_item(items: list[StepItem], text: str | None, *, event_ids: list[UUID] | None = None) -> None:
@@ -82,18 +82,6 @@ def update_tool_item(
         status=status or ToolStatus.REQUESTED,
         event_ids=event_ids,
     )
-
-
-def derive_status(items: list[StepItem]) -> StepStatus:
-    if any(isinstance(item, StepToolItem) and item.status == ToolStatus.FAILED for item in items):
-        return StepStatus.FAILED
-    if any(
-        isinstance(item, StepToolItem) and item.status in (ToolStatus.REQUESTED, ToolStatus.IN_PROGRESS)
-        for item in items
-    ):
-        return StepStatus.IN_PROGRESS
-    return StepStatus.COMPLETED
-
 
 def _merge_tool_item(
     item: StepToolItem,

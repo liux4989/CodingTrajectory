@@ -1,5 +1,4 @@
 from coding_trajectory.ingestion import (
-    AgentType,
     AmpAdapter,
     AmpExtensions,
     BaseAdapter,
@@ -16,7 +15,6 @@ from coding_trajectory.ingestion import (
     Session,
     Step,
     StepItem,
-    StepStatus,
     StepTextItem,
     StepToolItem,
     Trajectory,
@@ -33,7 +31,6 @@ from coding_trajectory.query import DocumentStore
 __all__ = [
     "AmpAdapter",
     "AmpExtensions",
-    "AgentType",
     "BaseAdapter",
     "BaseDecorator",
     "ClaudeCodeAdapter",
@@ -49,7 +46,6 @@ __all__ = [
     "Session",
     "Step",
     "StepItem",
-    "StepStatus",
     "StepTextItem",
     "StepToolItem",
     "Trajectory",

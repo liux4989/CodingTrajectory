@@ -98,6 +98,7 @@ def test_amp_adapter_emits_message_lifecycle_events(tmp_path) -> None:
     assert len(session.turns) == 1
     turn = session.turns[0]
     assert turn.user_request_event_id is not None
+    assert turn.event_ids
     assert len(turn.steps) >= 1
 
     # Thinking in step vendor_data

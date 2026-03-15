@@ -24,12 +24,14 @@
       }
     }
   },
-  "description": "Replay-first JSON-RPC contract for canonical trajectory, session, turn, and event data.",
+  "description": "JSON-RPC contract for canonical session, turn, step, and event resources plus structural trajectory aggregates.",
   "design_principles": [
     "Use id-driven reads for all canonical resources.",
-    "Make session.timeline the primary replay interface.",
-    "Model trajectory as a graph of sessions and operations, not a flat session bag.",
+    "Treat event, step, turn, and session as canonical normalized resources.",
+    "Make session, turn, step, and event refs the primary canonical replay interface.",
+    "Treat trajectory as a structural aggregate over canonical sessions, not a flat session bag.",
     "Support both cross-session multi-agent orchestration and in-session multi-agent orchestration.",
+    "Keep presentation-oriented interpretations out of canonical resources.",
     "Treat trajectory.sections as an ordered presentation view derived from canonical relations and operation boundaries.",
     "Treat turns as grouped event references, not embedded event containers.",
     "Keep collection query methods out of the initial API until concrete query use cases exist."
@@ -197,7 +199,6 @@
       "required": [
         "session_count",
         "turn_count",
-        "event_count",
         "vendors"
       ],
       "properties": {
@@ -227,10 +228,6 @@
           "minimum": 0
         },
         "turn_count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "event_count": {
           "type": "integer",
           "minimum": 0
         },
@@ -718,11 +715,12 @@
           "type": "string",
           "format": "uuid"
         },
-        "user_request": {
+        "user_request_event_id": {
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "format": "uuid"
         },
         "started_at": {
           "type": "string",
@@ -741,6 +739,13 @@
             "type": "string",
             "format": "uuid"
           }
+        },
+        "step_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
         }
       }
     },
@@ -751,7 +756,8 @@
         "trajectory_id",
         "vendor",
         "started_at",
-        "timeline"
+        "turn_ids",
+        "event_ids"
       ],
       "properties": {
         "session_id": {
@@ -772,6 +778,12 @@
         "vendor": {
           "$ref": "#/shared_types/Vendor"
         },
+        "agent_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "started_at": {
           "type": "string",
           "format": "date-time"
@@ -783,10 +795,18 @@
           ],
           "format": "date-time"
         },
-        "timeline": {
+        "turn_ids": {
           "type": "array",
           "items": {
-            "$ref": "#/shared_types/TimelineItem"
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "extensions": {
@@ -803,11 +823,7 @@
         "trajectory_id",
         "session_ids",
         "summary",
-        "session_refs",
-        "edges",
-        "operations",
-        "sections",
-        "inference_notes"
+        "edges"
       ],
       "properties": {
         "trajectory_id": {
@@ -820,24 +836,6 @@
             "null"
           ]
         },
-        "task_reference": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "multi_agent_mode": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "enum": [
-            "cross_session",
-            "in_session",
-            "hybrid",
-            null
-          ]
-        },
         "summary": {
           "$ref": "#/shared_types/TrajectorySummary"
         },
@@ -848,34 +846,10 @@
             "format": "uuid"
           }
         },
-        "session_refs": {
-          "type": "array",
-          "items": {
-            "$ref": "#/shared_types/TrajectorySessionRef"
-          }
-        },
         "edges": {
           "type": "array",
           "items": {
             "$ref": "#/shared_types/TrajectoryEdge"
-          }
-        },
-        "operations": {
-          "type": "array",
-          "items": {
-            "$ref": "#/shared_types/TrajectoryOperation"
-          }
-        },
-        "sections": {
-          "type": "array",
-          "items": {
-            "$ref": "#/shared_types/TrajectorySection"
-          }
-        },
-        "inference_notes": {
-          "type": "array",
-          "items": {
-            "$ref": "#/shared_types/InferenceNote"
           }
         }
       }
@@ -883,7 +857,7 @@
   },
   "methods": {
     "trajectory.get": {
-      "summary": "Fetch one trajectory by id. Returns replay-first graph metadata, section boundaries, and session references; sessions are still fetched separately by id.",
+      "summary": "Fetch one trajectory by id. Returns canonical trajectory metadata, edges, and member session ids.",
       "params": {
         "type": "object",
         "required": [
@@ -902,7 +876,7 @@
       }
     },
     "session.get": {
-      "summary": "Fetch one session by id. Returns the mixed replay timeline of event refs and turn refs.",
+      "summary": "Fetch one session by id. Returns canonical session metadata plus turn and event refs.",
       "params": {
         "type": "object",
         "required": [

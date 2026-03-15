@@ -3,25 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from coding_trajectory.ingestion.models import (
-    Event,
-    EventType,
-    Session,
-    Step,
-    StepToolItem,
-    ToolStatus,
-    Trajectory,
-    TrajectoryEdge,
-    TrajectorySummary,
-    Turn,
-    Vendor,
-    VendorExtensions,
-    CodexExtensions,
-)
+from coding_trajectory.ingestion.models import Session, Trajectory, TrajectoryEdge, TrajectorySummary, Vendor
 from coding_trajectory.service import serialize_session_detail, serialize_trajectory_detail
 
 
-def test_serialize_trajectory_detail_includes_session_refs_and_edge_provenance() -> None:
+def test_serialize_trajectory_detail_exposes_only_canonical_trajectory_fields() -> None:
     trajectory_id = uuid4()
     session_a_id = uuid4()
     session_b_id = uuid4()
@@ -36,7 +22,6 @@ def test_serialize_trajectory_detail_includes_session_refs_and_edge_provenance()
         vendor=Vendor.CODEX_CLI,
         started_at=timestamp,
         ended_at=timestamp,
-        extensions=VendorExtensions(codex=CodexExtensions(collaboration_mode="default", agent_nickname="root")),
     )
     session_b = Session(
         session_id=session_b_id,
@@ -76,72 +61,39 @@ def test_serialize_trajectory_detail_includes_session_refs_and_edge_provenance()
 
     payload = serialize_trajectory_detail(trajectory)
 
-    assert payload["multi_agent_mode"] == "cross_session"
-    assert payload["operations"] == []
-    assert payload["sections"] == []
-    assert payload["inference_notes"] == []
-    assert payload["session_refs"][0]["role"] == "primary"
-    assert payload["session_refs"][0]["agent_name"] == "root"
-    assert payload["session_refs"][1]["role"] == "subagent"
+    assert set(payload) == {"trajectory_id", "project_identifier", "summary", "session_ids", "edges"}
+    assert payload["session_ids"] == [str(session_a_id), str(session_b_id)]
     assert payload["edges"][0]["source_session_id"] == str(session_a_id)
     assert payload["edges"][0]["target_session_id"] == str(session_b_id)
     assert payload["edges"][0]["source_turn_id"] == str(turn_id)
     assert payload["edges"][0]["source_step_id"] == str(step_id)
     assert payload["edges"][0]["source_event_id"] == str(event_id)
     assert payload["edges"][0]["provenance"] == "observed"
-    assert payload["edges"][0]["metadata"] == {"tool_name": "spawn_agent"}
 
 
-def test_serialize_session_detail_includes_turn_timeline() -> None:
+def test_serialize_session_detail_exposes_only_canonical_session_fields() -> None:
     session_id = uuid4()
-    turn_id = uuid4()
-    step_id = uuid4()
-    user_event_id = uuid4()
+    trajectory_id = uuid4()
     timestamp = datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc)
 
     session = Session(
         session_id=session_id,
-        trajectory_id=uuid4(),
+        trajectory_id=trajectory_id,
         vendor=Vendor.CODEX_CLI,
         started_at=timestamp,
         ended_at=timestamp,
-        events=[
-            Event(
-                event_id=user_event_id,
-                session_id=session_id,
-                timestamp=timestamp,
-                type=EventType.USER_PROMPT_SUBMITTED,
-                vendor_source=Vendor.CODEX_CLI,
-                actor="user",
-                payload={"text": "spawn a worker"},
-            )
-        ],
-        turns=[
-            Turn(
-                turn_id=turn_id,
-                session_id=session_id,
-                sequence=0,
-                started_at=timestamp,
-                ended_at=timestamp,
-                user_request_event_id=user_event_id,
-                steps=[
-                    Step(
-                        step_id=step_id,
-                        session_id=session_id,
-                        turn_id=turn_id,
-                        sequence=0,
-                        timestamp=timestamp,
-                        vendor=Vendor.CODEX_CLI,
-                        items=[StepToolItem(tool_name="spawn_agent", status=ToolStatus.REQUESTED)],
-                    )
-                ],
-            )
-        ],
     )
 
     payload = serialize_session_detail(session)
 
-    assert payload["timeline"][0]["kind"] == "turn"
-    assert payload["timeline"][0]["turn_id"] == str(turn_id)
-    assert payload["timeline"][0]["user_request_event_id"] == str(user_event_id)
-    assert payload["timeline"][0]["step_ids"] == [str(step_id)]
+    assert set(payload) == {
+        "session_id",
+        "trajectory_id",
+        "vendor",
+        "started_at",
+        "ended_at",
+        "turn_ids",
+        "event_ids",
+    }
+    assert payload["session_id"] == str(session_id)
+    assert payload["trajectory_id"] == str(trajectory_id)

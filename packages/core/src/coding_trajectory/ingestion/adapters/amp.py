@@ -13,7 +13,6 @@ from uuid import UUID, uuid4
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, parse_iso_timestamp, parse_timestamp
 from coding_trajectory.ingestion.models import (
-    AgentType,
     AmpExtensions,
     Event,
     EventType,
@@ -24,7 +23,7 @@ from coding_trajectory.ingestion.models import (
     Vendor,
     VendorExtensions,
 )
-from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, derive_status, update_tool_item
+from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, update_tool_item
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +109,6 @@ class AmpAdapter(BaseAdapter):
             session_id=session_id,
             trajectory_id=uuid4(),
             vendor=self.vendor,
-            agent_type=AgentType.MAIN,
             started_at=created_at,
             ended_at=ended_at,
             events=events,
@@ -226,6 +224,7 @@ class AmpAdapter(BaseAdapter):
                         sequence=turn_sequence,
                         started_at=ts,
                         user_request_event_id=user_ev.event_id if user_ev else None,
+                        event_ids=[event.event_id for event in event_index.get(message_id, [])],
                     )
                     turn_sequence += 1
                     step_sequence = 0
@@ -240,6 +239,8 @@ class AmpAdapter(BaseAdapter):
                             if e.type in (EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED)
                         ]
                         for ev in result_evs:
+                            if ev.event_id not in current_turn.event_ids:
+                                current_turn.event_ids.append(ev.event_id)
                             if ev.event_id not in last_step.event_ids:
                                 last_step.event_ids.append(ev.event_id)
                             update_tool_item(
@@ -254,7 +255,6 @@ class AmpAdapter(BaseAdapter):
                                 ),
                                 event_ids=[ev.event_id],
                             )
-                        last_step.status = derive_status(last_step.items)
 
             elif role == "assistant":
                 if current_turn is None:
@@ -265,6 +265,8 @@ class AmpAdapter(BaseAdapter):
                 # Collect events for this step
                 step_event_ids: list[UUID] = []
                 for ev in event_index.get(message_id, []):
+                    if ev.event_id not in current_turn.event_ids:
+                        current_turn.event_ids.append(ev.event_id)
                     if ev.type in (
                         EventType.TOOL_CALL_REQUESTED,
                         EventType.LLM_RESPONSE,
@@ -317,7 +319,6 @@ class AmpAdapter(BaseAdapter):
                     sequence=step_sequence,
                     timestamp=ts,
                     vendor=Vendor.AMP,
-                    status=derive_status(items),
                     items=items,
                     vendor_data={k: v for k, v in vendor_data.items() if v is not None},
                     event_ids=step_event_ids,

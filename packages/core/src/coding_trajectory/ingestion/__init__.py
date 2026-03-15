@@ -9,12 +9,10 @@ from coding_trajectory.ingestion.decorators import (
     VendorDecorator,
 )
 from coding_trajectory.ingestion.models import (
-    AgentType,
     AmpExtensions,
     ClaudeCodeExtensions,
     CodexExtensions,
     StepItem,
-    StepStatus,
     StepTextItem,
     StepToolItem,
     ToolStatus,
@@ -34,7 +32,6 @@ from coding_trajectory.ingestion.models import (
 __all__ = [
     # models
     "AmpExtensions",
-    "AgentType",
     "ClaudeCodeExtensions",
     "CodexExtensions",
     "Event",
@@ -43,7 +40,6 @@ __all__ = [
     "Session",
     "Step",
     "StepItem",
-    "StepStatus",
     "StepTextItem",
     "StepToolItem",
     "Trajectory",

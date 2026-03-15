@@ -6,7 +6,7 @@ from uuid import UUID
 
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
 from coding_trajectory.ingestion.common import extract_exit_code
-from coding_trajectory.ingestion.models import EventType, StepTextItem, StepToolItem, StepStatus, ToolStatus
+from coding_trajectory.ingestion.models import EventType, StepTextItem, StepToolItem, ToolStatus
 from coding_trajectory.trajectory import assemble_project_trajectories
 
 
@@ -74,11 +74,11 @@ def test_codex_adapter_normalizes_failures_and_task_completion(tmp_path) -> None
     assert len(session.turns) == 1
     turn = session.turns[0]
     assert turn.user_request_event_id is not None
+    assert turn.event_ids
 
     # One step in the turn
     assert len(turn.steps) == 1
     step = turn.steps[0]
-    assert step.status == StepStatus.FAILED
     assert any(isinstance(item, StepTextItem) and item.text == "Done" for item in step.items)
     failed_tool = next(item for item in step.items if isinstance(item, StepToolItem))
     assert failed_tool.tool_name == "exec_command"

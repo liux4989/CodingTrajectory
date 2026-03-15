@@ -22,19 +22,13 @@ def prune_nones(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def serialize_trajectory_detail(trajectory: Trajectory) -> dict[str, Any]:
-    session_refs = [serialize_trajectory_session_ref(session) for session in trajectory.sessions]
     return prune_nones(
         {
             "trajectory_id": str(trajectory.trajectory_id),
             "project_identifier": trajectory.project_identifier,
             "summary": trajectory.summary.model_dump(mode="json") if trajectory.summary else None,
             "session_ids": [str(session.session_id) for session in trajectory.sessions],
-            "session_refs": session_refs,
             "edges": [item.model_dump(mode="json") for item in trajectory.edges],
-            "operations": [],
-            "sections": [],
-            "inference_notes": [],
-            "multi_agent_mode": _infer_multi_agent_mode(trajectory),
         }
     )
 
@@ -46,12 +40,10 @@ def serialize_session_detail(session: Session) -> dict[str, Any]:
             "trajectory_id": str(session.trajectory_id),
             "parent_session_id": str(session.parent_session_id) if session.parent_session_id else None,
             "vendor": session.vendor.value,
-            "agent_type": session.agent_type.value if session.agent_type else None,
             "agent_name": session.agent_name,
             "started_at": format_datetime(session.started_at),
             "ended_at": format_datetime(session.ended_at),
             "turn_ids": [str(turn.turn_id) for turn in session.turns],
-            "timeline": _build_session_timeline(session),
             "event_ids": [str(event.event_id) for event in session.events],
             "extensions": session.extensions.model_dump(mode="json") if session.extensions else None,
         }
@@ -67,6 +59,7 @@ def serialize_turn_detail(turn: Turn) -> dict[str, Any]:
             "started_at": format_datetime(turn.started_at),
             "ended_at": format_datetime(turn.ended_at),
             "user_request_event_id": str(turn.user_request_event_id) if turn.user_request_event_id else None,
+            "event_ids": [str(event_id) for event_id in turn.event_ids],
             "step_ids": [str(step.step_id) for step in turn.steps],
         }
     )
@@ -81,7 +74,6 @@ def serialize_step_detail(step: Step) -> dict[str, Any]:
             "sequence": step.sequence,
             "timestamp": format_datetime(step.timestamp),
             "vendor": step.vendor.value,
-            "status": step.status.value,
             "items": [item.model_dump(mode="json") for item in step.items],
             "artifacts": step.artifacts or None,
             "vendor_data": step.vendor_data or None,
@@ -102,60 +94,6 @@ def serialize_event_detail(event: Event) -> dict[str, Any]:
             "payload": event.payload,
         }
     )
-
-
-def serialize_trajectory_session_ref(session: Session) -> dict[str, Any]:
-    claude = session.extensions.claude_code if session.extensions else None
-    codex = session.extensions.codex if session.extensions else None
-
-    return prune_nones(
-        {
-            "session_id": str(session.session_id),
-            "parent_session_id": str(session.parent_session_id) if session.parent_session_id else None,
-            "vendor": session.vendor.value,
-            "role": _infer_session_role(session),
-            "agent_name": session.agent_name or (claude.agent_name if claude else None) or (codex.agent_nickname if codex else None),
-            "team_name": claude.team_name if claude else None,
-            "is_sidechain": claude.is_sidechain if claude else None,
-            "collaboration_mode": codex.collaboration_mode if codex else None,
-            "started_at": format_datetime(session.started_at),
-            "ended_at": format_datetime(session.ended_at),
-        }
-    )
-
-
-def _build_session_timeline(session: Session) -> list[dict[str, Any]]:
-    timeline: list[dict[str, Any]] = []
-    for turn in session.turns:
-        timeline.append(
-            prune_nones(
-                {
-                    "kind": "turn",
-                    "turn_id": str(turn.turn_id),
-                    "started_at": format_datetime(turn.started_at),
-                    "ended_at": format_datetime(turn.ended_at),
-                    "user_request_event_id": str(turn.user_request_event_id) if turn.user_request_event_id else None,
-                    "step_ids": [str(step.step_id) for step in turn.steps],
-                }
-            )
-        )
-    return timeline
-
-
-def _infer_session_role(session: Session) -> str | None:
-    claude = session.extensions.claude_code if session.extensions else None
-    if claude and claude.is_sidechain:
-        return "subagent"
-    if session.parent_session_id is None:
-        return "primary"
-    return "subagent"
-
-
-def _infer_multi_agent_mode(trajectory: Trajectory) -> str | None:
-    if len(trajectory.sessions) <= 1:
-        return None
-    return "cross_session"
-
 
 def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> Trajectory | Session | Turn | Event | Step:
     resource_id = UUID(raw_id)

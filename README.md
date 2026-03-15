@@ -2,6 +2,12 @@
 
 Unified canonical models and CLI tooling for coding-agent trajectories.
 
+## Layering
+
+- `Event`, `Step`, `Turn`, and `Session` are canonical normalized resources. They preserve agent-agnostic facts and stable references reconstructed from vendor logs.
+- `Trajectory` is a structural aggregate over canonical sessions. It may expose graph-level structure such as membership, edges, and summary metadata.
+- Presentation-oriented interpretations such as replay sections, UI workflows, and consumer-specific labels do not belong in the core layer.
+
 ## Docs
 
 - CLI usage: [`docs/cli.md`](docs/cli.md)

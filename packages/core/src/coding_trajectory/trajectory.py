@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from coding_trajectory.ingestion.decorators import ClaudeCodeDecorator
 from coding_trajectory.ingestion.models import (
     EventType,
     Session,
@@ -21,18 +20,7 @@ from coding_trajectory.ingestion.models import (
 
 
 def decorate_sessions(sessions: list[Session]) -> list[Session]:
-    registry = {session.session_id: session for session in sessions}
-    decorators = [ClaudeCodeDecorator()]
-    updated: list[Session] = []
-
-    for session in sorted(sessions, key=lambda item: (item.started_at, str(item.session_id))):
-        enriched = session
-        for decorator in decorators:
-            enriched = decorator.apply(enriched, registry)
-        registry[enriched.session_id] = enriched
-        updated.append(enriched)
-
-    return updated
+    return sessions
 
 
 def assemble_project_trajectories(project_identifier: str, sessions: list[Session]) -> list[Trajectory]:
@@ -215,6 +203,8 @@ def _find_edge_origin(session: Session) -> _EdgeOrigin | None:
 def _build_step_event_index(session: Session) -> dict[UUID, tuple[Turn | None, Step | None]]:
     index: dict[UUID, tuple[Turn | None, Step | None]] = {}
     for turn in session.turns:
+        for event_id in turn.event_ids:
+            index.setdefault(event_id, (turn, None))
         if turn.user_request_event_id is not None:
             index.setdefault(turn.user_request_event_id, (turn, None))
         for step in turn.steps:

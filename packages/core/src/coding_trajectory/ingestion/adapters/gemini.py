@@ -13,7 +13,6 @@ from uuid import UUID, uuid4
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, parse_iso_timestamp
 from coding_trajectory.ingestion.models import (
-    AgentType,
     Event,
     EventType,
     GeminiExtensions,
@@ -24,7 +23,7 @@ from coding_trajectory.ingestion.models import (
     Vendor,
     VendorExtensions,
 )
-from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, derive_status
+from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +100,6 @@ class GeminiAdapter(BaseAdapter):
             session_id=session_id,
             trajectory_id=uuid4(),
             vendor=self.vendor,
-            agent_type=AgentType.MAIN,
             started_at=started_at,
             ended_at=ended_at,
             events=events,
@@ -170,6 +168,7 @@ class GeminiAdapter(BaseAdapter):
                     sequence=turn_sequence,
                     started_at=timestamp,
                     user_request_event_id=user_ev.event_id if user_ev else None,
+                    event_ids=[event.event_id for event in event_index.get(timestamp, [])],
                 )
                 turn_sequence += 1
                 step_sequence = 0
@@ -187,6 +186,8 @@ class GeminiAdapter(BaseAdapter):
                 # Collect event IDs for this step
                 step_event_ids: list[UUID] = []
                 for ev in event_index.get(timestamp, []):
+                    if ev.event_id not in current_turn.event_ids:
+                        current_turn.event_ids.append(ev.event_id)
                     if ev.type in (
                         EventType.TOOL_CALL_REQUESTED,
                         EventType.TOOL_CALL_SUCCEEDED,
@@ -204,6 +205,8 @@ class GeminiAdapter(BaseAdapter):
                                 EventType.TOOL_CALL_SUCCEEDED,
                                 EventType.TOOL_CALL_FAILED,
                             ):
+                                if ev.event_id not in current_turn.event_ids:
+                                    current_turn.event_ids.append(ev.event_id)
                                 if ev.event_id not in step_event_ids:
                                     step_event_ids.append(ev.event_id)
 
@@ -257,7 +260,6 @@ class GeminiAdapter(BaseAdapter):
                     sequence=step_sequence,
                     timestamp=timestamp,
                     vendor=Vendor.GEMINI_CLI,
-                    status=derive_status(items),
                     items=items,
                     vendor_data=vendor_data,
                     event_ids=step_event_ids,
