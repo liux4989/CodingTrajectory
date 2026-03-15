@@ -176,19 +176,28 @@ class ClaudeCodeAdapter(BaseAdapter):
                 )
             )
 
-            if isinstance(tool_use_result, dict) and tool_use_result.get("team_name"):
+            if isinstance(tool_use_result, dict) and tool_use_result.get("agentId"):
+                status = tool_use_result.get("status")
+                bg_event_type = (
+                    EventType.BACKGROUND_TASK_COMPLETED
+                    if status == "completed"
+                    else EventType.BACKGROUND_TASK_STARTED
+                )
                 events.append(
                     Event(
                         session_id=session_id,
                         timestamp=timestamp,
-                        type=EventType.BACKGROUND_TASK_STARTED,
+                        type=bg_event_type,
                         vendor_source=self.vendor,
                         actor="system",
                         payload=compact_dict(
                             {
                                 **base,
-                                "team_name": tool_use_result.get("team_name"),
-                                "lead_agent_id": tool_use_result.get("lead_agent_id"),
+                                "agent_id": tool_use_result.get("agentId"),
+                                "status": status,
+                                "tool_uses": tool_use_result.get("tool_uses"),
+                                "duration": tool_use_result.get("duration"),
+                                "tokens": tool_use_result.get("tokens"),
                             }
                         ),
                     )
@@ -238,7 +247,7 @@ class ClaudeCodeAdapter(BaseAdapter):
                 )
             )
 
-            if tool.get("name") == "TeamCreate":
+            if tool.get("name") == "Agent":
                 events.append(
                     Event(
                         session_id=session_id,

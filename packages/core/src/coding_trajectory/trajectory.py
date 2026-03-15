@@ -185,7 +185,7 @@ def build_edges(sessions: list[Session]) -> list[TrajectoryEdge]:
 
 def _classify_edge(child: Session, parent: Session | None) -> tuple[str, list]:
     """Return (edge_type, evidence_event_ids) for a child->parent relationship."""
-    _SUBAGENT_TOOL_NAMES = {"TaskCreate", "Agent", "Task", "spawn_agent"}
+    _SUBAGENT_TOOL_NAMES = {"Agent", "Task", "spawn_agent"}
     if parent is not None:
         for event in parent.events:
             tool_name = event.payload.get("tool_name")
@@ -373,7 +373,7 @@ def _event_operation_kind(event: Event) -> str | None:
     tool_name = payload.get("tool_name")
 
     if event.type == EventType.BACKGROUND_TASK_STARTED:
-        return "teammate" if payload.get("team_name") or tool_name == "TeamCreate" else "subagent"
+        return "teammate" if payload.get("team_name") else "subagent"
     if event.type == EventType.CONTEXT_COMPACTION_STARTED or event.type == EventType.CONTEXT_COMPACTION_COMPLETED:
         return "compact"
     if event.type == EventType.SESSION_RESUMED:
@@ -381,7 +381,7 @@ def _event_operation_kind(event: Event) -> str | None:
     if event.type == EventType.TASK_COMPLETED and event.vendor_source == Vendor.CODEX_CLI:
         return "subagent"
     if event.type == EventType.TOOL_CALL_REQUESTED:
-        if tool_name in {"spawn_agent", "TaskCreate", "Agent", "Task"}:
+        if tool_name in {"spawn_agent", "Agent", "Task"}:
             return "subagent"
         if tool_name == "send_input":
             return "handoff"

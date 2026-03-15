@@ -33,7 +33,15 @@ def test_build_trajectory_detects_in_session_codex_orchestration() -> None:
                 vendor_source=Vendor.CODEX_CLI,
                 actor="assistant",
                 payload={"tool_name": "spawn_agent", "tool_call_id": "call-1"},
-            )
+            ),
+            Event(
+                session_id=session_id,
+                timestamp=timestamp,
+                type=EventType.BACKGROUND_TASK_STARTED,
+                vendor_source=Vendor.CODEX_CLI,
+                actor="assistant",
+                payload={"tool_name": "spawn_agent", "tool_call_id": "call-1"},
+            ),
         ],
         extensions=VendorExtensions(
             codex=CodexExtensions(
@@ -50,8 +58,9 @@ def test_build_trajectory_detects_in_session_codex_orchestration() -> None:
     )
 
     assert trajectory.multi_agent_mode == "in_session"
-    assert len(trajectory.operations) == 1
-    assert trajectory.operations[0].scope == "session_span"
+    subagent_ops = [op for op in trajectory.operations if op.kind == "subagent"]
+    assert len(subagent_ops) == 2
+    assert all(op.scope == "session_span" for op in subagent_ops)
     assert trajectory.edges == []
 
 

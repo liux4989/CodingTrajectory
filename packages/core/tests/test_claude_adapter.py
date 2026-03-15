@@ -26,7 +26,7 @@ def test_claude_adapter_emits_stream_tool_and_resume_events(tmp_path) -> None:
                 "role": "assistant",
                 "content": [
                     {"type": "thinking", "thinking": "I should create a task"},
-                    {"type": "tool_use", "id": "tool-1", "name": "TaskCreate", "input": {"prompt": "Do work"}},
+                    {"type": "tool_use", "id": "tool-1", "name": "Agent", "input": {"prompt": "Do work"}},
                 ],
                 "usage": {"input_tokens": 10, "output_tokens": 20},
             },
@@ -59,6 +59,9 @@ def test_claude_adapter_emits_stream_tool_and_resume_events(tmp_path) -> None:
 
     assert any(event.type == EventType.LLM_STREAM_EVENT for event in events)
     assert any(event.type == EventType.TOOL_CALL_REQUESTED for event in events)
+    bg_started = [event for event in events if event.type == EventType.BACKGROUND_TASK_STARTED]
+    assert len(bg_started) == 1
+    assert bg_started[0].payload.get("tool_name") == "Agent"
     resumed = next(event for event in events if event.type == EventType.SESSION_RESUMED)
     assert resumed.provenance == EventProvenance.DERIVED
     assert resumed.confidence == EventConfidence.MEDIUM

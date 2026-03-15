@@ -72,9 +72,11 @@ class CodexAdapter(BaseAdapter):
         state = self._ParseState()
 
         for record in self._load_records(path):
-            event = self._parse_raw_line_with_state(record, state)
-            if event is not None:
-                events.append(event)
+            parsed = self._parse_raw_line_with_state(record, state)
+            if isinstance(parsed, list):
+                events.extend(parsed)
+            elif parsed is not None:
+                events.append(parsed)
 
         return self._build_session(path, events, state)
 
@@ -103,7 +105,7 @@ class CodexAdapter(BaseAdapter):
         self,
         line: dict[str, Any],
         state: _ParseState,
-    ) -> Event | None:  # noqa: C901
+    ) -> Event | list[Event] | None:  # noqa: C901
         try:
             outer_type: str = line.get("type", "")
             timestamp = parse_iso_timestamp(line.get("timestamp")) or _now_utc()
@@ -230,7 +232,7 @@ class CodexAdapter(BaseAdapter):
         payload: dict[str, Any],
         timestamp: datetime,
         state: _ParseState,
-    ) -> Event | None:
+    ) -> Event | list[Event] | None:
         inner_type = payload.get("type", "")
 
         if inner_type == "message":
@@ -266,25 +268,61 @@ class CodexAdapter(BaseAdapter):
             )
 
         if inner_type == "function_call":
+            tool_name = payload.get("name")
             tool_input = _parse_json_blob(payload.get("arguments"))
-            return self._event_from(
+            base_payload = compact_dict(
+                {
+                    "tool_call_id": payload.get("call_id"),
+                    "tool_name": tool_name,
+                    "tool_kind": "function_call",
+                    "tool_input": tool_input,
+                    "raw": payload,
+                }
+            )
+            event = self._event_from(
                 session_id=state.session_id,
                 event_type=EventType.TOOL_CALL_REQUESTED,
                 timestamp=timestamp,
                 actor="assistant",
-                payload=compact_dict(
-                    {
-                        "tool_call_id": payload.get("call_id"),
-                        "tool_name": payload.get("name"),
-                        "tool_kind": "function_call",
-                        "tool_input": tool_input,
-                        "raw": payload,
-                    }
-                ),
+                payload=base_payload,
             )
+            if tool_name == "spawn_agent":
+                return [
+                    event,
+                    self._event_from(
+                        session_id=state.session_id,
+                        event_type=EventType.BACKGROUND_TASK_STARTED,
+                        timestamp=timestamp,
+                        actor="assistant",
+                        payload=base_payload,
+                    ),
+                ]
+            return event
 
         if inner_type == "function_call_output":
             raw_output = payload.get("output")
+            parsed_out = _parse_json_blob(raw_output)
+            call_id = payload.get("call_id")
+
+            # close_agent collects the result of a previously spawned agent
+            if isinstance(parsed_out, dict) and "status" in parsed_out and isinstance(parsed_out.get("status"), dict):
+                return self._event_from(
+                    session_id=state.session_id,
+                    event_type=EventType.BACKGROUND_TASK_COMPLETED,
+                    timestamp=timestamp,
+                    actor="tool",
+                    payload=compact_dict(
+                        {
+                            "tool_call_id": call_id,
+                            "tool_kind": "function_call_output",
+                            "tool_name": "close_agent",
+                            "output": parsed_out,
+                            "raw_output": raw_output,
+                            "raw": payload,
+                        }
+                    ),
+                )
+
             success = infer_tool_success(raw_output)
             event_type = EventType.TOOL_CALL_SUCCEEDED if success is not False else EventType.TOOL_CALL_FAILED
             return self._event_from(
@@ -294,10 +332,10 @@ class CodexAdapter(BaseAdapter):
                 actor="tool",
                 payload=compact_dict(
                     {
-                        "tool_call_id": payload.get("call_id"),
+                        "tool_call_id": call_id,
                         "tool_kind": "function_call_output",
                         "exit_code": extract_exit_code(raw_output),
-                        "output": _parse_json_blob(raw_output),
+                        "output": parsed_out,
                         "raw_output": raw_output,
                         "raw": payload,
                     }

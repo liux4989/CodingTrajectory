@@ -77,6 +77,76 @@ def test_codex_adapter_normalizes_failures_and_task_completion(tmp_path) -> None
     assert {item.id for item in session.timeline if item.kind == "turn"} == {turn.turn_id for turn in session.turns}
 
 
+def test_codex_adapter_spawn_agent_emits_background_task_events(tmp_path) -> None:
+    path = tmp_path / "session.jsonl"
+    records = [
+        {
+            "timestamp": "2026-03-13T10:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": "019c92d8-0250-7291-8585-6f69c1f1e981", "cwd": "/repo"},
+        },
+        {
+            "timestamp": "2026-03-13T10:00:01Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "spawn_agent",
+                "arguments": '{"role":"implementer","nickname":"agent-1","task":"fix bug"}',
+                "call_id": "call-spawn-1",
+            },
+        },
+        {
+            "timestamp": "2026-03-13T10:00:02Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call-spawn-1",
+                "output": '{"agent_id":"a-123","nickname":"agent-1"}',
+            },
+        },
+        {
+            "timestamp": "2026-03-13T10:00:10Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "close_agent",
+                "arguments": '{"agent_id":"a-123"}',
+                "call_id": "call-close-1",
+            },
+        },
+        {
+            "timestamp": "2026-03-13T10:00:11Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call-close-1",
+                "output": '{"status":{"completed":"Bug fixed successfully"}}',
+            },
+        },
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+    session = CodexAdapter().ingest_file(path)
+    events = session.events
+
+    # spawn_agent should emit TOOL_CALL_REQUESTED + BACKGROUND_TASK_STARTED
+    bg_started = [e for e in events if e.type == EventType.BACKGROUND_TASK_STARTED]
+    assert len(bg_started) == 1
+    assert bg_started[0].payload["tool_name"] == "spawn_agent"
+
+    # close_agent output should emit BACKGROUND_TASK_COMPLETED
+    bg_completed = [e for e in events if e.type == EventType.BACKGROUND_TASK_COMPLETED]
+    assert len(bg_completed) == 1
+    assert bg_completed[0].payload["tool_name"] == "close_agent"
+
+    # The spawn_agent should also have a regular TOOL_CALL_REQUESTED
+    spawn_requested = [
+        e for e in events
+        if e.type == EventType.TOOL_CALL_REQUESTED and e.payload.get("tool_name") == "spawn_agent"
+    ]
+    assert len(spawn_requested) == 1
+
+
 def test_extract_exit_code_handles_nested_json_without_recursing_forever() -> None:
     output = json.dumps({"result": {"metadata": {"exit_code": 7}}})
 
