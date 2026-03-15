@@ -18,7 +18,16 @@ from coding_trajectory.ingestion.common import (
     infer_tool_success,
     parse_iso_timestamp,
 )
-from coding_trajectory.ingestion.models import CodexExtensions, Event, EventType, Session, Vendor, VendorExtensions
+from coding_trajectory.ingestion.models import (
+    CodexExtensions,
+    Event,
+    EventType,
+    Session,
+    Step,
+    Turn,
+    Vendor,
+    VendorExtensions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,20 +50,6 @@ def _extract_message_text(payload: dict[str, Any]) -> str | None:
     return message if isinstance(message, str) and message else None
 
 
-def _extract_assistant_text(payload: dict[str, Any]) -> str | None:
-    content = payload.get("content")
-    if isinstance(content, str) and content:
-        return content
-    if isinstance(content, list):
-        texts = [
-            item.get("text", "")
-            for item in content
-            if isinstance(item, dict) and item.get("type") in {"output_text", "text"}
-        ]
-        joined = " ".join(text for text in texts if text).strip()
-        return joined or None
-    return None
-
 
 class CodexAdapter(BaseAdapter):
     """Ingest Codex CLI JSONL rollout files from ~/.codex/sessions/."""
@@ -68,17 +63,230 @@ class CodexAdapter(BaseAdapter):
         session_id: UUID = field(default_factory=uuid4)
 
     def ingest_file(self, path: Path) -> Session:
-        events: list[Event] = []
+        self._reset_ingest_state()
+        records = self._load_records(path)
         state = self._ParseState()
 
-        for record in self._load_records(path):
+        events: list[Event] = []
+        for record in records:
             parsed = self._parse_raw_line_with_state(record, state)
             if isinstance(parsed, list):
                 events.extend(parsed)
             elif parsed is not None:
                 events.append(parsed)
 
-        return self._build_session(path, events, state)
+        return self._build_session(path, records, events, state)
+
+    def _build_session(
+        self,
+        source: Path,
+        records: list[dict],
+        events: list[Event],
+        state: _ParseState | None = None,
+    ) -> Session:
+        state = state or self._ParseState()
+        if not events:
+            warnings.warn(f"No events parsed from {source}", stacklevel=2)
+            started_at = _now_utc()
+            ended_at = None
+        else:
+            started_at = min(e.timestamp for e in events)
+            ended_at = max(e.timestamp for e in events)
+
+        meta = state.session_meta
+        ctx = state.turn_context
+        sandbox_policy = ctx.get("sandbox_policy") or {}
+        normalized_events = [
+            event if event.session_id == state.session_id
+            else event.model_copy(update={"session_id": state.session_id})
+            for event in events
+        ]
+
+        extensions = VendorExtensions(
+            codex=CodexExtensions(
+                sandbox_id=meta.get("id"),
+                sandbox_mode=sandbox_policy.get("type"),
+                approval_policy=ctx.get("approval_policy"),
+                collaboration_mode=(
+                    ctx.get("collaboration_mode", {}).get("mode")
+                    if isinstance(ctx.get("collaboration_mode"), dict)
+                    else None
+                ),
+                agent_role=meta.get("source"),
+                cwd=meta.get("cwd") if isinstance(meta.get("cwd"), str) else None,
+            )
+        )
+
+        turns = self._build_turns(state.session_id, records, normalized_events)
+
+        return Session(
+            session_id=state.session_id,
+            trajectory_id=uuid4(),
+            vendor=Vendor.CODEX_CLI,
+            started_at=started_at,
+            ended_at=ended_at,
+            events=normalized_events,
+            turns=turns,
+            extensions=extensions,
+        )
+
+    def _build_turns(
+        self,
+        session_id: UUID,
+        records: list[dict],
+        events: list[Event],
+    ) -> list[Turn]:
+        """One Step per turn bounded by task_started → task_complete."""
+        turns: list[Turn] = []
+        turn_sequence = 0
+
+        # Index events by timestamp for association
+        event_index: dict[datetime, list[Event]] = {}
+        for ev in events:
+            if ev.timestamp not in event_index:
+                event_index[ev.timestamp] = []
+            event_index[ev.timestamp].append(ev)
+
+        current_turn: Turn | None = None
+        current_step_event_ids: list[UUID] = []
+        current_step_tool_calls: list[dict] = []
+        current_step_commentary: list[str] = []
+        current_step_model: str | None = None
+        current_step_start_ts: datetime | None = None
+        user_request_event_id: UUID | None = None
+
+        def _flush_turn_with_step(last_msg: str | None, end_ts: datetime) -> None:
+            nonlocal current_turn, current_step_event_ids, current_step_tool_calls
+            nonlocal current_step_commentary, current_step_model, current_step_start_ts
+            nonlocal user_request_event_id, turn_sequence
+
+            if current_turn is None:
+                return
+
+            vendor_data: dict = {}
+            if current_step_model:
+                vendor_data["model"] = current_step_model
+            if current_step_commentary:
+                vendor_data["commentary"] = current_step_commentary
+            if current_step_tool_calls:
+                vendor_data["tool_calls"] = current_step_tool_calls
+
+            step = Step(
+                session_id=session_id,
+                turn_id=current_turn.turn_id,
+                sequence=0,
+                timestamp=current_step_start_ts or current_turn.started_at,
+                vendor=Vendor.CODEX_CLI,
+                text=last_msg,
+                vendor_data=vendor_data,
+                event_ids=list(current_step_event_ids),
+            )
+            current_turn.steps.append(step)
+            current_turn.ended_at = end_ts
+            turns.append(current_turn)
+
+            current_turn = None
+            current_step_event_ids = []
+            current_step_tool_calls = []
+            current_step_commentary = []
+            current_step_model = None
+            current_step_start_ts = None
+            user_request_event_id = None
+
+        def _get_ts(record: dict) -> datetime:
+            return parse_iso_timestamp(record.get("timestamp")) or _now_utc()
+
+        for record in records:
+            outer_type = record.get("type", "")
+            payload = record.get("payload") or {}
+            ts = _get_ts(record)
+
+            if outer_type == "session_meta":
+                continue
+
+            if outer_type == "turn_context":
+                continue
+
+            if outer_type == "event_msg":
+                inner_type = payload.get("type", "")
+
+                if inner_type == "user_message":
+                    # Find the USER_PROMPT_SUBMITTED event
+                    user_evs = [
+                        e for e in event_index.get(ts, [])
+                        if e.type == EventType.USER_PROMPT_SUBMITTED
+                    ]
+                    user_ev = user_evs[0] if user_evs else None
+
+                    # Start a new turn
+                    current_turn = Turn(
+                        session_id=session_id,
+                        sequence=turn_sequence,
+                        started_at=ts,
+                        user_request_event_id=user_ev.event_id if user_ev else None,
+                    )
+                    turn_sequence += 1
+                    current_step_start_ts = ts
+                    if user_ev:
+                        current_step_event_ids.append(user_ev.event_id)
+
+                elif inner_type == "agent_message":
+                    # Intermediate commentary
+                    text = _extract_message_text(payload)
+                    phase = payload.get("phase")
+                    if phase == "commentary" and text:
+                        current_step_commentary.append(text)
+                    # Collect event IDs
+                    for ev in event_index.get(ts, []):
+                        current_step_event_ids.append(ev.event_id)
+
+                elif inner_type == "task_complete":
+                    last_msg = payload.get("last_agent_message")
+                    if current_turn is not None:
+                        # Collect task_complete event IDs
+                        for ev in event_index.get(ts, []):
+                            if ev.type == EventType.VENDOR_RAW:
+                                current_step_event_ids.append(ev.event_id)
+                        _flush_turn_with_step(last_msg, ts)
+
+            elif outer_type == "response_item":
+                inner_type = payload.get("type", "")
+                if current_turn is None:
+                    continue
+
+                if inner_type == "function_call":
+                    tool_name = payload.get("name")
+                    tool_input = _parse_json_blob(payload.get("arguments"))
+                    current_step_tool_calls.append({
+                        "name": tool_name,
+                        "id": payload.get("call_id"),
+                        "input": tool_input,
+                    })
+                    # Collect events
+                    for ev in event_index.get(ts, []):
+                        if ev.type == EventType.TOOL_CALL_REQUESTED:
+                            current_step_event_ids.append(ev.event_id)
+
+                elif inner_type == "function_call_output":
+                    for ev in event_index.get(ts, []):
+                        if ev.type in (EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED):
+                            current_step_event_ids.append(ev.event_id)
+
+                elif inner_type == "reasoning":
+                    # Encrypted, skip
+                    pass
+
+                elif inner_type == "message":
+                    if payload.get("role") == "assistant":
+                        for ev in event_index.get(ts, []):
+                            current_step_event_ids.append(ev.event_id)
+
+        # Flush any incomplete turn
+        if current_turn is not None:
+            last_ts = max((e.timestamp for e in events), default=current_turn.started_at)
+            _flush_turn_with_step(None, last_ts)
+
+        return turns
 
     def _event_from(
         self,
@@ -98,9 +306,6 @@ class CodexAdapter(BaseAdapter):
             payload=payload,
         )
 
-    def _parse_raw_line(self, line: dict[str, Any]) -> Event | None:  # noqa: C901
-        return self._parse_raw_line_with_state(line, self._ParseState())
-
     def _parse_raw_line_with_state(
         self,
         line: dict[str, Any],
@@ -119,24 +324,7 @@ class CodexAdapter(BaseAdapter):
                     except ValueError:
                         pass
                 state.session_meta = payload
-                return self._event_from(
-                    session_id=state.session_id,
-                    event_type=EventType.SESSION_STARTED,
-                    timestamp=timestamp,
-                    actor="system",
-                    payload=compact_dict(
-                        {
-                            "session_id_raw": payload.get("id"),
-                            "cwd": payload.get("cwd"),
-                            "cli_version": payload.get("cli_version"),
-                            "model_provider": payload.get("model_provider"),
-                            "originator": payload.get("originator"),
-                            "source": payload.get("source"),
-                            "git": payload.get("git"),
-                            "raw": payload,
-                        }
-                    ),
-                )
+                return None  # No event emitted for session_meta
 
             if outer_type == "turn_context":
                 state.turn_context = payload
@@ -173,39 +361,6 @@ class CodexAdapter(BaseAdapter):
                     {
                         "turn_id_raw": turn_id,
                         "text": _extract_message_text(payload),
-                        "images": payload.get("images"),
-                        "local_images": payload.get("local_images"),
-                        "raw": payload,
-                    }
-                ),
-            )
-
-        if inner_type == "agent_reasoning":
-            return self._event_from(
-                session_id=state.session_id,
-                event_type=EventType.LLM_STREAM_EVENT,
-                timestamp=timestamp,
-                actor="assistant",
-                payload=compact_dict(
-                    {
-                        "turn_id_raw": turn_id,
-                        "text": payload.get("text") or payload.get("summary"),
-                        "raw": payload,
-                    }
-                ),
-            )
-
-        if inner_type == "agent_message":
-            return self._event_from(
-                session_id=state.session_id,
-                event_type=EventType.AGENT_RESPONSE_COMPLETED,
-                timestamp=timestamp,
-                actor="assistant",
-                payload=compact_dict(
-                    {
-                        "turn_id_raw": turn_id,
-                        "text": _extract_message_text(payload),
-                        "raw": payload,
                     }
                 ),
             )
@@ -213,18 +368,19 @@ class CodexAdapter(BaseAdapter):
         if inner_type == "task_complete":
             return self._event_from(
                 session_id=state.session_id,
-                event_type=EventType.TASK_COMPLETED,
+                event_type=EventType.VENDOR_RAW,
                 timestamp=timestamp,
                 actor="assistant",
                 payload=compact_dict(
                     {
                         "turn_id_raw": payload.get("turn_id"),
                         "last_agent_message": payload.get("last_agent_message"),
-                        "raw": payload,
+                        "raw_type": "task_complete",
                     }
                 ),
             )
 
+        # agent_message and others → drop
         return None
 
     def _parse_response_item(
@@ -235,38 +391,6 @@ class CodexAdapter(BaseAdapter):
     ) -> Event | list[Event] | None:
         inner_type = payload.get("type", "")
 
-        if inner_type == "message":
-            if payload.get("role") != "assistant":
-                return None
-            return self._event_from(
-                session_id=state.session_id,
-                event_type=EventType.LLM_REQUEST_COMPLETED,
-                timestamp=timestamp,
-                actor="assistant",
-                payload=compact_dict(
-                    {
-                        "text": _extract_assistant_text(payload),
-                        "role": payload.get("role"),
-                        "content": payload.get("content"),
-                        "raw": payload,
-                    }
-                ),
-            )
-
-        if inner_type == "reasoning":
-            return self._event_from(
-                session_id=state.session_id,
-                event_type=EventType.LLM_STREAM_EVENT,
-                timestamp=timestamp,
-                actor="assistant",
-                payload=compact_dict(
-                    {
-                        "text": payload.get("summary") or payload.get("content"),
-                        "raw": payload,
-                    }
-                ),
-            )
-
         if inner_type == "function_call":
             tool_name = payload.get("name")
             tool_input = _parse_json_blob(payload.get("arguments"))
@@ -274,51 +398,34 @@ class CodexAdapter(BaseAdapter):
                 {
                     "tool_call_id": payload.get("call_id"),
                     "tool_name": tool_name,
-                    "tool_kind": "function_call",
                     "tool_input": tool_input,
-                    "raw": payload,
                 }
             )
-            event = self._event_from(
+            return self._event_from(
                 session_id=state.session_id,
                 event_type=EventType.TOOL_CALL_REQUESTED,
                 timestamp=timestamp,
                 actor="assistant",
                 payload=base_payload,
             )
-            if tool_name == "spawn_agent":
-                return [
-                    event,
-                    self._event_from(
-                        session_id=state.session_id,
-                        event_type=EventType.BACKGROUND_TASK_STARTED,
-                        timestamp=timestamp,
-                        actor="assistant",
-                        payload=base_payload,
-                    ),
-                ]
-            return event
 
         if inner_type == "function_call_output":
             raw_output = payload.get("output")
             parsed_out = _parse_json_blob(raw_output)
             call_id = payload.get("call_id")
 
-            # close_agent collects the result of a previously spawned agent
+            # close_agent output
             if isinstance(parsed_out, dict) and "status" in parsed_out and isinstance(parsed_out.get("status"), dict):
                 return self._event_from(
                     session_id=state.session_id,
-                    event_type=EventType.BACKGROUND_TASK_COMPLETED,
+                    event_type=EventType.TOOL_CALL_SUCCEEDED,
                     timestamp=timestamp,
                     actor="tool",
                     payload=compact_dict(
                         {
                             "tool_call_id": call_id,
-                            "tool_kind": "function_call_output",
                             "tool_name": "close_agent",
                             "output": parsed_out,
-                            "raw_output": raw_output,
-                            "raw": payload,
                         }
                     ),
                 )
@@ -333,115 +440,14 @@ class CodexAdapter(BaseAdapter):
                 payload=compact_dict(
                     {
                         "tool_call_id": call_id,
-                        "tool_kind": "function_call_output",
                         "exit_code": extract_exit_code(raw_output),
                         "output": parsed_out,
-                        "raw_output": raw_output,
-                        "raw": payload,
                     }
                 ),
             )
 
-        if inner_type == "custom_tool_call":
-            return self._event_from(
-                session_id=state.session_id,
-                event_type=EventType.TOOL_CALL_STARTED,
-                timestamp=timestamp,
-                actor="assistant",
-                payload=compact_dict(
-                    {
-                        "tool_call_id": payload.get("call_id"),
-                        "tool_name": payload.get("name"),
-                        "tool_kind": "custom_tool_call",
-                        "tool_input": payload.get("input"),
-                        "tool_status": payload.get("status"),
-                        "raw": payload,
-                    }
-                ),
-            )
-
-        if inner_type == "custom_tool_call_output":
-            raw_output = payload.get("output")
-            parsed_output = _parse_json_blob(raw_output)
-            metadata = parsed_output.get("metadata") if isinstance(parsed_output, dict) else None
-            return self._event_from(
-                session_id=state.session_id,
-                event_type=EventType.TOOL_CALL_SUCCEEDED,
-                timestamp=timestamp,
-                actor="tool",
-                payload=compact_dict(
-                    {
-                        "tool_call_id": payload.get("call_id"),
-                        "tool_kind": "custom_tool_call_output",
-                        "exit_code": (
-                            metadata.get("exit_code")
-                            if isinstance(metadata, dict)
-                            else extract_exit_code(raw_output)
-                        ),
-                        "duration_seconds": metadata.get("duration_seconds") if isinstance(metadata, dict) else None,
-                        "output": parsed_output,
-                        "raw_output": raw_output,
-                        "raw": payload,
-                    }
-                ),
-            )
-
+        # reasoning and others → drop
         return None
-
-    def _build_session(
-        self,
-        source: Path,
-        events: list[Event],
-        state: _ParseState | None = None,
-    ) -> Session:
-        state = state or self._ParseState()
-        if not events:
-            warnings.warn(f"No events parsed from {source}", stacklevel=2)
-            started_at = _now_utc()
-            ended_at = None
-        else:
-            started_at = min(e.timestamp for e in events)
-            ended_at = max(e.timestamp for e in events)
-
-        meta = state.session_meta
-        ctx = state.turn_context
-        sandbox_policy = ctx.get("sandbox_policy") or {}
-        normalized_events = [
-            event if event.session_id == state.session_id else event.model_copy(update={"session_id": state.session_id})
-            for event in events
-        ]
-
-        extensions = VendorExtensions(
-            codex=CodexExtensions(
-                sandbox_id=meta.get("id"),
-                sandbox_mode=sandbox_policy.get("type"),
-                approval_policy=ctx.get("approval_policy"),
-                collaboration_mode=(
-                    ctx.get("collaboration_mode", {}).get("mode")
-                    if isinstance(ctx.get("collaboration_mode"), dict)
-                    else None
-                ),
-                agent_role=meta.get("source"),
-                model_context_window=None,
-            )
-        )
-        turns = self._group_into_turns(
-            state.session_id,
-            normalized_events,
-            end_at_next_user_prompt=True,
-        )
-
-        return Session(
-            session_id=state.session_id,
-            trajectory_id=uuid4(),
-            vendor=Vendor.CODEX_CLI,
-            started_at=started_at,
-            ended_at=ended_at,
-            timeline=self._build_timeline(normalized_events, turns),
-            events=normalized_events,
-            turns=turns,
-            extensions=extensions,
-        )
 
     def ingest_codex_home(self, codex_dir: Path | None = None) -> list[Session]:
         """Ingest all rollout JSONL files under the Codex home directory."""

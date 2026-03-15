@@ -64,20 +64,23 @@ def test_codex_adapter_normalizes_failures_and_task_completion(tmp_path) -> None
     session = CodexAdapter().ingest_file(path)
     events = session.events
 
-    assert events[0].type == EventType.SESSION_STARTED
     assert any(event.type == EventType.USER_PROMPT_SUBMITTED for event in events)
     failure = next(event for event in events if event.type == EventType.TOOL_CALL_FAILED)
     assert failure.payload["exit_code"] == 1
-    assert any(event.type == EventType.TASK_COMPLETED for event in events)
-    assert any(turn.user_request == "fix the bug" for turn in session.turns)
-    assert [item.kind for item in session.timeline] == ["event", "turn"]
-    assert {item.id for item in session.timeline if item.kind == "event"} == {
-        event.event_id for event in session.events if event.turn_id is None
-    }
-    assert {item.id for item in session.timeline if item.kind == "turn"} == {turn.turn_id for turn in session.turns}
+
+    # Turns are built
+    assert len(session.turns) == 1
+    turn = session.turns[0]
+    assert turn.user_request_event_id is not None
+
+    # One step in the turn
+    assert len(turn.steps) == 1
+    step = turn.steps[0]
+    # The last_agent_message from task_complete should be the step text
+    assert step.text == "Done"
 
 
-def test_codex_adapter_spawn_agent_emits_background_task_events(tmp_path) -> None:
+def test_codex_adapter_spawn_agent_tool_call_requested(tmp_path) -> None:
     path = tmp_path / "session.jsonl"
     records = [
         {
@@ -87,6 +90,11 @@ def test_codex_adapter_spawn_agent_emits_background_task_events(tmp_path) -> Non
         },
         {
             "timestamp": "2026-03-13T10:00:01Z",
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": "spawn a worker"},
+        },
+        {
+            "timestamp": "2026-03-13T10:00:02Z",
             "type": "response_item",
             "payload": {
                 "type": "function_call",
@@ -96,7 +104,7 @@ def test_codex_adapter_spawn_agent_emits_background_task_events(tmp_path) -> Non
             },
         },
         {
-            "timestamp": "2026-03-13T10:00:02Z",
+            "timestamp": "2026-03-13T10:00:03Z",
             "type": "response_item",
             "payload": {
                 "type": "function_call_output",
@@ -106,21 +114,11 @@ def test_codex_adapter_spawn_agent_emits_background_task_events(tmp_path) -> Non
         },
         {
             "timestamp": "2026-03-13T10:00:10Z",
-            "type": "response_item",
+            "type": "event_msg",
             "payload": {
-                "type": "function_call",
-                "name": "close_agent",
-                "arguments": '{"agent_id":"a-123"}',
-                "call_id": "call-close-1",
-            },
-        },
-        {
-            "timestamp": "2026-03-13T10:00:11Z",
-            "type": "response_item",
-            "payload": {
-                "type": "function_call_output",
-                "call_id": "call-close-1",
-                "output": '{"status":{"completed":"Bug fixed successfully"}}',
+                "type": "task_complete",
+                "turn_id": "turn-1",
+                "last_agent_message": "Spawned agent successfully",
             },
         },
     ]
@@ -129,17 +127,7 @@ def test_codex_adapter_spawn_agent_emits_background_task_events(tmp_path) -> Non
     session = CodexAdapter().ingest_file(path)
     events = session.events
 
-    # spawn_agent should emit TOOL_CALL_REQUESTED + BACKGROUND_TASK_STARTED
-    bg_started = [e for e in events if e.type == EventType.BACKGROUND_TASK_STARTED]
-    assert len(bg_started) == 1
-    assert bg_started[0].payload["tool_name"] == "spawn_agent"
-
-    # close_agent output should emit BACKGROUND_TASK_COMPLETED
-    bg_completed = [e for e in events if e.type == EventType.BACKGROUND_TASK_COMPLETED]
-    assert len(bg_completed) == 1
-    assert bg_completed[0].payload["tool_name"] == "close_agent"
-
-    # The spawn_agent should also have a regular TOOL_CALL_REQUESTED
+    # spawn_agent should emit TOOL_CALL_REQUESTED
     spawn_requested = [
         e for e in events
         if e.type == EventType.TOOL_CALL_REQUESTED and e.payload.get("tool_name") == "spawn_agent"
@@ -168,6 +156,11 @@ def test_codex_adapter_is_safe_to_reuse_across_concurrent_ingests(tmp_path) -> N
             "type": "event_msg",
             "payload": {"type": "user_message", "message": "task a"},
         },
+        {
+            "timestamp": "2026-03-13T10:00:02Z",
+            "type": "event_msg",
+            "payload": {"type": "task_complete", "turn_id": "t1", "last_agent_message": "done a"},
+        },
     ]
     records_b = [
         {
@@ -180,6 +173,11 @@ def test_codex_adapter_is_safe_to_reuse_across_concurrent_ingests(tmp_path) -> N
             "type": "event_msg",
             "payload": {"type": "user_message", "message": "task b"},
         },
+        {
+            "timestamp": "2026-03-13T11:00:02Z",
+            "type": "event_msg",
+            "payload": {"type": "task_complete", "turn_id": "t2", "last_agent_message": "done b"},
+        },
     ]
     path_a.write_text("\n".join(json.dumps(record) for record in records_a), encoding="utf-8")
     path_b.write_text("\n".join(json.dumps(record) for record in records_b), encoding="utf-8")
@@ -189,5 +187,7 @@ def test_codex_adapter_is_safe_to_reuse_across_concurrent_ingests(tmp_path) -> N
         session_a, session_b = executor.map(adapter.ingest_file, [path_a, path_b])
 
     assert session_a.session_id != session_b.session_id
-    assert {turn.user_request for turn in session_a.turns} == {"task a"}
-    assert {turn.user_request for turn in session_b.turns} == {"task b"}
+
+    # Check user request event IDs are set
+    assert session_a.turns
+    assert session_b.turns

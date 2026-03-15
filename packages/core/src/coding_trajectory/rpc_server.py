@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from coding_trajectory.consumer import enrich_session
 from coding_trajectory.discovery import discover_store, format_discovery_sources
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import (
@@ -15,6 +14,7 @@ from coding_trajectory.service import (
     resolve_resource,
     serialize_event_detail,
     serialize_session_detail,
+    serialize_step_detail,
     serialize_trajectory_detail,
     serialize_turn_detail,
 )
@@ -25,6 +25,7 @@ _ERROR_CODES: dict[str, int] = {
     "trajectory_not_found": 40401,
     "turn_not_found": 40402,
     "event_not_found": 40403,
+    "step_not_found": 40404,
     "invalid_request": -32600,
     "method_not_found": -32601,
     "invalid_params": -32602,
@@ -36,6 +37,7 @@ _RESOURCE_NOT_FOUND_CODES: dict[str, int] = {
     "trajectory": _ERROR_CODES["trajectory_not_found"],
     "turn": _ERROR_CODES["turn_not_found"],
     "event": _ERROR_CODES["event_not_found"],
+    "step": _ERROR_CODES["step_not_found"],
 }
 
 
@@ -109,12 +111,16 @@ def _dispatch(
 
     if method == "turn.bundle":
         turn = resolve_resource(store, "turn", params["turn_id"])
-        events = [serialize_event_detail(store.get_event(eid)) for eid in turn.event_ids]
-        return {"turn": serialize_turn_detail(turn), "events": events}
+        steps = [serialize_step_detail(s) for s in turn.steps]
+        return {"turn": serialize_turn_detail(turn), "steps": steps}
 
     if method == "event.get":
         event = resolve_resource(store, "event", params["event_id"])
         return serialize_event_detail(event)
+
+    if method == "step.get":
+        step = resolve_resource(store, "step", params["step_id"])
+        return serialize_step_detail(step)
 
     raise KeyError(method)
 
@@ -193,11 +199,6 @@ def serve(argv: list[str] | None = None) -> None:
 
     store = discovery.store
     discovery_note = format_discovery_sources(discovery.sources)
-
-    # Enrich all sessions once at startup — populates category, event_group_id,
-    # parent_event_id, tool_call, llm, text on every Event.
-    for session in store.sessions.values():
-        enrich_session(session)
 
     for line in sys.stdin:
         line = line.strip()

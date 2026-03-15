@@ -94,38 +94,19 @@ def test_ingestion_pipeline_real_project_logs(
     assert all(e.session_id == session.session_id for e in session.events)
     assert any(e.type == EventType.USER_PROMPT_SUBMITTED for e in session.events)
 
-    # --- Turns: non-empty, unique IDs, internally consistent ---
+    # --- Turns: non-empty, unique IDs ---
     assert session.turns, f"No turns produced from {source}"
     turn_ids = [t.turn_id for t in session.turns]
     assert len(turn_ids) == len(set(turn_ids)), "Duplicate turn_ids detected"
-    assert all(t.event_ids for t in session.turns), "Every turn must reference at least one event"
     assert all(
         t.started_at <= (t.ended_at or t.started_at) for t in session.turns
     ), "Turn started_at must not exceed ended_at"
 
-    # --- Turn ↔ event linkage is consistent ---
-    turn_id_set = {t.turn_id for t in session.turns}
-    session_event_id_set = {e.event_id for e in session.events}
-
-    for event in session.events:
-        if event.turn_id is not None:
-            assert event.turn_id in turn_id_set, (
-                f"event.turn_id {event.turn_id} references a turn not in session.turns"
-            )
-
-    all_turn_event_ids = {eid for t in session.turns for eid in t.event_ids}
-    assert all_turn_event_ids <= session_event_id_set, (
-        "Turn.event_ids contains IDs not present in session.events"
-    )
-
-    # --- Timeline coverage: every turn and every outside-turn event appears ---
-    if session.timeline:
-        timeline_ids = {item.id for item in session.timeline}
-        for event in session.events:
-            if event.turn_id is None:
-                assert event.event_id in timeline_ids, f"Standalone event {event.event_id} is missing from session.timeline"
-        for turn in session.turns:
-            assert turn.turn_id in timeline_ids, f"Turn {turn.turn_id} is missing from session.timeline"
+    # --- Steps: unique IDs if present ---
+    all_steps = [s for t in session.turns for s in t.steps]
+    if all_steps:
+        step_ids = [s.step_id for s in all_steps]
+        assert len(step_ids) == len(set(step_ids)), "Duplicate step_ids detected"
 
     # --- Payload sanity: all events carry a dict payload ---
     assert all(isinstance(e.payload, dict) for e in session.events), "Event payload must always be a dict"

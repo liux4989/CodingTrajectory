@@ -184,11 +184,8 @@ def summarize_trajectory(raw: dict[str, Any]) -> dict[str, Any]:
         {
             "id": raw["trajectory_id"],
             "project": raw.get("project_identifier"),
-            "task": raw.get("task_reference"),
-            "multi_agent_mode": raw.get("multi_agent_mode"),
             "session_count": summary.get("session_count", len(raw.get("session_ids", []))),
-            "operation_count": len(raw.get("operations", [])),
-            "section_count": len(raw.get("sections", [])),
+            "turn_count": summary.get("turn_count"),
             "session_ids": raw.get("session_ids", []),
         }
     )
@@ -201,98 +198,58 @@ def summarize_session(
     include_timeline: bool = False,
     bundle: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    timeline_items = raw.get("timeline", [])
-
     if bundle:
-        event_count = len(bundle.get("events", []))
         turn_count = len(bundle.get("turns", []))
     else:
-        event_count = raw.get("event_count", 0)
-        turn_count = raw.get("turn_count", 0)
+        turn_count = len(raw.get("turn_ids", []))
 
-    timeline = None
+    turns = None
     if include_timeline and bundle:
-        timeline = summarize_session_timeline(raw, bundle=bundle, no_truncate=no_truncate)
+        turns = summarize_session_turns(raw, bundle=bundle, no_truncate=no_truncate)
 
     summary: dict[str, Any] = {
         "id": raw["session_id"],
         "trajectory": raw.get("trajectory_id"),
-        "parent": raw.get("parent_session_id"),
         "vendor": raw.get("vendor"),
         "started_at": format_datetime(raw.get("started_at")),
         "ended_at": format_datetime(raw.get("ended_at")),
         "status": status_from_end(raw.get("ended_at")),
-        "timeline_count": len(timeline_items),
-        "event_count": event_count,
         "turn_count": turn_count,
     }
-    if include_timeline and timeline is not None:
-        summary["timeline"] = timeline
+    if include_timeline and turns is not None:
+        summary["turns"] = turns
 
     return prune_nones(summary)
 
 
-def summarize_session_timeline(
+def summarize_session_turns(
     session_raw: dict[str, Any],
     *,
     bundle: dict[str, Any],
     no_truncate: bool,
 ) -> list[dict[str, Any]]:
-    events_list = bundle.get("events", [])
     turns_list = bundle.get("turns", [])
+    events_list = bundle.get("events", [])
     event_by_id = {e["event_id"]: e for e in events_list}
-    turn_by_id = {t["turn_id"]: t for t in turns_list}
-    timeline: list[dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
 
-    for index, item in enumerate(session_raw.get("timeline", []), start=1):
-        kind = item["kind"]
-        item_id = item["id"]
+    for index, turn in enumerate(turns_list, start=1):
+        result.append(summarize_session_turn_item(turn, idx=index, no_truncate=no_truncate, event_by_id=event_by_id))
 
-        if kind == "event":
-            event = event_by_id.get(item_id)
-            if event is None:
-                timeline.append(prune_nones({"idx": index, "kind": "event", "id": item_id}))
-                continue
-            timeline.append(summarize_session_event_item(event, idx=index, no_truncate=no_truncate))
-            continue
-
-        turn = turn_by_id.get(item_id)
-        if turn is None:
-            timeline.append(prune_nones({"idx": index, "kind": "turn", "id": item_id}))
-            continue
-        timeline.append(summarize_session_turn_item(turn, idx=index, no_truncate=no_truncate))
-
-    return timeline
+    return result
 
 
 def build_typed_preview(event: dict[str, Any], *, no_truncate: bool) -> dict[str, Any] | None:
-    """Build a preview dict from the consumer-layer typed fields — no payload inspection needed."""
-    parts: dict[str, Any] = {}
+    """Build a preview dict from event payload keys."""
+    payload = event.get("payload") or {}
 
-    if tc := event.get("tool_call"):
-        if name := tc.get("tool_name"):
-            parts["tool"] = name
-        if kind := tc.get("kind"):
-            parts["kind"] = kind
-        if status := tc.get("status"):
-            parts["status"] = status
+    if tool_name := payload.get("tool_name"):
+        return {"tool": tool_name}
 
-    if llm := event.get("llm"):
-        if model := llm.get("model"):
-            parts["model"] = model
-        if tok_in := llm.get("input_tokens"):
-            parts["tokens_in"] = tok_in
-        if tok_out := llm.get("output_tokens"):
-            parts["tokens_out"] = tok_out
-        if stop := llm.get("stop_reason"):
-            parts["stop_reason"] = stop
+    if text := payload.get("text"):
+        return {"text": shorten_line(text) if not no_truncate else text}
 
-    if txt := event.get("text"):
-        text = txt.get("text") or ""
-        if text:
-            parts["text"] = shorten_line(text) if not no_truncate else text
-
-    return parts or None
+    return None
 
 
 def summarize_session_turn_item(
@@ -300,8 +257,15 @@ def summarize_session_turn_item(
     *,
     idx: int,
     no_truncate: bool,
+    event_by_id: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    preview = turn.get("user_request")
+    preview = None
+    user_request_event_id = turn.get("user_request_event_id")
+    if user_request_event_id and event_by_id:
+        event = event_by_id.get(user_request_event_id)
+        if event:
+            payload = event.get("payload") or {}
+            preview = payload.get("text")
     if preview and not no_truncate:
         preview = shorten_line(preview)
 
@@ -312,7 +276,7 @@ def summarize_session_turn_item(
             "id": turn["turn_id"],
             "started_at": format_datetime(turn.get("started_at")),
             "preview": preview,
-            "event_count": len(turn.get("event_ids", [])),
+            "step_count": len(turn.get("step_ids", [])),
         }
     )
 
@@ -329,7 +293,6 @@ def summarize_session_event_item(
         "id": event["event_id"],
         "timestamp": format_datetime(event.get("timestamp")),
         "type": event.get("type"),
-        "category": event.get("category"),
         "actor": event.get("actor"),
     }
     preview = build_typed_preview(event, no_truncate=no_truncate)
@@ -339,27 +302,21 @@ def summarize_session_event_item(
 
 
 def summarize_turn(turn: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
-    preview = turn.get("user_request")
-    if preview and not no_truncate:
-        preview = shorten_line(preview)
-
     return prune_nones(
         {
             "id": turn["turn_id"],
             "session": turn.get("session_id"),
-            "user_request": turn.get("user_request"),
             "started_at": format_datetime(turn.get("started_at")),
             "ended_at": format_datetime(turn.get("ended_at")),
             "status": status_from_end(turn.get("ended_at")),
-            "event_count": len(turn.get("event_ids", [])),
-            "preview": preview,
+            "step_count": len(turn.get("step_ids", [])),
         }
     )
 
 
 def summarize_turn_detail(turn: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
     summary = summarize_turn(turn, no_truncate=no_truncate)
-    summary["event_ids"] = turn.get("event_ids", [])
+    summary["step_ids"] = turn.get("step_ids", [])
     return summary
 
 
@@ -369,11 +326,7 @@ def summarize_turn_by_category(
     bundle: dict[str, Any],
     no_truncate: bool,
 ) -> dict[str, Any]:
-    """Pretty view of a turn: header fields + events grouped by category."""
-    preview = turn.get("user_request")
-    if preview and not no_truncate:
-        preview = shorten_line(preview)
-
+    """Pretty view of a turn: header fields + steps list."""
     summary: dict[str, Any] = prune_nones(
         {
             "id": turn["turn_id"],
@@ -381,64 +334,47 @@ def summarize_turn_by_category(
             "started_at": format_datetime(turn.get("started_at")),
             "ended_at": format_datetime(turn.get("ended_at")),
             "status": status_from_end(turn.get("ended_at")),
-            "user_request": preview,
-            "event_count": len(turn.get("event_ids", [])),
+            "step_count": len(turn.get("step_ids", [])),
         }
     )
 
-    # Group events by category; uncategorised events go under "other"
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for event in bundle.get("events", []):
-        category = event.get("category") or "other"
-        groups.setdefault(category, []).append(
-            _compact_event_entry(event, no_truncate=no_truncate)
-        )
-
-    if groups:
-        summary["events_by_category"] = groups
+    steps_list = bundle.get("steps", [])
+    if steps_list:
+        summary["steps"] = [_compact_step_entry(s, idx=i, no_truncate=no_truncate) for i, s in enumerate(steps_list, start=1)]
 
     return summary
 
 
-def _compact_event_entry(event: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
-    """One-line summary of an event, driven by typed consumer fields."""
-    entry: dict[str, Any] = {
-        "id": event["event_id"],
-        "type": event.get("type"),
-    }
-    if tc := event.get("tool_call"):
-        entry["tool_call"] = {k: v for k, v in tc.items() if v is not None}
-    if llm := event.get("llm"):
-        entry["llm"] = {k: v for k, v in llm.items() if v is not None}
-    if txt := event.get("text"):
-        text_str = txt.get("text") or ""
-        entry["text"] = shorten_line(text_str) if not no_truncate else text_str
-    return prune_nones(entry)
+def _compact_step_entry(step: dict[str, Any], *, idx: int, no_truncate: bool) -> dict[str, Any]:
+    """One-line summary of a step."""
+    text = step.get("text") or ""
+    if text and not no_truncate:
+        text = shorten_line(text)
+    vendor_data = step.get("vendor_data") or {}
+    tool_count = len(vendor_data) if isinstance(vendor_data, list) else 0
+    return prune_nones(
+        {
+            "idx": idx,
+            "id": step["step_id"],
+            "text": text or None,
+            "tool_count": tool_count or None,
+        }
+    )
 
 
 def summarize_event(event: dict[str, Any], *, no_truncate: bool) -> dict[str, Any]:
+    payload = event.get("payload") or {}
+    if payload and not no_truncate:
+        payload = {k: truncate_value(v) for k, v in payload.items()}
     entry: dict[str, Any] = {
         "id": event["event_id"],
         "session": event.get("session_id"),
-        "turn": event.get("turn_id"),
         "timestamp": format_datetime(event.get("timestamp")),
         "type": event.get("type"),
-        "category": event.get("category"),
         "actor": event.get("actor"),
         "vendor": event.get("vendor_source"),
-        "provenance": event.get("provenance"),
-        "confidence": event.get("confidence"),
-        "group_id": event.get("event_group_id"),
-        "parent_id": event.get("parent_event_id"),
+        "payload": payload or None,
     }
-    # Typed detail — richer than a payload preview
-    if tc := event.get("tool_call"):
-        entry["tool_call"] = {k: v for k, v in tc.items() if v is not None}
-    if llm := event.get("llm"):
-        entry["llm"] = {k: v for k, v in llm.items() if v is not None}
-    if txt := event.get("text"):
-        text_str = txt.get("text") or ""
-        entry["text"] = shorten_line(text_str) if not no_truncate else text_str
     return prune_nones(entry)
 
 

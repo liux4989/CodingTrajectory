@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID
 
 from pydantic import ValidationError
 
-from coding_trajectory.ingestion.models import Event, Session, Trajectory, Turn
+from coding_trajectory.ingestion.models import Event, Session, Step, Trajectory, Turn
 
 
 class QueryError(Exception):
@@ -32,6 +32,7 @@ class DocumentStore:
     sessions: dict[UUID, Session]
     turns: dict[UUID, Turn]
     events: dict[UUID, Event]
+    steps: dict[UUID, Step] = field(default_factory=dict)
 
     @classmethod
     def from_path(cls, path: str | Path) -> "DocumentStore":
@@ -52,6 +53,7 @@ class DocumentStore:
         sessions: dict[UUID, Session] = {}
         turns: dict[UUID, Turn] = {}
         events: dict[UUID, Event] = {}
+        steps: dict[UUID, Step] = {}
 
         for trajectory in trajectories_list:
             trajectories[trajectory.trajectory_id] = trajectory
@@ -59,10 +61,18 @@ class DocumentStore:
                 sessions[session.session_id] = session
                 for turn in session.turns:
                     turns[turn.turn_id] = turn
+                    for step in turn.steps:
+                        steps[step.step_id] = step
                 for event in session.events:
                     events[event.event_id] = event
 
-        return cls(trajectories=trajectories, sessions=sessions, turns=turns, events=events)
+        return cls(
+            trajectories=trajectories,
+            sessions=sessions,
+            turns=turns,
+            events=events,
+            steps=steps,
+        )
 
     @classmethod
     def from_data(cls, raw: object) -> "DocumentStore":
@@ -73,6 +83,7 @@ class DocumentStore:
         sessions: dict[UUID, Session] = {}
         turns: dict[UUID, Turn] = {}
         events: dict[UUID, Event] = {}
+        steps: dict[UUID, Step] = {}
 
         def add_trajectory(trajectory: Trajectory) -> None:
             trajectories[trajectory.trajectory_id] = trajectory
@@ -86,6 +97,8 @@ class DocumentStore:
             sessions[session.session_id] = session
             for turn in session.turns:
                 turns[turn.turn_id] = turn
+                for step in turn.steps:
+                    steps[step.step_id] = step
             for event in session.events:
                 events[event.event_id] = event
 
@@ -105,11 +118,14 @@ class DocumentStore:
                     for item in raw.get("events", []):
                         event = Event.model_validate(item)
                         events[event.event_id] = event
+                    for item in raw.get("steps", []):
+                        step = Step.model_validate(item)
+                        steps[step.step_id] = step
                 elif "trajectory_id" in raw:
                     add_trajectory(Trajectory.model_validate(raw))
-                elif "session_id" in raw and "timeline" in raw:
+                elif "session_id" in raw and "turns" in raw:
                     add_session(Session.model_validate(raw))
-                elif "turn_id" in raw and "event_ids" in raw:
+                elif "turn_id" in raw and "steps" in raw:
                     turn = Turn.model_validate(raw)
                     turns[turn.turn_id] = turn
                 elif "event_id" in raw and "timestamp" in raw:
@@ -129,6 +145,7 @@ class DocumentStore:
             sessions=sessions,
             turns=turns,
             events=events,
+            steps=steps,
         )
 
     def get_trajectory(self, resource_id: UUID) -> Trajectory:
@@ -154,3 +171,9 @@ class DocumentStore:
             return self.events[resource_id]
         except KeyError as exc:
             raise ResourceNotFoundError(f"event not found: {resource_id}") from exc
+
+    def get_step(self, resource_id: UUID) -> Step:
+        try:
+            return self.steps[resource_id]
+        except KeyError as exc:
+            raise ResourceNotFoundError(f"step not found: {resource_id}") from exc

@@ -4,7 +4,7 @@ from collections import Counter
 import json
 from pathlib import Path
 
-from coding_trajectory_cli.cli import EXIT_NOT_FOUND, build_typed_preview, main
+from coding_trajectory_cli.cli import EXIT_NOT_FOUND, build_typed_preview, main  # noqa: F401
 
 
 def write_codex_log(
@@ -100,7 +100,7 @@ def test_trajectory_list_defaults_to_current_project(tmp_path: Path, capsys, mon
     assert len(output) == 2
     assert all(item["project"] == "coding-trajectory" for item in output)
     assert all(item["session_count"] == 1 for item in output)
-    assert all(item["multi_agent_mode"] == "in_session" for item in output)
+    assert all(len(item["session_ids"]) == 1 for item in output)
     assert "Discovered coding-agent logs:" in captured.err
 
 
@@ -136,43 +136,31 @@ def test_session_get_uses_current_project_discovery(tmp_path: Path, capsys, monk
     output = json.loads(captured.out)
     assert output["id"] == "019c92d8-0250-7291-8585-6f69c1f1e981"
     assert output["status"] == "completed"
-    assert [item["kind"] for item in output["timeline"]] == ["event", "turn"]
-    assert output["timeline"][0]["type"] == "session.started"
-    assert output["timeline"][1]["preview"] == "fix the bug"
-    assert output["timeline"][1]["event_count"] == 3
-    assert "events" not in output["timeline"][1]
-    assert output["timeline_count"] == 2
+    assert len(output["turns"]) >= 1
+    assert output["turns"][0]["kind"] == "turn"
+    assert output["turns"][0]["preview"] == "fix the bug"
+    assert output["turns"][0]["step_count"] >= 1
     assert "Discovered coding-agent logs:" not in captured.err
 
 
 def test_build_typed_preview_extracts_llm_fields() -> None:
     event = {
-        "llm": {
-            "model": "claude-sonnet-4",
-            "input_tokens": 100,
-            "output_tokens": 50,
-            "stop_reason": "end_turn",
+        "payload": {
+            "text": "Hello, world!",
         }
     }
     result = build_typed_preview(event, no_truncate=False)
-    assert result == {
-        "model": "claude-sonnet-4",
-        "tokens_in": 100,
-        "tokens_out": 50,
-        "stop_reason": "end_turn",
-    }
+    assert result == {"text": "Hello, world!"}
 
 
 def test_build_typed_preview_extracts_tool_call_fields() -> None:
     event = {
-        "tool_call": {
+        "payload": {
             "tool_name": "exec_command",
-            "kind": "regular",
-            "status": "done",
         }
     }
     result = build_typed_preview(event, no_truncate=False)
-    assert result == {"tool": "exec_command", "kind": "regular", "status": "done"}
+    assert result == {"tool": "exec_command"}
 
 
 def test_session_get_global_can_resolve_other_project_id(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -202,7 +190,7 @@ def test_session_get_raw_matches_session_detail_shape(tmp_path: Path, capsys, mo
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["session_id"] == "019c92d8-0250-7291-8585-6f69c1f1e981"
-    assert [item["kind"] for item in output["timeline"]] == ["event", "turn"]
+    assert "turn_ids" in output
     assert "events" not in output
     assert "turns" not in output
 
@@ -215,13 +203,12 @@ def test_trajectory_get_fields(tmp_path: Path, capsys, monkeypatch) -> None:
     session_output = json.loads(capsys.readouterr().out)
     trajectory_id = session_output["trajectory"]
 
-    exit_code = main(["trajectory", "get", trajectory_id, "--fields", "id,session_count,multi_agent_mode"])
+    exit_code = main(["trajectory", "get", trajectory_id, "--fields", "id,session_count,session_ids"])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["id"] == trajectory_id
     assert output["session_count"] == 1
-    assert output["multi_agent_mode"] == "in_session"
 
 
 def test_session_list_can_filter_by_trajectory(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -237,8 +224,8 @@ def test_session_list_can_filter_by_trajectory(tmp_path: Path, capsys, monkeypat
     output = json.loads(capsys.readouterr().out)
     assert len(output) == 1
     assert output[0]["id"] == "019c92d8-0250-7291-8585-6f69c1f1e981"
-    assert "timeline" not in output[0]
-    assert output[0]["timeline_count"] == 2
+    assert "turns" not in output[0]
+    assert output[0]["turn_count"] >= 1
 
 
 def test_trajectory_get_raw_includes_graph_fields(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -253,12 +240,9 @@ def test_trajectory_get_raw_includes_graph_fields(tmp_path: Path, capsys, monkey
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["trajectory_id"] == trajectory_id
-    assert output["multi_agent_mode"] == "in_session"
     assert output["summary"]["session_count"] == 1
-    assert len(output["session_refs"]) == 1
+    assert len(output["session_ids"]) == 1
     assert output["edges"] == []
-    assert len(output["sections"]) >= 1
-    assert len(output["inference_notes"]) >= 1
 
 
 def test_turn_get_raw(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -266,14 +250,14 @@ def test_turn_get_raw(tmp_path: Path, capsys, monkeypatch) -> None:
 
     main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
     session = json.loads(capsys.readouterr().out)
-    turn_id = session["timeline"][1]["id"]
+    turn_id = session["turns"][0]["id"]
 
     exit_code = main(["turn", "get", turn_id, "--json"])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["turn_id"] == turn_id
-    assert len(output["event_ids"]) >= 1
+    assert len(output["step_ids"]) >= 1
 
 
 def test_turn_get_pretty_includes_event_ids(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -281,16 +265,16 @@ def test_turn_get_pretty_includes_event_ids(tmp_path: Path, capsys, monkeypatch)
 
     main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
     session = json.loads(capsys.readouterr().out)
-    turn_id = session["timeline"][1]["id"]
+    turn_id = session["turns"][0]["id"]
 
     exit_code = main(["turn", "get", turn_id, "--view", "pretty"])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["id"] == turn_id
-    assert output["event_count"] >= 1
-    assert "events_by_category" in output
-    assert "event_ids" not in output
+    assert output["step_count"] >= 1
+    assert "steps" in output
+    assert "step_ids" not in output
 
 
 def test_event_get_pretty(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -298,18 +282,18 @@ def test_event_get_pretty(tmp_path: Path, capsys, monkeypatch) -> None:
 
     main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
     session = json.loads(capsys.readouterr().out)
-    turn_id = session["timeline"][1]["id"]
+    turn_id = session["turns"][0]["id"]
     main(["turn", "get", turn_id, "--json"])
     turn = json.loads(capsys.readouterr().out)
-    event_id = turn["event_ids"][1]
+    event_id = turn["user_request_event_id"]
 
     exit_code = main(["event", "get", event_id, "--view", "pretty"])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["id"] == event_id
-    assert output["type"] == "tool.call.requested"
-    assert output["tool_call"]["tool_name"] == "exec_command"
+    assert output["type"] == "user.prompt.submitted"
+    assert output["payload"]["text"] == "fix the bug"
 
 
 def test_missing_resource_returns_not_found(tmp_path: Path, capsys, monkeypatch) -> None:

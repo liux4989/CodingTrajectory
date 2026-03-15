@@ -13,12 +13,12 @@ from uuid import UUID, uuid4
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, parse_iso_timestamp
 from coding_trajectory.ingestion.models import (
-    EventConfidence,
     Event,
-    EventProvenance,
     EventType,
     GeminiExtensions,
     Session,
+    Step,
+    Turn,
     Vendor,
     VendorExtensions,
 )
@@ -40,20 +40,6 @@ def _content_to_text(content: Any) -> str | None:
     return None
 
 
-def _token_payload(tokens: dict[str, Any] | None) -> dict[str, Any]:
-    tokens = tokens or {}
-    return compact_dict(
-        {
-            "token_input": tokens.get("input"),
-            "token_output": tokens.get("output"),
-            "token_cached": tokens.get("cached"),
-            "token_thoughts": tokens.get("thoughts"),
-            "token_tool": tokens.get("tool"),
-            "token_total": tokens.get("total"),
-        }
-    )
-
-
 class GeminiAdapter(BaseAdapter):
     """Adapter for Gemini CLI session JSON files."""
 
@@ -65,13 +51,6 @@ class GeminiAdapter(BaseAdapter):
     def _reset_ingest_state(self) -> None:
         self._current_record = None
 
-    def _parse_raw_line(self, line: dict) -> Event | None:
-        warnings.warn(
-            "_parse_raw_line called directly on GeminiAdapter; use ingest_file instead.",
-            stacklevel=2,
-        )
-        return None
-
     def _load_records(self, path: Path) -> list[dict]:
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
@@ -80,7 +59,16 @@ class GeminiAdapter(BaseAdapter):
             return []
         return [record] if isinstance(record, dict) else []
 
-    def _parse_record(self, source: Path, record: dict) -> list[Event]:
+    def _build_session(self, source: Path, records: list[dict]) -> Session:
+        if not records:
+            return Session(
+                session_id=uuid4(),
+                trajectory_id=uuid4(),
+                vendor=self.vendor,
+                started_at=datetime.now(timezone.utc),
+            )
+
+        record = records[0]
         self._current_record = record
 
         raw_sid = record.get("sessionId")
@@ -92,40 +80,163 @@ class GeminiAdapter(BaseAdapter):
         started_at = parse_iso_timestamp(record.get("startTime")) or datetime.now(timezone.utc)
         ended_at = parse_iso_timestamp(record.get("lastUpdated"))
 
-        events: list[Event] = [
-            Event(
-                session_id=session_id,
-                timestamp=started_at,
-                type=EventType.SESSION_STARTED,
-                vendor_source=self.vendor,
-                actor="system",
-                payload=compact_dict(
-                    {
-                        "project_hash": record.get("projectHash"),
-                        "summary": record.get("summary"),
-                        "kind": record.get("kind"),
-                    }
-                ),
-            )
-        ]
+        messages = record.get("messages") or []
+        events = self._parse_events(session_id, str(source), messages)
 
-        for msg in record.get("messages") or []:
-            if isinstance(msg, dict):
-                events.extend(self._ingest_message(msg, session_id, str(source)))
+        turns = self._build_turns(session_id, messages, events)
 
-        if ended_at is not None:
-            events.append(
-                Event(
-                    session_id=session_id,
-                    timestamp=ended_at,
-                    type=EventType.SESSION_ENDED,
-                    vendor_source=self.vendor,
-                    actor="system",
-                    payload={},
-                )
+        extensions = VendorExtensions(
+            gemini=GeminiExtensions(
+                session_file=str(source),
+                raw_tool_type=None,
+                model_version=None,
+                realtime_active=None,
             )
+        )
+
+        return Session(
+            session_id=session_id,
+            trajectory_id=uuid4(),
+            vendor=self.vendor,
+            started_at=started_at,
+            ended_at=ended_at,
+            events=events,
+            turns=turns,
+            extensions=extensions,
+        )
+
+    def _parse_events(
+        self,
+        session_id: UUID,
+        session_file: str,
+        messages: list[dict],
+    ) -> list[Event]:
+        events: list[Event] = []
+
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            events.extend(self._ingest_message(msg, session_id, session_file))
 
         return events
+
+    def _build_turns(
+        self,
+        session_id: UUID,
+        messages: list[dict],
+        all_events: list[Event],
+    ) -> list[Turn]:
+        """Group messages into turns. Each user message starts a new turn."""
+        turns: list[Turn] = []
+        turn_sequence = 0
+        step_sequence = 0
+        current_turn: Turn | None = None
+
+        # Index events by timestamp
+        event_index: dict[datetime, list[Event]] = {}
+        for ev in all_events:
+            if ev.timestamp not in event_index:
+                event_index[ev.timestamp] = []
+            event_index[ev.timestamp].append(ev)
+
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+
+            msg_type = msg.get("type", "")
+            timestamp = parse_iso_timestamp(msg.get("timestamp"))
+            if timestamp is None:
+                continue
+
+            if msg_type == "user":
+                # New turn
+                if current_turn is not None:
+                    if current_turn.ended_at is None:
+                        current_turn.ended_at = timestamp
+                    turns.append(current_turn)
+
+                user_evs = [
+                    e for e in event_index.get(timestamp, [])
+                    if e.type == EventType.USER_PROMPT_SUBMITTED
+                ]
+                user_ev = user_evs[0] if user_evs else None
+
+                current_turn = Turn(
+                    session_id=session_id,
+                    sequence=turn_sequence,
+                    started_at=timestamp,
+                    user_request_event_id=user_ev.event_id if user_ev else None,
+                )
+                turn_sequence += 1
+                step_sequence = 0
+
+            elif msg_type == "gemini":
+                if current_turn is None:
+                    continue
+
+                content = msg.get("content")
+                thoughts = msg.get("thoughts") or []
+                tool_calls = msg.get("toolCalls") or []
+                model = msg.get("model")
+                tokens = msg.get("tokens") or {}
+
+                # Collect event IDs for this step
+                step_event_ids: list[UUID] = []
+                for ev in event_index.get(timestamp, []):
+                    if ev.type in (
+                        EventType.TOOL_CALL_REQUESTED,
+                        EventType.TOOL_CALL_SUCCEEDED,
+                        EventType.TOOL_CALL_FAILED,
+                        EventType.LLM_RESPONSE,
+                    ):
+                        step_event_ids.append(ev.event_id)
+                    # Also collect tool call events at tool timestamps
+                for tc in tool_calls:
+                    tc_ts = parse_iso_timestamp(tc.get("timestamp")) or timestamp
+                    if tc_ts != timestamp:
+                        for ev in event_index.get(tc_ts, []):
+                            if ev.type in (
+                                EventType.TOOL_CALL_REQUESTED,
+                                EventType.TOOL_CALL_SUCCEEDED,
+                                EventType.TOOL_CALL_FAILED,
+                            ):
+                                if ev.event_id not in step_event_ids:
+                                    step_event_ids.append(ev.event_id)
+
+                vendor_data: dict = {}
+                if thoughts:
+                    vendor_data["thoughts"] = [
+                        {"subject": t.get("subject"), "description": t.get("description")}
+                        for t in thoughts
+                        if isinstance(t, dict)
+                    ]
+                if model:
+                    vendor_data["model"] = model
+                if tokens:
+                    vendor_data["tokens"] = tokens
+
+                text = _content_to_text(content)
+
+                step = Step(
+                    session_id=session_id,
+                    turn_id=current_turn.turn_id,
+                    sequence=step_sequence,
+                    timestamp=timestamp,
+                    vendor=Vendor.GEMINI_CLI,
+                    text=text,
+                    vendor_data=vendor_data,
+                    event_ids=step_event_ids,
+                )
+                step_sequence += 1
+                current_turn.steps.append(step)
+                current_turn.ended_at = timestamp
+
+        if current_turn is not None:
+            if current_turn.ended_at is None and all_events:
+                current_turn.ended_at = max(e.timestamp for e in all_events)
+            turns.append(current_turn)
+
+        return turns
 
     def _ingest_message(self, msg: dict, session_id: UUID, session_file: str) -> list[Event]:
         events: list[Event] = []
@@ -145,7 +256,6 @@ class GeminiAdapter(BaseAdapter):
         )
 
         if msg_type == "user":
-            content_parts = content if isinstance(content, list) else None
             events.append(
                 Event(
                     session_id=session_id,
@@ -157,7 +267,6 @@ class GeminiAdapter(BaseAdapter):
                         {
                             **base_payload,
                             "text": _content_to_text(content),
-                            "content_parts": content_parts,
                         }
                     ),
                 )
@@ -172,25 +281,7 @@ class GeminiAdapter(BaseAdapter):
         thoughts = msg.get("thoughts") or []
         tool_calls = msg.get("toolCalls") or []
 
-        for thought in thoughts:
-            thought_ts = parse_iso_timestamp(thought.get("timestamp")) or timestamp
-            events.append(
-                Event(
-                    session_id=session_id,
-                    timestamp=thought_ts,
-                    type=EventType.LLM_STREAM_EVENT,
-                    vendor_source=self.vendor,
-                    actor="assistant",
-                    payload=compact_dict(
-                        {
-                            **base_payload,
-                            "thought_subject": thought.get("subject"),
-                            "thought_description": thought.get("description"),
-                            "thought_timestamp": thought.get("timestamp"),
-                        }
-                    ),
-                )
-            )
+        # thoughts → go into vendor_data (not emitted as events)
 
         for tool_call in tool_calls:
             tool_ts = parse_iso_timestamp(tool_call.get("timestamp")) or timestamp
@@ -199,11 +290,8 @@ class GeminiAdapter(BaseAdapter):
                     **base_payload,
                     "tool_call_id": tool_call.get("id"),
                     "tool_name": tool_call.get("name"),
-                    "tool_display_name": tool_call.get("displayName"),
-                    "tool_description": tool_call.get("description"),
                     "tool_args": tool_call.get("args"),
                     "tool_status": tool_call.get("status"),
-                    "render_output_as_markdown": tool_call.get("renderOutputAsMarkdown"),
                     "model": model,
                 }
             )
@@ -219,7 +307,6 @@ class GeminiAdapter(BaseAdapter):
             )
 
             status = tool_call.get("status")
-            result_text = json.dumps(tool_call.get("result")) if not isinstance(tool_call.get("result"), str) else tool_call.get("result")
             result_payload = compact_dict(
                 {
                     **tool_payload,
@@ -229,12 +316,8 @@ class GeminiAdapter(BaseAdapter):
             )
 
             if status == "success":
-                event_type = EventType.TOOL_CALL_SUCCEEDED
-            elif status == "error":
-                event_type = EventType.TOOL_CALL_FAILED
-            elif status == "cancelled" and result_text and "user did not allow tool call" in result_text.lower():
-                event_type = EventType.PERMISSION_DENIED
-            elif status == "cancelled":
+                event_type: EventType | None = EventType.TOOL_CALL_SUCCEEDED
+            elif status in ("error", "cancelled"):
                 event_type = EventType.TOOL_CALL_FAILED
             else:
                 event_type = None
@@ -247,83 +330,27 @@ class GeminiAdapter(BaseAdapter):
                         type=event_type,
                         vendor_source=self.vendor,
                         actor="tool",
-                        provenance=(
-                            EventProvenance.DERIVED
-                            if event_type == EventType.PERMISSION_DENIED
-                            else EventProvenance.OBSERVED
-                        ),
-                        confidence=(
-                            EventConfidence.LOW
-                            if event_type == EventType.PERMISSION_DENIED
-                            else EventConfidence.HIGH
-                        ),
                         payload=result_payload,
                     )
                 )
 
         response_text = _content_to_text(content)
-        llm_payload = compact_dict(
-            {
-                **base_payload,
-                "text": response_text,
-                "model": model,
-                "thought_count": len(thoughts),
-                **_token_payload(tokens),
-            }
-        )
-        events.append(
-            Event(
-                session_id=session_id,
-                timestamp=timestamp,
-                type=EventType.LLM_REQUEST_COMPLETED,
-                vendor_source=self.vendor,
-                actor="assistant",
-                payload=llm_payload,
-            )
-        )
         if response_text:
             events.append(
                 Event(
                     session_id=session_id,
                     timestamp=timestamp,
-                    type=EventType.AGENT_RESPONSE_COMPLETED,
+                    type=EventType.LLM_RESPONSE,
                     vendor_source=self.vendor,
                     actor="assistant",
-                    payload=llm_payload,
+                    payload=compact_dict(
+                        {
+                            **base_payload,
+                            "text": response_text,
+                            "model": model,
+                        }
+                    ),
                 )
             )
 
         return events
-
-    def _build_session(self, source: Path, events: list[Event]) -> Session:
-        record = self._current_record or {}
-        raw_sid = record.get("sessionId")
-        try:
-            session_id = UUID(raw_sid) if raw_sid else uuid4()
-        except ValueError:
-            session_id = uuid4()
-
-        started_at = parse_iso_timestamp(record.get("startTime")) or datetime.now(timezone.utc)
-        ended_at = parse_iso_timestamp(record.get("lastUpdated"))
-
-        extensions = VendorExtensions(
-            gemini=GeminiExtensions(
-                session_file=str(source),
-                raw_tool_type=None,
-                model_version=None,
-                realtime_active=None,
-            )
-        )
-        turns = self._group_into_turns(session_id, events)
-
-        return Session(
-            session_id=session_id,
-            trajectory_id=uuid4(),
-            vendor=self.vendor,
-            started_at=started_at,
-            ended_at=ended_at,
-            timeline=self._build_timeline(events, turns),
-            events=events,
-            turns=turns,
-            extensions=extensions,
-        )

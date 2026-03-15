@@ -7,10 +7,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from coding_trajectory.ingestion.adapters.amp import AmpAdapter
-from coding_trajectory.ingestion.models import EventConfidence, EventProvenance, EventType
+from coding_trajectory.ingestion.models import EventType
 
 
-def test_amp_adapter_emits_trace_and_message_lifecycle_events(tmp_path) -> None:
+def test_amp_adapter_emits_message_lifecycle_events(tmp_path) -> None:
     path = tmp_path / "T-019c3c6b-8e41-7448-8a86-60a4edd6eed2.json"
     path.write_text(
         json.dumps(
@@ -89,20 +89,121 @@ def test_amp_adapter_emits_trace_and_message_lifecycle_events(tmp_path) -> None:
     session = AmpAdapter().ingest_file(path)
     events = session.events
 
-    assert events[0].type == EventType.SESSION_STARTED
-    llm_started = next(event for event in events if event.type == EventType.LLM_REQUEST_STARTED)
-    assert llm_started.provenance == EventProvenance.DERIVED
-    assert llm_started.confidence == EventConfidence.MEDIUM
-    tool_started = next(event for event in events if event.type == EventType.TOOL_CALL_STARTED)
-    assert tool_started.provenance == EventProvenance.DERIVED
-    assert tool_started.confidence == EventConfidence.MEDIUM
+    assert any(event.type == EventType.USER_PROMPT_SUBMITTED for event in events)
+    assert any(event.type == EventType.TOOL_CALL_REQUESTED for event in events)
     assert any(event.type == EventType.TOOL_CALL_SUCCEEDED for event in events)
-    assert any(event.type == EventType.AGENT_RESPONSE_COMPLETED for event in events)
-    assert any(item.kind == "turn" for item in session.timeline)
-    assert {item.id for item in session.timeline if item.kind == "event"} == {
-        event.event_id for event in session.events if event.turn_id is None
-    }
-    assert {item.id for item in session.timeline if item.kind == "turn"} == {turn.turn_id for turn in session.turns}
+    assert any(event.type == EventType.LLM_RESPONSE for event in events)
+
+    # Turns and steps
+    assert len(session.turns) == 1
+    turn = session.turns[0]
+    assert turn.user_request_event_id is not None
+    assert len(turn.steps) >= 1
+
+    # Thinking in step vendor_data
+    steps_with_thinking = [s for s in turn.steps if "thinking" in s.vendor_data]
+    assert len(steps_with_thinking) >= 1
+
+    # Extensions
     assert session.extensions is not None
     assert session.extensions.amp is not None
     assert session.extensions.amp.thread_id == "T-019c3c6b-8e41-7448-8a86-60a4edd6eed2"
+
+
+def test_amp_adapter_keeps_step_event_association_without_sent_timestamps(tmp_path) -> None:
+    path = tmp_path / "T-019c3c6b-8e41-7448-8a86-60a4edd6eed3.json"
+    path.write_text(
+        json.dumps(
+            {
+                "v": 212,
+                "id": "T-019c3c6b-8e41-7448-8a86-60a4edd6eed3",
+                "created": 1770540207688,
+                "messages": [
+                    {
+                        "role": "user",
+                        "messageId": 0,
+                        "content": [{"type": "text", "text": "do work"}],
+                        "meta": {"sentAt": 1770540231591},
+                    },
+                    {
+                        "role": "assistant",
+                        "messageId": 1,
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tool-1",
+                                "name": "Read",
+                                "input": {"path": "a.py"},
+                            }
+                        ],
+                        "state": {"type": "complete", "stopReason": "tool_use"},
+                    },
+                    {
+                        "role": "user",
+                        "messageId": 2,
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "toolUseID": "tool-1",
+                                "run": {"status": "done", "result": "ok"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "messageId": 3,
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tool-2",
+                                "name": "Edit",
+                                "input": {"path": "a.py"},
+                            }
+                        ],
+                        "state": {"type": "complete", "stopReason": "tool_use"},
+                    },
+                    {
+                        "role": "user",
+                        "messageId": 4,
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "toolUseID": "tool-2",
+                                "run": {"status": "done", "result": "ok"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "messageId": 5,
+                        "content": [{"type": "text", "text": "done"}],
+                        "state": {"type": "complete", "stopReason": "end_turn"},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    session = AmpAdapter().ingest_file(path)
+
+    assert len(session.turns) == 1
+    turn = session.turns[0]
+    assert len(turn.steps) == 3
+
+    events_by_id = {event.event_id: event for event in session.events}
+    unique_timestamps = {event.timestamp for event in session.events}
+    assert len(unique_timestamps) > 1
+
+    def _step_tool_ids(step_idx: int) -> set[str]:
+        step = turn.steps[step_idx]
+        return {
+            tool_call_id
+            for event_id in step.event_ids
+            for tool_call_id in [events_by_id[event_id].payload.get("tool_call_id")]
+            if isinstance(tool_call_id, str) and tool_call_id
+        }
+
+    assert _step_tool_ids(0) == {"tool-1"}
+    assert _step_tool_ids(1) == {"tool-2"}
+    assert _step_tool_ids(2) == set()

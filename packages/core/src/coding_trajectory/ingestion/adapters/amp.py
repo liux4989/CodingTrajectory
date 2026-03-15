@@ -5,19 +5,20 @@ from __future__ import annotations
 import json
 import logging
 import warnings
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, parse_iso_timestamp, parse_timestamp
 from coding_trajectory.ingestion.models import (
     AmpExtensions,
-    EventConfidence,
     Event,
-    EventProvenance,
     EventType,
     Session,
+    Step,
+    Turn,
     Vendor,
     VendorExtensions,
 )
@@ -67,48 +68,18 @@ class AmpAdapter(BaseAdapter):
     def ingest_default(self) -> list[Session]:
         return self.ingest_directory(_DEFAULT_AMP_THREADS_DIR)
 
-    def _parse_raw_line(self, line: dict) -> Event | None:
-        return None
-
-    def _parse_record(self, source: Path, record: dict) -> list[Event]:
-        self._current_thread = record
-
-        thread_id = record.get("id")
-        try:
-            session_id = UUID(str(thread_id).removeprefix("T-"))
-        except ValueError:
-            session_id = uuid4()
-
-        created_at = parse_timestamp(record.get("created")) or datetime.now(timezone.utc)
-        events = [
-            Event(
-                session_id=session_id,
-                timestamp=created_at,
-                type=EventType.SESSION_STARTED,
-                vendor_source=self.vendor,
-                actor="system",
-                payload=compact_dict({"thread_id": thread_id, "title": record.get("title")}),
+    def _build_session(self, source: Path, records: list[dict]) -> Session:
+        if not records:
+            return Session(
+                session_id=uuid4(),
+                trajectory_id=uuid4(),
+                vendor=self.vendor,
+                started_at=datetime.now(timezone.utc),
             )
-        ]
-        events.extend(self._parse_messages(session_id, created_at, record.get("messages") or []))
-        events.extend(self._parse_traces(session_id, record.get("meta") or {}, record.get("messages") or []))
 
-        ended_at = max((event.timestamp for event in events), default=created_at)
-        events.append(
-            Event(
-                session_id=session_id,
-                timestamp=ended_at,
-                type=EventType.SESSION_ENDED,
-                vendor_source=self.vendor,
-                actor="system",
-                payload={},
-            )
-        )
+        thread = records[0]
+        self._current_thread = thread
 
-        return events
-
-    def _build_session(self, source: Path, events: list[Event]) -> Session:
-        thread = self._current_thread or {}
         thread_id = thread.get("id")
         try:
             session_id = UUID(str(thread_id).removeprefix("T-"))
@@ -116,8 +87,21 @@ class AmpAdapter(BaseAdapter):
             session_id = uuid4()
 
         created_at = parse_timestamp(thread.get("created")) or datetime.now(timezone.utc)
+        messages = thread.get("messages") or []
+        traces = ((thread.get("meta") or {}).get("traces") or [])
+        message_timestamps = self._build_message_timestamps(
+            thread_created=created_at,
+            messages=messages,
+            traces=traces,
+        )
+
+        # Parse events from messages
+        events = self._parse_messages(session_id, messages, message_timestamps)
+
         ended_at = max((event.timestamp for event in events), default=created_at)
-        turns = self._group_into_turns(session_id, events)
+
+        # Build turns and steps
+        turns = self._build_turns(session_id, messages, message_timestamps, events)
 
         return Session(
             session_id=session_id,
@@ -125,117 +109,220 @@ class AmpAdapter(BaseAdapter):
             vendor=self.vendor,
             started_at=created_at,
             ended_at=ended_at,
-            timeline=self._build_timeline(events, turns),
             events=events,
             turns=turns,
             extensions=self._parse_extensions(thread),
         )
 
-    # Tools that spawn subagents / background tasks
-    _SUBAGENT_TOOLS = {"Task"}
-    # Tools that invoke a specialized in-session agent and return a text response
-    _AGENT_QUERY_TOOLS = {"oracle", "librarian"}
+    def _build_message_timestamps(
+        self,
+        *,
+        thread_created: datetime,
+        messages: list[dict],
+        traces: list[dict],
+    ) -> list[datetime]:
+        trace_by_message = self._trace_timestamps_by_message_id(traces)
+        timestamps: list[datetime] = []
+        last_ts: datetime | None = None
 
-    @staticmethod
-    def _parse_debug_usage(debug: dict | None) -> dict:
-        """Extract token / model info from a tool_result's ~debug field."""
-        if not isinstance(debug, dict):
-            return {}
-        inferences = debug.get("inferences") or []
-        first = inferences[0] if inferences else {}
-        usage = first.get("usage") or {}
-        return compact_dict({
-            "model": usage.get("model"),
-            "token_input": usage.get("inputTokens") or None,
-            "token_output": usage.get("outputTokens") or None,
-            "inference_ms": first.get("inferenceTimeMs"),
-            "reasoning_effort": debug.get("reasoningEffort"),
-        })
+        for msg in messages:
+            meta = msg.get("meta") or {}
+            message_id = msg.get("messageId")
 
-    def _extract_progress_events(
+            explicit = parse_timestamp(meta.get("sentAt"))
+            inferred = explicit or trace_by_message.get(message_id)
+            if inferred is None:
+                inferred = last_ts or thread_created
+
+            if last_ts is not None and inferred <= last_ts:
+                inferred = last_ts + timedelta(milliseconds=1)
+
+            timestamps.append(inferred)
+            last_ts = inferred
+
+        return timestamps
+
+    def _trace_timestamps_by_message_id(self, traces: list[dict]) -> dict[Any, datetime]:
+        by_message_id: dict[Any, datetime] = {}
+        for trace in traces:
+            if not isinstance(trace, dict):
+                continue
+
+            context = trace.get("context") or {}
+            message_id = context.get("messageId")
+            if message_id is None:
+                continue
+
+            trace_ts = (
+                parse_iso_timestamp(trace.get("startTime"))
+                or parse_iso_timestamp(trace.get("endTime"))
+            )
+            if trace_ts is None:
+                continue
+
+            existing = by_message_id.get(message_id)
+            if existing is None or trace_ts < existing:
+                by_message_id[message_id] = trace_ts
+
+        return by_message_id
+
+    def _build_turns(
         self,
         session_id: UUID,
-        timestamp: datetime,
-        progress: list,
-        parent_tool_id: str,
-        parent_tool_name: str,
-    ) -> list[Event]:
-        """Emit derived TOOL_CALL_REQUESTED + TOOL_CALL_SUCCEEDED/FAILED for each
-        tool call recorded in an agent's progress trace (librarian, Task subagent).
-        """
-        events: list[Event] = []
-        for step in progress:
-            if not isinstance(step, dict):
+        messages: list[dict],
+        message_timestamps: list[datetime],
+        all_events: list[Event],
+    ) -> list[Turn]:
+        """Group assistant messages + their tool results into Steps."""
+        turns: list[Turn] = []
+        turn_sequence = 0
+        step_sequence = 0
+
+        current_turn: Turn | None = None
+
+        # Index events by source message id.
+        event_index: dict[Any, list[Event]] = {}
+        for ev in all_events:
+            message_id = ev.payload.get("message_id")
+            if message_id is None:
                 continue
-            for tool_use in (step.get("tool_uses") or []):
-                if not isinstance(tool_use, dict):
+            if message_id not in event_index:
+                event_index[message_id] = []
+            event_index[message_id].append(ev)
+
+        for idx, msg in enumerate(messages):
+            role = msg.get("role")
+            message_id = msg.get("messageId")
+            content = msg.get("content") or []
+            ts = message_timestamps[idx]
+
+            if role == "user":
+                text = _content_text(content)
+                tool_results = [
+                    block for block in content
+                    if isinstance(block, dict) and block.get("type") == "tool_result"
+                ]
+
+                if text and not tool_results:
+                    # New turn starting with user prompt
+                    if current_turn is not None:
+                        # Finalize previous turn
+                        current_turn.ended_at = ts
+                        turns.append(current_turn)
+
+                    # Find USER_PROMPT_SUBMITTED event
+                    user_evs = [
+                        e for e in event_index.get(message_id, [])
+                        if e.type == EventType.USER_PROMPT_SUBMITTED
+                    ]
+                    user_ev = user_evs[0] if user_evs else None
+
+                    current_turn = Turn(
+                        session_id=session_id,
+                        sequence=turn_sequence,
+                        started_at=ts,
+                        user_request_event_id=user_ev.event_id if user_ev else None,
+                    )
+                    turn_sequence += 1
+                    step_sequence = 0
+
+                elif tool_results and current_turn is not None:
+                    # Tool result message — associate with current step
+                    # Find corresponding events and attach to current step if there is one
+                    if current_turn.steps:
+                        last_step = current_turn.steps[-1]
+                        result_evs = [
+                            e for e in event_index.get(message_id, [])
+                            if e.type in (EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED)
+                        ]
+                        for ev in result_evs:
+                            if ev.event_id not in last_step.event_ids:
+                                last_step.event_ids.append(ev.event_id)
+
+            elif role == "assistant":
+                if current_turn is None:
                     continue
-                tool_name = tool_use.get("tool_name") or ""
-                status = tool_use.get("status") or ""
-                base = compact_dict({
-                    "tool_name": tool_name,
-                    "parent_tool_call_id": parent_tool_id,
-                    "parent_tool_name": parent_tool_name,
-                })
-                events.append(
-                    Event(
-                        session_id=session_id,
-                        timestamp=timestamp,
-                        type=EventType.TOOL_CALL_REQUESTED,
-                        vendor_source=self.vendor,
-                        actor="assistant",
-                        provenance=EventProvenance.DERIVED,
-                        confidence=EventConfidence.MEDIUM,
-                        payload=compact_dict({**base, "tool_input": tool_use.get("input")}),
-                    )
-                )
-                event_type = (
-                    EventType.TOOL_CALL_SUCCEEDED if status == "done" else EventType.TOOL_CALL_FAILED
-                )
-                events.append(
-                    Event(
-                        session_id=session_id,
-                        timestamp=timestamp,
-                        type=event_type,
-                        vendor_source=self.vendor,
-                        actor="tool",
-                        provenance=EventProvenance.DERIVED,
-                        confidence=EventConfidence.MEDIUM,
-                        payload=compact_dict({**base, "tool_status": status}),
-                    )
-                )
-        return events
 
-    def _parse_messages(self, session_id: UUID, thread_created: datetime, messages: list[dict]) -> list[Event]:
+                usage = msg.get("usage") or {}
+                thinking = _thinking_blocks(content)
+                text = _content_text(content)
+
+                # Collect events for this step
+                step_event_ids: list[UUID] = []
+                for ev in event_index.get(message_id, []):
+                    if ev.type in (
+                        EventType.TOOL_CALL_REQUESTED,
+                        EventType.LLM_RESPONSE,
+                        EventType.VENDOR_RAW,
+                    ):
+                        step_event_ids.append(ev.event_id)
+
+                vendor_data: dict = {}
+                if thinking:
+                    vendor_data["thinking"] = thinking
+                if usage:
+                    vendor_data["model"] = usage.get("model")
+                    vendor_data["input_tokens"] = usage.get("inputTokens")
+                    vendor_data["output_tokens"] = usage.get("outputTokens")
+
+                stop_reason = (msg.get("state") or {}).get("stopReason")
+                if stop_reason:
+                    vendor_data["stop_reason"] = stop_reason
+
+                step = Step(
+                    session_id=session_id,
+                    turn_id=current_turn.turn_id,
+                    sequence=step_sequence,
+                    timestamp=ts,
+                    vendor=Vendor.AMP,
+                    text=text,
+                    vendor_data={k: v for k, v in vendor_data.items() if v is not None},
+                    event_ids=step_event_ids,
+                )
+                step_sequence += 1
+                current_turn.steps.append(step)
+
+        # Flush last turn
+        if current_turn is not None:
+            if current_turn.ended_at is None:
+                current_turn.ended_at = max(
+                    (e.timestamp for e in all_events), default=current_turn.started_at
+                )
+            turns.append(current_turn)
+
+        return turns
+
+    def _parse_messages(
+        self,
+        session_id: UUID,
+        messages: list[dict],
+        message_timestamps: list[datetime],
+    ) -> list[Event]:
         events: list[Event] = []
-        last_ts = thread_created
 
-        # Build tool_id → name mapping so tool_results can be classified by tool name.
-        # tool_result blocks only carry toolUseID; the name lives in the tool_use block.
+        # Build tool_id → name mapping
         tool_id_to_name: dict[str, str] = {}
-        tool_id_to_input: dict[str, dict] = {}
         for msg in messages:
             if msg.get("role") == "assistant":
                 for block in (msg.get("content") or []):
                     if isinstance(block, dict) and block.get("type") == "tool_use":
                         tid = block.get("id") or ""
                         tool_id_to_name[tid] = block.get("name") or ""
-                        tool_id_to_input[tid] = block.get("input") or {}
 
-        for msg in messages:
+        for idx, msg in enumerate(messages):
             role = msg.get("role")
             message_id = msg.get("messageId")
             content = msg.get("content") or []
+            timestamp = message_timestamps[idx]
 
             if role == "user":
-                timestamp = parse_timestamp((msg.get("meta") or {}).get("sentAt")) or last_ts
-                last_ts = timestamp
                 text = _content_text(content)
                 tool_results = [
-                    block for block in content if isinstance(block, dict) and block.get("type") == "tool_result"
+                    block for block in content
+                    if isinstance(block, dict) and block.get("type") == "tool_result"
                 ]
+
                 if text and not tool_results:
-                    user_state = msg.get("userState") or {}
                     events.append(
                         Event(
                             session_id=session_id,
@@ -247,11 +334,6 @@ class AmpAdapter(BaseAdapter):
                                 {
                                     "message_id": message_id,
                                     "text": text,
-                                    "sent_at": (msg.get("meta") or {}).get("sentAt"),
-                                    "active_editor": user_state.get("activeEditor"),
-                                    "visible_files": user_state.get("currentlyVisibleFiles"),
-                                    "cursor_location": user_state.get("cursorLocation"),
-                                    "interrupted": msg.get("interrupted"),
                                 }
                             ),
                         )
@@ -261,145 +343,31 @@ class AmpAdapter(BaseAdapter):
                     run = block.get("run") or {}
                     status = run.get("status")
                     tool_id = block.get("toolUseID") or ""
-                    tool_name = tool_id_to_name.get(tool_id, "")
 
-                    if tool_name in self._SUBAGENT_TOOLS:
-                        # Task tool: map done→BACKGROUND_TASK_COMPLETED, in-progress→skip
-                        if status == "done":
-                            event_type = EventType.BACKGROUND_TASK_COMPLETED
-                        elif status == "in-progress":
-                            # Still running — BACKGROUND_TASK_STARTED was already emitted on
-                            # the tool_use; no additional event needed here.
-                            continue
-                        else:
-                            event_type = EventType.TOOL_CALL_FAILED
-                        events.append(
-                            Event(
-                                session_id=session_id,
-                                timestamp=timestamp,
-                                type=event_type,
-                                vendor_source=self.vendor,
-                                actor="tool",
-                                payload=compact_dict(
-                                    {
-                                        "message_id": message_id,
-                                        "tool_call_id": tool_id,
-                                        "tool_name": tool_name,
-                                        "tool_status": status,
-                                        "tool_result": run.get("result"),
-                                        "track_files": run.get("trackFiles"),
-                                    }
-                                ),
-                            )
-                        )
-                        # Emit derived events for each tool call the subagent made
-                        if status == "done" and isinstance(run.get("progress"), list):
-                            events.extend(
-                                self._extract_progress_events(
-                                    session_id, timestamp, run["progress"], tool_id, tool_name
-                                )
-                            )
-
-                    elif tool_name in self._AGENT_QUERY_TOOLS:
-                        # oracle: single inference, no tool trace; token info in ~debug
-                        # librarian: full github tool trace in progress
-                        debug_info = self._parse_debug_usage(run.get("~debug"))
-                        event_type = EventType.TOOL_CALL_SUCCEEDED if status == "done" else EventType.TOOL_CALL_FAILED
-                        events.append(
-                            Event(
-                                session_id=session_id,
-                                timestamp=timestamp,
-                                type=event_type,
-                                vendor_source=self.vendor,
-                                actor="tool",
-                                payload=compact_dict(
-                                    {
-                                        "message_id": message_id,
-                                        "tool_call_id": tool_id,
-                                        "tool_name": tool_name,
-                                        "tool_status": status,
-                                        "track_files": run.get("trackFiles"),
-                                        **debug_info,
-                                    }
-                                ),
-                            )
-                        )
-                        # Librarian exposes its github tool calls in progress; emit them as derived events
-                        if status == "done" and tool_name == "librarian" and isinstance(run.get("progress"), list):
-                            events.extend(
-                                self._extract_progress_events(
-                                    session_id, timestamp, run["progress"], tool_id, tool_name
-                                )
-                            )
-                        if status == "done" and run.get("result"):
-                            events.append(
-                                Event(
-                                    session_id=session_id,
-                                    timestamp=timestamp,
-                                    type=EventType.AGENT_RESPONSE_COMPLETED,
-                                    vendor_source=self.vendor,
-                                    actor="assistant",
-                                    provenance=EventProvenance.DERIVED,
-                                    confidence=EventConfidence.MEDIUM,
-                                    payload=compact_dict(
-                                        {
-                                            "tool_call_id": tool_id,
-                                            "tool_name": tool_name,
-                                            "text": run.get("result"),
-                                            **debug_info,
-                                        }
-                                    ),
-                                )
-                            )
-
-                    else:
-                        event_type = EventType.TOOL_CALL_SUCCEEDED if status == "done" else EventType.TOOL_CALL_FAILED
-                        events.append(
-                            Event(
-                                session_id=session_id,
-                                timestamp=timestamp,
-                                type=event_type,
-                                vendor_source=self.vendor,
-                                actor="tool",
-                                payload=compact_dict(
-                                    {
-                                        "message_id": message_id,
-                                        "tool_call_id": tool_id,
-                                        "tool_name": tool_name,
-                                        "tool_status": status,
-                                        "tool_result": run.get("result"),
-                                        "track_files": run.get("trackFiles"),
-                                    }
-                                ),
-                            )
-                        )
-
-            elif role == "assistant":
-                timestamp = last_ts
-                usage = msg.get("usage") or {}
-                base_payload = compact_dict(
-                    {
-                        "message_id": message_id,
-                        "stop_reason": (msg.get("state") or {}).get("stopReason"),
-                        "turn_elapsed_ms": msg.get("turnElapsedMs"),
-                        "model": usage.get("model"),
-                        "token_input": usage.get("inputTokens"),
-                        "token_output": usage.get("outputTokens"),
-                        "token_total": usage.get("totalInputTokens"),
-                    }
-                )
-
-                for thinking in _thinking_blocks(content):
+                    event_type = (
+                        EventType.TOOL_CALL_SUCCEEDED if status == "done" else EventType.TOOL_CALL_FAILED
+                    )
                     events.append(
                         Event(
                             session_id=session_id,
                             timestamp=timestamp,
-                            type=EventType.LLM_STREAM_EVENT,
+                            type=event_type,
                             vendor_source=self.vendor,
-                            actor="assistant",
-                            payload=compact_dict({**base_payload, "text": thinking}),
+                            actor="tool",
+                            payload=compact_dict(
+                                {
+                                    "message_id": message_id,
+                                    "tool_call_id": tool_id,
+                                    "tool_name": tool_id_to_name.get(tool_id, ""),
+                                    "tool_status": status,
+                                    "tool_result": run.get("result"),
+                                }
+                            ),
                         )
                     )
+
+            elif role == "assistant":
+                usage = msg.get("usage") or {}
 
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
@@ -413,34 +381,14 @@ class AmpAdapter(BaseAdapter):
                                 actor="assistant",
                                 payload=compact_dict(
                                     {
-                                        **base_payload,
+                                        "message_id": message_id,
                                         "tool_call_id": block.get("id"),
                                         "tool_name": tool_name,
                                         "tool_input": block.get("input"),
-                                        "tool_complete": block.get("complete"),
                                     }
                                 ),
                             )
                         )
-                        # Task = Amp's subagent spawning tool (manual handoff / parallel tasks)
-                        if tool_name in self._SUBAGENT_TOOLS:
-                            events.append(
-                                Event(
-                                    session_id=session_id,
-                                    timestamp=timestamp,
-                                    type=EventType.BACKGROUND_TASK_STARTED,
-                                    vendor_source=self.vendor,
-                                    actor="assistant",
-                                    payload=compact_dict(
-                                        {
-                                            **base_payload,
-                                            "tool_call_id": block.get("id"),
-                                            "tool_name": tool_name,
-                                            "tool_input": block.get("input"),
-                                        }
-                                    ),
-                                )
-                            )
 
                 text = _content_text(content)
                 if text:
@@ -448,65 +396,18 @@ class AmpAdapter(BaseAdapter):
                         Event(
                             session_id=session_id,
                             timestamp=timestamp,
-                            type=EventType.AGENT_RESPONSE_COMPLETED,
+                            type=EventType.LLM_RESPONSE,
                             vendor_source=self.vendor,
                             actor="assistant",
-                            payload=compact_dict({**base_payload, "text": text}),
+                            payload=compact_dict(
+                                {
+                                    "message_id": message_id,
+                                    "text": text,
+                                    "model": usage.get("model"),
+                                }
+                            ),
                         )
                     )
-
-        return events
-
-    def _parse_traces(self, session_id: UUID, meta: dict, messages: list[dict]) -> list[Event]:
-        traces = meta.get("traces") or []
-        by_message_id = {msg.get("messageId"): msg for msg in messages if isinstance(msg, dict)}
-        events: list[Event] = []
-
-        for trace in traces:
-            name = trace.get("name")
-            start_ts = parse_iso_timestamp(trace.get("startTime"))
-            end_ts = parse_iso_timestamp(trace.get("endTime"))
-            message = by_message_id.get((trace.get("context") or {}).get("messageId")) or {}
-            message_id = message.get("messageId")
-            if name == "inference" and start_ts:
-                events.append(
-                    Event(
-                        session_id=session_id,
-                        timestamp=start_ts,
-                        type=EventType.LLM_REQUEST_STARTED,
-                        vendor_source=self.vendor,
-                        actor="system",
-                        provenance=EventProvenance.DERIVED,
-                        confidence=EventConfidence.MEDIUM,
-                        payload=compact_dict({"trace_id": trace.get("id"), "message_id": message_id}),
-                    )
-                )
-            if name == "tools" and start_ts:
-                events.append(
-                    Event(
-                        session_id=session_id,
-                        timestamp=start_ts,
-                        type=EventType.TOOL_CALL_STARTED,
-                        vendor_source=self.vendor,
-                        actor="system",
-                        provenance=EventProvenance.DERIVED,
-                        confidence=EventConfidence.MEDIUM,
-                        payload=compact_dict({"trace_id": trace.get("id"), "message_id": message_id}),
-                    )
-                )
-            if name == "agent" and end_ts and (message.get("state") or {}).get("stopReason") == "end_turn":
-                events.append(
-                    Event(
-                        session_id=session_id,
-                        timestamp=end_ts,
-                        type=EventType.AGENT_RESPONSE_COMPLETED,
-                        vendor_source=self.vendor,
-                        actor="system",
-                        provenance=EventProvenance.DERIVED,
-                        confidence=EventConfidence.MEDIUM,
-                        payload=compact_dict({"trace_id": trace.get("id"), "message_id": message_id}),
-                    )
-                )
 
         return events
 

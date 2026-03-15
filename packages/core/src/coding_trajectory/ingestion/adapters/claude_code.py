@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -13,11 +12,10 @@ from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, infer_tool_success, parse_timestamp
 from coding_trajectory.ingestion.models import (
     ClaudeCodeExtensions,
-    EventConfidence,
     Event,
-    EventProvenance,
     EventType,
     Session,
+    Step,
     Turn,
     Vendor,
     VendorExtensions,
@@ -26,7 +24,6 @@ from coding_trajectory.ingestion.models import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CLAUDE_DIR = Path.home() / ".claude" / "projects"
-_COMMAND_NAME_RE = re.compile(r"<command-name>(?P<name>[^<]+)</command-name>")
 
 
 def _extract_text(content: str | list | None) -> str | None:
@@ -106,12 +103,293 @@ class ClaudeCodeAdapter(BaseAdapter):
 
     vendor = Vendor.CLAUDE_CODE
 
-    def _parse_raw_line(self, line: dict) -> Event | None:
-        events = self._parse_raw_object(line)
-        return events[0] if events else None
+    def _build_session(self, source: Path, records: list[dict]) -> Session:
+        # First pass: collect all events
+        events: list[Event] = []
+        for record in records:
+            events.extend(self._parse_raw_object(record))
 
-    def _parse_record(self, source: Path, record: dict) -> list[Event]:
-        return self._parse_raw_object(record)
+        if not events:
+            return Session(
+                session_id=uuid4(),
+                trajectory_id=uuid4(),
+                vendor=self.vendor,
+                started_at=datetime.now(timezone.utc),
+            )
+
+        session_id = events[0].session_id
+        started_at = min(event.timestamp for event in events)
+        ended_at = max(event.timestamp for event in events)
+
+        # Build turns and steps from records directly
+        turns = self._build_turns(session_id, records, events)
+
+        return Session(
+            session_id=session_id,
+            trajectory_id=uuid4(),
+            vendor=self.vendor,
+            started_at=started_at,
+            ended_at=ended_at,
+            events=events,
+            turns=turns,
+            extensions=self._parse_extensions(source),
+        )
+
+    def _build_turns(self, session_id: UUID, records: list[dict], all_events: list[Event]) -> list[Turn]:
+        """Build Turn+Step objects from raw records."""
+        # Build a mapping from uuid -> event for easy lookup
+        event_by_uuid: dict[str, Event] = {}
+        for record in records:
+            uid = record.get("uuid")
+            ts = parse_timestamp(record.get("timestamp"))
+            sid_str = record.get("sessionId")
+            if uid and ts and sid_str:
+                # Find matching events in all_events
+                for ev in all_events:
+                    if ev.timestamp == ts and str(ev.session_id) == sid_str:
+                        event_by_uuid[uid] = ev
+                        break
+
+        # Build event lookup by uuid for records
+        # We need to process records in order to build turns
+        turns: list[Turn] = []
+        current_turn: Turn | None = None
+        turn_sequence = 0
+        step_sequence = 0
+        current_turn_last_ts: datetime | None = None  # track last timestamp seen in current turn
+
+        # State machine: COLLECTING_LLM | COLLECTING_RESULTS
+        # We process records in sequence
+        # A new turn starts when we see a real user prompt
+        # A new step starts at first assistant record after a user prompt or after tool results
+
+        # First, index events by their record position for quick lookup
+        # We'll work with records directly
+        pending_assistant_records: list[dict] = []  # accumulating one LLM call
+        pending_tool_result_event_ids: list[UUID] = []
+
+        # Track current step being built
+        current_step_thinking: list[str] = []
+        current_step_tool_calls: list[dict] = []
+        current_step_usage: dict | None = None
+        current_step_stop_reason: str | None = None
+        current_step_text: str | None = None
+        current_step_timestamp: datetime | None = None
+        current_step_event_ids: list[UUID] = []
+        in_step = False
+
+        def _flush_step(turn: Turn) -> None:
+            nonlocal current_step_thinking, current_step_tool_calls, current_step_usage
+            nonlocal current_step_stop_reason, current_step_text, current_step_timestamp
+            nonlocal current_step_event_ids, in_step, step_sequence
+
+            if not in_step:
+                return
+            if current_step_timestamp is None:
+                return
+
+            vendor_data: dict = {}
+            if current_step_thinking:
+                vendor_data["thinking"] = current_step_thinking
+            if current_step_tool_calls:
+                vendor_data["tool_calls"] = current_step_tool_calls
+            if current_step_usage:
+                vendor_data["usage"] = current_step_usage
+            if current_step_stop_reason:
+                vendor_data["stop_reason"] = current_step_stop_reason
+
+            step = Step(
+                session_id=turn.session_id,
+                turn_id=turn.turn_id,
+                sequence=step_sequence,
+                timestamp=current_step_timestamp,
+                vendor=Vendor.CLAUDE_CODE,
+                text=current_step_text,
+                vendor_data=vendor_data,
+                event_ids=list(current_step_event_ids),
+            )
+            step_sequence += 1
+            turn.steps.append(step)
+
+            # Reset step state
+            current_step_thinking = []
+            current_step_tool_calls = []
+            current_step_usage = None
+            current_step_stop_reason = None
+            current_step_text = None
+            current_step_timestamp = None
+            current_step_event_ids = []
+            in_step = False
+
+        def _start_step(ts: datetime) -> None:
+            nonlocal current_step_timestamp, in_step
+            current_step_timestamp = ts
+            in_step = True
+
+        # We also need to track tool result event IDs to associate with current step
+        # The flow: user_prompt → [turn start] → assistant (thinking+tool_use) → [step] → tool_results → assistant... → [step end]
+
+        # Let's find events by timestamp+session_id for each record
+        event_index: dict[tuple, list[Event]] = {}
+        for ev in all_events:
+            key = (ev.timestamp, ev.session_id)
+            if key not in event_index:
+                event_index[key] = []
+            event_index[key].append(ev)
+
+        def _get_events_for_record(rec: dict) -> list[Event]:
+            ts = parse_timestamp(rec.get("timestamp"))
+            sid_str = rec.get("sessionId")
+            if ts is None or sid_str is None:
+                return []
+            try:
+                sid = UUID(sid_str)
+            except (ValueError, AttributeError):
+                return []
+            return event_index.get((ts, sid), [])
+
+        # State: we're either in a turn or not
+        # Within a turn, we alternate: assistant_block -> tool_results -> assistant_block -> ...
+        # Each assistant_block + subsequent tool_results = one Step
+
+        collecting_results = False  # True after first terminal assistant in current step
+
+        for record in records:
+            raw_type = record.get("type")
+            ts = parse_timestamp(record.get("timestamp"))
+            if ts is None:
+                continue
+
+            sid_str = record.get("sessionId")
+            if not sid_str:
+                continue
+
+            if raw_type == "user":
+                message = record.get("message", {})
+                content = message.get("content")
+                rec_events = _get_events_for_record(record)
+
+                if _is_real_user_prompt(record):
+                    # End current turn
+                    if current_turn is not None:
+                        _flush_step(current_turn)
+                        # Use last seen timestamp for ended_at to avoid going backwards in time
+                        current_turn.ended_at = current_turn_last_ts or current_turn.started_at
+                        turns.append(current_turn)
+
+                    # Find the USER_PROMPT_SUBMITTED event
+                    user_event = next(
+                        (e for e in rec_events if e.type == EventType.USER_PROMPT_SUBMITTED),
+                        None
+                    )
+                    current_turn = Turn(
+                        session_id=session_id,
+                        sequence=turn_sequence,
+                        started_at=ts,
+                        user_request_event_id=user_event.event_id if user_event else None,
+                    )
+                    current_turn_last_ts = ts  # reset for new turn
+                    turn_sequence += 1
+                    step_sequence = 0
+                    in_step = False
+                    collecting_results = False
+                else:
+                    # Tool results
+                    if current_turn is not None:
+                        # Update last seen timestamp for current turn
+                        if current_turn_last_ts is None or ts > current_turn_last_ts:
+                            current_turn_last_ts = ts
+                        tool_result_events = [
+                            e for e in rec_events
+                            if e.type in (EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED)
+                        ]
+                        for ev in tool_result_events:
+                            current_step_event_ids.append(ev.event_id)
+
+                        # If we were collecting results and this is a tool result,
+                        # mark that we've completed collecting for current step
+                        # (step flush happens when next assistant record arrives)
+                        collecting_results = True
+
+            elif raw_type == "assistant":
+                if current_turn is None:
+                    continue
+
+                # Update last seen timestamp for current turn
+                if current_turn_last_ts is None or ts > current_turn_last_ts:
+                    current_turn_last_ts = ts
+
+                message = record.get("message", {})
+                content = message.get("content", [])
+                stop_reason = message.get("stop_reason")
+                usage = message.get("usage")
+                rec_events = _get_events_for_record(record)
+
+                # If we were collecting results, flush the previous step before starting a new one
+                if collecting_results and in_step:
+                    _flush_step(current_turn)
+                    collecting_results = False
+
+                if not in_step:
+                    _start_step(ts)
+
+                # Accumulate thinking
+                thinking_blocks = _extract_thinking(content)
+                current_step_thinking.extend(thinking_blocks)
+
+                # Accumulate tool calls
+                tool_uses = _tool_use_blocks(content)
+                for tool in tool_uses:
+                    current_step_tool_calls.append({
+                        "name": tool.get("name"),
+                        "id": tool.get("id"),
+                        "input": tool.get("input"),
+                    })
+
+                # Text
+                text = _extract_text(content)
+                if text:
+                    current_step_text = text
+
+                # Usage and stop_reason from terminal record
+                if stop_reason is not None:
+                    current_step_stop_reason = stop_reason
+                    if usage:
+                        current_step_usage = usage
+
+                # Collect event IDs
+                for ev in rec_events:
+                    if ev.type in (
+                        EventType.LLM_RESPONSE,
+                        EventType.TOOL_CALL_REQUESTED,
+                        EventType.VENDOR_RAW,
+                    ):
+                        current_step_event_ids.append(ev.event_id)
+
+                # If this record has tool_uses but stop_reason=None, it's intermediate
+                # If stop_reason is not None with no tool_uses → end_turn → flush step
+                if stop_reason is not None and not tool_uses:
+                    # Terminal with no tool calls → flush now
+                    _flush_step(current_turn)
+                    collecting_results = False
+                elif stop_reason is not None and tool_uses:
+                    # Has tool_uses with stop_reason="tool_use" → wait for tool results
+                    collecting_results = False  # will flip to True when tool results arrive
+
+            elif raw_type == "system":
+                # Drop system records (api_error, turn_duration, etc.)
+                continue
+
+        # Flush any remaining turn
+        if current_turn is not None:
+            _flush_step(current_turn)
+            if current_turn.ended_at is None:
+                # set ended_at from events
+                if all_events:
+                    current_turn.ended_at = max(e.timestamp for e in all_events)
+            turns.append(current_turn)
+
+        return turns
 
     def _parse_raw_object(self, obj: dict) -> list[Event]:  # noqa: C901
         raw_type = obj.get("type")
@@ -129,8 +407,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             return self._parse_user_line(obj, session_id, timestamp)
         if raw_type == "assistant":
             return self._parse_assistant_line(obj, session_id, timestamp)
-        if raw_type == "system":
-            return self._parse_system_line(obj, session_id, timestamp)
+        # Drop system records entirely (api_error, turn_duration, compact_boundary, local_command, etc.)
         return []
 
     def _parse_user_line(self, obj: dict, session_id: UUID, timestamp: datetime) -> list[Event]:
@@ -155,7 +432,11 @@ class ClaudeCodeAdapter(BaseAdapter):
         for block in tool_results:
             tool_use_result = obj.get("toolUseResult")
             success = infer_tool_success(tool_use_result)
-            event_type = EventType.TOOL_CALL_FAILED if block.get("is_error") or success is False else EventType.TOOL_CALL_SUCCEEDED
+            event_type = (
+                EventType.TOOL_CALL_FAILED
+                if block.get("is_error") or success is False
+                else EventType.TOOL_CALL_SUCCEEDED
+            )
             tool_payload = compact_dict(
                 {
                     **base,
@@ -176,33 +457,6 @@ class ClaudeCodeAdapter(BaseAdapter):
                 )
             )
 
-            if isinstance(tool_use_result, dict) and tool_use_result.get("agentId"):
-                status = tool_use_result.get("status")
-                bg_event_type = (
-                    EventType.BACKGROUND_TASK_COMPLETED
-                    if status == "completed"
-                    else EventType.BACKGROUND_TASK_STARTED
-                )
-                events.append(
-                    Event(
-                        session_id=session_id,
-                        timestamp=timestamp,
-                        type=bg_event_type,
-                        vendor_source=self.vendor,
-                        actor="system",
-                        payload=compact_dict(
-                            {
-                                **base,
-                                "agent_id": tool_use_result.get("agentId"),
-                                "status": status,
-                                "tool_uses": tool_use_result.get("tool_uses"),
-                                "duration": tool_use_result.get("duration"),
-                                "tokens": tool_use_result.get("tokens"),
-                            }
-                        ),
-                    )
-                )
-
         return events
 
     def _parse_assistant_line(self, obj: dict, session_id: UUID, timestamp: datetime) -> list[Event]:
@@ -212,18 +466,6 @@ class ClaudeCodeAdapter(BaseAdapter):
         usage = message.get("usage")
         base = _base_payload(obj)
         events: list[Event] = []
-
-        for thinking in _extract_thinking(content):
-            events.append(
-                Event(
-                    session_id=session_id,
-                    timestamp=timestamp,
-                    type=EventType.LLM_STREAM_EVENT,
-                    vendor_source=self.vendor,
-                    actor="assistant",
-                    payload=compact_dict({**base, "text": thinking, "usage": usage}),
-                )
-            )
 
         tool_uses = _tool_use_blocks(content)
         for tool in tool_uses:
@@ -247,41 +489,25 @@ class ClaudeCodeAdapter(BaseAdapter):
                 )
             )
 
-            if tool.get("name") == "Agent":
-                events.append(
-                    Event(
-                        session_id=session_id,
-                        timestamp=timestamp,
-                        type=EventType.BACKGROUND_TASK_STARTED,
-                        vendor_source=self.vendor,
-                        actor="assistant",
-                        payload=payload,
-                    )
-                )
-
         text = _extract_text(content)
         if text:
-            event_type = (
-                EventType.AGENT_RESPONSE_COMPLETED
-                if stop_reason in {"end_turn", "stop_sequence", None}
-                else EventType.LLM_REQUEST_COMPLETED
-            )
             events.append(
                 Event(
                     session_id=session_id,
                     timestamp=timestamp,
-                    type=event_type,
+                    type=EventType.LLM_RESPONSE,
                     vendor_source=self.vendor,
                     actor="assistant",
                     payload=compact_dict({**base, "text": text, "stop_reason": stop_reason, "usage": usage}),
                 )
             )
-        elif not events:
+        elif not events and stop_reason is not None:
+            # Emit a vendor_raw event for completeness (e.g. tool_use only records)
             events.append(
                 Event(
                     session_id=session_id,
                     timestamp=timestamp,
-                    type=EventType.LLM_REQUEST_COMPLETED,
+                    type=EventType.VENDOR_RAW,
                     vendor_source=self.vendor,
                     actor="assistant",
                     payload=compact_dict({**base, "stop_reason": stop_reason, "usage": usage}),
@@ -289,107 +515,6 @@ class ClaudeCodeAdapter(BaseAdapter):
             )
 
         return events
-
-    def _parse_system_line(self, obj: dict, session_id: UUID, timestamp: datetime) -> list[Event]:
-        subtype = obj.get("subtype")
-        base = _base_payload(obj)
-        if subtype == "compact_boundary":
-            meta = obj.get("compactMetadata") or {}
-            return [
-                Event(
-                    session_id=session_id,
-                    timestamp=timestamp,
-                    type=EventType.CONTEXT_COMPACTION_STARTED,
-                    vendor_source=self.vendor,
-                    actor="system",
-                    payload=compact_dict(
-                        {
-                            **base,
-                            "trigger": meta.get("trigger"),
-                            "pre_tokens": meta.get("preTokens"),
-                            "messages_summarized": meta.get("messagesSummarized"),
-                        }
-                    ),
-                )
-            ]
-
-        if subtype == "turn_duration":
-            return [
-                Event(
-                    session_id=session_id,
-                    timestamp=timestamp,
-                    type=EventType.AGENT_RESPONSE_COMPLETED,
-                    vendor_source=self.vendor,
-                    actor="system",
-                    payload=compact_dict({**base, "duration_ms": obj.get("durationMs")}),
-                )
-            ]
-
-        if subtype == "api_error":
-            return [
-                Event(
-                    session_id=session_id,
-                    timestamp=timestamp,
-                    type=EventType.LLM_REQUEST_COMPLETED,
-                    vendor_source=self.vendor,
-                    actor="system",
-                    payload=compact_dict({**base, "error": obj.get("error"), "cause": obj.get("cause")}),
-                )
-            ]
-
-        if subtype == "local_command":
-            content = obj.get("content")
-            command_name = None
-            if isinstance(content, str):
-                match = _COMMAND_NAME_RE.search(content)
-                if match:
-                    command_name = match.group("name")
-            if command_name == "/resume":
-                event_type = EventType.SESSION_RESUMED
-            elif command_name == "/exit":
-                event_type = EventType.SESSION_ENDED
-            else:
-                return []
-            return [
-                Event(
-                    session_id=session_id,
-                    timestamp=timestamp,
-                    type=event_type,
-                    vendor_source=self.vendor,
-                    actor="system",
-                    provenance=EventProvenance.DERIVED,
-                    confidence=EventConfidence.MEDIUM,
-                    payload=compact_dict({**base, "command_name": command_name}),
-                )
-            ]
-
-        return []
-
-    def _build_session(self, source: Path, events: list[Event]) -> Session:
-        if not events:
-            return Session(
-                session_id=uuid4(),
-                trajectory_id=uuid4(),
-                vendor=self.vendor,
-                started_at=datetime.now(timezone.utc),
-            )
-
-        session_id = events[0].session_id
-        started_at = min(event.timestamp for event in events)
-        ended_at = max(event.timestamp for event in events)
-        turns = self._group_into_turns(session_id, events)
-
-        return Session(
-            session_id=session_id,
-            trajectory_id=uuid4(),
-            vendor=self.vendor,
-            started_at=started_at,
-            ended_at=ended_at,
-            timeline=self._build_timeline(events, turns),
-            events=events,
-            turns=turns,
-            extensions=self._parse_extensions(source),
-        )
 
     def _parse_extensions(self, source: Path) -> VendorExtensions | None:
         try:

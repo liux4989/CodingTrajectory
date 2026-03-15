@@ -11,7 +11,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter, GeminiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
-from coding_trajectory.ingestion.models import Event, Session, TimelineItem, Trajectory, Turn, Vendor
+from coding_trajectory.ingestion.models import Event, Session, Step, Trajectory, Turn, Vendor
 from coding_trajectory.query import DocumentError, DocumentStore
 from coding_trajectory.trajectory import assemble_project_trajectories
 
@@ -138,6 +138,11 @@ def infer_project_identifier(session: Session, source: Path, *, fallback: str | 
 
 
 def _extract_session_cwd(session: Session) -> str | None:
+    # Check vendor extensions first (more reliable than scanning event payloads)
+    if session.extensions:
+        if session.extensions.codex and session.extensions.codex.cwd:
+            return session.extensions.codex.cwd
+
     for event in session.events:
         payload = cast(dict[str, object], event.payload)
         cwd = payload.get("cwd")
@@ -161,10 +166,9 @@ def format_discovery_sources(sources: list[DiscoverySource]) -> str:
 
 
 def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Session:
-    event_updates: dict[str, object] = {}
-    events: list[Event] = []
+    # --- stabilize event IDs ---
     event_id_map: dict[object, object] = {}
-
+    events: list[Event] = []
     for index, event in enumerate(session.events):
         stable_event_id = uuid5(
             NAMESPACE_URL,
@@ -183,48 +187,67 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
             ),
         )
         event_id_map[event.event_id] = stable_event_id
-        event_updates = {"event_id": stable_event_id}
-        events.append(event.model_copy(update=event_updates))
+        events.append(event.model_copy(update={"event_id": stable_event_id}))
 
+    # --- stabilize turn + step IDs ---
     turn_id_map: dict[object, object] = {}
     turns: list[Turn] = []
-    for index, turn in enumerate(session.turns):
+    for t_index, turn in enumerate(session.turns):
         stable_turn_id = uuid5(
             NAMESPACE_URL,
             json.dumps(
                 {
                     "vendor": vendor.value,
                     "source": str(source),
-                    "index": index,
+                    "turn_index": t_index,
                     "session_id": str(session.session_id),
-                    "user_request": turn.user_request,
+                    "sequence": turn.sequence,
                     "started_at": turn.started_at.isoformat(),
-                    "ended_at": turn.ended_at.isoformat() if turn.ended_at else None,
-                    "event_ids": [str(event_id_map.get(event_id, event_id)) for event_id in turn.event_ids],
                 },
                 sort_keys=True,
                 default=str,
             ),
         )
         turn_id_map[turn.turn_id] = stable_turn_id
+
+        stable_steps: list[Step] = []
+        for s_index, step in enumerate(turn.steps):
+            stable_step_id = uuid5(
+                NAMESPACE_URL,
+                json.dumps(
+                    {
+                        "vendor": vendor.value,
+                        "source": str(source),
+                        "turn_index": t_index,
+                        "step_index": s_index,
+                        "sequence": step.sequence,
+                        "timestamp": step.timestamp.isoformat(),
+                    },
+                    sort_keys=True,
+                    default=str,
+                ),
+            )
+            stable_steps.append(
+                step.model_copy(
+                    update={
+                        "step_id": stable_step_id,
+                        "turn_id": stable_turn_id,
+                        "event_ids": [event_id_map.get(eid, eid) for eid in step.event_ids],
+                    }
+                )
+            )
+
+        user_req_eid = turn.user_request_event_id
+        stable_user_req_eid = event_id_map.get(user_req_eid, user_req_eid) if user_req_eid else None
+
         turns.append(
             turn.model_copy(
                 update={
                     "turn_id": stable_turn_id,
-                    "event_ids": [event_id_map.get(event_id, event_id) for event_id in turn.event_ids],
+                    "user_request_event_id": stable_user_req_eid,
+                    "steps": stable_steps,
                 }
             )
         )
 
-    updated_events: list[Event] = []
-    for event in events:
-        updated_events.append(
-            event.model_copy(update={"turn_id": turn_id_map.get(event.turn_id, event.turn_id)})
-        )
-
-    timeline = [
-        TimelineItem(kind=item.kind, id=turn_id_map.get(item.id, event_id_map.get(item.id, item.id)))
-        for item in session.timeline
-    ]
-
-    return session.model_copy(update={"events": updated_events, "turns": turns, "timeline": timeline})
+    return session.model_copy(update={"events": events, "turns": turns})
