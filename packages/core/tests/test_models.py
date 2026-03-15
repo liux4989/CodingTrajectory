@@ -8,8 +8,6 @@ from coding_trajectory.ingestion.models import (
     EventType,
     Step,
     StepToolItem,
-    ToolArtifactKind,
-    ToolArtifactRef,
     Trajectory,
     Turn,
     Vendor,
@@ -49,20 +47,13 @@ def test_step_model_has_required_fields() -> None:
     assert step.event_ids == []
 
 
-def test_step_tool_item_defaults_include_artifacts() -> None:
+def test_step_tool_item_defaults_do_not_add_extra_fields() -> None:
     tool_item = StepToolItem(tool_name="spawn_agent")
 
-    assert tool_item.artifacts == []
-
-
-def test_tool_artifact_ref_supports_claude_specific_kinds() -> None:
-    artifact = ToolArtifactRef(
-        kind=ToolArtifactKind.CLAUDE_PLAN,
-        path="/Users/example/.claude/plans/example.md",
-    )
-
-    assert artifact.kind == ToolArtifactKind.CLAUDE_PLAN
-    assert artifact.metadata == {}
+    assert tool_item.tool_name == "spawn_agent"
+    assert tool_item.tool_call_id is None
+    assert tool_item.input is None
+    assert tool_item.output is None
 
 
 def test_turn_model_new_schema() -> None:

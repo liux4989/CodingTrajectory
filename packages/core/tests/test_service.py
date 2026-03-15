@@ -8,7 +8,6 @@ from coding_trajectory.ingestion.models import (
     Step,
     StepTextItem,
     StepToolItem,
-    ToolArtifactKind,
     Trajectory,
     TrajectoryEdge,
     TrajectorySummary,
@@ -109,7 +108,7 @@ def test_serialize_session_detail_exposes_only_canonical_session_fields() -> Non
     assert payload["trajectory_id"] == str(trajectory_id)
 
 
-def test_serialize_step_detail_nests_artifacts_under_tool_items() -> None:
+def test_serialize_step_detail_keeps_tool_items_direct() -> None:
     session_id = uuid4()
     turn_id = uuid4()
     event_id = uuid4()
@@ -125,12 +124,6 @@ def test_serialize_step_detail_nests_artifacts_under_tool_items() -> None:
             StepToolItem(
                 tool_name="plan_mode",
                 output={"status": "ok"},
-                artifacts=[
-                    {
-                        "kind": ToolArtifactKind.CLAUDE_PLAN,
-                        "path": "/Users/example/.claude/plans/example.md",
-                    }
-                ],
                 event_ids=[event_id],
             ),
         ],
@@ -139,14 +132,12 @@ def test_serialize_step_detail_nests_artifacts_under_tool_items() -> None:
 
     payload = serialize_step_detail(step)
 
-    assert "artifacts" not in payload
     assert payload["items"][0] == {"kind": "text", "text": "Planning", "event_ids": []}
     assert payload["items"][1]["tool_name"] == "plan_mode"
-    assert payload["items"][1]["artifacts"] == [
-        {
-            "kind": "claude_plan",
-            "path": "/Users/example/.claude/plans/example.md",
-            "created_at": None,
-            "metadata": {},
-        }
-    ]
+    assert payload["items"][1] == {
+        "kind": "tool",
+        "tool_name": "plan_mode",
+        "output": {"status": "ok"},
+        "status": "requested",
+        "event_ids": [str(event_id)],
+    }

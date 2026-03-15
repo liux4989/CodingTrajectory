@@ -33,11 +33,6 @@ class ToolStatus(str, Enum):
     FAILED      = "failed"
 
 
-class ToolArtifactKind(str, Enum):
-    CLAUDE_TASK_GROUP = "claude_task_group"
-    CLAUDE_PLAN       = "claude_plan"
-
-
 # ---------------------------------------------------------------------------
 # Vendor-specific extension models (session-level metadata)
 # ---------------------------------------------------------------------------
@@ -114,20 +109,12 @@ class StepTextItem(BaseModel):
     event_ids: list[UUID] = Field(default_factory=list)
 
 
-class ToolArtifactRef(BaseModel):
-    kind:       ToolArtifactKind
-    path:       str
-    created_at: datetime | None = None
-    metadata:   dict[str, Any] = Field(default_factory=dict)
-
-
 class StepToolItem(BaseModel):
     kind:         Literal["tool"] = "tool"
     tool_name:    str | None = None
     tool_call_id: str | None = None
     input:        Any = None
     output:       Any = None
-    artifacts:    list[ToolArtifactRef] = Field(default_factory=list)
     status:       ToolStatus = ToolStatus.REQUESTED
     event_ids:    list[UUID] = Field(default_factory=list)
 
