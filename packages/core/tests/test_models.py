@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from coding_trajectory.ingestion.models import Trajectory, Session, Turn, Step, Event, EventType, Vendor
+from coding_trajectory.ingestion.models import Event, EventType, Step, StepStatus, Trajectory, Turn, Vendor
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -33,7 +33,9 @@ def test_step_model_has_required_fields() -> None:
     )
 
     assert step.step_id is not None
-    assert step.text is None
+    assert step.status == StepStatus.COMPLETED
+    assert step.items == []
+    assert step.artifacts == {}
     assert step.vendor_data == {}
     assert step.event_ids == []
 

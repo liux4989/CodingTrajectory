@@ -102,7 +102,6 @@ def _dispatch(
         return {
             "session": serialize_session_detail(session),
             "turns": [serialize_turn_detail(t) for t in session.turns],
-            "events": [serialize_event_detail(e) for e in session.events],
         }
 
     if method == "turn.get":
@@ -117,6 +116,17 @@ def _dispatch(
     if method == "event.get":
         event = resolve_resource(store, "event", params["event_id"])
         return serialize_event_detail(event)
+
+    if method == "event.batch_get":
+        event_ids = params.get("event_ids") or []
+        if not isinstance(event_ids, list):
+            raise TypeError("event_ids must be an array")
+        return {
+            "items": [
+                serialize_event_detail(resolve_resource(store, "event", event_id))
+                for event_id in event_ids
+            ]
+        }
 
     if method == "step.get":
         step = resolve_resource(store, "step", params["step_id"])

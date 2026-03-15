@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from coding_trajectory.ingestion.adapters.gemini import GeminiAdapter
-from coding_trajectory.ingestion.models import EventType
+from coding_trajectory.ingestion.models import EventType, StepTextItem, StepToolItem, ToolStatus
 
 
 def test_gemini_adapter_emits_user_tool_and_llm_events(tmp_path) -> None:
@@ -70,6 +70,10 @@ def test_gemini_adapter_emits_user_tool_and_llm_events(tmp_path) -> None:
 
     # Thoughts go into step vendor_data, not as events
     assert "thoughts" in step.vendor_data
+    assert any(isinstance(item, StepTextItem) and item.text == "I can help" for item in step.items)
+    tool_item = next(item for item in step.items if isinstance(item, StepToolItem))
+    assert tool_item.tool_name == "run_shell_command"
+    assert tool_item.status == ToolStatus.COMPLETED
 
 
 def test_gemini_adapter_cancelled_tool_becomes_failed(tmp_path) -> None:
@@ -116,3 +120,6 @@ def test_gemini_adapter_cancelled_tool_becomes_failed(tmp_path) -> None:
     # cancelled → TOOL_CALL_FAILED
     failed = [e for e in events if e.type == EventType.TOOL_CALL_FAILED]
     assert len(failed) == 1
+    step = session.turns[0].steps[0]
+    tool_item = next(item for item in step.items if isinstance(item, StepToolItem))
+    assert tool_item.status == ToolStatus.FAILED

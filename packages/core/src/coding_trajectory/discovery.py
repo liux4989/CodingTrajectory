@@ -227,11 +227,21 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
                     default=str,
                 ),
             )
+            stable_items = []
+            for item in step.items:
+                stable_items.append(
+                    item.model_copy(
+                        update={
+                            "event_ids": [event_id_map.get(eid, eid) for eid in getattr(item, "event_ids", [])],
+                        }
+                    )
+                )
             stable_steps.append(
                 step.model_copy(
                     update={
                         "step_id": stable_step_id,
                         "turn_id": stable_turn_id,
+                        "items": stable_items,
                         "event_ids": [event_id_map.get(eid, eid) for eid in step.event_ids],
                     }
                 )

@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from coding_trajectory.ingestion.adapters.amp import AmpAdapter
-from coding_trajectory.ingestion.models import EventType
+from coding_trajectory.ingestion.models import EventType, StepTextItem, StepToolItem, ToolStatus
 
 
 def test_amp_adapter_emits_message_lifecycle_events(tmp_path) -> None:
@@ -103,6 +103,8 @@ def test_amp_adapter_emits_message_lifecycle_events(tmp_path) -> None:
     # Thinking in step vendor_data
     steps_with_thinking = [s for s in turn.steps if "thinking" in s.vendor_data]
     assert len(steps_with_thinking) >= 1
+    assert any(isinstance(item, StepToolItem) for item in turn.steps[0].items)
+    assert any(isinstance(item, StepTextItem) and item.text == "Here is the answer" for item in turn.steps[-1].items)
 
     # Extensions
     assert session.extensions is not None
@@ -207,3 +209,5 @@ def test_amp_adapter_keeps_step_event_association_without_sent_timestamps(tmp_pa
     assert _step_tool_ids(0) == {"tool-1"}
     assert _step_tool_ids(1) == {"tool-2"}
     assert _step_tool_ids(2) == set()
+    assert next(item for item in turn.steps[0].items if isinstance(item, StepToolItem)).status == ToolStatus.COMPLETED
+    assert next(item for item in turn.steps[1].items if isinstance(item, StepToolItem)).status == ToolStatus.COMPLETED

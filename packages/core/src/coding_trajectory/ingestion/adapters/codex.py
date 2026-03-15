@@ -19,14 +19,19 @@ from coding_trajectory.ingestion.common import (
     parse_iso_timestamp,
 )
 from coding_trajectory.ingestion.models import (
+    AgentType,
     CodexExtensions,
     Event,
     EventType,
     Session,
     Step,
+    StepTextItem,
+    StepToolItem,
     Turn,
+    ToolStatus,
     Vendor,
     VendorExtensions,
+    derive_step_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +53,39 @@ def _parse_json_blob(raw: Any) -> Any:
 def _extract_message_text(payload: dict[str, Any]) -> str | None:
     message = payload.get("message")
     return message if isinstance(message, str) and message else None
+
+
+def _extract_response_text(payload: dict[str, Any]) -> str | None:
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return None
+
+    texts = [
+        part.get("text", "")
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "output_text"
+    ]
+    joined = " ".join(text for text in texts if text).strip()
+    return joined or None
+
+
+def _append_unique_event_ids(target: list[UUID], event_ids: list[UUID]) -> None:
+    for event_id in event_ids:
+        if event_id not in target:
+            target.append(event_id)
+
+
+def _append_text_item(items: list[StepTextItem | StepToolItem], text: str | None, *, event_ids: list[UUID] | None = None) -> None:
+    if not text:
+        return
+    cleaned = text.strip()
+    if not cleaned:
+        return
+    if items and isinstance(items[-1], StepTextItem) and items[-1].text == cleaned:
+        if event_ids:
+            _append_unique_event_ids(items[-1].event_ids, event_ids)
+        return
+    items.append(StepTextItem(text=cleaned, event_ids=list(event_ids or [])))
 
 
 
@@ -112,6 +150,7 @@ class CodexAdapter(BaseAdapter):
                     if isinstance(ctx.get("collaboration_mode"), dict)
                     else None
                 ),
+                agent_nickname=meta.get("nickname") if isinstance(meta.get("nickname"), str) else None,
                 agent_role=meta.get("source"),
                 cwd=meta.get("cwd") if isinstance(meta.get("cwd"), str) else None,
             )
@@ -123,6 +162,8 @@ class CodexAdapter(BaseAdapter):
             session_id=state.session_id,
             trajectory_id=uuid4(),
             vendor=Vendor.CODEX_CLI,
+            agent_type=AgentType.MAIN,
+            agent_name=extensions.codex.agent_nickname if extensions.codex else None,
             started_at=started_at,
             ended_at=ended_at,
             events=normalized_events,
@@ -149,27 +190,18 @@ class CodexAdapter(BaseAdapter):
 
         current_turn: Turn | None = None
         current_step_event_ids: list[UUID] = []
-        current_step_tool_calls: list[dict] = []
-        current_step_commentary: list[str] = []
-        current_step_model: str | None = None
+        current_step_items: list[StepTextItem | StepToolItem] = []
+        current_step_tools_by_call_id: dict[str, StepToolItem] = {}
         current_step_start_ts: datetime | None = None
-        user_request_event_id: UUID | None = None
 
         def _flush_turn_with_step(last_msg: str | None, end_ts: datetime) -> None:
-            nonlocal current_turn, current_step_event_ids, current_step_tool_calls
-            nonlocal current_step_commentary, current_step_model, current_step_start_ts
-            nonlocal user_request_event_id, turn_sequence
+            nonlocal current_turn, current_step_event_ids, current_step_items
+            nonlocal current_step_tools_by_call_id, current_step_start_ts, turn_sequence
 
             if current_turn is None:
                 return
 
-            vendor_data: dict = {}
-            if current_step_model:
-                vendor_data["model"] = current_step_model
-            if current_step_commentary:
-                vendor_data["commentary"] = current_step_commentary
-            if current_step_tool_calls:
-                vendor_data["tool_calls"] = current_step_tool_calls
+            _append_text_item(current_step_items, last_msg)
 
             step = Step(
                 session_id=session_id,
@@ -177,8 +209,8 @@ class CodexAdapter(BaseAdapter):
                 sequence=0,
                 timestamp=current_step_start_ts or current_turn.started_at,
                 vendor=Vendor.CODEX_CLI,
-                text=last_msg,
-                vendor_data=vendor_data,
+                status=derive_step_status(current_step_items),
+                items=list(current_step_items),
                 event_ids=list(current_step_event_ids),
             )
             current_turn.steps.append(step)
@@ -187,11 +219,9 @@ class CodexAdapter(BaseAdapter):
 
             current_turn = None
             current_step_event_ids = []
-            current_step_tool_calls = []
-            current_step_commentary = []
-            current_step_model = None
+            current_step_items = []
+            current_step_tools_by_call_id = {}
             current_step_start_ts = None
-            user_request_event_id = None
 
         def _get_ts(record: dict) -> datetime:
             return parse_iso_timestamp(record.get("timestamp")) or _now_utc()
@@ -228,25 +258,28 @@ class CodexAdapter(BaseAdapter):
                     turn_sequence += 1
                     current_step_start_ts = ts
                     if user_ev:
-                        current_step_event_ids.append(user_ev.event_id)
+                        _append_unique_event_ids(current_step_event_ids, [user_ev.event_id])
 
                 elif inner_type == "agent_message":
                     # Intermediate commentary
                     text = _extract_message_text(payload)
                     phase = payload.get("phase")
                     if phase == "commentary" and text:
-                        current_step_commentary.append(text)
+                        _append_text_item(current_step_items, text)
                     # Collect event IDs
-                    for ev in event_index.get(ts, []):
-                        current_step_event_ids.append(ev.event_id)
+                    _append_unique_event_ids(
+                        current_step_event_ids,
+                        [ev.event_id for ev in event_index.get(ts, [])],
+                    )
 
                 elif inner_type == "task_complete":
                     last_msg = payload.get("last_agent_message")
                     if current_turn is not None:
                         # Collect task_complete event IDs
-                        for ev in event_index.get(ts, []):
-                            if ev.type == EventType.VENDOR_RAW:
-                                current_step_event_ids.append(ev.event_id)
+                        _append_unique_event_ids(
+                            current_step_event_ids,
+                            [ev.event_id for ev in event_index.get(ts, []) if ev.type == EventType.VENDOR_RAW],
+                        )
                         _flush_turn_with_step(last_msg, ts)
 
             elif outer_type == "response_item":
@@ -257,20 +290,44 @@ class CodexAdapter(BaseAdapter):
                 if inner_type == "function_call":
                     tool_name = payload.get("name")
                     tool_input = _parse_json_blob(payload.get("arguments"))
-                    current_step_tool_calls.append({
-                        "name": tool_name,
-                        "id": payload.get("call_id"),
-                        "input": tool_input,
-                    })
-                    # Collect events
-                    for ev in event_index.get(ts, []):
-                        if ev.type == EventType.TOOL_CALL_REQUESTED:
-                            current_step_event_ids.append(ev.event_id)
+                    request_event_ids = [
+                        ev.event_id
+                        for ev in event_index.get(ts, [])
+                        if ev.type == EventType.TOOL_CALL_REQUESTED
+                    ]
+                    tool_item = StepToolItem(
+                        tool_name=tool_name,
+                        tool_call_id=payload.get("call_id"),
+                        input=tool_input,
+                        status=ToolStatus.REQUESTED,
+                        event_ids=request_event_ids,
+                    )
+                    current_step_items.append(tool_item)
+                    call_id = payload.get("call_id")
+                    if isinstance(call_id, str) and call_id:
+                        current_step_tools_by_call_id[call_id] = tool_item
+                    _append_unique_event_ids(current_step_event_ids, request_event_ids)
 
                 elif inner_type == "function_call_output":
-                    for ev in event_index.get(ts, []):
-                        if ev.type in (EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED):
-                            current_step_event_ids.append(ev.event_id)
+                    result_event_ids = [
+                        ev.event_id
+                        for ev in event_index.get(ts, [])
+                        if ev.type in (EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED)
+                    ]
+                    _append_unique_event_ids(current_step_event_ids, result_event_ids)
+                    call_id = payload.get("call_id")
+                    tool_item = current_step_tools_by_call_id.get(call_id) if isinstance(call_id, str) else None
+                    if tool_item is not None:
+                        tool_item.output = _parse_json_blob(payload.get("output"))
+                        tool_item.status = (
+                            ToolStatus.FAILED
+                            if any(
+                                ev.type == EventType.TOOL_CALL_FAILED
+                                for ev in event_index.get(ts, [])
+                            )
+                            else ToolStatus.COMPLETED
+                        )
+                        _append_unique_event_ids(tool_item.event_ids, result_event_ids)
 
                 elif inner_type == "reasoning":
                     # Encrypted, skip
@@ -278,8 +335,10 @@ class CodexAdapter(BaseAdapter):
 
                 elif inner_type == "message":
                     if payload.get("role") == "assistant":
-                        for ev in event_index.get(ts, []):
-                            current_step_event_ids.append(ev.event_id)
+                        response_event_ids = [ev.event_id for ev in event_index.get(ts, [])]
+                        text = _extract_response_text(payload)
+                        _append_text_item(current_step_items, text, event_ids=list(response_event_ids))
+                        _append_unique_event_ids(current_step_event_ids, response_event_ids)
 
         # Flush any incomplete turn
         if current_turn is not None:
@@ -442,6 +501,23 @@ class CodexAdapter(BaseAdapter):
                         "tool_call_id": call_id,
                         "exit_code": extract_exit_code(raw_output),
                         "output": parsed_out,
+                    }
+                ),
+            )
+
+        if inner_type == "message" and payload.get("role") == "assistant":
+            text = _extract_response_text(payload)
+            if not text:
+                return None
+            return self._event_from(
+                session_id=state.session_id,
+                event_type=EventType.LLM_RESPONSE,
+                timestamp=timestamp,
+                actor="assistant",
+                payload=compact_dict(
+                    {
+                        "text": text,
+                        "phase": payload.get("phase"),
                     }
                 ),
             )

@@ -13,15 +13,18 @@ from uuid import UUID, uuid4
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, parse_iso_timestamp, parse_timestamp
 from coding_trajectory.ingestion.models import (
+    AgentType,
     AmpExtensions,
     Event,
     EventType,
     Session,
     Step,
+    ToolStatus,
     Turn,
     Vendor,
     VendorExtensions,
 )
+from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, derive_status, update_tool_item
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,7 @@ class AmpAdapter(BaseAdapter):
             session_id=session_id,
             trajectory_id=uuid4(),
             vendor=self.vendor,
+            agent_type=AgentType.MAIN,
             started_at=created_at,
             ended_at=ended_at,
             events=events,
@@ -238,6 +242,19 @@ class AmpAdapter(BaseAdapter):
                         for ev in result_evs:
                             if ev.event_id not in last_step.event_ids:
                                 last_step.event_ids.append(ev.event_id)
+                            update_tool_item(
+                                last_step.items,
+                                tool_call_id=ev.payload.get("tool_call_id"),
+                                tool_name=ev.payload.get("tool_name"),
+                                output=ev.payload.get("tool_result"),
+                                status=(
+                                    ToolStatus.COMPLETED
+                                    if ev.type == EventType.TOOL_CALL_SUCCEEDED
+                                    else ToolStatus.FAILED
+                                ),
+                                event_ids=[ev.event_id],
+                            )
+                        last_step.status = derive_status(last_step.items)
 
             elif role == "assistant":
                 if current_turn is None:
@@ -245,8 +262,6 @@ class AmpAdapter(BaseAdapter):
 
                 usage = msg.get("usage") or {}
                 thinking = _thinking_blocks(content)
-                text = _content_text(content)
-
                 # Collect events for this step
                 step_event_ids: list[UUID] = []
                 for ev in event_index.get(message_id, []):
@@ -256,6 +271,33 @@ class AmpAdapter(BaseAdapter):
                         EventType.VENDOR_RAW,
                     ):
                         step_event_ids.append(ev.event_id)
+
+                items = []
+                llm_event_ids = [
+                    ev.event_id for ev in event_index.get(message_id, [])
+                    if ev.type == EventType.LLM_RESPONSE
+                ]
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = block.get("type")
+                    if block_type == "text":
+                        append_text_item(items, block.get("text"), event_ids=llm_event_ids)
+                    elif block_type == "tool_use":
+                        tool_id = block.get("id")
+                        tool_event_ids = [
+                            ev.event_id
+                            for ev in event_index.get(message_id, [])
+                            if ev.type == EventType.TOOL_CALL_REQUESTED and ev.payload.get("tool_call_id") == tool_id
+                        ]
+                        append_tool_item(
+                            items,
+                            tool_name=block.get("name"),
+                            tool_call_id=tool_id,
+                            input=block.get("input"),
+                            status=ToolStatus.REQUESTED,
+                            event_ids=tool_event_ids,
+                        )
 
                 vendor_data: dict = {}
                 if thinking:
@@ -275,7 +317,8 @@ class AmpAdapter(BaseAdapter):
                     sequence=step_sequence,
                     timestamp=ts,
                     vendor=Vendor.AMP,
-                    text=text,
+                    status=derive_status(items),
+                    items=items,
                     vendor_data={k: v for k, v in vendor_data.items() if v is not None},
                     event_ids=step_event_ids,
                 )

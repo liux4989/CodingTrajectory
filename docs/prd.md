@@ -15,7 +15,7 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
   - Trajector
   - Session : {session-id}
   - Turn : {user-request}  
-  - Event :
+  - Steps :
     -- LLMResponse: {response text}
     -- Tool : {tool_name} {category}{type}{params} {output}  #The raw event logs  will have lots of chain toolevents for a single tool, we can category and reduce to one tool event
     

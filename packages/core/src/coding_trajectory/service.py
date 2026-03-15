@@ -40,9 +40,12 @@ def serialize_session_detail(session: Session) -> dict[str, Any]:
             "trajectory_id": str(session.trajectory_id),
             "parent_session_id": str(session.parent_session_id) if session.parent_session_id else None,
             "vendor": session.vendor.value,
+            "agent_type": session.agent_type.value if session.agent_type else None,
+            "agent_name": session.agent_name,
             "started_at": format_datetime(session.started_at),
             "ended_at": format_datetime(session.ended_at),
             "turn_ids": [str(turn.turn_id) for turn in session.turns],
+            "event_ids": [str(event.event_id) for event in session.events],
             "extensions": session.extensions.model_dump(mode="json") if session.extensions else None,
         }
     )
@@ -71,7 +74,9 @@ def serialize_step_detail(step: Step) -> dict[str, Any]:
             "sequence": step.sequence,
             "timestamp": format_datetime(step.timestamp),
             "vendor": step.vendor.value,
-            "text": step.text,
+            "status": step.status.value,
+            "items": [item.model_dump(mode="json") for item in step.items],
+            "artifacts": step.artifacts or None,
             "vendor_data": step.vendor_data or None,
             "event_ids": [str(eid) for eid in step.event_ids],
         }

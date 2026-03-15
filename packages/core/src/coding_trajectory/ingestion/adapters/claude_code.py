@@ -11,15 +11,18 @@ from uuid import UUID, uuid4
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, infer_tool_success, parse_timestamp
 from coding_trajectory.ingestion.models import (
+    AgentType,
     ClaudeCodeExtensions,
     Event,
     EventType,
     Session,
     Step,
+    ToolStatus,
     Turn,
     Vendor,
     VendorExtensions,
 )
+from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, derive_status, update_tool_item
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +71,12 @@ def _tool_use_blocks(content: list | None) -> list[dict]:
         for block in content
         if isinstance(block, dict) and block.get("type") == "tool_use"
     ]
+
+
+def _append_unique_event_ids(target: list[UUID], event_ids: list[UUID]) -> None:
+    for event_id in event_ids:
+        if event_id not in target:
+            target.append(event_id)
 
 
 def _is_real_user_prompt(obj: dict) -> bool:
@@ -123,16 +132,23 @@ class ClaudeCodeAdapter(BaseAdapter):
 
         # Build turns and steps from records directly
         turns = self._build_turns(session_id, records, events)
+        extensions = self._parse_extensions(source)
 
         return Session(
             session_id=session_id,
             trajectory_id=uuid4(),
             vendor=self.vendor,
+            agent_type=(
+                AgentType.SUBAGENT
+                if extensions and extensions.claude_code and extensions.claude_code.is_sidechain
+                else AgentType.MAIN
+            ),
+            agent_name=extensions.claude_code.agent_name if extensions and extensions.claude_code else None,
             started_at=started_at,
             ended_at=ended_at,
             events=events,
             turns=turns,
-            extensions=self._parse_extensions(source),
+            extensions=extensions,
         )
 
     def _build_turns(self, session_id: UUID, records: list[dict], all_events: list[Event]) -> list[Turn]:
@@ -163,24 +179,18 @@ class ClaudeCodeAdapter(BaseAdapter):
         # A new turn starts when we see a real user prompt
         # A new step starts at first assistant record after a user prompt or after tool results
 
-        # First, index events by their record position for quick lookup
-        # We'll work with records directly
-        pending_assistant_records: list[dict] = []  # accumulating one LLM call
-        pending_tool_result_event_ids: list[UUID] = []
-
         # Track current step being built
         current_step_thinking: list[str] = []
-        current_step_tool_calls: list[dict] = []
+        current_step_items = []
         current_step_usage: dict | None = None
         current_step_stop_reason: str | None = None
-        current_step_text: str | None = None
         current_step_timestamp: datetime | None = None
         current_step_event_ids: list[UUID] = []
         in_step = False
 
         def _flush_step(turn: Turn) -> None:
-            nonlocal current_step_thinking, current_step_tool_calls, current_step_usage
-            nonlocal current_step_stop_reason, current_step_text, current_step_timestamp
+            nonlocal current_step_thinking, current_step_items, current_step_usage
+            nonlocal current_step_stop_reason, current_step_timestamp
             nonlocal current_step_event_ids, in_step, step_sequence
 
             if not in_step:
@@ -191,8 +201,6 @@ class ClaudeCodeAdapter(BaseAdapter):
             vendor_data: dict = {}
             if current_step_thinking:
                 vendor_data["thinking"] = current_step_thinking
-            if current_step_tool_calls:
-                vendor_data["tool_calls"] = current_step_tool_calls
             if current_step_usage:
                 vendor_data["usage"] = current_step_usage
             if current_step_stop_reason:
@@ -204,7 +212,8 @@ class ClaudeCodeAdapter(BaseAdapter):
                 sequence=step_sequence,
                 timestamp=current_step_timestamp,
                 vendor=Vendor.CLAUDE_CODE,
-                text=current_step_text,
+                status=derive_status(current_step_items),
+                items=list(current_step_items),
                 vendor_data=vendor_data,
                 event_ids=list(current_step_event_ids),
             )
@@ -213,10 +222,9 @@ class ClaudeCodeAdapter(BaseAdapter):
 
             # Reset step state
             current_step_thinking = []
-            current_step_tool_calls = []
+            current_step_items = []
             current_step_usage = None
             current_step_stop_reason = None
-            current_step_text = None
             current_step_timestamp = None
             current_step_event_ids = []
             in_step = False
@@ -304,7 +312,15 @@ class ClaudeCodeAdapter(BaseAdapter):
                             if e.type in (EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED)
                         ]
                         for ev in tool_result_events:
-                            current_step_event_ids.append(ev.event_id)
+                            _append_unique_event_ids(current_step_event_ids, [ev.event_id])
+                            update_tool_item(
+                                current_step_items,
+                                tool_call_id=ev.payload.get("tool_call_id"),
+                                tool_name=ev.payload.get("tool_name"),
+                                output=ev.payload.get("tool_output", ev.payload.get("tool_text")),
+                                status=ToolStatus.FAILED if ev.type == EventType.TOOL_CALL_FAILED else ToolStatus.COMPLETED,
+                                event_ids=[ev.event_id],
+                            )
 
                         # If we were collecting results and this is a tool result,
                         # mark that we've completed collecting for current step
@@ -337,19 +353,28 @@ class ClaudeCodeAdapter(BaseAdapter):
                 thinking_blocks = _extract_thinking(content)
                 current_step_thinking.extend(thinking_blocks)
 
-                # Accumulate tool calls
                 tool_uses = _tool_use_blocks(content)
-                for tool in tool_uses:
-                    current_step_tool_calls.append({
-                        "name": tool.get("name"),
-                        "id": tool.get("id"),
-                        "input": tool.get("input"),
-                    })
-
-                # Text
-                text = _extract_text(content)
-                if text:
-                    current_step_text = text
+                llm_event_ids = [ev.event_id for ev in rec_events if ev.type == EventType.LLM_RESPONSE]
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "text":
+                        append_text_item(current_step_items, block.get("text"), event_ids=llm_event_ids)
+                    elif block.get("type") == "tool_use":
+                        tool_id = block.get("id")
+                        tool_event_ids = [
+                            ev.event_id
+                            for ev in rec_events
+                            if ev.type == EventType.TOOL_CALL_REQUESTED and ev.payload.get("tool_call_id") == tool_id
+                        ]
+                        append_tool_item(
+                            current_step_items,
+                            tool_name=block.get("name"),
+                            tool_call_id=tool_id,
+                            input=block.get("input"),
+                            status=ToolStatus.REQUESTED,
+                            event_ids=tool_event_ids,
+                        )
 
                 # Usage and stop_reason from terminal record
                 if stop_reason is not None:
@@ -364,7 +389,7 @@ class ClaudeCodeAdapter(BaseAdapter):
                         EventType.TOOL_CALL_REQUESTED,
                         EventType.VENDOR_RAW,
                     ):
-                        current_step_event_ids.append(ev.event_id)
+                        _append_unique_event_ids(current_step_event_ids, [ev.event_id])
 
                 # If this record has tool_uses but stop_reason=None, it's intermediate
                 # If stop_reason is not None with no tool_uses → end_turn → flush step

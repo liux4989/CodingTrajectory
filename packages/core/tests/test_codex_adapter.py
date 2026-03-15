@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
 from coding_trajectory.ingestion.common import extract_exit_code
-from coding_trajectory.ingestion.models import EventType
+from coding_trajectory.ingestion.models import EventType, StepTextItem, StepToolItem, StepStatus, ToolStatus
 
 
 def test_codex_adapter_normalizes_failures_and_task_completion(tmp_path) -> None:
@@ -76,8 +76,11 @@ def test_codex_adapter_normalizes_failures_and_task_completion(tmp_path) -> None
     # One step in the turn
     assert len(turn.steps) == 1
     step = turn.steps[0]
-    # The last_agent_message from task_complete should be the step text
-    assert step.text == "Done"
+    assert step.status == StepStatus.FAILED
+    assert any(isinstance(item, StepTextItem) and item.text == "Done" for item in step.items)
+    failed_tool = next(item for item in step.items if isinstance(item, StepToolItem))
+    assert failed_tool.tool_name == "exec_command"
+    assert failed_tool.status == ToolStatus.FAILED
 
 
 def test_codex_adapter_spawn_agent_tool_call_requested(tmp_path) -> None:

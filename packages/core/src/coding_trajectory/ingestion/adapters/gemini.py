@@ -13,15 +13,18 @@ from uuid import UUID, uuid4
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, parse_iso_timestamp
 from coding_trajectory.ingestion.models import (
+    AgentType,
     Event,
     EventType,
     GeminiExtensions,
     Session,
     Step,
+    ToolStatus,
     Turn,
     Vendor,
     VendorExtensions,
 )
+from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, derive_status
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +101,7 @@ class GeminiAdapter(BaseAdapter):
             session_id=session_id,
             trajectory_id=uuid4(),
             vendor=self.vendor,
+            agent_type=AgentType.MAIN,
             started_at=started_at,
             ended_at=ended_at,
             events=events,
@@ -215,7 +219,37 @@ class GeminiAdapter(BaseAdapter):
                 if tokens:
                     vendor_data["tokens"] = tokens
 
-                text = _content_to_text(content)
+                items = []
+                response_event_ids = [
+                    ev.event_id
+                    for ev in event_index.get(timestamp, [])
+                    if ev.type == EventType.LLM_RESPONSE
+                ]
+                append_text_item(items, _content_to_text(content), event_ids=response_event_ids)
+                for tc in tool_calls:
+                    tc_ts = parse_iso_timestamp(tc.get("timestamp")) or timestamp
+                    tool_event_ids = [
+                        ev.event_id
+                        for ev in event_index.get(tc_ts, [])
+                        if ev.payload.get("tool_call_id") == tc.get("id")
+                    ]
+                    status = tc.get("status")
+                    tool_status = ToolStatus.REQUESTED
+                    if status == "success":
+                        tool_status = ToolStatus.COMPLETED
+                    elif status in ("error", "cancelled"):
+                        tool_status = ToolStatus.FAILED
+                    elif status in ("running", "in_progress"):
+                        tool_status = ToolStatus.IN_PROGRESS
+                    append_tool_item(
+                        items,
+                        tool_name=tc.get("name"),
+                        tool_call_id=tc.get("id"),
+                        input=tc.get("args"),
+                        output=tc.get("resultDisplay") or tc.get("result"),
+                        status=tool_status,
+                        event_ids=tool_event_ids,
+                    )
 
                 step = Step(
                     session_id=session_id,
@@ -223,7 +257,8 @@ class GeminiAdapter(BaseAdapter):
                     sequence=step_sequence,
                     timestamp=timestamp,
                     vendor=Vendor.GEMINI_CLI,
-                    text=text,
+                    status=derive_status(items),
+                    items=items,
                     vendor_data=vendor_data,
                     event_ids=step_event_ids,
                 )

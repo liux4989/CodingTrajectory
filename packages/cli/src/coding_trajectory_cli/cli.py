@@ -107,6 +107,14 @@ def _handle_get(client: RpcClient, args: argparse.Namespace) -> dict[str, Any]:
         if view == "raw":
             return client.call("session.get", {"session_id": resource_id})
         bundle = client.call("session.bundle", {"session_id": resource_id})
+        preview_event_ids = [
+            turn["user_request_event_id"]
+            for turn in bundle.get("turns", [])
+            if turn.get("user_request_event_id")
+        ]
+        if preview_event_ids:
+            preview_events = client.call("event.batch_get", {"event_ids": preview_event_ids})
+            bundle["events"] = preview_events.get("items", [])
         return summarize_session(bundle["session"], bundle=bundle, no_truncate=no_truncate, include_timeline=True)
 
     if resource == "turn":
@@ -211,6 +219,8 @@ def summarize_session(
         "id": raw["session_id"],
         "trajectory": raw.get("trajectory_id"),
         "vendor": raw.get("vendor"),
+        "agent_type": raw.get("agent_type"),
+        "agent_name": raw.get("agent_name"),
         "started_at": format_datetime(raw.get("started_at")),
         "ended_at": format_datetime(raw.get("ended_at")),
         "status": status_from_end(raw.get("ended_at")),
@@ -347,15 +357,17 @@ def summarize_turn_by_category(
 
 def _compact_step_entry(step: dict[str, Any], *, idx: int, no_truncate: bool) -> dict[str, Any]:
     """One-line summary of a step."""
-    text = step.get("text") or ""
+    items = step.get("items") or []
+    text_parts = [item.get("text", "") for item in items if item.get("kind") == "text"]
+    text = " ".join(part for part in text_parts if part)
     if text and not no_truncate:
         text = shorten_line(text)
-    vendor_data = step.get("vendor_data") or {}
-    tool_count = len(vendor_data) if isinstance(vendor_data, list) else 0
+    tool_count = sum(1 for item in items if item.get("kind") == "tool")
     return prune_nones(
         {
             "idx": idx,
             "id": step["step_id"],
+            "status": step.get("status"),
             "text": text or None,
             "tool_count": tool_count or None,
         }

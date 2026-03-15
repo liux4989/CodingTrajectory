@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -34,18 +33,17 @@ def decorate_sessions(sessions: list[Session]) -> list[Session]:
 
 def assemble_project_trajectories(project_identifier: str, sessions: list[Session]) -> list[Trajectory]:
     sessions = decorate_sessions(sessions)
-    groups: dict[str, list[Session]] = defaultdict(list)
-
-    for session in sorted(sessions, key=lambda item: (item.started_at, str(item.session_id))):
-        groups[_trajectory_group_key(session)].append(session)
+    key = _normalize_project_key(project_identifier)
+    components = _compute_connected_components(sessions)
 
     trajectories: list[Trajectory] = []
-    for group_key, group_sessions in sorted(groups.items()):
-        key = _normalize_project_key(project_identifier)
-        trajectory_id = uuid5(NAMESPACE_URL, f"coding-trajectory:{key}:{group_key}")
+    for component_sessions in components:
+        sorted_ids = sorted(str(s.session_id) for s in component_sessions)
+        component_sig = "|".join(sorted_ids)
+        trajectory_id = uuid5(NAMESPACE_URL, f"coding-trajectory:{key}:{component_sig}")
         normalized_sessions = [
             session.model_copy(update={"trajectory_id": trajectory_id})
-            for session in sorted(group_sessions, key=lambda item: (item.started_at, str(item.session_id)))
+            for session in sorted(component_sessions, key=lambda item: (item.started_at, str(item.session_id)))
         ]
         trajectories.append(
             build_trajectory(
@@ -58,12 +56,42 @@ def assemble_project_trajectories(project_identifier: str, sessions: list[Sessio
     return trajectories
 
 
+def _compute_connected_components(sessions: list[Session]) -> list[list[Session]]:
+    """Group sessions into connected components via union-find on parent_session_id links."""
+    session_map = {s.session_id: s for s in sessions}
+    parent: dict[UUID, UUID] = {s.session_id: s.session_id for s in sessions}
+
+    def find(x: UUID) -> UUID:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: UUID, b: UUID) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for session in sessions:
+        if session.parent_session_id is not None and session.parent_session_id in session_map:
+            union(session.session_id, session.parent_session_id)
+
+    groups: dict[UUID, list[Session]] = {}
+    for session in sessions:
+        root = find(session.session_id)
+        groups.setdefault(root, []).append(session)
+
+    return sorted(
+        groups.values(),
+        key=lambda g: (min(s.started_at for s in g), min(str(s.session_id) for s in g)),
+    )
+
+
 def build_trajectory(
     *,
     trajectory_id: UUID,
     project_identifier: str,
     sessions: list[Session],
-    extra_session_ids: set[UUID] | None = None,
 ) -> Trajectory:
     summary = build_trajectory_summary(sessions)
     edges = build_edges(sessions)
@@ -126,18 +154,6 @@ def _classify_edge(child: Session, parent: Session | None) -> tuple[str, list]:
     return "sidechain_of", []
 
 
-def _trajectory_group_key(session: Session) -> str:
-    parent = session.parent_session_id
-    if parent is not None:
-        return f"session:{parent}"
-
-    team_name = _team_name(session)
-    if session.vendor == Vendor.CLAUDE_CODE and team_name:
-        return f"claude-team:{team_name}"
-
-    return f"session:{session.session_id}"
-
-
 def _normalize_project_key(value: str) -> str:
     import re
 
@@ -160,13 +176,6 @@ def _agent_name(session: Session) -> str | None:
         return extensions.claude_code.agent_name
     if extensions.codex and extensions.codex.agent_nickname:
         return extensions.codex.agent_nickname
-    return None
-
-
-def _team_name(session: Session) -> str | None:
-    extensions = session.extensions
-    if extensions and extensions.claude_code:
-        return extensions.claude_code.team_name
     return None
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
-from coding_trajectory.ingestion.models import EventType
+from coding_trajectory.ingestion.models import EventType, StepTextItem, StepToolItem, StepStatus, ToolStatus
 
 
 def test_claude_adapter_emits_user_prompt_and_tool_events(tmp_path) -> None:
@@ -165,4 +165,52 @@ def test_claude_adapter_thinking_goes_into_step_vendor_data(tmp_path) -> None:
     step = turn.steps[0]
     assert "thinking" in step.vendor_data
     assert "I should reason carefully" in step.vendor_data["thinking"]
-    assert step.text == "Here is my answer"
+    assert step.status == StepStatus.COMPLETED
+    assert any(isinstance(item, StepTextItem) and item.text == "Here is my answer" for item in step.items)
+
+
+def test_claude_adapter_merges_tool_results_into_tool_items(tmp_path) -> None:
+    path = tmp_path / "session.jsonl"
+    records = [
+        {
+            "type": "user",
+            "sessionId": "05e58bcb-fe0a-4324-b311-2568aa901c9c",
+            "timestamp": "2026-03-13T10:00:00Z",
+            "message": {"role": "user", "content": "ship it"},
+            "uuid": "u-1",
+        },
+        {
+            "type": "assistant",
+            "sessionId": "05e58bcb-fe0a-4324-b311-2568aa901c9c",
+            "timestamp": "2026-03-13T10:00:01Z",
+            "uuid": "a-1",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Checking"},
+                    {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {"path": "a.py"}},
+                ],
+                "stop_reason": "tool_use",
+            },
+        },
+        {
+            "type": "user",
+            "sessionId": "05e58bcb-fe0a-4324-b311-2568aa901c9c",
+            "timestamp": "2026-03-13T10:00:02Z",
+            "uuid": "u-2",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"}],
+            },
+            "toolUseResult": {"result": "ok"},
+        },
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+    session = ClaudeCodeAdapter().ingest_file(path)
+    step = session.turns[0].steps[0]
+
+    tool_item = next(item for item in step.items if isinstance(item, StepToolItem))
+    assert tool_item.tool_name == "Read"
+    assert tool_item.status == ToolStatus.COMPLETED
+    assert tool_item.output == {"result": "ok"}
