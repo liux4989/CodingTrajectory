@@ -1,8 +1,19 @@
 from __future__ import annotations
 
-from coding_trajectory.ingestion.models import Event, EventType, Step, Trajectory, Turn, Vendor
 from datetime import datetime, timezone
 from uuid import uuid4
+
+from coding_trajectory.ingestion.models import (
+    Event,
+    EventType,
+    Step,
+    StepToolItem,
+    ToolArtifactKind,
+    ToolArtifactRef,
+    Trajectory,
+    Turn,
+    Vendor,
+)
 
 
 def test_trajectory_supports_project_identifier() -> None:
@@ -34,9 +45,24 @@ def test_step_model_has_required_fields() -> None:
 
     assert step.step_id is not None
     assert step.items == []
-    assert step.artifacts == {}
     assert step.vendor_data == {}
     assert step.event_ids == []
+
+
+def test_step_tool_item_defaults_include_artifacts() -> None:
+    tool_item = StepToolItem(tool_name="spawn_agent")
+
+    assert tool_item.artifacts == []
+
+
+def test_tool_artifact_ref_supports_claude_specific_kinds() -> None:
+    artifact = ToolArtifactRef(
+        kind=ToolArtifactKind.CLAUDE_PLAN,
+        path="/Users/example/.claude/plans/example.md",
+    )
+
+    assert artifact.kind == ToolArtifactKind.CLAUDE_PLAN
+    assert artifact.metadata == {}
 
 
 def test_turn_model_new_schema() -> None:

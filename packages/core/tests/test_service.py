@@ -3,8 +3,18 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from coding_trajectory.ingestion.models import Session, Trajectory, TrajectoryEdge, TrajectorySummary, Vendor
-from coding_trajectory.service import serialize_session_detail, serialize_trajectory_detail
+from coding_trajectory.ingestion.models import (
+    Session,
+    Step,
+    StepTextItem,
+    StepToolItem,
+    ToolArtifactKind,
+    Trajectory,
+    TrajectoryEdge,
+    TrajectorySummary,
+    Vendor,
+)
+from coding_trajectory.service import serialize_session_detail, serialize_step_detail, serialize_trajectory_detail
 
 
 def test_serialize_trajectory_detail_exposes_only_canonical_trajectory_fields() -> None:
@@ -97,3 +107,46 @@ def test_serialize_session_detail_exposes_only_canonical_session_fields() -> Non
     }
     assert payload["session_id"] == str(session_id)
     assert payload["trajectory_id"] == str(trajectory_id)
+
+
+def test_serialize_step_detail_nests_artifacts_under_tool_items() -> None:
+    session_id = uuid4()
+    turn_id = uuid4()
+    event_id = uuid4()
+    timestamp = datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc)
+    step = Step(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=timestamp,
+        vendor=Vendor.CLAUDE_CODE,
+        items=[
+            StepTextItem(text="Planning"),
+            StepToolItem(
+                tool_name="plan_mode",
+                output={"status": "ok"},
+                artifacts=[
+                    {
+                        "kind": ToolArtifactKind.CLAUDE_PLAN,
+                        "path": "/Users/example/.claude/plans/example.md",
+                    }
+                ],
+                event_ids=[event_id],
+            ),
+        ],
+        event_ids=[event_id],
+    )
+
+    payload = serialize_step_detail(step)
+
+    assert "artifacts" not in payload
+    assert payload["items"][0] == {"kind": "text", "text": "Planning", "event_ids": []}
+    assert payload["items"][1]["tool_name"] == "plan_mode"
+    assert payload["items"][1]["artifacts"] == [
+        {
+            "kind": "claude_plan",
+            "path": "/Users/example/.claude/plans/example.md",
+            "created_at": None,
+            "metadata": {},
+        }
+    ]

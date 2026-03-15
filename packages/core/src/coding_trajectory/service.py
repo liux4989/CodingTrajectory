@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from coding_trajectory.discovery import normalize_project_key
-from coding_trajectory.ingestion.models import Event, Session, Step, Trajectory, Turn
+from coding_trajectory.ingestion.models import Event, Session, Step, StepItem, StepToolItem, Trajectory, Turn
 from coding_trajectory.query import DocumentStore
 
 
@@ -74,8 +74,7 @@ def serialize_step_detail(step: Step) -> dict[str, Any]:
             "sequence": step.sequence,
             "timestamp": format_datetime(step.timestamp),
             "vendor": step.vendor.value,
-            "items": [item.model_dump(mode="json") for item in step.items],
-            "artifacts": step.artifacts or None,
+            "items": [serialize_step_item(item) for item in step.items],
             "vendor_data": step.vendor_data or None,
             "event_ids": [str(eid) for eid in step.event_ids],
         }
@@ -94,6 +93,14 @@ def serialize_event_detail(event: Event) -> dict[str, Any]:
             "payload": event.payload,
         }
     )
+
+
+def serialize_step_item(item: StepItem) -> dict[str, Any]:
+    payload = item.model_dump(mode="json")
+    if isinstance(item, StepToolItem) and not item.artifacts:
+        payload.pop("artifacts", None)
+    return prune_nones(payload)
+
 
 def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> Trajectory | Session | Turn | Event | Step:
     resource_id = UUID(raw_id)
