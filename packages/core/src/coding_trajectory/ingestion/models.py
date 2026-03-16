@@ -166,7 +166,7 @@ class TrajectoryEdge(BaseModel):
     source_turn_id:     UUID | None = None
     source_step_id:     UUID | None = None
     source_event_id:    UUID | None = None
-    provenance:         Literal["observed", "derived", "synthetic"] = "derived"
+    provenance:         Literal["observed", "derived"] = "derived"
     confidence:         Literal["high", "medium", "low"] = "medium"
     evidence_event_ids: list[UUID] = Field(default_factory=list)
     metadata:           dict[str, Any] | None = None

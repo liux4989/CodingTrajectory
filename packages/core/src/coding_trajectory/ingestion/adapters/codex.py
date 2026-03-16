@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-import warnings
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -34,10 +33,6 @@ from coding_trajectory.ingestion.models import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _parse_json_blob(raw: Any) -> Any:
@@ -220,9 +215,7 @@ class CodexAdapter(BaseAdapter):
     ) -> Session:
         state = state or self._ParseState()
         if not events:
-            warnings.warn(f"No events parsed from {source}", stacklevel=2)
-            started_at = _now_utc()
-            ended_at = None
+            raise ValueError(f"CodexAdapter: no events parsed from {source}")
         else:
             started_at = min(e.timestamp for e in events)
             ended_at = max(e.timestamp for e in events)
@@ -324,18 +317,18 @@ class CodexAdapter(BaseAdapter):
             current_step_tools_by_call_id = {}
             current_step_start_ts = None
 
-        def _get_ts(record: dict) -> datetime:
-            return parse_iso_timestamp(record.get("timestamp")) or _now_utc()
-
         for record in records:
             outer_type = record.get("type", "")
             payload = record.get("payload") or {}
-            ts = _get_ts(record)
 
             if outer_type == "session_meta":
                 continue
 
             if outer_type == "turn_context":
+                continue
+
+            ts = parse_iso_timestamp(record.get("timestamp"))
+            if ts is None:
                 continue
 
             if outer_type == "event_msg":
@@ -487,7 +480,6 @@ class CodexAdapter(BaseAdapter):
     ) -> Event | list[Event] | None:  # noqa: C901
         try:
             outer_type: str = line.get("type", "")
-            timestamp = parse_iso_timestamp(line.get("timestamp")) or _now_utc()
             payload: dict[str, Any] = line.get("payload") or {}
 
             if outer_type == "session_meta":
@@ -502,6 +494,10 @@ class CodexAdapter(BaseAdapter):
 
             if outer_type == "turn_context":
                 state.turn_context = payload
+                return None
+
+            timestamp = parse_iso_timestamp(line.get("timestamp"))
+            if timestamp is None:
                 return None
 
             if outer_type == "event_msg":

@@ -66,12 +66,11 @@ class ClaudeCodeDecorator(VendorDecorator):
                 continue
             candidates.append(candidate)
 
-        # Priority 1: match parent_uuid against event payload "uuid" fields (deterministic)
+        # Only match via deterministic parent_uuid → event payload "uuid" link
         if cc.parent_uuid:
             for candidate in candidates:
                 for event in candidate.events:
                     if event.payload.get("uuid") == cc.parent_uuid:
                         return candidate
 
-        # Priority 2: first team-name-compatible match
-        return candidates[0] if candidates else None
+        return None

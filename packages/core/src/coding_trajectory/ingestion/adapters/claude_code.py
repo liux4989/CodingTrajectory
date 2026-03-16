@@ -118,12 +118,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             events.extend(self._parse_raw_object(record))
 
         if not events:
-            return Session(
-                session_id=uuid4(),
-                trajectory_id=uuid4(),
-                vendor=self.vendor,
-                started_at=datetime.now(timezone.utc),
-            )
+            raise ValueError(f"ClaudeCodeAdapter: no events parsed from {source}")
 
         session_id = events[0].session_id
         started_at = min(event.timestamp for event in events)

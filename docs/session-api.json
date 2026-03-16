@@ -359,8 +359,7 @@
           "type": "string",
           "enum": [
             "observed",
-            "derived",
-            "synthetic"
+            "derived"
           ]
         },
         "confidence": {
@@ -473,7 +472,6 @@
           "enum": [
             "observed",
             "derived",
-            "synthetic",
             null
           ]
         },
@@ -596,8 +594,7 @@
           "type": "string",
           "enum": [
             "observed",
-            "derived",
-            "synthetic"
+            "derived"
           ]
         },
         "confidence": {
@@ -645,7 +642,7 @@
         },
         "provenance": {
           "type": "string",
-          "enum": ["observed", "derived", "synthetic"]
+          "enum": ["observed", "derived"]
         },
         "confidence": {
           "type": "string",
@@ -868,7 +865,7 @@
         "message": { "type": "string" },
         "provenance": {
           "type": "string",
-          "enum": ["observed", "derived", "synthetic"]
+          "enum": ["observed", "derived"]
         },
         "confidence": {
           "type": "string",

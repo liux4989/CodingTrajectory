@@ -72,12 +72,7 @@ class AmpAdapter(BaseAdapter):
 
     def _build_session(self, source: Path, records: list[dict]) -> Session:
         if not records:
-            return Session(
-                session_id=uuid4(),
-                trajectory_id=uuid4(),
-                vendor=self.vendor,
-                started_at=datetime.now(timezone.utc),
-            )
+            raise ValueError(f"AmpAdapter: no valid records found in {source}")
 
         thread = records[0]
         self._current_thread = thread

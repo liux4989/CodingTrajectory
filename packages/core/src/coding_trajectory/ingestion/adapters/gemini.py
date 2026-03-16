@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -63,12 +62,7 @@ class GeminiAdapter(BaseAdapter):
 
     def _build_session(self, source: Path, records: list[dict]) -> Session:
         if not records:
-            return Session(
-                session_id=uuid4(),
-                trajectory_id=uuid4(),
-                vendor=self.vendor,
-                started_at=datetime.now(timezone.utc),
-            )
+            raise ValueError(f"GeminiAdapter: no valid records found in {source}")
 
         record = records[0]
         self._current_record = record
@@ -278,7 +272,7 @@ class GeminiAdapter(BaseAdapter):
     def _ingest_message(self, msg: dict, session_id: UUID, session_file: str) -> list[Event]:
         events: list[Event] = []
         msg_type = msg.get("type", "")
-        msg_id = msg.get("id", str(uuid4()))
+        msg_id = msg.get("id")
         timestamp = parse_iso_timestamp(msg.get("timestamp"))
         if timestamp is None:
             logger.warning("GeminiAdapter: missing or bad timestamp in message %s", msg_id)
