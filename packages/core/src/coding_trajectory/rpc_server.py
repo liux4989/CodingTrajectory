@@ -8,13 +8,18 @@ from pathlib import Path
 from typing import Any
 
 from coding_trajectory.discovery import discover_store, format_discovery_sources
-from coding_trajectory.enrichment import build_default_trajectory_enrichment
+from coding_trajectory.enrichment import build_trajectory_structure
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
+from coding_trajectory.overview import (
+    build_session_overview,
+    build_step_overview,
+    build_trajectory_overview,
+    build_turn_overview,
+)
 from coding_trajectory.service import (
     resolve_collection,
     resolve_resource,
     serialize_event_detail,
-    serialize_enriched_trajectory,
     serialize_session_detail,
     serialize_step_detail,
     serialize_trajectory_detail,
@@ -75,10 +80,6 @@ def _dispatch(
     current_dir: Path,
     discovery_note: str,
 ) -> Any:
-    if method == "trajectory.get":
-        trajectory = resolve_resource(store, "trajectory", params["trajectory_id"])
-        return serialize_trajectory_detail(trajectory)
-
     if method == "trajectory.list":
         trajectories = resolve_collection(store, "trajectory", global_scope=global_scope, current_dir=current_dir)
         return {
@@ -88,12 +89,16 @@ def _dispatch(
 
     if method == "trajectory.enrich":
         trajectory = resolve_resource(store, "trajectory", params["trajectory_id"])
-        enriched = build_default_trajectory_enrichment(trajectory, store=store)
-        return serialize_enriched_trajectory(enriched)
+        structure = build_trajectory_structure(trajectory)
+        return structure.model_dump(mode="json")
 
-    if method == "session.get":
+    if method == "trajectory.overview":
+        trajectory = resolve_resource(store, "trajectory", params["trajectory_id"])
+        return build_trajectory_overview(trajectory, store=store)
+
+    if method == "session.overview":
         session = resolve_resource(store, "session", params["session_id"])
-        return serialize_session_detail(session)
+        return build_session_overview(session, store=store)
 
     if method == "session.list":
         sessions = resolve_collection(
@@ -111,9 +116,9 @@ def _dispatch(
             "turns": [serialize_turn_detail(t) for t in session.turns],
         }
 
-    if method == "turn.get":
+    if method == "turn.overview":
         turn = resolve_resource(store, "turn", params["turn_id"])
-        return serialize_turn_detail(turn)
+        return build_turn_overview(turn, store=store)
 
     if method == "turn.bundle":
         turn = resolve_resource(store, "turn", params["turn_id"])
@@ -135,9 +140,9 @@ def _dispatch(
             ]
         }
 
-    if method == "step.get":
+    if method == "step.overview":
         step = resolve_resource(store, "step", params["step_id"])
-        return serialize_step_detail(step)
+        return build_step_overview(step, store=store)
 
     raise KeyError(method)
 

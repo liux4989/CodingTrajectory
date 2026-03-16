@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from coding_trajectory.enrichment import build_default_trajectory_enrichment
+from coding_trajectory.enrichment import build_trajectory_structure
 from coding_trajectory.ingestion.models import (
+    Event,
+    EventType,
     Session,
     Step,
     StepTextItem,
@@ -13,15 +15,17 @@ from coding_trajectory.ingestion.models import (
     Trajectory,
     TrajectoryEdge,
     TrajectorySummary,
+    Turn,
     Vendor,
 )
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.rpc_server import _dispatch
 from coding_trajectory.service import (
-    serialize_enriched_trajectory,
+    serialize_event_detail,
     serialize_session_detail,
     serialize_step_detail,
     serialize_trajectory_detail,
+    serialize_turn_detail,
 )
 
 
@@ -79,14 +83,8 @@ def test_serialize_trajectory_detail_exposes_only_canonical_trajectory_fields() 
 
     payload = serialize_trajectory_detail(trajectory)
 
-    assert set(payload) == {"trajectory_id", "project_identifier", "summary", "session_ids", "edges"}
+    assert set(payload) == {"trajectory_id", "session_ids"}
     assert payload["session_ids"] == [str(session_a_id), str(session_b_id)]
-    assert payload["edges"][0]["source_session_id"] == str(session_a_id)
-    assert payload["edges"][0]["target_session_id"] == str(session_b_id)
-    assert payload["edges"][0]["source_turn_id"] == str(turn_id)
-    assert payload["edges"][0]["source_step_id"] == str(step_id)
-    assert payload["edges"][0]["source_event_id"] == str(event_id)
-    assert payload["edges"][0]["provenance"] == "observed"
 
 
 def test_serialize_session_detail_exposes_only_canonical_session_fields() -> None:
@@ -107,14 +105,44 @@ def test_serialize_session_detail_exposes_only_canonical_session_fields() -> Non
     assert set(payload) == {
         "session_id",
         "trajectory_id",
-        "vendor",
-        "started_at",
-        "ended_at",
         "turn_ids",
         "event_ids",
     }
     assert payload["session_id"] == str(session_id)
     assert payload["trajectory_id"] == str(trajectory_id)
+
+
+def test_serialize_turn_detail_exposes_only_analysis_join_fields() -> None:
+    session_id = uuid4()
+    turn_id = uuid4()
+    step_id = uuid4()
+    event_id = uuid4()
+    turn = Turn(
+        turn_id=turn_id,
+        session_id=session_id,
+        sequence=0,
+        started_at=datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc),
+        event_ids=[event_id],
+        steps=[
+            Step(
+                step_id=step_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                sequence=0,
+                timestamp=datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc),
+                vendor=Vendor.CODEX_CLI,
+            )
+        ],
+    )
+
+    payload = serialize_turn_detail(turn)
+
+    assert payload == {
+        "turn_id": str(turn_id),
+        "session_id": str(session_id),
+        "event_ids": [str(event_id)],
+        "step_ids": [str(step_id)],
+    }
 
 
 def test_serialize_step_detail_keeps_tool_items_direct() -> None:
@@ -141,6 +169,7 @@ def test_serialize_step_detail_keeps_tool_items_direct() -> None:
 
     payload = serialize_step_detail(step)
 
+    assert set(payload) == {"step_id", "session_id", "turn_id", "items", "event_ids"}
     assert payload["items"][0] == {"kind": "text", "text": "Planning", "event_ids": []}
     assert payload["items"][1]["tool_name"] == "plan_mode"
     assert payload["items"][1] == {
@@ -152,7 +181,41 @@ def test_serialize_step_detail_keeps_tool_items_direct() -> None:
     }
 
 
-def test_serialize_enriched_trajectory_uses_sidecar_wrapper_shape() -> None:
+def test_serialize_event_detail_keeps_analysis_fields_and_typed_subdetails() -> None:
+    session_id = uuid4()
+    event = Event(
+        session_id=session_id,
+        timestamp=datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc),
+        type=EventType.TOOL_CALL_SUCCEEDED,
+        vendor_source=Vendor.CODEX_CLI,
+        payload={
+            "tool_call_id": "call-1",
+            "tool_name": "spawn_agent",
+            "tool_args": {"role": "explorer"},
+            "result": {"agent_id": "a1"},
+            "text": "spawned agent",
+        },
+    )
+
+    payload = serialize_event_detail(event)
+
+    assert payload == {
+        "event_id": str(event.event_id),
+        "session_id": str(session_id),
+        "timestamp": "2026-03-13T10:00:00Z",
+        "type": "tool.call.succeeded",
+        "tool_call": {
+            "tool_call_id": "call-1",
+            "tool_name": "spawn_agent",
+            "input": {"role": "explorer"},
+            "result": {"agent_id": "a1"},
+            "status": "done",
+        },
+        "text": {"text": "spawned agent"},
+    }
+
+
+def test_build_trajectory_structure_serializes_correctly() -> None:
     trajectory_id = uuid4()
     session_id = uuid4()
     timestamp = datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc)
@@ -178,12 +241,12 @@ def test_serialize_enriched_trajectory_uses_sidecar_wrapper_shape() -> None:
         ],
     )
 
-    enriched = build_default_trajectory_enrichment(trajectory)
-    payload = serialize_enriched_trajectory(enriched)
+    structure = build_trajectory_structure(trajectory)
+    payload = structure.model_dump(mode="json")
 
     assert payload["trajectory_id"] == str(trajectory_id)
-    assert set(payload["enrichment"]) == {"structural", "derived", "agent_specific", "plugins", "notes"}
-    assert payload["enrichment"]["structural"]["session_tree"]["root_session_id"] == str(session_id)
+    assert payload["session_tree"]["root_session_id"] == str(session_id)
+    assert payload["multi_agent_mode"] == "single_session"
 
 
 def test_rpc_dispatch_trajectory_enrich_returns_enriched_sidecar() -> None:
@@ -223,5 +286,5 @@ def test_rpc_dispatch_trajectory_enrich_returns_enriched_sidecar() -> None:
     )
 
     assert result["trajectory_id"] == str(trajectory_id)
-    assert result["enrichment"]["derived"]["multi_agent_mode"] == "single_session"
-    assert result["enrichment"]["structural"]["session_tree"]["roots"] == [str(session_id)]
+    assert result["multi_agent_mode"] == "single_session"
+    assert result["session_tree"]["root_session_ids"] == [str(session_id)]

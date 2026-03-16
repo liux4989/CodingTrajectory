@@ -1,28 +1,29 @@
-from coding_trajectory.enrichment.base import EnrichmentPlugin
 from coding_trajectory.enrichment.codex import CodexWorkflowPlugin
-from coding_trajectory.enrichment.models import (
-    EnrichedEvent,
-    EnrichedSession,
-    EnrichedStep,
-    EnrichedTrajectory,
-    EnrichedTurn,
-    EnrichmentNote,
-    EnrichmentOverlay,
+from coding_trajectory.enrichment.models import EnrichmentNote
+from coding_trajectory.enrichment.sidecars import (
+    ResourceSidecars,
+    SidecarPayload,
+    SidecarPlugin,
+    collect_sidecars,
 )
-from coding_trajectory.enrichment.session import build_enriched_session
-from coding_trajectory.enrichment.trajectory import build_default_trajectory_enrichment, build_enriched_trajectory
+from coding_trajectory.enrichment.structure import build_trajectory_structure
+from coding_trajectory.enrichment.structure_models import (
+    CrossSessionOperation,
+    SessionTree,
+    SessionTreeNode,
+    TrajectoryStructure,
+)
 
 __all__ = [
     "CodexWorkflowPlugin",
-    "EnrichedEvent",
-    "EnrichedSession",
-    "EnrichedStep",
-    "EnrichedTrajectory",
-    "EnrichedTurn",
+    "CrossSessionOperation",
     "EnrichmentNote",
-    "EnrichmentOverlay",
-    "EnrichmentPlugin",
-    "build_default_trajectory_enrichment",
-    "build_enriched_session",
-    "build_enriched_trajectory",
+    "ResourceSidecars",
+    "SessionTree",
+    "SessionTreeNode",
+    "SidecarPayload",
+    "SidecarPlugin",
+    "TrajectoryStructure",
+    "build_trajectory_structure",
+    "collect_sidecars",
 ]

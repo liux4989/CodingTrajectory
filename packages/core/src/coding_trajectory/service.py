@@ -6,9 +6,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from coding_trajectory.enrichment.models import EnrichedTrajectory
 from coding_trajectory.discovery import normalize_project_key
-from coding_trajectory.ingestion.models import Event, Session, Step, StepItem, Trajectory, Turn
+from coding_trajectory.ingestion.models import Event, EventType, Session, Step, StepItem, Trajectory, Turn
 from coding_trajectory.query import DocumentStore
 
 
@@ -26,16 +25,9 @@ def serialize_trajectory_detail(trajectory: Trajectory) -> dict[str, Any]:
     return prune_nones(
         {
             "trajectory_id": str(trajectory.trajectory_id),
-            "project_identifier": trajectory.project_identifier,
-            "summary": trajectory.summary.model_dump(mode="json") if trajectory.summary else None,
             "session_ids": [str(session.session_id) for session in trajectory.sessions],
-            "edges": [item.model_dump(mode="json") for item in trajectory.edges],
         }
     )
-
-
-def serialize_enriched_trajectory(enriched: EnrichedTrajectory) -> dict[str, Any]:
-    return enriched.model_dump(mode="json")
 
 
 def serialize_session_detail(session: Session) -> dict[str, Any]:
@@ -43,14 +35,8 @@ def serialize_session_detail(session: Session) -> dict[str, Any]:
         {
             "session_id": str(session.session_id),
             "trajectory_id": str(session.trajectory_id),
-            "parent_session_id": str(session.parent_session_id) if session.parent_session_id else None,
-            "vendor": session.vendor.value,
-            "agent_name": session.agent_name,
-            "started_at": format_datetime(session.started_at),
-            "ended_at": format_datetime(session.ended_at),
             "turn_ids": [str(turn.turn_id) for turn in session.turns],
             "event_ids": [str(event.event_id) for event in session.events],
-            "extensions": session.extensions.model_dump(mode="json") if session.extensions else None,
         }
     )
 
@@ -60,10 +46,6 @@ def serialize_turn_detail(turn: Turn) -> dict[str, Any]:
         {
             "turn_id": str(turn.turn_id),
             "session_id": str(turn.session_id),
-            "sequence": turn.sequence,
-            "started_at": format_datetime(turn.started_at),
-            "ended_at": format_datetime(turn.ended_at),
-            "user_request_event_id": str(turn.user_request_event_id) if turn.user_request_event_id else None,
             "event_ids": [str(event_id) for event_id in turn.event_ids],
             "step_ids": [str(step.step_id) for step in turn.steps],
         }
@@ -76,11 +58,7 @@ def serialize_step_detail(step: Step) -> dict[str, Any]:
             "step_id": str(step.step_id),
             "session_id": str(step.session_id),
             "turn_id": str(step.turn_id),
-            "sequence": step.sequence,
-            "timestamp": format_datetime(step.timestamp),
-            "vendor": step.vendor.value,
             "items": [serialize_step_item(item) for item in step.items],
-            "vendor_data": step.vendor_data or None,
             "event_ids": [str(eid) for eid in step.event_ids],
         }
     )
@@ -93,15 +71,59 @@ def serialize_event_detail(event: Event) -> dict[str, Any]:
             "session_id": str(event.session_id),
             "timestamp": format_datetime(event.timestamp),
             "type": event.type.value,
-            "vendor_source": event.vendor_source.value,
-            "actor": event.actor,
-            "payload": event.payload,
+            "tool_call": serialize_tool_call_detail(event),
+            "llm": serialize_llm_detail(event),
+            "text": serialize_text_detail(event),
         }
     )
 
 
 def serialize_step_item(item: StepItem) -> dict[str, Any]:
     return prune_nones(item.model_dump(mode="json"))
+
+
+def serialize_tool_call_detail(event: Event) -> dict[str, Any] | None:
+    if event.type not in {EventType.TOOL_CALL_REQUESTED, EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED}:
+        return None
+
+    payload = event.payload
+    status_by_type = {
+        EventType.TOOL_CALL_REQUESTED: "in_progress",
+        EventType.TOOL_CALL_SUCCEEDED: "done",
+        EventType.TOOL_CALL_FAILED: "failed",
+    }
+    return prune_nones(
+        {
+            "tool_call_id": payload.get("tool_call_id"),
+            "tool_name": payload.get("tool_name"),
+            "input": payload.get("tool_args") or payload.get("input"),
+            "result": payload.get("result") or payload.get("tool_output") or payload.get("tool_text"),
+            "status": status_by_type.get(event.type),
+        }
+    ) or None
+
+
+def serialize_llm_detail(event: Event) -> dict[str, Any] | None:
+    if event.type != EventType.LLM_RESPONSE:
+        return None
+
+    usage = event.payload.get("usage") if isinstance(event.payload.get("usage"), dict) else {}
+    return prune_nones(
+        {
+            "model": event.payload.get("model") or event.payload.get("model_version"),
+            "input_tokens": usage.get("input_tokens") or usage.get("prompt_tokens"),
+            "output_tokens": usage.get("output_tokens") or usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+            "stop_reason": event.payload.get("stop_reason"),
+        }
+    ) or None
+
+
+def serialize_text_detail(event: Event) -> dict[str, Any] | None:
+    text = event.payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return {"text": text.strip()}
 
 
 def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> Trajectory | Session | Turn | Event | Step:

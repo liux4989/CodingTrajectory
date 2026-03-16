@@ -6,8 +6,8 @@ from typing import Any
 
 from coding_trajectory.ingestion.models import Session, StepToolItem, Vendor
 
-from .base import EnrichmentPlugin
-from .models import EnrichmentNote, EnrichmentOverlay
+from .models import EnrichmentNote
+from .sidecars import SidecarPayload, SidecarPlugin
 
 
 def _as_non_empty_str(value: Any) -> str | None:
@@ -38,7 +38,7 @@ def _iter_step_tools(session: Session):
                     yield step, item
 
 
-class CodexWorkflowPlugin(EnrichmentPlugin):
+class CodexWorkflowPlugin(SidecarPlugin):
     """Adds Codex session-level workflow references."""
 
     namespace = "codex.workflow"
@@ -48,7 +48,7 @@ class CodexWorkflowPlugin(EnrichmentPlugin):
         session: Session,
         *,
         store=None,
-    ) -> EnrichmentOverlay | None:
+    ) -> SidecarPayload | None:
         if session.vendor != Vendor.CODEX_CLI:
             return None
 
@@ -98,11 +98,11 @@ class CodexWorkflowPlugin(EnrichmentPlugin):
                     entry["agent_id"] = agent_id
                 spawned_agents.append(entry)
 
-        codex_agent_specific: dict[str, Any] = {}
+        data: dict[str, Any] = {}
         if plans:
-            codex_agent_specific["plans"] = plans
+            data["plans"] = plans
         if spawned_agents:
-            codex_agent_specific["spawned_agents"] = spawned_agents
+            data["spawned_agents"] = spawned_agents
 
         codex_ext = session.extensions.codex if session.extensions is not None else None
         if codex_ext is not None and session.parent_session_id is not None:
@@ -116,7 +116,7 @@ class CodexWorkflowPlugin(EnrichmentPlugin):
             nickname = codex_ext.spawn_agent_nickname or codex_ext.agent_nickname
             if nickname:
                 spawned_from["agent_nickname"] = nickname
-            codex_agent_specific["spawned_from"] = spawned_from
+            data["spawned_from"] = spawned_from
 
         notes: list[EnrichmentNote] = []
         if plans:
@@ -138,10 +138,7 @@ class CodexWorkflowPlugin(EnrichmentPlugin):
                 )
             )
 
-        if not codex_agent_specific and not notes:
+        if not data and not notes:
             return None
 
-        return EnrichmentOverlay(
-            agent_specific={"codex": codex_agent_specific} if codex_agent_specific else {},
-            notes=notes,
-        )
+        return SidecarPayload(data=data, notes=notes)

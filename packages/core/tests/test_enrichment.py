@@ -6,11 +6,9 @@ from uuid import uuid4
 from coding_trajectory.enrichment import (
     CodexWorkflowPlugin,
     EnrichmentNote,
-    EnrichmentOverlay,
-    EnrichmentPlugin,
-    build_default_trajectory_enrichment,
-    build_enriched_session,
-    build_enriched_trajectory,
+    SidecarPlugin,
+    build_trajectory_structure,
+    collect_sidecars,
 )
 from coding_trajectory.ingestion.models import (
     CodexExtensions,
@@ -27,77 +25,7 @@ from coding_trajectory.ingestion.models import (
 from coding_trajectory.trajectory import build_trajectory
 
 
-class _TrajectoryPlugin(EnrichmentPlugin):
-    namespace = "codex.spawn"
-
-    def enrich_trajectory(self, trajectory: Trajectory, *, store=None) -> EnrichmentOverlay | None:
-        return EnrichmentOverlay(
-            structural={"operations": [{"kind": "subagent"}]},
-            derived={"multi_agent_mode": "cross_session"},
-            agent_specific={"codex": {"collaboration_mode": "default"}},
-            notes=[
-                EnrichmentNote(
-                    subject="trajectory",
-                    message="derived for replay",
-                    provenance="derived",
-                    confidence="medium",
-                )
-            ],
-        )
-
-
-def test_build_enriched_session_wraps_canonical_and_sidecar_separately() -> None:
-    timestamp = datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc)
-    session = Session(
-        session_id=uuid4(),
-        trajectory_id=uuid4(),
-        vendor=Vendor.CODEX_CLI,
-        started_at=timestamp,
-        ended_at=timestamp,
-    )
-
-    enriched = build_enriched_session(
-        session,
-        derived={"session_kind": "primary"},
-        agent_specific={"codex": {"approval_policy": "never"}},
-    )
-
-    assert enriched.session_id == session.session_id
-    assert enriched.enrichment.derived == {"session_kind": "primary"}
-    assert enriched.enrichment.agent_specific == {"codex": {"approval_policy": "never"}}
-
-
-def test_build_enriched_trajectory_collects_plugin_output_under_namespace() -> None:
-    timestamp = datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc)
-    trajectory = Trajectory(
-        trajectory_id=uuid4(),
-        project_identifier="coding-trajectory",
-        sessions=[
-            Session(
-                session_id=uuid4(),
-                trajectory_id=uuid4(),
-                vendor=Vendor.CODEX_CLI,
-                started_at=timestamp,
-                ended_at=timestamp,
-            )
-        ],
-    )
-
-    enriched = build_enriched_trajectory(
-        trajectory,
-        structural={"session_graph": {"session_count": 1}},
-        plugins=[_TrajectoryPlugin()],
-    )
-
-    assert enriched.trajectory_id == trajectory.trajectory_id
-    assert enriched.enrichment.structural["session_graph"] == {"session_count": 1}
-    assert enriched.enrichment.derived["multi_agent_mode"] == "cross_session"
-    assert enriched.enrichment.agent_specific["codex"] == {"collaboration_mode": "default"}
-    assert enriched.enrichment.plugins["codex.spawn"]["derived"] == {"multi_agent_mode": "cross_session"}
-    assert enriched.enrichment.notes[0].subject == "trajectory"
-
-
-def test_build_default_trajectory_enrichment_builds_single_session_projection() -> None:
+def test_build_trajectory_structure_single_session() -> None:
     timestamp = datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc)
     session = Session(
         session_id=uuid4(),
@@ -118,20 +46,18 @@ def test_build_default_trajectory_enrichment_builds_single_session_projection() 
         sessions=[session],
     )
 
-    enriched = build_default_trajectory_enrichment(trajectory)
+    structure = build_trajectory_structure(trajectory)
 
-    assert enriched.trajectory_id == trajectory.trajectory_id
-    assert enriched.enrichment.structural["session_tree"]["root_session_id"] == session.session_id
-    assert enriched.enrichment.structural["session_tree"]["roots"] == [session.session_id]
-    assert enriched.enrichment.structural["session_tree"]["leaves"] == [session.session_id]
-    assert enriched.enrichment.structural["operations"] == []
-    assert enriched.enrichment.derived["multi_agent_mode"] == "single_session"
-    assert enriched.enrichment.derived["topology"] == "single_session"
-    assert enriched.enrichment.agent_specific["codex"]["collaboration_modes"] == ["default"]
-    assert enriched.enrichment.agent_specific["codex"]["agent_roles"] == ["cli"]
+    assert structure.trajectory_id == trajectory.trajectory_id
+    assert structure.session_tree.root_session_id == session.session_id
+    assert structure.session_tree.root_session_ids == [session.session_id]
+    assert structure.session_tree.leaf_session_ids == [session.session_id]
+    assert structure.operations == []
+    assert structure.multi_agent_mode == "single_session"
+    assert structure.topology == "single_session"
 
 
-def test_build_default_trajectory_enrichment_projects_observed_spawn_operation() -> None:
+def test_build_trajectory_structure_observed_spawn() -> None:
     trajectory_id = uuid4()
     parent_session_id = uuid4()
     child_session_id = uuid4()
@@ -195,35 +121,32 @@ def test_build_default_trajectory_enrichment_projects_observed_spawn_operation()
         sessions=[parent, child],
     )
 
-    enriched = build_default_trajectory_enrichment(trajectory)
+    structure = build_trajectory_structure(trajectory)
 
-    operation = enriched.enrichment.structural["operations"][0]
-    session_tree = enriched.enrichment.structural["session_tree"]
-    assert operation["edge_type"] == "spawned_subagent"
-    assert operation["source_session_id"] == parent_session_id
-    assert operation["target_session_id"] == child_session_id
-    assert operation["source_turn_id"] == turn_id
-    assert operation["source_step_id"] == step_id
-    assert operation["source_event_id"] == tool_event.event_id
-    assert operation["tool_name"] == "spawn_agent"
-    assert operation["provenance"] == "observed"
-    assert session_tree["root_session_id"] == parent_session_id
-    assert session_tree["leaves"] == [child_session_id]
-    assert enriched.enrichment.derived["multi_agent_mode"] == "cross_session"
-    assert enriched.enrichment.derived["topology"] == "linear"
-    assert enriched.enrichment.derived["has_observed_spawn"] is True
-    assert enriched.enrichment.agent_specific["codex"]["multi_agent"] == {
-        "spawned_subagent_count": 1,
-        "spawn_links": [
-            {
-                "source_session_id": parent_session_id,
-                "target_session_id": child_session_id,
-                "source_step_id": step_id,
-                "source_event_id": tool_event.event_id,
-            }
-        ],
-    }
-    assert enriched.enrichment.notes == []
+    assert len(structure.operations) == 1
+    op = structure.operations[0]
+    assert op.edge_type == "spawned_subagent"
+    assert op.source_session_id == parent_session_id
+    assert op.target_session_id == child_session_id
+    assert op.source_turn_id == turn_id
+    assert op.source_step_id == step_id
+    assert op.source_event_id == tool_event.event_id
+    assert op.tool_name == "spawn_agent"
+    assert op.provenance == "observed"
+    assert structure.session_tree.root_session_id == parent_session_id
+    assert structure.session_tree.leaf_session_ids == [child_session_id]
+    assert structure.multi_agent_mode == "cross_session"
+    assert structure.topology == "linear"
+    assert structure.has_observed_spawn is True
+    assert structure.notes == []
+
+    # Verify tree node relationships
+    parent_node = structure.session_tree.nodes_by_session_id[parent_session_id]
+    child_node = structure.session_tree.nodes_by_session_id[child_session_id]
+    assert parent_node.child_session_ids == [child_session_id]
+    assert child_node.parent_session_id == parent_session_id
+    assert parent_node.is_root is True
+    assert child_node.is_leaf is True
 
 
 def test_codex_workflow_plugin_extracts_plan_snapshots_from_update_plan_tools() -> None:
@@ -271,10 +194,10 @@ def test_codex_workflow_plugin_extracts_plan_snapshots_from_update_plan_tools() 
         ],
     )
 
-    enriched = build_enriched_session(session, plugins=[CodexWorkflowPlugin()])
+    sidecars = collect_sidecars([CodexWorkflowPlugin()], session)
 
-    codex = enriched.enrichment.agent_specific["codex"]
-    assert codex["plans"] == [
+    payload = sidecars.namespaces["codex.workflow"]
+    assert payload.data["plans"] == [
         {
             "source_step_id": str(step_id),
             "tool_name": "update_plan",
@@ -286,8 +209,7 @@ def test_codex_workflow_plugin_extracts_plan_snapshots_from_update_plan_tools() 
             ],
         }
     ]
-    assert enriched.enrichment.derived == {}
-    assert enriched.enrichment.notes[0].message == "Codex plan snapshots derived from update_plan tool calls."
+    assert payload.notes[0].message == "Codex plan snapshots derived from update_plan tool calls."
 
 
 def test_codex_workflow_plugin_keeps_spawn_references_at_session_level() -> None:
@@ -345,11 +267,11 @@ def test_codex_workflow_plugin_keeps_spawn_references_at_session_level() -> None
         ),
     )
 
-    enriched_parent = build_enriched_session(parent, plugins=[CodexWorkflowPlugin()])
-    enriched_child = build_enriched_session(child, plugins=[CodexWorkflowPlugin()])
+    parent_sidecars = collect_sidecars([CodexWorkflowPlugin()], parent)
+    child_sidecars = collect_sidecars([CodexWorkflowPlugin()], child)
 
-    parent_codex = enriched_parent.enrichment.agent_specific["codex"]
-    assert parent_codex["spawned_agents"] == [
+    parent_data = parent_sidecars.namespaces["codex.workflow"].data
+    assert parent_data["spawned_agents"] == [
         {
             "source_step_id": str(step_id),
             "tool_name": "spawn_agent",
@@ -360,14 +282,11 @@ def test_codex_workflow_plugin_keeps_spawn_references_at_session_level() -> None
             "agent_id": "019cf10a-9142-73d3-b05c-3d37fdfcbe4e",
         }
     ]
-    assert "multi_agent" not in parent_codex
-    assert enriched_parent.enrichment.derived == {}
 
-    child_codex = enriched_child.enrichment.agent_specific["codex"]
-    assert child_codex["spawned_from"] == {
+    child_data = child_sidecars.namespaces["codex.workflow"].data
+    assert child_data["spawned_from"] == {
         "parent_session_id": str(parent_session_id),
         "spawn_origin": "subagent",
         "agent_role": "explorer",
         "agent_nickname": "Singer",
     }
-    assert enriched_child.enrichment.derived == {}
