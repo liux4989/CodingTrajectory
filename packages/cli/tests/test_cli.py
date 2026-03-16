@@ -4,7 +4,7 @@ from collections import Counter
 import json
 from pathlib import Path
 
-from coding_trajectory_cli.cli import EXIT_NOT_FOUND, build_typed_preview, main  # noqa: F401
+from coding_trajectory_cli.cli import EXIT_USAGE, main
 
 
 def write_codex_log(
@@ -89,7 +89,7 @@ def setup_project_logs(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     return home, project_dir
 
 
-def test_trajectory_list_defaults_to_current_project(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_trajectory_list_defaults_to_enrichment_for_current_project(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
     exit_code = main(["trajectory", "list"])
@@ -98,9 +98,8 @@ def test_trajectory_list_defaults_to_current_project(tmp_path: Path, capsys, mon
     captured = capsys.readouterr()
     output = json.loads(captured.out)
     assert len(output) == 2
-    assert all(item["project"] == "coding-trajectory" for item in output)
-    assert all(item["session_count"] == 1 for item in output)
-    assert all(len(item["session_ids"]) == 1 for item in output)
+    assert all("enrichment" in item for item in output)
+    assert all(item["enrichment"]["derived"]["multi_agent_mode"] == "single_session" for item in output)
     assert "Discovered coding-agent logs:" in captured.err
 
 
@@ -120,13 +119,12 @@ def test_trajectory_list_global_includes_other_projects(tmp_path: Path, capsys, 
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
-    assert Counter(item["project"] for item in output) == {
-        "coding-trajectory": 2,
-        "other-project": 1,
+    assert Counter(item["enrichment"]["derived"]["multi_agent_mode"] for item in output) == {
+        "single_session": 3,
     }
 
 
-def test_session_get_uses_current_project_discovery(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_session_get_defaults_to_canonical_payload(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
     exit_code = main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
@@ -134,33 +132,19 @@ def test_session_get_uses_current_project_discovery(tmp_path: Path, capsys, monk
     assert exit_code == 0
     captured = capsys.readouterr()
     output = json.loads(captured.out)
-    assert output["id"] == "019c92d8-0250-7291-8585-6f69c1f1e981"
-    assert output["status"] == "completed"
-    assert len(output["turns"]) >= 1
-    assert output["turns"][0]["kind"] == "turn"
-    assert output["turns"][0]["preview"] == "fix the bug"
-    assert output["turns"][0]["step_count"] >= 1
+    assert output["session_id"] == "019c92d8-0250-7291-8585-6f69c1f1e981"
+    assert "turn_ids" in output
+    assert "turns" not in output
     assert "Discovered coding-agent logs:" not in captured.err
 
 
-def test_build_typed_preview_extracts_llm_fields() -> None:
-    event = {
-        "payload": {
-            "text": "Hello, world!",
-        }
-    }
-    result = build_typed_preview(event, no_truncate=False)
-    assert result == {"text": "Hello, world!"}
+def test_session_get_pretty_is_rejected_without_enrichment_endpoint(tmp_path: Path, capsys, monkeypatch) -> None:
+    setup_project_logs(tmp_path, monkeypatch)
 
+    exit_code = main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981", "--view", "pretty"])
 
-def test_build_typed_preview_extracts_tool_call_fields() -> None:
-    event = {
-        "payload": {
-            "tool_name": "exec_command",
-        }
-    }
-    result = build_typed_preview(event, no_truncate=False)
-    assert result == {"tool": "exec_command"}
+    assert exit_code == EXIT_USAGE
+    assert "pretty view is not supported for session" in capsys.readouterr().err
 
 
 def test_session_get_global_can_resolve_other_project_id(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -179,61 +163,71 @@ def test_session_get_global_can_resolve_other_project_id(tmp_path: Path, capsys,
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
-    assert output["id"] == "019c92d8-0250-7291-8585-6f69c1f1e983"
+    assert output["session_id"] == "019c92d8-0250-7291-8585-6f69c1f1e983"
 
 
-def test_session_get_raw_matches_session_detail_shape(tmp_path: Path, capsys, monkeypatch) -> None:
-    setup_project_logs(tmp_path, monkeypatch)
-
-    exit_code = main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981", "--json"])
-
-    assert exit_code == 0
-    output = json.loads(capsys.readouterr().out)
-    assert output["session_id"] == "019c92d8-0250-7291-8585-6f69c1f1e981"
-    assert "turn_ids" in output
-    assert "events" not in output
-    assert "turns" not in output
-
-
-def test_trajectory_get_fields(tmp_path: Path, capsys, monkeypatch) -> None:
-    setup_project_logs(tmp_path, monkeypatch)
-
-    session_code = main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
-    assert session_code == 0
-    session_output = json.loads(capsys.readouterr().out)
-    trajectory_id = session_output["trajectory"]
-
-    exit_code = main(["trajectory", "get", trajectory_id, "--fields", "id,session_count,session_ids"])
-
-    assert exit_code == 0
-    output = json.loads(capsys.readouterr().out)
-    assert output["id"] == trajectory_id
-    assert output["session_count"] == 1
-
-
-def test_session_list_can_filter_by_trajectory(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_trajectory_get_defaults_to_enrichment_payload(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
     main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
     session_output = json.loads(capsys.readouterr().out)
-    trajectory_id = session_output["trajectory"]
+    trajectory_id = session_output["trajectory_id"]
+
+    exit_code = main(["trajectory", "get", trajectory_id])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["trajectory_id"] == trajectory_id
+    assert output["enrichment"]["derived"]["multi_agent_mode"] == "single_session"
+    assert "project_identifier" not in output
+
+
+def test_trajectory_get_fields_can_select_enrichment_keys(tmp_path: Path, capsys, monkeypatch) -> None:
+    setup_project_logs(tmp_path, monkeypatch)
+
+    main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
+    session_output = json.loads(capsys.readouterr().out)
+    trajectory_id = session_output["trajectory_id"]
+
+    exit_code = main(["trajectory", "get", trajectory_id, "--fields", "trajectory_id,enrichment"])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["trajectory_id"] == trajectory_id
+    assert "enrichment" in output
+
+
+def test_session_list_can_filter_by_trajectory_in_raw_mode(tmp_path: Path, capsys, monkeypatch) -> None:
+    setup_project_logs(tmp_path, monkeypatch)
+
+    main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
+    session_output = json.loads(capsys.readouterr().out)
+    trajectory_id = session_output["trajectory_id"]
 
     exit_code = main(["session", "list", "--trajectory-id", trajectory_id])
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert len(output) == 1
-    assert output[0]["id"] == "019c92d8-0250-7291-8585-6f69c1f1e981"
-    assert "turns" not in output[0]
-    assert output[0]["turn_count"] >= 1
+    assert output[0]["session_id"] == "019c92d8-0250-7291-8585-6f69c1f1e981"
+    assert "turn_ids" in output[0]
 
 
-def test_trajectory_get_raw_includes_graph_fields(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_session_list_pretty_is_rejected_without_enrichment_endpoint(tmp_path: Path, capsys, monkeypatch) -> None:
+    setup_project_logs(tmp_path, monkeypatch)
+
+    exit_code = main(["session", "list", "--view", "pretty"])
+
+    assert exit_code == EXIT_USAGE
+    assert "pretty view is not supported for session list" in capsys.readouterr().err
+
+
+def test_trajectory_get_raw_includes_canonical_graph_fields(tmp_path: Path, capsys, monkeypatch) -> None:
     setup_project_logs(tmp_path, monkeypatch)
 
     main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
     session_output = json.loads(capsys.readouterr().out)
-    trajectory_id = session_output["trajectory"]
+    trajectory_id = session_output["trajectory_id"]
 
     exit_code = main(["trajectory", "get", trajectory_id, "--json"])
 
@@ -250,7 +244,7 @@ def test_turn_get_raw(tmp_path: Path, capsys, monkeypatch) -> None:
 
     main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
     session = json.loads(capsys.readouterr().out)
-    turn_id = session["turns"][0]["id"]
+    turn_id = session["turn_ids"][0]
 
     exit_code = main(["turn", "get", turn_id, "--json"])
 
@@ -258,48 +252,3 @@ def test_turn_get_raw(tmp_path: Path, capsys, monkeypatch) -> None:
     output = json.loads(capsys.readouterr().out)
     assert output["turn_id"] == turn_id
     assert len(output["step_ids"]) >= 1
-
-
-def test_turn_get_pretty_includes_event_ids(tmp_path: Path, capsys, monkeypatch) -> None:
-    setup_project_logs(tmp_path, monkeypatch)
-
-    main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
-    session = json.loads(capsys.readouterr().out)
-    turn_id = session["turns"][0]["id"]
-
-    exit_code = main(["turn", "get", turn_id, "--view", "pretty"])
-
-    assert exit_code == 0
-    output = json.loads(capsys.readouterr().out)
-    assert output["id"] == turn_id
-    assert output["step_count"] >= 1
-    assert "steps" in output
-    assert "step_ids" not in output
-
-
-def test_event_get_pretty(tmp_path: Path, capsys, monkeypatch) -> None:
-    setup_project_logs(tmp_path, monkeypatch)
-
-    main(["session", "get", "019c92d8-0250-7291-8585-6f69c1f1e981"])
-    session = json.loads(capsys.readouterr().out)
-    turn_id = session["turns"][0]["id"]
-    main(["turn", "get", turn_id, "--json"])
-    turn = json.loads(capsys.readouterr().out)
-    event_id = turn["user_request_event_id"]
-
-    exit_code = main(["event", "get", event_id, "--view", "pretty"])
-
-    assert exit_code == 0
-    output = json.loads(capsys.readouterr().out)
-    assert output["id"] == event_id
-    assert output["type"] == "user.prompt.submitted"
-    assert output["payload"]["text"] == "fix the bug"
-
-
-def test_missing_resource_returns_not_found(tmp_path: Path, capsys, monkeypatch) -> None:
-    setup_project_logs(tmp_path, monkeypatch)
-
-    exit_code = main(["event", "get", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"])
-
-    assert exit_code == EXIT_NOT_FOUND
-    assert "event not found" in capsys.readouterr().err
