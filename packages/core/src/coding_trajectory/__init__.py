@@ -26,6 +26,19 @@ from coding_trajectory.ingestion import (
     VendorDecorator,
     VendorExtensions,
 )
+from coding_trajectory.enrichment import (
+    CodexWorkflowPlugin,
+    EnrichedEvent,
+    EnrichedSession,
+    EnrichedStep,
+    EnrichedTrajectory,
+    EnrichedTurn,
+    EnrichmentNote,
+    EnrichmentOverlay,
+    EnrichmentPlugin,
+    build_enriched_session,
+    build_enriched_trajectory,
+)
 from coding_trajectory.query import DocumentStore
 
 __all__ = [
@@ -39,6 +52,15 @@ __all__ = [
     "CodexAdapter",
     "CodexExtensions",
     "DocumentStore",
+    "CodexWorkflowPlugin",
+    "EnrichedEvent",
+    "EnrichedSession",
+    "EnrichedStep",
+    "EnrichedTrajectory",
+    "EnrichedTurn",
+    "EnrichmentNote",
+    "EnrichmentOverlay",
+    "EnrichmentPlugin",
     "Event",
     "EventType",
     "GeminiAdapter",
@@ -56,4 +78,6 @@ __all__ = [
     "Vendor",
     "VendorDecorator",
     "VendorExtensions",
+    "build_enriched_session",
+    "build_enriched_trajectory",
 ]

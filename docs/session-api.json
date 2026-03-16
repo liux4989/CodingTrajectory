@@ -1,6 +1,6 @@
 {
   "name": "coding-trajectory-api",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "protocol": {
     "transport": "JSON-RPC 2.0",
     "request": {
@@ -115,7 +115,7 @@
     },
     "EventCategory": {
       "type": "string",
-      "description": "High-level logical grouping set by the consumer layer. Links related events (e.g. all events of one tool call) without payload inspection.",
+      "description": "High-level logical grouping set by the enrichment layer. Links related events (e.g. all events of one tool call) without payload inspection.",
       "enum": [
         "session",
         "user_interaction",
@@ -128,7 +128,7 @@
     },
     "ToolCallKind": {
       "type": "string",
-      "description": "Agent/tool-specific classification within a tool call event. Set by the consumer layer.",
+      "description": "Agent/tool-specific classification within a tool call event. Set by the enrichment layer.",
       "enum": [
         "regular",
         "subagent",
@@ -139,7 +139,7 @@
     },
     "ToolCallDetail": {
       "type": "object",
-      "description": "Typed detail for TOOL_CALL_* events. Populated by the consumer layer.",
+      "description": "Typed detail for TOOL_CALL_* events. Populated by the enrichment layer.",
       "properties": {
         "tool_call_id": { "type": ["string", "null"] },
         "tool_name":    { "type": ["string", "null"] },
@@ -151,7 +151,7 @@
     },
     "LLMDetail": {
       "type": "object",
-      "description": "Typed LLM inference metadata for LLM_REQUEST_* and LLM_STREAM_EVENT events. Populated by the consumer layer.",
+      "description": "Typed LLM inference metadata for LLM_REQUEST_* and LLM_STREAM_EVENT events. Populated by the enrichment layer.",
       "properties": {
         "model":            { "type": ["string", "null"] },
         "input_tokens":     { "type": ["integer", "null"] },
@@ -164,7 +164,7 @@
     },
     "TextDetail": {
       "type": "object",
-      "description": "Typed text content for USER_PROMPT_SUBMITTED and AGENT_RESPONSE_COMPLETED events. Populated by the consumer layer.",
+      "description": "Typed text content for USER_PROMPT_SUBMITTED and AGENT_RESPONSE_COMPLETED events. Populated by the enrichment layer.",
       "required": ["text"],
       "properties": {
         "text":           { "type": "string" },
@@ -659,7 +659,7 @@
           "description": "Raw vendor payload — always present; full fidelity log data."
         },
         "category": {
-          "description": "Consumer-layer: logical operation this event belongs to.",
+          "description": "Enrichment-layer: logical operation this event belongs to.",
           "oneOf": [
             { "$ref": "#/shared_types/EventCategory" },
             { "type": "null" }
@@ -668,29 +668,29 @@
         "event_group_id": {
           "type": ["string", "null"],
           "format": "uuid",
-          "description": "Consumer-layer: shared ID across all events in one logical operation (e.g. a tool call lifecycle)."
+          "description": "Enrichment-layer: shared ID across all events in one logical operation (e.g. a tool call lifecycle)."
         },
         "parent_event_id": {
           "type": ["string", "null"],
           "format": "uuid",
-          "description": "Consumer-layer: direct parent in the tool-call tree. Null for root events."
+          "description": "Enrichment-layer: direct parent in the tool-call tree. Null for root events."
         },
         "tool_call": {
-          "description": "Consumer-layer: typed tool call detail. Populated for TOOL_CALL_* and BACKGROUND_TASK_* events.",
+          "description": "Enrichment-layer: typed tool call detail. Populated for TOOL_CALL_* and BACKGROUND_TASK_* events.",
           "oneOf": [
             { "$ref": "#/shared_types/ToolCallDetail" },
             { "type": "null" }
           ]
         },
         "llm": {
-          "description": "Consumer-layer: typed LLM inference detail. Populated for LLM_REQUEST_* and LLM_STREAM_EVENT events.",
+          "description": "Enrichment-layer: typed LLM inference detail. Populated for LLM_REQUEST_* and LLM_STREAM_EVENT events.",
           "oneOf": [
             { "$ref": "#/shared_types/LLMDetail" },
             { "type": "null" }
           ]
         },
         "text": {
-          "description": "Consumer-layer: typed text content. Populated for USER_PROMPT_SUBMITTED and AGENT_RESPONSE_COMPLETED events.",
+          "description": "Enrichment-layer: typed text content. Populated for USER_PROMPT_SUBMITTED and AGENT_RESPONSE_COMPLETED events.",
           "oneOf": [
             { "$ref": "#/shared_types/TextDetail" },
             { "type": "null" }
@@ -853,6 +853,70 @@
           }
         }
       }
+    },
+    "EnrichmentNote": {
+      "type": "object",
+      "required": [
+        "subject",
+        "message",
+        "provenance",
+        "confidence",
+        "evidence_event_ids"
+      ],
+      "properties": {
+        "subject": { "type": "string" },
+        "message": { "type": "string" },
+        "provenance": {
+          "type": "string",
+          "enum": ["observed", "derived", "synthetic"]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["high", "medium", "low"]
+        },
+        "evidence_event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    },
+    "TrajectoryEnrichment": {
+      "type": "object",
+      "required": [
+        "trajectory_id",
+        "enrichment"
+      ],
+      "properties": {
+        "trajectory_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "enrichment": {
+          "type": "object",
+          "required": [
+            "structural",
+            "derived",
+            "agent_specific",
+            "plugins",
+            "notes"
+          ],
+          "properties": {
+            "structural": { "type": "object" },
+            "derived": { "type": "object" },
+            "agent_specific": { "type": "object" },
+            "plugins": { "type": "object" },
+            "notes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/shared_types/EnrichmentNote"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "methods": {
@@ -873,6 +937,25 @@
       },
       "result": {
         "$ref": "#/shared_types/TrajectoryDetail"
+      }
+    },
+    "trajectory.enrich": {
+      "summary": "Fetch one trajectory enrichment sidecar by id. Returns replay-oriented structure and derived labels keyed by canonical ids.",
+      "params": {
+        "type": "object",
+        "required": [
+          "trajectory_id"
+        ],
+        "properties": {
+          "trajectory_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "result": {
+        "$ref": "#/shared_types/TrajectoryEnrichment"
       }
     },
     "session.get": {

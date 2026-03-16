@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from coding_trajectory.discovery import discover_store, format_discovery_sources
+from coding_trajectory.enrichment import build_default_trajectory_enrichment
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import (
     resolve_collection,
     resolve_resource,
     serialize_event_detail,
+    serialize_enriched_trajectory,
     serialize_session_detail,
     serialize_step_detail,
     serialize_trajectory_detail,
@@ -83,6 +85,11 @@ def _dispatch(
             "items": [serialize_trajectory_detail(t) for t in trajectories],
             "discovery_note": discovery_note,
         }
+
+    if method == "trajectory.enrich":
+        trajectory = resolve_resource(store, "trajectory", params["trajectory_id"])
+        enriched = build_default_trajectory_enrichment(trajectory, store=store)
+        return serialize_enriched_trajectory(enriched)
 
     if method == "session.get":
         session = resolve_resource(store, "session", params["session_id"])

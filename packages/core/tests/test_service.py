@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
+from coding_trajectory.enrichment import build_default_trajectory_enrichment
 from coding_trajectory.ingestion.models import (
     Session,
     Step,
@@ -13,7 +15,14 @@ from coding_trajectory.ingestion.models import (
     TrajectorySummary,
     Vendor,
 )
-from coding_trajectory.service import serialize_session_detail, serialize_step_detail, serialize_trajectory_detail
+from coding_trajectory.query import DocumentStore
+from coding_trajectory.rpc_server import _dispatch
+from coding_trajectory.service import (
+    serialize_enriched_trajectory,
+    serialize_session_detail,
+    serialize_step_detail,
+    serialize_trajectory_detail,
+)
 
 
 def test_serialize_trajectory_detail_exposes_only_canonical_trajectory_fields() -> None:
@@ -141,3 +150,78 @@ def test_serialize_step_detail_keeps_tool_items_direct() -> None:
         "status": "requested",
         "event_ids": [str(event_id)],
     }
+
+
+def test_serialize_enriched_trajectory_uses_sidecar_wrapper_shape() -> None:
+    trajectory_id = uuid4()
+    session_id = uuid4()
+    timestamp = datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc)
+    trajectory = Trajectory(
+        trajectory_id=trajectory_id,
+        project_identifier="coding-trajectory",
+        summary=TrajectorySummary(
+            root_session_id=session_id,
+            started_at=timestamp,
+            ended_at=timestamp,
+            session_count=1,
+            turn_count=0,
+            vendors=[Vendor.CODEX_CLI],
+        ),
+        sessions=[
+            Session(
+                session_id=session_id,
+                trajectory_id=trajectory_id,
+                vendor=Vendor.CODEX_CLI,
+                started_at=timestamp,
+                ended_at=timestamp,
+            )
+        ],
+    )
+
+    enriched = build_default_trajectory_enrichment(trajectory)
+    payload = serialize_enriched_trajectory(enriched)
+
+    assert payload["trajectory_id"] == str(trajectory_id)
+    assert set(payload["enrichment"]) == {"structural", "derived", "agent_specific", "plugins", "notes"}
+    assert payload["enrichment"]["structural"]["session_tree"]["root_session_id"] == str(session_id)
+
+
+def test_rpc_dispatch_trajectory_enrich_returns_enriched_sidecar() -> None:
+    trajectory_id = uuid4()
+    session_id = uuid4()
+    timestamp = datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc)
+    trajectory = Trajectory(
+        trajectory_id=trajectory_id,
+        project_identifier="coding-trajectory",
+        summary=TrajectorySummary(
+            root_session_id=session_id,
+            started_at=timestamp,
+            ended_at=timestamp,
+            session_count=1,
+            turn_count=0,
+            vendors=[Vendor.CODEX_CLI],
+        ),
+        sessions=[
+            Session(
+                session_id=session_id,
+                trajectory_id=trajectory_id,
+                vendor=Vendor.CODEX_CLI,
+                started_at=timestamp,
+                ended_at=timestamp,
+            )
+        ],
+    )
+    store = DocumentStore.from_trajectories([trajectory])
+
+    result = _dispatch(
+        "trajectory.enrich",
+        {"trajectory_id": str(trajectory_id)},
+        store=store,
+        global_scope=False,
+        current_dir=Path.cwd(),
+        discovery_note="",
+    )
+
+    assert result["trajectory_id"] == str(trajectory_id)
+    assert result["enrichment"]["derived"]["multi_agent_mode"] == "single_session"
+    assert result["enrichment"]["structural"]["session_tree"]["roots"] == [str(session_id)]

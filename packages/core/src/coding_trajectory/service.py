@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from coding_trajectory.enrichment.models import EnrichedTrajectory
 from coding_trajectory.discovery import normalize_project_key
 from coding_trajectory.ingestion.models import Event, Session, Step, StepItem, Trajectory, Turn
 from coding_trajectory.query import DocumentStore
@@ -31,6 +32,10 @@ def serialize_trajectory_detail(trajectory: Trajectory) -> dict[str, Any]:
             "edges": [item.model_dump(mode="json") for item in trajectory.edges],
         }
     )
+
+
+def serialize_enriched_trajectory(enriched: EnrichedTrajectory) -> dict[str, Any]:
+    return enriched.model_dump(mode="json")
 
 
 def serialize_session_detail(session: Session) -> dict[str, Any]:
