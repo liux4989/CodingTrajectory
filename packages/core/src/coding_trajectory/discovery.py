@@ -156,6 +156,33 @@ def _extract_session_cwd(session: Session) -> str | None:
     return None
 
 
+def discover_store_from_file(path: Path) -> DiscoveryResult:
+    """Build a store from a single explicit log file, auto-detecting the vendor."""
+    path = path.resolve()
+    if not path.exists():
+        raise DocumentError(f"log file not found: {path}")
+
+    for vendor, adapter_cls, _base_dir, _pattern in _vendor_configs():
+        adapter = adapter_cls()
+        try:
+            session = stabilize_session(adapter.ingest_file(path), vendor=vendor, source=path)
+        except Exception:
+            continue
+
+        project_identifier = infer_project_identifier(session, path, fallback=path.stem)
+        if not project_identifier:
+            project_identifier = path.stem
+
+        key = normalize_project_key(project_identifier)
+        session = session.model_copy(update={"trajectory_id": uuid5(NAMESPACE_URL, f"coding-trajectory:{key}")})
+        trajectories = assemble_project_trajectories(project_identifier, [session])
+        store = DocumentStore.from_trajectories(trajectories)
+        source = DiscoverySource(vendor=vendor, path=path)
+        return DiscoveryResult(store=store, sources=[source])
+
+    raise DocumentError(f"no adapter could parse log file: {path}")
+
+
 def format_discovery_sources(sources: list[DiscoverySource]) -> str:
     if not sources:
         return ""

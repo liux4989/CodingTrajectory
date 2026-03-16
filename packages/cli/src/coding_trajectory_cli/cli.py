@@ -11,7 +11,7 @@ from coding_trajectory_cli.rpc_client import RpcClient, RpcError
 
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
-    with RpcClient(global_scope=args.global_scope) as client:
+    with RpcClient(global_scope=args.global_scope, log_file=getattr(args, "log_file", None)) as client:
         if args.command == "list":
             result = client.call("trajectory.list", {})
             return result if isinstance(result, dict) else {"items": result}
@@ -27,6 +27,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="coding-trajectory")
     parser.add_argument("--global-scope", action="store_true")
+    parser.add_argument("--log-file", metavar="PATH", dest="log_file", help="Absolute path to a specific coding log file to use instead of auto-discovery.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     subparsers = parser.add_subparsers(dest="command", required=True)

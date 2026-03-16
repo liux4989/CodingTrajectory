@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from coding_trajectory.discovery import discover_store, format_discovery_sources
+from coding_trajectory.discovery import discover_store, discover_store_from_file, format_discovery_sources
 from coding_trajectory.enrichment import build_trajectory_structure
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.overview import (
@@ -199,8 +199,17 @@ def serve(argv: list[str] | None = None) -> None:
     global_scope = "--global-scope" in argv
     current_dir = Path.cwd()
 
+    log_file: Path | None = None
+    if "--log-file" in argv:
+        idx = argv.index("--log-file")
+        if idx + 1 < len(argv):
+            log_file = Path(argv[idx + 1])
+
     try:
-        discovery = discover_store(current_dir=current_dir, global_scope=global_scope)
+        if log_file is not None:
+            discovery = discover_store_from_file(log_file)
+        else:
+            discovery = discover_store(current_dir=current_dir, global_scope=global_scope)
     except DocumentError as exc:
         # Write a single error response for any request that arrives, then exit.
         for line in sys.stdin:

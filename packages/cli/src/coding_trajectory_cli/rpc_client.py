@@ -20,10 +20,12 @@ class RpcError(Exception):
 class RpcClient:
     """JSON-RPC 2.0 client that communicates with the server via subprocess stdin/stdout."""
 
-    def __init__(self, *, global_scope: bool = False):
+    def __init__(self, *, global_scope: bool = False, log_file: str | None = None):
         cmd = [sys.executable, "-m", "coding_trajectory.rpc_server"]
         if global_scope:
             cmd.append("--global-scope")
+        if log_file is not None:
+            cmd.extend(["--log-file", log_file])
         self._process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
