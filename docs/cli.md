@@ -19,26 +19,34 @@ Three goals:
 ## Public Surface
 
 ```
-ct [--log-file PATH] [--output FILE] [--pretty] list
-ct [--log-file PATH] [--output FILE] [--pretty] trajectory overview <trajectory_id>
-ct [--log-file PATH] [--output FILE] [--pretty] trajectory scan <trajectory_id> --type TYPE [--filter KEY=VALUE ...]
-ct [--log-file PATH] [--output FILE] [--pretty] step details <step_id>
+ct [--output FILE] [--pretty] project list
+ct [--output FILE] [--pretty] project <project_name>
+ct [--output FILE] [--pretty] project --logfile PATH
+ct [--output FILE] [--pretty] trajectory overview <trajectory_id> [--logfile PATH]
+ct [--output FILE] [--pretty] trajectory scan <trajectory_id> [--logfile PATH] --type TYPE [--filter KEY=VALUE ...]
+ct [--output FILE] [--pretty] step details <step_id>
 ```
 
 Global options:
 
-- `--log-file PATH` — analyze a specific log file instead of auto-discovery
 - `--output FILE` / `-o FILE` — write JSON output to a file instead of stdout
 - `--pretty` — pretty-print JSON output
+
+Subcommand options:
+
+- `project --logfile PATH` — load a specific log file and return its trajectory id
+- `trajectory ... --logfile PATH` — analyze a specific log file instead of resolving by trajectory id
 
 Everything else (session, turn, event, raw) is not exposed at this stage.
 
 ## Intended Reading Flow
 
-1. `list` — find the trajectory id
-2. `trajectory overview <trajectory_id>` — read the navigation tree, identify relevant steps
-3. `trajectory scan <trajectory_id> --type TYPE [--filter ...]` — cross-cut the tree to find all steps of a type, optionally narrowed by shape predicates
-4. `step details <step_id>` — read the evidence for a specific step
+1. `project list` — find project names
+2. `project <project_name>` — list trajectories for a project, get the trajectory id
+   - or `project --logfile PATH` — load a log file directly and get the trajectory id
+3. `trajectory overview <trajectory_id>` — read the navigation tree, identify relevant steps
+4. `trajectory scan <trajectory_id> --type TYPE [--filter ...]` — cross-cut the tree to find all steps of a type, optionally narrowed by shape predicates
+5. `step details <step_id>` — read the evidence for a specific step
 
 ---
 

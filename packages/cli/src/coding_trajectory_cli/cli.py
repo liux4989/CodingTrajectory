@@ -11,19 +11,17 @@ from coding_trajectory_cli.rpc_client import RpcClient, RpcError
 
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
-    with RpcClient(global_scope=args.global_scope, log_file=getattr(args, "log_file", None)) as client:
-        if args.command == "list":
-            params: dict[str, Any] = {}
-            if getattr(args, "project_name", None):
-                params["project_name"] = args.project_name
-            if getattr(args, "agent_vendor", None):
-                params["agent_vendor"] = args.agent_vendor
-            result = client.call("trajectory.list", params)
-            return result if isinstance(result, dict) else {"items": result}
-
-        if args.command == "project" and args.action == "list":
-            result = client.call("project.list", {})
-            return result if isinstance(result, dict) else {"items": result}
+    log_file = getattr(args, "logfile", None)
+    with RpcClient(global_scope=args.global_scope, log_file=log_file) as client:
+        if args.command == "project":
+            if log_file is not None and args.name is None:
+                return client.call("project.logfile", {"path": log_file})
+            if args.name == "list":
+                result = client.call("project.list", {})
+                return result if isinstance(result, dict) else {"items": result}
+            else:
+                result = client.call("trajectory.list", {"project_name": args.name})
+                return result if isinstance(result, dict) else {"items": result}
 
         if args.command == "trajectory" and args.action == "overview":
             return client.call("trajectory.overview", {"trajectory_id": args.resource_id})
@@ -51,7 +49,7 @@ LEARN MORE
   Use 'ct <command> --help' for more information about a command.
 """
 
-_LOG_FILE_HELP = "Absolute path to the JSONL log file identifying the session to inspect."
+_LOGFILE_HELP = "Absolute path to the JSONL log file to analyze."
 
 
 class _GhFormatter(argparse.RawDescriptionHelpFormatter):
@@ -78,8 +76,8 @@ class _GhFormatter(argparse.RawDescriptionHelpFormatter):
         return text
 
 
-def _add_log_file(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--log-file", metavar="PATH", dest="log_file", help=_LOG_FILE_HELP)
+def _add_logfile(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--logfile", metavar="PATH", dest="logfile", help=_LOGFILE_HELP)
 
 
 def _add_output_flags(p: argparse.ArgumentParser) -> None:
@@ -98,29 +96,22 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_output_flags(parser)
 
     subparsers = parser.add_subparsers(dest="command", required=True)
-    list_parser = subparsers.add_parser(
-        "list",
-        help="List available sessions. Returns PATH values for --log-file.",
-        formatter_class=_GhFormatter,
-    )
-    list_parser.add_argument("--project-name", metavar="NAME", dest="project_name", help="Filter trajectories by project name.")
-    list_parser.add_argument("--agent-vendor", metavar="VENDOR", dest="agent_vendor", help="Filter trajectories by agent vendor (e.g. codex_cli, claude_code, gemini_cli, amp).")
-    _add_log_file(list_parser)
-    _add_output_flags(list_parser)
 
     project_parser = subparsers.add_parser(
         "project",
-        help="Inspect projects (subcommands: list).",
+        help="List projects, list trajectories, or load a log file.",
         formatter_class=_GhFormatter,
+        epilog="Use 'list' as PROJECT_NAME to list all known projects.",
     )
-    project_sub = project_parser.add_subparsers(dest="action", required=True)
-    project_list = project_sub.add_parser(
-        "list",
-        help="List distinct project names found across all trajectories.",
-        formatter_class=_GhFormatter,
+    project_parser.add_argument(
+        "name",
+        metavar="PROJECT_NAME",
+        nargs="?",
+        default=None,
+        help="Project name to list trajectories for, or 'list' to list all projects.",
     )
-    _add_log_file(project_list)
-    _add_output_flags(project_list)
+    _add_logfile(project_parser)
+    _add_output_flags(project_parser)
 
     traj_parser = subparsers.add_parser(
         "trajectory",
@@ -135,7 +126,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_GhFormatter,
     )
     traj_overview.add_argument("resource_id", metavar="TRAJECTORY_ID", nargs="?", default=None)
-    _add_log_file(traj_overview)
+    _add_logfile(traj_overview)
     _add_output_flags(traj_overview)
 
     traj_scan = traj_sub.add_parser(
@@ -144,7 +135,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_GhFormatter,
     )
     traj_scan.add_argument("resource_id", metavar="TRAJECTORY_ID", nargs="?", default=None)
-    _add_log_file(traj_scan)
+    _add_logfile(traj_scan)
     _add_output_flags(traj_scan)
     traj_scan.add_argument(
         "--type",
@@ -177,7 +168,6 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_GhFormatter,
     )
     step_details.add_argument("resource_id", metavar="STEP_ID")
-    _add_log_file(step_details)
     _add_output_flags(step_details)
 
     return parser

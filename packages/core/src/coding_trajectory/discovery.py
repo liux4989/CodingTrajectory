@@ -87,6 +87,43 @@ def discover_store(*, current_dir: Path, global_scope: bool = False) -> Discover
     return DiscoveryResult(store=DocumentStore.from_trajectories(trajectories), sources=sources)
 
 
+def _decode_claude_encoded_path(encoded: str) -> str | None:
+    """Decode a Claude Code encoded CWD path.
+
+    Claude Code stores sessions under .claude/projects/<encoded-cwd>/ where the
+    CWD is encoded by replacing every '/' with '-'.  When a directory name itself
+    contains a hyphen (e.g. 'gh-worktree') the encoding is ambiguous.
+
+    We resolve the ambiguity by greedily walking the real filesystem: at each
+    level we try the shortest token-sequence that names an existing child, which
+    matches the common case of simple names before reaching hyphenated ones.
+    """
+    if not encoded:
+        return None
+    # Leading '-' represents the leading '/' of an absolute path.
+    stripped = encoded.lstrip("-")
+    tokens = stripped.split("-")
+
+    def _walk(current: Path, idx: int) -> str | None:
+        if idx == len(tokens):
+            return str(current)
+        for end in range(idx + 1, len(tokens) + 1):
+            segment = "-".join(tokens[idx:end])
+            candidate = current / segment
+            if candidate.exists():
+                result = _walk(candidate, end)
+                if result is not None:
+                    return result
+        return None
+
+    resolved = _walk(Path("/"), 0)
+    if resolved:
+        return resolved
+    # Fallback: simple replacement (original behaviour) so we never regress on
+    # paths where the directory no longer exists on this machine.
+    return "/" + stripped.replace("-", "/")
+
+
 def normalize_project_key(value: str) -> str:
     collapsed = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", value.strip())
     normalized = re.sub(r"[^a-zA-Z0-9]+", "-", collapsed).strip("-").lower()
@@ -132,9 +169,11 @@ def infer_project_identifier(session: Session, source: Path, *, fallback: str | 
         base = Path.home() / ".claude" / "projects"
         try:
             encoded = source.relative_to(base).parts[0]
-            name = Path(encoded.replace("-", "/")).name
-            if name:
-                return name
+            decoded = _decode_claude_encoded_path(encoded)
+            if decoded:
+                name = Path(decoded).name
+                if name:
+                    return name
         except ValueError:
             pass
 
@@ -175,7 +214,7 @@ def _extract_session_cwd(session: Session, source: Path | None = None) -> str | 
         base = Path.home() / ".claude" / "projects"
         try:
             encoded = source.relative_to(base).parts[0]
-            return encoded.replace("-", "/")
+            return _decode_claude_encoded_path(encoded)
         except ValueError:
             pass
 

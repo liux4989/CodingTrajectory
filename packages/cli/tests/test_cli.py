@@ -21,22 +21,7 @@ class _FakeRpcClient:
         return None
 
 
-def test_list_command_calls_rpc(monkeypatch, capsys) -> None:
-    responses = {
-        ("trajectory.list", json.dumps({}, sort_keys=True)): {
-            "items": [{"trajectory_id": "t1", "session_ids": ["s1"]}]
-        }
-    }
-    monkeypatch.setattr(cli, "RpcClient", lambda global_scope=False, log_file=None: _FakeRpcClient(responses))
-
-    exit_code = cli.main(["list"])
-
-    assert exit_code == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["items"][0]["trajectory_id"] == "t1"
-
-
-def test_list_projects_command_calls_rpc(monkeypatch, capsys) -> None:
+def test_project_list_calls_rpc(monkeypatch, capsys) -> None:
     responses = {
         ("project.list", json.dumps({}, sort_keys=True)): {
             "items": ["my-app", "other-project"]
@@ -49,6 +34,21 @@ def test_list_projects_command_calls_rpc(monkeypatch, capsys) -> None:
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["items"] == ["my-app", "other-project"]
+
+
+def test_project_name_lists_trajectories(monkeypatch, capsys) -> None:
+    responses = {
+        ("trajectory.list", json.dumps({"project_name": "my-app"}, sort_keys=True)): {
+            "items": [{"trajectory_id": "t1"}]
+        }
+    }
+    monkeypatch.setattr(cli, "RpcClient", lambda global_scope=False, log_file=None: _FakeRpcClient(responses))
+
+    exit_code = cli.main(["project", "my-app"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["items"][0]["trajectory_id"] == "t1"
 
 
 def test_trajectory_overview_command_calls_rpc(monkeypatch, capsys) -> None:

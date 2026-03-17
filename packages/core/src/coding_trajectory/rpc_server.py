@@ -181,10 +181,10 @@ def _dispatch(
             project_name=params.get("project_name"),
             agent_vendor=params.get("agent_vendor"),
         )
-        return {
-            "items": [serialize_trajectory_detail(t) for t in trajectories],
-            "discovery_note": discovery_note,
-        }
+        result: dict[str, Any] = {"items": [serialize_trajectory_detail(t) for t in trajectories]}
+        if not params.get("project_name"):
+            result["discovery_note"] = discovery_note
+        return result
 
     if method == "project.list":
         trajectories = resolve_collection(
