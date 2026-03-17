@@ -138,9 +138,9 @@ def infer_project_identifier(session: Session, source: Path, *, fallback: str | 
         except ValueError:
             pass
 
-    cwd = _extract_session_cwd(session)
-    if cwd:
-        return Path(cwd).name
+    # session.cwd is already resolved by stabilize_session (has access to source)
+    if session.cwd:
+        return Path(session.cwd).name
 
     if fallback:
         return fallback
@@ -153,6 +153,10 @@ def _extract_session_cwd(session: Session, source: Path | None = None) -> str | 
     if session.extensions:
         if session.extensions.codex and session.extensions.codex.cwd:
             return session.extensions.codex.cwd
+        if session.extensions.amp and session.extensions.amp.workspace_id:
+            ws_id = session.extensions.amp.workspace_id
+            if ws_id.startswith("file://"):
+                return ws_id.removeprefix("file://")
 
     for event in session.events:
         payload = cast(dict[str, object], event.payload)
@@ -173,6 +177,22 @@ def _extract_session_cwd(session: Session, source: Path | None = None) -> str | 
             encoded = source.relative_to(base).parts[0]
             return encoded.replace("-", "/")
         except ValueError:
+            pass
+
+    # Gemini CLI stores sessions under .gemini/tmp/<projectHash>/chats/session-*.json
+    # projects.json maps CWD path -> projectHash; invert it to resolve the hash to a CWD.
+    if source and session.vendor == Vendor.GEMINI_CLI:
+        base = Path.home() / ".gemini" / "tmp"
+        projects_file = Path.home() / ".gemini" / "projects.json"
+        try:
+            project_hash = source.relative_to(base).parts[0]
+            if projects_file.exists():
+                data = json.loads(projects_file.read_text(encoding="utf-8"))
+                hash_to_cwd = {v: k for k, v in (data.get("projects") or {}).items()}
+                cwd = hash_to_cwd.get(project_hash)
+                if cwd:
+                    return cwd
+        except (ValueError, KeyError, OSError):
             pass
 
     return None
