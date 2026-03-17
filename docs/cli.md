@@ -1,127 +1,83 @@
-# CLI Draft
+# CLI Design
 
 ## Goal
 
-The CLI is for one job: help an LLM analyze coding-agent logs without reading
+The CLI has one job: help an LLM analyze coding-agent logs without reading
 the full raw log stream first.
 
-It has three goals:
+Three goals:
 
-1. Progressive disclosure
-   The LLM should read the big picture first, then drill into details only when
-   needed.
-2. Contextual understanding
-   The CLI should return enriched, categorized, post-processed structure instead
-   of forcing the LLM to infer everything from raw events.
-3. Noise removal
-   The CLI should hide non-session analysis noise by default, especially raw
-   execution-recording logs that do not help reconstruct the coding session.
+1. Progressive disclosure — read the big picture first, drill into details only when needed.
+2. Contextual understanding — return enriched, post-processed structure instead of raw events.
+3. Noise removal — suppress execution-recording noise by default.
 
-## Principle
-  - structure for navigation
-  - atomic events for evidence
-  - derived queries later for scalable analysis
-  
+## Design Principle
 
-## Design Direction
+- navigation tree for orientation
+- evidence of atomic action for detail
 
-The CLI should expose:
+## Public Surface
 
-- `overview` for composite resources such as trajectory, session, turn, and step
-- `get` only for atomic events
+```
+coding-trajectory [--log-file PATH] [--output FILE] [--pretty] list
+coding-trajectory [--log-file PATH] [--output FILE] [--pretty] trajectory overview <trajectory_id>
+coding-trajectory [--log-file PATH] [--output FILE] [--pretty] trajectory scan <trajectory_id> --type TYPE [--filter KEY=VALUE ...]
+coding-trajectory [--log-file PATH] [--output FILE] [--pretty] step details <step_id>
+```
 
-This lets the LLM:
+Global options:
 
-- start from a tree
-- expand only the relevant node
-- drill into exact evidence only at the event layer
-- avoid context pollution from low-value raw logs
+- `--log-file PATH` — analyze a specific log file instead of auto-discovery
+- `--output FILE` / `-o FILE` — write JSON output to a file instead of stdout
+- `--pretty` — pretty-print JSON output
 
-The CLI itself should stay thin:
+Everything else (session, turn, event, raw) is not exposed at this stage.
 
-- overview logic belongs in the core overview / enrichment layer
-- the CLI should mostly map commands to RPC methods
-- overview responses must preserve stable ref ids for further drill-down
+## Intended Reading Flow
 
-## Command Pattern
+1. `list` — find the trajectory id
+2. `trajectory overview <trajectory_id>` — read the navigation tree, identify relevant steps
+3. `trajectory scan <trajectory_id> --type TYPE [--filter ...]` — cross-cut the tree to find all steps of a type, optionally narrowed by shape predicates
+4. `step details <step_id>` — read the evidence for a specific step
 
-Each layer should follow the same pattern:
+---
 
-- `trajectory overview <trajectory_id>`
-- `session overview <session_id>`
-- `turn overview <turn_id>`
-- `step overview <step_id>`
-- `event get <event_id>`
-- `raw <event_id>`
-
-`overview` is the main reading surface.
-`event get` is the exact inspection surface.
-`raw` is the proof surface.
-
-## Trajectory
-
-### `trajectory overview <trajectory_id>`
+## `trajectory overview <trajectory_id>` — Navigation Tree
 
 Purpose:
-Return the whole reconstructed trajectory tree in a lightweight form.
+Return the whole session tree in lightweight form. Each step is a navigation
+node: just enough to orient, never enough to overwhelm.
 
 Shape:
 
-- trajectory identity and typed context
-- nested sessions
-- nested turns
-- nested user request
-- nested steps
-- event references
+- trajectory identity
+- nested sessions with connection context
+- nested turns with user request
+- nested steps with type only
 
 Example:
 
 ```json
 {
-  "trajectory": {
-    "trajectory_id": "t1",
-    "context": {
-      "multi_agent": true,
-      "relationship_types": ["spawned_subagent"]
-    },
-    "session_count": 2,
-    "turn_count": 5
-  },
-  "tree": [
+  "trajectory_id": "t1",
+  "sessions": [
     {
       "session_id": "s1",
-      "context": {
-        "role": "main"
-      },
+      "connection": { "role": "main" },
       "turns": [
         {
           "turn_id": "turn-1",
           "user_request": "analyze the schema design",
           "steps": [
-            {
-              "step_id": "step-1",
-              "event_refs": [
-                {
-                  "event_id": "e1",
-                  "type": "user.prompt.submitted",
-                  "category": "user_interaction"
-                },
-                {
-                  "event_id": "e2",
-                  "type": "tool.call.requested",
-                  "category": "tool_call"
-                }
-              ]
-            }
+            { "step_id": "step-1", "type": "tool_call" },
+            { "step_id": "step-2", "type": "assistant_response" }
           ]
         }
       ]
     },
     {
       "session_id": "s2",
-      "context": {
-        "relationship": "spawned_subagent"
-      },
+      "connection": { "relationship": "spawned_subagent", "parent_session_id": "s1" },
       "turns": []
     }
   ]
@@ -130,60 +86,60 @@ Example:
 
 Rules:
 
-- keep it hierarchical
-- keep it lightweight
-- include typed context, not invented summaries
-- include event refs, not full event bodies
+- keep it hierarchical and lightweight
+- steps show type only — no content, no event refs
+- connection context captures session relationships, not operation detail
 
-## Session
+---
 
-### `session overview <session_id>`
+## `trajectory scan <trajectory_id>` — Cross-Cut Query
 
 Purpose:
-Return one session in analysis form.
+Flatten the full trajectory tree and return all steps of a given type.
+Each `--filter` expression narrows the result set further (AND logic), applied
+against the step's `shape` fields.
+
+Options:
+
+- `--type TYPE` — required. Step type selector: `tool_call`, `assistant_response`, `plan_subagent`, `todo_list`, `session_handoff`
+- `--filter KEY=VALUE` — exact match on a shape field. Chainable.
+- `--filter KEY=*` — field exists and is not null.
+- `--filter KEY=!` — field absent or null.
+
+Keys support dot-path notation into nested shape fields (e.g. `tool_output.error`).
+
+Examples:
+
+```bash
+# All tool_call steps
+trajectory scan t1 --type tool_call
+
+# All Read calls
+trajectory scan t1 --type tool_call --filter tool_name=Read
+
+# All tool_call steps where tool_output has an error field
+trajectory scan t1 --type tool_call --filter tool_output.error=*
+
+# Chain: Read calls that returned an error
+trajectory scan t1 --type tool_call --filter tool_name=Read --filter tool_output.error=*
+```
 
 Shape:
 
-- canonical session ids and metadata
-- all enriched turns in the session
-
-Example:
-
 ```json
 {
-  "session": {
-    "session_id": "s1",
-    "trajectory_id": "t1",
-    "parent_session_id": null,
-    "vendor": "claude_code",
-    "context": {
-      "teammate": false,
-      "multi_agent": false
-    }
-  },
-  "turns": [
+  "trajectory_id": "t1",
+  "type": "tool_call",
+  "matches": [
     {
-      "turn_id": "turn-1",
-      "user_request": "analyze the schema design",
-      "steps": [
-        {
-          "step_id": "step-1",
-          "event_refs": [
-            {
-              "event_id": "e1",
-              "type": "user.prompt.submitted",
-              "category": "user_interaction"
-            },
-            {
-              "event_id": "e2",
-              "type": "tool.call.requested",
-              "category": "tool_call"
-            }
-          ]
-        }
-      ],
-      "enrichment": {
-        "notes": []
+      "step_id": "step-3",
+      "session_id": "s1",
+      "turn_id": "turn-2",
+      "user_request": "analyze the schema",
+      "shape": {
+        "tool_name": "Read",
+        "tool_input": { "file_path": "/src/foo.py" },
+        "tool_output": { "content": "..." }
       }
     }
   ]
@@ -192,109 +148,96 @@ Example:
 
 Rules:
 
-- session stays canonical at the top
-- session may include compact workflow operations with evidence refs
-- turns are enriched for reading
-- return all turns, not only selected turns
+- `--type` is required — scan is always type-scoped
+- Full `shape` is returned for each match (unlike `trajectory overview`)
+- Use `step details <step_id>` if you need `event_ids` or `operations`
 
-## Turn
+---
 
-### `turn overview <turn_id>`
+## `step details <step_id>` — Evidence of Atomic Action
 
 Purpose:
-Return one reconstructed turn in reading form.
+Return the full enriched step. Shape is type-specific.
 
 Shape:
 
-- user request
-- steps
-- tool actions
-- event references
+- step identity and type
+- operations — what actions were performed
+- shape — type-specific enriched fields
+- event_ids — anchors to underlying raw events
 
-## Step
+### tool_call
 
-### `step overview <step_id>`
+```json
+{
+  "step_id": "step-1",
+  "type": "tool_call",
+  "operations": ["Read"],
+  "shape": {
+    "tool_name": "Read",
+    "tool_input": { "file_path": "/src/foo.py" },
+    "tool_output": { "content": "..." }
+  },
+  "event_ids": ["e1", "e2"]
+}
+```
 
-Purpose:
-Return one step in reading form.
+### plan_subagent
 
-Shape:
+```json
+{
+  "step_id": "step-3",
+  "type": "plan_subagent",
+  "operations": ["spawn", "collect_result"],
+  "shape": {
+    "agent_input": { "prompt": "..." },
+    "agent_output": { "result": "..." },
+    "agent_session_id": "s2"
+  },
+  "event_ids": ["e5", "e6", "e7"]
+}
+```
 
-- items
-- event references
-- compact feature operations with event/session refs when present
+### assistant_response
 
-## Event
+```json
+{
+  "step_id": "step-2",
+  "type": "assistant_response",
+  "operations": ["text_reply"],
+  "shape": {
+    "text": "Here is the analysis...",
+    "stop_reason": "end_turn",
+    "usage": { "input_tokens": 120, "output_tokens": 340 }
+  },
+  "event_ids": ["e3", "e4"]
+}
+```
 
-### `event get <event_id>`
+Rules:
 
-Purpose:
-Return the exact canonical event detail.
+- shape fields are determined by type — no generic fallback
+- event_ids are present as anchors but not resolvable via public CLI at this stage
+- full content, no truncation
 
-Shape:
+---
 
-- canonical event fields only
+## What The CLI Hides
 
-## Raw
+These are not exposed in the public surface:
 
-### `raw <event_id>`
+- session overview — session boundaries are visible inside trajectory overview
+- turn overview — turn boundaries are visible inside trajectory overview
+- event get — event_ids are present in step details as anchors
+- raw — source proof surface, not yet exposed
 
-Purpose:
-Return the exact raw log record for a canonical event.
-
-Shape:
-
-- source file path
-- raw line number
-- raw vendor payload
-
-This is the verification escape hatch, not the main reading interface.
-
-## Default Behavior
-
-The default behavior should be:
-
-- show reconstructed session structure
-- show enriched understanding
-- suppress execution-recording noise
-- keep outputs small
-- preserve stable ids for drill-down
-
-## What The CLI Should Hide By Default
-
-These should not dominate normal analysis output:
-
-- hook progress logs
-- file snapshot bookkeeping
-- transport-level tool protocol chatter
-- execution-recording messages that do not change session meaning
-- repeated low-value vendor metadata
-
-They may still exist in raw evidence, but they should not pollute the normal
-overview APIs.
+They remain in the underlying RPC layer but are not public CLI commands.
 
 ## Most Important Fields
 
-The LLM mainly needs:
-
-- stable ids
-- session tree
-- operations
-- type
-- category
-- relationship context
-- user request
-- steps
-- event refs
-- source path and source line for raw evidence
-
-## Recommendation
-
-The intended reading flow is:
-
-1. `trajectory overview <trajectory_id>`
-2. `session overview <session_id>`
-3. `turn overview <turn_id>`
-4. `step overview <step_id>`
-5. `event get <event_id>` when atomic event detail is needed
-6. `raw <event_id>` when exact source proof is needed
+- stable ids (trajectory_id, session_id, turn_id, step_id)
+- session connection context
+- user request text
+- step type
+- step operations and shape
+- event_ids (in step details only)

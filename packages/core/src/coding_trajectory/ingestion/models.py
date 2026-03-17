@@ -69,17 +69,18 @@ class GeminiExtensions(BaseModel):
 
 
 class AmpExtensions(BaseModel):
-    thread_id:      str | None = None
-    thread_version: int | None = None
-    workspace_id:   str | None = None
-    workspace_name: str | None = None
-    git_url:        str | None = None
-    git_ref:        str | None = None
-    agent_version:  str | None = None
-    client_type:    str | None = None
-    os_platform:    str | None = None
-    title:          str | None = None
-    agent_mode:     str | None = None
+    thread_id:        str | None = None
+    thread_version:   int | None = None
+    parent_thread_id: str | None = None
+    workspace_id:     str | None = None
+    workspace_name:   str | None = None
+    git_url:          str | None = None
+    git_ref:          str | None = None
+    agent_version:    str | None = None
+    client_type:      str | None = None
+    os_platform:      str | None = None
+    title:            str | None = None
+    agent_mode:       str | None = None
 
 
 class VendorExtensions(BaseModel):

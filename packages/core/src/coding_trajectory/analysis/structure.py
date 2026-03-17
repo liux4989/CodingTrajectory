@@ -7,7 +7,6 @@ from uuid import UUID
 
 from coding_trajectory.ingestion.models import Trajectory
 
-from .models import EnrichmentNote
 from .structure_models import (
     CrossSessionOperation,
     SessionTree,
@@ -20,7 +19,6 @@ def build_trajectory_structure(trajectory: Trajectory) -> TrajectoryStructure:
     session_tree = _build_session_tree(trajectory)
     operations = _build_operations(trajectory)
 
-    # Derived facts
     child_counts = Counter(edge.source_session_id for edge in trajectory.edges)
     edge_type_counts = Counter(edge.type for edge in trajectory.edges)
     vendors = trajectory.summary.vendors if trajectory.summary else []
@@ -28,8 +26,6 @@ def build_trajectory_structure(trajectory: Trajectory) -> TrajectoryStructure:
     topology: str = "single_session"
     if len(trajectory.sessions) > 1:
         topology = "branching" if any(count > 1 for count in child_counts.values()) else "linear"
-
-    notes = _build_notes(trajectory)
 
     return TrajectoryStructure(
         trajectory_id=trajectory.trajectory_id,
@@ -43,7 +39,6 @@ def build_trajectory_structure(trajectory: Trajectory) -> TrajectoryStructure:
         ),
         vendor_set=[vendor.value for vendor in vendors],
         edge_type_counts=dict(sorted(edge_type_counts.items())),
-        notes=notes,
     )
 
 
@@ -148,24 +143,3 @@ def _build_operations(canonical: Trajectory) -> list[CrossSessionOperation]:
             )
         )
     return operations
-
-
-def _build_notes(canonical: Trajectory) -> list[EnrichmentNote]:
-    notes: list[EnrichmentNote] = []
-    for edge in canonical.edges:
-        if edge.provenance == "observed" and edge.confidence == "high":
-            continue
-        notes.append(
-            EnrichmentNote(
-                subject="trajectory_edge",
-                message=(
-                    f"{edge.type} inferred from session linkage"
-                    if edge.provenance != "observed"
-                    else f"{edge.type} retained with {edge.confidence} confidence"
-                ),
-                provenance=edge.provenance,
-                confidence=edge.confidence,
-                evidence_event_ids=list(edge.evidence_event_ids),
-            )
-        )
-    return notes

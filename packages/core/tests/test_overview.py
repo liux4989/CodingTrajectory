@@ -18,7 +18,7 @@ from coding_trajectory.ingestion.models import (
     Turn,
     Vendor,
 )
-from coding_trajectory.overview import build_session_overview, build_step_overview, build_trajectory_overview
+from coding_trajectory.analysis.views import build_step_details, build_trajectory_overview
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.rpc_server import _dispatch, _handle_request
 
@@ -63,7 +63,9 @@ def _fixture_store() -> tuple[DocumentStore, dict[str, object]]:
             StepToolItem(
                 tool_name="spawn_agent",
                 tool_call_id="call-1",
-                status=ToolStatus.REQUESTED,
+                input={"prompt": "analyze schema"},
+                output={"result": "done"},
+                status=ToolStatus.COMPLETED,
                 event_ids=[tool_event_id],
             ),
         ],
@@ -137,45 +139,52 @@ def _fixture_store() -> tuple[DocumentStore, dict[str, object]]:
     }
 
 
-def test_build_session_overview_returns_canonical_session_and_turn_overviews() -> None:
+def test_build_trajectory_overview_returns_navigation_tree() -> None:
     store, ids = _fixture_store()
+    trajectory = store.get_trajectory(ids["trajectory_id"])
 
-    overview = build_session_overview(store.get_session(ids["session_id"]), store=store)
+    result = build_trajectory_overview(trajectory, store=store)
 
-    assert overview["session"]["session_id"] == str(ids["session_id"])
-    assert overview["operations"][0]["kind"] == "spawned_subagent"
-    assert overview["operations"][0]["related_session_ids"] == [str(ids["child_session_id"])]
-    assert overview["turns"][0]["turn_id"] == str(ids["turn_id"])
-    assert overview["turns"][0]["user_request"] == "analyze the schema design"
-    assert overview["turns"][0]["steps"][0]["event_refs"] == [
-        {
-            "event_id": str(ids["prompt_event_id"]),
-            "type": "user.prompt.submitted",
-            "category": "user_interaction",
-        },
-        {
-            "event_id": str(ids["tool_event_id"]),
-            "type": "tool.call.requested",
-            "category": "tool_call",
-        },
-    ]
-    assert overview["turns"][0]["steps"][0]["operations"][0]["kind"] == "spawn_subsession"
-    assert overview["turns"][0]["steps"][0]["operations"][0]["target_session_ids"] == [str(ids["child_session_id"])]
+    assert result["trajectory_id"] == str(ids["trajectory_id"])
+    sessions = result["sessions"]
+    main_session = sessions[0]
+    assert main_session["session_id"] == str(ids["session_id"])
+    assert main_session["connection"] == {"role": "main"}
+    assert main_session["turns"][0]["user_request"] == "analyze the schema design"
+    step_node = main_session["turns"][0]["steps"][0]
+    assert step_node["step_id"] == str(ids["step_id"])
+    assert step_node["type"] == "plan_subagent"
+    assert "event_ids" not in step_node
 
 
-def test_build_step_overview_includes_navigation_ids_and_operations() -> None:
+def test_build_trajectory_overview_child_session_has_connection_context() -> None:
     store, ids = _fixture_store()
+    trajectory = store.get_trajectory(ids["trajectory_id"])
 
-    overview = build_step_overview(store.get_step(ids["step_id"]), store=store)
+    result = build_trajectory_overview(trajectory, store=store)
 
-    assert overview["step"]["step_id"] == str(ids["step_id"])
-    assert overview["step"]["session_id"] == str(ids["session_id"])
-    assert overview["step"]["turn_id"] == str(ids["turn_id"])
-    assert overview["step"]["operations"][0]["kind"] == "spawn_subsession"
-    assert overview["step"]["operations"][0]["event_ids"] == [str(ids["tool_event_id"])]
+    sessions_by_id = {s["session_id"]: s for s in result["sessions"]}
+    child = sessions_by_id[str(ids["child_session_id"])]
+    assert child["connection"]["relationship"] == "spawned_subagent"
+    assert child["connection"]["parent_session_id"] == str(ids["session_id"])
 
 
-def test_rpc_dispatch_trajectory_overview_returns_tree_and_context() -> None:
+def test_build_step_details_plan_subagent() -> None:
+    store, ids = _fixture_store()
+    step = store.get_step(ids["step_id"])
+
+    result = build_step_details(step, store=store)
+
+    assert result["step_id"] == str(ids["step_id"])
+    assert result["type"] == "plan_subagent"
+    assert result["operations"] == ["spawn", "collect_result"]
+    assert result["shape"]["agent_input"] == {"prompt": "analyze schema"}
+    assert result["shape"]["agent_output"] == {"result": "done"}
+    assert result["shape"]["agent_session_id"] == str(ids["child_session_id"])
+    assert str(ids["tool_event_id"]) in result["event_ids"]
+
+
+def test_rpc_dispatch_trajectory_overview_returns_navigation_tree() -> None:
     store, ids = _fixture_store()
 
     result = _dispatch(
@@ -187,22 +196,39 @@ def test_rpc_dispatch_trajectory_overview_returns_tree_and_context() -> None:
         discovery_note="",
     )
 
-    assert result["trajectory"]["trajectory_id"] == str(ids["trajectory_id"])
-    assert result["trajectory"]["context"]["multi_agent_mode"] == "cross_session"
-    assert result["tree"][0]["session"]["session_id"] == str(ids["session_id"])
-    assert result["tree"][0]["children"][0]["session"]["session_id"] != str(ids["session_id"])
+    assert result["trajectory_id"] == str(ids["trajectory_id"])
+    assert result["sessions"][0]["session_id"] == str(ids["session_id"])
+    assert result["sessions"][0]["connection"] == {"role": "main"}
 
 
-def test_non_atomic_get_methods_are_removed() -> None:
+def test_rpc_dispatch_step_details_returns_evidence() -> None:
     store, ids = _fixture_store()
-    requests = [
-        ("trajectory.get", {"trajectory_id": str(ids["trajectory_id"])}),
-        ("session.get", {"session_id": str(ids["session_id"])}),
-        ("turn.get", {"turn_id": str(ids["turn_id"])}),
-        ("step.get", {"step_id": str(ids["step_id"])}),
+
+    result = _dispatch(
+        "step.details",
+        {"step_id": str(ids["step_id"])},
+        store=store,
+        global_scope=False,
+        current_dir=Path.cwd(),
+        discovery_note="",
+    )
+
+    assert result["step_id"] == str(ids["step_id"])
+    assert result["type"] == "plan_subagent"
+    assert result["shape"]["agent_session_id"] == str(ids["child_session_id"])
+
+
+def test_removed_methods_return_method_not_found() -> None:
+    store, ids = _fixture_store()
+    removed_methods = [
+        ("session.overview", {"session_id": str(ids["session_id"])}),
+        ("turn.overview", {"turn_id": str(ids["turn_id"])}),
+        ("step.overview", {"step_id": str(ids["step_id"])}),
+        ("event.get", {"event_id": str(ids["prompt_event_id"])}),
+        ("trajectory.enrich", {"trajectory_id": str(ids["trajectory_id"])}),
     ]
 
-    for method, params in requests:
+    for method, params in removed_methods:
         response = _handle_request(
             {"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
             store=store,
@@ -210,5 +236,4 @@ def test_non_atomic_get_methods_are_removed() -> None:
             current_dir=Path.cwd(),
             discovery_note="",
         )
-        assert response["error"]["code"] == -32601
-        assert response["error"]["message"] == f"unknown method: {method}"
+        assert response["error"]["code"] == -32601, f"{method} should be removed"

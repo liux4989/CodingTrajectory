@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from coding_trajectory.enrichment import build_trajectory_structure
+from coding_trajectory.analysis import build_trajectory_structure
 from coding_trajectory.ingestion.models import (
     Event,
     EventType,

@@ -83,6 +83,14 @@ class AmpAdapter(BaseAdapter):
         except ValueError:
             session_id = uuid4()
 
+        parent_thread_id_raw = thread.get("parentId")
+        parent_session_id: UUID | None = None
+        if parent_thread_id_raw:
+            try:
+                parent_session_id = UUID(str(parent_thread_id_raw).removeprefix("T-"))
+            except ValueError:
+                pass
+
         created_at = parse_timestamp(thread.get("created")) or datetime.now(timezone.utc)
         messages = thread.get("messages") or []
         traces = ((thread.get("meta") or {}).get("traces") or [])
@@ -106,6 +114,7 @@ class AmpAdapter(BaseAdapter):
             vendor=self.vendor,
             started_at=created_at,
             ended_at=ended_at,
+            parent_session_id=parent_session_id,
             events=events,
             turns=turns,
             extensions=self._parse_extensions(thread),
@@ -460,6 +469,7 @@ class AmpAdapter(BaseAdapter):
             amp=AmpExtensions(
                 thread_id=thread.get("id"),
                 thread_version=thread.get("v"),
+                parent_thread_id=thread.get("parentId"),
                 workspace_id=first_tree.get("uri"),
                 workspace_name=first_tree.get("displayName"),
                 git_url=repo.get("url"),

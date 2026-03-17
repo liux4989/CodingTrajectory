@@ -7,8 +7,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from coding_trajectory.enrichment.models import EnrichmentNote
-
 
 class SessionTreeNode(BaseModel):
     session_id: UUID
@@ -52,5 +50,3 @@ class TrajectoryStructure(BaseModel):
     has_observed_spawn: bool = False
     vendor_set: list[str] = Field(default_factory=list)
     edge_type_counts: dict[str, int] = Field(default_factory=dict)
-
-    notes: list[EnrichmentNote] = Field(default_factory=list)

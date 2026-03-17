@@ -8,30 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from coding_trajectory.discovery import discover_store, discover_store_from_file, format_discovery_sources
-from coding_trajectory.enrichment import build_trajectory_structure
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
-from coding_trajectory.overview import (
-    build_session_overview,
-    build_step_overview,
-    build_trajectory_overview,
-    build_turn_overview,
-)
-from coding_trajectory.service import (
-    resolve_collection,
-    resolve_resource,
-    serialize_event_detail,
-    serialize_session_detail,
-    serialize_step_detail,
-    serialize_trajectory_detail,
-    serialize_turn_detail,
-)
+from coding_trajectory.analysis.views import build_trajectory_overview, build_step_details, build_trajectory_scan
+from coding_trajectory.service import resolve_collection, resolve_resource, serialize_trajectory_detail
 
 # JSON-RPC / session-api error codes
 _ERROR_CODES: dict[str, int] = {
-    "session_not_found": 40400,
     "trajectory_not_found": 40401,
-    "turn_not_found": 40402,
-    "event_not_found": 40403,
     "step_not_found": 40404,
     "invalid_request": -32600,
     "method_not_found": -32601,
@@ -40,10 +23,7 @@ _ERROR_CODES: dict[str, int] = {
 }
 
 _RESOURCE_NOT_FOUND_CODES: dict[str, int] = {
-    "session": _ERROR_CODES["session_not_found"],
     "trajectory": _ERROR_CODES["trajectory_not_found"],
-    "turn": _ERROR_CODES["turn_not_found"],
-    "event": _ERROR_CODES["event_not_found"],
     "step": _ERROR_CODES["step_not_found"],
 }
 
@@ -52,7 +32,7 @@ def _error_code_for_resource(message: str) -> int:
     for resource, code in _RESOURCE_NOT_FOUND_CODES.items():
         if resource in message:
             return code
-    return _ERROR_CODES["session_not_found"]
+    return _ERROR_CODES["internal_error"]
 
 
 def _make_response(id: Any, *, result: Any = None, error: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -87,62 +67,21 @@ def _dispatch(
             "discovery_note": discovery_note,
         }
 
-    if method == "trajectory.enrich":
-        trajectory = resolve_resource(store, "trajectory", params["trajectory_id"])
-        structure = build_trajectory_structure(trajectory)
-        return structure.model_dump(mode="json")
-
     if method == "trajectory.overview":
         trajectory = resolve_resource(store, "trajectory", params["trajectory_id"])
         return build_trajectory_overview(trajectory, store=store)
 
-    if method == "session.overview":
-        session = resolve_resource(store, "session", params["session_id"])
-        return build_session_overview(session, store=store)
-
-    if method == "session.list":
-        sessions = resolve_collection(
-            store, "session", trajectory_id=params.get("trajectory_id"),
-        )
-        return {
-            "items": [serialize_session_detail(s) for s in sessions],
-            "discovery_note": discovery_note,
-        }
-
-    if method == "session.bundle":
-        session = resolve_resource(store, "session", params["session_id"])
-        return {
-            "session": serialize_session_detail(session),
-            "turns": [serialize_turn_detail(t) for t in session.turns],
-        }
-
-    if method == "turn.overview":
-        turn = resolve_resource(store, "turn", params["turn_id"])
-        return build_turn_overview(turn, store=store)
-
-    if method == "turn.bundle":
-        turn = resolve_resource(store, "turn", params["turn_id"])
-        steps = [serialize_step_detail(s) for s in turn.steps]
-        return {"turn": serialize_turn_detail(turn), "steps": steps}
-
-    if method == "event.get":
-        event = resolve_resource(store, "event", params["event_id"])
-        return serialize_event_detail(event)
-
-    if method == "event.batch_get":
-        event_ids = params.get("event_ids") or []
-        if not isinstance(event_ids, list):
-            raise TypeError("event_ids must be an array")
-        return {
-            "items": [
-                serialize_event_detail(resolve_resource(store, "event", event_id))
-                for event_id in event_ids
-            ]
-        }
-
-    if method == "step.overview":
+    if method == "step.details":
         step = resolve_resource(store, "step", params["step_id"])
-        return build_step_overview(step, store=store)
+        return build_step_details(step, store=store)
+
+    if method == "trajectory.scan":
+        trajectory = resolve_resource(store, "trajectory", params["trajectory_id"])
+        step_type = params.get("type")
+        if not step_type:
+            raise ValueError("missing required param: type")
+        filters: list[str] = params.get("filters") or []
+        return build_trajectory_scan(trajectory, store=store, step_type=step_type, filters=filters)
 
     raise KeyError(method)
 
@@ -211,7 +150,6 @@ def serve(argv: list[str] | None = None) -> None:
         else:
             discovery = discover_store(current_dir=current_dir, global_scope=global_scope)
     except DocumentError as exc:
-        # Write a single error response for any request that arrives, then exit.
         for line in sys.stdin:
             line = line.strip()
             if not line:
