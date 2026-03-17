@@ -125,14 +125,22 @@ def infer_project_identifier(session: Session, source: Path, *, fallback: str | 
         if amp.workspace_id and amp.workspace_id.startswith("file://"):
             return Path(amp.workspace_id.removeprefix("file://")).name
 
+    # For Claude Code the source path encodes the CWD authoritatively; event payloads
+    # can contain misleading cwds (e.g. when a session runs inside .claude/projects/).
+    # Path structure: .claude/projects/<encoded-cwd>/<session-uuid>[/subagents]/file.jsonl
+    if session.vendor == Vendor.CLAUDE_CODE:
+        base = Path.home() / ".claude" / "projects"
+        try:
+            encoded = source.relative_to(base).parts[0]
+            name = Path(encoded.replace("-", "/")).name
+            if name:
+                return name
+        except ValueError:
+            pass
+
     cwd = _extract_session_cwd(session)
     if cwd:
         return Path(cwd).name
-
-    if session.vendor == Vendor.CLAUDE_CODE and len(source.parts) >= 2:
-        parent = source.parent.name
-        if parent:
-            return parent
 
     if fallback:
         return fallback
@@ -140,7 +148,7 @@ def infer_project_identifier(session: Session, source: Path, *, fallback: str | 
     return None
 
 
-def _extract_session_cwd(session: Session) -> str | None:
+def _extract_session_cwd(session: Session, source: Path | None = None) -> str | None:
     # Check vendor extensions first (more reliable than scanning event payloads)
     if session.extensions:
         if session.extensions.codex and session.extensions.codex.cwd:
@@ -156,6 +164,17 @@ def _extract_session_cwd(session: Session) -> str | None:
             raw_cwd = raw.get("cwd")
             if isinstance(raw_cwd, str) and raw_cwd:
                 return raw_cwd
+
+    # Claude Code encodes the CWD as the first path component under .claude/projects/
+    # Structure: .claude/projects/<encoded-cwd>/<session-uuid>[/subagents]/file.jsonl
+    if source and session.vendor == Vendor.CLAUDE_CODE:
+        base = Path.home() / ".claude" / "projects"
+        try:
+            encoded = source.relative_to(base).parts[0]
+            return encoded.replace("-", "/")
+        except ValueError:
+            pass
+
     return None
 
 
@@ -292,4 +311,5 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
             )
         )
 
-    return session.model_copy(update={"events": events, "turns": turns})
+    cwd = _extract_session_cwd(session, source)
+    return session.model_copy(update={"events": events, "turns": turns, "cwd": cwd})

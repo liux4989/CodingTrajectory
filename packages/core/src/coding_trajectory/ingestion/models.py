@@ -155,6 +155,7 @@ class Session(BaseModel):
     started_at:        datetime
     ended_at:          datetime | None = None
     parent_session_id: UUID | None = None
+    cwd:               str | None = None
     events:            list[Event] = Field(default_factory=list)
     turns:             list[Turn] = Field(default_factory=list)
     extensions:        VendorExtensions | None = None

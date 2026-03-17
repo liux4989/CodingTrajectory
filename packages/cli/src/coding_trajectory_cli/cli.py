@@ -21,7 +21,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             result = client.call("trajectory.list", params)
             return result if isinstance(result, dict) else {"items": result}
 
-        if args.command == "list_projects":
+        if args.command == "project" and args.action == "list":
             result = client.call("project.list", {})
             return result if isinstance(result, dict) else {"items": result}
 
@@ -48,7 +48,7 @@ STEP TYPES
   plan_subagent        A sub-agent spawned during planning
 
 LEARN MORE
-  Use 'coding-trajectory <command> --help' for more information about a command.
+  Use 'ct <command> --help' for more information about a command.
 """
 
 _LOG_FILE_HELP = "Absolute path to the JSONL log file identifying the session to inspect."
@@ -90,7 +90,7 @@ def _add_output_flags(p: argparse.ArgumentParser) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="coding-trajectory",
+        prog="ct",
         description="Inspect coding-session trajectories stored in JSONL log files.",
         epilog=_EPILOG,
         formatter_class=_GhFormatter,
@@ -108,13 +108,19 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_log_file(list_parser)
     _add_output_flags(list_parser)
 
-    list_projects_parser = subparsers.add_parser(
-        "list_projects",
+    project_parser = subparsers.add_parser(
+        "project",
+        help="Inspect projects (subcommands: list).",
+        formatter_class=_GhFormatter,
+    )
+    project_sub = project_parser.add_subparsers(dest="action", required=True)
+    project_list = project_sub.add_parser(
+        "list",
         help="List distinct project names found across all trajectories.",
         formatter_class=_GhFormatter,
     )
-    _add_log_file(list_projects_parser)
-    _add_output_flags(list_projects_parser)
+    _add_log_file(project_list)
+    _add_output_flags(project_list)
 
     traj_parser = subparsers.add_parser(
         "trajectory",

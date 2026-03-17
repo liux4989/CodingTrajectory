@@ -44,7 +44,7 @@ def test_list_projects_command_calls_rpc(monkeypatch, capsys) -> None:
     }
     monkeypatch.setattr(cli, "RpcClient", lambda global_scope=False, log_file=None: _FakeRpcClient(responses))
 
-    exit_code = cli.main(["list_projects"])
+    exit_code = cli.main(["project", "list"])
 
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)

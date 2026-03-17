@@ -193,13 +193,25 @@ def _dispatch(
             global_scope=global_scope,
             current_dir=current_dir,
         )
-        names: set[str] = set()
+        projects: dict[str, dict] = {}
         for t in trajectories:
-            if t.project_identifier:
-                names.add(t.project_identifier)
+            if not t.project_identifier:
+                continue
+            key = t.project_identifier
+            if key.startswith("unknown-"):
+                continue
+            if key not in projects:
+                projects[key] = {"vendors": set(), "path": None}
+            for s in t.sessions:
+                if s.vendor:
+                    projects[key]["vendors"].add(s.vendor.value)
+                if projects[key]["path"] is None and s.cwd:
+                    projects[key]["path"] = s.cwd
         return {
-            "items": sorted(names),
-            "discovery_note": discovery_note,
+            "items": {
+                k: {"path": v["path"], "vendors": sorted(v["vendors"])}
+                for k, v in sorted(projects.items())
+            },
         }
 
     if method == "trajectory.overview":
@@ -269,10 +281,11 @@ def _handle_request(
         return _make_response(req_id, error=_make_error(_ERROR_CODES["invalid_params"], "params must be an object"))
 
     try:
+        effective_global_scope = global_scope or method == "project.list"
         store, discovery_note = _resolve_store(
             params,
             log_file=log_file,
-            global_scope=global_scope,
+            global_scope=effective_global_scope,
             current_dir=current_dir,
             cache=cache,
         )
@@ -280,7 +293,7 @@ def _handle_request(
             method,
             params,
             store=store,
-            global_scope=global_scope,
+            global_scope=effective_global_scope,
             current_dir=current_dir,
             discovery_note=discovery_note,
             cache=cache,

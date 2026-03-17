@@ -19,10 +19,10 @@ Three goals:
 ## Public Surface
 
 ```
-coding-trajectory [--log-file PATH] [--output FILE] [--pretty] list
-coding-trajectory [--log-file PATH] [--output FILE] [--pretty] trajectory overview <trajectory_id>
-coding-trajectory [--log-file PATH] [--output FILE] [--pretty] trajectory scan <trajectory_id> --type TYPE [--filter KEY=VALUE ...]
-coding-trajectory [--log-file PATH] [--output FILE] [--pretty] step details <step_id>
+ct [--log-file PATH] [--output FILE] [--pretty] list
+ct [--log-file PATH] [--output FILE] [--pretty] trajectory overview <trajectory_id>
+ct [--log-file PATH] [--output FILE] [--pretty] trajectory scan <trajectory_id> --type TYPE [--filter KEY=VALUE ...]
+ct [--log-file PATH] [--output FILE] [--pretty] step details <step_id>
 ```
 
 Global options:
