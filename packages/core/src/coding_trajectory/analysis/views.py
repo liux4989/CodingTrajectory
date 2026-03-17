@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from uuid import UUID
+
+_COMMAND_NAME_RE = re.compile(r"<command-name>(.*?)</command-name>", re.DOTALL)
 
 _MISSING = object()
 
@@ -46,7 +49,19 @@ from coding_trajectory.query import DocumentStore
 from coding_trajectory.service import prune_nones
 
 
-def _extract_user_request(store: DocumentStore, turn: Turn) -> str | None:
+def _parse_user_request_info(raw: str) -> dict[str, Any]:
+    """Classify raw user request text into a structured dict."""
+    m = _COMMAND_NAME_RE.search(raw)
+    if m:
+        return {"type": "command", "name": m.group(1).strip()}
+    stripped = raw.strip()
+    # System-only noise (e.g. empty local-command-stdout wrappers)
+    if not stripped or re.fullmatch(r"<[^>]+>\s*</[^>]+>", stripped):
+        return {"type": "system"}
+    return {"type": "message", "text": stripped}
+
+
+def _extract_user_request(store: DocumentStore, turn: Turn) -> dict[str, Any] | None:
     if turn.user_request_event_id is None:
         return None
     try:
@@ -56,8 +71,47 @@ def _extract_user_request(store: DocumentStore, turn: Turn) -> str | None:
     for key in ("text", "message", "content"):
         value = event.payload.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            return _parse_user_request_info(value)
     return None
+
+
+# Commands that carry no work output — UI state, config, or session management only.
+# Derived from Claude Code and Codex CLI official command references.
+_LOW_VALUE_COMMANDS: frozenset[str] = frozenset({
+    # Context / session reset
+    "/clear", "/reset", "/new",
+    # Context management
+    "/compact", "/context",
+    # Cost / usage display
+    "/cost", "/usage", "/stats",
+    # Exit
+    "/exit", "/quit",
+    # Help / info
+    "/help", "/release-notes",
+    # Settings / config UI
+    "/config", "/settings",
+    # Model / mode toggles
+    "/model", "/fast", "/effort", "/vim",
+    # Visual / terminal config
+    "/theme", "/color", "/statusline", "/keybindings", "/terminal-setup",
+    # Auth
+    "/login", "/logout",
+    # Status display
+    "/status",
+    # Non-work / marketing
+    "/stickers", "/mobile", "/ios", "/android", "/upgrade", "/privacy-settings",
+    # Codex-specific low-value
+    "/personality", "/debug-config",
+})
+
+
+def _is_low_value_turn(steps: list, user_request: dict[str, Any] | None) -> bool:
+    """Return True for turns that carry no work output and should be hidden in overview."""
+    if not steps:
+        return True
+    if user_request and user_request.get("type") == "command":
+        return user_request.get("name") in _LOW_VALUE_COMMANDS
+    return False
 
 
 def _classify_step(step: Step) -> str:
@@ -112,18 +166,73 @@ def build_trajectory_overview(trajectory: Trajectory, *, store: DocumentStore) -
 
 
 def _session_nav_node(session: Session, *, store: DocumentStore, structure: TrajectoryStructure) -> dict[str, Any]:
+    turns = [n for turn in session.turns if (n := _turn_nav_node(turn, store=store)) is not None]
     return {
         "session_id": str(session.session_id),
         "connection": _session_connection(session, structure=structure),
-        "turns": [_turn_nav_node(turn, store=store) for turn in session.turns],
+        "turns": turns,
     }
 
 
-def _turn_nav_node(turn: Turn, *, store: DocumentStore) -> dict[str, Any]:
+_TEXT_PREVIEW_LEN = 120
+
+
+def _collapse_tool_sequence(tools: list[str]) -> str:
+    """Collapse a flat list of tool names into a compact flow string, e.g. 'Read → Grep×3 → Edit×2'."""
+    groups: list[str] = []
+    i = 0
+    while i < len(tools):
+        tool = tools[i]
+        count = 1
+        while i + count < len(tools) and tools[i + count] == tool:
+            count += 1
+        groups.append(f"{tool}×{count}" if count > 1 else tool)
+        i += count
+    return " → ".join(groups)
+
+
+def _build_flows(steps: list[Step]) -> list[dict[str, Any]]:
+    """Build an interleaved narrative flow from a flat step list.
+
+    Consecutive tool calls are collapsed into a single ``tool_calls`` entry.
+    Each assistant response becomes an ``agent_response`` entry.
+    """
+    result: list[dict[str, Any]] = []
+    pending_tools: list[str] = []
+
+    for step in steps:
+        tool_items = [item for item in step.items if isinstance(item, StepToolItem)]
+        if tool_items:
+            for item in tool_items:
+                if item.tool_name:
+                    pending_tools.append(item.tool_name)
+        else:
+            if pending_tools:
+                result.append({"tool_calls": _collapse_tool_sequence(pending_tools)})
+                pending_tools = []
+            text_items = [item for item in step.items if isinstance(item, StepTextItem)]
+            text = "\n".join(item.text for item in text_items if item.text).strip()
+            if text:
+                preview = text[:_TEXT_PREVIEW_LEN] + ("…" if len(text) > _TEXT_PREVIEW_LEN else "")
+                result.append({"agent_response": preview})
+
+    if pending_tools:
+        result.append({"tool_calls": _collapse_tool_sequence(pending_tools)})
+
+    return result
+
+
+def _turn_nav_node(turn: Turn, *, store: DocumentStore) -> dict[str, Any] | None:
+    user_request = _extract_user_request(store, turn)
+    if _is_low_value_turn(turn.steps, user_request):
+        return None
     return prune_nones({
         "turn_id": str(turn.turn_id),
-        "user_request": _extract_user_request(store, turn),
-        "steps": [{"step_id": str(step.step_id), "type": _classify_step(step)} for step in turn.steps],
+        "user_request": user_request,
+        "steps": {
+            "flows": _build_flows(turn.steps),
+            "step_ids": [str(step.step_id) for step in turn.steps],
+        },
     })
 
 

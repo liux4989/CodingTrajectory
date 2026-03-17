@@ -51,6 +51,18 @@ def _make_error(code: int, message: str, data: Any = None) -> dict[str, Any]:
     return err
 
 
+def _resolve_trajectory(store: Any, raw_id: str | None) -> Any:
+    """Resolve a trajectory by ID, or infer the single trajectory when raw_id is None."""
+    if raw_id is not None:
+        return resolve_resource(store, "trajectory", raw_id)
+    trajectories = list(store.trajectories.values())
+    if len(trajectories) == 1:
+        return trajectories[0]
+    if not trajectories:
+        raise ValueError("no trajectories found in store")
+    raise ValueError("trajectory_id is required when the store contains multiple trajectories")
+
+
 def _dispatch(
     method: str,
     params: dict[str, Any],
@@ -68,7 +80,7 @@ def _dispatch(
         }
 
     if method == "trajectory.overview":
-        trajectory = resolve_resource(store, "trajectory", params["trajectory_id"])
+        trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
         return build_trajectory_overview(trajectory, store=store)
 
     if method == "step.details":
@@ -76,7 +88,7 @@ def _dispatch(
         return build_step_details(step, store=store)
 
     if method == "trajectory.scan":
-        trajectory = resolve_resource(store, "trajectory", params["trajectory_id"])
+        trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
         step_type = params.get("type")
         if not step_type:
             raise ValueError("missing required param: type")
