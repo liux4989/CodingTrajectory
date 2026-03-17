@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from coding_trajectory.discovery import DiscoveryResult, DiscoverySource
 from coding_trajectory.ingestion.models import (
     Event,
     EventType,
@@ -18,9 +19,9 @@ from coding_trajectory.ingestion.models import (
     Turn,
     Vendor,
 )
-from coding_trajectory.analysis.views import build_step_details, build_trajectory_overview
+from coding_trajectory.analysis.views import build_step_details, build_trajectory_overview, build_trajectory_scan, _SCAN_STRING_PREVIEW_LEN
 from coding_trajectory.query import DocumentStore
-from coding_trajectory.rpc_server import _dispatch, _handle_request
+from coding_trajectory.rpc_server import _dispatch, _resolve_store, IndexCache
 
 
 def _fixture_store() -> tuple[DocumentStore, dict[str, object]]:
@@ -150,11 +151,9 @@ def test_build_trajectory_overview_returns_navigation_tree() -> None:
     main_session = sessions[0]
     assert main_session["session_id"] == str(ids["session_id"])
     assert main_session["connection"] == {"role": "main"}
-    assert main_session["turns"][0]["user_request"] == "analyze the schema design"
-    step_node = main_session["turns"][0]["steps"][0]
-    assert step_node["step_id"] == str(ids["step_id"])
-    assert step_node["type"] == "plan_subagent"
-    assert "event_ids" not in step_node
+    assert main_session["turns"][0]["user_request"] == {"text": "analyze the schema design", "type": "message"}
+    steps_node = main_session["turns"][0]["steps"]
+    assert str(ids["step_id"]) in steps_node["step_ids"]
 
 
 def test_build_trajectory_overview_child_session_has_connection_context() -> None:
@@ -194,6 +193,7 @@ def test_rpc_dispatch_trajectory_overview_returns_navigation_tree() -> None:
         global_scope=False,
         current_dir=Path.cwd(),
         discovery_note="",
+        cache=IndexCache(),
     )
 
     assert result["trajectory_id"] == str(ids["trajectory_id"])
@@ -206,16 +206,165 @@ def test_rpc_dispatch_step_details_returns_evidence() -> None:
 
     result = _dispatch(
         "step.details",
-        {"step_id": str(ids["step_id"])},
+        {"trajectory_id": str(ids["trajectory_id"]), "step_id": str(ids["step_id"])},
         store=store,
         global_scope=False,
         current_dir=Path.cwd(),
         discovery_note="",
+        cache=IndexCache(),
     )
 
     assert result["step_id"] == str(ids["step_id"])
     assert result["type"] == "plan_subagent"
     assert result["shape"]["agent_session_id"] == str(ids["child_session_id"])
+
+
+def test_resolve_store_full_discovery_maps_source_to_own_trajectory(monkeypatch) -> None:
+    store_a, ids_a = _fixture_store()
+    store_b, ids_b = _fixture_store()
+    trajectory_a = store_a.get_trajectory(ids_a["trajectory_id"])
+    trajectory_b = store_b.get_trajectory(ids_b["trajectory_id"])
+    combined_store = DocumentStore.from_trajectories([trajectory_a, trajectory_b])
+    source_a = Path("/tmp/trajectory-a.jsonl")
+    source_b = Path("/tmp/trajectory-b.jsonl")
+
+    discovery = DiscoveryResult(
+        store=combined_store,
+        sources=[
+            DiscoverySource(vendor=Vendor.CLAUDE_CODE, path=source_a, trajectory_id=trajectory_a.trajectory_id),
+            DiscoverySource(vendor=Vendor.CLAUDE_CODE, path=source_b, trajectory_id=trajectory_b.trajectory_id),
+        ],
+    )
+
+    def _fake_discover_store(*, current_dir: Path, global_scope: bool = False) -> DiscoveryResult:
+        return discovery
+
+    monkeypatch.setattr("coding_trajectory.rpc_server.discover_store", _fake_discover_store)
+
+    cache = IndexCache()
+    _resolve_store(
+        {"trajectory_id": str(trajectory_a.trajectory_id)},
+        log_file=None,
+        global_scope=False,
+        current_dir=Path.cwd(),
+        cache=cache,
+    )
+
+    assert cache.paths_for_trajectory(str(trajectory_a.trajectory_id)) == [str(source_a)]
+    assert cache.paths_for_trajectory(str(trajectory_b.trajectory_id)) == [str(source_b)]
+
+
+def _fixture_store_with_long_output() -> tuple[DocumentStore, dict[str, object]]:
+    """Fixture with a tool_call step whose tool_output contains a long string."""
+    trajectory_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+    step_id = uuid4()
+    prompt_event_id = uuid4()
+    tool_event_id = uuid4()
+    ts = datetime(2026, 3, 10, 8, 20, tzinfo=timezone.utc)
+
+    long_content = "x" * (_SCAN_STRING_PREVIEW_LEN + 100)
+
+    prompt_event = Event(
+        event_id=prompt_event_id,
+        session_id=session_id,
+        timestamp=ts,
+        type=EventType.USER_PROMPT_SUBMITTED,
+        vendor_source=Vendor.CLAUDE_CODE,
+        actor="user",
+        payload={"text": "read a file"},
+    )
+    tool_event = Event(
+        event_id=tool_event_id,
+        session_id=session_id,
+        timestamp=ts,
+        type=EventType.TOOL_CALL_REQUESTED,
+        vendor_source=Vendor.CLAUDE_CODE,
+        actor="assistant",
+        payload={"tool_name": "Read", "tool_call_id": "call-read"},
+    )
+    step = Step(
+        step_id=step_id,
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=ts,
+        vendor=Vendor.CLAUDE_CODE,
+        items=[
+            StepToolItem(
+                tool_name="Read",
+                tool_call_id="call-read",
+                input={"file_path": "/src/foo.py"},
+                output={"content": long_content},
+                status=ToolStatus.COMPLETED,
+                event_ids=[tool_event_id],
+            ),
+        ],
+        event_ids=[prompt_event_id, tool_event_id],
+    )
+    turn = Turn(
+        turn_id=turn_id,
+        session_id=session_id,
+        sequence=0,
+        started_at=ts,
+        ended_at=ts,
+        user_request_event_id=prompt_event_id,
+        event_ids=[prompt_event_id, tool_event_id],
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        trajectory_id=trajectory_id,
+        vendor=Vendor.CLAUDE_CODE,
+        agent_name="main",
+        started_at=ts,
+        ended_at=ts,
+        events=[prompt_event, tool_event],
+        turns=[turn],
+    )
+    trajectory = Trajectory(
+        trajectory_id=trajectory_id,
+        project_identifier="legion",
+        summary=TrajectorySummary(
+            root_session_id=session_id,
+            started_at=ts,
+            ended_at=ts,
+            session_count=1,
+            turn_count=1,
+            vendors=[Vendor.CLAUDE_CODE],
+        ),
+        edges=[],
+        sessions=[session],
+    )
+    store = DocumentStore.from_trajectories([trajectory])
+    return store, {
+        "trajectory_id": trajectory_id,
+        "step_id": step_id,
+        "long_content": long_content,
+    }
+
+
+def test_trajectory_scan_truncates_long_output_strings() -> None:
+    store, ids = _fixture_store_with_long_output()
+    trajectory = store.get_trajectory(ids["trajectory_id"])
+
+    result = build_trajectory_scan(trajectory, store=store, step_type="tool_call")
+
+    assert len(result["matches"]) == 1
+    content = result["matches"][0]["shape"]["tool_output"]["content"]
+    assert len(content) == _SCAN_STRING_PREVIEW_LEN + 1  # truncated + ellipsis char
+    assert content.endswith("…")
+
+
+def test_step_details_returns_full_output_without_truncation() -> None:
+    store, ids = _fixture_store_with_long_output()
+    step = store.get_step(ids["step_id"])
+
+    result = build_step_details(step, store=store)
+
+    content = result["shape"]["tool_output"]["content"]
+    assert content == ids["long_content"]
 
 
 def test_removed_methods_return_method_not_found() -> None:
@@ -229,11 +378,16 @@ def test_removed_methods_return_method_not_found() -> None:
     ]
 
     for method, params in removed_methods:
-        response = _handle_request(
-            {"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
-            store=store,
-            global_scope=False,
-            current_dir=Path.cwd(),
-            discovery_note="",
-        )
-        assert response["error"]["code"] == -32601, f"{method} should be removed"
+        try:
+            _dispatch(
+                method,
+                params,
+                store=store,
+                global_scope=False,
+                current_dir=Path.cwd(),
+                discovery_note="",
+                cache=IndexCache(),
+            )
+            raise AssertionError(f"{method} should raise KeyError")
+        except KeyError:
+            pass  # expected — unknown method

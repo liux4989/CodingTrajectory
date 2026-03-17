@@ -19,7 +19,7 @@ from coding_trajectory.ingestion.models import (
     Vendor,
 )
 from coding_trajectory.query import DocumentStore
-from coding_trajectory.rpc_server import _dispatch
+from coding_trajectory.rpc_server import _dispatch, IndexCache
 from coding_trajectory.service import (
     serialize_event_detail,
     serialize_session_detail,
@@ -249,7 +249,7 @@ def test_build_trajectory_structure_serializes_correctly() -> None:
     assert payload["multi_agent_mode"] == "single_session"
 
 
-def test_rpc_dispatch_trajectory_enrich_returns_enriched_sidecar() -> None:
+def test_rpc_dispatch_trajectory_enrich_is_removed() -> None:
     trajectory_id = uuid4()
     session_id = uuid4()
     timestamp = datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc)
@@ -276,15 +276,16 @@ def test_rpc_dispatch_trajectory_enrich_returns_enriched_sidecar() -> None:
     )
     store = DocumentStore.from_trajectories([trajectory])
 
-    result = _dispatch(
-        "trajectory.enrich",
-        {"trajectory_id": str(trajectory_id)},
-        store=store,
-        global_scope=False,
-        current_dir=Path.cwd(),
-        discovery_note="",
-    )
-
-    assert result["trajectory_id"] == str(trajectory_id)
-    assert result["multi_agent_mode"] == "single_session"
-    assert result["session_tree"]["root_session_ids"] == [str(session_id)]
+    try:
+        _dispatch(
+            "trajectory.enrich",
+            {"trajectory_id": str(trajectory_id)},
+            store=store,
+            global_scope=False,
+            current_dir=Path.cwd(),
+            discovery_note="",
+            cache=IndexCache(),
+        )
+        raise AssertionError("trajectory.enrich should raise KeyError")
+    except KeyError:
+        pass  # expected — unknown method

@@ -13,7 +13,16 @@ from coding_trajectory_cli.rpc_client import RpcClient, RpcError
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     with RpcClient(global_scope=args.global_scope, log_file=getattr(args, "log_file", None)) as client:
         if args.command == "list":
-            result = client.call("trajectory.list", {})
+            params: dict[str, Any] = {}
+            if getattr(args, "project_name", None):
+                params["project_name"] = args.project_name
+            if getattr(args, "agent_vendor", None):
+                params["agent_vendor"] = args.agent_vendor
+            result = client.call("trajectory.list", params)
+            return result if isinstance(result, dict) else {"items": result}
+
+        if args.command == "list_projects":
+            result = client.call("project.list", {})
             return result if isinstance(result, dict) else {"items": result}
 
         if args.command == "trajectory" and args.action == "overview":
@@ -94,8 +103,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="List available sessions. Returns PATH values for --log-file.",
         formatter_class=_GhFormatter,
     )
+    list_parser.add_argument("--project-name", metavar="NAME", dest="project_name", help="Filter trajectories by project name.")
+    list_parser.add_argument("--agent-vendor", metavar="VENDOR", dest="agent_vendor", help="Filter trajectories by agent vendor (e.g. codex_cli, claude_code, gemini_cli, amp).")
     _add_log_file(list_parser)
     _add_output_flags(list_parser)
+
+    list_projects_parser = subparsers.add_parser(
+        "list_projects",
+        help="List distinct project names found across all trajectories.",
+        formatter_class=_GhFormatter,
+    )
+    _add_log_file(list_projects_parser)
+    _add_output_flags(list_projects_parser)
 
     traj_parser = subparsers.add_parser(
         "trajectory",

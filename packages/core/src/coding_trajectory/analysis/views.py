@@ -350,6 +350,20 @@ def build_step_details(step: Step, *, store: DocumentStore) -> dict[str, Any]:
 # Trajectory scan
 # ---------------------------------------------------------------------------
 
+_SCAN_STRING_PREVIEW_LEN = 300
+
+
+def _truncate_shape_strings(obj: Any, max_len: int = _SCAN_STRING_PREVIEW_LEN) -> Any:
+    """Recursively truncate long strings in a shape dict for scan output."""
+    if isinstance(obj, str):
+        return obj[:max_len] + "…" if len(obj) > max_len else obj
+    if isinstance(obj, dict):
+        return {k: _truncate_shape_strings(v, max_len) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_truncate_shape_strings(v, max_len) for v in obj]
+    return obj
+
+
 def build_trajectory_scan(
     trajectory: Trajectory,
     *,
@@ -381,7 +395,7 @@ def build_trajectory_scan(
                     "session_id": str(session.session_id),
                     "turn_id": str(turn.turn_id),
                     "user_request": user_request,
-                    "shape": shape or None,
+                    "shape": _truncate_shape_strings(shape) or None,
                 }))
 
     return {

@@ -36,6 +36,21 @@ def test_list_command_calls_rpc(monkeypatch, capsys) -> None:
     assert payload["items"][0]["trajectory_id"] == "t1"
 
 
+def test_list_projects_command_calls_rpc(monkeypatch, capsys) -> None:
+    responses = {
+        ("project.list", json.dumps({}, sort_keys=True)): {
+            "items": ["my-app", "other-project"]
+        }
+    }
+    monkeypatch.setattr(cli, "RpcClient", lambda global_scope=False, log_file=None: _FakeRpcClient(responses))
+
+    exit_code = cli.main(["list_projects"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["items"] == ["my-app", "other-project"]
+
+
 def test_trajectory_overview_command_calls_rpc(monkeypatch, capsys) -> None:
     responses = {
         ("trajectory.overview", json.dumps({"trajectory_id": "t1"}, sort_keys=True)): {

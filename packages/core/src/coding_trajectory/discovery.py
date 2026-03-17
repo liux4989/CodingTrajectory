@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter, GeminiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
@@ -22,6 +22,7 @@ _SEARCH_LIMIT = 100
 class DiscoverySource:
     vendor: Vendor
     path: Path
+    trajectory_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,10 +70,12 @@ def discover_store(*, current_dir: Path, global_scope: bool = False) -> Discover
             if not key:
                 continue
 
+            trajectory_id = uuid5(NAMESPACE_URL, f"coding-trajectory:{key}")
+
             sessions_by_project.setdefault(project_identifier, []).append(
-                session.model_copy(update={"trajectory_id": uuid5(NAMESPACE_URL, f"coding-trajectory:{key}")})
+                session.model_copy(update={"trajectory_id": trajectory_id})
             )
-            sources.append(DiscoverySource(vendor=vendor, path=path))
+            sources.append(DiscoverySource(vendor=vendor, path=path, trajectory_id=trajectory_id))
 
     if not sessions_by_project:
         raise DocumentError(f"no matching coding-agent logs found for {current_dir}")
@@ -174,10 +177,11 @@ def discover_store_from_file(path: Path) -> DiscoveryResult:
             project_identifier = path.stem
 
         key = normalize_project_key(project_identifier)
-        session = session.model_copy(update={"trajectory_id": uuid5(NAMESPACE_URL, f"coding-trajectory:{key}")})
+        trajectory_id = uuid5(NAMESPACE_URL, f"coding-trajectory:{key}")
+        session = session.model_copy(update={"trajectory_id": trajectory_id})
         trajectories = assemble_project_trajectories(project_identifier, [session])
         store = DocumentStore.from_trajectories(trajectories)
-        source = DiscoverySource(vendor=vendor, path=path)
+        source = DiscoverySource(vendor=vendor, path=path, trajectory_id=trajectory_id)
         return DiscoveryResult(store=store, sources=[source])
 
     raise DocumentError(f"no adapter could parse log file: {path}")

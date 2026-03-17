@@ -150,15 +150,30 @@ def resolve_collection(
     global_scope: bool = False,
     trajectory_id: str | None = None,
     current_dir: Path | None = None,
+    project_name: str | None = None,
+    agent_vendor: str | None = None,
 ) -> list[Trajectory | Session]:
     if resource == "trajectory":
         trajectories = list(store.trajectories.values())
-        if not global_scope and current_dir is not None:
+        if not global_scope and current_dir is not None and project_name is None:
             current_project = normalize_project_key(current_dir.name)
             trajectories = [
                 item
                 for item in trajectories
                 if item.project_identifier and normalize_project_key(item.project_identifier) == current_project
+            ]
+        if project_name is not None:
+            key = normalize_project_key(project_name)
+            trajectories = [
+                item
+                for item in trajectories
+                if item.project_identifier and normalize_project_key(item.project_identifier) == key
+            ]
+        if agent_vendor is not None:
+            trajectories = [
+                item
+                for item in trajectories
+                if item.summary and any(v.value == agent_vendor for v in item.summary.vendors)
             ]
         return sorted(trajectories, key=lambda item: (item.project_identifier or "", str(item.trajectory_id)))
 

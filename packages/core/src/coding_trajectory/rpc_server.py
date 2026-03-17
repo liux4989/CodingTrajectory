@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from coding_trajectory.discovery import discover_store, discover_store_from_file, format_discovery_sources
-from coding_trajectory.query import DocumentError, ResourceNotFoundError
+from coding_trajectory.discovery import DiscoverySource, discover_store, discover_store_from_file, format_discovery_sources
+from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
 from coding_trajectory.analysis.views import build_trajectory_overview, build_step_details, build_trajectory_scan
 from coding_trajectory.service import resolve_collection, resolve_resource, serialize_trajectory_detail
 
@@ -26,6 +27,64 @@ _RESOURCE_NOT_FOUND_CODES: dict[str, int] = {
     "trajectory": _ERROR_CODES["trajectory_not_found"],
     "step": _ERROR_CODES["step_not_found"],
 }
+
+
+_CACHE_DIR = Path.home() / ".coding-trajectory"
+_CACHE_FILE = _CACHE_DIR / "index.json"
+
+
+@dataclass
+class IndexCache:
+    """Lazy index persisted to ~/.coding-trajectory/index.json."""
+
+    path_to_trajectory: dict[str, str] = field(default_factory=dict)
+    session_to_trajectory: dict[str, str] = field(default_factory=dict)
+
+    def paths_for_trajectory(self, trajectory_id: str) -> list[str]:
+        return [p for p, tid in self.path_to_trajectory.items() if tid == trajectory_id]
+
+    def save(self) -> None:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _CACHE_FILE.write_text(
+            json.dumps(
+                {
+                    "path_to_trajectory": self.path_to_trajectory,
+                    "session_to_trajectory": self.session_to_trajectory,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def load(cls) -> IndexCache:
+        if not _CACHE_FILE.exists():
+            return cls()
+        try:
+            raw = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return cls()
+        cache = cls(
+            path_to_trajectory=raw.get("path_to_trajectory", {}),
+            session_to_trajectory=raw.get("session_to_trajectory", {}),
+        )
+        cache._prune_stale()
+        return cache
+
+    def _prune_stale(self) -> None:
+        """Remove entries whose source files no longer exist."""
+        stale = [p for p in self.path_to_trajectory if not Path(p).exists()]
+        if not stale:
+            return
+        stale_tids = set()
+        for p in stale:
+            stale_tids.add(self.path_to_trajectory.pop(p))
+        live_tids = set(self.path_to_trajectory.values())
+        for tid in stale_tids - live_tids:
+            self.session_to_trajectory = {
+                sid: t for sid, t in self.session_to_trajectory.items() if t != tid
+            }
 
 
 def _error_code_for_resource(message: str) -> int:
@@ -63,6 +122,46 @@ def _resolve_trajectory(store: Any, raw_id: str | None) -> Any:
     raise ValueError("trajectory_id is required when the store contains multiple trajectories")
 
 
+def _update_path_index(cache: IndexCache, sources: list[DiscoverySource]) -> None:
+    for source in sources:
+        if source.trajectory_id is not None:
+            cache.path_to_trajectory[str(source.path)] = str(source.trajectory_id)
+
+
+def _build_store_full(*, global_scope: bool, current_dir: Path, cache: IndexCache) -> tuple[DocumentStore, str]:
+    """Full discovery — populates cache.path_to_trajectory."""
+    discovery = discover_store(current_dir=current_dir, global_scope=global_scope)
+    _update_path_index(cache, discovery.sources)
+
+    return discovery.store, format_discovery_sources(discovery.sources)
+
+
+def _build_store_targeted(paths: list[str], cache: IndexCache) -> tuple[DocumentStore, str]:
+    """Targeted discovery — ingest only the files mapped to a trajectory."""
+    from coding_trajectory.discovery import DiscoveryResult
+
+    stores: list[DiscoveryResult] = []
+    for p in paths:
+        try:
+            stores.append(discover_store_from_file(Path(p)))
+        except DocumentError:
+            continue
+
+    if not stores:
+        raise DocumentError(f"no valid log files found for cached paths: {paths}")
+
+    all_trajectories = []
+    all_sources = []
+    for dr in stores:
+        all_trajectories.extend(dr.store.trajectories.values())
+        all_sources.extend(dr.sources)
+
+    _update_path_index(cache, all_sources)
+
+    store = DocumentStore.from_trajectories(all_trajectories)
+    return store, format_discovery_sources(all_sources)
+
+
 def _dispatch(
     method: str,
     params: dict[str, Any],
@@ -71,20 +170,50 @@ def _dispatch(
     global_scope: bool,
     current_dir: Path,
     discovery_note: str,
+    cache: IndexCache,
 ) -> Any:
     if method == "trajectory.list":
-        trajectories = resolve_collection(store, "trajectory", global_scope=global_scope, current_dir=current_dir)
+        trajectories = resolve_collection(
+            store,
+            "trajectory",
+            global_scope=global_scope,
+            current_dir=current_dir,
+            project_name=params.get("project_name"),
+            agent_vendor=params.get("agent_vendor"),
+        )
         return {
             "items": [serialize_trajectory_detail(t) for t in trajectories],
             "discovery_note": discovery_note,
         }
 
+    if method == "project.list":
+        trajectories = resolve_collection(
+            store,
+            "trajectory",
+            global_scope=global_scope,
+            current_dir=current_dir,
+        )
+        names: set[str] = set()
+        for t in trajectories:
+            if t.project_identifier:
+                names.add(t.project_identifier)
+        return {
+            "items": sorted(names),
+            "discovery_note": discovery_note,
+        }
+
     if method == "trajectory.overview":
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
-        return build_trajectory_overview(trajectory, store=store)
+        result = build_trajectory_overview(trajectory, store=store)
+        for session in trajectory.sessions:
+            cache.session_to_trajectory[str(session.session_id)] = str(trajectory.trajectory_id)
+        return result
 
     if method == "step.details":
-        step = resolve_resource(store, "step", params["step_id"])
+        step_id = params.get("step_id")
+        if not step_id:
+            raise ValueError("missing required param: step_id")
+        step = resolve_resource(store, "step", step_id)
         return build_step_details(step, store=store)
 
     if method == "trajectory.scan":
@@ -98,13 +227,36 @@ def _dispatch(
     raise KeyError(method)
 
 
+def _resolve_store(
+    params: dict[str, Any],
+    *,
+    log_file: Path | None,
+    global_scope: bool,
+    current_dir: Path,
+    cache: IndexCache,
+) -> tuple[DocumentStore, str]:
+    """Build a store: use cached path index for targeted load, fall back to full discovery."""
+    if log_file is not None:
+        discovery = discover_store_from_file(log_file)
+        _update_path_index(cache, discovery.sources)
+        return discovery.store, format_discovery_sources(discovery.sources)
+
+    trajectory_id = params.get("trajectory_id")
+    if trajectory_id and cache.path_to_trajectory:
+        cached_paths = cache.paths_for_trajectory(trajectory_id)
+        if cached_paths:
+            return _build_store_targeted(cached_paths, cache)
+
+    return _build_store_full(global_scope=global_scope, current_dir=current_dir, cache=cache)
+
+
 def _handle_request(
     request: dict[str, Any],
     *,
-    store: Any,
+    log_file: Path | None,
     global_scope: bool,
     current_dir: Path,
-    discovery_note: str,
+    cache: IndexCache,
 ) -> dict[str, Any]:
     req_id = request.get("id")
 
@@ -117,6 +269,13 @@ def _handle_request(
         return _make_response(req_id, error=_make_error(_ERROR_CODES["invalid_params"], "params must be an object"))
 
     try:
+        store, discovery_note = _resolve_store(
+            params,
+            log_file=log_file,
+            global_scope=global_scope,
+            current_dir=current_dir,
+            cache=cache,
+        )
         result = _dispatch(
             method,
             params,
@@ -124,6 +283,7 @@ def _handle_request(
             global_scope=global_scope,
             current_dir=current_dir,
             discovery_note=discovery_note,
+            cache=cache,
         )
     except KeyError as exc:
         if str(exc).strip("'\"") == method:
@@ -139,6 +299,7 @@ def _handle_request(
     except (ValueError, TypeError) as exc:
         return _make_response(req_id, error=_make_error(_ERROR_CODES["invalid_params"], str(exc)))
 
+    cache.save()
     return _make_response(req_id, result=result)
 
 
@@ -156,30 +317,7 @@ def serve(argv: list[str] | None = None) -> None:
         if idx + 1 < len(argv):
             log_file = Path(argv[idx + 1])
 
-    try:
-        if log_file is not None:
-            discovery = discover_store_from_file(log_file)
-        else:
-            discovery = discover_store(current_dir=current_dir, global_scope=global_scope)
-    except DocumentError as exc:
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                request = json.loads(line)
-            except json.JSONDecodeError:
-                request = {}
-            response = _make_response(
-                request.get("id"), error=_make_error(_ERROR_CODES["internal_error"], str(exc)),
-            )
-            sys.stdout.write(json.dumps(response) + "\n")
-            sys.stdout.flush()
-            break
-        return
-
-    store = discovery.store
-    discovery_note = format_discovery_sources(discovery.sources)
+    cache = IndexCache.load()
 
     for line in sys.stdin:
         line = line.strip()
@@ -193,10 +331,10 @@ def serve(argv: list[str] | None = None) -> None:
         else:
             response = _handle_request(
                 request,
-                store=store,
+                log_file=log_file,
                 global_scope=global_scope,
                 current_dir=current_dir,
-                discovery_note=discovery_note,
+                cache=cache,
             )
 
         sys.stdout.write(json.dumps(response) + "\n")
