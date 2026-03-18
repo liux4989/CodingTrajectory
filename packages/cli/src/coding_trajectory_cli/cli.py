@@ -50,13 +50,27 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
 
 
 _EPILOG = """
-STEP TYPES
+WORKFLOW
+  1. ct project --logfile <path>           → get trajectory_id
+  2. ct trajectory overview <tid>          → see sessions, turns, step_ids
+  3. ct trajectory scan <tid> --type TYPE  → find steps by type (with optional --filter)
+  4. ct step details <step_id>             → full detail for one step
+  5. ct event detail <event_id>            → expand $truncated fields
+"""
+
+_SCAN_EPILOG = """
+STEP TYPES (for --type)
   tool_call            A tool invocation (Bash, Read, Edit, …)
   assistant_response   A text message from the assistant
   plan_subagent        A sub-agent spawned during planning
+  todo_list            A todo/task list update
+  session_handoff      A handoff between sessions
 
-LEARN MORE
-  Use 'ct <command> --help' for more information about a command.
+FILTER SYNTAX (for --filter)
+  key=value            Exact match on a shape field
+  key=*               Field must exist
+  key=!               Field must be absent/null
+  Dot-paths supported: tool_output.error=*
 """
 
 _LOGFILE_HELP = "Absolute path to the JSONL log file to analyze."
@@ -152,6 +166,7 @@ def _build_parser() -> argparse.ArgumentParser:
     traj_scan = traj_sub.add_parser(
         "scan",
         help="Return steps matching --type and optional --filter expressions.",
+        epilog=_SCAN_EPILOG,
         formatter_class=_GhFormatter,
     )
     traj_scan.add_argument("resource_id", metavar="TRAJECTORY_ID", nargs="?", default=None)
