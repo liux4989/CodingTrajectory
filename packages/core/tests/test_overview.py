@@ -21,7 +21,7 @@ from coding_trajectory.ingestion.models import (
 )
 from coding_trajectory.analysis.views import build_step_details, build_trajectory_overview, build_trajectory_scan, _SCAN_STRING_PREVIEW_LEN
 from coding_trajectory.query import DocumentStore
-from coding_trajectory.rpc_server import _dispatch, _resolve_store, IndexCache
+from coding_trajectory.service import dispatch, resolve_store, IndexCache
 
 
 def _fixture_store() -> tuple[DocumentStore, dict[str, object]]:
@@ -186,7 +186,7 @@ def test_build_step_details_plan_subagent() -> None:
 def test_rpc_dispatch_trajectory_overview_returns_navigation_tree() -> None:
     store, ids = _fixture_store()
 
-    result = _dispatch(
+    result = dispatch(
         "trajectory.overview",
         {"trajectory_id": str(ids["trajectory_id"])},
         store=store,
@@ -204,7 +204,7 @@ def test_rpc_dispatch_trajectory_overview_returns_navigation_tree() -> None:
 def test_rpc_dispatch_step_details_returns_evidence() -> None:
     store, ids = _fixture_store()
 
-    result = _dispatch(
+    result = dispatch(
         "step.details",
         {"trajectory_id": str(ids["trajectory_id"]), "step_id": str(ids["step_id"])},
         store=store,
@@ -239,10 +239,10 @@ def test_resolve_store_full_discovery_maps_source_to_own_trajectory(monkeypatch)
     def _fake_discover_store(*, current_dir: Path, global_scope: bool = False) -> DiscoveryResult:
         return discovery
 
-    monkeypatch.setattr("coding_trajectory.rpc_server.discover_store", _fake_discover_store)
+    monkeypatch.setattr("coding_trajectory.service.discover_store", _fake_discover_store)
 
     cache = IndexCache()
-    _resolve_store(
+    resolve_store(
         {"trajectory_id": str(trajectory_a.trajectory_id)},
         log_file=None,
         global_scope=False,
@@ -379,7 +379,7 @@ def test_removed_methods_return_method_not_found() -> None:
 
     for method, params in removed_methods:
         try:
-            _dispatch(
+            dispatch(
                 method,
                 params,
                 store=store,

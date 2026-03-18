@@ -5,48 +5,67 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
-from coding_trajectory_cli.rpc_client import RpcClient, RpcError
+from coding_trajectory.query import DocumentError, ResourceNotFoundError
+from coding_trajectory.service import IndexCache, dispatch, resolve_store
 
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     log_file = getattr(args, "logfile", None)
-    with RpcClient(global_scope=args.global_scope, log_file=log_file) as client:
-        if args.command == "project":
-            agent_vendor = getattr(args, "agent_vendor", None)
-            if log_file is not None and args.name is None:
-                return client.call("project.logfile", {"path": log_file})
-            if args.name == "list":
-                params: dict[str, Any] = {}
-                if agent_vendor is not None:
-                    params["agent_vendor"] = agent_vendor
-                result = client.call("project.list", params)
-                return result if isinstance(result, dict) else {"items": result}
-            else:
-                params = {"project_name": args.name}
-                if agent_vendor is not None:
-                    params["agent_vendor"] = agent_vendor
-                result = client.call("trajectory.list", params)
-                return result if isinstance(result, dict) else {"items": result}
+    current_dir = Path.cwd()
+    cache = IndexCache.load()
 
-        if args.command == "trajectory" and args.action == "overview":
-            return client.call("trajectory.overview", {"trajectory_id": args.resource_id})
+    if args.command == "project":
+        agent_vendor = getattr(args, "agent_vendor", None)
+        if log_file is not None and args.name is None:
+            method = "project.logfile"
+            params: dict[str, Any] = {"path": log_file}
+        elif args.name == "list":
+            method = "project.list"
+            params = {}
+            if agent_vendor is not None:
+                params["agent_vendor"] = agent_vendor
+        else:
+            method = "trajectory.list"
+            params = {"project_name": args.name}
+            if agent_vendor is not None:
+                params["agent_vendor"] = agent_vendor
+    elif args.command == "trajectory" and args.action == "overview":
+        method = "trajectory.overview"
+        params = {"trajectory_id": args.resource_id}
+    elif args.command == "trajectory" and args.action == "scan":
+        method = "trajectory.scan"
+        params = {"trajectory_id": args.resource_id, "type": args.step_type, "filters": args.filters}
+    elif args.command == "step" and args.action == "details":
+        method = "step.details"
+        params = {"step_id": args.resource_id}
+    elif args.command == "event" and args.action == "detail":
+        method = "event.detail"
+        params = {"event_id": args.resource_id}
+    else:
+        raise ValueError(f"unsupported command: {args.command}")
 
-        if args.command == "trajectory" and args.action == "scan":
-            return client.call("trajectory.scan", {
-                "trajectory_id": args.resource_id,
-                "type": args.step_type,
-                "filters": args.filters,
-            })
-
-        if args.command == "step" and args.action == "details":
-            return client.call("step.details", {"step_id": args.resource_id})
-
-        if args.command == "event" and args.action == "detail":
-            return client.call("event.detail", {"event_id": args.resource_id})
-
-    raise ValueError(f"unsupported command: {args.command}")
+    effective_global_scope = True if method == "project.list" else args.global_scope
+    store, discovery_note = resolve_store(
+        params,
+        log_file=Path(log_file) if log_file else None,
+        global_scope=effective_global_scope,
+        current_dir=current_dir,
+        cache=cache,
+    )
+    result = dispatch(
+        method,
+        params,
+        store=store,
+        global_scope=effective_global_scope,
+        current_dir=current_dir,
+        discovery_note=discovery_note,
+        cache=cache,
+    )
+    cache.save()
+    return result
 
 
 _EPILOG = """
@@ -228,8 +247,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         payload = _dispatch(args)
-    except RpcError as exc:
-        print(json.dumps({"error": {"code": exc.code, "message": str(exc), "data": exc.data}}, indent=2), file=sys.stderr)
+    except ResourceNotFoundError as exc:
+        print(json.dumps({"error": {"message": str(exc)}}, indent=2), file=sys.stderr)
+        return 1
+    except DocumentError as exc:
+        print(json.dumps({"error": {"message": str(exc)}}, indent=2), file=sys.stderr)
         return 1
     except Exception as exc:  # pragma: no cover - defensive CLI fallback
         print(json.dumps({"error": {"message": str(exc)}}, indent=2), file=sys.stderr)
@@ -239,7 +261,6 @@ def main(argv: list[str] | None = None) -> int:
     text = json.dumps(payload, indent=indent, ensure_ascii=False)
 
     if args.output_file:
-        from pathlib import Path
         Path(args.output_file).write_text(text + "\n", encoding="utf-8")
     else:
         print(text)

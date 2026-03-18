@@ -1,24 +1,26 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from unittest.mock import MagicMock
 
 from coding_trajectory_cli import cli
 
 
-class _FakeRpcClient:
-    def __init__(self, responses: dict[tuple[str, str], object], *, global_scope: bool = False, log_file=None):
-        self._responses = responses
-        self.global_scope = global_scope
+def _patch_dispatch(monkeypatch, responses: dict[str, object]) -> None:
+    """Patch resolve_store and dispatch so the CLI calls the service layer with canned responses."""
+    fake_store = MagicMock()
+    fake_cache = MagicMock()
+    fake_cache.save = MagicMock()
 
-    def call(self, method: str, params: dict) -> object:
+    monkeypatch.setattr(cli, "resolve_store", lambda params, **kw: (fake_store, ""))
+    monkeypatch.setattr(cli, "IndexCache", MagicMock(load=MagicMock(return_value=fake_cache)))
+
+    def fake_dispatch(method, params, **kw):
         key = (method, json.dumps(params, sort_keys=True))
-        return self._responses[key]
+        return responses[key]
 
-    def __enter__(self) -> _FakeRpcClient:
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        return None
+    monkeypatch.setattr(cli, "dispatch", fake_dispatch)
 
 
 def test_project_list_calls_rpc(monkeypatch, capsys) -> None:
@@ -27,7 +29,7 @@ def test_project_list_calls_rpc(monkeypatch, capsys) -> None:
             "items": ["my-app", "other-project"]
         }
     }
-    monkeypatch.setattr(cli, "RpcClient", lambda global_scope=False, log_file=None: _FakeRpcClient(responses))
+    _patch_dispatch(monkeypatch, responses)
 
     exit_code = cli.main(["project", "list"])
 
@@ -42,7 +44,7 @@ def test_project_name_lists_trajectories(monkeypatch, capsys) -> None:
             "items": [{"trajectory_id": "t1"}]
         }
     }
-    monkeypatch.setattr(cli, "RpcClient", lambda global_scope=False, log_file=None: _FakeRpcClient(responses))
+    _patch_dispatch(monkeypatch, responses)
 
     exit_code = cli.main(["project", "my-app"])
 
@@ -70,7 +72,7 @@ def test_trajectory_overview_command_calls_rpc(monkeypatch, capsys) -> None:
             ],
         }
     }
-    monkeypatch.setattr(cli, "RpcClient", lambda global_scope=False, log_file=None: _FakeRpcClient(responses))
+    _patch_dispatch(monkeypatch, responses)
 
     exit_code = cli.main(["trajectory", "overview", "t1"])
 
@@ -95,7 +97,7 @@ def test_step_details_command_calls_rpc(monkeypatch, capsys) -> None:
             "event_ids": ["e1", "e2"],
         }
     }
-    monkeypatch.setattr(cli, "RpcClient", lambda global_scope=False, log_file=None: _FakeRpcClient(responses))
+    _patch_dispatch(monkeypatch, responses)
 
     exit_code = cli.main(["step", "details", "step-1"])
 

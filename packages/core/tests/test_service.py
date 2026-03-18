@@ -19,7 +19,7 @@ from coding_trajectory.ingestion.models import (
     Vendor,
 )
 from coding_trajectory.query import DocumentStore
-from coding_trajectory.rpc_server import _dispatch, IndexCache
+from coding_trajectory.service import dispatch, IndexCache
 from coding_trajectory.service import (
     serialize_event_detail,
     serialize_session_detail,
@@ -277,7 +277,7 @@ def test_rpc_dispatch_trajectory_enrich_is_removed() -> None:
     store = DocumentStore.from_trajectories([trajectory])
 
     try:
-        _dispatch(
+        dispatch(
             "trajectory.enrich",
             {"trajectory_id": str(trajectory_id)},
             store=store,
