@@ -22,9 +22,11 @@ def prune_nones(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def serialize_trajectory_detail(trajectory: Trajectory) -> dict[str, Any]:
+    vendors = sorted({session.vendor.value for session in trajectory.sessions if session.vendor})
     return prune_nones(
         {
             "trajectory_id": str(trajectory.trajectory_id),
+            "vendors": vendors or None,
             "session_ids": [str(session.session_id) for session in trajectory.sessions],
         }
     )

@@ -19,12 +19,13 @@ Three goals:
 ## Public Surface
 
 ```
-ct [--output FILE] [--pretty] project list
-ct [--output FILE] [--pretty] project <project_name>
+ct [--output FILE] [--pretty] project list [--agent-vendor AGENT_VENDOR]
+ct [--output FILE] [--pretty] project <project_name> [--agent-vendor AGENT_VENDOR]
 ct [--output FILE] [--pretty] project --logfile PATH
 ct [--output FILE] [--pretty] trajectory overview <trajectory_id> [--logfile PATH]
 ct [--output FILE] [--pretty] trajectory scan <trajectory_id> [--logfile PATH] --type TYPE [--filter KEY=VALUE ...]
 ct [--output FILE] [--pretty] step details <step_id>
+ct [--output FILE] [--pretty] event detail <event_id>
 ```
 
 Global options:
@@ -35,6 +36,11 @@ Global options:
 Subcommand options:
 
 - `project --logfile PATH` — load a specific log file and return its trajectory id
+- `project --agent-vendor AGENT_VENDOR` — filter projects or trajectories by agent vendor. Supported values:
+  - `claude_code` — Anthropic Claude Code CLI
+  - `codex_cli` — OpenAI Codex CLI
+  - `gemini_cli` — Google Gemini CLI
+  - `amp` — Amp agent
 - `trajectory ... --logfile PATH` — analyze a specific log file instead of resolving by trajectory id
 
 Everything else (session, turn, event, raw) is not exposed at this stage.
@@ -47,6 +53,7 @@ Everything else (session, turn, event, raw) is not exposed at this stage.
 3. `trajectory overview <trajectory_id>` — read the navigation tree, identify relevant steps
 4. `trajectory scan <trajectory_id> --type TYPE [--filter ...]` — cross-cut the tree to find all steps of a type, optionally narrowed by shape predicates
 5. `step details <step_id>` — read the evidence for a specific step
+6. `event detail <event_id>` — resolve the full content of a `$truncated` field from step details or scan
 
 ---
 
@@ -225,8 +232,37 @@ Shape:
 Rules:
 
 - shape fields are determined by type — no generic fallback
-- event_ids are present as anchors but not resolvable via public CLI at this stage
-- full content, no truncation
+- string fields longer than 500 chars are replaced with a `$truncated` ref object; use `event detail <event_id>` to get full content
+- event_ids are present as anchors for both the step and individual truncated fields
+
+---
+
+## `event detail <event_id>` — Full Event Content
+
+Purpose:
+Resolve the full payload of a single event. Primarily used to expand
+`$truncated` fields returned by `step details` or `trajectory scan`.
+
+A `$truncated` field looks like:
+
+```json
+"tool_output": {
+  "$truncated": true,
+  "preview": "first 500 chars…",
+  "event_ids": ["<uuid>"]
+}
+```
+
+Call `event detail <uuid>` on any of the listed `event_ids` to get the
+complete event payload including the untruncated field value.
+
+Shape: see `serialize_event_detail` — event identity, type, timestamp, and
+one of `tool_call`, `llm`, or `text` depending on event type.
+
+Rules:
+
+- event_ids in a `$truncated` ref point to the events that carry the full value
+- `event detail` also accepts any `event_id` from `step details` top-level `event_ids`
 
 ---
 

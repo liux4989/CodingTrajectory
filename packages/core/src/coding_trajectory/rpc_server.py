@@ -11,7 +11,7 @@ from typing import Any
 from coding_trajectory.discovery import DiscoverySource, discover_store, discover_store_from_file, format_discovery_sources
 from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
 from coding_trajectory.analysis.views import build_trajectory_overview, build_step_details, build_trajectory_scan
-from coding_trajectory.service import resolve_collection, resolve_resource, serialize_trajectory_detail
+from coding_trajectory.service import resolve_collection, resolve_resource, serialize_event_detail, serialize_trajectory_detail
 
 # JSON-RPC / session-api error codes
 _ERROR_CODES: dict[str, int] = {
@@ -26,6 +26,7 @@ _ERROR_CODES: dict[str, int] = {
 _RESOURCE_NOT_FOUND_CODES: dict[str, int] = {
     "trajectory": _ERROR_CODES["trajectory_not_found"],
     "step": _ERROR_CODES["step_not_found"],
+    "event": _ERROR_CODES["internal_error"],
 }
 
 
@@ -192,6 +193,7 @@ def _dispatch(
             "trajectory",
             global_scope=global_scope,
             current_dir=current_dir,
+            agent_vendor=params.get("agent_vendor"),
         )
         projects: dict[str, dict] = {}
         for t in trajectories:
@@ -214,6 +216,12 @@ def _dispatch(
             },
         }
 
+    if method == "project.logfile":
+        trajectories = list(store.trajectories.values())
+        if not trajectories:
+            raise ValueError("no trajectories found in log file")
+        return {"items": [serialize_trajectory_detail(t) for t in trajectories]}
+
     if method == "trajectory.overview":
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
         result = build_trajectory_overview(trajectory, store=store)
@@ -227,6 +235,13 @@ def _dispatch(
             raise ValueError("missing required param: step_id")
         step = resolve_resource(store, "step", step_id)
         return build_step_details(step, store=store)
+
+    if method == "event.detail":
+        event_id = params.get("event_id")
+        if not event_id:
+            raise ValueError("missing required param: event_id")
+        event = resolve_resource(store, "event", event_id)
+        return serialize_event_detail(event)
 
     if method == "trajectory.scan":
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))

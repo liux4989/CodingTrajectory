@@ -14,13 +14,20 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     log_file = getattr(args, "logfile", None)
     with RpcClient(global_scope=args.global_scope, log_file=log_file) as client:
         if args.command == "project":
+            agent_vendor = getattr(args, "agent_vendor", None)
             if log_file is not None and args.name is None:
                 return client.call("project.logfile", {"path": log_file})
             if args.name == "list":
-                result = client.call("project.list", {})
+                params: dict[str, Any] = {}
+                if agent_vendor is not None:
+                    params["agent_vendor"] = agent_vendor
+                result = client.call("project.list", params)
                 return result if isinstance(result, dict) else {"items": result}
             else:
-                result = client.call("trajectory.list", {"project_name": args.name})
+                params = {"project_name": args.name}
+                if agent_vendor is not None:
+                    params["agent_vendor"] = agent_vendor
+                result = client.call("trajectory.list", params)
                 return result if isinstance(result, dict) else {"items": result}
 
         if args.command == "trajectory" and args.action == "overview":
@@ -35,6 +42,9 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
 
         if args.command == "step" and args.action == "details":
             return client.call("step.details", {"step_id": args.resource_id})
+
+        if args.command == "event" and args.action == "detail":
+            return client.call("event.detail", {"event_id": args.resource_id})
 
     raise ValueError(f"unsupported command: {args.command}")
 
@@ -110,6 +120,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Project name to list trajectories for, or 'list' to list all projects.",
     )
+    project_parser.add_argument(
+        "--agent-vendor",
+        metavar="AGENT_VENDOR",
+        dest="agent_vendor",
+        default=None,
+        help=(
+            "Filter by agent vendor. "
+            "Known values: claude_code, codex_cli, gemini_cli, amp."
+        ),
+    )
     _add_logfile(project_parser)
     _add_output_flags(project_parser)
 
@@ -169,6 +189,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     step_details.add_argument("resource_id", metavar="STEP_ID")
     _add_output_flags(step_details)
+
+    event_parser = subparsers.add_parser(
+        "event",
+        help="Resolve a single event by its event ID (subcommands: detail).",
+        formatter_class=_GhFormatter,
+    )
+    event_sub = event_parser.add_subparsers(dest="action", required=True)
+    event_detail = event_sub.add_parser(
+        "detail",
+        help="Return the full content of a single event (resolves $truncated refs from step details or scan).",
+        formatter_class=_GhFormatter,
+    )
+    event_detail.add_argument("resource_id", metavar="EVENT_ID")
+    _add_output_flags(event_detail)
 
     return parser
 

@@ -10,6 +10,30 @@ _COMMAND_NAME_RE = re.compile(r"<command-name>(.*?)</command-name>", re.DOTALL)
 
 _MISSING = object()
 
+_STEP_DETAIL_TRUNCATE_LEN = 500
+
+
+def _truncate_with_ref(value: Any, event_ids: list, max_len: int = _STEP_DETAIL_TRUNCATE_LEN) -> Any:
+    """Recursively truncate long strings, replacing them with event-ref objects.
+
+    A truncated value becomes::
+
+        {"$truncated": true, "preview": "<first N chars>…", "event_ids": ["<uuid>", ...]}
+
+    so callers can resolve the full content via ``event.detail <event_id>``.
+    """
+    if isinstance(value, str) and len(value) > max_len:
+        return {
+            "$truncated": True,
+            "preview": value[:max_len] + "…",
+            "event_ids": [str(eid) for eid in event_ids],
+        }
+    if isinstance(value, dict):
+        return {k: _truncate_with_ref(v, event_ids, max_len) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_truncate_with_ref(v, event_ids, max_len) for v in value]
+    return value
+
 
 def _resolve_path(obj: Any, path: str) -> Any:
     """Resolve a dot-separated path into a nested dict, returning _MISSING if absent."""
@@ -252,18 +276,18 @@ def _assistant_response_shape(step: Step) -> dict[str, Any]:
 def _tool_call_shape(tool_items: list[StepToolItem]) -> dict[str, Any]:
     if len(tool_items) == 1:
         item = tool_items[0]
-        return prune_nones({
+        return _truncate_with_ref(prune_nones({
             "tool_name": item.tool_name,
             "tool_input": item.input,
             "tool_output": item.output,
-        })
+        }), item.event_ids)
     return {
         "tools": [
-            prune_nones({
+            _truncate_with_ref(prune_nones({
                 "tool_name": item.tool_name,
                 "tool_input": item.input,
                 "tool_output": item.output,
-            })
+            }), item.event_ids)
             for item in tool_items
         ]
     }
@@ -311,10 +335,10 @@ def _session_handoff_shape(step: Step, *, store: DocumentStore) -> dict[str, Any
     handoff_session_id = _lookup_target_session(step, store=store, edge_type="handoff_to")
     if handoff_item is None:
         return prune_nones({"handoff_session_id": handoff_session_id})
-    return prune_nones({
+    return _truncate_with_ref(prune_nones({
         "handoff_input": handoff_item.input,
         "handoff_session_id": handoff_session_id,
-    })
+    }), handoff_item.event_ids)
 
 
 def build_step_details(step: Step, *, store: DocumentStore) -> dict[str, Any]:
@@ -353,14 +377,26 @@ def build_step_details(step: Step, *, store: DocumentStore) -> dict[str, Any]:
 _SCAN_STRING_PREVIEW_LEN = 300
 
 
-def _truncate_shape_strings(obj: Any, max_len: int = _SCAN_STRING_PREVIEW_LEN) -> Any:
-    """Recursively truncate long strings in a shape dict for scan output."""
+def _truncate_shape_strings(obj: Any, event_ids: list | None = None, max_len: int = _SCAN_STRING_PREVIEW_LEN) -> Any:
+    """Recursively truncate long strings in a shape dict for scan output.
+
+    When *event_ids* are provided, truncated strings become event-ref objects
+    (same structure as ``_truncate_with_ref``) so callers can resolve full
+    content via ``event.detail``.  Already-truncated ref objects are passed
+    through unchanged.
+    """
     if isinstance(obj, str):
-        return obj[:max_len] + "…" if len(obj) > max_len else obj
+        if len(obj) > max_len:
+            if event_ids:
+                return {"$truncated": True, "preview": obj[:max_len] + "…", "event_ids": [str(eid) for eid in event_ids]}
+            return obj[:max_len] + "…"
+        return obj
     if isinstance(obj, dict):
-        return {k: _truncate_shape_strings(v, max_len) for k, v in obj.items()}
+        if "$truncated" in obj:  # already a ref — pass through unchanged
+            return obj
+        return {k: _truncate_shape_strings(v, event_ids, max_len) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_truncate_shape_strings(v, max_len) for v in obj]
+        return [_truncate_shape_strings(v, event_ids, max_len) for v in obj]
     return obj
 
 
@@ -377,6 +413,9 @@ def build_trajectory_scan(
     step's ``shape`` dict.  Supports dot-path keys (e.g. ``tool_output.error``),
     ``key=*`` (exists), and ``key=!`` (absent).
     """
+    # Assistant-response and plan-subagent shapes contain narrative text —
+    # truncating them would hide meaning. Only truncate tool_call shapes.
+    _NO_TRUNCATE_TYPES = {"assistant_response", "plan_subagent"}
     matches: list[dict[str, Any]] = []
 
     for session in trajectory.sessions:
@@ -390,12 +429,17 @@ def build_trajectory_scan(
                 if filters:
                     if not all(_match_filter(shape, f) for f in filters):
                         continue
+                if step_type in _NO_TRUNCATE_TYPES:
+                    truncated_shape = shape
+                else:
+                    truncated_shape = _truncate_shape_strings(shape, event_ids=step.event_ids)
                 matches.append(prune_nones({
                     "step_id": str(step.step_id),
                     "session_id": str(session.session_id),
                     "turn_id": str(turn.turn_id),
                     "user_request": user_request,
-                    "shape": _truncate_shape_strings(shape) or None,
+                    "shape": truncated_shape or None,
+                    "event_ids": [str(eid) for eid in step.event_ids] or None,
                 }))
 
     return {
