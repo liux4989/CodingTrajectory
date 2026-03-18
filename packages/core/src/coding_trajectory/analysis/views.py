@@ -13,21 +13,23 @@ _MISSING = object()
 _STEP_DETAIL_TRUNCATE_LEN = 500
 
 
+def _truncation_marker(length: int, event_ids: list) -> str:
+    """Return an inline truncation marker, e.g. ``[5,234 chars → event.detail abc123]``."""
+    ref = " | ".join(str(eid) for eid in event_ids)
+    return f"[{length:,} chars → event.detail {ref}]"
+
+
 def _truncate_with_ref(value: Any, event_ids: list, max_len: int = _STEP_DETAIL_TRUNCATE_LEN) -> Any:
-    """Recursively truncate long strings, replacing them with event-ref objects.
+    """Recursively truncate long strings, replacing them with inline markers.
 
-    A truncated value becomes::
+    A truncated value becomes a plain string like::
 
-        {"$truncated": true, "preview": "<first N chars>…", "event_ids": ["<uuid>", ...]}
+        "[5,234 chars → event.detail <uuid>]"
 
-    so callers can resolve the full content via ``event.detail <event_id>``.
+    so callers can resolve the full content via ``event.detail <event_id>`` only when needed.
     """
     if isinstance(value, str) and len(value) > max_len:
-        return {
-            "$truncated": True,
-            "preview": value[:max_len] + "…",
-            "event_ids": [str(eid) for eid in event_ids],
-        }
+        return _truncation_marker(len(value), event_ids)
     if isinstance(value, dict):
         return {k: _truncate_with_ref(v, event_ids, max_len) for k, v in value.items()}
     if isinstance(value, list):
@@ -380,20 +382,16 @@ _SCAN_STRING_PREVIEW_LEN = 300
 def _truncate_shape_strings(obj: Any, event_ids: list | None = None, max_len: int = _SCAN_STRING_PREVIEW_LEN) -> Any:
     """Recursively truncate long strings in a shape dict for scan output.
 
-    When *event_ids* are provided, truncated strings become event-ref objects
-    (same structure as ``_truncate_with_ref``) so callers can resolve full
-    content via ``event.detail``.  Already-truncated ref objects are passed
-    through unchanged.
+    Truncated strings become inline markers like ``[5,234 chars → event.detail <id>]``
+    so callers can resolve full content via ``event.detail`` only when needed.
     """
     if isinstance(obj, str):
         if len(obj) > max_len:
             if event_ids:
-                return {"$truncated": True, "preview": obj[:max_len] + "…", "event_ids": [str(eid) for eid in event_ids]}
-            return obj[:max_len] + "…"
+                return _truncation_marker(len(obj), event_ids)
+            return f"[{len(obj):,} chars]"
         return obj
     if isinstance(obj, dict):
-        if "$truncated" in obj:  # already a ref — pass through unchanged
-            return obj
         return {k: _truncate_shape_strings(v, event_ids, max_len) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_truncate_shape_strings(v, event_ids, max_len) for v in obj]
