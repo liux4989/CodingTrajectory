@@ -26,10 +26,12 @@ class BenchmarkFSM:
         log_file: str,
         task_case: str | None = None,
         output_dir: str = "results",
+        interactive: bool = False,
     ) -> None:
         self.log_file = log_file
         self.task_case = task_case
         self.output_dir = output_dir
+        self.interactive = interactive
         self.state = State.LOAD
         self.run = BenchmarkRun()
         self._pending: list[TestCase] = []
@@ -68,7 +70,7 @@ class BenchmarkFSM:
                 "RUN_AGENT",
                 f"{case.task_type.value} / {case.tool_variant.value} ({case.case_id})",
             )
-            output = run_agent(case)
+            output = run_agent(case, interactive=self.interactive)
             self.run.outputs.append(output)
         self._log("RUN_AGENT", f"Collected {len(self.run.outputs)} outputs")
 
@@ -142,10 +144,10 @@ def main(argv: list[str] | None = None) -> int:
         help=f"Run only a specific task type. Choices: {_VALID_TASKS}",
     )
     parser.add_argument(
-        "--output-dir",
-        dest="output_dir",
-        default="results",
-        help="Directory to write benchmark results (default: results).",
+        "--interactive",
+        action="store_true",
+        default=False,
+        help="Stream each agent subprocess to the terminal instead of capturing output.",
     )
     args = parser.parse_args(argv)
 
@@ -153,9 +155,12 @@ def main(argv: list[str] | None = None) -> int:
         fsm = BenchmarkFSM(
             log_file=args.logfile,
             task_case=args.task_case,
-            output_dir=args.output_dir,
+            interactive=args.interactive,
         )
         fsm.run_all()
+    except KeyboardInterrupt:
+        print("\nAborted.", file=sys.stderr)
+        return 1
     except (ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

@@ -11,6 +11,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter, GeminiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
+from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import Event, Session, Step, Trajectory, Turn, Vendor
 from coding_trajectory.query import DocumentError, DocumentStore
 from coding_trajectory.trajectory import assemble_project_trajectories
@@ -46,7 +47,7 @@ def discover_store(*, current_dir: Path, global_scope: bool = False) -> Discover
     current_project = normalize_project_key(current_dir.name)
 
     sessions_by_project: dict[str, list[Session]] = {}
-    sources: list[DiscoverySource] = []
+    path_session_meta: list[tuple[Vendor, Path, UUID]] = []
 
     for vendor, adapter_cls, base_dir, pattern in _vendor_configs():
         for path in _recent_files(base_dir, pattern):
@@ -70,12 +71,8 @@ def discover_store(*, current_dir: Path, global_scope: bool = False) -> Discover
             if not key:
                 continue
 
-            trajectory_id = uuid5(NAMESPACE_URL, f"coding-trajectory:{key}")
-
-            sessions_by_project.setdefault(project_identifier, []).append(
-                session.model_copy(update={"trajectory_id": trajectory_id})
-            )
-            sources.append(DiscoverySource(vendor=vendor, path=path, trajectory_id=trajectory_id))
+            sessions_by_project.setdefault(project_identifier, []).append(session)
+            path_session_meta.append((vendor, path, session.session_id))
 
     if not sessions_by_project:
         raise DocumentError(f"no matching coding-agent logs found for {current_dir}")
@@ -83,6 +80,16 @@ def discover_store(*, current_dir: Path, global_scope: bool = False) -> Discover
     trajectories: list[Trajectory] = []
     for project_identifier, sessions in sorted(sessions_by_project.items()):
         trajectories.extend(assemble_project_trajectories(project_identifier, sessions))
+
+    session_to_traj: dict[UUID, UUID] = {
+        session.session_id: trajectory.trajectory_id
+        for trajectory in trajectories
+        for session in trajectory.sessions
+    }
+    sources = [
+        DiscoverySource(vendor=vendor, path=path, trajectory_id=session_to_traj.get(session_id))
+        for vendor, path, session_id in path_session_meta
+    ]
 
     return DiscoveryResult(store=DocumentStore.from_trajectories(trajectories), sources=sources)
 
@@ -122,12 +129,6 @@ def _decode_claude_encoded_path(encoded: str) -> str | None:
     # Fallback: simple replacement (original behaviour) so we never regress on
     # paths where the directory no longer exists on this machine.
     return "/" + stripped.replace("-", "/")
-
-
-def normalize_project_key(value: str) -> str:
-    collapsed = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", value.strip())
-    normalized = re.sub(r"[^a-zA-Z0-9]+", "-", collapsed).strip("-").lower()
-    return normalized
 
 
 def _normalize_token(value: str) -> str:
@@ -254,11 +255,9 @@ def discover_store_from_file(path: Path) -> DiscoveryResult:
         if not project_identifier:
             project_identifier = path.stem
 
-        key = normalize_project_key(project_identifier)
-        trajectory_id = uuid5(NAMESPACE_URL, f"coding-trajectory:{key}")
-        session = session.model_copy(update={"trajectory_id": trajectory_id})
         trajectories = assemble_project_trajectories(project_identifier, [session])
         store = DocumentStore.from_trajectories(trajectories)
+        trajectory_id = trajectories[0].trajectory_id
         source = DiscoverySource(vendor=vendor, path=path, trajectory_id=trajectory_id)
         return DiscoveryResult(store=store, sources=[source])
 

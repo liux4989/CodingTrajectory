@@ -1,80 +1,177 @@
-"""LLM judge for automated evaluation of agent outputs."""
+"""LLM judge: prompt templates, JSON schemas, and response parsing."""
 from __future__ import annotations
-import json
-from .models import AgentOutput, JudgeScore, TaskType, TestCase
+from .models import AgentOutput, CompactJudgeScore, DynamicJudgeScore, JudgeScore, ScoringCriterion, TaskType, TestCase
+
+
+def _judge_schema(model: type) -> dict:
+    """Derive a JSON schema from a score model, excluding fields the judge shouldn't fill."""
+    schema = model.model_json_schema()
+    for field in ("case_id",):
+        schema.get("properties", {}).pop(field, None)
+        if field in schema.get("required", []):
+            schema["required"].remove(field)
+    return schema
 
 
 # ---------------------------------------------------------------------------
-# Base judge framing (shared across all task types)
+# Judge system prompts (one per task type) — used when no per-case criteria
 # ---------------------------------------------------------------------------
 
-_JUDGE_BASE = """\
+_JUDGE_INTROS: dict[TaskType, str] = {
+    TaskType.SESSION_COMPACT: (
+        "You are an expert evaluator of compact continuation summaries produced from coding agent sessions."
+    ),
+    TaskType.ERROR_ROOT_CAUSE: "You are an expert evaluator of coding agent log analysis.",
+    TaskType.SUBAGENT_DELEGATION: "You are an expert evaluator of coding agent log analysis.",
+    TaskType.TOOL_FAILURE_REPORT: "You are an expert evaluator of coding agent log analysis.",
+}
+
+_JUDGE_PROMPTS: dict[TaskType, str] = {
+    TaskType.SESSION_COMPACT: """\
+You are an expert evaluator of compact continuation summaries produced from coding agent sessions.
+Score the following summary on six dimensions (0-5 each).
+
+Evaluation criteria:
+- state_preservation (0-5): Does the next agent still know the actual task? \
+The summary must carry forward the original objective so a fresh agent can understand what it is building/fixing.
+- constraint_preservation (0-5): Does it retain the non-obvious requirements? \
+Edge-case rules, user preferences, performance targets, and compatibility constraints that are easy to drop.
+- decision_preservation (0-5): Does it keep prior commitments and architectural choices? \
+Framework picks, API contracts, naming conventions, and rejected alternatives that should not be revisited.
+- verification_fidelity (0-5): Does it distinguish "done" from "tested"? \
+Clearly marks which steps are implemented-but-unverified vs. fully tested and passing.
+- resume_quality (0-5): Can the next turn act immediately? \
+The summary provides enough context (file paths, current branch, error state) to start coding without re-reading logs.
+- compression_ratio (0-5): Is it much shorter than the original session? \
+Rewards aggressive compression while penalising loss of essential information (balance with other criteria).""",
+
+    TaskType.ERROR_ROOT_CAUSE: """\
 You are an expert evaluator of coding agent log analysis.
-Score the following analysis output on four dimensions (0-5 each).
+Score the following error root cause analysis on four dimensions (0-5 each).
 
-{rubric}
+Evaluation criteria:
+- completeness: Are all error-retry loops in the session identified? Is the location, retry count, and resolution reported for each?
+- accuracy: Is the root cause diagnosis correct (not just restating the error message)? Are retry counts and resolutions factually accurate per the logs?
+- structure: Is the analysis well-organized with clear per-error breakdowns and an impact summary?
+- insight: Does it distinguish symptoms from root causes? Does it assess the agent's error recovery strategy quality?""",
 
-Respond with JSON: {{"completeness": N, "accuracy": N, "structure": N, "insight": N, "reasoning": "..."}}
-"""
+    TaskType.SUBAGENT_DELEGATION: """\
+You are an expert evaluator of coding agent log analysis.
+Score the following subagent delegation analysis on four dimensions (0-5 each).
 
-# ---------------------------------------------------------------------------
-# Task-specific rubric definitions
-# ---------------------------------------------------------------------------
+Evaluation criteria:
+- completeness: Are all subagent delegations identified? Is each delegation's task, return value, and parent usage reported?
+- accuracy: Are parent/child relationships, task assignments, and return values correct per the logs?
+- structure: Is the delegation graph clearly presented with data flow direction?
+- insight: Does it identify context loss across handoffs, delegation failures, or inefficient delegation patterns?""",
 
-_TASK_RUBRICS: dict[TaskType, str] = {
-    TaskType.SESSION_SUMMARY: """\
-Evaluation criteria for a **session summary**:
-- completeness: Does it cover user goal, agent approach, tool sequence, and final outcome?
-- accuracy: Are the described events, tool calls, and results factually correct per the logs?
-- structure: Is there a clear narrative arc (goal → approach → execution → outcome)?
-- insight: Does it surface non-obvious patterns such as retries, pivots, or wasted effort?""",
+    TaskType.TOOL_FAILURE_REPORT: """\
+You are an expert evaluator of coding agent log analysis.
+Score the following tool failure report on four dimensions (0-5 each).
 
-    TaskType.SESSION_CONNECTION: """\
-Evaluation criteria for a **session connection map**:
-- completeness: Are all sessions identified with their parent/child, subagent, or handoff relationships?
-- accuracy: Are session IDs, relationships, and role assignments correct per the logs?
-- structure: Is the topology clearly presented (e.g. tree, diagram, or structured list)?
-- insight: Does it explain *why* sessions were spawned and what role each plays in the overall task?""",
-
-    TaskType.EFFORT_DISTRIBUTION: """\
-Evaluation criteria for an **effort distribution analysis**:
-- completeness: Are all four categories covered (planning, executing, bug fixing, interactive refinement)?
-- accuracy: Are the counts, percentages, and category assignments correct per the logs?
-- structure: Are results presented with clear counts/percentages and supporting evidence?
-- insight: Does it identify imbalances, bottlenecks, or unusual distribution patterns?""",
+Evaluation criteria:
+- completeness: Are all distinct tool failures captured? Are retries correctly grouped rather than listed as separate failures?
+- accuracy: Are tool names, error messages, and recovery outcomes correct per the logs? Are lifecycle events correctly excluded?
+- structure: Is each failure clearly reported with tool name, input summary, error, recovery, and classification?
+- insight: Does it correctly classify failures (transient/permanent/fatal) and assess the agent's recovery strategy?""",
 }
 
 
-def _get_judge_system_prompt(task_type: TaskType) -> str:
-    """Return the judge system prompt with task-specific rubric."""
-    rubric = _TASK_RUBRICS[task_type]
-    return _JUDGE_BASE.format(rubric=rubric)
+# ---------------------------------------------------------------------------
+# JSON schemas (used with claude --json-schema) — TaskType defaults
+# ---------------------------------------------------------------------------
+
+JUDGE_SCHEMAS: dict[TaskType, dict] = {
+    TaskType.SESSION_COMPACT: _judge_schema(CompactJudgeScore),
+    TaskType.ERROR_ROOT_CAUSE: _judge_schema(JudgeScore),
+    TaskType.SUBAGENT_DELEGATION: _judge_schema(JudgeScore),
+    TaskType.TOOL_FAILURE_REPORT: _judge_schema(JudgeScore),
+}
 
 
-def build_judge_prompt(test_case: TestCase, output: AgentOutput) -> str:
-    """Build the prompt to send to the LLM judge."""
-    parts = [
-        f"Task type: {test_case.task_type.value}",
-        f"Tool variant: {test_case.tool_variant.value}",
-        f"Task prompt:\n{test_case.prompt}",
-        f"\nAgent output:\n{output.output}",
-    ]
-    if test_case.reference_answer:
-        parts.append(f"\nReference answer:\n{test_case.reference_answer}")
-    return "\n".join(parts)
+# ---------------------------------------------------------------------------
+# Score model mapping — TaskType defaults
+# ---------------------------------------------------------------------------
+
+_SCORE_MODEL: dict[TaskType, type[JudgeScore | CompactJudgeScore]] = {
+    TaskType.SESSION_COMPACT: CompactJudgeScore,
+    TaskType.ERROR_ROOT_CAUSE: JudgeScore,
+    TaskType.SUBAGENT_DELEGATION: JudgeScore,
+    TaskType.TOOL_FAILURE_REPORT: JudgeScore,
+}
 
 
-def parse_judge_response(case_id: str, raw_response: str) -> JudgeScore:
-    """Parse the LLM judge's JSON response into a JudgeScore."""
-    cleaned = raw_response.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    data = json.loads(cleaned)
-    return JudgeScore(
-        case_id=case_id,
-        completeness=data["completeness"],
-        accuracy=data["accuracy"],
-        structure=data["structure"],
-        insight=data["insight"],
-        reasoning=data.get("reasoning", ""),
+# ---------------------------------------------------------------------------
+# Per-case dynamic helpers
+# ---------------------------------------------------------------------------
+
+def _build_dynamic_prompt(task_type: TaskType, criteria: list[ScoringCriterion]) -> str:
+    """Build a judge prompt from per-case scoring criteria."""
+    intro = _JUDGE_INTROS[task_type]
+    criterion_lines = "\n".join(
+        f"- {c.name} (0-{c.max_score}): {c.description}"
+        for c in criteria
     )
+    return (
+        f"{intro}\n"
+        f"Score the following on {len(criteria)} dimension(s) (0-5 each).\n\n"
+        f"Evaluation criteria:\n{criterion_lines}"
+    )
+
+
+def _build_dynamic_schema(criteria: list[ScoringCriterion]) -> dict:
+    """Build a JSON schema from per-case scoring criteria."""
+    properties: dict = {
+        c.name: {"type": "number", "minimum": 0, "maximum": c.max_score}
+        for c in criteria
+    }
+    properties["reasoning"] = {"type": "string"}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": [c.name for c in criteria],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def get_judge_prompt(test_case: TestCase) -> str:
+    """Return the judge system prompt for a test case.
+
+    Uses per-case criteria when present; falls back to the TaskType default.
+    """
+    if test_case.scoring_criteria:
+        return _build_dynamic_prompt(test_case.task_type, test_case.scoring_criteria)
+    return _JUDGE_PROMPTS[test_case.task_type]
+
+
+def get_judge_schema(test_case: TestCase) -> dict:
+    """Return the JSON schema for a test case.
+
+    Uses per-case criteria when present; falls back to the TaskType default.
+    """
+    if test_case.scoring_criteria:
+        return _build_dynamic_schema(test_case.scoring_criteria)
+    return JUDGE_SCHEMAS[test_case.task_type]
+
+
+def build_judge_input(output: AgentOutput, reference_answer: str | None = None) -> str:
+    """Return the agent output as judge input, optionally with a reference answer."""
+    if reference_answer:
+        return f"Reference answer:\n{reference_answer}\n\nAgent output:\n{output.output}"
+    return output.output
+
+
+def parse_judge_response(
+    case_id: str,
+    data: dict,
+    test_case: TestCase,
+) -> JudgeScore | CompactJudgeScore | DynamicJudgeScore:
+    """Build a score model from the validated judge dict."""
+    if test_case.scoring_criteria:
+        scores = {c.name: data[c.name] for c in test_case.scoring_criteria}
+        return DynamicJudgeScore(case_id=case_id, scores=scores, reasoning=data.get("reasoning", ""))
+    model = _SCORE_MODEL[test_case.task_type]
+    return model(case_id=case_id, **data)

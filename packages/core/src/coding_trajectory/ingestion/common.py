@@ -1,4 +1,4 @@
-"""Common timestamp and payload normalization helpers."""
+"""Common timestamp, payload, and output normalization helpers."""
 
 from __future__ import annotations
 
@@ -11,6 +11,24 @@ from typing import Any, Mapping
 
 _EXIT_CODE_RE = re.compile(r"Process exited with code (?P<code>-?\d+)")
 _JSON_EXIT_CODE_RE = re.compile(r'"exit_code"\s*:\s*(?P<code>-?\d+)')
+
+
+def prune_nones(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop None values from a dict (shallow)."""
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def format_datetime(value: Any) -> str | None:
+    """Serialize a datetime to ISO-8601 UTC string, or None."""
+    if value is None:
+        return None
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def normalize_project_key(value: str) -> str:
+    """Normalize an arbitrary project name to a lowercase slug."""
+    collapsed = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", value.strip())
+    return re.sub(r"[^a-zA-Z0-9]+", "-", collapsed).strip("-").lower()
 
 
 def compact_dict(data: Mapping[str, Any]) -> dict[str, Any]:

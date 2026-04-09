@@ -38,7 +38,7 @@ def test_project_list_calls_rpc(monkeypatch, capsys) -> None:
     assert payload["items"] == ["my-app", "other-project"]
 
 
-def test_project_name_lists_trajectories(monkeypatch, capsys) -> None:
+def test_project_trajectories_lists_trajectories(monkeypatch, capsys) -> None:
     responses = {
         ("trajectory.list", json.dumps({"project_name": "my-app"}, sort_keys=True)): {
             "items": [{"trajectory_id": "t1"}]
@@ -46,7 +46,7 @@ def test_project_name_lists_trajectories(monkeypatch, capsys) -> None:
     }
     _patch_dispatch(monkeypatch, responses)
 
-    exit_code = cli.main(["project", "my-app"])
+    exit_code = cli.main(["project", "trajectories", "my-app"])
 
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
@@ -83,26 +83,29 @@ def test_trajectory_overview_command_calls_rpc(monkeypatch, capsys) -> None:
     assert payload["sessions"][0]["turns"][0]["steps"][0]["type"] == "tool_call"
 
 
-def test_step_details_command_calls_rpc(monkeypatch, capsys) -> None:
+def test_step_detail_command_calls_rpc(monkeypatch, capsys) -> None:
     responses = {
-        ("step.details", json.dumps({"step_id": "step-1"}, sort_keys=True)): {
-            "step_id": "step-1",
-            "type": "tool_call",
-            "operations": ["Read"],
-            "shape": {
-                "tool_name": "Read",
-                "tool_input": {"file_path": "/src/foo.py"},
-                "tool_output": {"content": "..."},
-            },
-            "event_ids": ["e1", "e2"],
-        }
+        ("step.details", json.dumps({"step_ids": ["step-1"]}, sort_keys=True)): [
+            {
+                "step_id": "step-1",
+                "type": "tool_call",
+                "operations": ["Read"],
+                "shape": {
+                    "tool_name": "Read",
+                    "tool_input": {"file_path": "/src/foo.py"},
+                    "tool_output": {"content": "..."},
+                },
+                "event_ids": ["e1", "e2"],
+            }
+        ]
     }
     _patch_dispatch(monkeypatch, responses)
 
-    exit_code = cli.main(["step", "details", "step-1"])
+    exit_code = cli.main(["step", "detail", "step-1"])
 
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["step_id"] == "step-1"
-    assert payload["type"] == "tool_call"
-    assert payload["shape"]["tool_name"] == "Read"
+    assert isinstance(payload, list)
+    assert payload[0]["step_id"] == "step-1"
+    assert payload[0]["type"] == "tool_call"
+    assert payload[0]["shape"]["tool_name"] == "Read"

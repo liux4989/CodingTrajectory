@@ -18,9 +18,19 @@ _VARIANT_PREAMBLES: dict[ToolVariant, str] = {
     ToolVariant.CT_CLI: """\
 You have the `ct` CLI for exploring coding agent session logs. All commands return JSON.
 
-Run `ct --help` to see the full workflow, available commands, and their usage.
+The log file to analyze is at: {log_file}
 
-The log file to analyze is: {log_file}
+## Structured View
+Use this sequence to explore the log through enriched, post-processed structure:
+1. `ct project list`  → list all known projects; find the project and trajectory ID for the log above
+2. `ct trajectory overview <TRAJECTORY_ID>`  → session structure, step types, user requests — start here
+3. `ct step details <STEP_ID> [<STEP_ID> ...]`  → full detail for one or more steps (returns JSON array)
+
+## Raw View
+Only fall back to raw events when structured data is truncated or missing detail you need:
+1. `ct event scan <TRAJECTORY_ID> --type TYPE [--filter KEY=VALUE ...]`
+2. `ct event detail <EVENT_ID>`
+
 """,
 
     ToolVariant.TOOL_ASSISTED: """\
@@ -42,11 +52,11 @@ Common fields in each line vary by vendor but typically include:
 - Amp: thread-based, events with `type` field, parent_thread_id for subagents
 
 Use your available tools (Read, Grep, Bash, etc.) to explore the file.
+
+## Strategy
+Sample the first ~50 lines to identify the vendor and schema, then read selectively.
 """,
 
-    ToolVariant.READ_FILE: """\
-Analyze the coding agent log file at: {log_file}
-""",
 }
 
 
@@ -55,28 +65,46 @@ Analyze the coding agent log file at: {log_file}
 # ---------------------------------------------------------------------------
 
 _TASK_INSTRUCTIONS: dict[TaskType, str] = {
-    TaskType.SESSION_SUMMARY: """\
-Summarize this coding session log. Cover:
-- What was the user trying to accomplish?
-- What approach did the agent take?
-- What tools were used and in what sequence?
-- What was the final outcome?
-Provide a concise but comprehensive summary.""",
+    TaskType.SESSION_COMPACT: """\
+Given this coding-agent session log, generate a compact continuation summary that preserves the minimum sufficient state needed to continue the current task after context compression.
 
-    TaskType.SESSION_CONNECTION: """\
-Analyze the session connection map of this coding trajectory. Answer:
-- How many sessions exist and how are they related (parent/child, subagent, handoff)?
-- What is the overall task status in the big picture?
-- Draw the session topology (linear, branching, etc.)
-- What role does each session play?""",
+Include whichever of the following sections are relevant to the log (omit any that do not apply):
+- **Task**: the original request
+- **Progress**: what is done, what is in progress, and what is blocked (use a checklist format)
+- **Key decisions**: choices made and why (includes tradeoffs, pivots, rejected approaches)
+- **Critical context**: facts, discoveries, or environmental details needed to continue
+- **User constraints**: explicit preferences, boundaries, or requirements from the user
+- **Next steps**: what should happen next to move the task forward
+- **Files touched**: list files that were read or modified""",
 
-    TaskType.EFFORT_DISTRIBUTION: """\
-Analyze the effort distribution in this coding session. Break down into:
-- Planning: time/steps spent on planning, reading docs, understanding requirements
-- Executing: time/steps spent on actual code writing, file edits
-- Bug fixing: time/steps spent on debugging, error resolution, retries
-- Interactive refinement: time/steps spent on user feedback loops, iterations
-Provide counts and percentages for each category.""",
+    TaskType.ERROR_ROOT_CAUSE: """\
+The agent encountered one or more error-retry loops during this session. Analyze:
+- **Location**: Which step(s) contain the error loop? Identify by step ID or position.
+- **Root cause**: What was the underlying cause of the failure (not just the error message)?
+- **Retry count**: How many times did the agent retry before resolving (or giving up)?
+- **Resolution**: What change finally resolved the error? Or did the agent give up / work around it?
+- **Impact**: How much of the session was spent in error recovery vs. productive work?
+
+Start with the high-level session overview to locate error clusters, then drill into specific steps for details.""",
+
+    TaskType.SUBAGENT_DELEGATION: """\
+Analyze the subagent delegation pattern in this coding trajectory:
+- **Delegation inventory**: For each subagent spawned, what task was assigned and what was the parent's intent?
+- **Return analysis**: What did each subagent return to its parent? Was the result used correctly?
+- **Context fidelity**: Did any delegation lose important context (constraints, decisions, file state) in the handoff?
+- **Failure handling**: If a subagent failed, how did the parent respond (retry, delegate elsewhere, handle inline)?
+- **Topology**: Draw the delegation graph showing parent→child relationships and data flow direction.""",
+
+    TaskType.TOOL_FAILURE_REPORT: """\
+Extract every distinct tool invocation that failed during this session. For each failure report:
+- **Tool name**: Which tool was called?
+- **Input summary**: What was the tool asked to do (brief)?
+- **Error**: The actual error message or failure mode.
+- **Recovery**: Did the agent recover? How (retry with different input, alternative tool, skip)?
+- **Classification**: Categorize as: transient (retry fixed it), permanent (agent worked around it), or fatal (blocked progress).
+
+Only report actual tool failures — not lifecycle events, not successful calls, not internal framework messages.
+Ignore duplicate retries of the same failure; group them as one entry with a retry count.""",
 }
 
 
@@ -93,4 +121,4 @@ def build_prompt(task_type: TaskType, tool_variant: ToolVariant, log_file: str) 
     """
     preamble = _VARIANT_PREAMBLES[tool_variant].replace("{log_file}", log_file)
     instruction = _TASK_INSTRUCTIONS[task_type]
-    return f"{preamble}\n--- Task ---\n{instruction}"
+    return f"{preamble}\n--- Task Instructions ---\n{instruction}"

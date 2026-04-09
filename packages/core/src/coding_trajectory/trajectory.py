@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
+from coding_trajectory.ingestion.common import normalize_project_key as _normalize_project_key
 from coding_trajectory.ingestion.models import (
     EventType,
     Session,
@@ -30,9 +31,10 @@ def assemble_project_trajectories(project_identifier: str, sessions: list[Sessio
 
     trajectories: list[Trajectory] = []
     for component_sessions in components:
-        sorted_ids = sorted(str(s.session_id) for s in component_sessions)
-        component_sig = "|".join(sorted_ids)
-        trajectory_id = uuid5(NAMESPACE_URL, f"coding-trajectory:{key}:{component_sig}")
+        root = _root_session(component_sessions)
+        trajectory_id = root.session_id if root else min(
+            component_sessions, key=lambda s: (s.started_at, str(s.session_id))
+        ).session_id
         normalized_sessions = [
             session.model_copy(update={"trajectory_id": trajectory_id})
             for session in sorted(component_sessions, key=lambda item: (item.started_at, str(item.session_id)))
@@ -221,13 +223,6 @@ def _event_tool_name(event: Any) -> str | None:
     if isinstance(tool_name, str) and tool_name.strip():
         return tool_name
     return None
-
-
-def _normalize_project_key(value: str) -> str:
-    import re
-
-    collapsed = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", value.strip())
-    return re.sub(r"[^a-zA-Z0-9]+", "-", collapsed).strip("-").lower()
 
 
 def _root_session(sessions: list[Session]) -> Session | None:

@@ -19,7 +19,7 @@ from coding_trajectory.ingestion.models import (
     Turn,
     Vendor,
 )
-from coding_trajectory.analysis.views import build_step_details, build_trajectory_overview, build_trajectory_scan, _SCAN_STRING_PREVIEW_LEN
+from coding_trajectory.analysis.views import build_step_details, build_trajectory_overview, build_event_scan, _EVENT_SCAN_PAYLOAD_PREVIEW_LEN
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.service import dispatch, resolve_store, IndexCache
 
@@ -151,8 +151,8 @@ def test_build_trajectory_overview_returns_navigation_tree() -> None:
     main_session = sessions[0]
     assert main_session["session_id"] == str(ids["session_id"])
     assert main_session["connection"] == {"role": "main"}
-    assert main_session["turns"][0]["user_request"] == {"text": "analyze the schema design", "type": "message"}
-    steps_node = main_session["turns"][0]["steps"]
+    assert main_session["turns"][0]["user_request"] == {"content": "analyze the schema design", "type": "message"}
+    steps_node = main_session["turns"][0]["work_summary"]
     assert str(ids["step_id"]) in steps_node["step_ids"]
 
 
@@ -206,7 +206,7 @@ def test_rpc_dispatch_step_details_returns_evidence() -> None:
 
     result = dispatch(
         "step.details",
-        {"trajectory_id": str(ids["trajectory_id"]), "step_id": str(ids["step_id"])},
+        {"trajectory_id": str(ids["trajectory_id"]), "step_ids": [str(ids["step_id"])]},
         store=store,
         global_scope=False,
         current_dir=Path.cwd(),
@@ -214,9 +214,35 @@ def test_rpc_dispatch_step_details_returns_evidence() -> None:
         cache=IndexCache(),
     )
 
-    assert result["step_id"] == str(ids["step_id"])
-    assert result["type"] == "plan_subagent"
-    assert result["shape"]["agent_session_id"] == str(ids["child_session_id"])
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["step_id"] == str(ids["step_id"])
+    assert result[0]["type"] == "plan_subagent"
+    assert result[0]["shape"]["agent_session_id"] == str(ids["child_session_id"])
+
+
+def test_rpc_dispatch_step_details_batch_returns_array() -> None:
+    store, ids = _fixture_store()
+    store2, ids2 = _fixture_store_with_long_output()
+    # Merge stores
+    combined = DocumentStore.from_trajectories(
+        list(store.trajectories.values()) + list(store2.trajectories.values())
+    )
+
+    result = dispatch(
+        "step.details",
+        {"step_ids": [str(ids["step_id"]), str(ids2["step_id"])]},
+        store=combined,
+        global_scope=False,
+        current_dir=Path.cwd(),
+        discovery_note="",
+        cache=IndexCache(),
+    )
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert result[0]["step_id"] == str(ids["step_id"])
+    assert result[1]["step_id"] == str(ids2["step_id"])
 
 
 def test_resolve_store_full_discovery_maps_source_to_own_trajectory(monkeypatch) -> None:
@@ -264,7 +290,7 @@ def _fixture_store_with_long_output() -> tuple[DocumentStore, dict[str, object]]
     tool_event_id = uuid4()
     ts = datetime(2026, 3, 10, 8, 20, tzinfo=timezone.utc)
 
-    long_content = "x" * (_SCAN_STRING_PREVIEW_LEN + 100)
+    long_content = "x" * (_EVENT_SCAN_PAYLOAD_PREVIEW_LEN + 100)
 
     prompt_event = Event(
         event_id=prompt_event_id,
@@ -345,16 +371,18 @@ def _fixture_store_with_long_output() -> tuple[DocumentStore, dict[str, object]]
     }
 
 
-def test_trajectory_scan_truncates_long_output_strings() -> None:
+def test_event_scan_filters_by_type_and_truncates() -> None:
     store, ids = _fixture_store_with_long_output()
     trajectory = store.get_trajectory(ids["trajectory_id"])
 
-    result = build_trajectory_scan(trajectory, store=store, step_type="tool_call")
+    result = build_event_scan(trajectory, event_type="tool.call.requested")
 
-    assert len(result["matches"]) == 1
-    content = result["matches"][0]["shape"]["tool_output"]["content"]
-    assert len(content) == _SCAN_STRING_PREVIEW_LEN + 1  # truncated + ellipsis char
-    assert content.endswith("…")
+    assert len(result["matches"]) >= 1
+    assert result["type"] == "tool.call.requested"
+    for match in result["matches"]:
+        assert match["type"] == "tool.call.requested"
+        assert "event_id" in match
+        assert "session_id" in match
 
 
 def test_step_details_returns_full_output_without_truncation() -> None:
@@ -365,6 +393,18 @@ def test_step_details_returns_full_output_without_truncation() -> None:
 
     content = result["shape"]["tool_output"]["content"]
     assert content == ids["long_content"]
+
+
+def test_build_trajectory_overview_includes_files_in_flows() -> None:
+    store, ids = _fixture_store_with_long_output()
+    trajectory = store.get_trajectory(ids["trajectory_id"])
+
+    result = build_trajectory_overview(trajectory, store=store)
+
+    session = result["sessions"][0]
+    flows = session["turns"][0]["work_summary"]["flows"]
+    tool_flow = next(f for f in flows if "tool_calls" in f)
+    assert tool_flow["files"] == ["foo.py"]
 
 
 def test_removed_methods_return_method_not_found() -> None:

@@ -3,27 +3,48 @@ from __future__ import annotations
 import json
 import subprocess
 
-from .judge import _get_judge_system_prompt, build_judge_prompt, parse_judge_response
-from .models import AgentOutput, JudgeScore, TestCase
+from .judge import get_judge_prompt, get_judge_schema, build_judge_input, parse_judge_response
+from .models import AgentOutput, CompactJudgeScore, DynamicJudgeScore, JudgeScore, TestCase
 
 
-def run_judge(test_case: TestCase, output: AgentOutput, timeout: int = 120) -> JudgeScore:
-    """Invoke `claude -p` as an LLM judge and return a structured JudgeScore."""
-    system_prompt = _get_judge_system_prompt(test_case.task_type)
-    prompt = f"{system_prompt}\n\n{build_judge_prompt(test_case, output)}"
+def run_judge(test_case: TestCase, output: AgentOutput, timeout: int = 120) -> JudgeScore | CompactJudgeScore | DynamicJudgeScore:
+    """Invoke `claude -p` as an LLM judge and return a structured score."""
+    prompt = f"{get_judge_prompt(test_case)}\n\n{build_judge_input(output, test_case.reference_answer)}"
+    schema = get_judge_schema(test_case)
 
     cmd = [
         "claude",
         "--print", prompt,
         "--output-format", "json",
-        "--allowedTools", "",  # no tools — pure text completion
+        "--json-schema", json.dumps(schema),
+        "--allowedTools", "",
     ]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    proc_obj = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        stdout_data, stderr_data = proc_obj.communicate(timeout=timeout)
+    except KeyboardInterrupt:
+        proc_obj.terminate()
+        try:
+            proc_obj.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc_obj.kill()
+        raise
+    except subprocess.TimeoutExpired:
+        proc_obj.kill()
+        proc_obj.wait()
+        raise
 
-    if proc.returncode != 0:
-        raise RuntimeError(f"judge subprocess failed: {proc.stderr}")
+    if proc_obj.returncode != 0:
+        raise RuntimeError(f"judge subprocess failed: {stderr_data}")
 
-    data = json.loads(proc.stdout)
-    raw = data.get("result", proc.stdout)
-    return parse_judge_response(output.case_id, raw)
+    if not stdout_data or not stdout_data.strip():
+        raise RuntimeError("judge subprocess returned empty output")
+
+    # With --json-schema, claude puts validated output in "structured_output"
+    outer = json.loads(stdout_data)
+    result = outer.get("structured_output")
+    if result is None:
+        raise RuntimeError(f"judge response missing structured_output: {stdout_data[:200]}")
+
+    return parse_judge_response(output.case_id, result, test_case=test_case)

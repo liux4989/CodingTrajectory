@@ -83,8 +83,9 @@ def test_serialize_trajectory_detail_exposes_only_canonical_trajectory_fields() 
 
     payload = serialize_trajectory_detail(trajectory)
 
-    assert set(payload) == {"trajectory_id", "session_ids"}
+    assert set(payload) == {"trajectory_id", "session_ids", "vendors"}
     assert payload["session_ids"] == [str(session_a_id), str(session_b_id)]
+    assert payload["vendors"] == ["codex_cli"]
 
 
 def test_serialize_session_detail_exposes_only_canonical_session_fields() -> None:

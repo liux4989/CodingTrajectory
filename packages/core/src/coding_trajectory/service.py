@@ -13,20 +13,10 @@ from coding_trajectory.discovery import (
     discover_store,
     discover_store_from_file,
     format_discovery_sources,
-    normalize_project_key,
 )
+from coding_trajectory.ingestion.common import format_datetime, normalize_project_key, prune_nones
 from coding_trajectory.ingestion.models import Event, EventType, Session, Step, StepItem, Trajectory, Turn
 from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
-
-
-def format_datetime(value: Any) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat().replace("+00:00", "Z")
-
-
-def prune_nones(payload: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in payload.items() if value is not None}
 
 
 def serialize_trajectory_detail(trajectory: Trajectory) -> dict[str, Any]:
@@ -355,7 +345,7 @@ def dispatch(
     discovery_note: str,
     cache: IndexCache,
 ) -> Any:
-    from coding_trajectory.analysis.views import build_step_details, build_trajectory_overview, build_trajectory_scan
+    from coding_trajectory.analysis.views import build_step_details, build_trajectory_overview, build_event_scan
 
     if method == "trajectory.list":
         trajectories = resolve_collection(
@@ -414,11 +404,15 @@ def dispatch(
         return result
 
     if method == "step.details":
-        step_id = params.get("step_id")
-        if not step_id:
-            raise ValueError("missing required param: step_id")
-        step = resolve_resource(store, "step", step_id)
-        return build_step_details(step, store=store)
+        step_ids = params.get("step_ids")
+        if not step_ids:
+            raise ValueError("missing required param: step_ids")
+        if isinstance(step_ids, str):
+            step_ids = [step_ids]
+        return [
+            build_step_details(resolve_resource(store, "step", sid), store=store)
+            for sid in step_ids
+        ]
 
     if method == "event.detail":
         event_id = params.get("event_id")
@@ -427,12 +421,12 @@ def dispatch(
         event = resolve_resource(store, "event", event_id)
         return serialize_event_detail(event)
 
-    if method == "trajectory.scan":
+    if method == "event.scan":
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
-        step_type = params.get("type")
-        if not step_type:
+        event_type = params.get("type")
+        if not event_type:
             raise ValueError("missing required param: type")
         filters: list[str] = params.get("filters") or []
-        return build_trajectory_scan(trajectory, store=store, step_type=step_type, filters=filters)
+        return build_event_scan(trajectory, event_type=event_type, filters=filters)
 
     raise KeyError(method)

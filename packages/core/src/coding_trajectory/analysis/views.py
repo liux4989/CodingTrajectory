@@ -67,24 +67,24 @@ def _match_filter(shape: dict[str, Any], expr: str) -> bool:
         return resolved is _MISSING or resolved is None
     return str(resolved) == value
 
-from coding_trajectory.analysis.concepts import TOOL_CONCEPT_MAP
+from coding_trajectory.analysis.concepts import TOOL_CONCEPT_MAP, StepType
 from coding_trajectory.analysis.structure import build_trajectory_structure
 from coding_trajectory.analysis.structure_models import TrajectoryStructure
-from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, Trajectory, Turn
+from coding_trajectory.ingestion.common import prune_nones
+from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, ToolStatus, Trajectory, Turn
 from coding_trajectory.query import DocumentStore
-from coding_trajectory.service import prune_nones
 
 
 def _parse_user_request_info(raw: str) -> dict[str, Any]:
     """Classify raw user request text into a structured dict."""
     m = _COMMAND_NAME_RE.search(raw)
     if m:
-        return {"type": "command", "name": m.group(1).strip()}
+        return {"type": "command", "content": m.group(1).strip()}
     stripped = raw.strip()
     # System-only noise (e.g. empty local-command-stdout wrappers)
     if not stripped or re.fullmatch(r"<[^>]+>\s*</[^>]+>", stripped):
-        return {"type": "system"}
-    return {"type": "message", "text": stripped}
+        return {"type": "system", "content": None}
+    return {"type": "message", "content": stripped}
 
 
 def _extract_user_request(store: DocumentStore, turn: Turn) -> dict[str, Any] | None:
@@ -136,20 +136,20 @@ def _is_low_value_turn(steps: list, user_request: dict[str, Any] | None) -> bool
     if not steps:
         return True
     if user_request and user_request.get("type") == "command":
-        return user_request.get("name") in _LOW_VALUE_COMMANDS
+        return user_request.get("content") in _LOW_VALUE_COMMANDS
     return False
 
 
-def _classify_step(step: Step) -> str:
+def _classify_step(step: Step) -> StepType:
     tool_items = [item for item in step.items if isinstance(item, StepToolItem)]
     if not tool_items:
-        return "assistant_response"
+        return StepType.ASSISTANT_RESPONSE
     for item in tool_items:
         if item.tool_name:
             concept = TOOL_CONCEPT_MAP.get(item.tool_name)
-            if concept:
+            if concept is not None:
                 return concept
-    return "tool_call"
+    return StepType.TOOL_CALL
 
 
 def _session_connection(session: Session, *, structure: TrajectoryStructure) -> dict[str, Any]:
@@ -200,21 +200,49 @@ def _session_nav_node(session: Session, *, store: DocumentStore, structure: Traj
     }
 
 
-_TEXT_PREVIEW_LEN = 120
+_TEXT_PREVIEW_LEN = 300
 
 
-def _collapse_tool_sequence(tools: list[str]) -> str:
-    """Collapse a flat list of tool names into a compact flow string, e.g. 'Read → Grep×3 → Edit×2'."""
+def _collapse_tool_sequence(tools: list[str], failed: set[int]) -> str:
+    """Collapse a flat list of tool names into a compact flow string, e.g. 'Read → Grep×3 → Edit×2'.
+
+    Indices in *failed* mark tools that errored; they are annotated with ``!``,
+    e.g. ``Edit!`` or ``Edit!×2``.
+    """
     groups: list[str] = []
     i = 0
     while i < len(tools):
         tool = tools[i]
         count = 1
-        while i + count < len(tools) and tools[i + count] == tool:
+        is_failed = i in failed
+        while i + count < len(tools) and tools[i + count] == tool and (i + count in failed) == is_failed:
             count += 1
-        groups.append(f"{tool}×{count}" if count > 1 else tool)
+        suffix = "!" if is_failed else ""
+        groups.append(f"{tool}{suffix}×{count}" if count > 1 else f"{tool}{suffix}")
         i += count
     return " → ".join(groups)
+
+
+_FILE_PATH_KEYS = ("file_path", "path", "file", "pattern")
+
+
+def _extract_files(items: list) -> list[str]:
+    """Extract unique file basenames from tool input fields."""
+    from coding_trajectory.ingestion.models import StepToolItem
+    import os
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if not isinstance(item, StepToolItem) or not isinstance(item.input, dict):
+            continue
+        for key in _FILE_PATH_KEYS:
+            val = item.input.get(key)
+            if isinstance(val, str) and val:
+                name = os.path.basename(val.rstrip("/"))
+                if name and name not in seen:
+                    seen.add(name)
+                    result.append(name)
+    return result
 
 
 def _build_flows(steps: list[Step]) -> list[dict[str, Any]]:
@@ -225,25 +253,40 @@ def _build_flows(steps: list[Step]) -> list[dict[str, Any]]:
     """
     result: list[dict[str, Any]] = []
     pending_tools: list[str] = []
+    pending_failed: set[int] = set()
+    pending_items: list[StepToolItem] = []
+
+    def _flush_tools() -> None:
+        if not pending_tools:
+            return
+        entry: dict[str, Any] = {"tool_calls": _collapse_tool_sequence(pending_tools, pending_failed)}
+        files = _extract_files(pending_items)
+        if files:
+            entry["files"] = files
+        result.append(entry)
+        pending_tools.clear()
+        pending_failed.clear()
+        pending_items.clear()
 
     for step in steps:
         tool_items = [item for item in step.items if isinstance(item, StepToolItem)]
         if tool_items:
             for item in tool_items:
                 if item.tool_name:
+                    idx = len(pending_tools)
                     pending_tools.append(item.tool_name)
+                    if item.status == ToolStatus.FAILED:
+                        pending_failed.add(idx)
+            pending_items.extend(tool_items)
         else:
-            if pending_tools:
-                result.append({"tool_calls": _collapse_tool_sequence(pending_tools)})
-                pending_tools = []
+            _flush_tools()
             text_items = [item for item in step.items if isinstance(item, StepTextItem)]
             text = "\n".join(item.text for item in text_items if item.text).strip()
             if text:
                 preview = text[:_TEXT_PREVIEW_LEN] + ("…" if len(text) > _TEXT_PREVIEW_LEN else "")
                 result.append({"agent_response": preview})
 
-    if pending_tools:
-        result.append({"tool_calls": _collapse_tool_sequence(pending_tools)})
+    _flush_tools()
 
     return result
 
@@ -255,7 +298,7 @@ def _turn_nav_node(turn: Turn, *, store: DocumentStore) -> dict[str, Any] | None
     return prune_nones({
         "turn_id": str(turn.turn_id),
         "user_request": user_request,
-        "steps": {
+        "work_summary": {
             "flows": _build_flows(turn.steps),
             "step_ids": [str(step.step_id) for step in turn.steps],
         },
@@ -347,16 +390,16 @@ def build_step_details(step: Step, *, store: DocumentStore) -> dict[str, Any]:
     step_type = _classify_step(step)
     tool_items = [item for item in step.items if isinstance(item, StepToolItem)]
 
-    if step_type == "assistant_response":
+    if step_type == StepType.ASSISTANT_RESPONSE:
         operations: list[str] = ["text_reply"]
         shape = _assistant_response_shape(step)
-    elif step_type == "plan_subagent":
+    elif step_type == StepType.PLAN_SUBAGENT:
         operations = ["spawn", "collect_result"]
         shape = _plan_subagent_shape(step, store=store)
-    elif step_type == "todo_list":
+    elif step_type == StepType.TODO_LIST:
         operations = ["update"]
         shape = _todo_list_shape(tool_items)
-    elif step_type == "session_handoff":
+    elif step_type == StepType.SESSION_HANDOFF:
         operations = ["handoff"]
         shape = _session_handoff_shape(step, store=store)
     else:
@@ -373,75 +416,65 @@ def build_step_details(step: Step, *, store: DocumentStore) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Trajectory scan
+# Event scan
 # ---------------------------------------------------------------------------
 
-_SCAN_STRING_PREVIEW_LEN = 300
+_EVENT_SCAN_PAYLOAD_PREVIEW_LEN = 300
 
 
-def _truncate_shape_strings(obj: Any, event_ids: list | None = None, max_len: int = _SCAN_STRING_PREVIEW_LEN) -> Any:
-    """Recursively truncate long strings in a shape dict for scan output.
-
-    Truncated strings become inline markers like ``[5,234 chars → event.detail <id>]``
-    so callers can resolve full content via ``event.detail`` only when needed.
-    """
+def _truncate_payload_strings(obj: Any, max_len: int = _EVENT_SCAN_PAYLOAD_PREVIEW_LEN) -> Any:
+    """Recursively truncate long strings in an event payload for scan output."""
     if isinstance(obj, str):
         if len(obj) > max_len:
-            if event_ids:
-                return _truncation_marker(len(obj), event_ids)
             return f"[{len(obj):,} chars]"
         return obj
     if isinstance(obj, dict):
-        return {k: _truncate_shape_strings(v, event_ids, max_len) for k, v in obj.items()}
+        return {k: _truncate_payload_strings(v, max_len) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_truncate_shape_strings(v, event_ids, max_len) for v in obj]
+        return [_truncate_payload_strings(v, max_len) for v in obj]
     return obj
 
 
-def build_trajectory_scan(
+def build_event_scan(
     trajectory: Trajectory,
     *,
-    store: DocumentStore,
-    step_type: str,
+    event_type: str,
     filters: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Flatten the trajectory tree and return all steps matching *step_type*.
+    """Flatten all events across sessions and return those matching *event_type*.
 
     Each ``--filter key=value`` expression is ANDed and applied against the
-    step's ``shape`` dict.  Supports dot-path keys (e.g. ``tool_output.error``),
-    ``key=*`` (exists), and ``key=!`` (absent).
+    event's ``payload`` dict.  Supports dot-path keys, ``key=*`` (exists),
+    and ``key=!`` (absent).
     """
-    # Assistant-response and plan-subagent shapes contain narrative text —
-    # truncating them would hide meaning. Only truncate tool_call shapes.
-    _NO_TRUNCATE_TYPES = {"assistant_response", "plan_subagent"}
+    from coding_trajectory.ingestion.models import EventType
+
+    # Validate event_type against known values
+    valid_types = {e.value for e in EventType}
+    if event_type not in valid_types:
+        valid = ", ".join(sorted(valid_types))
+        raise ValueError(f"unknown event type {event_type!r}. Valid types: {valid}")
+
     matches: list[dict[str, Any]] = []
 
     for session in trajectory.sessions:
-        for turn in session.turns:
-            user_request = _extract_user_request(store, turn)
-            for step in turn.steps:
-                if _classify_step(step) != step_type:
+        for event in session.events:
+            if event.type.value != event_type:
+                continue
+            payload = event.payload
+            if filters:
+                if not all(_match_filter(payload, f) for f in filters):
                     continue
-                detail = build_step_details(step, store=store)
-                shape: dict[str, Any] = detail.get("shape") or {}
-                if filters:
-                    if not all(_match_filter(shape, f) for f in filters):
-                        continue
-                if step_type in _NO_TRUNCATE_TYPES:
-                    truncated_shape = shape
-                else:
-                    truncated_shape = _truncate_shape_strings(shape, event_ids=step.event_ids)
-                matches.append(prune_nones({
-                    "step_id": str(step.step_id),
-                    "session_id": str(session.session_id),
-                    "turn_id": str(turn.turn_id),
-                    "user_request": user_request,
-                    "shape": truncated_shape or None,
-                    "event_ids": [str(eid) for eid in step.event_ids] or None,
-                }))
+            matches.append(prune_nones({
+                "event_id": str(event.event_id),
+                "session_id": str(event.session_id),
+                "timestamp": event.timestamp.isoformat().replace("+00:00", "Z") if event.timestamp else None,
+                "type": event.type.value,
+                "payload": _truncate_payload_strings(payload) or None,
+            }))
 
     return {
         "trajectory_id": str(trajectory.trajectory_id),
-        "type": step_type,
+        "type": event_type,
         "matches": matches,
     }

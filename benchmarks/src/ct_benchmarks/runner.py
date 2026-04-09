@@ -6,7 +6,6 @@ from .models import (
     AgentOutput,
     ArenaComparison,
     BenchmarkRun,
-    JudgeScore,
     TaskType,
     TestCase,
     ToolVariant,
@@ -58,8 +57,7 @@ def summarize_run(run: BenchmarkRun) -> dict:
         if case is None:
             continue
         variant = case.tool_variant.value
-        avg = (score.completeness + score.accuracy + score.structure + score.insight) / 4
-        scores_by_variant.setdefault(variant, []).append(avg)
+        scores_by_variant.setdefault(variant, []).append(score.average())
 
     arena_wins: dict[str, int] = {}
     for comp in run.arena_comparisons:
