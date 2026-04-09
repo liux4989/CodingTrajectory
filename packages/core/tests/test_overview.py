@@ -675,13 +675,17 @@ def test_build_trajectory_overview_uses_teammate_summary_for_team_turns() -> Non
             "summary": "Task 1 done, 2 and 3 unblocked",
         }
     ]
-    assert turn_node["teammate_summary"]["task"] == [
+    assert turn_node["teammate_summary"]["lead_flow"] == [
+        {
+            "type": "lead_tool_calls",
+            "tool_calls": "TaskUpdate",
+        }
+    ]
+    assert turn_node["teammate_summary"]["tasks"] == [
         {
             "task_id": "1",
             "member_id": "infra",
-            "summary": "Task 1 done, 2 and 3 unblocked",
             "status": "completed",
-            "updated_fields": ["status"],
         }
     ]
 
@@ -770,12 +774,450 @@ def test_build_trajectory_overview_filters_team_lead_user_request_content() -> N
 
     result = build_trajectory_overview(trajectory, store=store)
 
-    user_request = result["sessions"][0]["turns"][0]["user_request"]
-    assert user_request == {
+    turn_node = result["sessions"][0]["turns"][0]
+    lead_flow = result["sessions"][0]["turns"][0]["teammate_summary"]["lead_flow"]
+    assert "user_request" not in turn_node
+    assert lead_flow == [
+        {
+            "type": "teammate_update",
+            "member_id": "yaml-fix",
+            "summary": "Task 4 done: YAMLs wrapped in execution",
+            "task_id": "4",
+        },
+        {
+            "type": "teammate_update",
+            "member_id": "infra",
+            "summary": "Task 1 done, 2 and 3 unblocked",
+            "task_id": "1",
+        },
+        {
+            "type": "lead_status",
+            "summary": "received update",
+        },
+    ]
+
+
+def test_build_trajectory_overview_collapses_followup_team_lead_turns() -> None:
+    trajectory_id = uuid4()
+    session_id = uuid4()
+    first_turn_id = uuid4()
+    second_turn_id = uuid4()
+    first_step_id = uuid4()
+    second_step_id = uuid4()
+    human_event_id = uuid4()
+    lead_event_id = uuid4()
+    ts = datetime(2026, 4, 7, 10, 56, tzinfo=timezone.utc)
+    ts_followup = datetime(2026, 4, 7, 10, 57, tzinfo=timezone.utc)
+
+    human_event = Event(
+        event_id=human_event_id,
+        session_id=session_id,
+        timestamp=ts,
+        type=EventType.USER_PROMPT_SUBMITTED,
+        vendor_source=Vendor.CLAUDE_CODE,
+        actor="user",
+        payload={"text": "create a team to implement these"},
+    )
+    lead_event = Event(
+        event_id=lead_event_id,
+        session_id=session_id,
+        timestamp=ts_followup,
+        type=EventType.USER_PROMPT_SUBMITTED,
+        vendor_source=Vendor.CLAUDE_CODE,
+        actor="user",
+        payload={
+            "text": (
+                '<teammate-message teammate_id="infra" color="blue" summary="Task 1 done, 2 and 3 unblocked">\n'
+                "Task #1 complete.\n"
+                "</teammate-message>\n"
+                '<teammate-message teammate_id="login" color="green" summary="Task #2 LoginPage complete">\n'
+                "Task #2 complete.\n"
+                "</teammate-message>"
+            )
+        },
+    )
+
+    first_turn = Turn(
+        turn_id=first_turn_id,
+        session_id=session_id,
+        sequence=0,
+        started_at=ts,
+        ended_at=ts,
+        user_request_event_id=human_event_id,
+        event_ids=[human_event_id],
+        steps=[
+            Step(
+                step_id=first_step_id,
+                session_id=session_id,
+                turn_id=first_turn_id,
+                sequence=0,
+                timestamp=ts,
+                vendor=Vendor.CLAUDE_CODE,
+                items=[StepTextItem(text="Team is running.", event_ids=[human_event_id])],
+                event_ids=[human_event_id],
+            )
+        ],
+        team_state=TeamTurnState(
+            members=[TeamMemberState(member_id="infra", color="blue")],
+            tasks=[TeamTaskState(task_id="1", title="Setup React Router", status="created")],
+        ),
+    )
+    second_turn = Turn(
+        turn_id=second_turn_id,
+        session_id=session_id,
+        sequence=1,
+        started_at=ts_followup,
+        ended_at=ts_followup,
+        user_request_event_id=lead_event_id,
+        event_ids=[lead_event_id],
+        steps=[
+            Step(
+                step_id=second_step_id,
+                session_id=session_id,
+                turn_id=second_turn_id,
+                sequence=0,
+                timestamp=ts_followup,
+                vendor=Vendor.CLAUDE_CODE,
+                items=[StepTextItem(text="All 4 agents have completed.", event_ids=[lead_event_id])],
+                event_ids=[lead_event_id],
+            )
+        ],
+        team_state=TeamTurnState(
+            members=[
+                TeamMemberState(member_id="infra", color="blue", summary="Task 1 done, 2 and 3 unblocked"),
+                TeamMemberState(member_id="login", color="green", summary="Task #2 LoginPage complete"),
+            ],
+            tasks=[
+                TeamTaskState(task_id="1", member_id="infra", status="completed", summary="Task 1 done, 2 and 3 unblocked"),
+                TeamTaskState(task_id="2", member_id="login", status="completed", summary="Task #2 LoginPage complete"),
+            ],
+        ),
+    )
+    session = Session(
+        session_id=session_id,
+        trajectory_id=trajectory_id,
+        vendor=Vendor.CLAUDE_CODE,
+        agent_name="main",
+        started_at=ts,
+        ended_at=ts_followup,
+        events=[human_event, lead_event],
+        turns=[first_turn, second_turn],
+    )
+    trajectory = Trajectory(
+        trajectory_id=trajectory_id,
+        project_identifier="legion",
+        summary=TrajectorySummary(
+            root_session_id=session_id,
+            started_at=ts,
+            ended_at=ts_followup,
+            session_count=1,
+            turn_count=2,
+            vendors=[Vendor.CLAUDE_CODE],
+        ),
+        edges=[],
+        sessions=[session],
+    )
+    store = DocumentStore.from_trajectories([trajectory])
+
+    result = build_trajectory_overview(trajectory, store=store)
+
+    turns = result["sessions"][0]["turns"]
+    assert len(turns) == 1
+    turn_node = turns[0]
+    assert turn_node["turn_id"] == str(first_turn_id)
+    assert turn_node["user_request"] == {
         "type": "message",
-        "source": "team_lead",
-        "content": "yaml-fix: Task 4 done: YAMLs wrapped in execution\ninfra: Task 1 done, 2 and 3 unblocked",
+        "source": "human_user",
+        "content": "create a team to implement these",
     }
+    assert turn_node["teammate_summary"]["step_ids"] == [str(first_step_id), str(second_step_id)]
+    assert turn_node["teammate_summary"]["members"] == [
+        {"member_id": "infra", "color": "blue", "summary": "Task 1 done, 2 and 3 unblocked"},
+        {"member_id": "login", "color": "green", "summary": "Task #2 LoginPage complete"},
+    ]
+    assert turn_node["teammate_summary"]["tasks"] == [
+        {"task_id": "1", "title": "Setup React Router", "status": "completed", "member_id": "infra"},
+        {"task_id": "2", "status": "completed", "member_id": "login"},
+    ]
+    assert turn_node["teammate_summary"]["lead_flow"] == [
+        {
+            "type": "lead_status",
+            "summary": "Team is running.",
+        },
+        {
+            "type": "teammate_update",
+            "member_id": "infra",
+            "summary": "Task 1 done, 2 and 3 unblocked",
+            "task_id": "1",
+        },
+        {
+            "type": "teammate_update",
+            "member_id": "login",
+            "summary": "Task #2 LoginPage complete",
+            "task_id": "2",
+        },
+        {
+            "type": "lead_status",
+            "summary": "All 4 agents have completed.",
+        },
+    ]
+
+
+def test_build_trajectory_overview_collapsed_members_merge_agent_aliases() -> None:
+    trajectory_id = uuid4()
+    session_id = uuid4()
+    first_turn_id = uuid4()
+    second_turn_id = uuid4()
+    first_step_id = uuid4()
+    second_step_id = uuid4()
+    first_event_id = uuid4()
+    second_event_id = uuid4()
+    member_session_id = uuid4()
+    ts = datetime(2026, 4, 7, 10, 56, tzinfo=timezone.utc)
+    ts_followup = datetime(2026, 4, 7, 10, 57, tzinfo=timezone.utc)
+
+    first_event = Event(
+        event_id=first_event_id,
+        session_id=session_id,
+        timestamp=ts,
+        type=EventType.USER_PROMPT_SUBMITTED,
+        vendor_source=Vendor.CLAUDE_CODE,
+        actor="user",
+        payload={"text": "create a team to implement these"},
+    )
+    second_event = Event(
+        event_id=second_event_id,
+        session_id=session_id,
+        timestamp=ts_followup,
+        type=EventType.USER_PROMPT_SUBMITTED,
+        vendor_source=Vendor.CLAUDE_CODE,
+        actor="user",
+        payload={
+            "text": (
+                '<teammate-message teammate_id="infra" color="blue" summary="Task 1 done">\n'
+                "Task #1 complete.\n"
+                "</teammate-message>"
+            )
+        },
+    )
+
+    first_turn = Turn(
+        turn_id=first_turn_id,
+        session_id=session_id,
+        sequence=0,
+        started_at=ts,
+        ended_at=ts,
+        user_request_event_id=first_event_id,
+        event_ids=[first_event_id],
+        steps=[
+            Step(
+                step_id=first_step_id,
+                session_id=session_id,
+                turn_id=first_turn_id,
+                sequence=0,
+                timestamp=ts,
+                vendor=Vendor.CLAUDE_CODE,
+                items=[StepTextItem(text="Team is running.", event_ids=[first_event_id])],
+                event_ids=[first_event_id],
+            )
+        ],
+        team_state=TeamTurnState(
+            members=[
+                TeamMemberState(
+                    member_id="infra@taskbucket-impl",
+                    name="infra",
+                    team_name="taskbucket-impl",
+                    agent_type="general-purpose",
+                )
+            ],
+            tasks=[TeamTaskState(task_id="1", title="Setup React Router", status="created")],
+        ),
+    )
+    second_turn = Turn(
+        turn_id=second_turn_id,
+        session_id=session_id,
+        sequence=1,
+        started_at=ts_followup,
+        ended_at=ts_followup,
+        user_request_event_id=second_event_id,
+        event_ids=[second_event_id],
+        steps=[
+            Step(
+                step_id=second_step_id,
+                session_id=session_id,
+                turn_id=second_turn_id,
+                sequence=0,
+                timestamp=ts_followup,
+                vendor=Vendor.CLAUDE_CODE,
+                items=[StepTextItem(text="Infra finished.", event_ids=[second_event_id])],
+                event_ids=[second_event_id],
+            )
+        ],
+        team_state=TeamTurnState(
+            members=[
+                TeamMemberState(
+                    member_id="infra",
+                    color="blue",
+                    summary="Task 1 done",
+                    session_id=member_session_id,
+                )
+            ],
+            tasks=[TeamTaskState(task_id="1", member_id="infra", status="completed", summary="Task 1 done")],
+        ),
+    )
+    session = Session(
+        session_id=session_id,
+        trajectory_id=trajectory_id,
+        vendor=Vendor.CLAUDE_CODE,
+        agent_name="main",
+        started_at=ts,
+        ended_at=ts_followup,
+        events=[first_event, second_event],
+        turns=[first_turn, second_turn],
+    )
+    trajectory = Trajectory(
+        trajectory_id=trajectory_id,
+        project_identifier="legion",
+        summary=TrajectorySummary(
+            root_session_id=session_id,
+            started_at=ts,
+            ended_at=ts_followup,
+            session_count=1,
+            turn_count=2,
+            vendors=[Vendor.CLAUDE_CODE],
+        ),
+        edges=[],
+        sessions=[session],
+    )
+    store = DocumentStore.from_trajectories([trajectory])
+
+    result = build_trajectory_overview(trajectory, store=store)
+
+    teammate_summary = result["sessions"][0]["turns"][0]["teammate_summary"]
+    assert teammate_summary["members"] == [
+        {
+            "member_id": "infra@taskbucket-impl",
+            "name": "infra",
+            "team_name": "taskbucket-impl",
+            "agent_type": "general-purpose",
+            "color": "blue",
+            "summary": "Task 1 done",
+            "session_id": str(member_session_id),
+        }
+    ]
+    assert teammate_summary["tasks"] == [
+        {
+            "task_id": "1",
+            "title": "Setup React Router",
+            "status": "completed",
+            "member_id": "infra",
+        }
+    ]
+
+
+def test_build_trajectory_overview_classifies_meaningful_lead_text_events() -> None:
+    trajectory_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+    prompt_event_id = uuid4()
+    ts = datetime(2026, 4, 7, 10, 56, tzinfo=timezone.utc)
+
+    prompt_event = Event(
+        event_id=prompt_event_id,
+        session_id=session_id,
+        timestamp=ts,
+        type=EventType.USER_PROMPT_SUBMITTED,
+        vendor_source=Vendor.CLAUDE_CODE,
+        actor="user",
+        payload={"text": "create a team to implement these"},
+    )
+    turn = Turn(
+        turn_id=turn_id,
+        session_id=session_id,
+        sequence=0,
+        started_at=ts,
+        ended_at=ts,
+        user_request_event_id=prompt_event_id,
+        event_ids=[prompt_event_id],
+        steps=[
+            Step(
+                step_id=uuid4(),
+                session_id=session_id,
+                turn_id=turn_id,
+                sequence=0,
+                timestamp=ts,
+                vendor=Vendor.CLAUDE_CODE,
+                items=[StepTextItem(text="Good progress. Still waiting on home.", event_ids=[prompt_event_id])],
+                event_ids=[prompt_event_id],
+            ),
+            Step(
+                step_id=uuid4(),
+                session_id=session_id,
+                turn_id=turn_id,
+                sequence=1,
+                timestamp=ts,
+                vendor=Vendor.CLAUDE_CODE,
+                items=[StepTextItem(text="Clean. Let me quickly check the key files landed correctly.", event_ids=[prompt_event_id])],
+                event_ids=[prompt_event_id],
+            ),
+            Step(
+                step_id=uuid4(),
+                session_id=session_id,
+                turn_id=turn_id,
+                sequence=2,
+                timestamp=ts,
+                vendor=Vendor.CLAUDE_CODE,
+                items=[StepTextItem(text="Error: structured messages cannot be broadcast (to: \"*\")", event_ids=[prompt_event_id])],
+                event_ids=[prompt_event_id],
+            ),
+        ],
+        team_state=TeamTurnState(
+            members=[TeamMemberState(member_id="infra")],
+            tasks=[],
+        ),
+    )
+    session = Session(
+        session_id=session_id,
+        trajectory_id=trajectory_id,
+        vendor=Vendor.CLAUDE_CODE,
+        agent_name="main",
+        started_at=ts,
+        ended_at=ts,
+        events=[prompt_event],
+        turns=[turn],
+    )
+    trajectory = Trajectory(
+        trajectory_id=trajectory_id,
+        project_identifier="legion",
+        summary=TrajectorySummary(
+            root_session_id=session_id,
+            started_at=ts,
+            ended_at=ts,
+            session_count=1,
+            turn_count=1,
+            vendors=[Vendor.CLAUDE_CODE],
+        ),
+        edges=[],
+        sessions=[session],
+    )
+    store = DocumentStore.from_trajectories([trajectory])
+
+    result = build_trajectory_overview(trajectory, store=store)
+
+    assert result["sessions"][0]["turns"][0]["teammate_summary"]["lead_flow"] == [
+        {
+            "type": "lead_status",
+            "summary": "Good progress. Still waiting on home.",
+        },
+        {
+            "type": "lead_check_result",
+            "summary": "Clean. Let me quickly check the key files landed correctly.",
+        },
+        {
+            "type": "lead_error",
+            "summary": "Error: structured messages cannot be broadcast (to: \"*\")",
+        },
+    ]
 
 
 def test_build_trajectory_overview_resolves_teammate_member_session_id() -> None:
@@ -859,8 +1301,15 @@ def test_build_trajectory_overview_resolves_teammate_member_session_id() -> None
 
     result = build_trajectory_overview(trajectory, store=store)
 
-    members = result["sessions"][0]["turns"][0]["teammate_summary"]["members"]
+    teammate_summary = result["sessions"][0]["turns"][0]["teammate_summary"]
+    members = teammate_summary["members"]
     assert members == [{"member_id": "infra@alpha", "name": "infra", "session_id": str(child_session_id)}]
+    assert teammate_summary["lead_flow"] == [
+        {
+            "type": "lead_status",
+            "summary": "team update",
+        }
+    ]
 
 
 def test_build_trajectory_overview_resolves_teammate_member_session_id_from_role_and_timing() -> None:
@@ -962,8 +1411,15 @@ def test_build_trajectory_overview_resolves_teammate_member_session_id_from_role
 
     result = build_trajectory_overview(trajectory, store=store)
 
-    members = result["sessions"][0]["turns"][0]["teammate_summary"]["members"]
+    teammate_summary = result["sessions"][0]["turns"][0]["teammate_summary"]
+    members = teammate_summary["members"]
     assert members == [{"member_id": "infra", "session_id": str(new_child_session_id)}]
+    assert teammate_summary["lead_flow"] == [
+        {
+            "type": "lead_status",
+            "summary": "team update",
+        }
+    ]
 
 
 def test_build_trajectory_overview_omits_spawned_child_sessions() -> None:

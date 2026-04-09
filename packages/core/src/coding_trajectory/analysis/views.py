@@ -332,22 +332,149 @@ def _session_nav_node(
     structure: TrajectoryStructure,
     member_session_lookup: dict[str, list[_MemberSessionCandidate]],
 ) -> dict[str, Any]:
-    turns = [
-        n
-        for turn in session.turns
-        if (
-            n := _turn_nav_node(
-                turn,
-                session=session,
-                store=store,
-                structure=structure,
-                member_session_lookup=member_session_lookup,
-            )
-        ) is not None
-    ]
+    turns: list[dict[str, Any]] = []
+    pending_teammate: dict[str, Any] | None = None
+
+    for turn in session.turns:
+        node = _turn_nav_node(
+            turn,
+            session=session,
+            store=store,
+            structure=structure,
+            member_session_lookup=member_session_lookup,
+        )
+        if node is None:
+            continue
+
+        if "teammate_summary" not in node:
+            if pending_teammate is not None:
+                turns.append(pending_teammate)
+                pending_teammate = None
+            turns.append(node)
+            continue
+
+        request = node.get("user_request")
+        request_source = request.get("source") if isinstance(request, dict) else None
+        if pending_teammate is None:
+            pending_teammate = node
+            continue
+
+        if request_source == "human_user":
+            turns.append(pending_teammate)
+            pending_teammate = node
+            continue
+
+        pending_teammate = _merge_teammate_turn_nodes(pending_teammate, node)
+
+    if pending_teammate is not None:
+        turns.append(pending_teammate)
+
     return {
         "turns": turns,
     }
+
+
+def _merge_ordered_unique(existing: list[str], incoming: list[str]) -> list[str]:
+    seen = set(existing)
+    merged = list(existing)
+    for value in incoming:
+        if value not in seen:
+            seen.add(value)
+            merged.append(value)
+    return merged
+
+
+def _merge_member_records(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    merge_keys: list[set[str]] = []
+
+    for record in existing + incoming:
+        member_id = record.get("member_id")
+        if not isinstance(member_id, str) or not member_id:
+            continue
+
+        record_keys = set(_member_lookup_keys(member_id, record.get("name") if isinstance(record.get("name"), str) else None))
+        record_session_id = record.get("session_id") if isinstance(record.get("session_id"), str) else None
+
+        target_index: int | None = None
+        for idx, current in enumerate(merged):
+            current_session_id = current.get("session_id") if isinstance(current.get("session_id"), str) else None
+            if record_session_id and current_session_id and record_session_id == current_session_id:
+                target_index = idx
+                break
+            if record_keys and merge_keys[idx].intersection(record_keys):
+                target_index = idx
+                break
+
+        if target_index is None:
+            merged.append(dict(record))
+            merge_keys.append(record_keys)
+            continue
+
+        target = merged[target_index]
+        merge_keys[target_index].update(record_keys)
+        for key, value in record.items():
+            if key == "member_id" or value in (None, "", [], {}):
+                continue
+            target[key] = value
+
+    return merged
+
+
+def _merge_task_records(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for record in existing + incoming:
+        task_id = record.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            continue
+        if task_id not in merged:
+            merged[task_id] = dict(record)
+            order.append(task_id)
+            continue
+        target = merged[task_id]
+        for key, value in record.items():
+            if key == "task_id" or value in (None, "", {}, []):
+                continue
+            if key in {"blocked_by", "updated_fields"} and isinstance(value, list):
+                target[key] = _merge_ordered_unique(
+                    [item for item in target.get(key, []) if isinstance(item, str)],
+                    [item for item in value if isinstance(item, str)],
+                )
+            else:
+                target[key] = value
+    return [merged[task_id] for task_id in order]
+
+
+def _merge_teammate_turn_nodes(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    current_summary = current.get("teammate_summary")
+    incoming_summary = incoming.get("teammate_summary")
+    if not isinstance(current_summary, dict) or not isinstance(incoming_summary, dict):
+        return current
+
+    merged_summary = dict(current_summary)
+    merged_summary["lead_flow"] = [
+        *[item for item in current_summary.get("lead_flow", []) if isinstance(item, dict)],
+        *[item for item in incoming_summary.get("lead_flow", []) if isinstance(item, dict)],
+    ]
+    merged_summary["members"] = _merge_member_records(
+        [item for item in current_summary.get("members", []) if isinstance(item, dict)],
+        [item for item in incoming_summary.get("members", []) if isinstance(item, dict)],
+    )
+    merged_summary["tasks"] = _merge_task_records(
+        [item for item in current_summary.get("tasks", []) if isinstance(item, dict)],
+        [item for item in incoming_summary.get("tasks", []) if isinstance(item, dict)],
+    )
+    merged_summary["step_ids"] = _merge_ordered_unique(
+        [item for item in current_summary.get("step_ids", []) if isinstance(item, str)],
+        [item for item in incoming_summary.get("step_ids", []) if isinstance(item, str)],
+    )
+
+    merged = dict(current)
+    merged["teammate_summary"] = prune_nones(merged_summary)
+    if merged.get("user_request") is None:
+        merged.pop("user_request", None)
+    return merged
 
 
 def _build_member_session_lookup(trajectory: Trajectory) -> dict[str, list[_MemberSessionCandidate]]:
@@ -388,6 +515,9 @@ def _build_member_session_lookup(trajectory: Trajectory) -> dict[str, list[_Memb
 
 
 _TEXT_PREVIEW_LEN = 300
+_TEAM_TASK_ID_RE = re.compile(r"Task\s*#?\s*(\d+)", re.IGNORECASE)
+_LEAD_ERROR_RE = re.compile(r"\b(error|failed|failure|exception|traceback)\b", re.IGNORECASE)
+_LEAD_CHECK_RESULT_RE = re.compile(r"\b(clean|passed|success|succeeded|no output|all solid)\b", re.IGNORECASE)
 
 
 def _collapse_tool_sequence(tools: list[str], failed: set[int]) -> str:
@@ -478,6 +608,68 @@ def _build_flows(steps: list[Step]) -> list[dict[str, Any]]:
     return result
 
 
+def _build_lead_flow(turn: Turn, *, user_request: dict[str, Any] | None) -> list[dict[str, Any]]:
+    flow: list[dict[str, Any]] = []
+
+    if (
+        user_request
+        and user_request.get("type") == "message"
+        and user_request.get("source") == "team_lead"
+        and isinstance(user_request.get("content"), str)
+    ):
+        for raw_line in user_request["content"].splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            member_id, separator, summary = line.partition(":")
+            event = {
+                "type": "teammate_update",
+                "summary": line if not separator else summary.strip(),
+            }
+            if separator:
+                event["member_id"] = member_id.strip()
+                task_match = _TEAM_TASK_ID_RE.search(summary)
+                if task_match:
+                    event["task_id"] = task_match.group(1)
+            flow.append(event)
+
+    for item in _build_flows(turn.steps):
+        if "tool_calls" in item:
+            flow.append({"type": "lead_tool_calls", **item})
+        elif "agent_response" in item:
+            flow.extend(_build_lead_text_events(item["agent_response"]))
+
+    return flow
+
+
+def _build_lead_text_events(text: str) -> list[dict[str, Any]]:
+    normalized = text.strip()
+    if not normalized:
+        return []
+
+    # Preserve detailed wrap-up messages as responses instead of flattening them
+    # into status lines.
+    if len(normalized) > 160 or "\n\n" in normalized or any(token in normalized for token in ("|", "- `", "**")):
+        return [{"type": "lead_response", "agent_response": normalized}]
+
+    events: list[dict[str, Any]] = []
+    for raw_line in normalized.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[\-\*\u2022]\s*", "", line)
+        if not line:
+            continue
+        if _LEAD_ERROR_RE.search(line):
+            events.append({"type": "lead_error", "summary": line})
+        elif _LEAD_CHECK_RESULT_RE.search(line):
+            events.append({"type": "lead_check_result", "summary": line})
+        else:
+            events.append({"type": "lead_status", "summary": line})
+
+    return events or [{"type": "lead_response", "agent_response": normalized}]
+
+
 def _is_teammate_turn(session: Session, turn: Turn, *, user_request: dict[str, Any] | None) -> bool:
     if session.parent_session_id is not None:
         return False
@@ -491,7 +683,12 @@ def _build_teammate_summary(
     member_session_lookup: dict[str, list[_MemberSessionCandidate]],
 ) -> dict[str, Any]:
     if turn.team_state is None:
-        return {"members": [], "task": [], "step_ids": [str(step.step_id) for step in turn.steps]}
+        return {
+            "lead_flow": _build_lead_flow(turn, user_request=user_request),
+            "members": [],
+            "tasks": [],
+            "step_ids": [str(step.step_id) for step in turn.steps],
+        }
 
     members: list[dict[str, Any]] = []
     for member in turn.team_state.members:
@@ -507,10 +704,20 @@ def _build_teammate_summary(
                 member_data["session_id"] = session_id
         members.append(_prune_empty_collections(member_data))
     return {
+        "lead_flow": _build_lead_flow(turn, user_request=user_request),
         "members": members,
-        "task": [_prune_empty_collections(prune_nones(task.model_dump(mode="json"))) for task in turn.team_state.tasks],
+        "tasks": [_project_teammate_task(task.model_dump(mode="json")) for task in turn.team_state.tasks],
         "step_ids": [str(step.step_id) for step in turn.steps],
     }
+
+
+def _project_teammate_task(task: dict[str, Any]) -> dict[str, Any]:
+    return _prune_empty_collections(prune_nones({
+        "task_id": task.get("task_id"),
+        "title": task.get("title"),
+        "status": task.get("status"),
+        "member_id": task.get("member_id"),
+    }))
 
 
 def _member_lookup_keys(member_id: str, member_name: str | None) -> list[str]:
@@ -583,12 +790,15 @@ def _turn_nav_node(
     member_session_lookup: dict[str, list[_MemberSessionCandidate]],
 ) -> dict[str, Any] | None:
     user_request = _effective_user_request(store, turn, session=session, structure=structure)
+    visible_user_request = user_request
+    if isinstance(user_request, dict) and user_request.get("source") == "team_lead":
+        visible_user_request = None
     if _is_low_value_turn(turn.steps, user_request):
         return None
     if _is_teammate_turn(session, turn, user_request=user_request):
         return prune_nones({
             "turn_id": str(turn.turn_id),
-            "user_request": user_request,
+            "user_request": visible_user_request,
             "teammate_summary": _build_teammate_summary(
                 turn,
                 user_request=user_request,
