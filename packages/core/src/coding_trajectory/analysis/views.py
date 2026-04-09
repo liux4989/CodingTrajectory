@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 import re
 from typing import Any
 from uuid import UUID
@@ -34,6 +36,20 @@ def _truncate_with_ref(value: Any, event_ids: list, max_len: int = _STEP_DETAIL_
         return {k: _truncate_with_ref(v, event_ids, max_len) for k, v in value.items()}
     if isinstance(value, list):
         return [_truncate_with_ref(v, event_ids, max_len) for v in value]
+    return value
+
+
+def _prune_empty_collections(value: Any) -> Any:
+    if isinstance(value, dict):
+        pruned: dict[str, Any] = {}
+        for key, child in value.items():
+            child_pruned = _prune_empty_collections(child)
+            if child_pruned in (None, [], {}, ""):
+                continue
+            pruned[key] = child_pruned
+        return pruned
+    if isinstance(value, list):
+        return [_prune_empty_collections(child) for child in value]
     return value
 
 
@@ -73,21 +89,38 @@ from coding_trajectory.analysis.structure_models import TrajectoryStructure
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, ToolStatus, Trajectory, Turn
 from coding_trajectory.query import DocumentStore
+from coding_trajectory.team_state import extract_high_value_teammate_request, has_teammate_messages
 
 
-def _parse_user_request_info(raw: str) -> dict[str, Any]:
+@dataclass(frozen=True)
+class _MemberSessionCandidate:
+    session_id: str
+    started_at: datetime
+    ended_at: datetime | None
+
+
+def _normalize_member_lookup_key(value: str) -> str:
+    return value.strip().lower()
+
+
+def _parse_user_request_info(raw: str, *, session: Session | None = None) -> dict[str, Any] | None:
     """Classify raw user request text into a structured dict."""
     m = _COMMAND_NAME_RE.search(raw)
     if m:
-        return {"type": "command", "content": m.group(1).strip()}
+        return {"type": "command", "source": "human_user", "content": m.group(1).strip()}
     stripped = raw.strip()
-    # System-only noise (e.g. empty local-command-stdout wrappers)
-    if not stripped or re.fullmatch(r"<[^>]+>\s*</[^>]+>", stripped):
-        return {"type": "system", "content": None}
-    return {"type": "message", "content": stripped}
+    if not stripped:
+        return None
+    if has_teammate_messages(stripped):
+        filtered = extract_high_value_teammate_request(stripped)
+        if not filtered:
+            return None
+        source = "parent_agent" if session and session.parent_session_id is not None else "team_lead"
+        return {"type": "message", "source": source, "content": filtered}
+    return {"type": "message", "source": "human_user", "content": stripped}
 
 
-def _extract_user_request(store: DocumentStore, turn: Turn) -> dict[str, Any] | None:
+def _extract_user_request(store: DocumentStore, turn: Turn, *, session: Session | None = None) -> dict[str, Any] | None:
     if turn.user_request_event_id is None:
         return None
     try:
@@ -97,8 +130,87 @@ def _extract_user_request(store: DocumentStore, turn: Turn) -> dict[str, Any] | 
     for key in ("text", "message", "content"):
         value = event.payload.get(key)
         if isinstance(value, str) and value.strip():
-            return _parse_user_request_info(value)
+            return _parse_user_request_info(value, session=session)
     return None
+
+
+def _latest_human_user_request(
+    store: DocumentStore,
+    session: Session,
+    *,
+    before: datetime | None = None,
+) -> dict[str, Any] | None:
+    turns = sorted(session.turns, key=lambda item: (item.started_at, item.sequence), reverse=True)
+    for turn in turns:
+        if before is not None and turn.started_at > before:
+            continue
+        request = _extract_user_request(store, turn, session=session)
+        if request and request.get("source") == "human_user":
+            return request
+    return None
+
+
+def _incoming_operation(structure: TrajectoryStructure, session_id: UUID):
+    for op in structure.operations:
+        if op.target_session_id == session_id:
+            return op
+    return None
+
+
+def _resolve_originating_human_request(
+    store: DocumentStore,
+    session: Session,
+    *,
+    structure: TrajectoryStructure,
+) -> dict[str, Any] | None:
+    current_session = session
+    visited: set[UUID] = set()
+    cutoff: datetime | None = None
+
+    while current_session.parent_session_id is not None and current_session.session_id not in visited:
+        visited.add(current_session.session_id)
+        try:
+            parent_session = store.get_session(current_session.parent_session_id)
+        except Exception:
+            return None
+
+        incoming_op = _incoming_operation(structure, current_session.session_id)
+        if incoming_op is not None and incoming_op.source_turn_id is not None:
+            try:
+                source_turn = store.get_turn(incoming_op.source_turn_id)
+            except Exception:
+                source_turn = None
+            if source_turn is not None:
+                request = _extract_user_request(store, source_turn, session=parent_session)
+                if request and request.get("source") == "human_user":
+                    return request
+                cutoff = source_turn.started_at
+            else:
+                cutoff = current_session.started_at
+        else:
+            cutoff = current_session.started_at
+
+        request = _latest_human_user_request(store, parent_session, before=cutoff)
+        if request is not None:
+            return request
+        current_session = parent_session
+
+    return None
+
+
+def _effective_user_request(
+    store: DocumentStore,
+    turn: Turn,
+    *,
+    session: Session,
+    structure: TrajectoryStructure,
+) -> dict[str, Any] | None:
+    request = _extract_user_request(store, turn, session=session)
+    if request is None:
+        return None
+    if request.get("source") != "parent_agent":
+        return request
+    return _resolve_originating_human_request(store, session, structure=structure)
 
 
 # Commands that carry no work output — UI state, config, or session management only.
@@ -162,9 +274,17 @@ def _session_connection(session: Session, *, structure: TrajectoryStructure) -> 
     })
 
 
+def _include_session_in_overview(session: Session, *, structure: TrajectoryStructure) -> bool:
+    node = structure.session_tree.nodes_by_session_id.get(session.session_id)
+    if node is None:
+        return True
+    return node.incoming_edge_type != "spawned_subagent"
+
+
 def build_trajectory_overview(trajectory: Trajectory, *, store: DocumentStore) -> dict[str, Any]:
     structure = build_trajectory_structure(trajectory)
     sessions_by_id = {s.session_id: s for s in trajectory.sessions}
+    member_session_lookup = _build_member_session_lookup(trajectory)
 
     ordered: list[dict[str, Any]] = []
     visited: set[UUID] = set()
@@ -175,15 +295,29 @@ def build_trajectory_overview(trajectory: Trajectory, *, store: DocumentStore) -
             continue
         visited.add(session_id)
         session = sessions_by_id.get(session_id)
-        if session:
-            ordered.append(_session_nav_node(session, store=store, structure=structure))
+        if session and _include_session_in_overview(session, structure=structure):
+            ordered.append(
+                _session_nav_node(
+                    session,
+                    store=store,
+                    structure=structure,
+                    member_session_lookup=member_session_lookup,
+                )
+            )
         node = structure.session_tree.nodes_by_session_id.get(session_id)
         if node:
             queue.extend(node.child_session_ids)
 
     for session in trajectory.sessions:
-        if session.session_id not in visited:
-            ordered.append(_session_nav_node(session, store=store, structure=structure))
+        if session.session_id not in visited and _include_session_in_overview(session, structure=structure):
+            ordered.append(
+                _session_nav_node(
+                    session,
+                    store=store,
+                    structure=structure,
+                    member_session_lookup=member_session_lookup,
+                )
+            )
 
     return {
         "trajectory_id": str(trajectory.trajectory_id),
@@ -191,12 +325,65 @@ def build_trajectory_overview(trajectory: Trajectory, *, store: DocumentStore) -
     }
 
 
-def _session_nav_node(session: Session, *, store: DocumentStore, structure: TrajectoryStructure) -> dict[str, Any]:
-    turns = [n for turn in session.turns if (n := _turn_nav_node(turn, store=store)) is not None]
+def _session_nav_node(
+    session: Session,
+    *,
+    store: DocumentStore,
+    structure: TrajectoryStructure,
+    member_session_lookup: dict[str, list[_MemberSessionCandidate]],
+) -> dict[str, Any]:
+    turns = [
+        n
+        for turn in session.turns
+        if (
+            n := _turn_nav_node(
+                turn,
+                session=session,
+                store=store,
+                structure=structure,
+                member_session_lookup=member_session_lookup,
+            )
+        ) is not None
+    ]
     return {
-        "session_id": str(session.session_id),
-        "connection": _session_connection(session, structure=structure),
         "turns": turns,
+    }
+
+
+def _build_member_session_lookup(trajectory: Trajectory) -> dict[str, list[_MemberSessionCandidate]]:
+    lookup: dict[str, dict[str, _MemberSessionCandidate]] = {}
+    for session in trajectory.sessions:
+        candidates: set[str] = set()
+        if session.agent_name:
+            candidates.add(session.agent_name)
+            if "@" in session.agent_name:
+                candidates.add(session.agent_name.split("@", 1)[0])
+        extensions = session.extensions
+        if extensions and extensions.claude_code:
+            if extensions.claude_code.agent_name:
+                agent_name = extensions.claude_code.agent_name
+                candidates.add(agent_name)
+                if "@" in agent_name:
+                    candidates.add(agent_name.split("@", 1)[0])
+            if extensions.claude_code.agent_role:
+                candidates.add(extensions.claude_code.agent_role)
+        session_candidate = _MemberSessionCandidate(
+            session_id=str(session.session_id),
+            started_at=session.started_at,
+            ended_at=session.ended_at,
+        )
+        for candidate in candidates:
+            key = _normalize_member_lookup_key(candidate)
+            if not key:
+                continue
+            lookup.setdefault(key, {})
+            lookup[key].setdefault(session_candidate.session_id, session_candidate)
+    return {
+        key: sorted(
+            session_map.values(),
+            key=lambda item: (item.started_at, item.ended_at or item.started_at, item.session_id),
+        )
+        for key, session_map in lookup.items()
     }
 
 
@@ -291,10 +478,123 @@ def _build_flows(steps: list[Step]) -> list[dict[str, Any]]:
     return result
 
 
-def _turn_nav_node(turn: Turn, *, store: DocumentStore) -> dict[str, Any] | None:
-    user_request = _extract_user_request(store, turn)
+def _is_teammate_turn(session: Session, turn: Turn, *, user_request: dict[str, Any] | None) -> bool:
+    if session.parent_session_id is not None:
+        return False
+    return turn.team_state is not None and bool(turn.team_state.members or turn.team_state.tasks)
+
+
+def _build_teammate_summary(
+    turn: Turn,
+    *,
+    user_request: dict[str, Any] | None,
+    member_session_lookup: dict[str, list[_MemberSessionCandidate]],
+) -> dict[str, Any]:
+    if turn.team_state is None:
+        return {"members": [], "task": [], "step_ids": [str(step.step_id) for step in turn.steps]}
+
+    members: list[dict[str, Any]] = []
+    for member in turn.team_state.members:
+        member_data = prune_nones(member.model_dump(mode="json"))
+        if "session_id" not in member_data:
+            session_id = _resolve_member_session_id(
+                turn,
+                member_id=member.member_id,
+                member_name=member.name,
+                member_session_lookup=member_session_lookup,
+            )
+            if session_id is not None:
+                member_data["session_id"] = session_id
+        members.append(_prune_empty_collections(member_data))
+    return {
+        "members": members,
+        "task": [_prune_empty_collections(prune_nones(task.model_dump(mode="json"))) for task in turn.team_state.tasks],
+        "step_ids": [str(step.step_id) for step in turn.steps],
+    }
+
+
+def _member_lookup_keys(member_id: str, member_name: str | None) -> list[str]:
+    keys: list[str] = []
+    for raw in (member_id, member_name):
+        if not raw:
+            continue
+        values = [raw]
+        if "@" in raw:
+            values.append(raw.split("@", 1)[0])
+        for value in values:
+            key = _normalize_member_lookup_key(value)
+            if key and key not in keys:
+                keys.append(key)
+    return keys
+
+
+def _resolve_member_session_id(
+    turn: Turn,
+    *,
+    member_id: str,
+    member_name: str | None,
+    member_session_lookup: dict[str, list[_MemberSessionCandidate]],
+) -> str | None:
+    candidates_by_session: dict[str, _MemberSessionCandidate] = {}
+    for key in _member_lookup_keys(member_id, member_name):
+        for candidate in member_session_lookup.get(key, []):
+            candidates_by_session.setdefault(candidate.session_id, candidate)
+
+    candidates = list(candidates_by_session.values())
+    if len(candidates) == 1:
+        return candidates[0].session_id
+    if not candidates:
+        return None
+
+    turn_start = turn.started_at
+    turn_end = turn.ended_at or turn.started_at
+
+    completed_before_turn = [item for item in candidates if item.ended_at is not None and item.ended_at <= turn_start]
+    if completed_before_turn:
+        latest_end = max(item.ended_at for item in completed_before_turn if item.ended_at is not None)
+        latest = [item for item in completed_before_turn if item.ended_at == latest_end]
+        if len(latest) == 1:
+            return latest[0].session_id
+
+    active_during_turn = [
+        item
+        for item in candidates
+        if item.started_at <= turn_end and (item.ended_at is None or item.ended_at >= turn_start)
+    ]
+    if len(active_during_turn) == 1:
+        return active_during_turn[0].session_id
+
+    spawned_in_turn = [item for item in candidates if turn_start <= item.started_at <= turn_end]
+    if spawned_in_turn:
+        earliest_start = min(item.started_at for item in spawned_in_turn)
+        earliest = [item for item in spawned_in_turn if item.started_at == earliest_start]
+        if len(earliest) == 1:
+            return earliest[0].session_id
+
+    return None
+
+
+def _turn_nav_node(
+    turn: Turn,
+    *,
+    session: Session,
+    store: DocumentStore,
+    structure: TrajectoryStructure,
+    member_session_lookup: dict[str, list[_MemberSessionCandidate]],
+) -> dict[str, Any] | None:
+    user_request = _effective_user_request(store, turn, session=session, structure=structure)
     if _is_low_value_turn(turn.steps, user_request):
         return None
+    if _is_teammate_turn(session, turn, user_request=user_request):
+        return prune_nones({
+            "turn_id": str(turn.turn_id),
+            "user_request": user_request,
+            "teammate_summary": _build_teammate_summary(
+                turn,
+                user_request=user_request,
+                member_session_lookup=member_session_lookup,
+            ),
+        })
     return prune_nones({
         "turn_id": str(turn.turn_id),
         "user_request": user_request,
