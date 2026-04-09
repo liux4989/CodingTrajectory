@@ -141,15 +141,13 @@ def _add_trajectory_source(p: argparse.ArgumentParser) -> None:
 
 
 def _add_base_output_flags(p: argparse.ArgumentParser) -> None:
-    """Add --pretty and --output flags (for ID-based lookups that don't need scope)."""
-    p.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    """Add --output flag (for ID-based lookups that don't need scope)."""
     p.add_argument("--output", "-o", metavar="FILE", dest="output_file", help="Write JSON output to FILE instead of stdout.")
     p.set_defaults(global_scope=False)
 
 
 def _add_output_flags(p: argparse.ArgumentParser) -> None:
-    """Add --pretty, --output, and --global-scope flags (for commands that need scope)."""
-    p.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    """Add --output and --global-scope flags (for commands that need scope)."""
     p.add_argument("--output", "-o", metavar="FILE", dest="output_file", help="Write JSON output to FILE instead of stdout.")
     p.add_argument("--global-scope", action="store_true", help="Search all known log files instead of the most-recent session.")
 
@@ -329,8 +327,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": {"message": str(exc)}}, indent=2), file=sys.stderr)
         return 1
 
-    indent = 2 if args.pretty else None
-    text = json.dumps(payload, indent=indent, ensure_ascii=False)
+    text = json.dumps(payload, indent=2, ensure_ascii=False)
 
     if args.output_file:
         Path(args.output_file).write_text(text + "\n", encoding="utf-8")
