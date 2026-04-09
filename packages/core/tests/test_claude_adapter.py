@@ -222,6 +222,10 @@ def test_claude_adapter_assigns_unique_session_id_to_subagent_files(tmp_path) ->
     root_session_id = "05e58bcb-fe0a-4324-b311-2568aa901c9c"
     path = project_dir / root_session_id / "subagents" / "agent-123.jsonl"
     path.parent.mkdir(parents=True)
+    path.with_name("agent-123.meta.json").write_text(
+        json.dumps({"agentType": "infra", "description": "router and auth context"}),
+        encoding="utf-8",
+    )
     records = [
         {
             "type": "user",
@@ -252,6 +256,126 @@ def test_claude_adapter_assigns_unique_session_id_to_subagent_files(tmp_path) ->
 
     assert session.session_id != UUID(root_session_id)
     assert session.parent_session_id == UUID(root_session_id)
+    assert session.extensions is not None
+    assert session.extensions.claude_code is not None
+    assert session.extensions.claude_code.agent_role == "infra"
+    assert session.extensions.claude_code.description == "router and auth context"
     assert all(event.session_id == session.session_id for event in session.events)
     assert all(turn.session_id == session.session_id for turn in session.turns)
     assert all(step.session_id == session.session_id for turn in session.turns for step in turn.steps)
+
+
+def test_claude_adapter_populates_turn_team_state_from_tool_outputs(tmp_path) -> None:
+    path = tmp_path / "session.jsonl"
+    records = [
+        {
+            "type": "user",
+            "sessionId": "05e58bcb-fe0a-4324-b311-2568aa901c9c",
+            "timestamp": "2026-03-13T10:00:00Z",
+            "message": {"role": "user", "content": "create a team"},
+            "uuid": "u-1",
+        },
+        {
+            "type": "assistant",
+            "sessionId": "05e58bcb-fe0a-4324-b311-2568aa901c9c",
+            "timestamp": "2026-03-13T10:00:01Z",
+            "uuid": "a-1",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "tool-team", "name": "Agent", "input": {"prompt": "spawn infra"}},
+                    {"type": "tool_use", "id": "tool-task", "name": "TaskCreate", "input": {"subject": "Setup auth"}},
+                ],
+                "stop_reason": "tool_use",
+            },
+        },
+        {
+            "type": "user",
+            "sessionId": "05e58bcb-fe0a-4324-b311-2568aa901c9c",
+            "timestamp": "2026-03-13T10:00:02Z",
+            "uuid": "u-2",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "tool-team", "content": "spawned"}],
+            },
+            "toolUseResult": {
+                "status": "teammate_spawned",
+                "teammate_id": "infra@alpha",
+                "name": "infra",
+                "team_name": "alpha",
+                "agent_type": "general-purpose",
+            },
+        },
+        {
+            "type": "user",
+            "sessionId": "05e58bcb-fe0a-4324-b311-2568aa901c9c",
+            "timestamp": "2026-03-13T10:00:03Z",
+            "uuid": "u-3",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "tool-task", "content": "created"}],
+            },
+            "toolUseResult": {"task": {"id": "1", "subject": "Setup auth"}},
+        },
+        {
+            "type": "assistant",
+            "sessionId": "05e58bcb-fe0a-4324-b311-2568aa901c9c",
+            "timestamp": "2026-03-13T10:00:04Z",
+            "uuid": "a-2",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Team running"}],
+                "stop_reason": "end_turn",
+            },
+        },
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+    session = ClaudeCodeAdapter().ingest_file(path)
+
+    turn = session.turns[0]
+    assert turn.team_state is not None
+    assert [member.member_id for member in turn.team_state.members] == ["infra@alpha"]
+    assert turn.team_state.members[0].team_name == "alpha"
+    assert [task.task_id for task in turn.team_state.tasks] == ["1"]
+    assert turn.team_state.tasks[0].title == "Setup auth"
+    assert turn.team_state.tasks[0].status == "created"
+
+
+def test_claude_adapter_populates_turn_team_state_from_teammate_messages(tmp_path) -> None:
+    path = tmp_path / "session.jsonl"
+    teammate_payload = (
+        '<teammate-message teammate_id="infra" color="blue" summary="Task 1 done, 2 and 3 unblocked">\n'
+        "Task #1 complete.\n"
+        "</teammate-message>"
+    )
+    records = [
+        {
+            "type": "user",
+            "sessionId": "05e58bcb-fe0a-4324-b311-2568aa901c9c",
+            "timestamp": "2026-03-13T10:00:00Z",
+            "message": {"role": "user", "content": teammate_payload},
+            "uuid": "u-1",
+        },
+        {
+            "type": "assistant",
+            "sessionId": "05e58bcb-fe0a-4324-b311-2568aa901c9c",
+            "timestamp": "2026-03-13T10:00:01Z",
+            "uuid": "a-1",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "received"}],
+                "stop_reason": "end_turn",
+            },
+        },
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+    session = ClaudeCodeAdapter().ingest_file(path)
+
+    turn = session.turns[0]
+    assert turn.team_state is not None
+    assert [member.member_id for member in turn.team_state.members] == ["infra"]
+    assert turn.team_state.members[0].summary == "Task 1 done, 2 and 3 unblocked"
+    assert [task.task_id for task in turn.team_state.tasks] == ["1"]
+    assert turn.team_state.tasks[0].status == "completed"

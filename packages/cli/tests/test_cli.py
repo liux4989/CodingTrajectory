@@ -59,8 +59,6 @@ def test_trajectory_overview_command_calls_rpc(monkeypatch, capsys) -> None:
             "trajectory_id": "t1",
             "sessions": [
                 {
-                    "session_id": "s1",
-                    "connection": {"role": "main"},
                     "turns": [
                         {
                             "turn_id": "turn-1",
@@ -79,7 +77,7 @@ def test_trajectory_overview_command_calls_rpc(monkeypatch, capsys) -> None:
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["trajectory_id"] == "t1"
-    assert payload["sessions"][0]["session_id"] == "s1"
+    assert set(payload["sessions"][0]) == {"turns"}
     assert payload["sessions"][0]["turns"][0]["steps"][0]["type"] == "tool_call"
 
 

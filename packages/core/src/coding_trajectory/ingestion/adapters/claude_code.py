@@ -22,10 +22,23 @@ from coding_trajectory.ingestion.models import (
     VendorExtensions,
 )
 from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, update_tool_item
+from coding_trajectory.team_state import build_turn_team_state
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CLAUDE_DIR = Path.home() / ".claude" / "projects"
+
+
+def _read_subagent_meta(source: Path) -> dict[str, object]:
+    meta_path = source.with_name(f"{source.stem}.meta.json")
+    try:
+        with meta_path.open(encoding="utf-8") as fh:
+            loaded = json.load(fh)
+    except OSError:
+        return {}
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _extract_text(content: str | list | None) -> str | None:
@@ -209,6 +222,7 @@ class ClaudeCodeAdapter(BaseAdapter):
         # We need to process records in order to build turns
         turns: list[Turn] = []
         current_turn: Turn | None = None
+        current_user_request_text: str | None = None
         turn_sequence = 0
         step_sequence = 0
         current_turn_last_ts: datetime | None = None  # track last timestamp seen in current turn
@@ -319,6 +333,10 @@ class ClaudeCodeAdapter(BaseAdapter):
                     # End current turn
                     if current_turn is not None:
                         _flush_step(current_turn)
+                        current_turn.team_state = build_turn_team_state(
+                            current_turn,
+                            user_request_text=current_user_request_text,
+                        )
                         # Use last seen timestamp for ended_at to avoid going backwards in time
                         current_turn.ended_at = current_turn_last_ts or current_turn.started_at
                         turns.append(current_turn)
@@ -335,6 +353,7 @@ class ClaudeCodeAdapter(BaseAdapter):
                         user_request_event_id=user_event.event_id if user_event else None,
                         event_ids=[event.event_id for event in rec_events],
                     )
+                    current_user_request_text = _extract_text(content)
                     current_turn_last_ts = ts  # reset for new turn
                     turn_sequence += 1
                     step_sequence = 0
@@ -449,6 +468,10 @@ class ClaudeCodeAdapter(BaseAdapter):
         # Flush any remaining turn
         if current_turn is not None:
             _flush_step(current_turn)
+            current_turn.team_state = build_turn_team_state(
+                current_turn,
+                user_request_text=current_user_request_text,
+            )
             if current_turn.ended_at is None:
                 # set ended_at from events
                 if all_events:
@@ -583,6 +606,7 @@ class ClaudeCodeAdapter(BaseAdapter):
         return events
 
     def _parse_extensions(self, source: Path) -> VendorExtensions | None:
+        meta = _read_subagent_meta(source) if source.parent.name == "subagents" else {}
         try:
             with source.open(encoding="utf-8") as fh:
                 for raw in fh:
@@ -604,6 +628,8 @@ class ClaudeCodeAdapter(BaseAdapter):
                             parent_uuid=obj.get("parentUuid"),
                             request_id=obj.get("uuid"),
                             agent_name=obj.get("agentId") or obj.get("agentName") or obj.get("slug"),
+                            agent_role=meta.get("agentType") if isinstance(meta.get("agentType"), str) else None,
+                            description=meta.get("description") if isinstance(meta.get("description"), str) else None,
                         )
                     )
         except OSError as exc:

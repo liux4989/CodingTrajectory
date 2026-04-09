@@ -40,6 +40,8 @@ class ToolStatus(str, Enum):
 class ClaudeCodeExtensions(BaseModel):
     team_name:      str | None = None
     agent_name:     str | None = None
+    agent_role:     str | None = None
+    description:    str | None = None
     is_sidechain:   bool | None = None
     permission_mode: str | None = None
     parent_uuid:    str | None = None
@@ -136,6 +138,31 @@ class Step(BaseModel):
     event_ids:   list[UUID] = Field(default_factory=list)      # refs into Session.events
 
 
+class TeamMemberState(BaseModel):
+    member_id:  str
+    session_id: UUID | None = None
+    name:       str | None = None
+    color:      str | None = None
+    team_name:  str | None = None
+    agent_type: str | None = None
+    summary:    str | None = None
+
+
+class TeamTaskState(BaseModel):
+    task_id:         str
+    title:           str | None = None
+    status:          str | None = None
+    member_id:       str | None = None
+    summary:         str | None = None
+    blocked_by:      list[str] = Field(default_factory=list)
+    updated_fields:  list[str] = Field(default_factory=list)
+
+
+class TeamTurnState(BaseModel):
+    members: list[TeamMemberState] = Field(default_factory=list)
+    tasks:   list[TeamTaskState] = Field(default_factory=list)
+
+
 class Turn(BaseModel):
     turn_id:               UUID = Field(default_factory=uuid4)
     session_id:            UUID
@@ -145,6 +172,7 @@ class Turn(BaseModel):
     user_request_event_id: UUID | None = None    # ref into Session.events
     event_ids:             list[UUID] = Field(default_factory=list)
     steps:                 list[Step] = Field(default_factory=list)
+    team_state:            TeamTurnState | None = None
 
 
 class Session(BaseModel):

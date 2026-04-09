@@ -264,6 +264,51 @@ def discover_store_from_file(path: Path) -> DiscoveryResult:
     raise DocumentError(f"no adapter could parse log file: {path}")
 
 
+def discover_store_from_files(paths: list[Path]) -> DiscoveryResult:
+    """Build a store from multiple explicit log files, preserving cross-session links."""
+    sessions_by_project: dict[str, list[Session]] = {}
+    path_session_meta: list[tuple[Vendor, Path, UUID]] = []
+
+    for raw_path in paths:
+        path = raw_path.resolve()
+        if not path.exists():
+            continue
+
+        for vendor, adapter_cls, _base_dir, _pattern in _vendor_configs():
+            adapter = adapter_cls()
+            try:
+                session = stabilize_session(adapter.ingest_file(path), vendor=vendor, source=path)
+            except Exception:
+                continue
+
+            project_identifier = infer_project_identifier(session, path, fallback=path.stem)
+            if not project_identifier:
+                project_identifier = path.stem
+
+            sessions_by_project.setdefault(project_identifier, []).append(session)
+            path_session_meta.append((vendor, path, session.session_id))
+            break
+
+    if not sessions_by_project:
+        raise DocumentError(f"no valid log files found for paths: {[str(path) for path in paths]}")
+
+    trajectories: list[Trajectory] = []
+    for project_identifier, sessions in sorted(sessions_by_project.items()):
+        trajectories.extend(assemble_project_trajectories(project_identifier, sessions))
+
+    session_to_traj: dict[UUID, UUID] = {
+        session.session_id: trajectory.trajectory_id
+        for trajectory in trajectories
+        for session in trajectory.sessions
+    }
+    sources = [
+        DiscoverySource(vendor=vendor, path=path, trajectory_id=session_to_traj.get(session_id))
+        for vendor, path, session_id in path_session_meta
+    ]
+
+    return DiscoveryResult(store=DocumentStore.from_trajectories(trajectories), sources=sources)
+
+
 def format_discovery_sources(sources: list[DiscoverySource]) -> str:
     if not sources:
         return ""

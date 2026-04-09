@@ -12,6 +12,7 @@ from coding_trajectory.discovery import (
     DiscoverySource,
     discover_store,
     discover_store_from_file,
+    discover_store_from_files,
     format_discovery_sources,
 )
 from coding_trajectory.ingestion.common import format_datetime, normalize_project_key, prune_nones
@@ -282,28 +283,33 @@ def _build_store_full(*, global_scope: bool, current_dir: Path, cache: IndexCach
 
 def _build_store_targeted(paths: list[str], cache: IndexCache) -> tuple[DocumentStore, str]:
     """Targeted discovery — ingest only the files mapped to a trajectory."""
-    from coding_trajectory.discovery import DiscoveryResult
+    expanded_paths = _expand_targeted_paths([Path(p) for p in paths])
+    discovery = discover_store_from_files(expanded_paths)
+    _update_path_index(cache, discovery.sources)
+    return discovery.store, format_discovery_sources(discovery.sources)
 
-    stores: list[DiscoveryResult] = []
-    for p in paths:
-        try:
-            stores.append(discover_store_from_file(Path(p)))
-        except DocumentError:
+
+def _expand_targeted_paths(paths: list[Path]) -> list[Path]:
+    expanded: list[Path] = []
+    seen: set[Path] = set()
+
+    for path in paths:
+        resolved = path.resolve()
+        if resolved not in seen and resolved.exists():
+            expanded.append(resolved)
+            seen.add(resolved)
+
+        subagents_dir = resolved.with_suffix("") / "subagents"
+        if not subagents_dir.is_dir():
             continue
+        for subagent_path in sorted(subagents_dir.glob("*.jsonl")):
+            subagent_resolved = subagent_path.resolve()
+            if subagent_resolved in seen:
+                continue
+            expanded.append(subagent_resolved)
+            seen.add(subagent_resolved)
 
-    if not stores:
-        raise DocumentError(f"no valid log files found for cached paths: {paths}")
-
-    all_trajectories = []
-    all_sources = []
-    for dr in stores:
-        all_trajectories.extend(dr.store.trajectories.values())
-        all_sources.extend(dr.sources)
-
-    _update_path_index(cache, all_sources)
-
-    store = DocumentStore.from_trajectories(all_trajectories)
-    return store, format_discovery_sources(all_sources)
+    return expanded
 
 
 def resolve_store(
