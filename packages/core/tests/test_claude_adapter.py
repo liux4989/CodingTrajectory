@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from uuid import UUID
 
 from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
 from coding_trajectory.ingestion.models import EventType, StepTextItem, StepToolItem, ToolStatus
@@ -214,3 +215,43 @@ def test_claude_adapter_merges_tool_results_into_tool_items(tmp_path) -> None:
     assert tool_item.tool_name == "Read"
     assert tool_item.status == ToolStatus.COMPLETED
     assert tool_item.output == {"result": "ok"}
+
+
+def test_claude_adapter_assigns_unique_session_id_to_subagent_files(tmp_path) -> None:
+    project_dir = tmp_path / "project"
+    root_session_id = "05e58bcb-fe0a-4324-b311-2568aa901c9c"
+    path = project_dir / root_session_id / "subagents" / "agent-123.jsonl"
+    path.parent.mkdir(parents=True)
+    records = [
+        {
+            "type": "user",
+            "sessionId": root_session_id,
+            "timestamp": "2026-03-13T10:00:00Z",
+            "agentId": "agent-123",
+            "isSidechain": True,
+            "message": {"role": "user", "content": "do work"},
+            "uuid": "u-1",
+        },
+        {
+            "type": "assistant",
+            "sessionId": root_session_id,
+            "timestamp": "2026-03-13T10:00:01Z",
+            "agentId": "agent-123",
+            "isSidechain": True,
+            "uuid": "a-1",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "working"}],
+                "stop_reason": "end_turn",
+            },
+        },
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+    session = ClaudeCodeAdapter().ingest_file(path)
+
+    assert session.session_id != UUID(root_session_id)
+    assert session.parent_session_id == UUID(root_session_id)
+    assert all(event.session_id == session.session_id for event in session.events)
+    assert all(turn.session_id == session.session_id for turn in session.turns)
+    assert all(step.session_id == session.session_id for turn in session.turns for step in turn.steps)

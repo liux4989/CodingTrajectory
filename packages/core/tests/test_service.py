@@ -19,7 +19,7 @@ from coding_trajectory.ingestion.models import (
     Vendor,
 )
 from coding_trajectory.query import DocumentStore
-from coding_trajectory.service import dispatch, IndexCache
+from coding_trajectory.service import dispatch, IndexCache, resolve_store
 from coding_trajectory.service import (
     serialize_event_detail,
     serialize_session_detail,
@@ -289,3 +289,29 @@ def test_rpc_dispatch_trajectory_enrich_is_removed() -> None:
         raise AssertionError("trajectory.enrich should raise KeyError")
     except KeyError:
         pass  # expected — unknown method
+
+
+def test_resolve_store_uses_global_discovery_for_explicit_project_name(monkeypatch, tmp_path) -> None:
+    cache = IndexCache()
+    fake_store = DocumentStore.from_trajectories([])
+    observed: dict[str, object] = {}
+
+    def fake_build_store_full(*, global_scope: bool, current_dir: Path, cache: IndexCache):
+        observed["global_scope"] = global_scope
+        observed["current_dir"] = current_dir
+        return fake_store, ""
+
+    monkeypatch.setattr("coding_trajectory.service._build_store_full", fake_build_store_full)
+
+    store, note = resolve_store(
+        {"project_name": "TaskBucket"},
+        log_file=None,
+        global_scope=False,
+        current_dir=tmp_path,
+        cache=cache,
+    )
+
+    assert store is fake_store
+    assert note == ""
+    assert observed["global_scope"] is True
+    assert observed["current_dir"] == tmp_path

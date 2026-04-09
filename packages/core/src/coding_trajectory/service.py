@@ -336,7 +336,8 @@ def resolve_store(
         if cached_paths:
             return _build_store_targeted(cached_paths, cache)
 
-    return _build_store_full(global_scope=global_scope, current_dir=current_dir, cache=cache)
+    effective_global_scope = global_scope or bool(params.get("project_name"))
+    return _build_store_full(global_scope=effective_global_scope, current_dir=current_dir, cache=cache)
 
 
 # ---------------------------------------------------------------------------

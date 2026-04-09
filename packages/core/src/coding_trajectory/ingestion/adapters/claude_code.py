@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, infer_tool_success, parse_timestamp
@@ -120,13 +120,30 @@ class ClaudeCodeAdapter(BaseAdapter):
         if not events:
             raise ValueError(f"ClaudeCodeAdapter: no events parsed from {source}")
 
-        session_id = events[0].session_id
+        raw_session_id = events[0].session_id
         started_at = min(event.timestamp for event in events)
         ended_at = max(event.timestamp for event in events)
 
         # Build turns and steps from records directly
-        turns = self._build_turns(session_id, records, events)
+        turns = self._build_turns(raw_session_id, records, events)
         extensions = self._parse_extensions(source)
+        session_id, parent_session_id = self._canonical_session_ids(
+            source=source,
+            raw_session_id=raw_session_id,
+            extensions=extensions,
+        )
+
+        if session_id != raw_session_id:
+            events = [event.model_copy(update={"session_id": session_id}) for event in events]
+            turns = [
+                turn.model_copy(
+                    update={
+                        "session_id": session_id,
+                        "steps": [step.model_copy(update={"session_id": session_id}) for step in turn.steps],
+                    }
+                )
+                for turn in turns
+            ]
 
         return Session(
             session_id=session_id,
@@ -135,10 +152,43 @@ class ClaudeCodeAdapter(BaseAdapter):
             agent_name=extensions.claude_code.agent_name if extensions and extensions.claude_code else None,
             started_at=started_at,
             ended_at=ended_at,
+            parent_session_id=parent_session_id,
             events=events,
             turns=turns,
             extensions=extensions,
         )
+
+    def _canonical_session_ids(
+        self,
+        *,
+        source: Path,
+        raw_session_id: UUID,
+        extensions: VendorExtensions | None,
+    ) -> tuple[UUID, UUID | None]:
+        if source.parent.name != "subagents":
+            return raw_session_id, None
+
+        try:
+            parent_session_id = UUID(source.parent.parent.name)
+        except ValueError:
+            return raw_session_id, None
+
+        agent_name = extensions.claude_code.agent_name if extensions and extensions.claude_code else None
+        canonical_session_id = uuid5(
+            NAMESPACE_URL,
+            json.dumps(
+                {
+                    "vendor": self.vendor.value,
+                    "kind": "claude_subagent_session",
+                    "source": str(source.resolve()),
+                    "raw_session_id": str(raw_session_id),
+                    "parent_session_id": str(parent_session_id),
+                    "agent_name": agent_name,
+                },
+                sort_keys=True,
+            ),
+        )
+        return canonical_session_id, parent_session_id
 
     def _build_turns(self, session_id: UUID, records: list[dict], all_events: list[Event]) -> list[Turn]:
         """Build Turn+Step objects from raw records."""
