@@ -87,7 +87,7 @@ from coding_trajectory.analysis.concepts import TOOL_CONCEPT_MAP, StepType
 from coding_trajectory.analysis.structure import build_trajectory_structure
 from coding_trajectory.analysis.structure_models import TrajectoryStructure
 from coding_trajectory.ingestion.common import prune_nones
-from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, ToolStatus, Trajectory, Turn
+from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, Trajectory, Turn
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.team_state import extract_high_value_teammate_request, has_teammate_messages
 
@@ -325,6 +325,96 @@ def build_trajectory_overview(trajectory: Trajectory, *, store: DocumentStore) -
     }
 
 
+def build_trajectory_narrative(trajectory: Trajectory, *, store: DocumentStore) -> dict[str, Any]:
+    """Build a deterministic turn narrative for downstream summarizers.
+
+    Unlike ``trajectory overview``, this is not a drilldown/navigation tree. It
+    keeps the naive transcript shape: user request and final assistant response.
+    It intentionally does not include tool activity or infer progress,
+    decisions, constraints, or next steps.
+    """
+    structure = build_trajectory_structure(trajectory)
+    sessions_by_id = {s.session_id: s for s in trajectory.sessions}
+
+    ordered: list[dict[str, Any]] = []
+    visited: set[UUID] = set()
+    queue = list(structure.session_tree.root_session_ids)
+    while queue:
+        session_id = queue.pop(0)
+        if session_id in visited:
+            continue
+        visited.add(session_id)
+        session = sessions_by_id.get(session_id)
+        if session is not None:
+            ordered.append(_session_narrative_node(session, store=store, structure=structure))
+        node = structure.session_tree.nodes_by_session_id.get(session_id)
+        if node:
+            queue.extend(node.child_session_ids)
+
+    for session in trajectory.sessions:
+        if session.session_id not in visited:
+            ordered.append(_session_narrative_node(session, store=store, structure=structure))
+
+    return {
+        "trajectory_id": str(trajectory.trajectory_id),
+        "sessions": ordered,
+    }
+
+
+def _session_narrative_node(
+    session: Session,
+    *,
+    store: DocumentStore,
+    structure: TrajectoryStructure,
+) -> dict[str, Any]:
+    return prune_nones({
+        "session_id": str(session.session_id),
+        "relationship": _session_connection(session, structure=structure),
+        "vendor": session.vendor.value,
+        "agent_name": session.agent_name,
+        "cwd": session.cwd,
+        "turns": [
+            turn_node
+            for turn in session.turns
+            if (turn_node := _turn_narrative_node(turn, session=session, store=store)) is not None
+        ],
+    })
+
+
+def _turn_narrative_node(
+    turn: Turn,
+    *,
+    session: Session,
+    store: DocumentStore,
+) -> dict[str, Any] | None:
+    user_request = _extract_user_request(store, turn, session=session)
+    if _is_low_value_turn(turn.steps, user_request):
+        return None
+
+    assistant_response: str | None = None
+    step_ids: list[str] = []
+
+    for step in turn.steps:
+        step_ids.append(str(step.step_id))
+
+        text = "\n".join(
+            item.text for item in step.items
+            if isinstance(item, StepTextItem) and item.text
+        ).strip()
+        if text:
+            assistant_response = text
+
+    return prune_nones({
+        "turn_id": str(turn.turn_id),
+        "user_request": user_request,
+        "assistant_response": assistant_response,
+        "refs": {
+            "step_ids": step_ids or None,
+            "user_request_event_id": str(turn.user_request_event_id) if turn.user_request_event_id else None,
+        },
+    })
+
+
 def _session_nav_node(
     session: Session,
     *,
@@ -520,81 +610,37 @@ _LEAD_ERROR_RE = re.compile(r"\b(error|failed|failure|exception|traceback)\b", r
 _LEAD_CHECK_RESULT_RE = re.compile(r"\b(clean|passed|success|succeeded|no output|all solid)\b", re.IGNORECASE)
 
 
-def _collapse_tool_sequence(tools: list[str], failed: set[int]) -> str:
-    """Collapse a flat list of tool names into a compact flow string, e.g. 'Read → Grep×3 → Edit×2'.
-
-    Indices in *failed* mark tools that errored; they are annotated with ``!``,
-    e.g. ``Edit!`` or ``Edit!×2``.
-    """
-    groups: list[str] = []
-    i = 0
-    while i < len(tools):
-        tool = tools[i]
-        count = 1
-        is_failed = i in failed
-        while i + count < len(tools) and tools[i + count] == tool and (i + count in failed) == is_failed:
-            count += 1
-        suffix = "!" if is_failed else ""
-        groups.append(f"{tool}{suffix}×{count}" if count > 1 else f"{tool}{suffix}")
-        i += count
-    return " → ".join(groups)
-
-
-_FILE_PATH_KEYS = ("file_path", "path", "file", "pattern")
-
-
-def _extract_files(items: list) -> list[str]:
-    """Extract unique file basenames from tool input fields."""
-    from coding_trajectory.ingestion.models import StepToolItem
-    import os
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in items:
-        if not isinstance(item, StepToolItem) or not isinstance(item.input, dict):
-            continue
-        for key in _FILE_PATH_KEYS:
-            val = item.input.get(key)
-            if isinstance(val, str) and val:
-                name = os.path.basename(val.rstrip("/"))
-                if name and name not in seen:
-                    seen.add(name)
-                    result.append(name)
-    return result
-
-
 def _build_flows(steps: list[Step]) -> list[dict[str, Any]]:
     """Build an interleaved narrative flow from a flat step list.
 
-    Consecutive tool calls are collapsed into a single ``tool_calls`` entry.
+    Consecutive tool calls are emitted under a single ``tool_calls`` entry as
+    a list of compact summaries::
+
+        {"tool_calls": [
+            {"name": "SearchText", "description": "'btw' within src", "summary": "Found 7 matches"},
+            {"name": "ReadFile",   "description": "src/core.py",      "summary": "Read 444 line(s)"}
+        ]}
+
     Each assistant response becomes an ``agent_response`` entry.
     """
+    from coding_trajectory.analysis.tool_summary import summarize_tool_call
+
     result: list[dict[str, Any]] = []
-    pending_tools: list[str] = []
-    pending_failed: set[int] = set()
-    pending_items: list[StepToolItem] = []
+    pending: list[dict[str, Any]] = []
 
     def _flush_tools() -> None:
-        if not pending_tools:
+        if not pending:
             return
-        entry: dict[str, Any] = {"tool_calls": _collapse_tool_sequence(pending_tools, pending_failed)}
-        files = _extract_files(pending_items)
-        if files:
-            entry["files"] = files
-        result.append(entry)
-        pending_tools.clear()
-        pending_failed.clear()
-        pending_items.clear()
+        result.append({"tool_calls": list(pending)})
+        pending.clear()
 
     for step in steps:
         tool_items = [item for item in step.items if isinstance(item, StepToolItem)]
         if tool_items:
             for item in tool_items:
-                if item.tool_name:
-                    idx = len(pending_tools)
-                    pending_tools.append(item.tool_name)
-                    if item.status == ToolStatus.FAILED:
-                        pending_failed.add(idx)
-            pending_items.extend(tool_items)
+                summary = summarize_tool_call(item)
+                if summary is not None:
+                    pending.append(summary)
         else:
             _flush_tools()
             text_items = [item for item in step.items if isinstance(item, StepTextItem)]

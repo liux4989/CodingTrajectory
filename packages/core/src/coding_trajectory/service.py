@@ -351,7 +351,12 @@ def dispatch(
     discovery_note: str,
     cache: IndexCache,
 ) -> Any:
-    from coding_trajectory.analysis.views import build_step_details, build_trajectory_overview, build_event_scan
+    from coding_trajectory.analysis.views import (
+        build_event_scan,
+        build_step_details,
+        build_trajectory_narrative,
+        build_trajectory_overview,
+    )
 
     if method == "trajectory.list":
         trajectories = resolve_collection(
@@ -405,6 +410,13 @@ def dispatch(
     if method == "trajectory.overview":
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
         result = build_trajectory_overview(trajectory, store=store)
+        for session in trajectory.sessions:
+            cache.session_to_trajectory[str(session.session_id)] = str(trajectory.trajectory_id)
+        return result
+
+    if method == "trajectory.narrative":
+        trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
+        result = build_trajectory_narrative(trajectory, store=store)
         for session in trajectory.sessions:
             cache.session_to_trajectory[str(session.session_id)] = str(trajectory.trajectory_id)
         return result

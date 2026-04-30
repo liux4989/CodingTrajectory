@@ -24,11 +24,11 @@ Structured View
 2. `project trajectories <project_name>` — list trajectories for a project, get the trajectory id
    - or `project --logfile PATH` — load a log file directly and get the trajectory id
 3. `trajectory overview <trajectory_id>` — read the navigation tree, identify relevant steps
-4. `step detail <step_id>` — read the evidence for a specific step
+4. `trajectory narrative <trajectory_id>` — read deterministic user/assistant/tool activity for summarization
+5. `step detail <step_id>` — read the evidence for a specific step
 
 
 Raw View
 1. `event detail <event_id>` — resolve the full content of a step
 2. `event scan <trajectory_id> --type TYPE [--filter ...]` — query raw events by type, optionally narrowed by payload predicates
 ---
-

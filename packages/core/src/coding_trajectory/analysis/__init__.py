@@ -5,7 +5,11 @@ from coding_trajectory.analysis.structure_models import (
     SessionTreeNode,
     TrajectoryStructure,
 )
-from coding_trajectory.analysis.views import build_step_details, build_trajectory_overview
+from coding_trajectory.analysis.views import (
+    build_step_details,
+    build_trajectory_narrative,
+    build_trajectory_overview,
+)
 
 __all__ = [
     "CrossSessionOperation",
@@ -13,6 +17,7 @@ __all__ = [
     "SessionTreeNode",
     "TrajectoryStructure",
     "build_step_details",
+    "build_trajectory_narrative",
     "build_trajectory_overview",
     "build_trajectory_structure",
 ]

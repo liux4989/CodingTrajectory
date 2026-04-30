@@ -62,6 +62,7 @@ NAVIGATE
   ct project list                                  list all known projects
   ct project trajectories PROJECT_NAME             list trajectories for a project
   ct trajectory overview [TRAJECTORY_ID]           session structure, step types, user requests
+  ct trajectory narrative [TRAJECTORY_ID]          deterministic turn narrative for summarizers
   ct step detail STEP_ID [...]                     full detail for one or more steps
 
 INSPECT COMMANDS
@@ -231,6 +232,18 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_output_flags(traj_overview)
     traj_overview.set_defaults(
         _method="trajectory.overview",
+        _params=lambda args: {"trajectory_id": args.trajectory_id} if args.trajectory_id else {},
+    )
+
+    traj_narrative = traj_sub.add_parser(
+        "narrative",
+        help="Show deterministic user request, assistant response, and tool activity narrative.",
+        formatter_class=_GhFormatter,
+    )
+    _add_trajectory_source(traj_narrative)
+    _add_output_flags(traj_narrative)
+    traj_narrative.set_defaults(
+        _method="trajectory.narrative",
         _params=lambda args: {"trajectory_id": args.trajectory_id} if args.trajectory_id else {},
     )
 
