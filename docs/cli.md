@@ -25,7 +25,9 @@ Structured View
    - or `project --logfile PATH` — load a log file directly and get the trajectory id
 3. `trajectory overview <trajectory_id>` — read the navigation tree, identify relevant steps
 4. `trajectory narrative <trajectory_id>` — read deterministic user/assistant/tool activity for summarization
-5. `step detail <step_id>` — read the evidence for a specific step
+5. `metrics trajectory <trajectory_id>` — inspect native token/quota metrics joined to the hierarchy
+6. `metrics turns <trajectory_id>` — compare execution metrics turn by turn
+7. `step detail <step_id>` — read the evidence for a specific step
 
 
 Raw View

@@ -1,0 +1,381 @@
+"""Build derived execution metrics from canonical trajectories."""
+
+from __future__ import annotations
+
+from typing import Any
+from uuid import UUID
+
+from coding_trajectory.ingestion.models import Event, EventType, Session, Step, Trajectory, Turn, Vendor
+from coding_trajectory.metrics.models import (
+    CostEstimate,
+    MetricSource,
+    QuotaSnapshot,
+    QuotaWindow,
+    SessionMetrics,
+    StepMetrics,
+    TokenUsage,
+    TokenUsageObservation,
+    TrajectoryMetrics,
+    TurnMetrics,
+)
+from coding_trajectory.metrics.pricing import estimate_observation_cost
+from coding_trajectory.query import DocumentStore
+
+
+def build_trajectory_metrics(
+    trajectory: Trajectory,
+    *,
+    store: DocumentStore,
+    extra_billing: bool = False,
+) -> dict[str, Any]:
+    """Return token/quota metrics projected onto the trajectory hierarchy."""
+    session_metrics: list[SessionMetrics] = []
+    total = TokenUsage()
+    cost_total = CostEstimate(extra_billing=extra_billing)
+    warnings: list[str] = []
+
+    for session in trajectory.sessions:
+        metrics = _build_session_metrics(session, store=store, extra_billing=extra_billing)
+        session_metrics.append(metrics)
+        total = total.plus(metrics.token_usage)
+        cost_total = cost_total.plus(metrics.cost_estimate)
+        if not _session_has_usage(metrics):
+            warnings.append(f"no token usage metrics found for session {session.session_id}")
+        if not metrics.cost_estimate.complete:
+            warnings.extend(metrics.cost_estimate.missing_reasons)
+
+    return TrajectoryMetrics(
+        trajectory_id=trajectory.trajectory_id,
+        token_usage=total,
+        cost_estimate=_finalize_cost(cost_total),
+        sessions=session_metrics,
+        warnings=_unique(warnings),
+    ).model_dump(mode="json")
+
+
+def _build_session_metrics(
+    session: Session,
+    *,
+    store: DocumentStore,
+    extra_billing: bool,
+) -> SessionMetrics:
+    codex_seen_totals: set[tuple[int, int, int, int, int]] = set()
+    turn_metrics: list[TurnMetrics] = []
+    session_total = TokenUsage()
+    cost_total = CostEstimate(extra_billing=extra_billing)
+    latest_quota: QuotaSnapshot | None = None
+
+    for turn in session.turns:
+        metrics = _build_turn_metrics(
+            session,
+            turn,
+            store=store,
+            codex_seen_totals=codex_seen_totals,
+            extra_billing=extra_billing,
+        )
+        turn_metrics.append(metrics)
+        session_total = session_total.plus(metrics.token_usage)
+        cost_total = cost_total.plus(metrics.cost_estimate)
+        if metrics.quota_snapshots:
+            latest_quota = metrics.quota_snapshots[-1]
+
+    return SessionMetrics(
+        session_id=session.session_id,
+        vendor=session.vendor.value,
+        token_usage=session_total,
+        cost_estimate=_finalize_cost(cost_total),
+        turns=turn_metrics,
+        quota_snapshot=latest_quota,
+    )
+
+
+def _build_turn_metrics(
+    session: Session,
+    turn: Turn,
+    *,
+    store: DocumentStore,
+    codex_seen_totals: set[tuple[int, int, int, int, int]],
+    extra_billing: bool,
+) -> TurnMetrics:
+    step_metrics: list[StepMetrics] = []
+    turn_total = TokenUsage()
+    cost_total = CostEstimate(extra_billing=extra_billing)
+    quota_snapshots: list[QuotaSnapshot] = []
+
+    for step in turn.steps:
+        metrics = _build_step_metrics(
+            session,
+            step,
+            store=store,
+            codex_seen_totals=codex_seen_totals,
+            extra_billing=extra_billing,
+        )
+        step_metrics.append(metrics)
+        turn_total = turn_total.plus(metrics.token_usage)
+        cost_total = cost_total.plus(metrics.cost_estimate)
+
+    for event_id in turn.event_ids:
+        event = _get_event(store, event_id)
+        if event is None:
+            continue
+        quota = _quota_snapshot_from_event(event)
+        if quota is not None:
+            quota_snapshots.append(quota)
+
+    quota_snapshots.sort(key=lambda item: item.timestamp)
+    return TurnMetrics(
+        turn_id=turn.turn_id,
+        sequence=turn.sequence,
+        token_usage=turn_total,
+        cost_estimate=_finalize_cost(cost_total),
+        steps=step_metrics,
+        quota_snapshots=quota_snapshots,
+    )
+
+
+def _build_step_metrics(
+    session: Session,
+    step: Step,
+    *,
+    store: DocumentStore,
+    codex_seen_totals: set[tuple[int, int, int, int, int]],
+    extra_billing: bool,
+) -> StepMetrics:
+    observations: list[TokenUsageObservation] = []
+
+    vendor_observation = _usage_from_step_vendor_data(step)
+    if vendor_observation is not None:
+        observations.append(vendor_observation)
+
+    for event_id in step.event_ids:
+        event = _get_event(store, event_id)
+        if event is None:
+            continue
+        event_observation = _usage_from_event(
+            event,
+            step=step,
+            session=session,
+            codex_seen_totals=codex_seen_totals,
+        )
+        if event_observation is not None:
+            observations.append(event_observation)
+
+    observations.sort(key=lambda item: item.timestamp)
+    total = TokenUsage()
+    cost_total = CostEstimate(extra_billing=extra_billing)
+    for observation in observations:
+        total = total.plus(observation.usage)
+        cost_total = cost_total.plus(
+            estimate_observation_cost(observation, extra_billing=extra_billing)
+        )
+
+    return StepMetrics(
+        step_id=step.step_id,
+        sequence=step.sequence,
+        token_usage=total,
+        cost_estimate=_finalize_cost(cost_total),
+        observations=observations,
+    )
+
+
+def _usage_from_step_vendor_data(step: Step) -> TokenUsageObservation | None:
+    data = step.vendor_data or {}
+    provider = step.vendor.value
+    model = _as_str(data.get("model"))
+
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        model = model or _as_str(usage.get("model"))
+        token_usage = _token_usage_from_mapping(usage)
+    else:
+        token_usage = _token_usage_from_mapping(data)
+
+    if _is_zero_usage(token_usage):
+        return None
+
+    return TokenUsageObservation(
+        scope_type="step",
+        scope_id=step.step_id,
+        timestamp=step.timestamp,
+        usage=token_usage,
+        provider=provider,
+        model=model,
+        source=MetricSource(vendor=provider, source_type="step.vendor_data"),
+    )
+
+
+def _usage_from_event(
+    event: Event,
+    *,
+    step: Step,
+    session: Session,
+    codex_seen_totals: set[tuple[int, int, int, int, int]],
+) -> TokenUsageObservation | None:
+    if event.type != EventType.VENDOR_RAW:
+        return None
+    if event.vendor_source != Vendor.CODEX_CLI:
+        return None
+    if event.payload.get("raw_type") != "token_count":
+        return None
+
+    info = event.payload.get("info")
+    if not isinstance(info, dict):
+        return None
+
+    total_raw = info.get("total_token_usage")
+    if isinstance(total_raw, dict):
+        total_key = _usage_key(_token_usage_from_mapping(total_raw))
+        if total_key in codex_seen_totals:
+            return None
+        codex_seen_totals.add(total_key)
+
+    usage_raw = info.get("last_token_usage")
+    if not isinstance(usage_raw, dict):
+        return None
+
+    token_usage = _token_usage_from_mapping(usage_raw)
+    if _is_zero_usage(token_usage):
+        return None
+
+    return TokenUsageObservation(
+        scope_type="step",
+        scope_id=step.step_id,
+        timestamp=event.timestamp,
+        usage=token_usage,
+        provider=session.vendor.value,
+        model=_as_str(event.payload.get("model")),
+        source=MetricSource(
+            vendor=event.vendor_source.value,
+            source_type="event.payload",
+            event_id=event.event_id,
+        ),
+    )
+
+
+def _quota_snapshot_from_event(event: Event) -> QuotaSnapshot | None:
+    if event.type != EventType.VENDOR_RAW:
+        return None
+    if event.vendor_source != Vendor.CODEX_CLI:
+        return None
+    if event.payload.get("raw_type") != "token_count":
+        return None
+
+    rate_limits = event.payload.get("rate_limits")
+    if not isinstance(rate_limits, dict):
+        return None
+
+    return QuotaSnapshot(
+        timestamp=event.timestamp,
+        source_event_id=event.event_id,
+        limit_id=_as_str(rate_limits.get("limit_id")),
+        plan_type=_as_str(rate_limits.get("plan_type")),
+        primary=_quota_window(rate_limits.get("primary")),
+        secondary=_quota_window(rate_limits.get("secondary")),
+        rate_limit_reached_type=_as_str(rate_limits.get("rate_limit_reached_type")),
+    )
+
+
+def _quota_window(value: Any) -> QuotaWindow | None:
+    if not isinstance(value, dict):
+        return None
+    return QuotaWindow(
+        used_percent=_as_float(value.get("used_percent")),
+        window_minutes=_as_int(value.get("window_minutes")),
+        resets_at=_as_int(value.get("resets_at")),
+    )
+
+
+def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
+    cache_creation = value.get("cache_creation")
+    cache_creation_5m = 0
+    cache_creation_1h = 0
+    if isinstance(cache_creation, dict):
+        cache_creation_5m = _as_int(cache_creation.get("ephemeral_5m_input_tokens"))
+        cache_creation_1h = _as_int(cache_creation.get("ephemeral_1h_input_tokens"))
+
+    return TokenUsage(
+        input_tokens=_as_int(value.get("input_tokens") or value.get("inputTokens")),
+        cached_input_tokens=_as_int(value.get("cached_input_tokens") or value.get("cachedInputTokens")),
+        cache_creation_input_tokens=_as_int(
+            value.get("cache_creation_input_tokens") or value.get("cacheCreationInputTokens")
+        ),
+        cache_creation_5m_input_tokens=cache_creation_5m,
+        cache_creation_1h_input_tokens=cache_creation_1h,
+        cache_read_input_tokens=_as_int(value.get("cache_read_input_tokens") or value.get("cacheReadInputTokens")),
+        output_tokens=_as_int(value.get("output_tokens") or value.get("outputTokens")),
+        reasoning_output_tokens=_as_int(
+            value.get("reasoning_output_tokens") or value.get("reasoningOutputTokens")
+        ),
+        total_tokens=_as_int(value.get("total_tokens") or value.get("totalTokens")),
+    )
+
+
+def _usage_key(usage: TokenUsage) -> tuple[int, int, int, int, int]:
+    return (
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+        usage.reasoning_output_tokens,
+        usage.total_tokens,
+    )
+
+
+def _session_has_usage(metrics: SessionMetrics) -> bool:
+    return not _is_zero_usage(metrics.token_usage)
+
+
+def _is_zero_usage(usage: TokenUsage) -> bool:
+    return all(value == 0 for value in usage.model_dump().values())
+
+
+def _get_event(store: DocumentStore, event_id: UUID) -> Event | None:
+    try:
+        return store.get_event(event_id)
+    except Exception:
+        return None
+
+
+def _finalize_cost(cost: CostEstimate) -> CostEstimate:
+    return cost.model_copy(
+        update={
+            "amount_usd": round(cost.amount_usd, 8),
+            "missing_reasons": _unique(cost.missing_reasons),
+            "breakdown": cost.breakdown.model_copy(
+                update={
+                    "input_usd": round(cost.breakdown.input_usd, 8),
+                    "cached_input_usd": round(cost.breakdown.cached_input_usd, 8),
+                    "cache_creation_usd": round(cost.breakdown.cache_creation_usd, 8),
+                    "cache_creation_5m_usd": round(cost.breakdown.cache_creation_5m_usd, 8),
+                    "cache_creation_1h_usd": round(cost.breakdown.cache_creation_1h_usd, 8),
+                    "cache_read_usd": round(cost.breakdown.cache_read_usd, 8),
+                    "output_usd": round(cost.breakdown.output_usd, 8),
+                    "reasoning_output_usd": round(cost.breakdown.reasoning_output_usd, 8),
+                }
+            ),
+        }
+    )
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _as_int(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _as_float(value: Any) -> float | None:
+    if isinstance(value, (float, int)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _as_str(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None

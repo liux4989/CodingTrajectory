@@ -357,6 +357,7 @@ def dispatch(
         build_trajectory_narrative,
         build_trajectory_overview,
     )
+    from coding_trajectory.metrics import build_trajectory_metrics
 
     if method == "trajectory.list":
         trajectories = resolve_collection(
@@ -420,6 +421,44 @@ def dispatch(
         for session in trajectory.sessions:
             cache.session_to_trajectory[str(session.session_id)] = str(trajectory.trajectory_id)
         return result
+
+    if method == "metrics.trajectory":
+        trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
+        result = build_trajectory_metrics(
+            trajectory,
+            store=store,
+            extra_billing=bool(params.get("extra_billing")),
+        )
+        for session in trajectory.sessions:
+            cache.session_to_trajectory[str(session.session_id)] = str(trajectory.trajectory_id)
+        return result
+
+    if method == "metrics.turns":
+        trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
+        result = build_trajectory_metrics(
+            trajectory,
+            store=store,
+            extra_billing=bool(params.get("extra_billing")),
+        )
+        return {
+            "trajectory_id": result["trajectory_id"],
+            "token_usage": result["token_usage"],
+            "cost_estimate": result["cost_estimate"],
+            "turns": [
+                {
+                    "session_id": session["session_id"],
+                    "vendor": session["vendor"],
+                    "turn_id": turn["turn_id"],
+                    "sequence": turn["sequence"],
+                    "token_usage": turn["token_usage"],
+                    "cost_estimate": turn["cost_estimate"],
+                    "step_ids": [step["step_id"] for step in turn["steps"]],
+                }
+                for session in result["sessions"]
+                for turn in session["turns"]
+            ],
+            "warnings": result.get("warnings") or [],
+        }
 
     if method == "step.details":
         step_ids = params.get("step_ids")

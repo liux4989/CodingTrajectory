@@ -236,6 +236,7 @@ class ClaudeCodeAdapter(BaseAdapter):
         current_step_thinking: list[str] = []
         current_step_items = []
         current_step_usage: dict | None = None
+        current_step_model: str | None = None
         current_step_stop_reason: str | None = None
         current_step_timestamp: datetime | None = None
         current_step_event_ids: list[UUID] = []
@@ -243,7 +244,7 @@ class ClaudeCodeAdapter(BaseAdapter):
 
         def _flush_step(turn: Turn) -> None:
             nonlocal current_step_thinking, current_step_items, current_step_usage
-            nonlocal current_step_stop_reason, current_step_timestamp
+            nonlocal current_step_model, current_step_stop_reason, current_step_timestamp
             nonlocal current_step_event_ids, in_step, step_sequence
 
             if not in_step:
@@ -254,6 +255,8 @@ class ClaudeCodeAdapter(BaseAdapter):
             vendor_data: dict = {}
             if current_step_thinking:
                 vendor_data["thinking"] = current_step_thinking
+            if current_step_model:
+                vendor_data["model"] = current_step_model
             if current_step_usage:
                 vendor_data["usage"] = current_step_usage
             if current_step_stop_reason:
@@ -276,6 +279,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             current_step_thinking = []
             current_step_items = []
             current_step_usage = None
+            current_step_model = None
             current_step_stop_reason = None
             current_step_timestamp = None
             current_step_event_ids = []
@@ -396,6 +400,7 @@ class ClaudeCodeAdapter(BaseAdapter):
 
                 message = record.get("message", {})
                 content = message.get("content", [])
+                current_step_model = message.get("model") if isinstance(message.get("model"), str) else current_step_model
                 stop_reason = message.get("stop_reason")
                 usage = message.get("usage")
                 rec_events = _get_events_for_record(record)
@@ -561,6 +566,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             payload = compact_dict(
                 {
                     **base,
+                    "model": message.get("model"),
                     "tool_call_id": tool.get("id"),
                     "tool_name": tool.get("name"),
                     "tool_input": tool.get("input"),
@@ -587,7 +593,15 @@ class ClaudeCodeAdapter(BaseAdapter):
                     type=EventType.LLM_RESPONSE,
                     vendor_source=self.vendor,
                     actor="assistant",
-                    payload=compact_dict({**base, "text": text, "stop_reason": stop_reason, "usage": usage}),
+                    payload=compact_dict(
+                        {
+                            **base,
+                            "model": message.get("model"),
+                            "text": text,
+                            "stop_reason": stop_reason,
+                            "usage": usage,
+                        }
+                    ),
                 )
             )
         elif not events and stop_reason is not None:
@@ -599,7 +613,14 @@ class ClaudeCodeAdapter(BaseAdapter):
                     type=EventType.VENDOR_RAW,
                     vendor_source=self.vendor,
                     actor="assistant",
-                    payload=compact_dict({**base, "stop_reason": stop_reason, "usage": usage}),
+                    payload=compact_dict(
+                        {
+                            **base,
+                            "model": message.get("model"),
+                            "stop_reason": stop_reason,
+                            "usage": usage,
+                        }
+                    ),
                 )
             )
 

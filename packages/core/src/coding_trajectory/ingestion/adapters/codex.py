@@ -384,6 +384,16 @@ class CodexAdapter(BaseAdapter):
                         )
                         _flush_turn_with_step(last_msg, ts)
 
+                elif inner_type == "token_count":
+                    if current_turn is not None:
+                        metric_event_ids = [
+                            ev.event_id
+                            for ev in event_index.get(ts, [])
+                            if ev.type == EventType.VENDOR_RAW
+                        ]
+                        _append_unique_event_ids(current_turn.event_ids, metric_event_ids)
+                        _append_unique_event_ids(current_step_event_ids, metric_event_ids)
+
             elif outer_type == "response_item":
                 inner_type = payload.get("type", "")
                 if current_turn is None:
@@ -566,6 +576,23 @@ class CodexAdapter(BaseAdapter):
                         "turn_id_raw": turn_id,
                         "raw_type": "context_compacted",
                         "details": details or None,
+                    }
+                ),
+            )
+
+        if inner_type == "token_count":
+            return self._event_from(
+                session_id=state.session_id,
+                event_type=EventType.VENDOR_RAW,
+                timestamp=timestamp,
+                actor="assistant",
+                payload=compact_dict(
+                    {
+                        "turn_id_raw": turn_id,
+                        "raw_type": "token_count",
+                        "model": state.turn_context.get("model"),
+                        "info": payload.get("info"),
+                        "rate_limits": payload.get("rate_limits"),
                     }
                 ),
             )

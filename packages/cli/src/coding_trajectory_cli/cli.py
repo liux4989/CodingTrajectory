@@ -63,6 +63,8 @@ NAVIGATE
   ct project trajectories PROJECT_NAME             list trajectories for a project
   ct trajectory overview [TRAJECTORY_ID]           session structure, step types, user requests
   ct trajectory narrative [TRAJECTORY_ID]          deterministic turn narrative for summarizers
+  ct metrics trajectory [TRAJECTORY_ID]            token/quota rollup by hierarchy
+  ct metrics turns [TRAJECTORY_ID]                 token rollup by turn
   ct step detail STEP_ID [...]                     full detail for one or more steps
 
 INSPECT COMMANDS
@@ -151,6 +153,14 @@ def _add_output_flags(p: argparse.ArgumentParser) -> None:
     """Add --output and --global-scope flags (for commands that need scope)."""
     p.add_argument("--output", "-o", metavar="FILE", dest="output_file", help="Write JSON output to FILE instead of stdout.")
     p.add_argument("--global-scope", action="store_true", help="Search all known log files instead of the most-recent session.")
+
+
+def _add_metrics_flags(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--extra-billing",
+        action="store_true",
+        help="Mark cost estimates as outside-plan/API billing instead of plan-usage estimates.",
+    )
 
 
 def _add_agent_vendor_flag(p: argparse.ArgumentParser) -> None:
@@ -245,6 +255,46 @@ def _build_parser() -> argparse.ArgumentParser:
     traj_narrative.set_defaults(
         _method="trajectory.narrative",
         _params=lambda args: {"trajectory_id": args.trajectory_id} if args.trajectory_id else {},
+    )
+
+    # -- metrics --------------------------------------------------------
+    metrics_parser = subparsers.add_parser(
+        "metrics",
+        help="Inspect derived execution metrics.",
+        formatter_class=_GhFormatter,
+    )
+    metrics_sub = metrics_parser.add_subparsers(dest="action", required=True)
+
+    metrics_trajectory = metrics_sub.add_parser(
+        "trajectory",
+        help="Show token and quota metrics projected onto the trajectory hierarchy.",
+        formatter_class=_GhFormatter,
+    )
+    _add_trajectory_source(metrics_trajectory)
+    _add_output_flags(metrics_trajectory)
+    _add_metrics_flags(metrics_trajectory)
+    metrics_trajectory.set_defaults(
+        _method="metrics.trajectory",
+        _params=lambda args: {
+            "extra_billing": args.extra_billing,
+            **({"trajectory_id": args.trajectory_id} if args.trajectory_id else {}),
+        },
+    )
+
+    metrics_turns = metrics_sub.add_parser(
+        "turns",
+        help="Show token metrics summarized by turn.",
+        formatter_class=_GhFormatter,
+    )
+    _add_trajectory_source(metrics_turns)
+    _add_output_flags(metrics_turns)
+    _add_metrics_flags(metrics_turns)
+    metrics_turns.set_defaults(
+        _method="metrics.turns",
+        _params=lambda args: {
+            "extra_billing": args.extra_billing,
+            **({"trajectory_id": args.trajectory_id} if args.trajectory_id else {}),
+        },
     )
 
     # -- step -----------------------------------------------------------
