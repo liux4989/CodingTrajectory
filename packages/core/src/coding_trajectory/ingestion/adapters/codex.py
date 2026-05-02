@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -23,14 +24,17 @@ from coding_trajectory.ingestion.models import (
     Event,
     EventType,
     Session,
+    SessionStatus,
     Step,
-    StepTextItem,
+    StepItem,
     StepToolItem,
     Turn,
+    TurnStatus,
     ToolStatus,
     Vendor,
     VendorExtensions,
 )
+from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, update_tool_item
 
 logger = logging.getLogger(__name__)
 
@@ -67,19 +71,6 @@ def _append_unique_event_ids(target: list[UUID], event_ids: list[UUID]) -> None:
     for event_id in event_ids:
         if event_id not in target:
             target.append(event_id)
-
-
-def _append_text_item(items: list[StepTextItem | StepToolItem], text: str | None, *, event_ids: list[UUID] | None = None) -> None:
-    if not text:
-        return
-    cleaned = text.strip()
-    if not cleaned:
-        return
-    if items and isinstance(items[-1], StepTextItem) and items[-1].text == cleaned:
-        if event_ids:
-            _append_unique_event_ids(items[-1].event_ids, event_ids)
-        return
-    items.append(StepTextItem(text=cleaned, event_ids=list(event_ids or [])))
 
 
 def _as_non_empty_str(value: Any) -> str | None:
@@ -179,6 +170,22 @@ def _extract_collaboration_mode(ctx: dict[str, Any]) -> str | None:
     return _as_non_empty_str(collaboration_mode)
 
 
+def _is_source_active(source: Path | None, *, active_seconds: int = 300) -> bool:
+    if source is None:
+        return False
+    try:
+        return time.time() - source.stat().st_mtime <= active_seconds
+    except OSError:
+        return False
+
+
+def _derive_session_status(turns: list[Turn]) -> SessionStatus:
+    if any(turn.status == TurnStatus.RUNNING for turn in turns):
+        return SessionStatus.ACTIVE
+    if turns and turns[-1].status == TurnStatus.INCOMPLETE:
+        return SessionStatus.INCOMPLETE
+    return SessionStatus.COMPLETED
+
 
 class CodexAdapter(BaseAdapter):
     """Ingest Codex CLI JSONL rollout files from ~/.codex/sessions/."""
@@ -251,7 +258,8 @@ class CodexAdapter(BaseAdapter):
             )
         )
 
-        turns = self._build_turns(state.session_id, records, normalized_events)
+        turns = self._build_turns(state.session_id, records, normalized_events, source=source)
+        session_status = _derive_session_status(turns)
 
         return Session(
             session_id=state.session_id,
@@ -264,6 +272,7 @@ class CodexAdapter(BaseAdapter):
             events=normalized_events,
             turns=turns,
             extensions=extensions,
+            status=session_status,
         )
 
     def _build_turns(
@@ -271,8 +280,10 @@ class CodexAdapter(BaseAdapter):
         session_id: UUID,
         records: list[dict],
         events: list[Event],
+        *,
+        source: Path | None = None,
     ) -> list[Turn]:
-        """One Step per turn bounded by task_started → task_complete."""
+        """Build ordered steps while preserving interrupted/running turns."""
         turns: list[Turn] = []
         turn_sequence = 0
 
@@ -284,38 +295,60 @@ class CodexAdapter(BaseAdapter):
             event_index[ev.timestamp].append(ev)
 
         current_turn: Turn | None = None
+        current_step_sequence = 0
         current_step_event_ids: list[UUID] = []
-        current_step_items: list[StepTextItem | StepToolItem] = []
+        current_step_items: list[StepItem] = []
         current_step_tools_by_call_id: dict[str, StepToolItem] = {}
         current_step_start_ts: datetime | None = None
+        current_turn_has_final_answer = False
 
-        def _flush_turn_with_step(last_msg: str | None, end_ts: datetime) -> None:
+        def _flush_step() -> None:
             nonlocal current_turn, current_step_event_ids, current_step_items
-            nonlocal current_step_tools_by_call_id, current_step_start_ts, turn_sequence
+            nonlocal current_step_tools_by_call_id, current_step_start_ts
+            nonlocal current_step_sequence
 
-            if current_turn is None:
+            if current_turn is None or not current_step_items:
                 return
-
-            _append_text_item(current_step_items, last_msg)
 
             step = Step(
                 session_id=session_id,
                 turn_id=current_turn.turn_id,
-                sequence=0,
+                sequence=current_step_sequence,
                 timestamp=current_step_start_ts or current_turn.started_at,
                 vendor=Vendor.CODEX_CLI,
                 items=list(current_step_items),
                 event_ids=list(current_step_event_ids),
             )
             current_turn.steps.append(step)
-            current_turn.ended_at = end_ts
-            turns.append(current_turn)
-
-            current_turn = None
+            current_step_sequence += 1
             current_step_event_ids = []
             current_step_items = []
             current_step_tools_by_call_id = {}
             current_step_start_ts = None
+
+        def _start_step_if_needed(ts: datetime) -> None:
+            nonlocal current_step_start_ts
+            if current_step_start_ts is None:
+                current_step_start_ts = ts
+
+        def _flush_turn(last_msg: str | None, end_ts: datetime, *, status: TurnStatus) -> None:
+            nonlocal current_turn, current_step_sequence, current_turn_has_final_answer
+
+            if current_turn is None:
+                return
+
+            if status == TurnStatus.COMPLETED and not current_turn_has_final_answer:
+                _start_step_if_needed(end_ts)
+                append_text_item(current_step_items, last_msg)
+
+            _flush_step()
+            current_turn.ended_at = end_ts
+            current_turn.status = status
+            turns.append(current_turn)
+
+            current_turn = None
+            current_step_sequence = 0
+            current_turn_has_final_answer = False
 
         for record in records:
             outer_type = record.get("type", "")
@@ -335,6 +368,9 @@ class CodexAdapter(BaseAdapter):
                 inner_type = payload.get("type", "")
 
                 if inner_type == "user_message":
+                    if current_turn is not None:
+                        _flush_turn(None, ts, status=TurnStatus.INTERRUPTED)
+
                     # Find the USER_PROMPT_SUBMITTED event
                     user_evs = [
                         e for e in event_index.get(ts, [])
@@ -351,38 +387,32 @@ class CodexAdapter(BaseAdapter):
                         event_ids=[user_ev.event_id] if user_ev else [],
                     )
                     turn_sequence += 1
-                    current_step_start_ts = ts
+                    current_step_sequence = 0
+                    current_step_event_ids = []
+                    current_step_items = []
+                    current_step_tools_by_call_id = {}
+                    current_step_start_ts = None
+                    current_turn_has_final_answer = False
                     if user_ev:
-                        _append_unique_event_ids(current_step_event_ids, [user_ev.event_id])
+                        _append_unique_event_ids(current_turn.event_ids, [user_ev.event_id])
 
                 elif inner_type == "agent_message":
-                    # Intermediate commentary
-                    text = _extract_message_text(payload)
-                    phase = payload.get("phase")
-                    if phase == "commentary" and text:
-                        _append_text_item(current_step_items, text)
-                    # Collect event IDs
                     _append_unique_event_ids(
-                        current_step_event_ids,
+                        current_turn.event_ids if current_turn is not None else [],
                         [ev.event_id for ev in event_index.get(ts, [])],
                     )
-                    if current_turn is not None:
-                        _append_unique_event_ids(
-                            current_turn.event_ids,
-                            [ev.event_id for ev in event_index.get(ts, [])],
-                        )
 
                 elif inner_type == "task_complete":
                     last_msg = payload.get("last_agent_message")
                     if current_turn is not None:
-                        # Collect task_complete event IDs
                         turn_event_ids = [ev.event_id for ev in event_index.get(ts, [])]
                         _append_unique_event_ids(current_turn.event_ids, turn_event_ids)
-                        _append_unique_event_ids(
-                            current_step_event_ids,
-                            [ev.event_id for ev in event_index.get(ts, []) if ev.type == EventType.VENDOR_RAW],
-                        )
-                        _flush_turn_with_step(last_msg, ts)
+                        if not current_turn_has_final_answer:
+                            _append_unique_event_ids(
+                                current_step_event_ids,
+                                [ev.event_id for ev in event_index.get(ts, []) if ev.type == EventType.VENDOR_RAW],
+                            )
+                        _flush_turn(last_msg, ts, status=TurnStatus.COMPLETED)
 
                 elif inner_type == "token_count":
                     if current_turn is not None:
@@ -400,6 +430,9 @@ class CodexAdapter(BaseAdapter):
                     continue
 
                 if inner_type == "function_call":
+                    if current_step_items and not any(isinstance(item, StepToolItem) for item in current_step_items):
+                        _flush_step()
+                    _start_step_if_needed(ts)
                     tool_name = payload.get("name")
                     tool_input = _parse_json_blob(payload.get("arguments"))
                     request_event_ids = [
@@ -407,14 +440,14 @@ class CodexAdapter(BaseAdapter):
                         for ev in event_index.get(ts, [])
                         if ev.type == EventType.TOOL_CALL_REQUESTED
                     ]
-                    tool_item = StepToolItem(
+                    tool_item = append_tool_item(
+                        current_step_items,
                         tool_name=tool_name,
                         tool_call_id=payload.get("call_id"),
                         input=tool_input,
                         status=ToolStatus.REQUESTED,
                         event_ids=request_event_ids,
                     )
-                    current_step_items.append(tool_item)
                     call_id = payload.get("call_id")
                     if isinstance(call_id, str) and call_id:
                         current_step_tools_by_call_id[call_id] = tool_item
@@ -423,6 +456,7 @@ class CodexAdapter(BaseAdapter):
                         _append_unique_event_ids(current_turn.event_ids, request_event_ids)
 
                 elif inner_type == "function_call_output":
+                    _start_step_if_needed(ts)
                     result_event_ids = [
                         ev.event_id
                         for ev in event_index.get(ts, [])
@@ -432,18 +466,24 @@ class CodexAdapter(BaseAdapter):
                     if current_turn is not None:
                         _append_unique_event_ids(current_turn.event_ids, result_event_ids)
                     call_id = payload.get("call_id")
+                    status = (
+                        ToolStatus.FAILED
+                        if any(
+                            ev.type == EventType.TOOL_CALL_FAILED
+                            for ev in event_index.get(ts, [])
+                        )
+                        else ToolStatus.COMPLETED
+                    )
+                    update_tool_item(
+                        current_step_items,
+                        tool_call_id=call_id if isinstance(call_id, str) else None,
+                        output=_parse_json_blob(payload.get("output")),
+                        status=status,
+                        event_ids=result_event_ids,
+                    )
                     tool_item = current_step_tools_by_call_id.get(call_id) if isinstance(call_id, str) else None
                     if tool_item is not None:
-                        tool_item.output = _parse_json_blob(payload.get("output"))
-                        tool_item.status = (
-                            ToolStatus.FAILED
-                            if any(
-                                ev.type == EventType.TOOL_CALL_FAILED
-                                for ev in event_index.get(ts, [])
-                            )
-                            else ToolStatus.COMPLETED
-                        )
-                        _append_unique_event_ids(tool_item.event_ids, result_event_ids)
+                        tool_item.status = status
 
                 elif inner_type == "reasoning":
                     # Encrypted, skip
@@ -451,9 +491,15 @@ class CodexAdapter(BaseAdapter):
 
                 elif inner_type == "message":
                     if payload.get("role") == "assistant":
+                        phase = payload.get("phase")
+                        if current_step_items:
+                            _flush_step()
+                        _start_step_if_needed(ts)
                         response_event_ids = [ev.event_id for ev in event_index.get(ts, [])]
                         text = _extract_response_text(payload)
-                        _append_text_item(current_step_items, text, event_ids=list(response_event_ids))
+                        append_text_item(current_step_items, text, event_ids=list(response_event_ids))
+                        if phase == "final_answer" and text:
+                            current_turn_has_final_answer = True
                         _append_unique_event_ids(current_step_event_ids, response_event_ids)
                         if current_turn is not None:
                             _append_unique_event_ids(current_turn.event_ids, response_event_ids)
@@ -461,7 +507,8 @@ class CodexAdapter(BaseAdapter):
         # Flush any incomplete turn
         if current_turn is not None:
             last_ts = max((e.timestamp for e in events), default=current_turn.started_at)
-            _flush_turn_with_step(None, last_ts)
+            status = TurnStatus.RUNNING if _is_source_active(source) else TurnStatus.INCOMPLETE
+            _flush_turn(None, last_ts, status=status)
 
         return turns
 

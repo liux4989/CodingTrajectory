@@ -36,6 +36,7 @@ def serialize_session_detail(session: Session) -> dict[str, Any]:
         {
             "session_id": str(session.session_id),
             "trajectory_id": str(session.trajectory_id),
+            "status": session.status,
             "turn_ids": [str(turn.turn_id) for turn in session.turns],
             "event_ids": [str(event.event_id) for event in session.events],
         }
@@ -47,6 +48,7 @@ def serialize_turn_detail(turn: Turn) -> dict[str, Any]:
         {
             "turn_id": str(turn.turn_id),
             "session_id": str(turn.session_id),
+            "status": turn.status,
             "event_ids": [str(event_id) for event_id in turn.event_ids],
             "step_ids": [str(step.step_id) for step in turn.steps],
         }
@@ -448,8 +450,10 @@ def dispatch(
                 {
                     "session_id": session["session_id"],
                     "vendor": session["vendor"],
+                    "session_status": session.get("status"),
                     "turn_id": turn["turn_id"],
                     "sequence": turn["sequence"],
+                    "status": turn.get("status"),
                     "token_usage": turn["token_usage"],
                     "cost_estimate": turn["cost_estimate"],
                     "step_ids": [step["step_id"] for step in turn["steps"]],

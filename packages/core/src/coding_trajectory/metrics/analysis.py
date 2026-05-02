@@ -82,6 +82,7 @@ def _build_session_metrics(
     return SessionMetrics(
         session_id=session.session_id,
         vendor=session.vendor.value,
+        status=session.status.value,
         token_usage=session_total,
         cost_estimate=_finalize_cost(cost_total),
         turns=turn_metrics,
@@ -126,6 +127,7 @@ def _build_turn_metrics(
     return TurnMetrics(
         turn_id=turn.turn_id,
         sequence=turn.sequence,
+        status=turn.status.value,
         token_usage=turn_total,
         cost_estimate=_finalize_cost(cost_total),
         steps=step_metrics,

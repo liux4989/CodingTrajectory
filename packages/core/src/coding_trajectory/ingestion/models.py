@@ -33,6 +33,19 @@ class ToolStatus(str, Enum):
     FAILED      = "failed"
 
 
+class TurnStatus(str, Enum):
+    RUNNING     = "running"
+    INTERRUPTED = "interrupted"
+    COMPLETED   = "completed"
+    INCOMPLETE  = "incomplete"
+
+
+class SessionStatus(str, Enum):
+    ACTIVE     = "active"
+    COMPLETED  = "completed"
+    INCOMPLETE = "incomplete"
+
+
 # ---------------------------------------------------------------------------
 # Vendor-specific extension models (session-level metadata)
 # ---------------------------------------------------------------------------
@@ -173,6 +186,7 @@ class Turn(BaseModel):
     event_ids:             list[UUID] = Field(default_factory=list)
     steps:                 list[Step] = Field(default_factory=list)
     team_state:            TeamTurnState | None = None
+    status:                TurnStatus = TurnStatus.COMPLETED
 
 
 class Session(BaseModel):
@@ -187,6 +201,7 @@ class Session(BaseModel):
     events:            list[Event] = Field(default_factory=list)
     turns:             list[Turn] = Field(default_factory=list)
     extensions:        VendorExtensions | None = None
+    status:            SessionStatus = SessionStatus.COMPLETED
 
 
 class TrajectoryEdge(BaseModel):

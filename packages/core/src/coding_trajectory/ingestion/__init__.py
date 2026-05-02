@@ -3,11 +3,6 @@ from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
 from coding_trajectory.ingestion.adapters.gemini import GeminiAdapter
-from coding_trajectory.ingestion.decorators import (
-    BaseDecorator,
-    ClaudeCodeDecorator,
-    VendorDecorator,
-)
 from coding_trajectory.ingestion.models import (
     AmpExtensions,
     ClaudeCodeExtensions,
@@ -15,6 +10,7 @@ from coding_trajectory.ingestion.models import (
     StepItem,
     StepTextItem,
     StepToolItem,
+    SessionStatus,
     ToolStatus,
     Event,
     EventType,
@@ -25,6 +21,7 @@ from coding_trajectory.ingestion.models import (
     TrajectoryEdge,
     TrajectorySummary,
     Turn,
+    TurnStatus,
     Vendor,
     VendorExtensions,
 )
@@ -42,10 +39,12 @@ __all__ = [
     "StepItem",
     "StepTextItem",
     "StepToolItem",
+    "SessionStatus",
     "Trajectory",
     "TrajectoryEdge",
     "TrajectorySummary",
     "Turn",
+    "TurnStatus",
     "ToolStatus",
     "Vendor",
     "VendorExtensions",
@@ -55,8 +54,4 @@ __all__ = [
     "ClaudeCodeAdapter",
     "CodexAdapter",
     "GeminiAdapter",
-    # decorators
-    "BaseDecorator",
-    "ClaudeCodeDecorator",
-    "VendorDecorator",
 ]

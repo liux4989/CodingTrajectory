@@ -133,6 +133,7 @@ class StepMetrics(BaseModel):
 class TurnMetrics(BaseModel):
     turn_id: UUID
     sequence: int
+    status: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
     steps: list[StepMetrics] = Field(default_factory=list)
@@ -142,6 +143,7 @@ class TurnMetrics(BaseModel):
 class SessionMetrics(BaseModel):
     session_id: UUID
     vendor: str
+    status: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
     turns: list[TurnMetrics] = Field(default_factory=list)

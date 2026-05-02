@@ -371,6 +371,7 @@ def _session_narrative_node(
         "session_id": str(session.session_id),
         "relationship": _session_connection(session, structure=structure),
         "vendor": session.vendor.value,
+        "status": session.status,
         "agent_name": session.agent_name,
         "cwd": session.cwd,
         "turns": [
@@ -391,23 +392,21 @@ def _turn_narrative_node(
     if _is_low_value_turn(turn.steps, user_request):
         return None
 
-    assistant_response: str | None = None
+    assistant_responses: list[str] = []
     step_ids: list[str] = []
 
     for step in turn.steps:
         step_ids.append(str(step.step_id))
 
-        text = "\n".join(
-            item.text for item in step.items
-            if isinstance(item, StepTextItem) and item.text
-        ).strip()
-        if text:
-            assistant_response = text
+        for item in step.items:
+            if isinstance(item, StepTextItem) and item.text:
+                assistant_responses.append(item.text)
 
     return prune_nones({
         "turn_id": str(turn.turn_id),
+        "status": turn.status,
         "user_request": user_request,
-        "assistant_response": assistant_response,
+        "assistant_responses": assistant_responses or None,
         "refs": {
             "step_ids": step_ids or None,
             "user_request_event_id": str(turn.user_request_event_id) if turn.user_request_event_id else None,
@@ -459,9 +458,15 @@ def _session_nav_node(
     if pending_teammate is not None:
         turns.append(pending_teammate)
 
-    return {
+    return prune_nones({
+        "session_id": str(session.session_id),
+        "relationship": _session_connection(session, structure=structure),
+        "vendor": session.vendor.value,
+        "status": session.status,
+        "agent_name": session.agent_name,
+        "cwd": session.cwd,
         "turns": turns,
-    }
+    })
 
 
 def _merge_ordered_unique(existing: list[str], incoming: list[str]) -> list[str]:
@@ -604,52 +609,38 @@ def _build_member_session_lookup(trajectory: Trajectory) -> dict[str, list[_Memb
     }
 
 
-_TEXT_PREVIEW_LEN = 300
 _TEAM_TASK_ID_RE = re.compile(r"Task\s*#?\s*(\d+)", re.IGNORECASE)
 _LEAD_ERROR_RE = re.compile(r"\b(error|failed|failure|exception|traceback)\b", re.IGNORECASE)
 _LEAD_CHECK_RESULT_RE = re.compile(r"\b(clean|passed|success|succeeded|no output|all solid)\b", re.IGNORECASE)
 
 
 def _build_flows(steps: list[Step]) -> list[dict[str, Any]]:
-    """Build an interleaved narrative flow from a flat step list.
+    """Build a flattened event stream from the ordered step items.
 
-    Consecutive tool calls are emitted under a single ``tool_calls`` entry as
-    a list of compact summaries::
+    Each item in the result is one of:
 
-        {"tool_calls": [
-            {"name": "SearchText", "description": "'btw' within src", "summary": "Found 7 matches"},
-            {"name": "ReadFile",   "description": "src/core.py",      "summary": "Read 444 line(s)"}
-        ]}
+    * ``{"type": "tool_call", ...}``
+    * ``{"type": "assistant_response", "text": ...}``
 
-    Each assistant response becomes an ``agent_response`` entry.
+    This preserves the original interleaving inside each step instead of
+    collapsing all tool calls together and dropping assistant text from mixed
+    tool/text steps.
     """
     from coding_trajectory.analysis.tool_summary import summarize_tool_call
 
     result: list[dict[str, Any]] = []
-    pending: list[dict[str, Any]] = []
-
-    def _flush_tools() -> None:
-        if not pending:
-            return
-        result.append({"tool_calls": list(pending)})
-        pending.clear()
 
     for step in steps:
-        tool_items = [item for item in step.items if isinstance(item, StepToolItem)]
-        if tool_items:
-            for item in tool_items:
+        for item in step.items:
+            if isinstance(item, StepToolItem):
                 summary = summarize_tool_call(item)
                 if summary is not None:
-                    pending.append(summary)
-        else:
-            _flush_tools()
-            text_items = [item for item in step.items if isinstance(item, StepTextItem)]
-            text = "\n".join(item.text for item in text_items if item.text).strip()
-            if text:
-                preview = text[:_TEXT_PREVIEW_LEN] + ("…" if len(text) > _TEXT_PREVIEW_LEN else "")
-                result.append({"agent_response": preview})
-
-    _flush_tools()
+                    result.append({"type": "tool_call", **summary})
+                continue
+            if isinstance(item, StepTextItem):
+                text = item.text.strip()
+                if text:
+                    result.append({"type": "assistant_response", "text": text})
 
     return result
 
@@ -680,10 +671,10 @@ def _build_lead_flow(turn: Turn, *, user_request: dict[str, Any] | None) -> list
             flow.append(event)
 
     for item in _build_flows(turn.steps):
-        if "tool_calls" in item:
-            flow.append({"type": "lead_tool_calls", **item})
-        elif "agent_response" in item:
-            flow.extend(_build_lead_text_events(item["agent_response"]))
+        if item.get("type") == "tool_call":
+            flow.append({"type": "lead_tool_call", **{key: value for key, value in item.items() if key != "type"}})
+        elif item.get("type") == "assistant_response":
+            flow.extend(_build_lead_text_events(item["text"]))
 
     return flow
 
@@ -844,6 +835,7 @@ def _turn_nav_node(
     if _is_teammate_turn(session, turn, user_request=user_request):
         return prune_nones({
             "turn_id": str(turn.turn_id),
+        "status": turn.status,
             "user_request": visible_user_request,
             "teammate_summary": _build_teammate_summary(
                 turn,
@@ -853,11 +845,10 @@ def _turn_nav_node(
         })
     return prune_nones({
         "turn_id": str(turn.turn_id),
+        "status": turn.status,
         "user_request": user_request,
-        "work_summary": {
-            "flows": _build_flows(turn.steps),
-            "step_ids": [str(step.step_id) for step in turn.steps],
-        },
+        "activity": _build_flows(turn.steps),
+        "step_ids": [str(step.step_id) for step in turn.steps],
     })
 
 
@@ -867,11 +858,11 @@ def _turn_nav_node(
 
 def _assistant_response_shape(step: Step) -> dict[str, Any]:
     text_items = [item for item in step.items if isinstance(item, StepTextItem)]
-    text = "\n".join(item.text for item in text_items if item.text).strip() or None
+    texts = [item.text for item in text_items if item.text]
     stop_reason = step.vendor_data.get("stop_reason")
     usage_raw = step.vendor_data.get("usage")
     usage = usage_raw if isinstance(usage_raw, dict) else None
-    return prune_nones({"text": text, "stop_reason": stop_reason, "usage": usage})
+    return prune_nones({"texts": texts or None, "stop_reason": stop_reason, "usage": usage})
 
 
 def _tool_call_shape(tool_items: list[StepToolItem]) -> dict[str, Any]:
