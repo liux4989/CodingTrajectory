@@ -243,6 +243,19 @@ _LOW_VALUE_COMMANDS: frozenset[str] = frozenset({
 })
 
 
+def _apply_turn_window(
+    turns: list[dict[str, Any]],
+    *,
+    num_turns: int | None = None,
+    drop_turns: int | None = None,
+) -> list[dict[str, Any]]:
+    if drop_turns is not None:
+        turns = turns[:-drop_turns]
+    if num_turns is not None:
+        turns = turns[-num_turns:]
+    return turns
+
+
 def _is_low_value_turn(steps: list, user_request: dict[str, Any] | None) -> bool:
     """Return True for turns that carry no work output and should be hidden in overview."""
     if not steps:
@@ -281,7 +294,13 @@ def _include_session_in_overview(session: Session, *, structure: TrajectoryStruc
     return node.incoming_edge_type != "spawned_subagent"
 
 
-def build_trajectory_overview(trajectory: Trajectory, *, store: DocumentStore) -> dict[str, Any]:
+def build_trajectory_overview(
+    trajectory: Trajectory,
+    *,
+    store: DocumentStore,
+    num_turns: int | None = None,
+    drop_turns: int | None = None,
+) -> dict[str, Any]:
     structure = build_trajectory_structure(trajectory)
     sessions_by_id = {s.session_id: s for s in trajectory.sessions}
     member_session_lookup = _build_member_session_lookup(trajectory)
@@ -302,6 +321,8 @@ def build_trajectory_overview(trajectory: Trajectory, *, store: DocumentStore) -
                     store=store,
                     structure=structure,
                     member_session_lookup=member_session_lookup,
+                    num_turns=num_turns,
+                    drop_turns=drop_turns,
                 )
             )
         node = structure.session_tree.nodes_by_session_id.get(session_id)
@@ -316,6 +337,8 @@ def build_trajectory_overview(trajectory: Trajectory, *, store: DocumentStore) -
                     store=store,
                     structure=structure,
                     member_session_lookup=member_session_lookup,
+                    num_turns=num_turns,
+                    drop_turns=drop_turns,
                 )
             )
 
@@ -325,7 +348,13 @@ def build_trajectory_overview(trajectory: Trajectory, *, store: DocumentStore) -
     }
 
 
-def build_trajectory_narrative(trajectory: Trajectory, *, store: DocumentStore) -> dict[str, Any]:
+def build_trajectory_narrative(
+    trajectory: Trajectory,
+    *,
+    store: DocumentStore,
+    num_turns: int | None = None,
+    drop_turns: int | None = None,
+) -> dict[str, Any]:
     """Build a deterministic turn narrative for downstream summarizers.
 
     Unlike ``trajectory overview``, this is not a drilldown/navigation tree. It
@@ -346,14 +375,30 @@ def build_trajectory_narrative(trajectory: Trajectory, *, store: DocumentStore) 
         visited.add(session_id)
         session = sessions_by_id.get(session_id)
         if session is not None:
-            ordered.append(_session_narrative_node(session, store=store, structure=structure))
+            ordered.append(
+                _session_narrative_node(
+                    session,
+                    store=store,
+                    structure=structure,
+                    num_turns=num_turns,
+                    drop_turns=drop_turns,
+                )
+            )
         node = structure.session_tree.nodes_by_session_id.get(session_id)
         if node:
             queue.extend(node.child_session_ids)
 
     for session in trajectory.sessions:
         if session.session_id not in visited:
-            ordered.append(_session_narrative_node(session, store=store, structure=structure))
+            ordered.append(
+                _session_narrative_node(
+                    session,
+                    store=store,
+                    structure=structure,
+                    num_turns=num_turns,
+                    drop_turns=drop_turns,
+                )
+            )
 
     return {
         "trajectory_id": str(trajectory.trajectory_id),
@@ -366,7 +411,16 @@ def _session_narrative_node(
     *,
     store: DocumentStore,
     structure: TrajectoryStructure,
+    num_turns: int | None = None,
+    drop_turns: int | None = None,
 ) -> dict[str, Any]:
+    turns = [
+        turn_node
+        for turn in session.turns
+        if (turn_node := _turn_narrative_node(turn, session=session, store=store)) is not None
+    ]
+    turns = _apply_turn_window(turns, num_turns=num_turns, drop_turns=drop_turns)
+
     return prune_nones({
         "session_id": str(session.session_id),
         "relationship": _session_connection(session, structure=structure),
@@ -374,11 +428,7 @@ def _session_narrative_node(
         "status": session.status,
         "agent_name": session.agent_name,
         "cwd": session.cwd,
-        "turns": [
-            turn_node
-            for turn in session.turns
-            if (turn_node := _turn_narrative_node(turn, session=session, store=store)) is not None
-        ],
+        "turns": turns,
     })
 
 
@@ -420,6 +470,8 @@ def _session_nav_node(
     store: DocumentStore,
     structure: TrajectoryStructure,
     member_session_lookup: dict[str, list[_MemberSessionCandidate]],
+    num_turns: int | None = None,
+    drop_turns: int | None = None,
 ) -> dict[str, Any]:
     turns: list[dict[str, Any]] = []
     pending_teammate: dict[str, Any] | None = None
@@ -457,6 +509,7 @@ def _session_nav_node(
 
     if pending_teammate is not None:
         turns.append(pending_teammate)
+    turns = _apply_turn_window(turns, num_turns=num_turns, drop_turns=drop_turns)
 
     return prune_nones({
         "session_id": str(session.session_id),

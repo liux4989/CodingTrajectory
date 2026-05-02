@@ -23,8 +23,11 @@ Structured View
 1. `project list` — find project names
 2. `project trajectories <project_name>` — list trajectories for a project, get the trajectory id
    - or `project --logfile PATH` — load a log file directly and get the trajectory id
-3. `trajectory overview <trajectory_id>` — read the navigation tree, identify relevant steps
-4. `trajectory narrative <trajectory_id>` — read deterministic user/assistant/tool activity for summarization
+3. `trajectory overview <trajectory_id> [--turns N] [--drop-turns K]` — read the navigation tree, identify relevant steps
+   - `--turns N` keeps only the last N visible turns per session
+   - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
+   - when combined, `--drop-turns` is applied before `--turns`
+4. `trajectory narrative <trajectory_id> [--turns N] [--drop-turns K]` — read deterministic user/assistant/tool activity for summarization
 5. `metrics trajectory <trajectory_id>` — inspect native token/quota metrics joined to the hierarchy
 6. `metrics turns <trajectory_id>` — compare execution metrics turn by turn
 7. `step detail <step_id>` — read the evidence for a specific step

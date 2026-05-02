@@ -57,6 +57,46 @@ def _project_trajectories_params(args: argparse.Namespace) -> dict[str, Any]:
     return params
 
 
+def _trajectory_turns_params(args: argparse.Namespace) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    if args.trajectory_id:
+        params["trajectory_id"] = args.trajectory_id
+    if args.num_turns is not None:
+        params["num_turns"] = args.num_turns
+    if args.drop_turns is not None:
+        params["drop_turns"] = args.drop_turns
+    return params
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def _add_turn_window_flags(p: argparse.ArgumentParser, *, view_name: str) -> None:
+    p.add_argument(
+        "--turns",
+        dest="num_turns",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help=f"Limit each session {view_name} to its last N visible turns.",
+    )
+    p.add_argument(
+        "--drop-turns",
+        dest="drop_turns",
+        type=_positive_int,
+        default=None,
+        metavar="K",
+        help="Drop the last K visible turns, matching thread/rollback semantics.",
+    )
+
+
 _EPILOG = """\
 NAVIGATE
   ct project list                                  list all known projects
@@ -239,10 +279,11 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_GhFormatter,
     )
     _add_trajectory_source(traj_overview)
+    _add_turn_window_flags(traj_overview, view_name="overview")
     _add_output_flags(traj_overview)
     traj_overview.set_defaults(
         _method="trajectory.overview",
-        _params=lambda args: {"trajectory_id": args.trajectory_id} if args.trajectory_id else {},
+        _params=_trajectory_turns_params,
     )
 
     traj_narrative = traj_sub.add_parser(
@@ -251,10 +292,11 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_GhFormatter,
     )
     _add_trajectory_source(traj_narrative)
+    _add_turn_window_flags(traj_narrative, view_name="narrative")
     _add_output_flags(traj_narrative)
     traj_narrative.set_defaults(
         _method="trajectory.narrative",
-        _params=lambda args: {"trajectory_id": args.trajectory_id} if args.trajectory_id else {},
+        _params=_trajectory_turns_params,
     )
 
     # -- metrics --------------------------------------------------------

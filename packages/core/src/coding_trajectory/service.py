@@ -20,6 +20,21 @@ from coding_trajectory.ingestion.models import Event, EventType, Session, Step, 
 from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
 
 
+def _optional_positive_int(params: dict[str, Any], key: str) -> int | None:
+    value = params.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a positive integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be a positive integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{key} must be a positive integer")
+    return parsed
+
+
 def serialize_trajectory_detail(trajectory: Trajectory) -> dict[str, Any]:
     vendors = sorted({session.vendor.value for session in trajectory.sessions if session.vendor})
     return prune_nones(
@@ -412,14 +427,24 @@ def dispatch(
 
     if method == "trajectory.overview":
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
-        result = build_trajectory_overview(trajectory, store=store)
+        result = build_trajectory_overview(
+            trajectory,
+            store=store,
+            num_turns=_optional_positive_int(params, "num_turns"),
+            drop_turns=_optional_positive_int(params, "drop_turns"),
+        )
         for session in trajectory.sessions:
             cache.session_to_trajectory[str(session.session_id)] = str(trajectory.trajectory_id)
         return result
 
     if method == "trajectory.narrative":
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
-        result = build_trajectory_narrative(trajectory, store=store)
+        result = build_trajectory_narrative(
+            trajectory,
+            store=store,
+            num_turns=_optional_positive_int(params, "num_turns"),
+            drop_turns=_optional_positive_int(params, "drop_turns"),
+        )
         for session in trajectory.sessions:
             cache.session_to_trajectory[str(session.session_id)] = str(trajectory.trajectory_id)
         return result
