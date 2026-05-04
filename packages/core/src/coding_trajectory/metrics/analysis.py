@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -22,6 +23,13 @@ from coding_trajectory.metrics.pricing import estimate_observation_cost
 from coding_trajectory.query import DocumentStore
 
 
+@dataclass
+class _CodexUsageState:
+    previous_totals: TokenUsage | None = None
+    remaining_inherited_totals: TokenUsage | None = None
+    seen_totals: set[tuple[int, int, int, int, int, int, int, int, int]] | None = None
+
+
 def build_trajectory_metrics(
     trajectory: Trajectory,
     *,
@@ -29,13 +37,19 @@ def build_trajectory_metrics(
     extra_billing: bool = False,
 ) -> dict[str, Any]:
     """Return token/quota metrics projected onto the trajectory hierarchy."""
+    sessions_by_id = {session.session_id: session for session in trajectory.sessions}
     session_metrics: list[SessionMetrics] = []
     total = TokenUsage()
     cost_total = CostEstimate(extra_billing=extra_billing)
     warnings: list[str] = []
 
     for session in trajectory.sessions:
-        metrics = _build_session_metrics(session, store=store, extra_billing=extra_billing)
+        metrics = _build_session_metrics(
+            session,
+            store=store,
+            sessions_by_id=sessions_by_id,
+            extra_billing=extra_billing,
+        )
         session_metrics.append(metrics)
         total = total.plus(metrics.token_usage)
         cost_total = cost_total.plus(metrics.cost_estimate)
@@ -57,9 +71,13 @@ def _build_session_metrics(
     session: Session,
     *,
     store: DocumentStore,
+    sessions_by_id: dict[UUID, Session],
     extra_billing: bool,
 ) -> SessionMetrics:
-    codex_seen_totals: set[tuple[int, int, int, int, int]] = set()
+    codex_state = _CodexUsageState(
+        remaining_inherited_totals=_inherited_codex_totals(session, sessions_by_id),
+        seen_totals=set(),
+    )
     turn_metrics: list[TurnMetrics] = []
     session_total = TokenUsage()
     cost_total = CostEstimate(extra_billing=extra_billing)
@@ -70,7 +88,7 @@ def _build_session_metrics(
             session,
             turn,
             store=store,
-            codex_seen_totals=codex_seen_totals,
+            codex_state=codex_state,
             extra_billing=extra_billing,
         )
         turn_metrics.append(metrics)
@@ -95,7 +113,7 @@ def _build_turn_metrics(
     turn: Turn,
     *,
     store: DocumentStore,
-    codex_seen_totals: set[tuple[int, int, int, int, int]],
+    codex_state: _CodexUsageState,
     extra_billing: bool,
 ) -> TurnMetrics:
     step_metrics: list[StepMetrics] = []
@@ -108,7 +126,7 @@ def _build_turn_metrics(
             session,
             step,
             store=store,
-            codex_seen_totals=codex_seen_totals,
+            codex_state=codex_state,
             extra_billing=extra_billing,
         )
         step_metrics.append(metrics)
@@ -140,7 +158,7 @@ def _build_step_metrics(
     step: Step,
     *,
     store: DocumentStore,
-    codex_seen_totals: set[tuple[int, int, int, int, int]],
+    codex_state: _CodexUsageState,
     extra_billing: bool,
 ) -> StepMetrics:
     observations: list[TokenUsageObservation] = []
@@ -157,7 +175,7 @@ def _build_step_metrics(
             event,
             step=step,
             session=session,
-            codex_seen_totals=codex_seen_totals,
+            codex_state=codex_state,
         )
         if event_observation is not None:
             observations.append(event_observation)
@@ -211,7 +229,7 @@ def _usage_from_event(
     *,
     step: Step,
     session: Session,
-    codex_seen_totals: set[tuple[int, int, int, int, int]],
+    codex_state: _CodexUsageState,
 ) -> TokenUsageObservation | None:
     if event.type != EventType.VENDOR_RAW:
         return None
@@ -224,20 +242,14 @@ def _usage_from_event(
     if not isinstance(info, dict):
         return None
 
-    total_raw = info.get("total_token_usage")
-    if isinstance(total_raw, dict):
-        total_key = _usage_key(_token_usage_from_mapping(total_raw))
-        if total_key in codex_seen_totals:
-            return None
-        codex_seen_totals.add(total_key)
-
-    usage_raw = info.get("last_token_usage")
-    if not isinstance(usage_raw, dict):
+    token_usage = _codex_delta_usage(info, codex_state)
+    if token_usage is None or _is_zero_usage(token_usage):
         return None
-
-    token_usage = _token_usage_from_mapping(usage_raw)
-    if _is_zero_usage(token_usage):
-        return None
+    model = (
+        _as_str(info.get("model"))
+        or _as_str(info.get("model_name"))
+        or _as_str(event.payload.get("model"))
+    )
 
     return TokenUsageObservation(
         scope_type="step",
@@ -245,13 +257,73 @@ def _usage_from_event(
         timestamp=event.timestamp,
         usage=token_usage,
         provider=session.vendor.value,
-        model=_as_str(event.payload.get("model")),
+        model=model,
         source=MetricSource(
             vendor=event.vendor_source.value,
             source_type="event.payload",
             event_id=event.event_id,
         ),
     )
+
+
+def _codex_delta_usage(info: dict[str, Any], state: _CodexUsageState) -> TokenUsage | None:
+    total_raw = info.get("total_token_usage")
+    if isinstance(total_raw, dict):
+        raw_totals = _token_usage_from_mapping(total_raw)
+        total_key = _usage_key(raw_totals)
+        if state.seen_totals is not None and total_key in state.seen_totals:
+            return None
+        if state.seen_totals is not None:
+            state.seen_totals.add(total_key)
+
+        current_totals = _subtract_usage(raw_totals, state.remaining_inherited_totals)
+        previous_totals = state.previous_totals or TokenUsage()
+        delta = _subtract_usage(current_totals, previous_totals)
+        state.previous_totals = current_totals
+        state.remaining_inherited_totals = None
+        return delta
+
+    last_raw = info.get("last_token_usage")
+    if not isinstance(last_raw, dict):
+        return None
+
+    raw_delta = _token_usage_from_mapping(last_raw)
+    delta = _subtract_usage(raw_delta, state.remaining_inherited_totals)
+    state.remaining_inherited_totals = _subtract_usage(state.remaining_inherited_totals, raw_delta)
+    previous_totals = state.previous_totals or TokenUsage()
+    state.previous_totals = previous_totals.plus(delta)
+    return delta
+
+
+def _inherited_codex_totals(
+    session: Session,
+    sessions_by_id: dict[UUID, Session],
+) -> TokenUsage | None:
+    if session.vendor != Vendor.CODEX_CLI or session.parent_session_id is None:
+        return None
+    parent = sessions_by_id.get(session.parent_session_id)
+    if parent is None or parent.vendor != Vendor.CODEX_CLI:
+        return None
+
+    state = _CodexUsageState(seen_totals=set())
+    latest = TokenUsage()
+    for event in sorted(parent.events, key=lambda item: item.timestamp):
+        if event.timestamp > session.started_at:
+            break
+        if event.type != EventType.VENDOR_RAW:
+            continue
+        if event.vendor_source != Vendor.CODEX_CLI:
+            continue
+        if event.payload.get("raw_type") != "token_count":
+            continue
+        info = event.payload.get("info")
+        if not isinstance(info, dict):
+            continue
+        delta = _codex_delta_usage(info, state)
+        if delta is not None:
+            latest = latest.plus(delta)
+
+    return None if _is_zero_usage(latest) else latest
 
 
 def _quota_snapshot_from_event(event: Event) -> QuotaSnapshot | None:
@@ -312,13 +384,33 @@ def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
     )
 
 
-def _usage_key(usage: TokenUsage) -> tuple[int, int, int, int, int]:
+def _usage_key(usage: TokenUsage) -> tuple[int, int, int, int, int, int, int, int, int]:
     return (
         usage.input_tokens,
         usage.cached_input_tokens,
+        usage.cache_creation_input_tokens,
+        usage.cache_creation_5m_input_tokens,
+        usage.cache_creation_1h_input_tokens,
+        usage.cache_read_input_tokens,
         usage.output_tokens,
         usage.reasoning_output_tokens,
         usage.total_tokens,
+    )
+
+
+def _subtract_usage(left: TokenUsage | None, right: TokenUsage | None) -> TokenUsage:
+    left = left or TokenUsage()
+    right = right or TokenUsage()
+    return TokenUsage(
+        input_tokens=max(left.input_tokens - right.input_tokens, 0),
+        cached_input_tokens=max(left.cached_input_tokens - right.cached_input_tokens, 0),
+        cache_creation_input_tokens=max(left.cache_creation_input_tokens - right.cache_creation_input_tokens, 0),
+        cache_creation_5m_input_tokens=max(left.cache_creation_5m_input_tokens - right.cache_creation_5m_input_tokens, 0),
+        cache_creation_1h_input_tokens=max(left.cache_creation_1h_input_tokens - right.cache_creation_1h_input_tokens, 0),
+        cache_read_input_tokens=max(left.cache_read_input_tokens - right.cache_read_input_tokens, 0),
+        output_tokens=max(left.output_tokens - right.output_tokens, 0),
+        reasoning_output_tokens=max(left.reasoning_output_tokens - right.reasoning_output_tokens, 0),
+        total_tokens=max(left.total_tokens - right.total_tokens, 0),
     )
 
 

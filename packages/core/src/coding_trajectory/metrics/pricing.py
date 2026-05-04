@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from coding_trajectory.metrics.models import CostBreakdown, CostEstimate, TokenUsage, TokenUsageObservation
@@ -29,20 +30,34 @@ _ANTHROPIC_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing"
 
 
 DEFAULT_PRICE_RULES: dict[str, PriceRule] = {
+    "gpt-5": PriceRule("gpt-5", input_per_mtok=1.25, cached_input_per_mtok=0.125, output_per_mtok=10.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5-codex": PriceRule("gpt-5-codex", input_per_mtok=1.25, cached_input_per_mtok=0.125, output_per_mtok=10.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5-mini": PriceRule("gpt-5-mini", input_per_mtok=0.25, cached_input_per_mtok=0.025, output_per_mtok=2.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5-nano": PriceRule("gpt-5-nano", input_per_mtok=0.05, cached_input_per_mtok=0.005, output_per_mtok=0.40, pricing_source=_OPENAI_SOURCE),
+    "gpt-5-pro": PriceRule("gpt-5-pro", input_per_mtok=15.00, output_per_mtok=120.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5.1": PriceRule("gpt-5.1", input_per_mtok=1.25, cached_input_per_mtok=0.125, output_per_mtok=10.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5.1-codex": PriceRule("gpt-5.1-codex", input_per_mtok=1.25, cached_input_per_mtok=0.125, output_per_mtok=10.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5.1-codex-max": PriceRule("gpt-5.1-codex-max", input_per_mtok=1.25, cached_input_per_mtok=0.125, output_per_mtok=10.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5.1-codex-mini": PriceRule("gpt-5.1-codex-mini", input_per_mtok=0.25, cached_input_per_mtok=0.025, output_per_mtok=2.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5.2": PriceRule("gpt-5.2", input_per_mtok=1.75, cached_input_per_mtok=0.175, output_per_mtok=14.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5.2-codex": PriceRule("gpt-5.2-codex", input_per_mtok=1.75, cached_input_per_mtok=0.175, output_per_mtok=14.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5.2-pro": PriceRule("gpt-5.2-pro", input_per_mtok=21.00, output_per_mtok=168.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5.3-codex": PriceRule("gpt-5.3-codex", input_per_mtok=1.75, cached_input_per_mtok=0.175, output_per_mtok=14.00, pricing_source=_OPENAI_SOURCE),
+    "gpt-5.3-codex-spark": PriceRule("gpt-5.3-codex-spark", input_per_mtok=0.00, cached_input_per_mtok=0.00, output_per_mtok=0.00, pricing_source=_OPENAI_SOURCE),
     "gpt-5.5": PriceRule("gpt-5.5", input_per_mtok=5.00, cached_input_per_mtok=0.50, output_per_mtok=30.00, pricing_source=_OPENAI_SOURCE),
     "gpt-5.4": PriceRule("gpt-5.4", input_per_mtok=2.50, cached_input_per_mtok=0.25, output_per_mtok=15.00, pricing_source=_OPENAI_SOURCE),
     "gpt-5.4-mini": PriceRule("gpt-5.4-mini", input_per_mtok=0.75, cached_input_per_mtok=0.075, output_per_mtok=4.50, pricing_source=_OPENAI_SOURCE),
     "gpt-5.4-nano": PriceRule("gpt-5.4-nano", input_per_mtok=0.20, cached_input_per_mtok=0.02, output_per_mtok=1.25, pricing_source=_OPENAI_SOURCE),
     "gpt-5.4-pro": PriceRule("gpt-5.4-pro", input_per_mtok=30.00, output_per_mtok=180.00, pricing_source=_OPENAI_SOURCE),
     "gpt-5.5-pro": PriceRule("gpt-5.5-pro", input_per_mtok=30.00, output_per_mtok=180.00, pricing_source=_OPENAI_SOURCE),
-    "claude-opus-4-7": PriceRule("claude-opus-4-7", input_per_mtok=5.00, cache_creation_per_mtok=10.00, cache_creation_5m_per_mtok=6.25, cache_creation_1h_per_mtok=10.00, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-opus-4-6": PriceRule("claude-opus-4-6", input_per_mtok=5.00, cache_creation_per_mtok=10.00, cache_creation_5m_per_mtok=6.25, cache_creation_1h_per_mtok=10.00, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-opus-4-5": PriceRule("claude-opus-4-5", input_per_mtok=5.00, cache_creation_per_mtok=10.00, cache_creation_5m_per_mtok=6.25, cache_creation_1h_per_mtok=10.00, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-opus-4-1": PriceRule("claude-opus-4-1", input_per_mtok=15.00, cache_creation_per_mtok=30.00, cache_creation_5m_per_mtok=18.75, cache_creation_1h_per_mtok=30.00, cache_read_per_mtok=1.50, output_per_mtok=75.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-sonnet-4-6": PriceRule("claude-sonnet-4-6", input_per_mtok=3.00, cache_creation_per_mtok=6.00, cache_creation_5m_per_mtok=3.75, cache_creation_1h_per_mtok=6.00, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-sonnet-4-5": PriceRule("claude-sonnet-4-5", input_per_mtok=3.00, cache_creation_per_mtok=6.00, cache_creation_5m_per_mtok=3.75, cache_creation_1h_per_mtok=6.00, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-sonnet-4": PriceRule("claude-sonnet-4", input_per_mtok=3.00, cache_creation_per_mtok=6.00, cache_creation_5m_per_mtok=3.75, cache_creation_1h_per_mtok=6.00, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-haiku-4-5": PriceRule("claude-haiku-4-5", input_per_mtok=1.00, cache_creation_per_mtok=2.00, cache_creation_5m_per_mtok=1.25, cache_creation_1h_per_mtok=2.00, cache_read_per_mtok=0.10, output_per_mtok=5.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-opus-4-7": PriceRule("claude-opus-4-7", input_per_mtok=5.00, cache_creation_per_mtok=6.25, cache_creation_5m_per_mtok=6.25, cache_creation_1h_per_mtok=10.00, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-opus-4-6": PriceRule("claude-opus-4-6", input_per_mtok=5.00, cache_creation_per_mtok=6.25, cache_creation_5m_per_mtok=6.25, cache_creation_1h_per_mtok=10.00, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-opus-4-5": PriceRule("claude-opus-4-5", input_per_mtok=5.00, cache_creation_per_mtok=6.25, cache_creation_5m_per_mtok=6.25, cache_creation_1h_per_mtok=10.00, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-opus-4-1": PriceRule("claude-opus-4-1", input_per_mtok=15.00, cache_creation_per_mtok=18.75, cache_creation_5m_per_mtok=18.75, cache_creation_1h_per_mtok=30.00, cache_read_per_mtok=1.50, output_per_mtok=75.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-sonnet-4-6": PriceRule("claude-sonnet-4-6", input_per_mtok=3.00, cache_creation_per_mtok=3.75, cache_creation_5m_per_mtok=3.75, cache_creation_1h_per_mtok=6.00, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-sonnet-4-5": PriceRule("claude-sonnet-4-5", input_per_mtok=3.00, cache_creation_per_mtok=3.75, cache_creation_5m_per_mtok=3.75, cache_creation_1h_per_mtok=6.00, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-sonnet-4": PriceRule("claude-sonnet-4", input_per_mtok=3.00, cache_creation_per_mtok=3.75, cache_creation_5m_per_mtok=3.75, cache_creation_1h_per_mtok=6.00, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-haiku-4-5": PriceRule("claude-haiku-4-5", input_per_mtok=1.00, cache_creation_per_mtok=1.25, cache_creation_5m_per_mtok=1.25, cache_creation_1h_per_mtok=2.00, cache_read_per_mtok=0.10, output_per_mtok=5.00, pricing_source=_ANTHROPIC_SOURCE),
 }
 
 
@@ -131,8 +146,24 @@ def _normalize_model(model: str | None) -> str | None:
     if not model:
         return None
     normalized = model.strip().lower()
-    if normalized.endswith("-20251001"):
-        normalized = normalized.removesuffix("-20251001")
-    if normalized.endswith("-20250929"):
-        normalized = normalized.removesuffix("-20250929")
+    if normalized.startswith("openai/"):
+        normalized = normalized.removeprefix("openai/")
+    if normalized.startswith("anthropic."):
+        normalized = normalized.removeprefix("anthropic.")
+    if "." in normalized and "claude-" in normalized:
+        tail = normalized.rsplit(".", maxsplit=1)[-1]
+        if tail.startswith("claude-"):
+            normalized = tail
+    if normalized in DEFAULT_PRICE_RULES:
+        return normalized
+    compact_date = re.search(r"-\d{8}$", normalized)
+    if compact_date is not None:
+        candidate = normalized[: compact_date.start()]
+        if candidate in DEFAULT_PRICE_RULES:
+            return candidate
+    dashed_date = re.search(r"-\d{4}-\d{2}-\d{2}$", normalized)
+    if dashed_date is not None:
+        candidate = normalized[: dashed_date.start()]
+        if candidate in DEFAULT_PRICE_RULES:
+            return candidate
     return normalized
