@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
-from coding_trajectory.ingestion.models import Event, Session, Turn, Vendor
+from coding_trajectory.ingestion.models import Session, Vendor
 
 
 class BaseAdapter(ABC):

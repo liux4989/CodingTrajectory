@@ -11,19 +11,15 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
-from coding_trajectory.ingestion.common import compact_dict, parse_iso_timestamp, parse_timestamp
+from coding_trajectory.ingestion.common import parse_iso_timestamp, parse_timestamp
 from coding_trajectory.ingestion.models import (
     AmpExtensions,
-    Event,
-    EventType,
     Session,
-    Step,
     ToolStatus,
-    Turn,
     Vendor,
     VendorExtensions,
 )
-from coding_trajectory.ingestion.step_items import append_text_item, append_tool_item, update_tool_item
+from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -100,13 +96,14 @@ class AmpAdapter(BaseAdapter):
             traces=traces,
         )
 
-        # Parse events from messages
-        events = self._parse_messages(session_id, messages, message_timestamps)
-
-        ended_at = max((event.timestamp for event in events), default=created_at)
-
-        # Build turns and steps
-        turns = self._build_turns(session_id, messages, message_timestamps, events)
+        transcript = self._build_transcript(messages, message_timestamps)
+        events = events_from_transcript(session_id=session_id, records=transcript)
+        ended_at = max((record.timestamp for record in transcript), default=created_at)
+        turns = project_transcript(
+            session_id=session_id,
+            vendor=Vendor.AMP,
+            records=transcript,
+        )
 
         return Session(
             session_id=session_id,
@@ -172,30 +169,20 @@ class AmpAdapter(BaseAdapter):
 
         return by_message_id
 
-    def _build_turns(
+    def _build_transcript(
         self,
-        session_id: UUID,
         messages: list[dict],
         message_timestamps: list[datetime],
-        all_events: list[Event],
-    ) -> list[Turn]:
-        """Group assistant messages + their tool results into Steps."""
-        turns: list[Turn] = []
-        turn_sequence = 0
-        step_sequence = 0
+    ) -> list[TranscriptRecord]:
+        """Extract only CT-useful transcript facts from Amp messages."""
+        tool_id_to_name: dict[str, str] = {}
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                for block in (msg.get("content") or []):
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tool_id_to_name[block.get("id") or ""] = block.get("name") or ""
 
-        current_turn: Turn | None = None
-
-        # Index events by source message id.
-        event_index: dict[Any, list[Event]] = {}
-        for ev in all_events:
-            message_id = ev.payload.get("message_id")
-            if message_id is None:
-                continue
-            if message_id not in event_index:
-                event_index[message_id] = []
-            event_index[message_id].append(ev)
-
+        transcript: list[TranscriptRecord] = []
         for idx, msg in enumerate(messages):
             role = msg.get("role")
             message_id = msg.get("messageId")
@@ -210,100 +197,48 @@ class AmpAdapter(BaseAdapter):
                 ]
 
                 if text and not tool_results:
-                    # New turn starting with user prompt
-                    if current_turn is not None:
-                        # Finalize previous turn
-                        current_turn.ended_at = ts
-                        turns.append(current_turn)
-
-                    # Find USER_PROMPT_SUBMITTED event
-                    user_evs = [
-                        e for e in event_index.get(message_id, [])
-                        if e.type == EventType.USER_PROMPT_SUBMITTED
-                    ]
-                    user_ev = user_evs[0] if user_evs else None
-
-                    current_turn = Turn(
-                        session_id=session_id,
-                        sequence=turn_sequence,
-                        started_at=ts,
-                        user_request_event_id=user_ev.event_id if user_ev else None,
-                        event_ids=[event.event_id for event in event_index.get(message_id, [])],
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.AMP,
+                            role="user",
+                            kind="user_message",
+                            data={"message_id": message_id, "text": text},
+                        )
                     )
-                    turn_sequence += 1
-                    step_sequence = 0
 
-                elif tool_results and current_turn is not None:
-                    # Tool result message — associate with current step
-                    # Find corresponding events and attach to current step if there is one
-                    if current_turn.steps:
-                        last_step = current_turn.steps[-1]
-                        result_evs = [
-                            e for e in event_index.get(message_id, [])
-                            if e.type in (EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED)
-                        ]
-                        for ev in result_evs:
-                            if ev.event_id not in current_turn.event_ids:
-                                current_turn.event_ids.append(ev.event_id)
-                            if ev.event_id not in last_step.event_ids:
-                                last_step.event_ids.append(ev.event_id)
-                            update_tool_item(
-                                last_step.items,
-                                tool_call_id=ev.payload.get("tool_call_id"),
-                                tool_name=ev.payload.get("tool_name"),
-                                output=ev.payload.get("tool_result"),
-                                status=(
-                                    ToolStatus.COMPLETED
-                                    if ev.type == EventType.TOOL_CALL_SUCCEEDED
-                                    else ToolStatus.FAILED
-                                ),
-                                event_ids=[ev.event_id],
+                elif tool_results:
+                    for block in tool_results:
+                        run = block.get("run") or {}
+                        status = run.get("status")
+                        tool_id = block.get("toolUseID") or ""
+                        transcript.append(
+                            TranscriptRecord(
+                                sequence=len(transcript),
+                                timestamp=ts,
+                                vendor=Vendor.AMP,
+                                role="tool",
+                                kind="tool_result",
+                                data={
+                                    "message_id": message_id,
+                                    "tool_call_id": tool_id,
+                                    "tool_name": tool_id_to_name.get(tool_id, ""),
+                                    "output": run.get("result"),
+                                    "status": (
+                                        ToolStatus.COMPLETED.value
+                                        if status == "done"
+                                        else ToolStatus.FAILED.value
+                                    ),
+                                    "attach_to_previous_step": True,
+                                },
+                                fidelity="synthetic",
                             )
+                        )
 
             elif role == "assistant":
-                if current_turn is None:
-                    continue
-
                 usage = msg.get("usage") or {}
                 thinking = _thinking_blocks(content)
-                # Collect events for this step
-                step_event_ids: list[UUID] = []
-                for ev in event_index.get(message_id, []):
-                    if ev.event_id not in current_turn.event_ids:
-                        current_turn.event_ids.append(ev.event_id)
-                    if ev.type in (
-                        EventType.TOOL_CALL_REQUESTED,
-                        EventType.LLM_RESPONSE,
-                        EventType.VENDOR_RAW,
-                    ):
-                        step_event_ids.append(ev.event_id)
-
-                items = []
-                llm_event_ids = [
-                    ev.event_id for ev in event_index.get(message_id, [])
-                    if ev.type == EventType.LLM_RESPONSE
-                ]
-                for block in content:
-                    if not isinstance(block, dict):
-                        continue
-                    block_type = block.get("type")
-                    if block_type == "text":
-                        append_text_item(items, block.get("text"), event_ids=llm_event_ids)
-                    elif block_type == "tool_use":
-                        tool_id = block.get("id")
-                        tool_event_ids = [
-                            ev.event_id
-                            for ev in event_index.get(message_id, [])
-                            if ev.type == EventType.TOOL_CALL_REQUESTED and ev.payload.get("tool_call_id") == tool_id
-                        ]
-                        append_tool_item(
-                            items,
-                            tool_name=block.get("name"),
-                            tool_call_id=tool_id,
-                            input=block.get("input"),
-                            status=ToolStatus.REQUESTED,
-                            event_ids=tool_event_ids,
-                        )
 
                 vendor_data: dict = {}
                 if thinking:
@@ -317,147 +252,47 @@ class AmpAdapter(BaseAdapter):
                 if stop_reason:
                     vendor_data["stop_reason"] = stop_reason
 
-                step = Step(
-                    session_id=session_id,
-                    turn_id=current_turn.turn_id,
-                    sequence=step_sequence,
-                    timestamp=ts,
-                    vendor=Vendor.AMP,
-                    items=items,
-                    vendor_data={k: v for k, v in vendor_data.items() if v is not None},
-                    event_ids=step_event_ids,
-                )
-                step_sequence += 1
-                current_turn.steps.append(step)
-
-        # Flush last turn
-        if current_turn is not None:
-            if current_turn.ended_at is None:
-                current_turn.ended_at = max(
-                    (e.timestamp for e in all_events), default=current_turn.started_at
-                )
-            turns.append(current_turn)
-
-        return turns
-
-    def _parse_messages(
-        self,
-        session_id: UUID,
-        messages: list[dict],
-        message_timestamps: list[datetime],
-    ) -> list[Event]:
-        events: list[Event] = []
-
-        # Build tool_id → name mapping
-        tool_id_to_name: dict[str, str] = {}
-        for msg in messages:
-            if msg.get("role") == "assistant":
-                for block in (msg.get("content") or []):
-                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                        tid = block.get("id") or ""
-                        tool_id_to_name[tid] = block.get("name") or ""
-
-        for idx, msg in enumerate(messages):
-            role = msg.get("role")
-            message_id = msg.get("messageId")
-            content = msg.get("content") or []
-            timestamp = message_timestamps[idx]
-
-            if role == "user":
-                text = _content_text(content)
-                tool_results = [
-                    block for block in content
-                    if isinstance(block, dict) and block.get("type") == "tool_result"
+                tool_blocks = [
+                    block
+                    for block in content
+                    if isinstance(block, dict) and block.get("type") == "tool_use"
                 ]
+                transcript.append(
+                    TranscriptRecord(
+                        sequence=len(transcript),
+                        timestamp=ts,
+                        vendor=Vendor.AMP,
+                        role="assistant",
+                        kind="assistant_message",
+                        data={
+                            "text": _content_text(content),
+                            "message_id": message_id,
+                            "vendor_data": {k: v for k, v in vendor_data.items() if v is not None},
+                            "flush_after": not tool_blocks,
+                        },
+                    )
+                )
 
-                if text and not tool_results:
-                    events.append(
-                        Event(
-                            session_id=session_id,
-                            timestamp=timestamp,
-                            type=EventType.USER_PROMPT_SUBMITTED,
-                            vendor_source=self.vendor,
-                            actor="user",
-                            payload=compact_dict(
-                                {
-                                    "message_id": message_id,
-                                    "text": text,
-                                }
-                            ),
+                for index, block in enumerate(tool_blocks):
+                    tool_id = block.get("id")
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.AMP,
+                            role="assistant",
+                            kind="tool_call",
+                            data={
+                                "message_id": message_id,
+                                "tool_name": block.get("name"),
+                                "tool_call_id": tool_id,
+                                "input": block.get("input"),
+                                "flush_after": index == len(tool_blocks) - 1,
+                            },
                         )
                     )
 
-                for block in tool_results:
-                    run = block.get("run") or {}
-                    status = run.get("status")
-                    tool_id = block.get("toolUseID") or ""
-
-                    event_type = (
-                        EventType.TOOL_CALL_SUCCEEDED if status == "done" else EventType.TOOL_CALL_FAILED
-                    )
-                    events.append(
-                        Event(
-                            session_id=session_id,
-                            timestamp=timestamp,
-                            type=event_type,
-                            vendor_source=self.vendor,
-                            actor="tool",
-                            payload=compact_dict(
-                                {
-                                    "message_id": message_id,
-                                    "tool_call_id": tool_id,
-                                    "tool_name": tool_id_to_name.get(tool_id, ""),
-                                    "tool_status": status,
-                                    "tool_result": run.get("result"),
-                                }
-                            ),
-                        )
-                    )
-
-            elif role == "assistant":
-                usage = msg.get("usage") or {}
-
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                        tool_name = block.get("name") or ""
-                        events.append(
-                            Event(
-                                session_id=session_id,
-                                timestamp=timestamp,
-                                type=EventType.TOOL_CALL_REQUESTED,
-                                vendor_source=self.vendor,
-                                actor="assistant",
-                                payload=compact_dict(
-                                    {
-                                        "message_id": message_id,
-                                        "tool_call_id": block.get("id"),
-                                        "tool_name": tool_name,
-                                        "tool_input": block.get("input"),
-                                    }
-                                ),
-                            )
-                        )
-
-                text = _content_text(content)
-                if text:
-                    events.append(
-                        Event(
-                            session_id=session_id,
-                            timestamp=timestamp,
-                            type=EventType.LLM_RESPONSE,
-                            vendor_source=self.vendor,
-                            actor="assistant",
-                            payload=compact_dict(
-                                {
-                                    "message_id": message_id,
-                                    "text": text,
-                                    "model": usage.get("model"),
-                                }
-                            ),
-                        )
-                    )
-
-        return events
+        return transcript
 
     def _parse_extensions(self, thread: dict) -> VendorExtensions | None:
         env = (thread.get("env") or {}).get("initial") or {}

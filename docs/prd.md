@@ -14,6 +14,13 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - `Trajectory` is a structural aggregate over canonical sessions. It may derive graph structure such as membership, edges, and summary metadata.
 - Replay/UI-oriented interpretations such as sections, operations, roles, and workflow-specific labels should live in a projection or enrichment layer, not the core hierarchy.
 
+# Ingestion Transcript Layer
+- Each vendor adapter keeps vendor-specific parsing local, then emits a small transcript record stream: user message, assistant message, tool call, tool result, usage/runtime, and task completion.
+- Adapters deserialize only fields that contribute to hierarchy, transcript, tool reconstruction, usage, status, or session linkage.
+- Transcript records carry CT-owned normalized `data`; lossy or synthetic records are explicitly marked with transcript fidelity.
+- A shared transcript projector owns the `Session -> Turn -> Step -> Item` reconstruction rules, including turn starts, step flushes, tool-call/result pairing, and final-answer fallback behavior.
+- Provider-specific payloads remain in transcript `data` and canonical `vendor_data` only when they are useful to CT; unused raw log properties are skipped instead of modeled.
+
 # Infrastructural layer
 - Discover : discocer all agent logs
 
