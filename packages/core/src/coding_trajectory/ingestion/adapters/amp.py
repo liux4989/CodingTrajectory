@@ -8,18 +8,22 @@ import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import parse_iso_timestamp, parse_timestamp
 from coding_trajectory.ingestion.models import (
-    AmpExtensions,
     Session,
     ToolStatus,
     Vendor,
-    VendorExtensions,
 )
 from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
+from coding_trajectory.ingestion.vendor_mechanisms.amp_handoff import (
+    AmpHandoffInput,
+    extensions as amp_extensions,
+    parent_session_id as amp_parent_session_id,
+    thread_session_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,28 @@ def _thinking_blocks(blocks: list[dict]) -> list[str]:
         for block in blocks
         if isinstance(block, dict) and block.get("type") == "thinking" and block.get("thinking")
     ]
+
+
+def _handoff_input(thread: dict[str, Any]) -> AmpHandoffInput:
+    env = (thread.get("env") or {}).get("initial") or {}
+    trees = env.get("trees") or []
+    platform = env.get("platform") or {}
+    first_tree = trees[0] if trees else {}
+    repo = first_tree.get("repository") or {}
+    return AmpHandoffInput(
+        thread_id=thread.get("id"),
+        thread_version=thread.get("v"),
+        parent_thread_id=thread.get("parentId"),
+        workspace_id=first_tree.get("uri"),
+        workspace_name=first_tree.get("displayName"),
+        git_url=repo.get("url"),
+        git_ref=repo.get("ref"),
+        agent_version=platform.get("clientVersion"),
+        client_type=platform.get("clientType"),
+        os_platform=platform.get("os"),
+        title=thread.get("title"),
+        agent_mode=thread.get("agentMode"),
+    )
 
 
 class AmpAdapter(BaseAdapter):
@@ -73,19 +99,9 @@ class AmpAdapter(BaseAdapter):
         thread = records[0]
         self._current_thread = thread
 
-        thread_id = thread.get("id")
-        try:
-            session_id = UUID(str(thread_id).removeprefix("T-"))
-        except ValueError:
-            session_id = uuid4()
-
-        parent_thread_id_raw = thread.get("parentId")
-        parent_session_id: UUID | None = None
-        if parent_thread_id_raw:
-            try:
-                parent_session_id = UUID(str(parent_thread_id_raw).removeprefix("T-"))
-            except ValueError:
-                pass
+        mechanism = _handoff_input(thread)
+        session_id = thread_session_id(mechanism)
+        parent_session_id = amp_parent_session_id(mechanism)
 
         created_at = parse_timestamp(thread.get("created")) or datetime.now(timezone.utc)
         messages = thread.get("messages") or []
@@ -114,7 +130,7 @@ class AmpAdapter(BaseAdapter):
             parent_session_id=parent_session_id,
             events=events,
             turns=turns,
-            extensions=self._parse_extensions(thread),
+            extensions=amp_extensions(mechanism),
         )
 
     def _build_message_timestamps(
@@ -293,26 +309,3 @@ class AmpAdapter(BaseAdapter):
                     )
 
         return transcript
-
-    def _parse_extensions(self, thread: dict) -> VendorExtensions | None:
-        env = (thread.get("env") or {}).get("initial") or {}
-        trees = env.get("trees") or []
-        platform = env.get("platform") or {}
-        first_tree = trees[0] if trees else {}
-        repo = first_tree.get("repository") or {}
-        return VendorExtensions(
-            amp=AmpExtensions(
-                thread_id=thread.get("id"),
-                thread_version=thread.get("v"),
-                parent_thread_id=thread.get("parentId"),
-                workspace_id=first_tree.get("uri"),
-                workspace_name=first_tree.get("displayName"),
-                git_url=repo.get("url"),
-                git_ref=repo.get("ref"),
-                agent_version=platform.get("clientVersion"),
-                client_type=platform.get("clientType"),
-                os_platform=platform.get("os"),
-                title=thread.get("title"),
-                agent_mode=thread.get("agentMode"),
-            )
-        )

@@ -14,7 +14,7 @@ from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import Event, Session, Step, Trajectory, Turn, Vendor
 from coding_trajectory.query import DocumentError, DocumentStore
-from coding_trajectory.trajectory import assemble_project_trajectories
+from coding_trajectory.ingestion.graph import assemble_project_trajectories
 
 _SEARCH_LIMIT = 100
 

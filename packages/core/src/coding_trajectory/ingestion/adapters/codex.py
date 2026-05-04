@@ -18,15 +18,19 @@ from coding_trajectory.ingestion.common import (
     parse_iso_timestamp,
 )
 from coding_trajectory.ingestion.models import (
-    CodexExtensions,
     Session,
     SessionStatus,
     TurnStatus,
     ToolStatus,
     Vendor,
-    VendorExtensions,
 )
 from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
+from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
+    CodexMultiAgentInput,
+    CodexThreadSpawn,
+    extensions as codex_extensions,
+    parent_session_id as codex_parent_session_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,85 +79,57 @@ def _extract_nested_map(payload: dict[str, Any], *keys: str) -> dict[str, Any] |
     return current if isinstance(current, dict) else None
 
 
-def _parse_uuid_candidate(value: Any) -> UUID | None:
-    if isinstance(value, UUID):
-        return value
-
+def _extract_uuid_text(value: Any) -> str | None:
     raw = _as_non_empty_str(value)
     if raw is None:
         return None
-
     for candidate in (raw, raw.removeprefix("T-")):
         try:
-            return UUID(candidate)
+            UUID(candidate)
+            return candidate
         except ValueError:
             continue
-
     match = re.search(
         r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
         raw,
     )
-    if match is None:
-        return None
-
-    try:
-        return UUID(match.group(0))
-    except ValueError:
-        return None
+    return match.group(0) if match else raw
 
 
-def _extract_thread_spawn(meta: dict[str, Any]) -> dict[str, Any] | None:
+def _codex_multi_agent_input(meta: dict[str, Any], ctx: dict[str, Any]) -> CodexMultiAgentInput:
+    sandbox_policy = ctx.get("sandbox_policy") if isinstance(ctx.get("sandbox_policy"), dict) else {}
     source = meta.get("source")
-    if not isinstance(source, dict):
-        return None
-    return _extract_nested_map(source, "subagent", "thread_spawn")
-
-
-def _extract_codex_parent_session_id(meta: dict[str, Any]) -> UUID | None:
-    forked_parent = _parse_uuid_candidate(meta.get("forked_from_id"))
-    if forked_parent is not None:
-        return forked_parent
-
-    thread_spawn = _extract_thread_spawn(meta)
-    if thread_spawn is None:
-        return None
-
-    return _parse_uuid_candidate(thread_spawn.get("parent_thread_id"))
-
-
-def _extract_codex_agent_nickname(meta: dict[str, Any]) -> str | None:
-    for key in ("nickname", "agent_nickname"):
-        nickname = _as_non_empty_str(meta.get(key))
-        if nickname is not None:
-            return nickname
-
-    thread_spawn = _extract_thread_spawn(meta)
-    if thread_spawn is None:
-        return None
-    return _as_non_empty_str(thread_spawn.get("agent_nickname"))
-
-
-def _extract_codex_agent_role(meta: dict[str, Any]) -> str | None:
-    role = _as_non_empty_str(meta.get("agent_role"))
-    if role is not None:
-        return role
-
-    source = meta.get("source")
+    thread_spawn_raw = (
+        _extract_nested_map(source, "subagent", "thread_spawn")
+        if isinstance(source, dict)
+        else None
+    )
     source_name = _as_non_empty_str(source)
-    if source_name is not None:
-        return source_name
-
-    thread_spawn = _extract_thread_spawn(meta)
-    if thread_spawn is None:
-        return None
-    return _as_non_empty_str(thread_spawn.get("agent_role"))
-
-
-def _extract_collaboration_mode(ctx: dict[str, Any]) -> str | None:
     collaboration_mode = ctx.get("collaboration_mode")
-    if isinstance(collaboration_mode, dict):
-        return _as_non_empty_str(collaboration_mode.get("mode"))
-    return _as_non_empty_str(collaboration_mode)
+    return CodexMultiAgentInput(
+        sandbox_id=_as_non_empty_str(meta.get("id")),
+        sandbox_mode=_as_non_empty_str(sandbox_policy.get("type")),
+        approval_policy=_as_non_empty_str(ctx.get("approval_policy")),
+        collaboration_mode=(
+            _as_non_empty_str(collaboration_mode.get("mode"))
+            if isinstance(collaboration_mode, dict)
+            else _as_non_empty_str(collaboration_mode)
+        ),
+        agent_nickname=_as_non_empty_str(meta.get("nickname")) or _as_non_empty_str(meta.get("agent_nickname")),
+        agent_role=_as_non_empty_str(meta.get("agent_role")) or source_name,
+        cwd=_as_non_empty_str(meta.get("cwd")),
+        forked_from_id=_extract_uuid_text(meta.get("forked_from_id")),
+        thread_spawn=(
+            CodexThreadSpawn(
+                parent_thread_id=_extract_uuid_text(thread_spawn_raw.get("parent_thread_id")),
+                depth=thread_spawn_raw.get("depth") if isinstance(thread_spawn_raw.get("depth"), int) else None,
+                agent_nickname=_as_non_empty_str(thread_spawn_raw.get("agent_nickname")),
+                agent_role=_as_non_empty_str(thread_spawn_raw.get("agent_role")),
+            )
+            if thread_spawn_raw is not None
+            else None
+        ),
+    )
 
 
 def _is_source_active(source: Path | None, *, active_seconds: int = 300) -> bool:
@@ -206,30 +182,10 @@ class CodexAdapter(BaseAdapter):
 
         meta = state.session_meta
         ctx = state.turn_context
-        sandbox_policy = ctx.get("sandbox_policy") if isinstance(ctx.get("sandbox_policy"), dict) else {}
-        thread_spawn = _extract_thread_spawn(meta) or {}
-        parent_session_id = _extract_codex_parent_session_id(meta)
-        forked_from_id = _as_non_empty_str(meta.get("forked_from_id"))
-        spawn_parent_thread_id = _as_non_empty_str(thread_spawn.get("parent_thread_id"))
-        spawn_depth = thread_spawn.get("depth") if isinstance(thread_spawn.get("depth"), int) else None
+        mechanism = _codex_multi_agent_input(meta, ctx)
+        parent_session_id = codex_parent_session_id(mechanism)
         events = events_from_transcript(session_id=state.session_id, records=transcript)
-
-        extensions = VendorExtensions(
-            codex=CodexExtensions(
-                sandbox_id=_as_non_empty_str(meta.get("id")),
-                sandbox_mode=_as_non_empty_str(sandbox_policy.get("type")),
-                approval_policy=_as_non_empty_str(ctx.get("approval_policy")),
-                collaboration_mode=_extract_collaboration_mode(ctx),
-                agent_nickname=_extract_codex_agent_nickname(meta),
-                agent_role=_extract_codex_agent_role(meta),
-                cwd=_as_non_empty_str(meta.get("cwd")),
-                forked_from_id=forked_from_id,
-                spawn_parent_thread_id=spawn_parent_thread_id,
-                spawn_depth=spawn_depth,
-                spawn_agent_nickname=_as_non_empty_str(thread_spawn.get("agent_nickname")),
-                spawn_agent_role=_as_non_empty_str(thread_spawn.get("agent_role")),
-            )
-        )
+        extensions = codex_extensions(mechanism)
 
         turns = project_transcript(
             session_id=state.session_id,

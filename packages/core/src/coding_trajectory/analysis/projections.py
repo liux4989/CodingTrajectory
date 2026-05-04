@@ -96,9 +96,6 @@ from coding_trajectory.analysis.concepts import TOOL_CONCEPT_MAP, StepType
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, Trajectory, TrajectoryEdge, Turn
 from coding_trajectory.query import DocumentStore
-from coding_trajectory.team_state import extract_high_value_teammate_request, has_teammate_messages
-
-
 # ---------------------------------------------------------------------------
 # Session index — replaces the former TrajectoryStructure dependency.
 # Only the fields actually consumed by the projection helpers below.
@@ -176,12 +173,6 @@ def _parse_user_request_info(raw: str, *, session: Session | None = None) -> dic
     stripped = raw.strip()
     if not stripped:
         return None
-    if has_teammate_messages(stripped):
-        filtered = extract_high_value_teammate_request(stripped)
-        if not filtered:
-            return None
-        source = "parent_agent" if session and session.parent_session_id is not None else "team_lead"
-        return {"type": "message", "source": source, "content": filtered}
     return {"type": "message", "source": "human_user", "content": stripped}
 
 
@@ -192,6 +183,10 @@ def _extract_user_request(store: DocumentStore, turn: Turn, *, session: Session 
         event = store.get_event(turn.user_request_event_id)
     except Exception:
         return None
+    team_request_summary = event.payload.get("team_request_summary")
+    if isinstance(team_request_summary, str) and team_request_summary.strip():
+        source = "parent_agent" if session and session.parent_session_id is not None else "team_lead"
+        return {"type": "message", "source": source, "content": team_request_summary.strip()}
     for key in ("text", "message", "content"):
         value = event.payload.get(key)
         if isinstance(value, str) and value.strip():

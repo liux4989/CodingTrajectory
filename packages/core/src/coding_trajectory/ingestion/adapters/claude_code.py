@@ -2,26 +2,64 @@
 
 from __future__ import annotations
 
-import json
 import logging
+import json
+import re
 from pathlib import Path
-from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import compact_dict, infer_tool_success, parse_timestamp
 from coding_trajectory.ingestion.models import (
-    ClaudeCodeExtensions,
     Session,
     ToolStatus,
     Vendor,
-    VendorExtensions,
 )
 from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
-from coding_trajectory.team_state import build_turn_team_state
+from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
+    ClaudeSubagentInput,
+    canonical_session_ids,
+    extensions as claude_extensions,
+)
+from coding_trajectory.ingestion.vendor_mechanisms.claude_team import (
+    ClaudeTeamMessage,
+    ClaudeTeamStateInput,
+    build_turn_team_state,
+    high_value_teammate_request,
+)
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CLAUDE_DIR = Path.home() / ".claude" / "projects"
+_TEAMMATE_MESSAGE_RE = re.compile(r"<teammate-message(?P<attrs>[^>]*)>(?P<body>.*?)</teammate-message>", re.DOTALL)
+_TEAMMATE_ATTR_RE = re.compile(r'(\w+)="(.*?)"')
+
+
+def _parse_team_messages(raw: str | None) -> list[ClaudeTeamMessage]:
+    if not raw:
+        return []
+
+    messages: list[ClaudeTeamMessage] = []
+    for match in _TEAMMATE_MESSAGE_RE.finditer(raw):
+        attrs = {key: value for key, value in _TEAMMATE_ATTR_RE.findall(match.group("attrs") or "")}
+        body = (match.group("body") or "").strip()
+        payload: dict | None = None
+        if body.startswith("{") and body.endswith("}"):
+            try:
+                loaded = json.loads(body)
+            except json.JSONDecodeError:
+                loaded = None
+            payload = loaded if isinstance(loaded, dict) else None
+        messages.append(
+            ClaudeTeamMessage(
+                teammate_id=attrs.get("teammate_id"),
+                color=attrs.get("color"),
+                summary=attrs.get("summary"),
+                body=body,
+                event_type=payload.get("type") if payload else None,
+            )
+        )
+    return messages
 
 
 def _read_subagent_meta(source: Path) -> dict[str, object]:
@@ -34,6 +72,32 @@ def _read_subagent_meta(source: Path) -> dict[str, object]:
     except json.JSONDecodeError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _subagent_input(source: Path, records: list[dict], raw_session_id: UUID) -> ClaudeSubagentInput:
+    first = next((record for record in records if record.get("sessionId")), {})
+    is_subagent_file = source.parent.name == "subagents"
+    parent_session_id: UUID | None = None
+    if is_subagent_file:
+        try:
+            parent_session_id = UUID(source.parent.parent.name)
+        except ValueError:
+            parent_session_id = None
+    meta = _read_subagent_meta(source) if is_subagent_file else {}
+    return ClaudeSubagentInput(
+        source_path=str(source.resolve()),
+        is_subagent_file=is_subagent_file,
+        parent_session_id=parent_session_id,
+        raw_session_id=raw_session_id,
+        team_name=first.get("teamName"),
+        is_sidechain=first.get("isSidechain"),
+        permission_mode=first.get("permissionMode"),
+        parent_uuid=first.get("parentUuid"),
+        request_id=first.get("uuid"),
+        agent_name=first.get("agentId") or first.get("agentName") or first.get("slug"),
+        agent_role=meta.get("agentType") if isinstance(meta.get("agentType"), str) else None,
+        description=meta.get("description") if isinstance(meta.get("description"), str) else None,
+    )
 
 
 def _extract_text(content: str | list | None) -> str | None:
@@ -118,13 +182,10 @@ class ClaudeCodeAdapter(BaseAdapter):
         if raw_session_id is None:
             raise ValueError(f"ClaudeCodeAdapter: no session id parsed from {source}")
 
-        extensions = self._parse_extensions(source, records)
-        session_id, parent_session_id = self._canonical_session_ids(
-            source=source,
-            raw_session_id=raw_session_id,
-            extensions=extensions,
-        )
-        transcript, user_request_texts = self._build_transcript(records)
+        mechanism = _subagent_input(source, records, raw_session_id)
+        extensions = claude_extensions(mechanism)
+        session_id, parent_session_id = canonical_session_ids(mechanism)
+        transcript, team_inputs = self._build_transcript(records)
         if not transcript:
             raise ValueError(f"ClaudeCodeAdapter: no transcript records parsed from {source}")
         events = events_from_transcript(session_id=session_id, records=transcript)
@@ -133,8 +194,8 @@ class ClaudeCodeAdapter(BaseAdapter):
             vendor=Vendor.CLAUDE_CODE,
             records=transcript,
         )
-        for turn, user_request_text in zip(turns, user_request_texts, strict=False):
-            turn.team_state = build_turn_team_state(turn, user_request_text=user_request_text)
+        for turn, team_input in zip(turns, team_inputs, strict=False):
+            turn.team_state = build_turn_team_state(turn, team_input=team_input)
         started_at = min(record.timestamp for record in transcript)
         ended_at = max(record.timestamp for record in transcript)
 
@@ -162,42 +223,10 @@ class ClaudeCodeAdapter(BaseAdapter):
                 continue
         return None
 
-    def _canonical_session_ids(
-        self,
-        *,
-        source: Path,
-        raw_session_id: UUID,
-        extensions: VendorExtensions | None,
-    ) -> tuple[UUID, UUID | None]:
-        if source.parent.name != "subagents":
-            return raw_session_id, None
-
-        try:
-            parent_session_id = UUID(source.parent.parent.name)
-        except ValueError:
-            return raw_session_id, None
-
-        agent_name = extensions.claude_code.agent_name if extensions and extensions.claude_code else None
-        canonical_session_id = uuid5(
-            NAMESPACE_URL,
-            json.dumps(
-                {
-                    "vendor": self.vendor.value,
-                    "kind": "claude_subagent_session",
-                    "source": str(source.resolve()),
-                    "raw_session_id": str(raw_session_id),
-                    "parent_session_id": str(parent_session_id),
-                    "agent_name": agent_name,
-                },
-                sort_keys=True,
-            ),
-        )
-        return canonical_session_id, parent_session_id
-
-    def _build_transcript(self, records: list[dict]) -> tuple[list[TranscriptRecord], list[str | None]]:
+    def _build_transcript(self, records: list[dict]) -> tuple[list[TranscriptRecord], list[ClaudeTeamStateInput]]:
         """Extract only CT-useful transcript facts from Claude Code JSONL records."""
         transcript: list[TranscriptRecord] = []
-        user_request_texts: list[str | None] = []
+        team_inputs: list[ClaudeTeamStateInput] = []
         collecting_results = False  # True after first terminal assistant in current step
 
         for record in records:
@@ -217,7 +246,9 @@ class ClaudeCodeAdapter(BaseAdapter):
 
                 if _is_real_user_prompt(record):
                     text = _extract_text(content)
-                    user_request_texts.append(text)
+                    team_input = ClaudeTeamStateInput(messages=_parse_team_messages(text))
+                    team_inputs.append(team_input)
+                    team_request_summary = high_value_teammate_request(team_input.messages)
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -225,7 +256,11 @@ class ClaudeCodeAdapter(BaseAdapter):
                             vendor=Vendor.CLAUDE_CODE,
                             role="user",
                             kind="user_message",
-                            data={**base, "text": text},
+                            data={
+                                **base,
+                                "text": text,
+                                "team_request_summary": team_request_summary,
+                            },
                         )
                     )
                     collecting_results = False
@@ -321,26 +356,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             elif raw_type == "system":
                 continue
 
-        return transcript, user_request_texts
-
-    def _parse_extensions(self, source: Path, records: list[dict]) -> VendorExtensions | None:
-        meta = _read_subagent_meta(source) if source.parent.name == "subagents" else {}
-        for obj in records:
-            if not obj.get("sessionId"):
-                continue
-            return VendorExtensions(
-                claude_code=ClaudeCodeExtensions(
-                    team_name=obj.get("teamName"),
-                    is_sidechain=obj.get("isSidechain"),
-                    permission_mode=obj.get("permissionMode"),
-                    parent_uuid=obj.get("parentUuid"),
-                    request_id=obj.get("uuid"),
-                    agent_name=obj.get("agentId") or obj.get("agentName") or obj.get("slug"),
-                    agent_role=meta.get("agentType") if isinstance(meta.get("agentType"), str) else None,
-                    description=meta.get("description") if isinstance(meta.get("description"), str) else None,
-                )
-            )
-        return None
+        return transcript, team_inputs
 
     def ingest_default(self) -> list[Session]:
         sessions: list[Session] = []

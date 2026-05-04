@@ -1,4 +1,4 @@
-"""Trajectory assembly for replay-first multi-session and multi-agent views."""
+"""Graph assembly for canonical multi-session trajectories."""
 
 from __future__ import annotations
 
@@ -16,7 +16,11 @@ from coding_trajectory.ingestion.models import (
     TrajectoryEdge,
     TrajectorySummary,
     Turn,
-    Vendor,
+)
+from coding_trajectory.ingestion.vendor_mechanisms.relation_edges import (
+    RelationEdgeInput,
+    classify_edge_type,
+    is_root_session_candidate,
 )
 
 
@@ -126,9 +130,7 @@ def build_edges(sessions: list[Session]) -> list[TrajectoryEdge]:
         edge = _build_edge(parent, session)
         if edge is None:
             continue
-        edges.append(
-            edge
-        )
+        edges.append(edge)
 
     return edges
 
@@ -146,7 +148,14 @@ def _build_edge(parent: Session | None, child: Session) -> TrajectoryEdge | None
         return None
 
     origin = _find_edge_origin(parent)
-    edge_type = _classify_edge_type(child, parent, origin)
+    edge_type = classify_edge_type(
+        RelationEdgeInput(
+            child_is_sidechain=_is_sidechain(child),
+            child_parent_session_id_present=child.parent_session_id is not None,
+            parent_vendor=parent.vendor,
+            origin_tool_name=origin.tool_name if origin else None,
+        )
+    )
     evidence_ids = [origin.event_id] if origin is not None else []
     metadata = {"tool_name": origin.tool_name} if origin and origin.tool_name else None
 
@@ -162,22 +171,6 @@ def _build_edge(parent: Session | None, child: Session) -> TrajectoryEdge | None
         evidence_event_ids=evidence_ids,
         metadata=metadata,
     )
-
-
-def _classify_edge_type(child: Session, parent: Session, origin: _EdgeOrigin | None) -> str:
-    if origin is not None:
-        tool_name = (origin.tool_name or "").strip().lower()
-        if tool_name in {"agent", "task", "spawn_agent", "spawnagent"}:
-            return "spawned_subagent"
-        if tool_name in {"handoff", "handoff_to"}:
-            return "handoff_to"
-        if tool_name in {"resume", "resume_agent"}:
-            return "resumed_from"
-
-    if _is_sidechain(child) and parent.vendor == Vendor.CLAUDE_CODE:
-        return "sidechain_of"
-
-    return "sidechain_of"
 
 
 def _find_edge_origin(session: Session) -> _EdgeOrigin | None:
@@ -227,20 +220,12 @@ def _event_tool_name(event: Any) -> str | None:
 
 def _root_session(sessions: list[Session]) -> Session | None:
     for session in sessions:
-        if session.parent_session_id is None and not _is_sidechain(session):
+        if is_root_session_candidate(
+            parent_session_id_present=session.parent_session_id is not None,
+            is_sidechain=_is_sidechain(session),
+        ):
             return session
     return min(sessions, key=lambda item: (item.started_at, str(item.session_id)), default=None)
-
-
-def _agent_name(session: Session) -> str | None:
-    extensions = session.extensions
-    if extensions is None:
-        return None
-    if extensions.claude_code and extensions.claude_code.agent_name:
-        return extensions.claude_code.agent_name
-    if extensions.codex and extensions.codex.agent_nickname:
-        return extensions.codex.agent_nickname
-    return None
 
 
 def _is_sidechain(session: Session) -> bool:
