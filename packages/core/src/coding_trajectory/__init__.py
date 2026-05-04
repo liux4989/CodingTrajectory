@@ -25,13 +25,6 @@ from coding_trajectory.ingestion import (
     Vendor,
     VendorExtensions,
 )
-from coding_trajectory.analysis import (
-    CrossSessionOperation,
-    SessionTree,
-    SessionTreeNode,
-    TrajectoryStructure,
-    build_trajectory_structure,
-)
 from coding_trajectory.query import DocumentStore
 
 __all__ = [
@@ -42,7 +35,6 @@ __all__ = [
     "ClaudeCodeExtensions",
     "CodexAdapter",
     "CodexExtensions",
-    "CrossSessionOperation",
     "DocumentStore",
     "Event",
     "EventType",
@@ -50,8 +42,6 @@ __all__ = [
     "GeminiExtensions",
     "Session",
     "SessionStatus",
-    "SessionTree",
-    "SessionTreeNode",
     "Step",
     "StepItem",
     "StepTextItem",
@@ -59,11 +49,9 @@ __all__ = [
     "Trajectory",
     "TrajectoryEdge",
     "TrajectorySummary",
-    "TrajectoryStructure",
     "Turn",
     "TurnStatus",
     "ToolStatus",
     "Vendor",
     "VendorExtensions",
-    "build_trajectory_structure",
 ]

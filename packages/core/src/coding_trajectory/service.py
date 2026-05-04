@@ -368,7 +368,7 @@ def dispatch(
     discovery_note: str,
     cache: IndexCache,
 ) -> Any:
-    from coding_trajectory.analysis.views import (
+    from coding_trajectory.analysis.projections import (
         build_event_scan,
         build_step_details,
         build_trajectory_narrative,

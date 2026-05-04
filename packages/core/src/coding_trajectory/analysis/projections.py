@@ -1,8 +1,17 @@
-"""View builders for the CLI navigation tree and step evidence."""
+"""Projections from a canonical Trajectory into CLI/service-facing shapes.
+
+Provides:
+
+* ``build_trajectory_overview``  - drilldown navigation tree (turns + steps).
+* ``build_trajectory_narrative``  - flat user/assistant transcript view.
+* ``build_step_details``          - single-step evidence for ``step.details``.
+* ``build_event_scan``            - event-type filter/scan over a trajectory.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime
 import re
 from typing import Any
@@ -84,12 +93,68 @@ def _match_filter(shape: dict[str, Any], expr: str) -> bool:
     return str(resolved) == value
 
 from coding_trajectory.analysis.concepts import TOOL_CONCEPT_MAP, StepType
-from coding_trajectory.analysis.structure import build_trajectory_structure
-from coding_trajectory.analysis.structure_models import TrajectoryStructure
 from coding_trajectory.ingestion.common import prune_nones
-from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, Trajectory, Turn
+from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, Trajectory, TrajectoryEdge, Turn
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.team_state import extract_high_value_teammate_request, has_teammate_messages
+
+
+# ---------------------------------------------------------------------------
+# Session index — replaces the former TrajectoryStructure dependency.
+# Only the fields actually consumed by the projection helpers below.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _SessionIndex:
+    parent: dict[UUID, UUID | None]
+    children: dict[UUID, list[UUID]]
+    incoming_edge_type: dict[UUID, str | None]
+    roots: list[UUID]
+    edges: list[TrajectoryEdge] = field(default_factory=list)
+
+
+def _build_session_index(trajectory: Trajectory) -> _SessionIndex:
+    incoming_by_target: dict[UUID, TrajectoryEdge] = {}
+    for edge in trajectory.edges:
+        incoming_by_target.setdefault(edge.target_session_id, edge)
+
+    parent: dict[UUID, UUID | None] = {}
+    for session in trajectory.sessions:
+        p = session.parent_session_id
+        if p is None:
+            edge = incoming_by_target.get(session.session_id)
+            if edge is not None:
+                p = edge.source_session_id
+        parent[session.session_id] = p
+
+    children: dict[UUID, list[UUID]] = defaultdict(list)
+    for sid, p in parent.items():
+        if p is not None:
+            children[p].append(sid)
+    for kids in children.values():
+        kids.sort(key=str)
+
+    roots = sorted(
+        (sid for sid, p in parent.items() if p is None),
+        key=str,
+    )
+
+    incoming_edge_type = {
+        session.session_id: (
+            incoming_by_target[session.session_id].type
+            if session.session_id in incoming_by_target
+            else None
+        )
+        for session in trajectory.sessions
+    }
+
+    return _SessionIndex(
+        parent=parent,
+        children=dict(children),
+        incoming_edge_type=incoming_edge_type,
+        roots=roots,
+        edges=list(trajectory.edges),
+    )
 
 
 @dataclass(frozen=True)
@@ -150,10 +215,10 @@ def _latest_human_user_request(
     return None
 
 
-def _incoming_operation(structure: TrajectoryStructure, session_id: UUID):
-    for op in structure.operations:
-        if op.target_session_id == session_id:
-            return op
+def _incoming_edge(index: _SessionIndex, session_id: UUID) -> TrajectoryEdge | None:
+    for edge in index.edges:
+        if edge.target_session_id == session_id:
+            return edge
     return None
 
 
@@ -161,7 +226,7 @@ def _resolve_originating_human_request(
     store: DocumentStore,
     session: Session,
     *,
-    structure: TrajectoryStructure,
+    index: _SessionIndex,
 ) -> dict[str, Any] | None:
     current_session = session
     visited: set[UUID] = set()
@@ -174,10 +239,10 @@ def _resolve_originating_human_request(
         except Exception:
             return None
 
-        incoming_op = _incoming_operation(structure, current_session.session_id)
-        if incoming_op is not None and incoming_op.source_turn_id is not None:
+        incoming = _incoming_edge(index, current_session.session_id)
+        if incoming is not None and incoming.source_turn_id is not None:
             try:
-                source_turn = store.get_turn(incoming_op.source_turn_id)
+                source_turn = store.get_turn(incoming.source_turn_id)
             except Exception:
                 source_turn = None
             if source_turn is not None:
@@ -203,14 +268,14 @@ def _effective_user_request(
     turn: Turn,
     *,
     session: Session,
-    structure: TrajectoryStructure,
+    index: _SessionIndex,
 ) -> dict[str, Any] | None:
     request = _extract_user_request(store, turn, session=session)
     if request is None:
         return None
     if request.get("source") != "parent_agent":
         return request
-    return _resolve_originating_human_request(store, session, structure=structure)
+    return _resolve_originating_human_request(store, session, index=index)
 
 
 # Commands that carry no work output — UI state, config, or session management only.
@@ -277,21 +342,42 @@ def _classify_step(step: Step) -> StepType:
     return StepType.TOOL_CALL
 
 
-def _session_connection(session: Session, *, structure: TrajectoryStructure) -> dict[str, Any]:
-    node = structure.session_tree.nodes_by_session_id.get(session.session_id)
-    if node is None or (node.is_root and not node.incoming_edge_type):
+def _session_connection(session: Session, *, index: _SessionIndex) -> dict[str, Any]:
+    sid = session.session_id
+    parent = index.parent.get(sid)
+    edge_type = index.incoming_edge_type.get(sid)
+    if parent is None and not edge_type:
         return {"role": "main"}
     return prune_nones({
-        "relationship": node.incoming_edge_type,
-        "parent_session_id": str(node.parent_session_id) if node.parent_session_id else None,
+        "relationship": edge_type,
+        "parent_session_id": str(parent) if parent else None,
     })
 
 
-def _include_session_in_overview(session: Session, *, structure: TrajectoryStructure) -> bool:
-    node = structure.session_tree.nodes_by_session_id.get(session.session_id)
-    if node is None:
-        return True
-    return node.incoming_edge_type != "spawned_subagent"
+def _include_session_in_overview(session: Session, *, index: _SessionIndex) -> bool:
+    return index.incoming_edge_type.get(session.session_id) != "spawned_subagent"
+
+
+def _ordered_sessions(trajectory: Trajectory, index: _SessionIndex) -> list[Session]:
+    """Walk the session tree in BFS order, then append any orphans."""
+    sessions_by_id = {s.session_id: s for s in trajectory.sessions}
+    ordered: list[Session] = []
+    visited: set[UUID] = set()
+    queue: list[UUID] = list(index.roots)
+    while queue:
+        session_id = queue.pop(0)
+        if session_id in visited:
+            continue
+        visited.add(session_id)
+        session = sessions_by_id.get(session_id)
+        if session is not None:
+            ordered.append(session)
+        queue.extend(index.children.get(session_id, []))
+
+    for session in trajectory.sessions:
+        if session.session_id not in visited:
+            ordered.append(session)
+    return ordered
 
 
 def build_trajectory_overview(
@@ -301,46 +387,21 @@ def build_trajectory_overview(
     num_turns: int | None = None,
     drop_turns: int | None = None,
 ) -> dict[str, Any]:
-    structure = build_trajectory_structure(trajectory)
-    sessions_by_id = {s.session_id: s for s in trajectory.sessions}
+    index = _build_session_index(trajectory)
     member_session_lookup = _build_member_session_lookup(trajectory)
 
-    ordered: list[dict[str, Any]] = []
-    visited: set[UUID] = set()
-    queue = list(structure.session_tree.root_session_ids)
-    while queue:
-        session_id = queue.pop(0)
-        if session_id in visited:
-            continue
-        visited.add(session_id)
-        session = sessions_by_id.get(session_id)
-        if session and _include_session_in_overview(session, structure=structure):
-            ordered.append(
-                _session_nav_node(
-                    session,
-                    store=store,
-                    structure=structure,
-                    member_session_lookup=member_session_lookup,
-                    num_turns=num_turns,
-                    drop_turns=drop_turns,
-                )
-            )
-        node = structure.session_tree.nodes_by_session_id.get(session_id)
-        if node:
-            queue.extend(node.child_session_ids)
-
-    for session in trajectory.sessions:
-        if session.session_id not in visited and _include_session_in_overview(session, structure=structure):
-            ordered.append(
-                _session_nav_node(
-                    session,
-                    store=store,
-                    structure=structure,
-                    member_session_lookup=member_session_lookup,
-                    num_turns=num_turns,
-                    drop_turns=drop_turns,
-                )
-            )
+    ordered = [
+        _session_nav_node(
+            session,
+            store=store,
+            index=index,
+            member_session_lookup=member_session_lookup,
+            num_turns=num_turns,
+            drop_turns=drop_turns,
+        )
+        for session in _ordered_sessions(trajectory, index)
+        if _include_session_in_overview(session, index=index)
+    ]
 
     return {
         "trajectory_id": str(trajectory.trajectory_id),
@@ -362,43 +423,18 @@ def build_trajectory_narrative(
     It intentionally does not include tool activity or infer progress,
     decisions, constraints, or next steps.
     """
-    structure = build_trajectory_structure(trajectory)
-    sessions_by_id = {s.session_id: s for s in trajectory.sessions}
+    index = _build_session_index(trajectory)
 
-    ordered: list[dict[str, Any]] = []
-    visited: set[UUID] = set()
-    queue = list(structure.session_tree.root_session_ids)
-    while queue:
-        session_id = queue.pop(0)
-        if session_id in visited:
-            continue
-        visited.add(session_id)
-        session = sessions_by_id.get(session_id)
-        if session is not None:
-            ordered.append(
-                _session_narrative_node(
-                    session,
-                    store=store,
-                    structure=structure,
-                    num_turns=num_turns,
-                    drop_turns=drop_turns,
-                )
-            )
-        node = structure.session_tree.nodes_by_session_id.get(session_id)
-        if node:
-            queue.extend(node.child_session_ids)
-
-    for session in trajectory.sessions:
-        if session.session_id not in visited:
-            ordered.append(
-                _session_narrative_node(
-                    session,
-                    store=store,
-                    structure=structure,
-                    num_turns=num_turns,
-                    drop_turns=drop_turns,
-                )
-            )
+    ordered = [
+        _session_narrative_node(
+            session,
+            store=store,
+            index=index,
+            num_turns=num_turns,
+            drop_turns=drop_turns,
+        )
+        for session in _ordered_sessions(trajectory, index)
+    ]
 
     return {
         "trajectory_id": str(trajectory.trajectory_id),
@@ -410,7 +446,7 @@ def _session_narrative_node(
     session: Session,
     *,
     store: DocumentStore,
-    structure: TrajectoryStructure,
+    index: _SessionIndex,
     num_turns: int | None = None,
     drop_turns: int | None = None,
 ) -> dict[str, Any]:
@@ -423,7 +459,7 @@ def _session_narrative_node(
 
     return prune_nones({
         "session_id": str(session.session_id),
-        "relationship": _session_connection(session, structure=structure),
+        "relationship": _session_connection(session, index=index),
         "vendor": session.vendor.value,
         "status": session.status,
         "agent_name": session.agent_name,
@@ -468,7 +504,7 @@ def _session_nav_node(
     session: Session,
     *,
     store: DocumentStore,
-    structure: TrajectoryStructure,
+    index: _SessionIndex,
     member_session_lookup: dict[str, list[_MemberSessionCandidate]],
     num_turns: int | None = None,
     drop_turns: int | None = None,
@@ -481,7 +517,7 @@ def _session_nav_node(
             turn,
             session=session,
             store=store,
-            structure=structure,
+            index=index,
             member_session_lookup=member_session_lookup,
         )
         if node is None:
@@ -513,7 +549,7 @@ def _session_nav_node(
 
     return prune_nones({
         "session_id": str(session.session_id),
-        "relationship": _session_connection(session, structure=structure),
+        "relationship": _session_connection(session, index=index),
         "vendor": session.vendor.value,
         "status": session.status,
         "agent_name": session.agent_name,
@@ -876,10 +912,10 @@ def _turn_nav_node(
     *,
     session: Session,
     store: DocumentStore,
-    structure: TrajectoryStructure,
+    index: _SessionIndex,
     member_session_lookup: dict[str, list[_MemberSessionCandidate]],
 ) -> dict[str, Any] | None:
-    user_request = _effective_user_request(store, turn, session=session, structure=structure)
+    user_request = _effective_user_request(store, turn, session=session, index=index)
     visible_user_request = user_request
     if isinstance(user_request, dict) and user_request.get("source") == "team_lead":
         visible_user_request = None
@@ -942,10 +978,9 @@ def _lookup_target_session(step: Step, *, store: DocumentStore, edge_type: str) 
     try:
         session = store.get_session(step.session_id)
         trajectory = store.get_trajectory(session.trajectory_id)
-        structure = build_trajectory_structure(trajectory)
-        for op in structure.operations:
-            if op.source_step_id == step.step_id and op.edge_type == edge_type:
-                return str(op.target_session_id)
+        for edge in trajectory.edges:
+            if edge.source_step_id == step.step_id and edge.type == edge_type:
+                return str(edge.target_session_id)
     except Exception:
         pass
     return None

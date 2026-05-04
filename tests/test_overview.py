@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from coding_trajectory.analysis.views import build_trajectory_narrative, build_trajectory_overview
+from coding_trajectory.analysis.projections import build_trajectory_narrative, build_trajectory_overview
 from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, Trajectory, Turn, Vendor
 from coding_trajectory.query import DocumentStore
 
