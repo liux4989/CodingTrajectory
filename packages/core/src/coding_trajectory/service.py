@@ -429,7 +429,6 @@ def dispatch(
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
         result = build_trajectory_overview(
             trajectory,
-            store=store,
             num_turns=_optional_positive_int(params, "num_turns"),
             drop_turns=_optional_positive_int(params, "drop_turns"),
         )
@@ -441,7 +440,6 @@ def dispatch(
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
         result = build_trajectory_narrative(
             trajectory,
-            store=store,
             num_turns=_optional_positive_int(params, "num_turns"),
             drop_turns=_optional_positive_int(params, "drop_turns"),
         )
@@ -453,7 +451,6 @@ def dispatch(
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
         result = build_trajectory_metrics(
             trajectory,
-            store=store,
             extra_billing=bool(params.get("extra_billing")),
         )
         for session in trajectory.sessions:
@@ -464,7 +461,6 @@ def dispatch(
         trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
         result = build_trajectory_metrics(
             trajectory,
-            store=store,
             extra_billing=bool(params.get("extra_billing")),
         )
         return {
@@ -495,10 +491,13 @@ def dispatch(
             raise ValueError("missing required param: step_ids")
         if isinstance(step_ids, str):
             step_ids = [step_ids]
-        return [
-            build_step_details(resolve_resource(store, "step", sid), store=store)
-            for sid in step_ids
-        ]
+        result: list[dict[str, Any]] = []
+        for step_id in step_ids:
+            step = resolve_resource(store, "step", step_id)
+            session = store.get_session(step.session_id)
+            trajectory = store.get_trajectory(session.trajectory_id)
+            result.append(build_step_details(step, trajectory=trajectory))
+        return result
 
     if method == "event.detail":
         event_id = params.get("event_id")

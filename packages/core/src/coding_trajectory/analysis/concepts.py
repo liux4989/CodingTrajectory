@@ -20,6 +20,7 @@ TOOL_CONCEPT_MAP: dict[str, StepType] = {
     # --- subagent spawning ---
     "spawn_agent": StepType.PLAN_SUBAGENT,   # Codex
     "Agent":       StepType.PLAN_SUBAGENT,   # Claude Code
+    "Task":        StepType.PLAN_SUBAGENT,   # Factory
 
     # --- todo list / planning ---
     "update_plan": StepType.TODO_LIST,        # Codex

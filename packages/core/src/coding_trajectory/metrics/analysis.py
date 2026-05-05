@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from coding_trajectory.ingestion.indexes import (
+    TrajectoryIndex,
+    build_trajectory_index,
+    events_for_step,
+    events_for_turn,
+)
 from coding_trajectory.ingestion.models import Event, EventType, Session, Step, Trajectory, Turn, Vendor
 from coding_trajectory.metrics.models import (
     CostEstimate,
@@ -20,7 +26,6 @@ from coding_trajectory.metrics.models import (
     TurnMetrics,
 )
 from coding_trajectory.metrics.pricing import estimate_observation_cost
-from coding_trajectory.query import DocumentStore
 
 
 @dataclass
@@ -33,10 +38,10 @@ class _CodexUsageState:
 def build_trajectory_metrics(
     trajectory: Trajectory,
     *,
-    store: DocumentStore,
     extra_billing: bool = False,
 ) -> dict[str, Any]:
     """Return token/quota metrics projected onto the trajectory hierarchy."""
+    index = build_trajectory_index(trajectory)
     sessions_by_id = {session.session_id: session for session in trajectory.sessions}
     session_metrics: list[SessionMetrics] = []
     total = TokenUsage()
@@ -46,7 +51,7 @@ def build_trajectory_metrics(
     for session in trajectory.sessions:
         metrics = _build_session_metrics(
             session,
-            store=store,
+            index=index,
             sessions_by_id=sessions_by_id,
             extra_billing=extra_billing,
         )
@@ -70,7 +75,7 @@ def build_trajectory_metrics(
 def _build_session_metrics(
     session: Session,
     *,
-    store: DocumentStore,
+    index: TrajectoryIndex,
     sessions_by_id: dict[UUID, Session],
     extra_billing: bool,
 ) -> SessionMetrics:
@@ -87,7 +92,7 @@ def _build_session_metrics(
         metrics = _build_turn_metrics(
             session,
             turn,
-            store=store,
+            index=index,
             codex_state=codex_state,
             extra_billing=extra_billing,
         )
@@ -112,7 +117,7 @@ def _build_turn_metrics(
     session: Session,
     turn: Turn,
     *,
-    store: DocumentStore,
+    index: TrajectoryIndex,
     codex_state: _CodexUsageState,
     extra_billing: bool,
 ) -> TurnMetrics:
@@ -125,7 +130,7 @@ def _build_turn_metrics(
         metrics = _build_step_metrics(
             session,
             step,
-            store=store,
+            index=index,
             codex_state=codex_state,
             extra_billing=extra_billing,
         )
@@ -133,10 +138,7 @@ def _build_turn_metrics(
         turn_total = turn_total.plus(metrics.token_usage)
         cost_total = cost_total.plus(metrics.cost_estimate)
 
-    for event_id in turn.event_ids:
-        event = _get_event(store, event_id)
-        if event is None:
-            continue
+    for event in events_for_turn(index, turn):
         quota = _quota_snapshot_from_event(event)
         if quota is not None:
             quota_snapshots.append(quota)
@@ -157,14 +159,13 @@ def _build_step_metrics(
     session: Session,
     step: Step,
     *,
-    store: DocumentStore,
+    index: TrajectoryIndex,
     codex_state: _CodexUsageState,
     extra_billing: bool,
 ) -> StepMetrics:
     observations: list[TokenUsageObservation] = []
 
-    events = [_get_event(store, event_id) for event_id in step.event_ids]
-    events = [event for event in events if event is not None]
+    events = events_for_step(index, step)
 
     if not _step_has_usage_event(step, events):
         vendor_observation = _usage_from_step_vendor_data(step)
@@ -430,13 +431,6 @@ def _step_has_usage_event(step: Step, events: list[Event]) -> bool:
         and event.payload.get("raw_type") == "token_count"
         for event in events
     )
-
-
-def _get_event(store: DocumentStore, event_id: UUID) -> Event | None:
-    try:
-        return store.get_event(event_id)
-    except Exception:
-        return None
 
 
 def _finalize_cost(cost: CostEstimate) -> CostEstimate:

@@ -14,7 +14,6 @@ from coding_trajectory.ingestion.models import (
     Vendor,
 )
 from coding_trajectory.metrics import build_trajectory_metrics
-from coding_trajectory.query import DocumentStore
 
 
 def _ts(second: int) -> datetime:
@@ -61,7 +60,7 @@ def test_metrics_roll_up_claude_step_usage() -> None:
     )
     trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[session])
 
-    result = build_trajectory_metrics(trajectory, store=DocumentStore.from_trajectories([trajectory]))
+    result = build_trajectory_metrics(trajectory)
 
     assert result["token_usage"]["input_tokens"] == 10
     assert result["token_usage"]["cache_creation_input_tokens"] == 20
@@ -145,7 +144,7 @@ def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None
     )
     trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[session])
 
-    result = build_trajectory_metrics(trajectory, store=DocumentStore.from_trajectories([trajectory]))
+    result = build_trajectory_metrics(trajectory)
 
     assert result["token_usage"]["input_tokens"] == 100
     assert result["token_usage"]["cached_input_tokens"] == 25
@@ -198,7 +197,6 @@ def test_metrics_can_mark_cost_as_extra_billing() -> None:
 
     result = build_trajectory_metrics(
         trajectory,
-        store=DocumentStore.from_trajectories([trajectory]),
         extra_billing=True,
     )
 
@@ -277,7 +275,7 @@ def test_metrics_compute_codex_deltas_from_cumulative_totals() -> None:
     )
     trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[session])
 
-    result = build_trajectory_metrics(trajectory, store=DocumentStore.from_trajectories([trajectory]))
+    result = build_trajectory_metrics(trajectory)
 
     assert result["token_usage"]["input_tokens"] == 175
     assert result["token_usage"]["cached_input_tokens"] == 40
@@ -387,7 +385,7 @@ def test_metrics_subtract_codex_parent_totals_for_forked_sessions() -> None:
     )
     trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[parent_session, child_session])
 
-    result = build_trajectory_metrics(trajectory, store=DocumentStore.from_trajectories([trajectory]))
+    result = build_trajectory_metrics(trajectory)
 
     child_metrics = result["sessions"][1]["turns"][0]
     assert child_metrics["token_usage"]["input_tokens"] == 30

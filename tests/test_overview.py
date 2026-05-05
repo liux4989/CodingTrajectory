@@ -3,9 +3,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from coding_trajectory.analysis.projections import build_trajectory_narrative, build_trajectory_overview
-from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, Trajectory, Turn, Vendor
-from coding_trajectory.query import DocumentStore
+from coding_trajectory.analysis.projections import build_step_details, build_trajectory_narrative, build_trajectory_overview
+from coding_trajectory.ingestion.models import (
+    Session,
+    Step,
+    StepTextItem,
+    StepToolItem,
+    Trajectory,
+    TrajectoryEdge,
+    Turn,
+    Vendor,
+)
 
 
 def _ts(second: int) -> datetime:
@@ -83,7 +91,7 @@ def test_overview_activity_flattens_interleaved_tool_and_text_items() -> None:
     )
     trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[session])
 
-    result = build_trajectory_overview(trajectory, store=DocumentStore.from_trajectories([trajectory]))
+    result = build_trajectory_overview(trajectory)
 
     turn = result["sessions"][0]["turns"][0]
 
@@ -97,7 +105,6 @@ def test_overview_activity_flattens_interleaved_tool_and_text_items() -> None:
             "type": "tool_call",
             "name": "ReadFile",
             "description": "/tmp/config.py",
-            "summary": "Read lines 1-1",
         },
         {"type": "assistant_response", "text": "The config looks good."},
     ]
@@ -133,7 +140,7 @@ def test_overview_activity_keeps_full_assistant_text() -> None:
     )
     trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[session])
 
-    result = build_trajectory_overview(trajectory, store=DocumentStore.from_trajectories([trajectory]))
+    result = build_trajectory_overview(trajectory)
 
     assert result["sessions"][0]["turns"][0]["activity"] == [
         {"type": "assistant_response", "text": long_text}
@@ -145,7 +152,6 @@ def test_overview_can_limit_to_latest_visible_turns() -> None:
 
     result = build_trajectory_overview(
         trajectory,
-        store=DocumentStore.from_trajectories([trajectory]),
         num_turns=2,
     )
 
@@ -163,7 +169,6 @@ def test_narrative_can_limit_to_latest_visible_turns() -> None:
 
     result = build_trajectory_narrative(
         trajectory,
-        store=DocumentStore.from_trajectories([trajectory]),
         num_turns=2,
     )
 
@@ -181,7 +186,6 @@ def test_overview_can_drop_latest_turns_like_thread_rollback() -> None:
 
     result = build_trajectory_overview(
         trajectory,
-        store=DocumentStore.from_trajectories([trajectory]),
         drop_turns=2,
     )
 
@@ -197,7 +201,6 @@ def test_narrative_applies_drop_before_limit() -> None:
 
     result = build_trajectory_narrative(
         trajectory,
-        store=DocumentStore.from_trajectories([trajectory]),
         num_turns=3,
         drop_turns=1,
     )
@@ -208,3 +211,63 @@ def test_narrative_applies_drop_before_limit() -> None:
         str(turns[1].turn_id),
         str(turns[2].turn_id),
     ]
+
+
+def test_step_details_resolves_spawned_session_from_trajectory_edges() -> None:
+    trajectory_id = uuid4()
+    parent_session_id = uuid4()
+    child_session_id = uuid4()
+    turn_id = uuid4()
+
+    step = Step(
+        session_id=parent_session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(1),
+        vendor=Vendor.CLAUDE_CODE,
+        items=[
+            StepToolItem(
+                tool_name="Task",
+                input={"subagent_type": "worker", "description": "Inspect code"},
+                output="done",
+            )
+        ],
+    )
+    turn = Turn(
+        session_id=parent_session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        steps=[step],
+    )
+    parent = Session(
+        session_id=parent_session_id,
+        trajectory_id=trajectory_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(0),
+        turns=[turn],
+    )
+    child = Session(
+        session_id=child_session_id,
+        trajectory_id=trajectory_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(2),
+    )
+    trajectory = Trajectory(
+        trajectory_id=trajectory_id,
+        sessions=[parent, child],
+        edges=[
+            TrajectoryEdge(
+                type="spawned_subagent",
+                source_session_id=parent_session_id,
+                target_session_id=child_session_id,
+                source_turn_id=turn_id,
+                source_step_id=step.step_id,
+            )
+        ],
+    )
+
+    result = build_step_details(step, trajectory=trajectory)
+
+    assert result["type"] == "plan_subagent"
+    assert result["shape"]["agent_session_id"] == str(child_session_id)
