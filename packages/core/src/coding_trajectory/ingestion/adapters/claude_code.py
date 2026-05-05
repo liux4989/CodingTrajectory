@@ -27,6 +27,7 @@ from coding_trajectory.ingestion.vendor_mechanisms.claude_team import (
     build_turn_team_state,
     high_value_teammate_request,
 )
+from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normalize_claude_usage
 
 logger = logging.getLogger(__name__)
 
@@ -300,11 +301,11 @@ class ClaudeCodeAdapter(BaseAdapter):
                 base = _base_payload(record)
                 tool_uses = _tool_use_blocks(content)
                 text = _extract_text(content)
+                normalized_metrics = normalize_claude_usage(model=message.get("model"), usage=usage)
                 vendor_data = compact_dict(
                     {
                         "thinking": _extract_thinking(content) or None,
-                        "model": message.get("model"),
-                        "usage": usage,
+                        **normalized_metrics,
                         "stop_reason": stop_reason,
                     }
                 )
@@ -341,11 +342,9 @@ class ClaudeCodeAdapter(BaseAdapter):
                             kind="tool_call",
                             data={
                                 **base,
-                                "model": message.get("model"),
                                 "tool_name": block.get("name"),
                                 "tool_call_id": tool_id,
                                 "input": block.get("input"),
-                                "usage": usage,
                                 "vendor_data": vendor_data if not emitted_step_anchor and index == 0 else {},
                                 "flush_before": collecting_results and not emitted_step_anchor and index == 0,
                             },

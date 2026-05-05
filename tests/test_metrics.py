@@ -34,12 +34,14 @@ def test_metrics_roll_up_claude_step_usage() -> None:
         vendor=Vendor.CLAUDE_CODE,
         items=[StepTextItem(text="done")],
         vendor_data={
-            "model": "claude-sonnet-4-6",
-            "usage": {
-                "input_tokens": 10,
-                "cache_creation_input_tokens": 20,
-                "cache_read_input_tokens": 30,
-                "output_tokens": 40,
+            "metrics": {
+                "model": "claude-sonnet-4-6",
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 20,
+                    "cache_read_input_tokens": 30,
+                    "output_tokens": 40,
+                },
             },
         },
     )
@@ -82,8 +84,8 @@ def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None
 
     payload = {
         "raw_type": "token_count",
-        "model": "gpt-5.5",
-        "info": {
+        "metrics": {
+            "model": "gpt-5.5",
             "total_token_usage": {
                 "input_tokens": 100,
                 "cached_input_tokens": 25,
@@ -100,7 +102,7 @@ def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None
             },
             "model_context_window": 258400,
         },
-        "rate_limits": {
+        "quota": {
             "limit_id": "codex",
             "plan_type": "plus",
             "primary": {"used_percent": 12.0, "window_minutes": 300, "resets_at": 1777583539},
@@ -168,10 +170,14 @@ def test_metrics_can_mark_cost_as_extra_billing() -> None:
         timestamp=_ts(1),
         vendor=Vendor.CODEX_CLI,
         vendor_data={
-            "model": "gpt-5.4",
-            "input_tokens": 1_000_000,
-            "cached_input_tokens": 1_000_000,
-            "output_tokens": 1_000_000,
+            "metrics": {
+                "model": "gpt-5.4",
+                "usage": {
+                    "input_tokens": 1_000_000,
+                    "cached_input_tokens": 1_000_000,
+                    "output_tokens": 1_000_000,
+                },
+            },
         },
     )
     turn = Turn(
@@ -217,8 +223,8 @@ def test_metrics_compute_codex_deltas_from_cumulative_totals() -> None:
         actor="assistant",
         payload={
             "raw_type": "token_count",
-            "model": "openai/gpt-5.4-2026-01-01",
-            "info": {
+            "metrics": {
+                "model": "openai/gpt-5.4-2026-01-01",
                 "total_token_usage": {
                     "input_tokens": 100,
                     "cached_input_tokens": 20,
@@ -234,8 +240,8 @@ def test_metrics_compute_codex_deltas_from_cumulative_totals() -> None:
             "timestamp": _ts(2),
             "payload": {
                 "raw_type": "token_count",
-                "model": "openai/gpt-5.4-2026-01-01",
-                "info": {
+                "metrics": {
+                    "model": "openai/gpt-5.4-2026-01-01",
                     "total_token_usage": {
                         "input_tokens": 175,
                         "cached_input_tokens": 40,
@@ -299,8 +305,8 @@ def test_metrics_subtract_codex_parent_totals_for_forked_sessions() -> None:
         actor="assistant",
         payload={
             "raw_type": "token_count",
-            "model": "gpt-5.4",
-            "info": {
+            "metrics": {
+                "model": "gpt-5.4",
                 "total_token_usage": {
                     "input_tokens": 100,
                     "cached_input_tokens": 20,
@@ -319,8 +325,8 @@ def test_metrics_subtract_codex_parent_totals_for_forked_sessions() -> None:
         actor="assistant",
         payload={
             "raw_type": "token_count",
-            "model": "gpt-5.4",
-            "info": {
+            "metrics": {
+                "model": "gpt-5.4",
                 "total_token_usage": {
                     "input_tokens": 130,
                     "cached_input_tokens": 25,

@@ -19,6 +19,7 @@ from coding_trajectory.ingestion.models import (
     VendorExtensions,
 )
 from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
+from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normalize_gemini_usage
 
 logger = logging.getLogger(__name__)
 
@@ -146,10 +147,8 @@ class GeminiAdapter(BaseAdapter):
                         for t in thoughts
                         if isinstance(t, dict)
                     ]
-                if model:
-                    vendor_data["model"] = model
                 if tokens:
-                    vendor_data["tokens"] = tokens
+                    vendor_data.update(normalize_gemini_usage(model=model, tokens=tokens))
 
                 transcript.append(
                     TranscriptRecord(

@@ -31,6 +31,7 @@ from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
     extensions as codex_extensions,
     parent_session_id as codex_parent_session_id,
 )
+from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normalize_codex_token_count
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +282,12 @@ class CodexAdapter(BaseAdapter):
                     )
 
                 elif inner_type == "token_count":
+                    info = payload.get("info")
+                    normalized_metrics = normalize_codex_token_count(
+                        model=state.turn_context.get("model"),
+                        info=info,
+                        rate_limits=payload.get("rate_limits"),
+                    )
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -291,13 +298,10 @@ class CodexAdapter(BaseAdapter):
                             data={
                                 "turn_id_raw": turn_id,
                                 "raw_type": "token_count",
-                                "model": state.turn_context.get("model"),
-                                "info": payload.get("info"),
-                                "rate_limits": payload.get("rate_limits"),
+                                **normalized_metrics,
                                 "vendor_data": {
-                                    "model": state.turn_context.get("model"),
-                                    **(payload.get("info") or {}).get("last_token_usage", {}),
-                                } if isinstance(payload.get("info"), dict) else {},
+                                    "metrics": normalized_metrics.get("metrics"),
+                                } if normalized_metrics.get("metrics") else {},
                             },
                             fidelity="synthetic",
                         )

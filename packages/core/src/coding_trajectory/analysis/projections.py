@@ -944,7 +944,8 @@ def _assistant_response_shape(step: Step) -> dict[str, Any]:
     text_items = [item for item in step.items if isinstance(item, StepTextItem)]
     texts = [item.text for item in text_items if item.text]
     stop_reason = step.vendor_data.get("stop_reason")
-    usage_raw = step.vendor_data.get("usage")
+    metrics = step.vendor_data.get("metrics")
+    usage_raw = metrics.get("usage") if isinstance(metrics, dict) else None
     usage = usage_raw if isinstance(usage_raw, dict) else None
     return prune_nones({"texts": texts or None, "stop_reason": stop_reason, "usage": usage})
 

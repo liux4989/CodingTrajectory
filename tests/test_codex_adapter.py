@@ -240,3 +240,57 @@ def test_codex_adapter_marks_open_recent_turn_as_running(tmp_path: Path) -> None
 
     assert session.status == SessionStatus.ACTIVE
     assert session.turns[0].status == TurnStatus.RUNNING
+
+
+def test_codex_adapter_normalizes_token_count_metrics(tmp_path: Path) -> None:
+    session_id = str(uuid4())
+    records = [
+        {
+            "type": "session_meta",
+            "payload": {"id": session_id, "cwd": "/tmp/project"},
+        },
+        {
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.4"},
+        },
+        {
+            "timestamp": "2026-01-01T00:00:00Z",
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": "count tokens"},
+        },
+        {
+            "timestamp": "2026-01-01T00:00:01Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 10,
+                    },
+                    "last_token_usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 10,
+                    },
+                    "model_context_window": 258400,
+                },
+                "rate_limits": {
+                    "limit_id": "codex",
+                    "plan_type": "plus",
+                    "primary": {"used_percent": 12.0, "window_minutes": 300, "resets_at": 1777583539},
+                },
+            },
+        },
+    ]
+
+    session = _session(_write_rollout(tmp_path, records))
+    usage_event = next(event for event in session.events if event.payload.get("raw_type") == "token_count")
+
+    assert usage_event.payload["metrics"]["model"] == "gpt-5.4"
+    assert usage_event.payload["metrics"]["total_token_usage"]["input_tokens"] == 100
+    assert usage_event.payload["metrics"]["last_token_usage"]["cached_input_tokens"] == 20
+    assert usage_event.payload["metrics"]["model_context_window"] == 258400
+    assert usage_event.payload["quota"]["plan_type"] == "plus"
+    assert usage_event.payload["quota"]["primary"]["window_minutes"] == 300

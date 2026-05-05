@@ -163,14 +163,15 @@ def _build_step_metrics(
 ) -> StepMetrics:
     observations: list[TokenUsageObservation] = []
 
-    vendor_observation = _usage_from_step_vendor_data(step)
-    if vendor_observation is not None:
-        observations.append(vendor_observation)
+    events = [_get_event(store, event_id) for event_id in step.event_ids]
+    events = [event for event in events if event is not None]
 
-    for event_id in step.event_ids:
-        event = _get_event(store, event_id)
-        if event is None:
-            continue
+    if not _step_has_usage_event(step, events):
+        vendor_observation = _usage_from_step_vendor_data(step)
+        if vendor_observation is not None:
+            observations.append(vendor_observation)
+
+    for event in events:
         event_observation = _usage_from_event(
             event,
             step=step,
@@ -201,14 +202,16 @@ def _build_step_metrics(
 def _usage_from_step_vendor_data(step: Step) -> TokenUsageObservation | None:
     data = step.vendor_data or {}
     provider = step.vendor.value
-    model = _as_str(data.get("model"))
+    normalized = data.get("metrics")
+    if not isinstance(normalized, dict):
+        return None
 
-    usage = data.get("usage")
-    if isinstance(usage, dict):
-        model = model or _as_str(usage.get("model"))
-        token_usage = _token_usage_from_mapping(usage)
-    else:
-        token_usage = _token_usage_from_mapping(data)
+    usage = normalized.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    model = _as_str(normalized.get("model")) or _as_str(usage.get("model"))
+    token_usage = _token_usage_from_mapping(usage)
 
     if _is_zero_usage(token_usage):
         return None
@@ -238,18 +241,14 @@ def _usage_from_event(
     if event.payload.get("raw_type") != "token_count":
         return None
 
-    info = event.payload.get("info")
-    if not isinstance(info, dict):
+    metrics = event.payload.get("metrics")
+    if not isinstance(metrics, dict):
         return None
 
-    token_usage = _codex_delta_usage(info, codex_state)
+    token_usage = _codex_delta_usage(metrics, codex_state)
     if token_usage is None or _is_zero_usage(token_usage):
         return None
-    model = (
-        _as_str(info.get("model"))
-        or _as_str(info.get("model_name"))
-        or _as_str(event.payload.get("model"))
-    )
+    model = _as_str(metrics.get("model"))
 
     return TokenUsageObservation(
         scope_type="step",
@@ -316,10 +315,10 @@ def _inherited_codex_totals(
             continue
         if event.payload.get("raw_type") != "token_count":
             continue
-        info = event.payload.get("info")
-        if not isinstance(info, dict):
+        metrics = event.payload.get("metrics")
+        if not isinstance(metrics, dict):
             continue
-        delta = _codex_delta_usage(info, state)
+        delta = _codex_delta_usage(metrics, state)
         if delta is not None:
             latest = latest.plus(delta)
 
@@ -334,7 +333,7 @@ def _quota_snapshot_from_event(event: Event) -> QuotaSnapshot | None:
     if event.payload.get("raw_type") != "token_count":
         return None
 
-    rate_limits = event.payload.get("rate_limits")
+    rate_limits = event.payload.get("quota")
     if not isinstance(rate_limits, dict):
         return None
 
@@ -420,6 +419,17 @@ def _session_has_usage(metrics: SessionMetrics) -> bool:
 
 def _is_zero_usage(usage: TokenUsage) -> bool:
     return all(value == 0 for value in usage.model_dump().values())
+
+
+def _step_has_usage_event(step: Step, events: list[Event]) -> bool:
+    if step.vendor != Vendor.CODEX_CLI:
+        return False
+    return any(
+        event.type == EventType.VENDOR_RAW
+        and event.vendor_source == Vendor.CODEX_CLI
+        and event.payload.get("raw_type") == "token_count"
+        for event in events
+    )
 
 
 def _get_event(store: DocumentStore, event_id: UUID) -> Event | None:

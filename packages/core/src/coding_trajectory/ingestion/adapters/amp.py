@@ -24,6 +24,7 @@ from coding_trajectory.ingestion.vendor_mechanisms.amp_handoff import (
     parent_session_id as amp_parent_session_id,
     thread_session_id,
 )
+from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normalize_amp_usage
 
 logger = logging.getLogger(__name__)
 
@@ -260,9 +261,7 @@ class AmpAdapter(BaseAdapter):
                 if thinking:
                     vendor_data["thinking"] = thinking
                 if usage:
-                    vendor_data["model"] = usage.get("model")
-                    vendor_data["input_tokens"] = usage.get("inputTokens")
-                    vendor_data["output_tokens"] = usage.get("outputTokens")
+                    vendor_data.update(normalize_amp_usage(model=usage.get("model"), usage=usage))
 
                 stop_reason = (msg.get("state") or {}).get("stopReason")
                 if stop_reason:
