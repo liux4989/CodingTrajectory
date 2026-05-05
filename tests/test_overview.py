@@ -213,6 +213,50 @@ def test_narrative_applies_drop_before_limit() -> None:
     ]
 
 
+def test_fork_relationship_is_visible_from_parent_and_child_sessions() -> None:
+    trajectory_id = uuid4()
+    parent_session_id = uuid4()
+    child_session_id = uuid4()
+    parent = Session(
+        session_id=parent_session_id,
+        trajectory_id=trajectory_id,
+        vendor=Vendor.CODEX_CLI,
+        started_at=_ts(0),
+    )
+    child = Session(
+        session_id=child_session_id,
+        trajectory_id=trajectory_id,
+        vendor=Vendor.CODEX_CLI,
+        started_at=_ts(1),
+        parent_session_id=parent_session_id,
+    )
+    trajectory = Trajectory(
+        trajectory_id=trajectory_id,
+        sessions=[parent, child],
+        edges=[
+            TrajectoryEdge(
+                type="forked_from",
+                source_session_id=parent_session_id,
+                target_session_id=child_session_id,
+            )
+        ],
+    )
+
+    overview = build_trajectory_overview(trajectory)
+    narrative = build_trajectory_narrative(trajectory)
+
+    for result in (overview, narrative):
+        parent_node, child_node = result["sessions"]
+        assert parent_node["relationship"] == {
+            "role": "main",
+            "forked_session_ids": [str(child_session_id)],
+        }
+        assert child_node["relationship"] == {
+            "relationship": "forked_from",
+            "parent_session_id": str(parent_session_id),
+        }
+
+
 def test_step_details_resolves_spawned_session_from_trajectory_edges() -> None:
     trajectory_id = uuid4()
     parent_session_id = uuid4()

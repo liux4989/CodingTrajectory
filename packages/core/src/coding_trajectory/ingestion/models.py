@@ -205,7 +205,7 @@ class Session(BaseModel):
 
 
 class TrajectoryEdge(BaseModel):
-    type:               Literal["spawned_subagent", "sidechain_of", "handoff_to", "resumed_from", "teammate_of"]
+    type:               Literal["spawned_subagent", "sidechain_of", "forked_from", "handoff_to", "resumed_from", "teammate_of"]
     source_session_id:  UUID
     target_session_id:  UUID
     source_turn_id:     UUID | None = None

@@ -273,9 +273,14 @@ class IndexCache:
 
 
 def _resolve_trajectory(store: Any, raw_id: str | None) -> Any:
-    """Resolve a trajectory by ID, or infer the single trajectory when raw_id is None."""
+    """Resolve a trajectory by trajectory ID or by one of its session IDs."""
     if raw_id is not None:
-        return resolve_resource(store, "trajectory", raw_id)
+        resource_id = UUID(raw_id)
+        try:
+            return store.get_trajectory(resource_id)
+        except ResourceNotFoundError:
+            session = store.get_session(resource_id)
+            return store.get_trajectory(session.trajectory_id)
     trajectories = list(store.trajectories.values())
     if len(trajectories) == 1:
         return trajectories[0]
@@ -290,10 +295,16 @@ def _update_path_index(cache: IndexCache, sources: list[DiscoverySource]) -> Non
             cache.path_to_trajectory[str(source.path)] = str(source.trajectory_id)
 
 
+def _update_session_index(cache: IndexCache, store: DocumentStore) -> None:
+    for session in store.sessions.values():
+        cache.session_to_trajectory[str(session.session_id)] = str(session.trajectory_id)
+
+
 def _build_store_full(*, global_scope: bool, current_dir: Path, cache: IndexCache) -> tuple[DocumentStore, str]:
     """Full discovery — populates cache.path_to_trajectory."""
     discovery = discover_store(current_dir=current_dir, global_scope=global_scope)
     _update_path_index(cache, discovery.sources)
+    _update_session_index(cache, discovery.store)
 
     return discovery.store, format_discovery_sources(discovery.sources)
 
@@ -303,6 +314,7 @@ def _build_store_targeted(paths: list[str], cache: IndexCache) -> tuple[Document
     expanded_paths = _expand_targeted_paths([Path(p) for p in paths])
     discovery = discover_store_from_files(expanded_paths)
     _update_path_index(cache, discovery.sources)
+    _update_session_index(cache, discovery.store)
     return discovery.store, format_discovery_sources(discovery.sources)
 
 
@@ -345,7 +357,8 @@ def resolve_store(
 
     trajectory_id = params.get("trajectory_id")
     if trajectory_id and cache.path_to_trajectory:
-        cached_paths = cache.paths_for_trajectory(trajectory_id)
+        target_trajectory_id = cache.session_to_trajectory.get(trajectory_id, trajectory_id)
+        cached_paths = cache.paths_for_trajectory(target_trajectory_id)
         if cached_paths:
             return _build_store_targeted(cached_paths, cache)
 

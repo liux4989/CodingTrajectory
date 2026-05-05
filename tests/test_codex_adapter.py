@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+from coding_trajectory.discovery import discover_store_from_files
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
 from coding_trajectory.ingestion.models import SessionStatus, StepTextItem, TurnStatus
 
@@ -294,3 +295,111 @@ def test_codex_adapter_normalizes_token_count_metrics(tmp_path: Path) -> None:
     assert usage_event.payload["metrics"]["model_context_window"] == 258400
     assert usage_event.payload["quota"]["plan_type"] == "plus"
     assert usage_event.payload["quota"]["primary"]["window_minutes"] == 300
+
+
+def test_codex_adapter_keeps_first_session_meta_as_rollout_identity(tmp_path: Path) -> None:
+    parent_id = str(uuid4())
+    child_id = str(uuid4())
+    records = [
+        {
+            "type": "session_meta",
+            "payload": {"id": child_id, "forked_from_id": parent_id, "cwd": "/tmp/project"},
+        },
+        {
+            "type": "session_meta",
+            "payload": {"id": parent_id, "cwd": "/tmp/project"},
+        },
+        {
+            "timestamp": "2026-01-01T00:00:00Z",
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": "continue fork"},
+        },
+        {
+            "timestamp": "2026-01-01T00:00:01Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": "fork done"}],
+            },
+        },
+    ]
+
+    session = _session(_write_rollout(tmp_path, records))
+
+    assert str(session.session_id) == child_id
+    assert str(session.parent_session_id) == parent_id
+    assert session.extensions
+    assert session.extensions.codex
+    assert session.extensions.codex.forked_from_id == parent_id
+
+
+def test_codex_discovery_links_fork_session_into_parent_trajectory(tmp_path: Path) -> None:
+    parent_id = str(uuid4())
+    child_id = str(uuid4())
+    parent_path = tmp_path / "parent.jsonl"
+    child_path = tmp_path / "child.jsonl"
+    parent_path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in [
+                {"type": "session_meta", "payload": {"id": parent_id, "cwd": "/tmp/project"}},
+                {
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "start"},
+                },
+                {
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "phase": "final_answer",
+                        "content": [{"type": "output_text", "text": "parent done"}],
+                    },
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    child_path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in [
+                {
+                    "type": "session_meta",
+                    "payload": {"id": child_id, "forked_from_id": parent_id, "cwd": "/tmp/project"},
+                },
+                {"type": "session_meta", "payload": {"id": parent_id, "cwd": "/tmp/project"}},
+                {
+                    "timestamp": "2026-01-01T00:00:02Z",
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "fork work"},
+                },
+                {
+                    "timestamp": "2026-01-01T00:00:03Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "phase": "final_answer",
+                        "content": [{"type": "output_text", "text": "child done"}],
+                    },
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    discovery = discover_store_from_files([parent_path, child_path])
+    trajectory = next(iter(discovery.store.trajectories.values()))
+
+    assert str(trajectory.trajectory_id) == parent_id
+    assert {str(session.session_id) for session in trajectory.sessions} == {parent_id, child_id}
+    assert [(edge.type, str(edge.source_session_id), str(edge.target_session_id)) for edge in trajectory.edges] == [
+        ("forked_from", parent_id, child_id)
+    ]

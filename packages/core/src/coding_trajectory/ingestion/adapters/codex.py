@@ -223,6 +223,8 @@ class CodexAdapter(BaseAdapter):
             payload = record.get("payload") or {}
 
             if outer_type == "session_meta":
+                if state.session_meta:
+                    continue
                 sid_str = payload.get("id")
                 if sid_str:
                     try:

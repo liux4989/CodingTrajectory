@@ -148,12 +148,16 @@ def _build_edge(parent: Session | None, child: Session) -> TrajectoryEdge | None
         return None
 
     origin = _find_edge_origin(parent)
-    edge_type = classify_edge_type(
-        RelationEdgeInput(
-            child_is_sidechain=_is_sidechain(child),
-            child_parent_session_id_present=child.parent_session_id is not None,
-            parent_vendor=parent.vendor,
-            origin_tool_name=origin.tool_name if origin else None,
+    edge_type = (
+        "forked_from"
+        if _is_codex_fork(child)
+        else classify_edge_type(
+            RelationEdgeInput(
+                child_is_sidechain=_is_sidechain(child),
+                child_parent_session_id_present=child.parent_session_id is not None,
+                parent_vendor=parent.vendor,
+                origin_tool_name=origin.tool_name if origin else None,
+            )
         )
     )
     evidence_ids = [origin.event_id] if origin is not None else []
@@ -231,6 +235,11 @@ def _root_session(sessions: list[Session]) -> Session | None:
 def _is_sidechain(session: Session) -> bool:
     extensions = session.extensions
     return bool(extensions and extensions.claude_code and extensions.claude_code.is_sidechain)
+
+
+def _is_codex_fork(session: Session) -> bool:
+    extensions = session.extensions
+    return bool(extensions and extensions.codex and extensions.codex.forked_from_id)
 
 
 def _max_datetime(values: Any) -> datetime | None:

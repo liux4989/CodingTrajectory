@@ -86,11 +86,20 @@ def _apply_turn_window(
 def _session_connection(session: Session, *, index: TrajectoryIndex) -> dict[str, Any]:
     parent = index.parent.get(session.session_id)
     edge_type = index.incoming_edge_type.get(session.session_id)
+    forked_session_ids = [
+        str(child_id)
+        for child_id in index.children.get(session.session_id, [])
+        if index.incoming_edge_type.get(child_id) == "forked_from"
+    ]
     if parent is None and not edge_type:
-        return {"role": "main"}
+        return prune_nones({
+            "role": "main",
+            "forked_session_ids": forked_session_ids or None,
+        })
     return prune_nones({
         "relationship": edge_type,
         "parent_session_id": str(parent) if parent else None,
+        "forked_session_ids": forked_session_ids or None,
     })
 
 
