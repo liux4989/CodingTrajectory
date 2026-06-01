@@ -191,7 +191,6 @@ class Turn(BaseModel):
 
 class Session(BaseModel):
     session_id:        UUID = Field(default_factory=uuid4)
-    trajectory_id:     UUID
     vendor:            Vendor
     agent_name:        str | None = None
     started_at:        datetime
@@ -204,7 +203,7 @@ class Session(BaseModel):
     status:            SessionStatus = SessionStatus.COMPLETED
 
 
-class TrajectoryEdge(BaseModel):
+class SessionEdge(BaseModel):
     type:               Literal["spawned_subagent", "sidechain_of", "forked_from", "handoff_to", "resumed_from", "teammate_of"]
     source_session_id:  UUID
     target_session_id:  UUID
@@ -217,7 +216,7 @@ class TrajectoryEdge(BaseModel):
     metadata:           dict[str, Any] | None = None
 
 
-class TrajectorySummary(BaseModel):
+class SessionGraphSummary(BaseModel):
     root_session_id: UUID | None = None
     started_at:      datetime | None = None
     ended_at:        datetime | None = None
@@ -226,9 +225,9 @@ class TrajectorySummary(BaseModel):
     vendors:         list[Vendor] = Field(default_factory=list)
 
 
-class Trajectory(BaseModel):
-    trajectory_id:      UUID = Field(default_factory=uuid4)
+class SessionGraph(BaseModel):
+    root_session_id:      UUID = Field(default_factory=uuid4)
     project_identifier: str | None = None
-    summary:            TrajectorySummary | None = None
-    edges:              list[TrajectoryEdge] = Field(default_factory=list)
+    summary:            SessionGraphSummary | None = None
+    edges:              list[SessionEdge] = Field(default_factory=list)
     sessions:           list[Session] = Field(default_factory=list)

@@ -6,7 +6,7 @@ from datetime import datetime
 import re
 from uuid import UUID
 
-from coding_trajectory.ingestion.indexes import TrajectoryIndex, event_for_turn_user_request, incoming_edge
+from coding_trajectory.ingestion.indexes import SessionGraphIndex, event_for_turn_user_request, incoming_edge
 from coding_trajectory.ingestion.models import Session, Turn
 
 _COMMAND_NAME_RE = re.compile(r"<command-name>(.*?)</command-name>", re.DOTALL)
@@ -28,7 +28,7 @@ _LOW_VALUE_COMMANDS: frozenset[str] = frozenset({
 
 
 def extract_user_request(
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
     turn: Turn,
     *,
     session: Session | None = None,
@@ -48,7 +48,7 @@ def extract_user_request(
 
 
 def latest_human_user_request(
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
     session: Session,
     *,
     before: datetime | None = None,
@@ -64,7 +64,7 @@ def latest_human_user_request(
 
 
 def resolve_originating_human_request(
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
     session: Session,
 ) -> dict[str, str] | None:
     current_session = session
@@ -102,7 +102,7 @@ def resolve_originating_human_request(
 
 
 def effective_user_request(
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
     turn: Turn,
     *,
     session: Session,

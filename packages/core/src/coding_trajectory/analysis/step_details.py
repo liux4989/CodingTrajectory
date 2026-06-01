@@ -7,14 +7,14 @@ from typing import Any
 from coding_trajectory.analysis.concepts import TOOL_CONCEPT_MAP, StepType
 from coding_trajectory.analysis.projection_utils import truncate_with_ref
 from coding_trajectory.ingestion.common import prune_nones
-from coding_trajectory.ingestion.indexes import TrajectoryIndex, build_trajectory_index, target_session_id_for_step
-from coding_trajectory.ingestion.models import Step, StepTextItem, StepToolItem, Trajectory
+from coding_trajectory.ingestion.indexes import SessionGraphIndex, build_session_graph_index, target_session_id_for_step
+from coding_trajectory.ingestion.models import Step, StepTextItem, StepToolItem, SessionGraph
 
 
-def build_step_details(step: Step, *, trajectory: Trajectory) -> dict[str, Any]:
+def build_step_details(step: Step, *, session_graph: SessionGraph) -> dict[str, Any]:
     step_type = _classify_step(step)
     tool_items = [item for item in step.items if isinstance(item, StepToolItem)]
-    index = build_trajectory_index(trajectory)
+    index = build_session_graph_index(session_graph)
 
     if step_type == StepType.ASSISTANT_RESPONSE:
         operations: list[str] = ["text_reply"]
@@ -93,12 +93,12 @@ def _tool_call_shape(tool_items: list[StepToolItem]) -> dict[str, Any]:
     }
 
 
-def _lookup_target_session(step: Step, *, index: TrajectoryIndex, edge_type: str) -> str | None:
+def _lookup_target_session(step: Step, *, index: SessionGraphIndex, edge_type: str) -> str | None:
     target_session_id = target_session_id_for_step(index, step, edge_type=edge_type)
     return str(target_session_id) if target_session_id is not None else None
 
 
-def _plan_subagent_shape(step: Step, *, index: TrajectoryIndex) -> dict[str, Any]:
+def _plan_subagent_shape(step: Step, *, index: SessionGraphIndex) -> dict[str, Any]:
     tool_items = [item for item in step.items if isinstance(item, StepToolItem)]
     spawn_item = next(
         (item for item in tool_items if TOOL_CONCEPT_MAP.get(item.tool_name or "") == StepType.PLAN_SUBAGENT),
@@ -118,7 +118,7 @@ def _todo_list_shape(tool_items: list[StepToolItem]) -> dict[str, Any]:
     return _tool_call_shape(tool_items)
 
 
-def _session_handoff_shape(step: Step, *, index: TrajectoryIndex) -> dict[str, Any]:
+def _session_handoff_shape(step: Step, *, index: SessionGraphIndex) -> dict[str, Any]:
     tool_items = [item for item in step.items if isinstance(item, StepToolItem)]
     handoff_item = next(
         (item for item in tool_items if TOOL_CONCEPT_MAP.get(item.tool_name or "") == StepType.SESSION_HANDOFF),

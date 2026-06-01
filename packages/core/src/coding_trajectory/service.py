@@ -16,7 +16,7 @@ from coding_trajectory.discovery import (
     format_discovery_sources,
 )
 from coding_trajectory.ingestion.common import format_datetime, normalize_project_key, prune_nones
-from coding_trajectory.ingestion.models import Event, EventType, Session, Step, StepItem, Trajectory, Turn
+from coding_trajectory.ingestion.models import Event, EventType, Session, Step, StepItem, SessionGraph, Turn
 from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
 
 
@@ -35,13 +35,13 @@ def _optional_positive_int(params: dict[str, Any], key: str) -> int | None:
     return parsed
 
 
-def serialize_trajectory_detail(trajectory: Trajectory) -> dict[str, Any]:
-    vendors = sorted({session.vendor.value for session in trajectory.sessions if session.vendor})
+def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any]:
+    vendors = sorted({session.vendor.value for session in session_graph.sessions if session.vendor})
     return prune_nones(
         {
-            "trajectory_id": str(trajectory.trajectory_id),
+            "root_session_id": str(session_graph.root_session_id),
             "vendors": vendors or None,
-            "session_ids": [str(session.session_id) for session in trajectory.sessions],
+            "session_ids": [str(session.session_id) for session in session_graph.sessions],
         }
     )
 
@@ -50,7 +50,6 @@ def serialize_session_detail(session: Session) -> dict[str, Any]:
     return prune_nones(
         {
             "session_id": str(session.session_id),
-            "trajectory_id": str(session.trajectory_id),
             "status": session.status,
             "turn_ids": [str(turn.turn_id) for turn in session.turns],
             "event_ids": [str(event.event_id) for event in session.events],
@@ -144,11 +143,11 @@ def serialize_text_detail(event: Event) -> dict[str, Any] | None:
     return {"text": text.strip()}
 
 
-def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> Trajectory | Session | Turn | Event | Step:
+def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> SessionGraph | Session | Turn | Event | Step:
     resource_id = UUID(raw_id)
 
-    if resource == "trajectory":
-        return store.get_trajectory(resource_id)
+    if resource == "session_graph":
+        return store.get_session_graph(resource_id)
     if resource == "session":
         return store.get_session(resource_id)
     if resource == "turn":
@@ -166,40 +165,44 @@ def resolve_collection(
     resource: str,
     *,
     global_scope: bool = False,
-    trajectory_id: str | None = None,
+    root_session_id: str | None = None,
     current_dir: Path | None = None,
     project_name: str | None = None,
     agent_vendor: str | None = None,
-) -> list[Trajectory | Session]:
-    if resource == "trajectory":
-        trajectories = list(store.trajectories.values())
+) -> list[SessionGraph | Session]:
+    if resource == "session_graph":
+        session_graphs = list(store.session_graphs.values())
         if not global_scope and current_dir is not None and project_name is None:
             current_project = normalize_project_key(current_dir.name)
-            trajectories = [
+            session_graphs = [
                 item
-                for item in trajectories
+                for item in session_graphs
                 if item.project_identifier and normalize_project_key(item.project_identifier) == current_project
             ]
         if project_name is not None:
             key = normalize_project_key(project_name)
-            trajectories = [
+            session_graphs = [
                 item
-                for item in trajectories
+                for item in session_graphs
                 if item.project_identifier and normalize_project_key(item.project_identifier) == key
             ]
         if agent_vendor is not None:
-            trajectories = [
+            session_graphs = [
                 item
-                for item in trajectories
+                for item in session_graphs
                 if item.summary and any(v.value == agent_vendor for v in item.summary.vendors)
             ]
-        return sorted(trajectories, key=lambda item: (item.project_identifier or "", str(item.trajectory_id)))
+        return sorted(session_graphs, key=lambda item: (item.project_identifier or "", str(item.root_session_id)))
 
     if resource == "session":
         sessions = list(store.sessions.values())
-        if trajectory_id:
-            tid = UUID(trajectory_id)
-            sessions = [item for item in sessions if item.trajectory_id == tid]
+        if root_session_id:
+            tid = UUID(root_session_id)
+            sessions = [
+                item
+                for item in sessions
+                if store.session_to_root.get(item.session_id) == tid
+            ]
         return sorted(sessions, key=lambda item: (item.started_at, str(item.session_id)))
 
     raise ValueError(f"unsupported resource: {resource}")
@@ -217,19 +220,19 @@ _CACHE_FILE = _CACHE_DIR / "index.json"
 class IndexCache:
     """Lazy index persisted to ~/.coding-trajectory/index.json."""
 
-    path_to_trajectory: dict[str, str] = field(default_factory=dict)
-    session_to_trajectory: dict[str, str] = field(default_factory=dict)
+    path_to_session_graph: dict[str, str] = field(default_factory=dict)
+    session_to_session_graph: dict[str, str] = field(default_factory=dict)
 
-    def paths_for_trajectory(self, trajectory_id: str) -> list[str]:
-        return [p for p, tid in self.path_to_trajectory.items() if tid == trajectory_id]
+    def paths_for_session_graph(self, root_session_id: str) -> list[str]:
+        return [p for p, tid in self.path_to_session_graph.items() if tid == root_session_id]
 
     def save(self) -> None:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         _CACHE_FILE.write_text(
             json.dumps(
                 {
-                    "path_to_trajectory": self.path_to_trajectory,
-                    "session_to_trajectory": self.session_to_trajectory,
+                    "path_to_session_graph": self.path_to_session_graph,
+                    "session_to_session_graph": self.session_to_session_graph,
                 },
                 indent=2,
             )
@@ -246,24 +249,24 @@ class IndexCache:
         except (json.JSONDecodeError, OSError):
             return cls()
         cache = cls(
-            path_to_trajectory=raw.get("path_to_trajectory", {}),
-            session_to_trajectory=raw.get("session_to_trajectory", {}),
+            path_to_session_graph=raw.get("path_to_session_graph", {}),
+            session_to_session_graph=raw.get("session_to_session_graph", {}),
         )
         cache._prune_stale()
         return cache
 
     def _prune_stale(self) -> None:
         """Remove entries whose source files no longer exist."""
-        stale = [p for p in self.path_to_trajectory if not Path(p).exists()]
+        stale = [p for p in self.path_to_session_graph if not Path(p).exists()]
         if not stale:
             return
         stale_tids = set()
         for p in stale:
-            stale_tids.add(self.path_to_trajectory.pop(p))
-        live_tids = set(self.path_to_trajectory.values())
+            stale_tids.add(self.path_to_session_graph.pop(p))
+        live_tids = set(self.path_to_session_graph.values())
         for tid in stale_tids - live_tids:
-            self.session_to_trajectory = {
-                sid: t for sid, t in self.session_to_trajectory.items() if t != tid
+            self.session_to_session_graph = {
+                sid: t for sid, t in self.session_to_session_graph.items() if t != tid
             }
 
 
@@ -272,36 +275,41 @@ class IndexCache:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_trajectory(store: Any, raw_id: str | None) -> Any:
-    """Resolve a trajectory by trajectory ID or by one of its session IDs."""
+def _resolve_session_graph(store: Any, raw_id: str | None) -> Any:
+    """Resolve a session graph by a session entry point."""
     if raw_id is not None:
         resource_id = UUID(raw_id)
         try:
-            return store.get_trajectory(resource_id)
+            return store.get_session_graph(resource_id)
         except ResourceNotFoundError:
             session = store.get_session(resource_id)
-            return store.get_trajectory(session.trajectory_id)
-    trajectories = list(store.trajectories.values())
-    if len(trajectories) == 1:
-        return trajectories[0]
-    if not trajectories:
-        raise ValueError("no trajectories found in store")
-    raise ValueError("trajectory_id is required when the store contains multiple trajectories")
+            return store.get_session_graph_for_session(session.session_id)
+    session_graphs = list(store.session_graphs.values())
+    if len(session_graphs) == 1:
+        return session_graphs[0]
+    if not session_graphs:
+        raise ValueError("no session_graphs found in store")
+    raise ValueError("session_id is required when the store contains multiple session_graphs")
+
+
+def _session_graph_entrypoint_id(params: dict[str, Any]) -> str | None:
+    """Return the public session entry point."""
+    return params.get("session_id") or params.get("root_session_id")
 
 
 def _update_path_index(cache: IndexCache, sources: list[DiscoverySource]) -> None:
     for source in sources:
-        if source.trajectory_id is not None:
-            cache.path_to_trajectory[str(source.path)] = str(source.trajectory_id)
+        if source.root_session_id is not None:
+            cache.path_to_session_graph[str(source.path)] = str(source.root_session_id)
 
 
 def _update_session_index(cache: IndexCache, store: DocumentStore) -> None:
-    for session in store.sessions.values():
-        cache.session_to_trajectory[str(session.session_id)] = str(session.trajectory_id)
+    for session_id, root_session_id in store.session_to_root.items():
+        cache.session_to_session_graph[str(session_id)] = str(root_session_id)
 
 
 def _build_store_full(*, global_scope: bool, current_dir: Path, cache: IndexCache) -> tuple[DocumentStore, str]:
-    """Full discovery — populates cache.path_to_trajectory."""
+    """Full discovery — populates cache.path_to_session_graph."""
     discovery = discover_store(current_dir=current_dir, global_scope=global_scope)
     _update_path_index(cache, discovery.sources)
     _update_session_index(cache, discovery.store)
@@ -310,7 +318,7 @@ def _build_store_full(*, global_scope: bool, current_dir: Path, cache: IndexCach
 
 
 def _build_store_targeted(paths: list[str], cache: IndexCache) -> tuple[DocumentStore, str]:
-    """Targeted discovery — ingest only the files mapped to a trajectory."""
+    """Targeted discovery — ingest only the files mapped to a session_graph."""
     expanded_paths = _expand_targeted_paths([Path(p) for p in paths])
     discovery = discover_store_from_files(expanded_paths)
     _update_path_index(cache, discovery.sources)
@@ -355,10 +363,10 @@ def resolve_store(
         _update_path_index(cache, discovery.sources)
         return discovery.store, format_discovery_sources(discovery.sources)
 
-    trajectory_id = params.get("trajectory_id")
-    if trajectory_id and cache.path_to_trajectory:
-        target_trajectory_id = cache.session_to_trajectory.get(trajectory_id, trajectory_id)
-        cached_paths = cache.paths_for_trajectory(target_trajectory_id)
+    entrypoint_id = _session_graph_entrypoint_id(params)
+    if entrypoint_id and cache.path_to_session_graph:
+        target_session_graph_id = cache.session_to_session_graph.get(entrypoint_id, entrypoint_id)
+        cached_paths = cache.paths_for_session_graph(target_session_graph_id)
         if cached_paths:
             return _build_store_targeted(cached_paths, cache)
 
@@ -384,35 +392,32 @@ def dispatch(
     from coding_trajectory.analysis.projections import (
         build_event_scan,
         build_step_details,
-        build_trajectory_narrative,
-        build_trajectory_overview,
+        build_session_graph_narrative,
+        build_session_graph_overview,
     )
-    from coding_trajectory.metrics import build_trajectory_metrics
+    from coding_trajectory.metrics import build_session_graph_metrics
 
-    if method == "trajectory.list":
-        trajectories = resolve_collection(
+    if method == "graph.list":
+        session_graphs = resolve_collection(
             store,
-            "trajectory",
+            "session_graph",
             global_scope=global_scope,
             current_dir=current_dir,
             project_name=params.get("project_name"),
             agent_vendor=params.get("agent_vendor"),
         )
-        result: dict[str, Any] = {"items": [serialize_trajectory_detail(t) for t in trajectories]}
-        if not params.get("project_name"):
-            result["discovery_note"] = discovery_note
-        return result
+        return {"items": [serialize_session_graph_detail(t) for t in session_graphs]}
 
     if method == "project.list":
-        trajectories = resolve_collection(
+        session_graphs = resolve_collection(
             store,
-            "trajectory",
+            "session_graph",
             global_scope=global_scope,
             current_dir=current_dir,
             agent_vendor=params.get("agent_vendor"),
         )
         projects: dict[str, dict] = {}
-        for t in trajectories:
+        for t in session_graphs:
             if not t.project_identifier:
                 continue
             key = t.project_identifier
@@ -433,51 +438,51 @@ def dispatch(
         }
 
     if method == "project.logfile":
-        trajectories = list(store.trajectories.values())
-        if not trajectories:
-            raise ValueError("no trajectories found in log file")
-        return {"items": [serialize_trajectory_detail(t) for t in trajectories]}
+        session_graphs = list(store.session_graphs.values())
+        if not session_graphs:
+            raise ValueError("no session_graphs found in log file")
+        return {"items": [serialize_session_graph_detail(t) for t in session_graphs]}
 
-    if method == "trajectory.overview":
-        trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
-        result = build_trajectory_overview(
-            trajectory,
+    if method == "graph.overview":
+        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
+        result = build_session_graph_overview(
+            session_graph,
             num_turns=_optional_positive_int(params, "num_turns"),
             drop_turns=_optional_positive_int(params, "drop_turns"),
         )
-        for session in trajectory.sessions:
-            cache.session_to_trajectory[str(session.session_id)] = str(trajectory.trajectory_id)
+        for session in session_graph.sessions:
+            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
         return result
 
-    if method == "trajectory.narrative":
-        trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
-        result = build_trajectory_narrative(
-            trajectory,
+    if method == "graph.narrative":
+        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
+        result = build_session_graph_narrative(
+            session_graph,
             num_turns=_optional_positive_int(params, "num_turns"),
             drop_turns=_optional_positive_int(params, "drop_turns"),
         )
-        for session in trajectory.sessions:
-            cache.session_to_trajectory[str(session.session_id)] = str(trajectory.trajectory_id)
+        for session in session_graph.sessions:
+            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
         return result
 
-    if method == "metrics.trajectory":
-        trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
-        result = build_trajectory_metrics(
-            trajectory,
+    if method == "metrics.graph":
+        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
+        result = build_session_graph_metrics(
+            session_graph,
             extra_billing=bool(params.get("extra_billing")),
         )
-        for session in trajectory.sessions:
-            cache.session_to_trajectory[str(session.session_id)] = str(trajectory.trajectory_id)
+        for session in session_graph.sessions:
+            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
         return result
 
     if method == "metrics.turns":
-        trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
-        result = build_trajectory_metrics(
-            trajectory,
+        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
+        result = build_session_graph_metrics(
+            session_graph,
             extra_billing=bool(params.get("extra_billing")),
         )
         return {
-            "trajectory_id": result["trajectory_id"],
+            "root_session_id": result["root_session_id"],
             "token_usage": result["token_usage"],
             "cost_estimate": result["cost_estimate"],
             "turns": [
@@ -507,9 +512,8 @@ def dispatch(
         result: list[dict[str, Any]] = []
         for step_id in step_ids:
             step = resolve_resource(store, "step", step_id)
-            session = store.get_session(step.session_id)
-            trajectory = store.get_trajectory(session.trajectory_id)
-            result.append(build_step_details(step, trajectory=trajectory))
+            session_graph = store.get_session_graph_for_session(step.session_id)
+            result.append(build_step_details(step, session_graph=session_graph))
         return result
 
     if method == "event.detail":
@@ -520,11 +524,11 @@ def dispatch(
         return serialize_event_detail(event)
 
     if method == "event.scan":
-        trajectory = _resolve_trajectory(store, params.get("trajectory_id"))
+        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
         event_type = params.get("type")
         if not event_type:
             raise ValueError("missing required param: type")
         filters: list[str] = params.get("filters") or []
-        return build_event_scan(trajectory, event_type=event_type, filters=filters)
+        return build_event_scan(session_graph, event_type=event_type, filters=filters)
 
     raise KeyError(method)

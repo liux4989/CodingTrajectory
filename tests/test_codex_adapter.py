@@ -335,7 +335,7 @@ def test_codex_adapter_keeps_first_session_meta_as_rollout_identity(tmp_path: Pa
     assert session.extensions.codex.forked_from_id == parent_id
 
 
-def test_codex_discovery_links_fork_session_into_parent_trajectory(tmp_path: Path) -> None:
+def test_codex_discovery_links_fork_session_into_parent_session_graph(tmp_path: Path) -> None:
     parent_id = str(uuid4())
     child_id = str(uuid4())
     parent_path = tmp_path / "parent.jsonl"
@@ -396,10 +396,10 @@ def test_codex_discovery_links_fork_session_into_parent_trajectory(tmp_path: Pat
     )
 
     discovery = discover_store_from_files([parent_path, child_path])
-    trajectory = next(iter(discovery.store.trajectories.values()))
+    session_graph = next(iter(discovery.store.session_graphs.values()))
 
-    assert str(trajectory.trajectory_id) == parent_id
-    assert {str(session.session_id) for session in trajectory.sessions} == {parent_id, child_id}
-    assert [(edge.type, str(edge.source_session_id), str(edge.target_session_id)) for edge in trajectory.edges] == [
+    assert str(session_graph.root_session_id) == parent_id
+    assert {str(session.session_id) for session in session_graph.sessions} == {parent_id, child_id}
+    assert [(edge.type, str(edge.source_session_id), str(edge.target_session_id)) for edge in session_graph.edges] == [
         ("forked_from", parent_id, child_id)
     ]

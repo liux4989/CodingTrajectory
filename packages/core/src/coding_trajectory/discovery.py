@@ -12,9 +12,9 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter, GeminiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import normalize_project_key
-from coding_trajectory.ingestion.models import Event, Session, Step, Trajectory, Turn, Vendor
+from coding_trajectory.ingestion.models import Event, Session, Step, SessionGraph, Turn, Vendor
 from coding_trajectory.query import DocumentError, DocumentStore
-from coding_trajectory.ingestion.graph import assemble_project_trajectories
+from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 
 _SEARCH_LIMIT = 100
 
@@ -23,7 +23,7 @@ _SEARCH_LIMIT = 100
 class DiscoverySource:
     vendor: Vendor
     path: Path
-    trajectory_id: UUID | None = None
+    root_session_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,21 +77,21 @@ def discover_store(*, current_dir: Path, global_scope: bool = False) -> Discover
     if not sessions_by_project:
         raise DocumentError(f"no matching coding-agent logs found for {current_dir}")
 
-    trajectories: list[Trajectory] = []
+    session_graphs: list[SessionGraph] = []
     for project_identifier, sessions in sorted(sessions_by_project.items()):
-        trajectories.extend(assemble_project_trajectories(project_identifier, sessions))
+        session_graphs.extend(assemble_project_session_graphs(project_identifier, sessions))
 
-    session_to_traj: dict[UUID, UUID] = {
-        session.session_id: trajectory.trajectory_id
-        for trajectory in trajectories
-        for session in trajectory.sessions
+    session_to_root: dict[UUID, UUID] = {
+        session.session_id: session_graph.root_session_id
+        for session_graph in session_graphs
+        for session in session_graph.sessions
     }
     sources = [
-        DiscoverySource(vendor=vendor, path=path, trajectory_id=session_to_traj.get(session_id))
+        DiscoverySource(vendor=vendor, path=path, root_session_id=session_to_root.get(session_id))
         for vendor, path, session_id in path_session_meta
     ]
 
-    return DiscoveryResult(store=DocumentStore.from_trajectories(trajectories), sources=sources)
+    return DiscoveryResult(store=DocumentStore.from_session_graphs(session_graphs), sources=sources)
 
 
 def _decode_claude_encoded_path(encoded: str) -> str | None:
@@ -255,10 +255,10 @@ def discover_store_from_file(path: Path) -> DiscoveryResult:
         if not project_identifier:
             project_identifier = path.stem
 
-        trajectories = assemble_project_trajectories(project_identifier, [session])
-        store = DocumentStore.from_trajectories(trajectories)
-        trajectory_id = trajectories[0].trajectory_id
-        source = DiscoverySource(vendor=vendor, path=path, trajectory_id=trajectory_id)
+        session_graphs = assemble_project_session_graphs(project_identifier, [session])
+        store = DocumentStore.from_session_graphs(session_graphs)
+        root_session_id = session_graphs[0].root_session_id
+        source = DiscoverySource(vendor=vendor, path=path, root_session_id=root_session_id)
         return DiscoveryResult(store=store, sources=[source])
 
     raise DocumentError(f"no adapter could parse log file: {path}")
@@ -292,21 +292,21 @@ def discover_store_from_files(paths: list[Path]) -> DiscoveryResult:
     if not sessions_by_project:
         raise DocumentError(f"no valid log files found for paths: {[str(path) for path in paths]}")
 
-    trajectories: list[Trajectory] = []
+    session_graphs: list[SessionGraph] = []
     for project_identifier, sessions in sorted(sessions_by_project.items()):
-        trajectories.extend(assemble_project_trajectories(project_identifier, sessions))
+        session_graphs.extend(assemble_project_session_graphs(project_identifier, sessions))
 
-    session_to_traj: dict[UUID, UUID] = {
-        session.session_id: trajectory.trajectory_id
-        for trajectory in trajectories
-        for session in trajectory.sessions
+    session_to_root: dict[UUID, UUID] = {
+        session.session_id: session_graph.root_session_id
+        for session_graph in session_graphs
+        for session in session_graph.sessions
     }
     sources = [
-        DiscoverySource(vendor=vendor, path=path, trajectory_id=session_to_traj.get(session_id))
+        DiscoverySource(vendor=vendor, path=path, root_session_id=session_to_root.get(session_id))
         for vendor, path, session_id in path_session_meta
     ]
 
-    return DiscoveryResult(store=DocumentStore.from_trajectories(trajectories), sources=sources)
+    return DiscoveryResult(store=DocumentStore.from_session_graphs(session_graphs), sources=sources)
 
 
 def format_discovery_sources(sources: list[DiscoverySource]) -> str:

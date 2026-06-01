@@ -6,11 +6,11 @@ from typing import Any
 
 from coding_trajectory.analysis.projection_utils import match_filter, truncate_payload_strings
 from coding_trajectory.ingestion.common import prune_nones
-from coding_trajectory.ingestion.models import EventType, Trajectory
+from coding_trajectory.ingestion.models import EventType, SessionGraph
 
 
 def build_event_scan(
-    trajectory: Trajectory,
+    session_graph: SessionGraph,
     *,
     event_type: str,
     filters: list[str] | None = None,
@@ -21,7 +21,7 @@ def build_event_scan(
         raise ValueError(f"unknown event type {event_type!r}. Valid types: {valid}")
 
     matches: list[dict[str, Any]] = []
-    for session in trajectory.sessions:
+    for session in session_graph.sessions:
         for event in session.events:
             if event.type.value != event_type:
                 continue
@@ -45,7 +45,7 @@ def build_event_scan(
             )
 
     return {
-        "trajectory_id": str(trajectory.trajectory_id),
+        "root_session_id": str(session_graph.root_session_id),
         "type": event_type,
         "matches": matches,
     }

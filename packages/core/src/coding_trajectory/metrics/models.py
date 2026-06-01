@@ -134,6 +134,8 @@ class TurnMetrics(BaseModel):
     turn_id: UUID
     sequence: int
     status: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
     steps: list[StepMetrics] = Field(default_factory=list)
@@ -150,8 +152,8 @@ class SessionMetrics(BaseModel):
     quota_snapshot: QuotaSnapshot | None = None
 
 
-class TrajectoryMetrics(BaseModel):
-    trajectory_id: UUID
+class SessionGraphMetrics(BaseModel):
+    root_session_id: UUID
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
     sessions: list[SessionMetrics] = Field(default_factory=list)

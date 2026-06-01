@@ -1,12 +1,12 @@
-"""Trajectory overview and narrative projections."""
+"""SessionGraph overview and narrative projections."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from coding_trajectory.ingestion.common import prune_nones
-from coding_trajectory.ingestion.indexes import TrajectoryIndex, build_trajectory_index, ordered_sessions
-from coding_trajectory.ingestion.models import Session, StepTextItem, Trajectory, Turn
+from coding_trajectory.ingestion.indexes import SessionGraphIndex, build_session_graph_index, ordered_sessions
+from coding_trajectory.ingestion.models import Session, StepTextItem, SessionGraph, Turn
 
 from coding_trajectory.analysis.request_lineage import effective_user_request, extract_user_request, is_low_value_turn
 from coding_trajectory.analysis.teammate_summary import (
@@ -19,14 +19,14 @@ from coding_trajectory.analysis.teammate_summary import (
 )
 
 
-def build_trajectory_overview(
-    trajectory: Trajectory,
+def build_session_graph_overview(
+    session_graph: SessionGraph,
     *,
     num_turns: int | None = None,
     drop_turns: int | None = None,
 ) -> dict[str, Any]:
-    index = build_trajectory_index(trajectory)
-    member_session_lookup = build_member_session_lookup(trajectory)
+    index = build_session_graph_index(session_graph)
+    member_session_lookup = build_member_session_lookup(session_graph)
 
     ordered = [
         _session_nav_node(
@@ -41,18 +41,18 @@ def build_trajectory_overview(
     ]
 
     return {
-        "trajectory_id": str(trajectory.trajectory_id),
+        "root_session_id": str(session_graph.root_session_id),
         "sessions": ordered,
     }
 
 
-def build_trajectory_narrative(
-    trajectory: Trajectory,
+def build_session_graph_narrative(
+    session_graph: SessionGraph,
     *,
     num_turns: int | None = None,
     drop_turns: int | None = None,
 ) -> dict[str, Any]:
-    index = build_trajectory_index(trajectory)
+    index = build_session_graph_index(session_graph)
 
     ordered = [
         _session_narrative_node(
@@ -65,7 +65,7 @@ def build_trajectory_narrative(
     ]
 
     return {
-        "trajectory_id": str(trajectory.trajectory_id),
+        "root_session_id": str(session_graph.root_session_id),
         "sessions": ordered,
     }
 
@@ -83,7 +83,7 @@ def _apply_turn_window(
     return turns
 
 
-def _session_connection(session: Session, *, index: TrajectoryIndex) -> dict[str, Any]:
+def _session_connection(session: Session, *, index: SessionGraphIndex) -> dict[str, Any]:
     parent = index.parent.get(session.session_id)
     edge_type = index.incoming_edge_type.get(session.session_id)
     forked_session_ids = [
@@ -103,14 +103,14 @@ def _session_connection(session: Session, *, index: TrajectoryIndex) -> dict[str
     })
 
 
-def _include_session_in_overview(session: Session, *, index: TrajectoryIndex) -> bool:
+def _include_session_in_overview(session: Session, *, index: SessionGraphIndex) -> bool:
     return index.incoming_edge_type.get(session.session_id) != "spawned_subagent"
 
 
 def _session_narrative_node(
     session: Session,
     *,
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
     num_turns: int | None = None,
     drop_turns: int | None = None,
 ) -> dict[str, Any]:
@@ -136,7 +136,7 @@ def _turn_narrative_node(
     turn: Turn,
     *,
     session: Session,
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
 ) -> dict[str, Any] | None:
     user_request = extract_user_request(index, turn, session=session)
     if is_low_value_turn(turn.steps, user_request):
@@ -165,7 +165,7 @@ def _turn_narrative_node(
 def _session_nav_node(
     session: Session,
     *,
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
     member_session_lookup: dict[str, list[MemberSessionCandidate]],
     num_turns: int | None = None,
     drop_turns: int | None = None,
@@ -222,7 +222,7 @@ def _turn_nav_node(
     turn: Turn,
     *,
     session: Session,
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
     member_session_lookup: dict[str, list[MemberSessionCandidate]],
 ) -> dict[str, Any] | None:
     user_request = effective_user_request(index, turn, session=session)

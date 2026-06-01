@@ -1,7 +1,7 @@
 [project]
 name = "coding-trajectory-core"
 version = "0.1.0"
-description = "Core models, ingestion, and query layer for coding agent trajectory data"
+description = "Core models, ingestion, and query layer for coding agent session graph data"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.12.5",

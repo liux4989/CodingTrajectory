@@ -40,9 +40,9 @@ def build_flows(steps: list[Step]) -> list[dict[str, Any]]:
     return result
 
 
-def build_member_session_lookup(trajectory) -> dict[str, list[MemberSessionCandidate]]:
+def build_member_session_lookup(session_graph) -> dict[str, list[MemberSessionCandidate]]:
     lookup: dict[str, dict[str, MemberSessionCandidate]] = {}
-    for session in trajectory.sessions:
+    for session in session_graph.sessions:
         candidates: set[str] = set()
         if session.agent_name:
             candidates.add(session.agent_name)

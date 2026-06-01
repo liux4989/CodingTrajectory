@@ -1,4 +1,4 @@
-"""Graph assembly for canonical multi-session trajectories."""
+"""Graph assembly for canonical multi-session session_graphs."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from coding_trajectory.ingestion.models import (
     EventType,
     Session,
     Step,
-    Trajectory,
-    TrajectoryEdge,
-    TrajectorySummary,
+    SessionGraph,
+    SessionEdge,
+    SessionGraphSummary,
     Turn,
 )
 from coding_trajectory.ingestion.vendor_mechanisms.relation_edges import (
@@ -28,30 +28,27 @@ def decorate_sessions(sessions: list[Session]) -> list[Session]:
     return sessions
 
 
-def assemble_project_trajectories(project_identifier: str, sessions: list[Session]) -> list[Trajectory]:
+def assemble_project_session_graphs(project_identifier: str, sessions: list[Session]) -> list[SessionGraph]:
     sessions = decorate_sessions(sessions)
     key = _normalize_project_key(project_identifier)
     components = _compute_connected_components(sessions)
 
-    trajectories: list[Trajectory] = []
+    session_graphs: list[SessionGraph] = []
     for component_sessions in components:
         root = _root_session(component_sessions)
-        trajectory_id = root.session_id if root else min(
+        root_session_id = root.session_id if root else min(
             component_sessions, key=lambda s: (s.started_at, str(s.session_id))
         ).session_id
-        normalized_sessions = [
-            session.model_copy(update={"trajectory_id": trajectory_id})
-            for session in sorted(component_sessions, key=lambda item: (item.started_at, str(item.session_id)))
-        ]
-        trajectories.append(
-            build_trajectory(
-                trajectory_id=trajectory_id,
+        normalized_sessions = sorted(component_sessions, key=lambda item: (item.started_at, str(item.session_id)))
+        session_graphs.append(
+            build_session_graph(
+                root_session_id=root_session_id,
                 project_identifier=key,
                 sessions=normalized_sessions,
             )
         )
 
-    return trajectories
+    return session_graphs
 
 
 def _compute_connected_components(sessions: list[Session]) -> list[list[Session]]:
@@ -85,17 +82,17 @@ def _compute_connected_components(sessions: list[Session]) -> list[list[Session]
     )
 
 
-def build_trajectory(
+def build_session_graph(
     *,
-    trajectory_id: UUID,
+    root_session_id: UUID,
     project_identifier: str,
     sessions: list[Session],
-) -> Trajectory:
-    summary = build_trajectory_summary(sessions)
+) -> SessionGraph:
+    summary = build_session_graph_summary(sessions)
     edges = build_edges(sessions)
 
-    return Trajectory(
-        trajectory_id=trajectory_id,
+    return SessionGraph(
+        root_session_id=root_session_id,
         project_identifier=project_identifier,
         summary=summary,
         edges=edges,
@@ -103,13 +100,13 @@ def build_trajectory(
     )
 
 
-def build_trajectory_summary(sessions: list[Session]) -> TrajectorySummary:
+def build_session_graph_summary(sessions: list[Session]) -> SessionGraphSummary:
     started_at = min((session.started_at for session in sessions), default=None)
     ended_at = _max_datetime(session.ended_at for session in sessions)
     root_session = _root_session(sessions)
     vendors = sorted({session.vendor for session in sessions}, key=lambda item: item.value)
 
-    return TrajectorySummary(
+    return SessionGraphSummary(
         root_session_id=root_session.session_id if root_session else None,
         started_at=started_at,
         ended_at=ended_at,
@@ -119,8 +116,8 @@ def build_trajectory_summary(sessions: list[Session]) -> TrajectorySummary:
     )
 
 
-def build_edges(sessions: list[Session]) -> list[TrajectoryEdge]:
-    edges: list[TrajectoryEdge] = []
+def build_edges(sessions: list[Session]) -> list[SessionEdge]:
+    edges: list[SessionEdge] = []
     session_map = {session.session_id: session for session in sessions}
 
     for session in sessions:
@@ -143,7 +140,7 @@ class _EdgeOrigin:
     tool_name: str | None
 
 
-def _build_edge(parent: Session | None, child: Session) -> TrajectoryEdge | None:
+def _build_edge(parent: Session | None, child: Session) -> SessionEdge | None:
     if parent is None:
         return None
 
@@ -163,7 +160,7 @@ def _build_edge(parent: Session | None, child: Session) -> TrajectoryEdge | None
     evidence_ids = [origin.event_id] if origin is not None else []
     metadata = {"tool_name": origin.tool_name} if origin and origin.tool_name else None
 
-    return TrajectoryEdge(
+    return SessionEdge(
         type=edge_type,
         source_session_id=parent.session_id,
         target_session_id=child.session_id,

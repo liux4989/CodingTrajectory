@@ -1,4 +1,4 @@
-"""Build derived execution metrics from canonical trajectories."""
+"""Build derived execution metrics from canonical session_graphs."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ from typing import Any
 from uuid import UUID
 
 from coding_trajectory.ingestion.indexes import (
-    TrajectoryIndex,
-    build_trajectory_index,
+    SessionGraphIndex,
+    build_session_graph_index,
     events_for_step,
     events_for_turn,
 )
-from coding_trajectory.ingestion.models import Event, EventType, Session, Step, Trajectory, Turn, Vendor
+from coding_trajectory.ingestion.models import Event, EventType, Session, Step, SessionGraph, Turn, Vendor
 from coding_trajectory.metrics.models import (
     CostEstimate,
     MetricSource,
@@ -22,7 +22,7 @@ from coding_trajectory.metrics.models import (
     StepMetrics,
     TokenUsage,
     TokenUsageObservation,
-    TrajectoryMetrics,
+    SessionGraphMetrics,
     TurnMetrics,
 )
 from coding_trajectory.metrics.pricing import estimate_observation_cost
@@ -35,20 +35,20 @@ class _CodexUsageState:
     seen_totals: set[tuple[int, int, int, int, int, int, int, int, int]] | None = None
 
 
-def build_trajectory_metrics(
-    trajectory: Trajectory,
+def build_session_graph_metrics(
+    session_graph: SessionGraph,
     *,
     extra_billing: bool = False,
 ) -> dict[str, Any]:
-    """Return token/quota metrics projected onto the trajectory hierarchy."""
-    index = build_trajectory_index(trajectory)
-    sessions_by_id = {session.session_id: session for session in trajectory.sessions}
+    """Return token/quota metrics projected onto the session_graph hierarchy."""
+    index = build_session_graph_index(session_graph)
+    sessions_by_id = {session.session_id: session for session in session_graph.sessions}
     session_metrics: list[SessionMetrics] = []
     total = TokenUsage()
     cost_total = CostEstimate(extra_billing=extra_billing)
     warnings: list[str] = []
 
-    for session in trajectory.sessions:
+    for session in session_graph.sessions:
         metrics = _build_session_metrics(
             session,
             index=index,
@@ -63,8 +63,8 @@ def build_trajectory_metrics(
         if not metrics.cost_estimate.complete:
             warnings.extend(metrics.cost_estimate.missing_reasons)
 
-    return TrajectoryMetrics(
-        trajectory_id=trajectory.trajectory_id,
+    return SessionGraphMetrics(
+        root_session_id=session_graph.root_session_id,
         token_usage=total,
         cost_estimate=_finalize_cost(cost_total),
         sessions=session_metrics,
@@ -75,7 +75,7 @@ def build_trajectory_metrics(
 def _build_session_metrics(
     session: Session,
     *,
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
     sessions_by_id: dict[UUID, Session],
     extra_billing: bool,
 ) -> SessionMetrics:
@@ -117,7 +117,7 @@ def _build_turn_metrics(
     session: Session,
     turn: Turn,
     *,
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
     codex_state: _CodexUsageState,
     extra_billing: bool,
 ) -> TurnMetrics:
@@ -148,6 +148,8 @@ def _build_turn_metrics(
         turn_id=turn.turn_id,
         sequence=turn.sequence,
         status=turn.status.value,
+        started_at=turn.started_at,
+        completed_at=turn.ended_at,
         token_usage=turn_total,
         cost_estimate=_finalize_cost(cost_total),
         steps=step_metrics,
@@ -159,7 +161,7 @@ def _build_step_metrics(
     session: Session,
     step: Step,
     *,
-    index: TrajectoryIndex,
+    index: SessionGraphIndex,
     codex_state: _CodexUsageState,
     extra_billing: bool,
 ) -> StepMetrics:

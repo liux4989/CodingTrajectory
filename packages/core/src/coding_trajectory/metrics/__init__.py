@@ -1,6 +1,6 @@
 """Derived execution metrics."""
 
-from coding_trajectory.metrics.analysis import build_trajectory_metrics
+from coding_trajectory.metrics.analysis import build_session_graph_metrics
 from coding_trajectory.metrics.models import (
     CostBreakdown,
     CostEstimate,
@@ -11,7 +11,7 @@ from coding_trajectory.metrics.models import (
     StepMetrics,
     TokenUsage,
     TokenUsageObservation,
-    TrajectoryMetrics,
+    SessionGraphMetrics,
     TurnMetrics,
 )
 from coding_trajectory.metrics.pricing import DEFAULT_PRICE_RULES, PriceRule, estimate_observation_cost
@@ -28,8 +28,8 @@ __all__ = [
     "StepMetrics",
     "TokenUsage",
     "TokenUsageObservation",
-    "TrajectoryMetrics",
+    "SessionGraphMetrics",
     "TurnMetrics",
-    "build_trajectory_metrics",
+    "build_session_graph_metrics",
     "estimate_observation_cost",
 ]

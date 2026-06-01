@@ -124,7 +124,6 @@ class AmpAdapter(BaseAdapter):
 
         return Session(
             session_id=session_id,
-            trajectory_id=uuid4(),
             vendor=self.vendor,
             started_at=created_at,
             ended_at=ended_at,

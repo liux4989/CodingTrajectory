@@ -1,4 +1,4 @@
-"""Command-line interface for reading coding trajectory data."""
+"""Command-line interface for reading coding session graph data."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def _project_list_params(args: argparse.Namespace) -> dict[str, Any]:
     return params
 
 
-def _project_trajectories_params(args: argparse.Namespace) -> dict[str, Any]:
+def _project_graphs_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {}
     if args.project_name:
         params["project_name"] = args.project_name
@@ -59,10 +59,10 @@ def _project_trajectories_params(args: argparse.Namespace) -> dict[str, Any]:
     return params
 
 
-def _trajectory_turns_params(args: argparse.Namespace) -> dict[str, Any]:
+def _session_graph_turns_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {}
-    if args.trajectory_id:
-        params["trajectory_id"] = args.trajectory_id
+    if args.session_id:
+        params["session_id"] = args.session_id
     if args.num_turns is not None:
         params["num_turns"] = args.num_turns
     if args.drop_turns is not None:
@@ -102,22 +102,22 @@ def _add_turn_window_flags(p: argparse.ArgumentParser, *, view_name: str) -> Non
 _EPILOG = """\
 NAVIGATE
   ct project list                                  list all known projects
-  ct project trajectories [PROJECT_NAME]           list trajectories for a project
-  ct trajectory overview [TRAJECTORY_ID]           session structure, step types, user requests
-  ct trajectory narrative [TRAJECTORY_ID]          deterministic turn narrative for summarizers
-  ct metrics trajectory [TRAJECTORY_ID]            token/quota rollup by hierarchy
-  ct metrics turns [TRAJECTORY_ID]                 token rollup by turn
+  ct project graphs [PROJECT_NAME]                 list session graphs for a project
+  ct graph overview [SESSION_ID]                   session structure, step types, user requests
+  ct graph narrative [SESSION_ID]                  deterministic turn narrative for summarizers
+  ct metrics graph [SESSION_ID]                    token/quota rollup by hierarchy
+  ct metrics turns [SESSION_ID]                    token rollup by turn
   ct step detail STEP_ID [...]                     full detail for one or more steps
 
 INSPECT COMMANDS
-  ct event scan [TRAJECTORY_ID] --type TYPE [--filter KEY=VALUE]
+  ct event scan [SESSION_ID] --type TYPE [--filter KEY=VALUE]
                                                    query raw events by type
   ct event detail EVENT_ID                         expand $truncated fields from step details
 
 NOTE
-  Trajectories are located automatically via cache; pass a TRAJECTORY_ID to
-  target a specific session, or omit it to use the most-recent session in the
-  current working directory.
+  Session graphs are located automatically via cache; pass a SESSION_ID to use
+  that coding session as the graph entry point, or omit it to use the
+  most-recent session in the current working directory.
 """
 
 _EVENT_SCAN_EPILOG = """\
@@ -174,14 +174,14 @@ class _GhFormatter(argparse.RawDescriptionHelpFormatter):
         return text
 
 
-def _add_trajectory_source(p: argparse.ArgumentParser) -> None:
-    """Add optional TRAJECTORY_ID positional as the trajectory source."""
+def _add_session_graph_source(p: argparse.ArgumentParser) -> None:
+    """Add optional SESSION_ID positional as the session graph entry point."""
     p.add_argument(
-        "trajectory_id",
-        metavar="TRAJECTORY_ID",
+        "session_id",
+        metavar="SESSION_ID",
         nargs="?",
         default=None,
-        help="Trajectory ID to target. Omit to use the most-recent session.",
+        help="Session ID to use as the graph entry point. Omit to use the most-recent session.",
     )
 
 
@@ -221,7 +221,7 @@ def _add_agent_vendor_flag(p: argparse.ArgumentParser) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct",
-        description="Inspect coding-session trajectories stored in JSONL log files.",
+        description="Inspect coding-session graphs stored in JSONL log files.",
         usage="ct <command> <subcommand> [flags]",
         epilog=_EPILOG,
         formatter_class=_GhFormatter,
@@ -233,7 +233,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # -- project --------------------------------------------------------
     project_parser = subparsers.add_parser(
         "project",
-        help="List projects or list trajectories within a project.",
+        help="List projects or list session graphs within a project.",
         formatter_class=_GhFormatter,
     )
     project_sub = project_parser.add_subparsers(dest="action", required=True)
@@ -250,57 +250,57 @@ def _build_parser() -> argparse.ArgumentParser:
         _params=_project_list_params,
     )
 
-    project_trajectories = project_sub.add_parser(
-        "trajectories",
-        help="List trajectories for a given project.",
+    project_graphs = project_sub.add_parser(
+        "graphs",
+        help="List session graphs for a given project.",
         formatter_class=_GhFormatter,
     )
-    project_trajectories.add_argument(
+    project_graphs.add_argument(
         "project_name",
         metavar="PROJECT_NAME",
         nargs="?",
         default=None,
-        help="Project name to list trajectories for. Defaults to the current directory.",
+        help="Project name to list session graphs for. Defaults to the current directory.",
     )
-    _add_agent_vendor_flag(project_trajectories)
-    _add_output_flags(project_trajectories)
-    project_trajectories.set_defaults(
-        _method="trajectory.list",
-        _params=_project_trajectories_params,
+    _add_agent_vendor_flag(project_graphs)
+    _add_output_flags(project_graphs)
+    project_graphs.set_defaults(
+        _method="graph.list",
+        _params=_project_graphs_params,
     )
 
-    # -- trajectory -----------------------------------------------------
-    traj_parser = subparsers.add_parser(
-        "trajectory",
-        help="Inspect a trajectory.",
+    # -- graph -----------------------------------------------------------
+    graph_parser = subparsers.add_parser(
+        "graph",
+        help="Inspect a session graph.",
         formatter_class=_GhFormatter,
     )
-    traj_sub = traj_parser.add_subparsers(dest="action", required=True)
+    graph_sub = graph_parser.add_subparsers(dest="action", required=True)
 
-    traj_overview = traj_sub.add_parser(
+    graph_overview = graph_sub.add_parser(
         "overview",
         help="Show session structure, step types, and user requests.",
         formatter_class=_GhFormatter,
     )
-    _add_trajectory_source(traj_overview)
-    _add_turn_window_flags(traj_overview, view_name="overview")
-    _add_output_flags(traj_overview)
-    traj_overview.set_defaults(
-        _method="trajectory.overview",
-        _params=_trajectory_turns_params,
+    _add_session_graph_source(graph_overview)
+    _add_turn_window_flags(graph_overview, view_name="overview")
+    _add_output_flags(graph_overview)
+    graph_overview.set_defaults(
+        _method="graph.overview",
+        _params=_session_graph_turns_params,
     )
 
-    traj_narrative = traj_sub.add_parser(
+    graph_narrative = graph_sub.add_parser(
         "narrative",
         help="Show deterministic user request, assistant response, and tool activity narrative.",
         formatter_class=_GhFormatter,
     )
-    _add_trajectory_source(traj_narrative)
-    _add_turn_window_flags(traj_narrative, view_name="narrative")
-    _add_output_flags(traj_narrative)
-    traj_narrative.set_defaults(
-        _method="trajectory.narrative",
-        _params=_trajectory_turns_params,
+    _add_session_graph_source(graph_narrative)
+    _add_turn_window_flags(graph_narrative, view_name="narrative")
+    _add_output_flags(graph_narrative)
+    graph_narrative.set_defaults(
+        _method="graph.narrative",
+        _params=_session_graph_turns_params,
     )
 
     # -- metrics --------------------------------------------------------
@@ -311,19 +311,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     metrics_sub = metrics_parser.add_subparsers(dest="action", required=True)
 
-    metrics_trajectory = metrics_sub.add_parser(
-        "trajectory",
-        help="Show token and quota metrics projected onto the trajectory hierarchy.",
+    metrics_graph = metrics_sub.add_parser(
+        "graph",
+        help="Show token and quota metrics projected onto the session graph hierarchy.",
         formatter_class=_GhFormatter,
     )
-    _add_trajectory_source(metrics_trajectory)
-    _add_output_flags(metrics_trajectory)
-    _add_metrics_flags(metrics_trajectory)
-    metrics_trajectory.set_defaults(
-        _method="metrics.trajectory",
+    _add_session_graph_source(metrics_graph)
+    _add_output_flags(metrics_graph)
+    _add_metrics_flags(metrics_graph)
+    metrics_graph.set_defaults(
+        _method="metrics.graph",
         _params=lambda args: {
             "extra_billing": args.extra_billing,
-            **({"trajectory_id": args.trajectory_id} if args.trajectory_id else {}),
+            **({"session_id": args.session_id} if args.session_id else {}),
         },
     )
 
@@ -332,14 +332,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show token metrics summarized by turn.",
         formatter_class=_GhFormatter,
     )
-    _add_trajectory_source(metrics_turns)
+    _add_session_graph_source(metrics_turns)
     _add_output_flags(metrics_turns)
     _add_metrics_flags(metrics_turns)
     metrics_turns.set_defaults(
         _method="metrics.turns",
         _params=lambda args: {
             "extra_billing": args.extra_billing,
-            **({"trajectory_id": args.trajectory_id} if args.trajectory_id else {}),
+            **({"session_id": args.session_id} if args.session_id else {}),
         },
     )
 
@@ -388,7 +388,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=_EVENT_SCAN_EPILOG,
         formatter_class=_GhFormatter,
     )
-    _add_trajectory_source(event_scan)
+    _add_session_graph_source(event_scan)
     _add_output_flags(event_scan)
     event_scan.add_argument(
         "--type",
@@ -413,7 +413,7 @@ def _build_parser() -> argparse.ArgumentParser:
         _params=lambda args: {
             "type": args.event_type,
             "filters": args.filters,
-            **({"trajectory_id": args.trajectory_id} if args.trajectory_id else {}),
+            **({"session_id": args.session_id} if args.session_id else {}),
         },
     )
 

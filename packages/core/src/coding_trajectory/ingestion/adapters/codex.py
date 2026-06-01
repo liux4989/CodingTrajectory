@@ -199,7 +199,6 @@ class CodexAdapter(BaseAdapter):
 
         return Session(
             session_id=state.session_id,
-            trajectory_id=uuid4(),
             vendor=Vendor.CODEX_CLI,
             agent_name=extensions.codex.agent_nickname if extensions.codex else None,
             started_at=started_at,

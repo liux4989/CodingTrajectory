@@ -1,4 +1,4 @@
-"""Query helpers for canonical trajectory JSON documents."""
+"""Query helpers for canonical session_graph JSON documents."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from coding_trajectory.ingestion.models import Event, Session, Step, Trajectory, Turn
+from coding_trajectory.ingestion.models import Event, Session, Step, SessionGraph, Turn
 
 
 class QueryError(Exception):
@@ -28,7 +28,8 @@ class ResourceNotFoundError(QueryError):
 class DocumentStore:
     """Indexes canonical resources loaded from JSON."""
 
-    trajectories: dict[UUID, Trajectory]
+    session_graphs: dict[UUID, SessionGraph]
+    session_to_root: dict[UUID, UUID]
     sessions: dict[UUID, Session]
     turns: dict[UUID, Turn]
     events: dict[UUID, Event]
@@ -48,16 +49,18 @@ class DocumentStore:
         return cls.from_data(raw)
 
     @classmethod
-    def from_trajectories(cls, trajectories_list: list[Trajectory]) -> "DocumentStore":
-        trajectories: dict[UUID, Trajectory] = {}
+    def from_session_graphs(cls, session_graphs_list: list[SessionGraph]) -> "DocumentStore":
+        session_graphs: dict[UUID, SessionGraph] = {}
+        session_to_root: dict[UUID, UUID] = {}
         sessions: dict[UUID, Session] = {}
         turns: dict[UUID, Turn] = {}
         events: dict[UUID, Event] = {}
         steps: dict[UUID, Step] = {}
 
-        for trajectory in trajectories_list:
-            trajectories[trajectory.trajectory_id] = trajectory
-            for session in trajectory.sessions:
+        for session_graph in session_graphs_list:
+            session_graphs[session_graph.root_session_id] = session_graph
+            for session in session_graph.sessions:
+                session_to_root[session.session_id] = session_graph.root_session_id
                 sessions[session.session_id] = session
                 for turn in session.turns:
                     turns[turn.turn_id] = turn
@@ -67,7 +70,8 @@ class DocumentStore:
                     events[event.event_id] = event
 
         return cls(
-            trajectories=trajectories,
+            session_graphs=session_graphs,
+            session_to_root=session_to_root,
             sessions=sessions,
             turns=turns,
             events=events,
@@ -79,21 +83,21 @@ class DocumentStore:
         if isinstance(raw, dict) and "result" in raw and isinstance(raw["result"], dict):
             raw = raw["result"]
 
-        trajectories: dict[UUID, Trajectory] = {}
+        session_graphs: dict[UUID, SessionGraph] = {}
+        session_to_root: dict[UUID, UUID] = {}
         sessions: dict[UUID, Session] = {}
         turns: dict[UUID, Turn] = {}
         events: dict[UUID, Event] = {}
         steps: dict[UUID, Step] = {}
 
-        def add_trajectory(trajectory: Trajectory) -> None:
-            trajectories[trajectory.trajectory_id] = trajectory
-            for session in trajectory.sessions:
-                add_session(session, trajectory)
+        def add_session_graph(session_graph: SessionGraph) -> None:
+            session_graphs[session_graph.root_session_id] = session_graph
+            for session in session_graph.sessions:
+                add_session(session, session_graph)
 
-        def add_session(session: Session, trajectory: Trajectory | None = None) -> None:
-            if trajectory is not None and session.trajectory_id != trajectory.trajectory_id:
-                session = session.model_copy(update={"trajectory_id": trajectory.trajectory_id})
-
+        def add_session(session: Session, session_graph: SessionGraph | None = None) -> None:
+            if session_graph is not None:
+                session_to_root[session.session_id] = session_graph.root_session_id
             sessions[session.session_id] = session
             for turn in session.turns:
                 turns[turn.turn_id] = turn
@@ -105,11 +109,11 @@ class DocumentStore:
         try:
             if isinstance(raw, list):
                 for item in raw:
-                    add_trajectory(Trajectory.model_validate(item))
+                    add_session_graph(SessionGraph.model_validate(item))
             elif isinstance(raw, dict):
-                if "trajectories" in raw:
-                    for item in raw.get("trajectories", []):
-                        add_trajectory(Trajectory.model_validate(item))
+                if "session_graphs" in raw:
+                    for item in raw.get("session_graphs", []):
+                        add_session_graph(SessionGraph.model_validate(item))
                     for item in raw.get("sessions", []):
                         add_session(Session.model_validate(item))
                     for item in raw.get("turns", []):
@@ -121,8 +125,8 @@ class DocumentStore:
                     for item in raw.get("steps", []):
                         step = Step.model_validate(item)
                         steps[step.step_id] = step
-                elif "trajectory_id" in raw:
-                    add_trajectory(Trajectory.model_validate(raw))
+                elif "root_session_id" in raw:
+                    add_session_graph(SessionGraph.model_validate(raw))
                 elif "session_id" in raw and "turns" in raw:
                     add_session(Session.model_validate(raw))
                 elif "turn_id" in raw and "steps" in raw:
@@ -133,7 +137,7 @@ class DocumentStore:
                     events[event.event_id] = event
                 else:
                     raise DocumentError(
-                        "unsupported document shape; expected a trajectory, resource bundle, or JSON-RPC result"
+                        "unsupported document shape; expected a session_graph, resource bundle, or JSON-RPC result"
                     )
             else:
                 raise DocumentError("unsupported document shape; expected an object or array")
@@ -141,18 +145,26 @@ class DocumentStore:
             raise DocumentError(f"input does not match canonical models: {exc}") from exc
 
         return cls(
-            trajectories=trajectories,
+            session_graphs=session_graphs,
+            session_to_root=session_to_root,
             sessions=sessions,
             turns=turns,
             events=events,
             steps=steps,
         )
 
-    def get_trajectory(self, resource_id: UUID) -> Trajectory:
+    def get_session_graph(self, resource_id: UUID) -> SessionGraph:
         try:
-            return self.trajectories[resource_id]
+            return self.session_graphs[resource_id]
         except KeyError as exc:
-            raise ResourceNotFoundError(f"trajectory not found: {resource_id}") from exc
+            raise ResourceNotFoundError(f"session_graph not found: {resource_id}") from exc
+
+    def get_session_graph_for_session(self, session_id: UUID) -> SessionGraph:
+        try:
+            root_session_id = self.session_to_root[session_id]
+        except KeyError as exc:
+            raise ResourceNotFoundError(f"session graph not found for session: {session_id}") from exc
+        return self.get_session_graph(root_session_id)
 
     def get_session(self, resource_id: UUID) -> Session:
         try:

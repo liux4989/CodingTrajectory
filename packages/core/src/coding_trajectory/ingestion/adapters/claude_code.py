@@ -202,7 +202,6 @@ class ClaudeCodeAdapter(BaseAdapter):
 
         return Session(
             session_id=session_id,
-            trajectory_id=uuid4(),
             vendor=self.vendor,
             agent_name=extensions.claude_code.agent_name if extensions and extensions.claude_code else None,
             started_at=started_at,

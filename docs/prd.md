@@ -11,7 +11,7 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 # Core Layer Boundary
 - `Event`, `Step`, `Turn`, and `Session` are canonical normalized resources.
 - Canonical means agent-agnostic facts and stable references reconstructed from logs, not raw vendor JSONL and not UI-specific interpretation.
-- `Trajectory` is a structural aggregate over canonical sessions. It may derive graph structure such as membership, edges, and summary metadata.
+- `SessionGraph` is a structural aggregate over canonical sessions. Its identity is the root session id, and it may derive graph structure such as membership, edges, and summary metadata.
 - Replay/UI-oriented interpretations such as sections, operations, roles, and workflow-specific labels should live in a projection or enrichment layer, not the core hierarchy.
 
 # Ingestion Transcript Layer

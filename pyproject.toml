@@ -1,7 +1,7 @@
 [project]
 name = "coding-trajectory-workspace"
 version = "0.1.0"
-description = "Unified Coding Agent Trajectory & Metrics Platform"
+description = "Unified Coding Agent Session Graph & Metrics Platform"
 readme = "README.md"
 requires-python = ">=3.12"
 

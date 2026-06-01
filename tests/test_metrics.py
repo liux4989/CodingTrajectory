@@ -9,11 +9,11 @@ from coding_trajectory.ingestion.models import (
     Session,
     Step,
     StepTextItem,
-    Trajectory,
+    SessionGraph,
     Turn,
     Vendor,
 )
-from coding_trajectory.metrics import build_trajectory_metrics
+from coding_trajectory.metrics import build_session_graph_metrics
 
 
 def _ts(second: int) -> datetime:
@@ -21,7 +21,7 @@ def _ts(second: int) -> datetime:
 
 
 def test_metrics_roll_up_claude_step_usage() -> None:
-    trajectory_id = uuid4()
+    root_session_id = uuid4()
     session_id = uuid4()
     turn_id = uuid4()
 
@@ -53,14 +53,13 @@ def test_metrics_roll_up_claude_step_usage() -> None:
     )
     session = Session(
         session_id=session_id,
-        trajectory_id=trajectory_id,
         vendor=Vendor.CLAUDE_CODE,
         started_at=_ts(0),
         turns=[turn],
     )
-    trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[session])
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
 
-    result = build_trajectory_metrics(trajectory)
+    result = build_session_graph_metrics(session_graph)
 
     assert result["token_usage"]["input_tokens"] == 10
     assert result["token_usage"]["cache_creation_input_tokens"] == 20
@@ -69,13 +68,16 @@ def test_metrics_roll_up_claude_step_usage() -> None:
     assert result["cost_estimate"]["amount_usd"] == 0.000714
     assert result["cost_estimate"]["complete"] is True
     assert result["cost_estimate"]["extra_billing"] is False
-    observation = result["sessions"][0]["turns"][0]["steps"][0]["observations"][0]
+    turn_metrics = result["sessions"][0]["turns"][0]
+    assert turn_metrics["started_at"] == "2026-01-01T00:00:00Z"
+    assert turn_metrics["completed_at"] is None
+    observation = turn_metrics["steps"][0]["observations"][0]
     assert observation["model"] == "claude-sonnet-4-6"
     assert observation["source"]["source_type"] == "step.vendor_data"
 
 
 def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None:
-    trajectory_id = uuid4()
+    root_session_id = uuid4()
     session_id = uuid4()
     turn_id = uuid4()
     event_id_1 = uuid4()
@@ -136,15 +138,14 @@ def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None
     )
     session = Session(
         session_id=session_id,
-        trajectory_id=trajectory_id,
         vendor=Vendor.CODEX_CLI,
         started_at=_ts(0),
         events=[event_1, event_2],
         turns=[turn],
     )
-    trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[session])
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
 
-    result = build_trajectory_metrics(trajectory)
+    result = build_session_graph_metrics(session_graph)
 
     assert result["token_usage"]["input_tokens"] == 100
     assert result["token_usage"]["cached_input_tokens"] == 25
@@ -158,7 +159,7 @@ def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None
 
 
 def test_metrics_can_mark_cost_as_extra_billing() -> None:
-    trajectory_id = uuid4()
+    root_session_id = uuid4()
     session_id = uuid4()
     turn_id = uuid4()
 
@@ -188,15 +189,14 @@ def test_metrics_can_mark_cost_as_extra_billing() -> None:
     )
     session = Session(
         session_id=session_id,
-        trajectory_id=trajectory_id,
         vendor=Vendor.CODEX_CLI,
         started_at=_ts(0),
         turns=[turn],
     )
-    trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[session])
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
 
-    result = build_trajectory_metrics(
-        trajectory,
+    result = build_session_graph_metrics(
+        session_graph,
         extra_billing=True,
     )
 
@@ -206,7 +206,7 @@ def test_metrics_can_mark_cost_as_extra_billing() -> None:
 
 
 def test_metrics_compute_codex_deltas_from_cumulative_totals() -> None:
-    trajectory_id = uuid4()
+    root_session_id = uuid4()
     session_id = uuid4()
     turn_id = uuid4()
     event_id_1 = uuid4()
@@ -267,15 +267,14 @@ def test_metrics_compute_codex_deltas_from_cumulative_totals() -> None:
     )
     session = Session(
         session_id=session_id,
-        trajectory_id=trajectory_id,
         vendor=Vendor.CODEX_CLI,
         started_at=_ts(0),
         events=[event_1, event_2],
         turns=[turn],
     )
-    trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[session])
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
 
-    result = build_trajectory_metrics(trajectory)
+    result = build_session_graph_metrics(session_graph)
 
     assert result["token_usage"]["input_tokens"] == 175
     assert result["token_usage"]["cached_input_tokens"] == 40
@@ -286,7 +285,7 @@ def test_metrics_compute_codex_deltas_from_cumulative_totals() -> None:
 
 
 def test_metrics_subtract_codex_parent_totals_for_forked_sessions() -> None:
-    trajectory_id = uuid4()
+    root_session_id = uuid4()
     parent_session_id = uuid4()
     child_session_id = uuid4()
     parent_turn_id = uuid4()
@@ -352,7 +351,6 @@ def test_metrics_subtract_codex_parent_totals_for_forked_sessions() -> None:
     )
     parent_session = Session(
         session_id=parent_session_id,
-        trajectory_id=trajectory_id,
         vendor=Vendor.CODEX_CLI,
         started_at=_ts(0),
         events=[parent_event],
@@ -368,7 +366,6 @@ def test_metrics_subtract_codex_parent_totals_for_forked_sessions() -> None:
     )
     child_session = Session(
         session_id=child_session_id,
-        trajectory_id=trajectory_id,
         vendor=Vendor.CODEX_CLI,
         started_at=_ts(2),
         parent_session_id=parent_session_id,
@@ -383,9 +380,9 @@ def test_metrics_subtract_codex_parent_totals_for_forked_sessions() -> None:
             )
         ],
     )
-    trajectory = Trajectory(trajectory_id=trajectory_id, sessions=[parent_session, child_session])
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[parent_session, child_session])
 
-    result = build_trajectory_metrics(trajectory)
+    result = build_session_graph_metrics(session_graph)
 
     child_metrics = result["sessions"][1]["turns"][0]
     assert child_metrics["token_usage"]["input_tokens"] == 30
@@ -394,3 +391,48 @@ def test_metrics_subtract_codex_parent_totals_for_forked_sessions() -> None:
     assert result["token_usage"]["input_tokens"] == 130
     assert result["token_usage"]["cached_input_tokens"] == 25
     assert result["token_usage"]["output_tokens"] == 20
+
+
+def test_metrics_turns_include_started_at_and_completed_at() -> None:
+    root_session_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+
+    step = Step(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(5),
+        vendor=Vendor.CLAUDE_CODE,
+        items=[StepTextItem(text="done")],
+        vendor_data={
+            "metrics": {
+                "model": "claude-sonnet-4-6",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                },
+            },
+        },
+    )
+    turn = Turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        ended_at=_ts(10),
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(0),
+        turns=[turn],
+    )
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
+
+    result = build_session_graph_metrics(session_graph)
+
+    turn_metrics = result["sessions"][0]["turns"][0]
+    assert turn_metrics["started_at"] == "2026-01-01T00:00:00Z"
+    assert turn_metrics["completed_at"] == "2026-01-01T00:00:10Z"

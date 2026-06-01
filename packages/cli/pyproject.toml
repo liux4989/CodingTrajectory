@@ -1,7 +1,7 @@
 [project]
 name = "coding-trajectory"
 version = "0.1.0"
-description = "CLI for querying canonical trajectory resources"
+description = "CLI for querying canonical session graph resources"
 requires-python = ">=3.12"
 dependencies = [
     "coding-trajectory-core",
