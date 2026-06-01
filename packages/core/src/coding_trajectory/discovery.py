@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 from dataclasses import dataclass
@@ -241,13 +242,33 @@ def _extract_session_cwd(session: Session, source: Path | None = None) -> str | 
     return None
 
 
+def _matching_vendor_configs(path: Path) -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
+    configs = _vendor_configs()
+    matched = [
+        config
+        for config in configs
+        if _path_matches_vendor_config(path, base_dir=config[2], pattern=config[3])
+    ]
+    return matched or configs
+
+
+
+def _path_matches_vendor_config(path: Path, *, base_dir: Path, pattern: str) -> bool:
+    try:
+        relative = path.resolve().relative_to(base_dir.resolve())
+    except ValueError:
+        return False
+    return fnmatch.fnmatch(relative.name, pattern)
+
+
+
 def discover_store_from_file(path: Path) -> DiscoveryResult:
     """Build a store from a single explicit log file, auto-detecting the vendor."""
     path = path.resolve()
     if not path.exists():
         raise DocumentError(f"log file not found: {path}")
 
-    for vendor, adapter_cls, _base_dir, _pattern in _vendor_configs():
+    for vendor, adapter_cls, _base_dir, _pattern in _matching_vendor_configs(path):
         adapter = adapter_cls()
         try:
             session = stabilize_session(adapter.ingest_file(path), vendor=vendor, source=path)
@@ -277,7 +298,7 @@ def discover_store_from_files(paths: list[Path]) -> DiscoveryResult:
         if not path.exists():
             continue
 
-        for vendor, adapter_cls, _base_dir, _pattern in _vendor_configs():
+        for vendor, adapter_cls, _base_dir, _pattern in _matching_vendor_configs(path):
             adapter = adapter_cls()
             try:
                 session = stabilize_session(adapter.ingest_file(path), vendor=vendor, source=path)
