@@ -172,9 +172,10 @@ class TurnMetricsFlat(BaseModel):
     completed_at: datetime | None = None
     model: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
+    cost: float = 0.0
+    currency: Literal["USD"] = "USD"
+    extra_billing: bool = False
     step_ids: list[UUID] = Field(default_factory=list)
-    quota_snapshot: QuotaSnapshot | None = None
 
 
 class SessionMetricsFlat(BaseModel):
@@ -182,14 +183,17 @@ class SessionMetricsFlat(BaseModel):
     vendor: str
     status: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
+    cost: float = 0.0
+    currency: Literal["USD"] = "USD"
+    extra_billing: bool = False
     turns: list[TurnMetricsFlat] = Field(default_factory=list)
-    quota_snapshot: QuotaSnapshot | None = None
 
 
 class SessionGraphMetricsFlat(BaseModel):
     root_session_id: UUID
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
+    cost: float = 0.0
+    currency: Literal["USD"] = "USD"
+    extra_billing: bool = False
     sessions: list[SessionMetricsFlat] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

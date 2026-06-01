@@ -51,7 +51,6 @@ def build_session_graph_metrics(
         turns_flat: list[TurnMetricsFlat] = []
         for turn in session.turns:
             model = _turn_model(turn)
-            quota = turn.quota_snapshots[-1] if turn.quota_snapshots else None
             turns_flat.append(
                 TurnMetricsFlat(
                     turn_id=turn.turn_id,
@@ -61,9 +60,9 @@ def build_session_graph_metrics(
                     completed_at=turn.completed_at,
                     model=model,
                     token_usage=turn.token_usage,
-                    cost_estimate=turn.cost_estimate,
+                    cost=turn.cost_estimate.amount_usd,
+                    extra_billing=turn.cost_estimate.extra_billing,
                     step_ids=[step.step_id for step in turn.steps],
-                    quota_snapshot=quota,
                 )
             )
         sessions_flat.append(
@@ -72,16 +71,17 @@ def build_session_graph_metrics(
                 vendor=session.vendor,
                 status=session.status,
                 token_usage=session.token_usage,
-                cost_estimate=session.cost_estimate,
+                cost=session.cost_estimate.amount_usd,
+                extra_billing=session.cost_estimate.extra_billing,
                 turns=turns_flat,
-                quota_snapshot=session.quota_snapshot,
             )
         )
 
     return SessionGraphMetricsFlat(
         root_session_id=full.root_session_id,
         token_usage=full.token_usage,
-        cost_estimate=full.cost_estimate,
+        cost=full.cost_estimate.amount_usd,
+        extra_billing=full.cost_estimate.extra_billing,
         sessions=sessions_flat,
         warnings=full.warnings,
     ).model_dump(mode="json")

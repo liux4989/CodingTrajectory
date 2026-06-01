@@ -67,14 +67,15 @@ def test_metrics_roll_up_claude_step_usage() -> None:
     assert result["token_usage"]["cache_creation_input_tokens"] == 20
     assert result["token_usage"]["cache_read_input_tokens"] == 30
     assert result["token_usage"]["output_tokens"] == 40
-    assert result["cost_estimate"]["amount_usd"] == 0.000714
-    assert result["cost_estimate"]["complete"] is True
-    assert result["cost_estimate"]["extra_billing"] is False
+    assert result["cost"] == 0.000714
+    assert result["extra_billing"] is False
     turn_metrics = result["sessions"][0]["turns"][0]
     assert turn_metrics["started_at"] == "2026-01-01T00:00:00Z"
     assert turn_metrics["completed_at"] is None
     assert turn_metrics["model"] == "claude-sonnet-4-6"
     assert turn_metrics["step_ids"] == [str(step_id)]
+    assert turn_metrics["cost"] == 0.000714
+    assert turn_metrics["extra_billing"] is False
 
 
 def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None:
@@ -155,9 +156,7 @@ def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None
     turn_metrics = result["sessions"][0]["turns"][0]
     assert turn_metrics["model"] == "gpt-5.5"
     assert turn_metrics["step_ids"] == [str(step.step_id)]
-    assert turn_metrics["quota_snapshot"] is not None
-    assert turn_metrics["quota_snapshot"]["plan_type"] == "plus"
-    assert result["cost_estimate"]["amount_usd"] == 0.0006875
+    assert result["cost"] == 0.0006875
 
 
 def test_metrics_can_mark_cost_as_extra_billing() -> None:
@@ -202,9 +201,9 @@ def test_metrics_can_mark_cost_as_extra_billing() -> None:
         extra_billing=True,
     )
 
-    assert result["cost_estimate"]["amount_usd"] == 15.25
-    assert result["cost_estimate"]["extra_billing"] is True
-    assert result["sessions"][0]["turns"][0]["cost_estimate"]["extra_billing"] is True
+    assert result["cost"] == 15.25
+    assert result["extra_billing"] is True
+    assert result["sessions"][0]["turns"][0]["extra_billing"] is True
 
 
 def test_metrics_compute_codex_deltas_from_cumulative_totals() -> None:
@@ -281,8 +280,7 @@ def test_metrics_compute_codex_deltas_from_cumulative_totals() -> None:
     assert result["token_usage"]["input_tokens"] == 175
     assert result["token_usage"]["cached_input_tokens"] == 40
     assert result["token_usage"]["output_tokens"] == 25
-    assert result["cost_estimate"]["model"] == "gpt-5.4"
-    assert result["cost_estimate"]["amount_usd"] == 0.0007225
+    assert result["cost"] == 0.0007225
     turn_metrics = result["sessions"][0]["turns"][0]
     assert turn_metrics["model"] == "openai/gpt-5.4-2026-01-01"
 

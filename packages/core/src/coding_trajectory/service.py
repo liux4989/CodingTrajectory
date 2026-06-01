@@ -524,7 +524,8 @@ def dispatch(
         return {
             "root_session_id": result["root_session_id"],
             "token_usage": result["token_usage"],
-            "cost_estimate": result["cost_estimate"],
+            "cost": result["cost"],
+            "extra_billing": result["extra_billing"],
             "turns": [
                 {
                     "session_id": session["session_id"],
@@ -534,7 +535,8 @@ def dispatch(
                     "sequence": turn["sequence"],
                     "status": turn.get("status"),
                     "token_usage": turn["token_usage"],
-                    "cost_estimate": turn["cost_estimate"],
+                    "cost": turn["cost"],
+                    "extra_billing": turn["extra_billing"],
                     "step_ids": turn["step_ids"],
                 }
                 for session in result["sessions"]
