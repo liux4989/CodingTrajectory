@@ -57,6 +57,20 @@ def normalize_claude_usage(*, model: Any, usage: Any) -> dict[str, Any]:
     return _normalized_step_usage(model=model, usage=usage)
 
 
+def normalize_pi_usage(*, model: Any, usage: Any) -> dict[str, Any]:
+    usage_map = usage if isinstance(usage, dict) else {}
+    return _normalized_step_usage(
+        model=model,
+        usage={
+            "input_tokens": usage_map.get("input"),
+            "output_tokens": usage_map.get("output"),
+            "cache_creation_input_tokens": usage_map.get("cacheWrite"),
+            "cache_read_input_tokens": usage_map.get("cacheRead"),
+            "total_tokens": usage_map.get("totalTokens"),
+        },
+    )
+
+
 def normalize_amp_usage(*, model: Any, usage: Any) -> dict[str, Any]:
     usage_map = usage if isinstance(usage, dict) else {}
     return _normalized_step_usage(

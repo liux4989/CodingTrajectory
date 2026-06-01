@@ -8,11 +8,14 @@ from coding_trajectory.metrics.models import (
     QuotaSnapshot,
     QuotaWindow,
     SessionMetrics,
+    SessionMetricsFlat,
+    SessionGraphMetrics,
+    SessionGraphMetricsFlat,
     StepMetrics,
     TokenUsage,
     TokenUsageObservation,
-    SessionGraphMetrics,
     TurnMetrics,
+    TurnMetricsFlat,
 )
 from coding_trajectory.metrics.pricing import DEFAULT_PRICE_RULES, PriceRule, estimate_observation_cost
 
@@ -25,11 +28,14 @@ __all__ = [
     "QuotaSnapshot",
     "QuotaWindow",
     "SessionMetrics",
+    "SessionMetricsFlat",
+    "SessionGraphMetrics",
+    "SessionGraphMetricsFlat",
     "StepMetrics",
     "TokenUsage",
     "TokenUsageObservation",
-    "SessionGraphMetrics",
     "TurnMetrics",
+    "TurnMetricsFlat",
     "build_session_graph_metrics",
     "estimate_observation_cost",
 ]

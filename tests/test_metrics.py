@@ -24,8 +24,10 @@ def test_metrics_roll_up_claude_step_usage() -> None:
     root_session_id = uuid4()
     session_id = uuid4()
     turn_id = uuid4()
+    step_id = uuid4()
 
     step = Step(
+        step_id=step_id,
         session_id=session_id,
         turn_id=turn_id,
         sequence=0,
@@ -71,9 +73,8 @@ def test_metrics_roll_up_claude_step_usage() -> None:
     turn_metrics = result["sessions"][0]["turns"][0]
     assert turn_metrics["started_at"] == "2026-01-01T00:00:00Z"
     assert turn_metrics["completed_at"] is None
-    observation = turn_metrics["steps"][0]["observations"][0]
-    assert observation["model"] == "claude-sonnet-4-6"
-    assert observation["source"]["source_type"] == "step.vendor_data"
+    assert turn_metrics["model"] == "claude-sonnet-4-6"
+    assert turn_metrics["step_ids"] == [str(step_id)]
 
 
 def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None:
@@ -151,11 +152,12 @@ def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None
     assert result["token_usage"]["cached_input_tokens"] == 25
     assert result["token_usage"]["output_tokens"] == 10
     assert result["token_usage"]["reasoning_output_tokens"] == 3
-    step_metrics = result["sessions"][0]["turns"][0]["steps"][0]
-    assert len(step_metrics["observations"]) == 1
-    assert step_metrics["observations"][0]["model"] == "gpt-5.5"
+    turn_metrics = result["sessions"][0]["turns"][0]
+    assert turn_metrics["model"] == "gpt-5.5"
+    assert turn_metrics["step_ids"] == [str(step.step_id)]
+    assert turn_metrics["quota_snapshot"] is not None
+    assert turn_metrics["quota_snapshot"]["plan_type"] == "plus"
     assert result["cost_estimate"]["amount_usd"] == 0.0006875
-    assert result["sessions"][0]["quota_snapshot"]["plan_type"] == "plus"
 
 
 def test_metrics_can_mark_cost_as_extra_billing() -> None:
@@ -279,9 +281,10 @@ def test_metrics_compute_codex_deltas_from_cumulative_totals() -> None:
     assert result["token_usage"]["input_tokens"] == 175
     assert result["token_usage"]["cached_input_tokens"] == 40
     assert result["token_usage"]["output_tokens"] == 25
-    assert len(result["sessions"][0]["turns"][0]["steps"][0]["observations"]) == 2
     assert result["cost_estimate"]["model"] == "gpt-5.4"
     assert result["cost_estimate"]["amount_usd"] == 0.0007225
+    turn_metrics = result["sessions"][0]["turns"][0]
+    assert turn_metrics["model"] == "openai/gpt-5.4-2026-01-01"
 
 
 def test_metrics_subtract_codex_parent_totals_for_forked_sessions() -> None:

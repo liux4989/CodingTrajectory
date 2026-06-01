@@ -105,8 +105,8 @@ NAVIGATE
   ct project graphs [PROJECT_NAME]                 list session graphs for a project
   ct session overview [SESSION_ID]                 session structure, step types, user requests
   ct session narrative [SESSION_ID]                deterministic turn narrative for summarizers
-  ct metrics session [SESSION_ID]                  token/quota rollup by hierarchy
-  ct metrics turns [SESSION_ID]                    token rollup by turn
+  ct graph metrics [SESSION_ID]                   token/quota/cost rollup by session graph hierarchy
+  ct graph turns [SESSION_ID]                     token rollup by turn
   ct step detail STEP_ID [...]                     full detail for one or more steps
 
 INSPECT COMMANDS
@@ -303,23 +303,23 @@ def _build_parser() -> argparse.ArgumentParser:
         _params=_session_graph_turns_params,
     )
 
-    # -- metrics --------------------------------------------------------
-    metrics_parser = subparsers.add_parser(
-        "metrics",
-        help="Inspect derived execution metrics.",
+    # -- graph ----------------------------------------------------------
+    graph_parser = subparsers.add_parser(
+        "graph",
+        help="Inspect session graph metrics and turn summaries.",
         formatter_class=_GhFormatter,
     )
-    metrics_sub = metrics_parser.add_subparsers(dest="action", required=True)
+    graph_sub = graph_parser.add_subparsers(dest="action", required=True)
 
-    metrics_session = metrics_sub.add_parser(
-        "session",
+    graph_metrics = graph_sub.add_parser(
+        "metrics",
         help="Show token and quota metrics projected onto the session graph hierarchy.",
         formatter_class=_GhFormatter,
     )
-    _add_session_graph_source(metrics_session)
-    _add_output_flags(metrics_session)
-    _add_metrics_flags(metrics_session)
-    metrics_session.set_defaults(
+    _add_session_graph_source(graph_metrics)
+    _add_output_flags(graph_metrics)
+    _add_metrics_flags(graph_metrics)
+    graph_metrics.set_defaults(
         _method="metrics.session",
         _params=lambda args: {
             "extra_billing": args.extra_billing,
@@ -327,15 +327,15 @@ def _build_parser() -> argparse.ArgumentParser:
         },
     )
 
-    metrics_turns = metrics_sub.add_parser(
+    graph_turns = graph_sub.add_parser(
         "turns",
         help="Show token metrics summarized by turn.",
         formatter_class=_GhFormatter,
     )
-    _add_session_graph_source(metrics_turns)
-    _add_output_flags(metrics_turns)
-    _add_metrics_flags(metrics_turns)
-    metrics_turns.set_defaults(
+    _add_session_graph_source(graph_turns)
+    _add_output_flags(graph_turns)
+    _add_metrics_flags(graph_turns)
+    graph_turns.set_defaults(
         _method="metrics.turns",
         _params=lambda args: {
             "extra_billing": args.extra_billing,

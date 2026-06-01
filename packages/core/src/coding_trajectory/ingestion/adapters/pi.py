@@ -22,7 +22,7 @@ from coding_trajectory.ingestion.models import (
     VendorExtensions,
 )
 from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
-from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normalize_claude_usage
+from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normalize_pi_usage
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +206,7 @@ class PiAdapter(BaseAdapter):
                 if thinking:
                     vendor_data["thinking"] = thinking
                 if usage:
-                    normalized = normalize_claude_usage(
+                    normalized = normalize_pi_usage(
                         model=message.get("model") or self._current_model,
                         usage=usage,
                     )

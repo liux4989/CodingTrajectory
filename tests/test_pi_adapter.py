@@ -129,7 +129,10 @@ def test_pi_adapter_handles_tool_calls_and_results(tmp_path: Path) -> None:
     tool_item = session.turns[0].steps[0].items[1]
     assert tool_item.output is not None
     assert tool_item.status == "completed"
-    assert session.turns[0].steps[0].vendor_data["metrics"]["usage"]["cost"] == 0.0123
+    usage = session.turns[0].steps[0].vendor_data["metrics"]["usage"]
+    assert usage["input_tokens"] == 50
+    assert usage["output_tokens"] == 20
+    assert usage["total_tokens"] == 70
 
 
 def test_pi_adapter_captures_unified_bash_execution_messages(tmp_path: Path) -> None:

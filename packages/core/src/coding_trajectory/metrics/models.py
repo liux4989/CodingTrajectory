@@ -158,3 +158,38 @@ class SessionGraphMetrics(BaseModel):
     cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
     sessions: list[SessionMetrics] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Simplified flat output for ct graph metrics
+# ---------------------------------------------------------------------------
+
+class TurnMetricsFlat(BaseModel):
+    turn_id: UUID
+    sequence: int
+    status: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    model: str | None = None
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
+    step_ids: list[UUID] = Field(default_factory=list)
+    quota_snapshot: QuotaSnapshot | None = None
+
+
+class SessionMetricsFlat(BaseModel):
+    session_id: UUID
+    vendor: str
+    status: str | None = None
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
+    turns: list[TurnMetricsFlat] = Field(default_factory=list)
+    quota_snapshot: QuotaSnapshot | None = None
+
+
+class SessionGraphMetricsFlat(BaseModel):
+    root_session_id: UUID
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
+    sessions: list[SessionMetricsFlat] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

@@ -19,11 +19,14 @@ from coding_trajectory.metrics.models import (
     QuotaSnapshot,
     QuotaWindow,
     SessionMetrics,
+    SessionMetricsFlat,
     StepMetrics,
     TokenUsage,
     TokenUsageObservation,
     SessionGraphMetrics,
+    SessionGraphMetricsFlat,
     TurnMetrics,
+    TurnMetricsFlat,
 )
 from coding_trajectory.metrics.pricing import estimate_observation_cost
 
@@ -40,7 +43,64 @@ def build_session_graph_metrics(
     *,
     extra_billing: bool = False,
 ) -> dict[str, Any]:
-    """Return token/quota metrics projected onto the session_graph hierarchy."""
+    """Return a flat metrics summary: sessions → turns with step_ids, no nested steps/observations."""
+    full = _build_full_metrics(session_graph, extra_billing=extra_billing)
+    sessions_flat: list[SessionMetricsFlat] = []
+
+    for session in full.sessions:
+        turns_flat: list[TurnMetricsFlat] = []
+        for turn in session.turns:
+            model = _turn_model(turn)
+            quota = turn.quota_snapshots[-1] if turn.quota_snapshots else None
+            turns_flat.append(
+                TurnMetricsFlat(
+                    turn_id=turn.turn_id,
+                    sequence=turn.sequence,
+                    status=turn.status,
+                    started_at=turn.started_at,
+                    completed_at=turn.completed_at,
+                    model=model,
+                    token_usage=turn.token_usage,
+                    cost_estimate=turn.cost_estimate,
+                    step_ids=[step.step_id for step in turn.steps],
+                    quota_snapshot=quota,
+                )
+            )
+        sessions_flat.append(
+            SessionMetricsFlat(
+                session_id=session.session_id,
+                vendor=session.vendor,
+                status=session.status,
+                token_usage=session.token_usage,
+                cost_estimate=session.cost_estimate,
+                turns=turns_flat,
+                quota_snapshot=session.quota_snapshot,
+            )
+        )
+
+    return SessionGraphMetricsFlat(
+        root_session_id=full.root_session_id,
+        token_usage=full.token_usage,
+        cost_estimate=full.cost_estimate,
+        sessions=sessions_flat,
+        warnings=full.warnings,
+    ).model_dump(mode="json")
+
+
+def _turn_model(turn: TurnMetrics) -> str | None:
+    for step in turn.steps:
+        for obs in step.observations:
+            if obs.model:
+                return obs.model
+    return None
+
+
+def _build_full_metrics(
+    session_graph: SessionGraph,
+    *,
+    extra_billing: bool = False,
+) -> SessionGraphMetrics:
+    """Return full token/quota metrics projected onto the session_graph hierarchy."""
     index = build_session_graph_index(session_graph)
     sessions_by_id = {session.session_id: session for session in session_graph.sessions}
     session_metrics: list[SessionMetrics] = []
@@ -69,7 +129,7 @@ def build_session_graph_metrics(
         cost_estimate=_finalize_cost(cost_total),
         sessions=session_metrics,
         warnings=_unique(warnings),
-    ).model_dump(mode="json")
+    )
 
 
 def _build_session_metrics(
