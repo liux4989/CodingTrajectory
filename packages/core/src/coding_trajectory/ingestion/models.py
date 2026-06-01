@@ -55,6 +55,7 @@ class ClaudeCodeExtensions(BaseModel):
     agent_name:     str | None = None
     agent_role:     str | None = None
     description:    str | None = None
+    title:          str | None = None
     is_sidechain:   bool | None = None
     permission_mode: str | None = None
     parent_uuid:    str | None = None
@@ -69,6 +70,7 @@ class CodexExtensions(BaseModel):
     agent_role:         str | None = None
     collaboration_mode: str | None = None
     cwd:                str | None = None
+    title:              str | None = None
     forked_from_id:     str | None = None
     spawn_parent_thread_id: str | None = None
     spawn_depth:        int | None = None
@@ -78,6 +80,7 @@ class CodexExtensions(BaseModel):
 
 class GeminiExtensions(BaseModel):
     session_file:    str | None = None
+    title:           str | None = None
     raw_tool_type:   str | None = None
     model_version:   str | None = None
     realtime_active: bool | None = None

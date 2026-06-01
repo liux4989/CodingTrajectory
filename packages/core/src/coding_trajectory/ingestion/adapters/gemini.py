@@ -24,6 +24,21 @@ from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normaliz
 logger = logging.getLogger(__name__)
 
 
+def _as_non_empty_str(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _record_title(record: dict[str, Any]) -> str | None:
+    for key in ("title", "sessionTitle", "conversationTitle", "threadName"):
+        title = _as_non_empty_str(record.get(key))
+        if title:
+            return title
+    return None
+
+
 def _content_to_text(content: Any) -> str | None:
     if isinstance(content, str):
         return content or None
@@ -85,6 +100,7 @@ class GeminiAdapter(BaseAdapter):
         extensions = VendorExtensions(
             gemini=GeminiExtensions(
                 session_file=str(source),
+                title=_record_title(record),
                 raw_tool_type=None,
                 model_version=None,
                 realtime_active=None,

@@ -3,9 +3,26 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from coding_trajectory.ingestion.models import Session, SessionGraph, Vendor
+from coding_trajectory.ingestion.models import CodexExtensions, Session, SessionGraph, Vendor, VendorExtensions
 from coding_trajectory.query import DocumentStore
-from coding_trajectory.service import _resolve_session_graph, _session_graph_entrypoint_id
+from coding_trajectory.service import _resolve_session_graph, _session_graph_entrypoint_id, serialize_session_graph_detail
+
+
+def test_serialize_session_graph_detail_includes_root_session_title() -> None:
+    root_session_id = uuid4()
+    session_graph = SessionGraph(
+        root_session_id=root_session_id,
+        sessions=[
+            Session(
+                session_id=root_session_id,
+                vendor=Vendor.CODEX_CLI,
+                started_at=datetime(2026, 1, 1, tzinfo=UTC),
+                extensions=VendorExtensions(codex=CodexExtensions(title="Meaningful session title")),
+            ),
+        ],
+    )
+
+    assert serialize_session_graph_detail(session_graph)["title"] == "Meaningful session title"
 
 
 def test_resolve_session_graph_accepts_member_session_id() -> None:

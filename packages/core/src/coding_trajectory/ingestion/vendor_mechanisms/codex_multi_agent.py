@@ -24,6 +24,7 @@ class CodexMultiAgentInput(BaseModel):
     agent_nickname: str | None = None
     agent_role: str | None = None
     cwd: str | None = None
+    title: str | None = None
     forked_from_id: str | None = None
     thread_spawn: CodexThreadSpawn | None = None
 
@@ -45,6 +46,7 @@ def extensions(mechanism: CodexMultiAgentInput) -> VendorExtensions:
             agent_nickname=mechanism.agent_nickname or (thread_spawn.agent_nickname if thread_spawn else None),
             agent_role=mechanism.agent_role or (thread_spawn.agent_role if thread_spawn else None),
             cwd=mechanism.cwd,
+            title=mechanism.title,
             forked_from_id=mechanism.forked_from_id,
             spawn_parent_thread_id=thread_spawn.parent_thread_id if thread_spawn else None,
             spawn_depth=thread_spawn.depth if thread_spawn else None,

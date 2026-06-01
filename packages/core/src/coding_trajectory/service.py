@@ -35,11 +35,51 @@ def _optional_positive_int(params: dict[str, Any], key: str) -> int | None:
     return parsed
 
 
+def _session_title(session: Session) -> str | None:
+    extensions = session.extensions
+    if extensions and extensions.codex and extensions.codex.title:
+        return extensions.codex.title
+    if extensions and extensions.amp and extensions.amp.title:
+        return extensions.amp.title
+    if extensions and extensions.claude_code and extensions.claude_code.title:
+        return extensions.claude_code.title
+    if extensions and extensions.gemini and extensions.gemini.title:
+        return extensions.gemini.title
+    return None
+
+
+def _first_user_prompt_title(session: Session) -> str | None:
+    for event in session.events:
+        if event.type != EventType.USER_PROMPT_SUBMITTED:
+            continue
+        text = event.payload.get("text")
+        if not isinstance(text, str):
+            continue
+        title = " ".join(text.split())
+        return title or None
+    return None
+
+
+def _session_graph_title(session_graph: SessionGraph) -> str | None:
+    by_id = {session.session_id: session for session in session_graph.sessions}
+    root = by_id.get(session_graph.root_session_id)
+    if root is not None:
+        title = _session_title(root) or _first_user_prompt_title(root)
+        if title:
+            return title
+    for session in session_graph.sessions:
+        title = _session_title(session) or _first_user_prompt_title(session)
+        if title:
+            return title
+    return None
+
+
 def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any]:
     vendors = sorted({session.vendor.value for session in session_graph.sessions if session.vendor})
     return prune_nones(
         {
             "root_session_id": str(session_graph.root_session_id),
+            "title": _session_graph_title(session_graph),
             "vendors": vendors or None,
             "session_ids": [str(session.session_id) for session in session_graph.sessions],
         }

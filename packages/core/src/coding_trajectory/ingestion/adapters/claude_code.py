@@ -63,6 +63,21 @@ def _parse_team_messages(raw: str | None) -> list[ClaudeTeamMessage]:
     return messages
 
 
+def _as_non_empty_str(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _record_title(record: dict[str, object]) -> str | None:
+    for key in ("title", "sessionTitle", "conversationTitle", "threadName"):
+        title = _as_non_empty_str(record.get(key))
+        if title:
+            return title
+    return None
+
+
 def _read_subagent_meta(source: Path) -> dict[str, object]:
     meta_path = source.with_name(f"{source.stem}.meta.json")
     try:
@@ -77,6 +92,7 @@ def _read_subagent_meta(source: Path) -> dict[str, object]:
 
 def _subagent_input(source: Path, records: list[dict], raw_session_id: UUID) -> ClaudeSubagentInput:
     first = next((record for record in records if record.get("sessionId")), {})
+    title = next((_record_title(record) for record in records if _record_title(record)), None)
     is_subagent_file = source.parent.name == "subagents"
     parent_session_id: UUID | None = None
     if is_subagent_file:
@@ -98,6 +114,7 @@ def _subagent_input(source: Path, records: list[dict], raw_session_id: UUID) -> 
         agent_name=first.get("agentId") or first.get("agentName") or first.get("slug"),
         agent_role=meta.get("agentType") if isinstance(meta.get("agentType"), str) else None,
         description=meta.get("description") if isinstance(meta.get("description"), str) else None,
+        title=title or _as_non_empty_str(meta.get("title")),
     )
 
 

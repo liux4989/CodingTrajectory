@@ -23,6 +23,7 @@ class ClaudeSubagentInput(BaseModel):
     agent_name: str | None = None
     agent_role: str | None = None
     description: str | None = None
+    title: str | None = None
 
 
 def canonical_session_ids(mechanism: ClaudeSubagentInput) -> tuple[UUID, UUID | None]:
@@ -57,5 +58,6 @@ def extensions(mechanism: ClaudeSubagentInput) -> VendorExtensions:
             agent_name=mechanism.agent_name,
             agent_role=mechanism.agent_role,
             description=mechanism.description,
+            title=mechanism.title,
         )
     )

@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from coding_trajectory.discovery import discover_store_from_files
-from coding_trajectory.ingestion.adapters.codex import CodexAdapter
+from coding_trajectory.ingestion.adapters.codex import CodexAdapter, _codex_session_title
 from coding_trajectory.ingestion.models import SessionStatus, StepTextItem, TurnStatus
 
 
@@ -32,6 +32,18 @@ def _step_item_kinds(path: Path) -> list[list[str]]:
 
 def _session(path: Path):
     return CodexAdapter().ingest_file(path)
+
+
+def test_codex_session_title_reads_session_index(tmp_path: Path) -> None:
+    session_id = uuid4()
+    index_path = tmp_path / "session_index.jsonl"
+    index_path.write_text(
+        json.dumps({"id": str(uuid4()), "thread_name": "Other title"}) + "\n"
+        + json.dumps({"id": str(session_id), "thread_name": "Meaningful session title"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert _codex_session_title(session_id, {}, index_path) == "Meaningful session title"
 
 
 def test_codex_adapter_keeps_response_item_final_answer_and_ignores_task_complete_copy(tmp_path: Path) -> None:

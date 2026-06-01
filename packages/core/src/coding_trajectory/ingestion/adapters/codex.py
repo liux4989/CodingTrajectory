@@ -35,6 +35,8 @@ from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normaliz
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
+
 
 def _parse_json_blob(raw: Any) -> Any:
     if not isinstance(raw, str):
@@ -97,7 +99,29 @@ def _extract_uuid_text(value: Any) -> str | None:
     return match.group(0) if match else raw
 
 
-def _codex_multi_agent_input(meta: dict[str, Any], ctx: dict[str, Any]) -> CodexMultiAgentInput:
+def _codex_session_title(session_id: UUID, meta: dict[str, Any], index_path: Path = _DEFAULT_CODEX_SESSION_INDEX) -> str | None:
+    title = _as_non_empty_str(meta.get("title")) or _as_non_empty_str(meta.get("thread_name"))
+    if title is not None:
+        return title
+    if not index_path.is_file():
+        return None
+
+    try:
+        with index_path.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("id") != str(session_id):
+                    continue
+                return _as_non_empty_str(record.get("thread_name")) or _as_non_empty_str(record.get("title"))
+    except OSError:
+        return None
+    return None
+
+
+def _codex_multi_agent_input(meta: dict[str, Any], ctx: dict[str, Any], *, session_id: UUID) -> CodexMultiAgentInput:
     sandbox_policy = ctx.get("sandbox_policy") if isinstance(ctx.get("sandbox_policy"), dict) else {}
     source = meta.get("source")
     thread_spawn_raw = (
@@ -119,6 +143,7 @@ def _codex_multi_agent_input(meta: dict[str, Any], ctx: dict[str, Any]) -> Codex
         agent_nickname=_as_non_empty_str(meta.get("nickname")) or _as_non_empty_str(meta.get("agent_nickname")),
         agent_role=_as_non_empty_str(meta.get("agent_role")) or source_name,
         cwd=_as_non_empty_str(meta.get("cwd")),
+        title=_codex_session_title(session_id, meta),
         forked_from_id=_extract_uuid_text(meta.get("forked_from_id")),
         thread_spawn=(
             CodexThreadSpawn(
@@ -183,7 +208,7 @@ class CodexAdapter(BaseAdapter):
 
         meta = state.session_meta
         ctx = state.turn_context
-        mechanism = _codex_multi_agent_input(meta, ctx)
+        mechanism = _codex_multi_agent_input(meta, ctx, session_id=state.session_id)
         parent_session_id = codex_parent_session_id(mechanism)
         events = events_from_transcript(session_id=state.session_id, records=transcript)
         extensions = codex_extensions(mechanism)
