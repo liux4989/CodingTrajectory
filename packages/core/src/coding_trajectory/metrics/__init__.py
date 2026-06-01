@@ -1,6 +1,6 @@
 """Derived execution metrics."""
 
-from coding_trajectory.metrics.analysis import build_session_graph_metrics
+from coding_trajectory.metrics.analysis import build_session_graph_metrics, build_session_graph_tool_usage
 from coding_trajectory.metrics.models import (
     CostBreakdown,
     CostEstimate,
@@ -11,9 +11,13 @@ from coding_trajectory.metrics.models import (
     SessionMetricsFlat,
     SessionGraphMetrics,
     SessionGraphMetricsFlat,
+    SessionGraphToolUsageFlat,
     StepMetrics,
+    ToolOutputUsageFlat,
+    ToolStepUsageFlat,
     TokenUsage,
     TokenUsageObservation,
+    ToolCostSemantics,
     TurnMetrics,
     TurnMetricsFlat,
 )
@@ -36,12 +40,17 @@ __all__ = [
     "SessionMetricsFlat",
     "SessionGraphMetrics",
     "SessionGraphMetricsFlat",
+    "SessionGraphToolUsageFlat",
     "StepMetrics",
+    "ToolCostSemantics",
+    "ToolOutputUsageFlat",
+    "ToolStepUsageFlat",
     "TokenUsage",
     "TokenUsageObservation",
     "TurnMetrics",
     "TurnMetricsFlat",
     "build_session_graph_metrics",
+    "build_session_graph_tool_usage",
     "estimate_observation_cost",
     "get_default_price_rules",
 ]

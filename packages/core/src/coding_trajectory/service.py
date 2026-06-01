@@ -435,7 +435,7 @@ def dispatch(
         build_session_graph_narrative,
         build_session_graph_overview,
     )
-    from coding_trajectory.metrics import build_session_graph_metrics
+    from coding_trajectory.metrics import build_session_graph_metrics, build_session_graph_tool_usage
 
     if method == "graph.list":
         session_graphs = resolve_collection(
@@ -520,6 +520,7 @@ def dispatch(
         result = build_session_graph_metrics(
             session_graph,
             extra_billing=bool(params.get("extra_billing")),
+            include_steps=True,
         )
         return {
             "root_session_id": result["root_session_id"],
@@ -544,6 +545,13 @@ def dispatch(
             ],
             "warnings": result.get("warnings") or [],
         }
+
+    if method == "metrics.tools":
+        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
+        return build_session_graph_tool_usage(
+            session_graph,
+            extra_billing=bool(params.get("extra_billing")),
+        )
 
     if method == "step.details":
         step_ids = params.get("step_ids")

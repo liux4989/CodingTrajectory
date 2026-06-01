@@ -105,8 +105,9 @@ NAVIGATE
   ct project graphs [PROJECT_NAME]                 list session graphs for a project
   ct session overview [SESSION_ID]                 session structure, step types, user requests
   ct session narrative [SESSION_ID]                deterministic turn narrative for summarizers
-  ct graph metrics [SESSION_ID]                   token/quota/cost rollup by session graph hierarchy
-  ct graph turns [SESSION_ID]                     token rollup by turn
+  ct graph usage [SESSION_ID]                     token/cost rollup by session graph hierarchy
+  ct graph turn-usage [SESSION_ID]                token/cost comparison by turn
+  ct graph tool-usage [SESSION_ID]                tool-step cost boundaries and output-size signals
   ct step detail STEP_ID [...]                     full detail for one or more steps
 
 INSPECT COMMANDS
@@ -306,14 +307,15 @@ def _build_parser() -> argparse.ArgumentParser:
     # -- graph ----------------------------------------------------------
     graph_parser = subparsers.add_parser(
         "graph",
-        help="Inspect session graph metrics and turn summaries.",
+        help="Inspect session graph usage and turn summaries.",
         formatter_class=_GhFormatter,
     )
     graph_sub = graph_parser.add_subparsers(dest="action", required=True)
 
     graph_metrics = graph_sub.add_parser(
-        "metrics",
-        help="Show token and quota metrics projected onto the session graph hierarchy.",
+        "usage",
+        aliases=["metrics"],
+        help="Show token and cost usage projected onto the session graph hierarchy.",
         formatter_class=_GhFormatter,
     )
     _add_session_graph_source(graph_metrics)
@@ -328,8 +330,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     graph_turns = graph_sub.add_parser(
-        "turns",
-        help="Show token metrics summarized by turn.",
+        "turn-usage",
+        aliases=["turns"],
+        help="Show token and cost usage summarized by turn.",
         formatter_class=_GhFormatter,
     )
     _add_session_graph_source(graph_turns)
@@ -337,6 +340,23 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_metrics_flags(graph_turns)
     graph_turns.set_defaults(
         _method="metrics.turns",
+        _params=lambda args: {
+            "extra_billing": args.extra_billing,
+            **({"session_id": args.session_id} if args.session_id else {}),
+        },
+    )
+
+    graph_tools = graph_sub.add_parser(
+        "tool-usage",
+        aliases=["tools"],
+        help="Show tool-step cost boundaries and per-tool output-size signals.",
+        formatter_class=_GhFormatter,
+    )
+    _add_session_graph_source(graph_tools)
+    _add_output_flags(graph_tools)
+    _add_metrics_flags(graph_tools)
+    graph_tools.set_defaults(
+        _method="metrics.tools",
         _params=lambda args: {
             "extra_billing": args.extra_billing,
             **({"session_id": args.session_id} if args.session_id else {}),

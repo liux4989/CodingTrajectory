@@ -148,35 +148,20 @@ class SessionGraphMetrics(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Simplified flat output for ct graph metrics
+# Simplified flat output for ct graph usage / turn-usage
 # ---------------------------------------------------------------------------
-
-class StepToolMetricsFlat(BaseModel):
-    tool_count: int = 0
-    duration_ms: int | None = None
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, handler):
-        data = handler(self)
-        if data.get("duration_ms") is None:
-            data.pop("duration_ms", None)
-        return data
-
 
 class StepMetricsFlat(BaseModel):
     step_id: UUID
     sequence: int
     kind: str | None = None
     token_usage: TokenUsage | None = None
-    tool_metrics: StepToolMetricsFlat | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
         if data.get("token_usage") is None:
             data.pop("token_usage", None)
-        if data.get("tool_metrics") is None:
-            data.pop("tool_metrics", None)
         return data
 
 
@@ -191,7 +176,14 @@ class TurnMetricsFlat(BaseModel):
     cost: float = 0.0
     currency: Literal["USD"] = "USD"
     extra_billing: bool = False
-    steps: list[StepMetricsFlat] = Field(default_factory=list)
+    steps: list[StepMetricsFlat] | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("steps") is None:
+            data.pop("steps", None)
+        return data
 
 
 class SessionMetricsFlat(BaseModel):
@@ -212,4 +204,68 @@ class SessionGraphMetricsFlat(BaseModel):
     currency: Literal["USD"] = "USD"
     extra_billing: bool = False
     sessions: list[SessionMetricsFlat] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ToolCostSemantics(BaseModel):
+    observed_cost_scope: Literal["tool_step"] = "tool_step"
+    per_tool_cost: Literal["not_measured"] = "not_measured"
+    output_metrics: Literal["causal_signal_only"] = "causal_signal_only"
+
+
+class ToolOutputUsageFlat(BaseModel):
+    tool_index: int
+    tool_name: str | None = None
+    status: str | None = None
+    input_summary: str | None = None
+    output_chars: int = 0
+    output_original_tokens: int | None = None
+    output_truncated: bool = False
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        for key in ("tool_name", "status", "input_summary", "output_original_tokens"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        if data.get("output_truncated") is False:
+            data.pop("output_truncated", None)
+        return data
+
+
+class ToolStepUsageFlat(BaseModel):
+    session_id: UUID
+    turn_id: UUID
+    turn_sequence: int
+    step_id: UUID
+    step_sequence: int
+    kind: str | None = None
+    observed_step_cost: float = 0.0
+    currency: Literal["USD"] = "USD"
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    tool_count: int = 0
+    duration_ms: int | None = None
+    tool_output_chars: int = 0
+    tool_output_original_tokens: int = 0
+    tools: list[ToolOutputUsageFlat] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("duration_ms") is None:
+            data.pop("duration_ms", None)
+        return data
+
+
+class SessionGraphToolUsageFlat(BaseModel):
+    root_session_id: UUID
+    cost_semantics: ToolCostSemantics = Field(default_factory=ToolCostSemantics)
+    observed_tool_step_cost: float = 0.0
+    currency: Literal["USD"] = "USD"
+    extra_billing: bool = False
+    tool_step_count: int = 0
+    tool_call_count: int = 0
+    tool_output_chars: int = 0
+    tool_output_original_tokens: int = 0
+    tool_steps: list[ToolStepUsageFlat] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

@@ -15,7 +15,7 @@ from coding_trajectory.ingestion.models import (
     Turn,
     Vendor,
 )
-from coding_trajectory.metrics import build_session_graph_metrics
+from coding_trajectory.metrics import build_session_graph_metrics, build_session_graph_tool_usage
 
 
 def _ts(second: int) -> datetime:
@@ -72,7 +72,10 @@ def test_metrics_roll_up_claude_step_usage() -> None:
     assert turn_metrics["completed_at"] is None
     assert turn_metrics["model"] == "claude-sonnet-4-6"
     assert "step_ids" not in turn_metrics
-    assert turn_metrics["steps"] == [
+    assert "steps" not in turn_metrics
+
+    with_steps = build_session_graph_metrics(session_graph, include_steps=True)
+    assert with_steps["sessions"][0]["turns"][0]["steps"] == [
         {
             "step_id": str(step_id),
             "sequence": 0,
@@ -138,12 +141,87 @@ def test_metrics_include_tool_duration_when_tool_events_are_paired() -> None:
     )
     session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
 
-    result = build_session_graph_metrics(session_graph)
+    result = build_session_graph_metrics(session_graph, include_steps=True)
 
     step_metrics = result["sessions"][0]["turns"][0]["steps"][0]
     assert step_metrics["kind"] == "tool"
-    assert step_metrics["tool_metrics"] == {"tool_count": 1, "duration_ms": 2000}
+    assert "tool_metrics" not in step_metrics
     assert "token_usage" not in step_metrics
+
+    tool_usage = build_session_graph_tool_usage(session_graph)
+    tool_step = tool_usage["tool_steps"][0]
+    assert tool_step["tool_count"] == 1
+    assert tool_step["duration_ms"] == 2000
+
+
+def test_tool_usage_separates_step_cost_from_tool_output_signals() -> None:
+    root_session_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+    step_id = uuid4()
+
+    step = Step(
+        step_id=step_id,
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(1),
+        vendor=Vendor.CLAUDE_CODE,
+        items=[
+            StepToolItem(
+                tool_name="Bash",
+                tool_call_id="tool-1",
+                input={"cmd": "pytest -q"},
+                output="Chunk ID: abc\nOriginal token count: 42\nOutput:\n2 passed\n",
+                status=ToolStatus.COMPLETED,
+            )
+        ],
+        vendor_data={
+            "metrics": {
+                "model": "claude-sonnet-4-6",
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 20,
+                },
+            },
+        },
+    )
+    turn = Turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(0),
+        turns=[turn],
+    )
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
+
+    result = build_session_graph_tool_usage(session_graph)
+
+    assert result["cost_semantics"] == {
+        "observed_cost_scope": "tool_step",
+        "per_tool_cost": "not_measured",
+        "output_metrics": "causal_signal_only",
+    }
+    assert result["observed_tool_step_cost"] == 0.0033
+    assert result["tool_step_count"] == 1
+    assert result["tool_call_count"] == 1
+    tool_step = result["tool_steps"][0]
+    assert tool_step["observed_step_cost"] == 0.0033
+    assert "cost" not in tool_step["tools"][0]
+    assert tool_step["tools"][0] == {
+        "tool_index": 0,
+        "tool_name": "Bash",
+        "status": "completed",
+        "input_summary": "pytest -q",
+        "output_chars": 56,
+        "output_original_tokens": 42,
+    }
 
 
 def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None:
@@ -215,7 +293,7 @@ def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None
     )
     session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
 
-    result = build_session_graph_metrics(session_graph)
+    result = build_session_graph_metrics(session_graph, include_steps=True)
 
     assert result["token_usage"]["input_tokens"] == 100
     assert result["token_usage"]["cached_input_tokens"] == 25
