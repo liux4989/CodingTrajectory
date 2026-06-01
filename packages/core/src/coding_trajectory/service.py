@@ -483,7 +483,7 @@ def dispatch(
             raise ValueError("no session_graphs found in log file")
         return {"items": [serialize_session_graph_detail(t) for t in session_graphs]}
 
-    if method == "graph.overview":
+    if method == "session.overview":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
         result = build_session_graph_overview(
             session_graph,
@@ -494,7 +494,7 @@ def dispatch(
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
         return result
 
-    if method == "graph.narrative":
+    if method == "session.narrative":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
         result = build_session_graph_narrative(
             session_graph,
@@ -505,7 +505,7 @@ def dispatch(
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
         return result
 
-    if method == "metrics.graph":
+    if method == "metrics.session":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
         result = build_session_graph_metrics(
             session_graph,

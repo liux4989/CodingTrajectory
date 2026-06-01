@@ -103,9 +103,9 @@ _EPILOG = """\
 NAVIGATE
   ct project list                                  list all known projects
   ct project graphs [PROJECT_NAME]                 list session graphs for a project
-  ct graph overview [SESSION_ID]                   session structure, step types, user requests
-  ct graph narrative [SESSION_ID]                  deterministic turn narrative for summarizers
-  ct metrics graph [SESSION_ID]                    token/quota rollup by hierarchy
+  ct session overview [SESSION_ID]                 session structure, step types, user requests
+  ct session narrative [SESSION_ID]                deterministic turn narrative for summarizers
+  ct metrics session [SESSION_ID]                  token/quota rollup by hierarchy
   ct metrics turns [SESSION_ID]                    token rollup by turn
   ct step detail STEP_ID [...]                     full detail for one or more steps
 
@@ -269,37 +269,37 @@ def _build_parser() -> argparse.ArgumentParser:
         _params=_project_graphs_params,
     )
 
-    # -- graph -----------------------------------------------------------
-    graph_parser = subparsers.add_parser(
-        "graph",
-        help="Inspect a session graph.",
+    # -- session ---------------------------------------------------------
+    session_parser = subparsers.add_parser(
+        "session",
+        help="Inspect a session and its connected graph.",
         formatter_class=_GhFormatter,
     )
-    graph_sub = graph_parser.add_subparsers(dest="action", required=True)
+    session_sub = session_parser.add_subparsers(dest="action", required=True)
 
-    graph_overview = graph_sub.add_parser(
+    session_overview = session_sub.add_parser(
         "overview",
         help="Show session structure, step types, and user requests.",
         formatter_class=_GhFormatter,
     )
-    _add_session_graph_source(graph_overview)
-    _add_turn_window_flags(graph_overview, view_name="overview")
-    _add_output_flags(graph_overview)
-    graph_overview.set_defaults(
-        _method="graph.overview",
+    _add_session_graph_source(session_overview)
+    _add_turn_window_flags(session_overview, view_name="overview")
+    _add_output_flags(session_overview)
+    session_overview.set_defaults(
+        _method="session.overview",
         _params=_session_graph_turns_params,
     )
 
-    graph_narrative = graph_sub.add_parser(
+    session_narrative = session_sub.add_parser(
         "narrative",
         help="Show deterministic user request, assistant response, and tool activity narrative.",
         formatter_class=_GhFormatter,
     )
-    _add_session_graph_source(graph_narrative)
-    _add_turn_window_flags(graph_narrative, view_name="narrative")
-    _add_output_flags(graph_narrative)
-    graph_narrative.set_defaults(
-        _method="graph.narrative",
+    _add_session_graph_source(session_narrative)
+    _add_turn_window_flags(session_narrative, view_name="narrative")
+    _add_output_flags(session_narrative)
+    session_narrative.set_defaults(
+        _method="session.narrative",
         _params=_session_graph_turns_params,
     )
 
@@ -311,16 +311,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     metrics_sub = metrics_parser.add_subparsers(dest="action", required=True)
 
-    metrics_graph = metrics_sub.add_parser(
-        "graph",
+    metrics_session = metrics_sub.add_parser(
+        "session",
         help="Show token and quota metrics projected onto the session graph hierarchy.",
         formatter_class=_GhFormatter,
     )
-    _add_session_graph_source(metrics_graph)
-    _add_output_flags(metrics_graph)
-    _add_metrics_flags(metrics_graph)
-    metrics_graph.set_defaults(
-        _method="metrics.graph",
+    _add_session_graph_source(metrics_session)
+    _add_output_flags(metrics_session)
+    _add_metrics_flags(metrics_session)
+    metrics_session.set_defaults(
+        _method="metrics.session",
         _params=lambda args: {
             "extra_billing": args.extra_billing,
             **({"session_id": args.session_id} if args.session_id else {}),

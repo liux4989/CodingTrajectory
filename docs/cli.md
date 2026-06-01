@@ -23,12 +23,12 @@ Structured View
 1. `project list` — find project names
 2. `project graphs <project_name>` — list session graphs for a project, get the session id to use as an entry point
    - or `project --logfile PATH` — load a log file directly and get the session id
-3. `graph overview <session_id> [--turns N] [--drop-turns K]` — read the navigation tree, identify relevant steps
+3. `session overview <session_id> [--turns N] [--drop-turns K]` — read the navigation tree, identify relevant steps
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
-4. `graph narrative <session_id> [--turns N] [--drop-turns K]` — read deterministic user/assistant/tool activity for summarization
-5. `metrics graph <session_id>` — inspect native token/quota metrics joined to the hierarchy
+4. `session narrative <session_id> [--turns N] [--drop-turns K]` — read deterministic user/assistant/tool activity for summarization
+5. `metrics session <session_id>` — inspect native token/quota metrics joined to the hierarchy
 6. `metrics turns <session_id>` — compare execution metrics turn by turn
 7. `step detail <step_id>` — read the evidence for a specific step
 
