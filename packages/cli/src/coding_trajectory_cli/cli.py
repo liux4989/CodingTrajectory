@@ -50,7 +50,9 @@ def _project_list_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _project_trajectories_params(args: argparse.Namespace) -> dict[str, Any]:
-    params: dict[str, Any] = {"project_name": args.project_name}
+    params: dict[str, Any] = {}
+    if args.project_name:
+        params["project_name"] = args.project_name
     agent_vendor = getattr(args, "agent_vendor", None)
     if agent_vendor is not None:
         params["agent_vendor"] = agent_vendor
@@ -100,7 +102,7 @@ def _add_turn_window_flags(p: argparse.ArgumentParser, *, view_name: str) -> Non
 _EPILOG = """\
 NAVIGATE
   ct project list                                  list all known projects
-  ct project trajectories PROJECT_NAME             list trajectories for a project
+  ct project trajectories [PROJECT_NAME]           list trajectories for a project
   ct trajectory overview [TRAJECTORY_ID]           session structure, step types, user requests
   ct trajectory narrative [TRAJECTORY_ID]          deterministic turn narrative for summarizers
   ct metrics trajectory [TRAJECTORY_ID]            token/quota rollup by hierarchy
@@ -256,7 +258,9 @@ def _build_parser() -> argparse.ArgumentParser:
     project_trajectories.add_argument(
         "project_name",
         metavar="PROJECT_NAME",
-        help="Project name to list trajectories for.",
+        nargs="?",
+        default=None,
+        help="Project name to list trajectories for. Defaults to the current directory.",
     )
     _add_agent_vendor_flag(project_trajectories)
     _add_output_flags(project_trajectories)
