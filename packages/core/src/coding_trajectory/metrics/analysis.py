@@ -23,7 +23,6 @@ from coding_trajectory.metrics.models import (
     StepMetrics,
     StepMetricsFlat,
     StepToolMetricsFlat,
-    StepUsageMetricsFlat,
     TokenUsage,
     TokenUsageObservation,
     SessionGraphMetrics,
@@ -38,7 +37,7 @@ from coding_trajectory.metrics.pricing import estimate_observation_cost
 class _CodexUsageState:
     previous_totals: TokenUsage | None = None
     remaining_inherited_totals: TokenUsage | None = None
-    seen_totals: set[tuple[int, int, int, int, int, int, int, int, int]] | None = None
+    seen_totals: set[tuple[int, int, int, int, int]] | None = None
 
 
 def build_session_graph_metrics(
@@ -70,9 +69,7 @@ def build_session_graph_metrics(
                             step_id=step.step_id,
                             sequence=step.sequence,
                             kind=step.kind,
-                            usage_metrics=None if _is_zero_usage(step.token_usage) else StepUsageMetricsFlat(
-                                token_usage=step.token_usage,
-                            ),
+                            token_usage=None if _is_zero_usage(step.token_usage) else step.token_usage,
                             tool_metrics=None if step.tool_count == 0 else StepToolMetricsFlat(
                                 tool_count=step.tool_count,
                                 duration_ms=step.tool_duration_ms,
@@ -499,10 +496,6 @@ def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
     return TokenUsage(
         input_tokens=_as_int(value.get("input_tokens") or value.get("inputTokens")),
         cached_input_tokens=_as_int(value.get("cached_input_tokens") or value.get("cachedInputTokens")),
-        cache_creation_input_tokens=_as_int(
-            value.get("cache_creation_input_tokens") or value.get("cacheCreationInputTokens")
-        ),
-        cache_read_input_tokens=_as_int(value.get("cache_read_input_tokens") or value.get("cacheReadInputTokens")),
         output_tokens=_as_int(value.get("output_tokens") or value.get("outputTokens")),
         reasoning_output_tokens=_as_int(
             value.get("reasoning_output_tokens") or value.get("reasoningOutputTokens")
@@ -511,12 +504,10 @@ def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
     )
 
 
-def _usage_key(usage: TokenUsage) -> tuple[int, int, int, int, int, int, int]:
+def _usage_key(usage: TokenUsage) -> tuple[int, int, int, int, int]:
     return (
         usage.input_tokens,
         usage.cached_input_tokens,
-        usage.cache_creation_input_tokens,
-        usage.cache_read_input_tokens,
         usage.output_tokens,
         usage.reasoning_output_tokens,
         usage.total_tokens,
@@ -529,8 +520,6 @@ def _subtract_usage(left: TokenUsage | None, right: TokenUsage | None) -> TokenU
     return TokenUsage(
         input_tokens=max(left.input_tokens - right.input_tokens, 0),
         cached_input_tokens=max(left.cached_input_tokens - right.cached_input_tokens, 0),
-        cache_creation_input_tokens=max(left.cache_creation_input_tokens - right.cache_creation_input_tokens, 0),
-        cache_read_input_tokens=max(left.cache_read_input_tokens - right.cache_read_input_tokens, 0),
         output_tokens=max(left.output_tokens - right.output_tokens, 0),
         reasoning_output_tokens=max(left.reasoning_output_tokens - right.reasoning_output_tokens, 0),
         total_tokens=max(left.total_tokens - right.total_tokens, 0),
@@ -565,8 +554,6 @@ def _finalize_cost(cost: CostEstimate) -> CostEstimate:
                 update={
                     "input_usd": round(cost.breakdown.input_usd, 8),
                     "cached_input_usd": round(cost.breakdown.cached_input_usd, 8),
-                    "cache_creation_usd": round(cost.breakdown.cache_creation_usd, 8),
-                    "cache_read_usd": round(cost.breakdown.cache_read_usd, 8),
                     "output_usd": round(cost.breakdown.output_usd, 8),
                     "reasoning_output_usd": round(cost.breakdown.reasoning_output_usd, 8),
                 }

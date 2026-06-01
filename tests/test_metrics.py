@@ -41,8 +41,6 @@ def test_metrics_roll_up_claude_step_usage() -> None:
                 "model": "claude-sonnet-4-6",
                 "usage": {
                     "input_tokens": 10,
-                    "cache_creation_input_tokens": 20,
-                    "cache_read_input_tokens": 30,
                     "output_tokens": 40,
                 },
             },
@@ -66,10 +64,8 @@ def test_metrics_roll_up_claude_step_usage() -> None:
     result = build_session_graph_metrics(session_graph)
 
     assert result["token_usage"]["input_tokens"] == 10
-    assert result["token_usage"]["cache_creation_input_tokens"] == 20
-    assert result["token_usage"]["cache_read_input_tokens"] == 30
     assert result["token_usage"]["output_tokens"] == 40
-    assert result["cost"] == 0.000714
+    assert result["cost"] == 0.00063
     assert result["extra_billing"] is False
     turn_metrics = result["sessions"][0]["turns"][0]
     assert turn_metrics["started_at"] == "2026-01-01T00:00:00Z"
@@ -81,20 +77,16 @@ def test_metrics_roll_up_claude_step_usage() -> None:
             "step_id": str(step_id),
             "sequence": 0,
             "kind": "response",
-            "usage_metrics": {
-                "token_usage": {
-                    "input_tokens": 10,
-                    "cached_input_tokens": 0,
-                    "cache_creation_input_tokens": 20,
-                    "cache_read_input_tokens": 30,
-                    "output_tokens": 40,
-                    "reasoning_output_tokens": 0,
-                    "total_tokens": 0,
-                },
+            "token_usage": {
+                "input_tokens": 10,
+                "cached_input_tokens": 0,
+                "output_tokens": 40,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 0,
             },
         }
     ]
-    assert turn_metrics["cost"] == 0.000714
+    assert turn_metrics["cost"] == 0.00063
     assert turn_metrics["extra_billing"] is False
 
 
@@ -151,7 +143,7 @@ def test_metrics_include_tool_duration_when_tool_events_are_paired() -> None:
     step_metrics = result["sessions"][0]["turns"][0]["steps"][0]
     assert step_metrics["kind"] == "tool"
     assert step_metrics["tool_metrics"] == {"tool_count": 1, "duration_ms": 2000}
-    assert "usage_metrics" not in step_metrics
+    assert "token_usage" not in step_metrics
 
 
 def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None:
@@ -234,7 +226,7 @@ def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None
     assert "step_ids" not in turn_metrics
     assert turn_metrics["steps"][0]["step_id"] == str(step.step_id)
     assert turn_metrics["steps"][0]["kind"] == "response"
-    assert turn_metrics["steps"][0]["usage_metrics"]["token_usage"]["input_tokens"] == 100
+    assert turn_metrics["steps"][0]["token_usage"]["input_tokens"] == 100
     assert result["cost"] == 0.0006875
 
 

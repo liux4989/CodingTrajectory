@@ -12,8 +12,6 @@ from pydantic import BaseModel, Field, model_serializer
 class TokenUsage(BaseModel):
     input_tokens: int = 0
     cached_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-    cache_read_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_output_tokens: int = 0
     total_tokens: int = 0
@@ -22,8 +20,6 @@ class TokenUsage(BaseModel):
         return TokenUsage(
             input_tokens=self.input_tokens + other.input_tokens,
             cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
-            cache_creation_input_tokens=self.cache_creation_input_tokens + other.cache_creation_input_tokens,
-            cache_read_input_tokens=self.cache_read_input_tokens + other.cache_read_input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             reasoning_output_tokens=self.reasoning_output_tokens + other.reasoning_output_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
@@ -50,8 +46,6 @@ class TokenUsageObservation(BaseModel):
 class CostBreakdown(BaseModel):
     input_usd: float = 0.0
     cached_input_usd: float = 0.0
-    cache_creation_usd: float = 0.0
-    cache_read_usd: float = 0.0
     output_usd: float = 0.0
     reasoning_output_usd: float = 0.0
 
@@ -59,8 +53,6 @@ class CostBreakdown(BaseModel):
         return CostBreakdown(
             input_usd=self.input_usd + other.input_usd,
             cached_input_usd=self.cached_input_usd + other.cached_input_usd,
-            cache_creation_usd=self.cache_creation_usd + other.cache_creation_usd,
-            cache_read_usd=self.cache_read_usd + other.cache_read_usd,
             output_usd=self.output_usd + other.output_usd,
             reasoning_output_usd=self.reasoning_output_usd + other.reasoning_output_usd,
         )
@@ -159,10 +151,6 @@ class SessionGraphMetrics(BaseModel):
 # Simplified flat output for ct graph metrics
 # ---------------------------------------------------------------------------
 
-class StepUsageMetricsFlat(BaseModel):
-    token_usage: TokenUsage = Field(default_factory=TokenUsage)
-
-
 class StepToolMetricsFlat(BaseModel):
     tool_count: int = 0
     duration_ms: int | None = None
@@ -179,14 +167,14 @@ class StepMetricsFlat(BaseModel):
     step_id: UUID
     sequence: int
     kind: str | None = None
-    usage_metrics: StepUsageMetricsFlat | None = None
+    token_usage: TokenUsage | None = None
     tool_metrics: StepToolMetricsFlat | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
-        if data.get("usage_metrics") is None:
-            data.pop("usage_metrics", None)
+        if data.get("token_usage") is None:
+            data.pop("token_usage", None)
         if data.get("tool_metrics") is None:
             data.pop("tool_metrics", None)
         return data

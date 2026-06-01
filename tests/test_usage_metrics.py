@@ -12,8 +12,6 @@ def test_other_agent_usage_normalizers_emit_common_metrics_shape() -> None:
         model="claude-sonnet-4-6",
         usage={
             "input_tokens": 10,
-            "cache_creation_input_tokens": 20,
-            "cache_read_input_tokens": 30,
             "output_tokens": 40,
         },
     )
@@ -27,7 +25,7 @@ def test_other_agent_usage_normalizers_emit_common_metrics_shape() -> None:
     )
 
     assert claude["metrics"]["model"] == "claude-sonnet-4-6"
-    assert claude["metrics"]["usage"]["cache_read_input_tokens"] == 30
+    assert claude["metrics"]["usage"]["output_tokens"] == 40
     assert amp["metrics"]["model"] == "amp-model"
     assert amp["metrics"]["usage"]["input_tokens"] == 50
     assert gemini["metrics"]["model"] == "gemini-model"
