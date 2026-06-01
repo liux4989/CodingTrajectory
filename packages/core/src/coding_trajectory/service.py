@@ -537,7 +537,7 @@ def dispatch(
                     "token_usage": turn["token_usage"],
                     "cost": turn["cost"],
                     "extra_billing": turn["extra_billing"],
-                    "step_ids": turn["step_ids"],
+                    "steps": turn.get("steps", []),
                 }
                 for session in result["sessions"]
                 for turn in session["turns"]

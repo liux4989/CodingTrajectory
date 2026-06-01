@@ -9,7 +9,9 @@ from coding_trajectory.ingestion.models import (
     Session,
     Step,
     StepTextItem,
+    StepToolItem,
     SessionGraph,
+    ToolStatus,
     Turn,
     Vendor,
 )
@@ -73,9 +75,83 @@ def test_metrics_roll_up_claude_step_usage() -> None:
     assert turn_metrics["started_at"] == "2026-01-01T00:00:00Z"
     assert turn_metrics["completed_at"] is None
     assert turn_metrics["model"] == "claude-sonnet-4-6"
-    assert turn_metrics["step_ids"] == [str(step_id)]
+    assert "step_ids" not in turn_metrics
+    assert turn_metrics["steps"] == [
+        {
+            "step_id": str(step_id),
+            "sequence": 0,
+            "kind": "response",
+            "usage_metrics": {
+                "token_usage": {
+                    "input_tokens": 10,
+                    "cached_input_tokens": 0,
+                    "cache_creation_input_tokens": 20,
+                    "cache_read_input_tokens": 30,
+                    "output_tokens": 40,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 0,
+                },
+            },
+        }
+    ]
     assert turn_metrics["cost"] == 0.000714
     assert turn_metrics["extra_billing"] is False
+
+
+def test_metrics_include_tool_duration_when_tool_events_are_paired() -> None:
+    root_session_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+    requested_id = uuid4()
+    completed_id = uuid4()
+
+    requested = Event(
+        event_id=requested_id,
+        session_id=session_id,
+        timestamp=_ts(1),
+        type=EventType.TOOL_CALL_REQUESTED,
+        vendor_source=Vendor.CLAUDE_CODE,
+        payload={"tool_call_id": "tool-1", "tool_name": "Read"},
+    )
+    completed = Event(
+        event_id=completed_id,
+        session_id=session_id,
+        timestamp=_ts(3),
+        type=EventType.TOOL_CALL_SUCCEEDED,
+        vendor_source=Vendor.CLAUDE_CODE,
+        payload={"tool_call_id": "tool-1", "tool_name": "Read"},
+    )
+    step = Step(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(1),
+        vendor=Vendor.CLAUDE_CODE,
+        items=[StepToolItem(tool_name="Read", tool_call_id="tool-1", status=ToolStatus.COMPLETED)],
+        event_ids=[requested_id, completed_id],
+    )
+    turn = Turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(0),
+        events=[requested, completed],
+        turns=[turn],
+    )
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
+
+    result = build_session_graph_metrics(session_graph)
+
+    step_metrics = result["sessions"][0]["turns"][0]["steps"][0]
+    assert step_metrics["kind"] == "tool"
+    assert step_metrics["tool_metrics"] == {"tool_count": 1, "duration_ms": 2000}
+    assert "usage_metrics" not in step_metrics
 
 
 def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None:
@@ -155,7 +231,10 @@ def test_metrics_extract_codex_token_count_events_and_dedupe_snapshots() -> None
     assert result["token_usage"]["reasoning_output_tokens"] == 3
     turn_metrics = result["sessions"][0]["turns"][0]
     assert turn_metrics["model"] == "gpt-5.5"
-    assert turn_metrics["step_ids"] == [str(step.step_id)]
+    assert "step_ids" not in turn_metrics
+    assert turn_metrics["steps"][0]["step_id"] == str(step.step_id)
+    assert turn_metrics["steps"][0]["kind"] == "response"
+    assert turn_metrics["steps"][0]["usage_metrics"]["token_usage"]["input_tokens"] == 100
     assert result["cost"] == 0.0006875
 
 

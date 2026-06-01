@@ -21,6 +21,9 @@ from coding_trajectory.metrics.models import (
     SessionMetrics,
     SessionMetricsFlat,
     StepMetrics,
+    StepMetricsFlat,
+    StepToolMetricsFlat,
+    StepUsageMetricsFlat,
     TokenUsage,
     TokenUsageObservation,
     SessionGraphMetrics,
@@ -43,7 +46,7 @@ def build_session_graph_metrics(
     *,
     extra_billing: bool = False,
 ) -> dict[str, Any]:
-    """Return a flat metrics summary: sessions → turns with step_ids, no nested steps/observations."""
+    """Return a flat metrics summary: sessions → turns with compact per-step metrics."""
     full = _build_full_metrics(session_graph, extra_billing=extra_billing)
     sessions_flat: list[SessionMetricsFlat] = []
 
@@ -62,7 +65,21 @@ def build_session_graph_metrics(
                     token_usage=turn.token_usage,
                     cost=turn.cost_estimate.amount_usd,
                     extra_billing=turn.cost_estimate.extra_billing,
-                    step_ids=[step.step_id for step in turn.steps],
+                    steps=[
+                        StepMetricsFlat(
+                            step_id=step.step_id,
+                            sequence=step.sequence,
+                            kind=step.kind,
+                            usage_metrics=None if _is_zero_usage(step.token_usage) else StepUsageMetricsFlat(
+                                token_usage=step.token_usage,
+                            ),
+                            tool_metrics=None if step.tool_count == 0 else StepToolMetricsFlat(
+                                tool_count=step.tool_count,
+                                duration_ms=step.tool_duration_ms,
+                            ),
+                        )
+                        for step in turn.steps
+                    ],
                 )
             )
         sessions_flat.append(
@@ -89,10 +106,62 @@ def build_session_graph_metrics(
 
 def _turn_model(turn: TurnMetrics) -> str | None:
     for step in turn.steps:
-        for obs in step.observations:
-            if obs.model:
-                return obs.model
+        model = _step_model(step)
+        if model:
+            return model
     return None
+
+
+def _step_model(step: StepMetrics) -> str | None:
+    for obs in step.observations:
+        if obs.model:
+            return obs.model
+    return None
+
+
+def _step_kind(step: Step, *, has_usage: bool = False) -> str:
+    has_tool = any(item.kind == "tool" for item in step.items)
+    has_text = any(item.kind == "text" for item in step.items)
+    if has_tool and has_text:
+        return "mixed"
+    if has_tool:
+        return "tool"
+    if has_text or has_usage:
+        return "response"
+    return "empty"
+
+
+def _step_tool_metrics(step: Step, events: list[Event]) -> tuple[int, int | None]:
+    tool_count = sum(1 for item in step.items if item.kind == "tool")
+    pending: dict[str, datetime] = {}
+    durations_ms: list[int] = []
+
+    for event in sorted(events, key=lambda item: item.timestamp):
+        if event.type not in {
+            EventType.TOOL_CALL_REQUESTED,
+            EventType.TOOL_CALL_SUCCEEDED,
+            EventType.TOOL_CALL_FAILED,
+        }:
+            continue
+
+        key = _tool_event_key(event)
+        if event.type == EventType.TOOL_CALL_REQUESTED:
+            pending[key] = event.timestamp
+            continue
+
+        started_at = pending.pop(key, None)
+        if started_at is None:
+            continue
+        duration_ms = int(max((event.timestamp - started_at).total_seconds(), 0) * 1000)
+        durations_ms.append(duration_ms)
+
+    return tool_count, sum(durations_ms) if durations_ms else None
+
+
+def _tool_event_key(event: Event) -> str:
+    payload = event.payload or {}
+    value = payload.get("tool_call_id") or payload.get("tool_name")
+    return str(value) if value else "__default__"
 
 
 def _build_full_metrics(
@@ -253,12 +322,17 @@ def _build_step_metrics(
             estimate_observation_cost(observation, extra_billing=extra_billing)
         )
 
+    tool_count, tool_duration_ms = _step_tool_metrics(step, events)
+
     return StepMetrics(
         step_id=step.step_id,
         sequence=step.sequence,
+        kind=_step_kind(step, has_usage=bool(observations)),
         token_usage=total,
         cost_estimate=_finalize_cost(cost_total),
         observations=observations,
+        tool_count=tool_count,
+        tool_duration_ms=tool_duration_ms,
     )
 
 
@@ -422,21 +496,12 @@ def _quota_window(value: Any) -> QuotaWindow | None:
 
 
 def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
-    cache_creation = value.get("cache_creation")
-    cache_creation_5m = 0
-    cache_creation_1h = 0
-    if isinstance(cache_creation, dict):
-        cache_creation_5m = _as_int(cache_creation.get("ephemeral_5m_input_tokens"))
-        cache_creation_1h = _as_int(cache_creation.get("ephemeral_1h_input_tokens"))
-
     return TokenUsage(
         input_tokens=_as_int(value.get("input_tokens") or value.get("inputTokens")),
         cached_input_tokens=_as_int(value.get("cached_input_tokens") or value.get("cachedInputTokens")),
         cache_creation_input_tokens=_as_int(
             value.get("cache_creation_input_tokens") or value.get("cacheCreationInputTokens")
         ),
-        cache_creation_5m_input_tokens=cache_creation_5m,
-        cache_creation_1h_input_tokens=cache_creation_1h,
         cache_read_input_tokens=_as_int(value.get("cache_read_input_tokens") or value.get("cacheReadInputTokens")),
         output_tokens=_as_int(value.get("output_tokens") or value.get("outputTokens")),
         reasoning_output_tokens=_as_int(
@@ -446,13 +511,11 @@ def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
     )
 
 
-def _usage_key(usage: TokenUsage) -> tuple[int, int, int, int, int, int, int, int, int]:
+def _usage_key(usage: TokenUsage) -> tuple[int, int, int, int, int, int, int]:
     return (
         usage.input_tokens,
         usage.cached_input_tokens,
         usage.cache_creation_input_tokens,
-        usage.cache_creation_5m_input_tokens,
-        usage.cache_creation_1h_input_tokens,
         usage.cache_read_input_tokens,
         usage.output_tokens,
         usage.reasoning_output_tokens,
@@ -467,8 +530,6 @@ def _subtract_usage(left: TokenUsage | None, right: TokenUsage | None) -> TokenU
         input_tokens=max(left.input_tokens - right.input_tokens, 0),
         cached_input_tokens=max(left.cached_input_tokens - right.cached_input_tokens, 0),
         cache_creation_input_tokens=max(left.cache_creation_input_tokens - right.cache_creation_input_tokens, 0),
-        cache_creation_5m_input_tokens=max(left.cache_creation_5m_input_tokens - right.cache_creation_5m_input_tokens, 0),
-        cache_creation_1h_input_tokens=max(left.cache_creation_1h_input_tokens - right.cache_creation_1h_input_tokens, 0),
         cache_read_input_tokens=max(left.cache_read_input_tokens - right.cache_read_input_tokens, 0),
         output_tokens=max(left.output_tokens - right.output_tokens, 0),
         reasoning_output_tokens=max(left.reasoning_output_tokens - right.reasoning_output_tokens, 0),
@@ -505,8 +566,6 @@ def _finalize_cost(cost: CostEstimate) -> CostEstimate:
                     "input_usd": round(cost.breakdown.input_usd, 8),
                     "cached_input_usd": round(cost.breakdown.cached_input_usd, 8),
                     "cache_creation_usd": round(cost.breakdown.cache_creation_usd, 8),
-                    "cache_creation_5m_usd": round(cost.breakdown.cache_creation_5m_usd, 8),
-                    "cache_creation_1h_usd": round(cost.breakdown.cache_creation_1h_usd, 8),
                     "cache_read_usd": round(cost.breakdown.cache_read_usd, 8),
                     "output_usd": round(cost.breakdown.output_usd, 8),
                     "reasoning_output_usd": round(cost.breakdown.reasoning_output_usd, 8),

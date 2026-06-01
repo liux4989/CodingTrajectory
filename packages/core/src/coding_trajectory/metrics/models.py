@@ -6,15 +6,13 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 
 class TokenUsage(BaseModel):
     input_tokens: int = 0
     cached_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
-    cache_creation_5m_input_tokens: int = 0
-    cache_creation_1h_input_tokens: int = 0
     cache_read_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_output_tokens: int = 0
@@ -25,8 +23,6 @@ class TokenUsage(BaseModel):
             input_tokens=self.input_tokens + other.input_tokens,
             cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
             cache_creation_input_tokens=self.cache_creation_input_tokens + other.cache_creation_input_tokens,
-            cache_creation_5m_input_tokens=self.cache_creation_5m_input_tokens + other.cache_creation_5m_input_tokens,
-            cache_creation_1h_input_tokens=self.cache_creation_1h_input_tokens + other.cache_creation_1h_input_tokens,
             cache_read_input_tokens=self.cache_read_input_tokens + other.cache_read_input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             reasoning_output_tokens=self.reasoning_output_tokens + other.reasoning_output_tokens,
@@ -55,8 +51,6 @@ class CostBreakdown(BaseModel):
     input_usd: float = 0.0
     cached_input_usd: float = 0.0
     cache_creation_usd: float = 0.0
-    cache_creation_5m_usd: float = 0.0
-    cache_creation_1h_usd: float = 0.0
     cache_read_usd: float = 0.0
     output_usd: float = 0.0
     reasoning_output_usd: float = 0.0
@@ -66,8 +60,6 @@ class CostBreakdown(BaseModel):
             input_usd=self.input_usd + other.input_usd,
             cached_input_usd=self.cached_input_usd + other.cached_input_usd,
             cache_creation_usd=self.cache_creation_usd + other.cache_creation_usd,
-            cache_creation_5m_usd=self.cache_creation_5m_usd + other.cache_creation_5m_usd,
-            cache_creation_1h_usd=self.cache_creation_1h_usd + other.cache_creation_1h_usd,
             cache_read_usd=self.cache_read_usd + other.cache_read_usd,
             output_usd=self.output_usd + other.output_usd,
             reasoning_output_usd=self.reasoning_output_usd + other.reasoning_output_usd,
@@ -125,9 +117,12 @@ class QuotaSnapshot(BaseModel):
 class StepMetrics(BaseModel):
     step_id: UUID
     sequence: int
+    kind: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
     observations: list[TokenUsageObservation] = Field(default_factory=list)
+    tool_count: int = 0
+    tool_duration_ms: int | None = None
 
 
 class TurnMetrics(BaseModel):
@@ -164,6 +159,39 @@ class SessionGraphMetrics(BaseModel):
 # Simplified flat output for ct graph metrics
 # ---------------------------------------------------------------------------
 
+class StepUsageMetricsFlat(BaseModel):
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
+
+
+class StepToolMetricsFlat(BaseModel):
+    tool_count: int = 0
+    duration_ms: int | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("duration_ms") is None:
+            data.pop("duration_ms", None)
+        return data
+
+
+class StepMetricsFlat(BaseModel):
+    step_id: UUID
+    sequence: int
+    kind: str | None = None
+    usage_metrics: StepUsageMetricsFlat | None = None
+    tool_metrics: StepToolMetricsFlat | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("usage_metrics") is None:
+            data.pop("usage_metrics", None)
+        if data.get("tool_metrics") is None:
+            data.pop("tool_metrics", None)
+        return data
+
+
 class TurnMetricsFlat(BaseModel):
     turn_id: UUID
     sequence: int
@@ -175,7 +203,7 @@ class TurnMetricsFlat(BaseModel):
     cost: float = 0.0
     currency: Literal["USD"] = "USD"
     extra_billing: bool = False
-    step_ids: list[UUID] = Field(default_factory=list)
+    steps: list[StepMetricsFlat] = Field(default_factory=list)
 
 
 class SessionMetricsFlat(BaseModel):

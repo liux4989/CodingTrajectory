@@ -17,8 +17,6 @@ class PriceRule:
     output_per_mtok: float
     cached_input_per_mtok: float | None = None
     cache_creation_per_mtok: float | None = None
-    cache_creation_5m_per_mtok: float | None = None
-    cache_creation_1h_per_mtok: float | None = None
     cache_read_per_mtok: float | None = None
     reasoning_output_per_mtok: float | None = None
     pricing_source: str = "builtin"
@@ -50,14 +48,14 @@ DEFAULT_PRICE_RULES: dict[str, PriceRule] = {
     "gpt-5.4-nano": PriceRule("gpt-5.4-nano", input_per_mtok=0.20, cached_input_per_mtok=0.02, output_per_mtok=1.25, pricing_source=_OPENAI_SOURCE),
     "gpt-5.4-pro": PriceRule("gpt-5.4-pro", input_per_mtok=30.00, output_per_mtok=180.00, pricing_source=_OPENAI_SOURCE),
     "gpt-5.5-pro": PriceRule("gpt-5.5-pro", input_per_mtok=30.00, output_per_mtok=180.00, pricing_source=_OPENAI_SOURCE),
-    "claude-opus-4-7": PriceRule("claude-opus-4-7", input_per_mtok=5.00, cache_creation_per_mtok=6.25, cache_creation_5m_per_mtok=6.25, cache_creation_1h_per_mtok=10.00, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-opus-4-6": PriceRule("claude-opus-4-6", input_per_mtok=5.00, cache_creation_per_mtok=6.25, cache_creation_5m_per_mtok=6.25, cache_creation_1h_per_mtok=10.00, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-opus-4-5": PriceRule("claude-opus-4-5", input_per_mtok=5.00, cache_creation_per_mtok=6.25, cache_creation_5m_per_mtok=6.25, cache_creation_1h_per_mtok=10.00, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-opus-4-1": PriceRule("claude-opus-4-1", input_per_mtok=15.00, cache_creation_per_mtok=18.75, cache_creation_5m_per_mtok=18.75, cache_creation_1h_per_mtok=30.00, cache_read_per_mtok=1.50, output_per_mtok=75.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-sonnet-4-6": PriceRule("claude-sonnet-4-6", input_per_mtok=3.00, cache_creation_per_mtok=3.75, cache_creation_5m_per_mtok=3.75, cache_creation_1h_per_mtok=6.00, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-sonnet-4-5": PriceRule("claude-sonnet-4-5", input_per_mtok=3.00, cache_creation_per_mtok=3.75, cache_creation_5m_per_mtok=3.75, cache_creation_1h_per_mtok=6.00, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-sonnet-4": PriceRule("claude-sonnet-4", input_per_mtok=3.00, cache_creation_per_mtok=3.75, cache_creation_5m_per_mtok=3.75, cache_creation_1h_per_mtok=6.00, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-haiku-4-5": PriceRule("claude-haiku-4-5", input_per_mtok=1.00, cache_creation_per_mtok=1.25, cache_creation_5m_per_mtok=1.25, cache_creation_1h_per_mtok=2.00, cache_read_per_mtok=0.10, output_per_mtok=5.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-opus-4-7": PriceRule("claude-opus-4-7", input_per_mtok=5.00, cache_creation_per_mtok=6.25, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-opus-4-6": PriceRule("claude-opus-4-6", input_per_mtok=5.00, cache_creation_per_mtok=6.25, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-opus-4-5": PriceRule("claude-opus-4-5", input_per_mtok=5.00, cache_creation_per_mtok=6.25, cache_read_per_mtok=0.50, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-opus-4-1": PriceRule("claude-opus-4-1", input_per_mtok=15.00, cache_creation_per_mtok=18.75, cache_read_per_mtok=1.50, output_per_mtok=75.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-sonnet-4-6": PriceRule("claude-sonnet-4-6", input_per_mtok=3.00, cache_creation_per_mtok=3.75, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-sonnet-4-5": PriceRule("claude-sonnet-4-5", input_per_mtok=3.00, cache_creation_per_mtok=3.75, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-sonnet-4": PriceRule("claude-sonnet-4", input_per_mtok=3.00, cache_creation_per_mtok=3.75, cache_read_per_mtok=0.30, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
+    "claude-haiku-4-5": PriceRule("claude-haiku-4-5", input_per_mtok=1.00, cache_creation_per_mtok=1.25, cache_read_per_mtok=0.10, output_per_mtok=5.00, pricing_source=_ANTHROPIC_SOURCE),
 }
 
 
@@ -82,8 +80,6 @@ def estimate_observation_cost(
         breakdown.input_usd
         + breakdown.cached_input_usd
         + breakdown.cache_creation_usd
-        + breakdown.cache_creation_5m_usd
-        + breakdown.cache_creation_1h_usd
         + breakdown.cache_read_usd
         + breakdown.output_usd
         + breakdown.reasoning_output_usd
@@ -102,21 +98,14 @@ def estimate_observation_cost(
 def _estimate_usage(usage: TokenUsage, rule: PriceRule) -> CostBreakdown:
     cached_input_rate = rule.cached_input_per_mtok
     cache_creation_rate = rule.cache_creation_per_mtok
-    cache_creation_5m_rate = rule.cache_creation_5m_per_mtok or cache_creation_rate
-    cache_creation_1h_rate = rule.cache_creation_1h_per_mtok or cache_creation_rate
     cache_read_rate = rule.cache_read_per_mtok
     reasoning_output_rate = rule.reasoning_output_per_mtok
 
     standard_input_tokens = max(usage.input_tokens - usage.cached_input_tokens, 0)
-    split_cache_creation = usage.cache_creation_5m_input_tokens + usage.cache_creation_1h_input_tokens
-    generic_cache_creation = max(usage.cache_creation_input_tokens - split_cache_creation, 0)
-
     return CostBreakdown(
         input_usd=_price(standard_input_tokens, rule.input_per_mtok),
         cached_input_usd=_price(usage.cached_input_tokens, cached_input_rate),
-        cache_creation_usd=_price(generic_cache_creation, cache_creation_rate),
-        cache_creation_5m_usd=_price(usage.cache_creation_5m_input_tokens, cache_creation_5m_rate),
-        cache_creation_1h_usd=_price(usage.cache_creation_1h_input_tokens, cache_creation_1h_rate),
+        cache_creation_usd=_price(usage.cache_creation_input_tokens, cache_creation_rate),
         cache_read_usd=_price(usage.cache_read_input_tokens, cache_read_rate),
         output_usd=_price(usage.output_tokens, rule.output_per_mtok),
         reasoning_output_usd=_price(usage.reasoning_output_tokens, reasoning_output_rate),
