@@ -24,6 +24,7 @@ class Vendor(str, Enum):
     CLAUDE_CODE = "claude_code"
     GEMINI_CLI  = "gemini_cli"
     AMP         = "amp"
+    PI          = "pi"
 
 
 class ToolStatus(str, Enum):
@@ -101,11 +102,21 @@ class AmpExtensions(BaseModel):
     agent_mode:       str | None = None
 
 
+class PiExtensions(BaseModel):
+    session_file:  str | None = None
+    cwd:           str | None = None
+    title:         str | None = None
+    provider:      str | None = None
+    model:         str | None = None
+    thinking_level: str | None = None
+
+
 class VendorExtensions(BaseModel):
     claude_code: ClaudeCodeExtensions | None = None
     codex:       CodexExtensions | None = None
     gemini:      GeminiExtensions | None = None
     amp:         AmpExtensions | None = None
+    pi:          PiExtensions | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter, GeminiAdapter
+from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter, GeminiAdapter, PiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import Event, Session, Step, SessionGraph, Turn, Vendor
@@ -39,6 +39,7 @@ def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
         (Vendor.CLAUDE_CODE, ClaudeCodeAdapter, home / ".claude" / "projects", "*.jsonl"),
         (Vendor.GEMINI_CLI, GeminiAdapter, home / ".gemini" / "tmp", "session-*.json"),
         (Vendor.AMP, AmpAdapter, home / ".local" / "share" / "amp" / "threads", "T-*.json"),
+        (Vendor.PI, PiAdapter, home / ".pi" / "agent" / "sessions", "*.jsonl"),
     ]
 
 
@@ -193,6 +194,8 @@ def _extract_session_cwd(session: Session, source: Path | None = None) -> str | 
     if session.extensions:
         if session.extensions.codex and session.extensions.codex.cwd:
             return session.extensions.codex.cwd
+        if session.extensions.pi and session.extensions.pi.cwd:
+            return session.extensions.pi.cwd
         if session.extensions.amp and session.extensions.amp.workspace_id:
             ws_id = session.extensions.amp.workspace_id
             if ws_id.startswith("file://"):

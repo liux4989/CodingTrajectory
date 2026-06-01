@@ -3,6 +3,7 @@ from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
 from coding_trajectory.ingestion.adapters.gemini import GeminiAdapter
+from coding_trajectory.ingestion.adapters.pi import PiAdapter
 
 __all__ = [
     "AmpAdapter",
@@ -10,4 +11,5 @@ __all__ = [
     "ClaudeCodeAdapter",
     "CodexAdapter",
     "GeminiAdapter",
+    "PiAdapter",
 ]
