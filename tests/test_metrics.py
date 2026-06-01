@@ -272,9 +272,53 @@ def test_metrics_can_mark_cost_as_extra_billing() -> None:
         extra_billing=True,
     )
 
-    assert result["cost"] == 15.25
+    assert result["cost"] == 23.0
     assert result["extra_billing"] is True
     assert result["sessions"][0]["turns"][0]["extra_billing"] is True
+
+
+def test_metrics_prefers_vendor_reported_pi_cost() -> None:
+    root_session_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+
+    step = Step(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(1),
+        vendor=Vendor.PI,
+        vendor_data={
+            "metrics": {
+                "model": "deepseek-v4-flash",
+                "usage": {
+                    "input_tokens": 2700,
+                    "output_tokens": 78,
+                    "total_tokens": 2778,
+                    "cost_usd": 0.00039984,
+                },
+            },
+        },
+    )
+    turn = Turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        vendor=Vendor.PI,
+        started_at=_ts(0),
+        turns=[turn],
+    )
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
+
+    result = build_session_graph_metrics(session_graph)
+
+    assert result["cost"] == 0.00039984
+    assert result["warnings"] == []
 
 
 def test_metrics_compute_codex_deltas_from_cumulative_totals() -> None:

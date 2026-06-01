@@ -312,12 +312,14 @@ def _build_step_metrics(
 
     observations.sort(key=lambda item: item.timestamp)
     total = TokenUsage()
-    cost_total = CostEstimate(extra_billing=extra_billing)
+    vendor_cost = _vendor_reported_cost_from_step(step, observations=observations, extra_billing=extra_billing)
+    cost_total = vendor_cost or CostEstimate(extra_billing=extra_billing)
     for observation in observations:
         total = total.plus(observation.usage)
-        cost_total = cost_total.plus(
-            estimate_observation_cost(observation, extra_billing=extra_billing)
-        )
+        if vendor_cost is None:
+            cost_total = cost_total.plus(
+                estimate_observation_cost(observation, extra_billing=extra_billing)
+            )
 
     tool_count, tool_duration_ms = _step_tool_metrics(step, events)
 
@@ -335,7 +337,6 @@ def _build_step_metrics(
 
 def _usage_from_step_vendor_data(step: Step) -> TokenUsageObservation | None:
     data = step.vendor_data or {}
-    provider = step.vendor.value
     normalized = data.get("metrics")
     if not isinstance(normalized, dict):
         return None
@@ -344,6 +345,7 @@ def _usage_from_step_vendor_data(step: Step) -> TokenUsageObservation | None:
     if not isinstance(usage, dict):
         return None
 
+    provider = _as_str(normalized.get("provider")) or step.vendor.value
     model = _as_str(normalized.get("model")) or _as_str(usage.get("model"))
     token_usage = _token_usage_from_mapping(usage)
 
@@ -358,6 +360,36 @@ def _usage_from_step_vendor_data(step: Step) -> TokenUsageObservation | None:
         provider=provider,
         model=model,
         source=MetricSource(vendor=provider, source_type="step.vendor_data"),
+    )
+
+
+def _vendor_reported_cost_from_step(
+    step: Step,
+    *,
+    observations: list[TokenUsageObservation],
+    extra_billing: bool,
+) -> CostEstimate | None:
+    data = step.vendor_data or {}
+    normalized = data.get("metrics")
+    if not isinstance(normalized, dict):
+        return None
+
+    usage = normalized.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    amount = _as_float(usage.get("cost_usd"))
+    if amount is None:
+        return None
+
+    model = next((observation.model for observation in observations if observation.model), None)
+    return CostEstimate(
+        amount_usd=amount,
+        extra_billing=extra_billing,
+        pricing_source="vendor_reported",
+        pricing_effective_date=step.timestamp.date().isoformat(),
+        model=model,
+        complete=True,
     )
 
 

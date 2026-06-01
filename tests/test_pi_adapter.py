@@ -133,6 +133,8 @@ def test_pi_adapter_handles_tool_calls_and_results(tmp_path: Path) -> None:
     assert usage["input_tokens"] == 50
     assert usage["output_tokens"] == 20
     assert usage["total_tokens"] == 70
+    assert usage["cost_usd"] == 0.0123
+    assert session.turns[0].steps[0].vendor_data["metrics"]["provider"] == "anthropic"
 
 
 def test_pi_adapter_captures_unified_bash_execution_messages(tmp_path: Path) -> None:

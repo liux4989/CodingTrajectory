@@ -207,6 +207,7 @@ class PiAdapter(BaseAdapter):
                     vendor_data["thinking"] = thinking
                 if usage:
                     normalized = normalize_pi_usage(
+                        provider=message.get("provider") or self._current_provider,
                         model=message.get("model") or self._current_model,
                         usage=usage,
                     )

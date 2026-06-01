@@ -57,14 +57,16 @@ def normalize_claude_usage(*, model: Any, usage: Any) -> dict[str, Any]:
     return _normalized_step_usage(model=model, usage=usage)
 
 
-def normalize_pi_usage(*, model: Any, usage: Any) -> dict[str, Any]:
+def normalize_pi_usage(*, provider: Any = None, model: Any, usage: Any) -> dict[str, Any]:
     usage_map = usage if isinstance(usage, dict) else {}
     return _normalized_step_usage(
         model=model,
+        provider=provider,
         usage={
             "input_tokens": usage_map.get("input"),
             "output_tokens": usage_map.get("output"),
             "total_tokens": usage_map.get("totalTokens"),
+            "cost_usd": _pi_cost_usd(usage_map.get("cost")),
         },
     )
 
@@ -98,13 +100,16 @@ def normalize_quota_snapshot(value: Any) -> dict[str, Any] | None:
     return dumped or None
 
 
-def _normalized_step_usage(*, model: Any, usage: Any) -> dict[str, Any]:
+def _normalized_step_usage(*, model: Any, usage: Any, provider: Any = None) -> dict[str, Any]:
     usage_map = usage if isinstance(usage, dict) else {}
     metrics = NormalizedUsageMetrics(
         model=_as_str(model) or _as_str(usage_map.get("model")),
         usage=usage_map or None,
     )
     dumped = metrics.model_dump(exclude_none=True)
+    provider_value = _as_str(provider)
+    if provider_value:
+        dumped["provider"] = provider_value
     return {"metrics": dumped} if dumped else {}
 
 
@@ -134,3 +139,10 @@ def _as_float_or_none(value: Any) -> float | None:
     if isinstance(value, (float, int)) and not isinstance(value, bool):
         return float(value)
     return None
+
+
+def _pi_cost_usd(value: Any) -> float | None:
+    if isinstance(value, dict):
+        total = value.get("total")
+        return _as_float_or_none(total)
+    return _as_float_or_none(value)

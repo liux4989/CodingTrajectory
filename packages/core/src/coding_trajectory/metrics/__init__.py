@@ -17,7 +17,12 @@ from coding_trajectory.metrics.models import (
     TurnMetrics,
     TurnMetricsFlat,
 )
-from coding_trajectory.metrics.pricing import DEFAULT_PRICE_RULES, PriceRule, estimate_observation_cost
+from coding_trajectory.metrics.pricing import (
+    DEFAULT_PRICE_RULES,
+    PriceRule,
+    estimate_observation_cost,
+    get_default_price_rules,
+)
 
 __all__ = [
     "CostBreakdown",
@@ -38,4 +43,5 @@ __all__ = [
     "TurnMetricsFlat",
     "build_session_graph_metrics",
     "estimate_observation_cost",
+    "get_default_price_rules",
 ]
