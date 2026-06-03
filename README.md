@@ -12,6 +12,4 @@ Unified canonical models and CLI tooling for coding-agent session graphs.
 
 - CLI usage: [`docs/cli.md`](docs/cli.md)
 - CLI agent notebook: [`docs/cli-agent-notebook.ipynb`](docs/cli-agent-notebook.ipynb)
-- CLI output contract: [`docs/cli-output-spec.md`](docs/cli-output-spec.md)
-- Enrichment layer: [`docs/enrichment.md`](docs/enrichment.md)
-- Session API schema: [`docs/session-api.json`](docs/session-api.json)
+- PRD & Architecture: [`docs/prd.md`](docs/prd.md)
