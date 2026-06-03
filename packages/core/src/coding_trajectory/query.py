@@ -166,6 +166,10 @@ class DocumentStore:
             raise ResourceNotFoundError(f"session graph not found for session: {session_id}") from exc
         return self.get_session_graph(root_session_id)
 
+    def get_session_graph_for_turn(self, turn_id: UUID) -> SessionGraph:
+        turn = self.get_turn(turn_id)
+        return self.get_session_graph_for_session(turn.session_id)
+
     def get_session(self, resource_id: UUID) -> Session:
         try:
             return self.sessions[resource_id]

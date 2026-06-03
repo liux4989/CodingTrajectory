@@ -42,11 +42,11 @@ Structured View
    - mutating or high-signal tools such as edits, writes, shell commands, subagents, and handoffs stay ungrouped; use `session overview --view narrative` or `session step-detail` to expand the evidence
 4. `session overview --view narrative <session_id> [--turns N] [--drop-turns K]` — read deterministic user/assistant/tool activity for summarization
 5. `session usage <session_id>` — inspect token/cost rollups joined to the session tree
-6. `session usage --scope turn <session_id> [turn_id]` — compare token/cost usage turn by turn, optionally narrowed to one turn with compact step token deltas
-7. `session usage --scope tool <session_id>` — inspect tool-step cost boundaries and per-tool output-size signals
+6. `session turn-usage <turn_id>` — inspect token/cost usage for one turn, with compact step token deltas
+7. `session tool-usage <session_id>` — inspect tool-step cost boundaries and per-tool output-size signals
 8. `session step-detail <step_id>` — read the evidence for a specific step
 
-`session usage --scope tool` keeps billing boundaries explicit:
+`session tool-usage` keeps billing boundaries explicit:
 `observed_step_cost` is the
 measured/estimated cost for the enclosing tool step, while each individual tool
 entry only reports output-size signals. Individual shell commands do not have

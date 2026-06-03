@@ -322,8 +322,11 @@ def _resolve_session_graph(store: Any, raw_id: str | None) -> Any:
         try:
             return store.get_session_graph(resource_id)
         except ResourceNotFoundError:
-            session = store.get_session(resource_id)
-            return store.get_session_graph_for_session(session.session_id)
+            try:
+                session = store.get_session(resource_id)
+                return store.get_session_graph_for_session(session.session_id)
+            except ResourceNotFoundError:
+                return store.get_session_graph_for_turn(resource_id)
     session_graphs = list(store.session_graphs.values())
     if len(session_graphs) == 1:
         return session_graphs[0]
@@ -334,7 +337,7 @@ def _resolve_session_graph(store: Any, raw_id: str | None) -> Any:
 
 def _session_graph_entrypoint_id(params: dict[str, Any]) -> str | None:
     """Return the public session entry point."""
-    return params.get("session_id") or params.get("root_session_id")
+    return params.get("session_id") or params.get("root_session_id") or params.get("turn_id")
 
 
 def _update_path_index(cache: IndexCache, sources: list[DiscoverySource]) -> None:
@@ -346,6 +349,10 @@ def _update_path_index(cache: IndexCache, sources: list[DiscoverySource]) -> Non
 def _update_session_index(cache: IndexCache, store: DocumentStore) -> None:
     for session_id, root_session_id in store.session_to_root.items():
         cache.session_to_session_graph[str(session_id)] = str(root_session_id)
+    for turn_id, turn in store.turns.items():
+        root_session_id = store.session_to_root.get(turn.session_id)
+        if root_session_id is not None:
+            cache.session_to_session_graph[str(turn_id)] = str(root_session_id)
 
 
 def _build_store_full(*, global_scope: bool, current_dir: Path, cache: IndexCache) -> tuple[DocumentStore, str]:
@@ -506,53 +513,62 @@ def dispatch(
 
     if method == "session.usage":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        scope = params.get("scope", "session")
         extra_billing = bool(params.get("extra_billing"))
         for session in session_graph.sessions:
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        if scope == "session":
-            return build_session_graph_metrics(
-                session_graph,
-                extra_billing=extra_billing,
-            )
-        if scope == "turn":
-            result = build_session_graph_metrics(
-                session_graph,
-                extra_billing=extra_billing,
-                include_steps=True,
-            )
-            turn_id = str(params["turn_id"]) if params.get("turn_id") else None
-            turns = [
-                {
-                    "session_id": session["session_id"],
-                    "vendor": session["vendor"],
-                    "session_status": session.get("status"),
-                    "turn_id": turn["turn_id"],
-                    "sequence": turn["sequence"],
-                    "status": turn.get("status"),
-                    "token_usage": turn["token_usage"],
-                    "cost": turn["cost"],
-                    "extra_billing": turn["extra_billing"],
-                    "steps": turn.get("steps", []),
-                }
-                for session in result["sessions"]
-                for turn in session["turns"]
-                if turn_id is None or str(turn["turn_id"]) == turn_id
-            ]
-            return {
-                "root_session_id": result["root_session_id"],
-                "token_usage": result["token_usage"],
-                "cost": result["cost"],
-                "extra_billing": result["extra_billing"],
-                "turns": turns,
-                "warnings": result.get("warnings") or [],
+        return build_session_graph_metrics(
+            session_graph,
+            extra_billing=extra_billing,
+        )
+
+    if method == "session.turn_usage":
+        if not params.get("turn_id"):
+            raise ValueError("missing required param: turn_id")
+        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
+        extra_billing = bool(params.get("extra_billing"))
+        for session in session_graph.sessions:
+            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
+        result = build_session_graph_metrics(
+            session_graph,
+            extra_billing=extra_billing,
+            include_steps=True,
+        )
+        turn_id = str(params["turn_id"])
+        turns = [
+            {
+                "session_id": session["session_id"],
+                "vendor": session["vendor"],
+                "session_status": session.get("status"),
+                "turn_id": turn["turn_id"],
+                "sequence": turn["sequence"],
+                "status": turn.get("status"),
+                "token_usage": turn["token_usage"],
+                "cost": turn["cost"],
+                "extra_billing": turn["extra_billing"],
+                "steps": turn.get("steps", []),
             }
-        if scope == "tool":
-            return build_session_graph_tool_usage(
-                session_graph,
-                extra_billing=extra_billing,
-            )
-        raise ValueError(f"unsupported session usage scope: {scope}")
+            for session in result["sessions"]
+            for turn in session["turns"]
+            if str(turn["turn_id"]) == turn_id
+        ]
+        return {
+            "root_session_id": result["root_session_id"],
+            "token_usage": result["token_usage"],
+            "cost": result["cost"],
+            "extra_billing": result["extra_billing"],
+            "turns": turns,
+            "warnings": result.get("warnings") or [],
+        }
+
+    if method == "session.tool_usage":
+        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
+        extra_billing = bool(params.get("extra_billing"))
+        for session in session_graph.sessions:
+            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
+        return build_session_graph_tool_usage(
+            session_graph,
+            extra_billing=extra_billing,
+        )
 
     if method == "step.details":
         step_ids = params.get("step_ids")

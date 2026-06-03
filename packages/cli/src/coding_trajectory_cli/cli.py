@@ -79,10 +79,15 @@ def _session_overview_params(args: argparse.Namespace) -> dict[str, Any]:
 
 def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
     return {
-        "scope": args.scope,
         "extra_billing": args.extra_billing,
         **({"session_id": args.session_id} if args.session_id else {}),
-        **({"turn_id": args.turn_id} if args.turn_id else {}),
+    }
+
+
+def _session_turn_usage_params(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "turn_id": args.turn_id,
+        "extra_billing": args.extra_billing,
     }
 
 
@@ -125,9 +130,8 @@ SESSION
   ct session overview --view narrative [SESSION_ID]
                                                    deterministic activity narrative
   ct session usage [SESSION_ID]                    token/cost rollup for the session tree
-  ct session usage --scope turn [SESSION_ID] [TURN_ID]
-                                                   token/cost comparison by turn
-  ct session usage --scope tool [SESSION_ID]       tool-step cost boundaries and output-size signals
+  ct session turn-usage TURN_ID                    token/cost comparison for one turn
+  ct session tool-usage [SESSION_ID]               tool-step cost boundaries and output-size signals
   ct session step-detail STEP_ID [...]             full detail for one or more steps
   ct session event-scan [SESSION_ID] --type TYPE [--filter KEY=VALUE]
                                                    query raw events by type
@@ -321,23 +325,36 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_GhFormatter,
     )
     _add_session_source(session_usage)
-    session_usage.add_argument(
-        "turn_id",
-        metavar="TURN_ID",
-        nargs="?",
-        default=None,
-        help="Turn ID to inspect when using --scope turn.",
-    )
-    session_usage.add_argument(
-        "--scope",
-        choices=("session", "turn", "tool"),
-        default="session",
-        help="Select the resource usage projection.",
-    )
     _add_output_flags(session_usage)
     _add_metrics_flags(session_usage)
     session_usage.set_defaults(
         _method="session.usage",
+        _params=_session_usage_params,
+    )
+
+    session_turn_usage = session_sub.add_parser(
+        "turn-usage",
+        help="Show resource usage for a single turn.",
+        formatter_class=_GhFormatter,
+    )
+    session_turn_usage.add_argument("turn_id", metavar="TURN_ID")
+    _add_output_flags(session_turn_usage)
+    _add_metrics_flags(session_turn_usage)
+    session_turn_usage.set_defaults(
+        _method="session.turn_usage",
+        _params=_session_turn_usage_params,
+    )
+
+    session_tool_usage = session_sub.add_parser(
+        "tool-usage",
+        help="Show tool-step cost boundaries and output-size signals.",
+        formatter_class=_GhFormatter,
+    )
+    _add_session_source(session_tool_usage)
+    _add_output_flags(session_tool_usage)
+    _add_metrics_flags(session_tool_usage)
+    session_tool_usage.set_defaults(
+        _method="session.tool_usage",
         _params=_session_usage_params,
     )
 
