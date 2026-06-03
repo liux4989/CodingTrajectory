@@ -9,22 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch, resolve_store
-
-
-class _YamlDumper(yaml.SafeDumper):
-    pass
-
-
-def _yaml_string_representer(dumper: yaml.SafeDumper, value: str) -> yaml.nodes.ScalarNode:
-    style = "|" if "\n" in value else None
-    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
-
-
-_YamlDumper.add_representer(str, _yaml_string_representer)
 
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
@@ -248,8 +234,8 @@ def _add_metrics_flags(p: argparse.ArgumentParser) -> None:
 def _add_format_flag(
     p: argparse.ArgumentParser,
     *,
-    choices: tuple[str, ...] = ("json", "yaml", "overview"),
-    default: str = "yaml",
+    choices: tuple[str, ...] = ("json", "overview"),
+    default: str = "json",
 ) -> None:
     help_text = "Select stdout format. --output always writes JSON."
     if choices == ("overview", "json"):
@@ -695,22 +681,6 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _prune_empty(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: pruned
-            for key, item in value.items()
-            if not _is_empty_yaml_value(pruned := _prune_empty(item))
-        }
-    if isinstance(value, list):
-        return [pruned for item in value if not _is_empty_yaml_value(pruned := _prune_empty(item))]
-    return value
-
-
-def _is_empty_yaml_value(value: Any) -> bool:
-    return value is None or value is False or value == {} or value == []
-
-
 def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
     if getattr(args, "data", False):
         return json.dumps(payload, indent=2, ensure_ascii=False)
@@ -722,12 +692,6 @@ def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
     if args._method == "session.usage":
         return _render_session_usage_text(payload)
 
-    fmt = getattr(args, "format", "json")
-    if fmt == "json":
-        return json.dumps(payload, indent=2, ensure_ascii=False)
-    if fmt in {"yaml", "overview"}:
-        json_compatible = _prune_empty(json.loads(json.dumps(payload, ensure_ascii=False)))
-        return yaml.dump(json_compatible, Dumper=_YamlDumper, allow_unicode=True, sort_keys=False, width=120)
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 

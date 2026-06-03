@@ -30,14 +30,11 @@ Three goals:
 
 ## Output Formats
 
-The CLI exposes one human navigation format and one exact structured format:
+The CLI exposes readable reports for navigation and JSON for exact data:
 
 - Report commands default to human-readable stdout. Use `--data` to print the
   structured JSON projection behind the report.
-- `--format yaml` — structured but pruned detail output for drill-down commands
-  that still expose YAML.
-- `--format json` — best for exact machine use. Use this for `jq`, batch
-  scripts, schema checks, and saved artifacts.
+- Detail and raw-query commands print JSON.
 
 `--output FILE` always writes JSON, regardless of stdout format. This keeps file
 output stable for automation while allowing stdout to optimize interactive
@@ -58,7 +55,7 @@ Structured View
    - activity renders as short human labels with truncated assistant response previews
 4. `session stats <session_id> [--data]` — inspect session stats with compact context/token sections
 5. `session usage <session_id> [--turn TURN_ID] [--data]` — inspect turn-level activity token and cost accounting
-6. `session step-detail <step_id> [--format yaml|json]` — read the evidence for a specific step
+6. `session step-detail <step_id>` — read the JSON evidence for a specific step
 
 `session usage` is intentionally turn-focused. It reports token buckets and cost
 grouped by turn and activity category without expanding paths, queries,
@@ -68,8 +65,8 @@ detail commands when you need hierarchy/navigation detail or causal drill-down.
 
 
 Raw View
-1. `session event-detail <event_id> [--format yaml|json]` — resolve the full content of an event
-2. `session event-scan <session_id> --type TYPE [--filter ...] [--format yaml|json]` — query raw events by type, optionally narrowed by payload predicates
+1. `session event-detail <event_id>` — resolve the full JSON content of an event
+2. `session event-scan <session_id> --type TYPE [--filter ...]` — query raw JSON events by type, optionally narrowed by payload predicates
 
 See [`cli-agent-notebook.ipynb`](cli-agent-notebook.ipynb) for an interactive
 Jupyter tutorial with examples and workflow guidance.
