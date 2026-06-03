@@ -28,9 +28,11 @@ def summarize_tool_call(item: StepToolItem) -> dict[str, Any] | None:
     if not tool_name:
         return None
 
-    concept, description = _classify(tool_name, item.input)
+    concept, description, optimization_profile = _classify(tool_name, item.input)
 
     result: dict[str, Any] = {"name": concept}
+    if optimization_profile:
+        result["optimization_profile"] = optimization_profile
     if description:
         result["description"] = description
     if item.status == ToolStatus.FAILED:
@@ -38,13 +40,14 @@ def summarize_tool_call(item: StepToolItem) -> dict[str, Any] | None:
     return result
 
 
-def _classify(tool_name: str, tool_input: Any) -> tuple[str, str | None]:
+def _classify(tool_name: str, tool_input: Any) -> tuple[str, str | None, str | None]:
     if tool_name in SHELL_TOOL_NAMES:
-        return classify_shell(tool_name, tool_input)
+        concept, description, profile = classify_shell(tool_name, tool_input)
+        return concept, description, profile
 
     concept = VENDOR_TOOL_CONCEPT.get(tool_name, tool_name)
     description = _describe_structured(concept, tool_input)
-    return concept, description
+    return concept, description, None
 
 
 def _describe_structured(concept: str, tool_input: Any) -> str | None:

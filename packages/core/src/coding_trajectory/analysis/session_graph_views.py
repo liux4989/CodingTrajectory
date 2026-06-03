@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from coding_trajectory.analysis.activity_flow import build_compact_flows
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.indexes import SessionGraphIndex, build_session_graph_index, ordered_sessions
 from coding_trajectory.ingestion.models import Session, StepTextItem, SessionGraph, Turn
@@ -11,7 +12,6 @@ from coding_trajectory.ingestion.models import Session, StepTextItem, SessionGra
 from coding_trajectory.analysis.request_lineage import effective_user_request, extract_user_request, is_low_value_turn
 from coding_trajectory.analysis.teammate_summary import (
     MemberSessionCandidate,
-    build_flows,
     build_member_session_lookup,
     build_teammate_summary,
     is_teammate_turn,
@@ -246,6 +246,6 @@ def _turn_nav_node(
         "turn_id": str(turn.turn_id),
         "status": turn.status,
         "user_request": user_request,
-        "activity": build_flows(turn.steps),
+        "activity": build_compact_flows(turn.steps),
         "step_ids": [str(step.step_id) for step in turn.steps],
     })

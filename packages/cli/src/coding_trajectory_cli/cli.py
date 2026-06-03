@@ -103,7 +103,7 @@ _EPILOG = """\
 NAVIGATE
   ct project list                                  list all known projects
   ct project graphs [PROJECT_NAME]                 list session graphs for a project
-  ct session overview [SESSION_ID]                 session structure, step types, user requests
+  ct session overview [SESSION_ID]                 compact session structure, step types, user requests
   ct session narrative [SESSION_ID]                deterministic turn narrative for summarizers
   ct graph usage [SESSION_ID]                     token/cost rollup by session graph hierarchy
   ct graph turn-usage [SESSION_ID]                token/cost comparison by turn
@@ -280,7 +280,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     session_overview = session_sub.add_parser(
         "overview",
-        help="Show session structure, step types, and user requests.",
+        help="Show compact session structure, step types, and user requests.",
         formatter_class=_GhFormatter,
     )
     _add_session_graph_source(session_overview)

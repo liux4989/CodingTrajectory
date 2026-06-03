@@ -7,8 +7,9 @@ from datetime import datetime
 import re
 from typing import Any
 
+from coding_trajectory.analysis.activity_flow import build_flows
 from coding_trajectory.ingestion.common import prune_nones
-from coding_trajectory.ingestion.models import Session, Step, StepTextItem, StepToolItem, Turn
+from coding_trajectory.ingestion.models import Session, Turn
 
 _TEAM_TASK_ID_RE = re.compile(r"Task\s*#?\s*(\d+)", re.IGNORECASE)
 _LEAD_ERROR_RE = re.compile(r"\b(error|failed|failure|exception|traceback)\b", re.IGNORECASE)
@@ -20,24 +21,6 @@ class MemberSessionCandidate:
     session_id: str
     started_at: datetime
     ended_at: datetime | None
-
-
-def build_flows(steps: list[Step]) -> list[dict[str, Any]]:
-    from coding_trajectory.analysis.tool_summary import summarize_tool_call
-
-    result: list[dict[str, Any]] = []
-    for step in steps:
-        for item in step.items:
-            if isinstance(item, StepToolItem):
-                summary = summarize_tool_call(item)
-                if summary is not None:
-                    result.append({"type": "tool_call", **summary})
-                continue
-            if isinstance(item, StepTextItem):
-                text = item.text.strip()
-                if text:
-                    result.append({"type": "assistant_response", "text": text})
-    return result
 
 
 def build_member_session_lookup(session_graph) -> dict[str, list[MemberSessionCandidate]]:
@@ -257,11 +240,21 @@ def _build_lead_flow(turn: Turn, *, user_request: dict[str, Any] | None) -> list
 
     for item in build_flows(turn.steps):
         if item.get("type") == "tool_call":
-            flow.append({"type": "lead_tool_call", **{key: value for key, value in item.items() if key != "type"}})
+            flow.append({"type": "lead_tool_call", **_public_tool_flow_item(item)})
+        elif item.get("type") == "tool_call_group":
+            flow.append({"type": "lead_tool_call_group", **_public_tool_flow_item(item)})
         elif item.get("type") == "assistant_response":
             flow.extend(_build_lead_text_events(item["text"]))
 
     return flow
+
+
+def _public_tool_flow_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in item.items()
+        if key not in {"type", "optimization_profile"}
+    }
 
 
 def _build_lead_text_events(text: str) -> list[dict[str, Any]]:

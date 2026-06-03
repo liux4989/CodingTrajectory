@@ -23,10 +23,13 @@ Structured View
 1. `project list` — find project names
 2. `project graphs <project_name>` — list session graphs for a project, get the session id to use as an entry point
    - or `project --logfile PATH` — load a log file directly and get the session id
-3. `session overview <session_id> [--turns N] [--drop-turns K]` — read the navigation tree, identify relevant steps
+3. `session overview <session_id> [--turns N] [--drop-turns K]` — read the compact navigation tree, identify relevant steps
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
+   - activity uses compact render keys such as `text`, `tool`, `path`, `query`, `url`, `count`, and plural variants
+   - repeated consecutive low-value tool calls are grouped by tool profile with ordered unique targets and repeat counts when useful
+   - mutating or high-signal tools such as edits, writes, shell commands, subagents, and handoffs stay ungrouped; use `session narrative` or `step detail` to expand the evidence
 4. `session narrative <session_id> [--turns N] [--drop-turns K]` — read deterministic user/assistant/tool activity for summarization
 5. `graph usage <session_id>` — inspect token/cost rollups joined to the hierarchy
 6. `graph turn-usage <session_id>` — compare token/cost usage turn by turn, with compact step token deltas

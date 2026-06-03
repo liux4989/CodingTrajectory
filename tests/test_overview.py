@@ -98,13 +98,9 @@ def test_overview_activity_flattens_interleaved_tool_and_text_items() -> None:
     assert result["sessions"][0]["status"] == "completed"
     assert turn["status"] == "completed"
     assert turn["activity"] == [
-        {"type": "assistant_response", "text": "I’ll inspect the config."},
-        {
-            "type": "tool_call",
-            "name": "ReadFile",
-            "description": "/tmp/config.py",
-        },
-        {"type": "assistant_response", "text": "The config looks good."},
+        {"text": "I’ll inspect the config."},
+        {"tool": "ReadFile", "path": "/tmp/config.py"},
+        {"text": "The config looks good."},
     ]
 
 
@@ -140,7 +136,286 @@ def test_overview_activity_keeps_full_assistant_text() -> None:
     result = build_session_graph_overview(session_graph)
 
     assert result["sessions"][0]["turns"][0]["activity"] == [
-        {"type": "assistant_response", "text": long_text}
+        {"text": long_text}
+    ]
+
+
+def test_narrative_keeps_full_assistant_text() -> None:
+    root_session_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+    long_text = "x" * 350
+
+    step = Step(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(1),
+        vendor=Vendor.CLAUDE_CODE,
+        items=[StepTextItem(text=long_text)],
+    )
+    turn = Turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(0),
+        turns=[turn],
+    )
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
+
+    result = build_session_graph_narrative(session_graph)
+
+    assert result["sessions"][0]["turns"][0]["assistant_responses"] == [long_text]
+
+
+def test_overview_activity_keeps_busy_assistant_items() -> None:
+    root_session_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+
+    step = Step(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(1),
+        vendor=Vendor.CLAUDE_CODE,
+        items=[StepTextItem(text=f"assistant {idx}") for idx in range(30)],
+    )
+    turn = Turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(0),
+        turns=[turn],
+    )
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
+
+    result = build_session_graph_overview(session_graph)
+
+    activity = result["sessions"][0]["turns"][0]["activity"]
+    assert len(activity) == 30
+    assert activity[0] == {"text": "assistant 0"}
+    assert activity[-1] == {"text": "assistant 29"}
+
+
+def test_overview_groups_repeated_consecutive_tool_calls_without_losing_descriptions() -> None:
+    root_session_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+
+    step = Step(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(1),
+        vendor=Vendor.CLAUDE_CODE,
+        items=[
+            StepTextItem(text="I’ll inspect related files."),
+            StepToolItem(
+                tool_name="Read",
+                input={"file_path": "/tmp/a.py"},
+                output="a",
+            ),
+            StepToolItem(
+                tool_name="Read",
+                input={"file_path": "/tmp/b.py"},
+                output="b",
+            ),
+            StepToolItem(
+                tool_name="Read",
+                input={"file_path": "/tmp/c.py"},
+                output="c",
+            ),
+            StepTextItem(text="Now I have the context."),
+        ],
+    )
+    turn = Turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(0),
+        turns=[turn],
+    )
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
+
+    result = build_session_graph_overview(session_graph)
+
+    assert result["sessions"][0]["turns"][0]["activity"] == [
+        {"text": "I’ll inspect related files."},
+        {
+            "tool": "ReadFile",
+            "count": 3,
+            "paths": ["/tmp/a.py", "/tmp/b.py", "/tmp/c.py"],
+        },
+        {"text": "Now I have the context."},
+    ]
+
+
+def test_overview_dedupes_repeated_grouped_read_paths_with_counts() -> None:
+    root_session_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+
+    step = Step(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(1),
+        vendor=Vendor.CLAUDE_CODE,
+        items=[
+            StepToolItem(
+                tool_name="Bash",
+                input={"command": "sed -n '1,20p' /tmp/a.py"},
+                output="a1",
+            ),
+            StepToolItem(
+                tool_name="Bash",
+                input={"command": "sed -n '20,40p' /tmp/a.py"},
+                output="a2",
+            ),
+            StepToolItem(
+                tool_name="Bash",
+                input={"command": "sed -n '1,20p' /tmp/b.py"},
+                output="b",
+            ),
+        ],
+    )
+    turn = Turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(0),
+        turns=[turn],
+    )
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
+
+    result = build_session_graph_overview(session_graph)
+
+    assert result["sessions"][0]["turns"][0]["activity"] == [
+        {
+            "tool": "ReadFile",
+            "count": 3,
+            "paths": ["/tmp/a.py", "/tmp/b.py"],
+            "path_counts": {"/tmp/a.py": 2},
+        },
+    ]
+
+
+def test_overview_does_not_group_repeated_mutating_tool_calls() -> None:
+    root_session_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+
+    step = Step(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(1),
+        vendor=Vendor.CLAUDE_CODE,
+        items=[
+            StepToolItem(
+                tool_name="Edit",
+                input={"file_path": "/tmp/a.py"},
+                output="edited a",
+            ),
+            StepToolItem(
+                tool_name="Edit",
+                input={"file_path": "/tmp/b.py"},
+                output="edited b",
+            ),
+        ],
+    )
+    turn = Turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(0),
+        turns=[turn],
+    )
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
+
+    result = build_session_graph_overview(session_graph)
+
+    assert result["sessions"][0]["turns"][0]["activity"] == [
+        {"tool": "EditFile", "path": "/tmp/a.py"},
+        {"tool": "EditFile", "path": "/tmp/b.py"},
+    ]
+
+
+def test_overview_does_not_group_repeated_shell_commands() -> None:
+    root_session_id = uuid4()
+    session_id = uuid4()
+    turn_id = uuid4()
+
+    step = Step(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        timestamp=_ts(1),
+        vendor=Vendor.CLAUDE_CODE,
+        items=[
+            StepToolItem(
+                tool_name="Bash",
+                input={"command": "uv run pytest tests/test_overview.py"},
+                output="passed",
+            ),
+            StepToolItem(
+                tool_name="Bash",
+                input={"command": "uv run pytest tests/test_service.py"},
+                output="passed",
+            ),
+        ],
+    )
+    turn = Turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        sequence=0,
+        started_at=_ts(0),
+        steps=[step],
+    )
+    session = Session(
+        session_id=session_id,
+        vendor=Vendor.CLAUDE_CODE,
+        started_at=_ts(0),
+        turns=[turn],
+    )
+    session_graph = SessionGraph(root_session_id=root_session_id, sessions=[session])
+
+    result = build_session_graph_overview(session_graph)
+
+    assert result["sessions"][0]["turns"][0]["activity"] == [
+        {"tool": "RunCommand", "cmd": "uv run pytest tests/test_overview.py"},
+        {"tool": "RunCommand", "cmd": "uv run pytest tests/test_service.py"},
     ]
 
 
@@ -157,8 +432,8 @@ def test_overview_can_limit_to_latest_visible_turns() -> None:
         str(turns[2].turn_id),
         str(turns[3].turn_id),
     ]
-    assert overview_turns[0]["activity"] == [{"type": "assistant_response", "text": "assistant 2"}]
-    assert overview_turns[1]["activity"] == [{"type": "assistant_response", "text": "assistant 3"}]
+    assert overview_turns[0]["activity"] == [{"text": "assistant 2"}]
+    assert overview_turns[1]["activity"] == [{"text": "assistant 3"}]
 
 
 def test_narrative_can_limit_to_latest_visible_turns() -> None:

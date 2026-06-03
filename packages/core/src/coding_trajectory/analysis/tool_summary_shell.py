@@ -19,12 +19,12 @@ from coding_trajectory.analysis.tool_summary_shared import (
 )
 
 
-def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None]:
+def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, str]:
     cmd = shell_cmd(tool_input)
     if not cmd:
         if tool_name == "write_stdin":
-            return RUN_COMMAND, "stdin"
-        return RUN_COMMAND, None
+            return RUN_COMMAND, "stdin", "shell:command"
+        return RUN_COMMAND, None, "shell:command"
 
     primary = primary_stage(cmd)
     head = primary_command(primary)
@@ -32,24 +32,24 @@ def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None]:
 
     if head in {"cat", "bat", "head", "tail", "less", "more", "nl"}:
         path = first_path_arg(primary, head)
-        return READ_FILE, short_path(path) or description
+        return READ_FILE, short_path(path) or description, "shell:read"
     if head == "sed":
         path = first_path_arg(primary, head)
-        return READ_FILE, short_path(path) or description
+        return READ_FILE, short_path(path) or description, "shell:read"
     if head in {"rg", "grep", "ag", "ack", "rga"}:
         tokens = safe_split(primary)
         if any(token in {"--files", "-l", "--files-with-matches"} for token in tokens):
-            return LIST_FILES, description
+            return LIST_FILES, description, "shell:list"
         pattern, scope = grep_pattern_and_scope(primary, head)
         if pattern and scope:
-            return SEARCH_TEXT, f"{pattern!r} within {scope}"
+            return SEARCH_TEXT, f"{pattern!r} within {scope}", "shell:search"
         if pattern:
-            return SEARCH_TEXT, repr(pattern)
-        return SEARCH_TEXT, description
+            return SEARCH_TEXT, repr(pattern), "shell:search"
+        return SEARCH_TEXT, description, "shell:search"
     if head in {"ls", "eza", "exa", "tree", "find", "fd"}:
-        return LIST_FILES, description
+        return LIST_FILES, description, "shell:list"
 
-    return RUN_COMMAND, description
+    return RUN_COMMAND, description, "shell:command"
 
 
 def primary_stage(cmd: str) -> str:
