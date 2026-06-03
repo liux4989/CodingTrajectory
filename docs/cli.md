@@ -33,8 +33,8 @@ Three goals:
 
 The CLI exposes two structured stdout formats:
 
-- `--format yaml` — best for agent and human reading. Use this for hierarchy,
-  narrative, and drill-down orientation.
+- `--format yaml` — default for structured hierarchy/detail commands. Use this
+  for agent and human reading, narrative, and drill-down orientation.
 - `--format json` — best for exact machine use. Use this for `jq`, batch
   scripts, schema checks, and saved artifacts.
 
@@ -42,8 +42,8 @@ The CLI exposes two structured stdout formats:
 output stable for automation while allowing YAML to optimize interactive agent
 reading.
 
-`session stats` and `session usage` also retain their compact `text` stdout
-mode for terminal summaries.
+`session stats` and `session usage` retain their compact `text` stdout default
+for terminal summaries, with `--format yaml` and `--format json` available.
 
 ## Intended Reading Flow
 

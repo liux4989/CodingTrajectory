@@ -12,7 +12,8 @@ Source session:
 
 ## Rule Of Thumb
 
-Use YAML when reading structure. Use JSON when querying exact fields.
+YAML is the default for structured hierarchy/detail commands. Use JSON when
+querying exact fields.
 
 ```bash
 SESSION=019e8d04-1f38-79f3-b5a8-2e36a86be145
@@ -24,7 +25,7 @@ Read only the latest visible turn in YAML. This is the cheapest first pass when
 an agent needs to understand what happened recently.
 
 ```bash
-ct session overview "$SESSION" --turns 1 --format yaml
+ct session overview "$SESSION" --turns 1
 ```
 
 Useful signal from this source session:
@@ -114,7 +115,7 @@ evidence.
 Use the first implementation step from the overview.
 
 ```bash
-ct session step-detail 9d38f678-a9c7-5205-a659-6043c5e83da5 --format yaml
+ct session step-detail 9d38f678-a9c7-5205-a659-6043c5e83da5
 ```
 
 Expected signal:
@@ -141,7 +142,7 @@ Use `--output` for artifacts. It always writes JSON, even if stdout would be
 YAML or text.
 
 ```bash
-ct session overview "$SESSION" --turns 1 --format yaml --output /tmp/ct-overview.json
+ct session overview "$SESSION" --turns 1 --output /tmp/ct-overview.json
 jq '.sessions[0].turns[0].step_ids | length' /tmp/ct-overview.json
 ```
 
@@ -156,8 +157,8 @@ automation.
 
 ## Recommended Agent Flow
 
-1. Start with `overview --format yaml --turns N`.
+1. Start with `overview --turns N`.
 2. Use `usage --format json | jq ...` to select costly or suspicious turns.
-3. Use `step-detail --format yaml` for readable evidence.
+3. Use `step-detail` for readable evidence.
 4. Use `event-detail --format json` only when exact raw content or a scriptable
    field is needed.

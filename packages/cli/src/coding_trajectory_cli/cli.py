@@ -246,7 +246,7 @@ def _add_format_flag(
     p: argparse.ArgumentParser,
     *,
     choices: tuple[str, ...] = ("json", "yaml"),
-    default: str = "json",
+    default: str = "yaml",
 ) -> None:
     p.add_argument(
         "--format",
