@@ -1,7 +1,12 @@
 """Derived execution metrics."""
 
-from coding_trajectory.metrics.analysis import build_session_graph_metrics, build_session_graph_tool_usage
+from coding_trajectory.metrics.analysis import (
+    build_session_graph_metrics,
+    build_session_graph_tool_usage,
+    build_session_graph_usage,
+)
 from coding_trajectory.metrics.models import (
+    ActivityCostDriverFlat,
     CostBreakdown,
     CostEstimate,
     MetricSource,
@@ -12,6 +17,7 @@ from coding_trajectory.metrics.models import (
     SessionGraphMetrics,
     SessionGraphMetricsFlat,
     SessionGraphToolUsageFlat,
+    SessionUsageCompactFlat,
     StepMetrics,
     ToolOutputUsageFlat,
     ToolStepUsageFlat,
@@ -20,6 +26,8 @@ from coding_trajectory.metrics.models import (
     ToolCostSemantics,
     TurnMetrics,
     TurnMetricsFlat,
+    TurnUsageCompactFlat,
+    UsageEfficiencyFlat,
 )
 from coding_trajectory.metrics.pricing import (
     DEFAULT_PRICE_RULES,
@@ -32,6 +40,7 @@ __all__ = [
     "CostBreakdown",
     "CostEstimate",
     "DEFAULT_PRICE_RULES",
+    "ActivityCostDriverFlat",
     "MetricSource",
     "PriceRule",
     "QuotaSnapshot",
@@ -41,6 +50,7 @@ __all__ = [
     "SessionGraphMetrics",
     "SessionGraphMetricsFlat",
     "SessionGraphToolUsageFlat",
+    "SessionUsageCompactFlat",
     "StepMetrics",
     "ToolCostSemantics",
     "ToolOutputUsageFlat",
@@ -49,8 +59,11 @@ __all__ = [
     "TokenUsageObservation",
     "TurnMetrics",
     "TurnMetricsFlat",
+    "TurnUsageCompactFlat",
+    "UsageEfficiencyFlat",
     "build_session_graph_metrics",
     "build_session_graph_tool_usage",
+    "build_session_graph_usage",
     "estimate_observation_cost",
     "get_default_price_rules",
 ]

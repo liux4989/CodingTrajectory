@@ -15,12 +15,14 @@ from coding_trajectory.ingestion.indexes import (
 )
 from coding_trajectory.ingestion.models import Event, EventType, Session, Step, SessionGraph, Turn, Vendor
 from coding_trajectory.metrics.models import (
+    ActivityCostDriverFlat,
     CostEstimate,
     MetricSource,
     QuotaSnapshot,
     QuotaWindow,
     SessionMetrics,
     SessionMetricsFlat,
+    SessionUsageCompactFlat,
     StepMetrics,
     StepMetricsFlat,
     ToolOutputUsageFlat,
@@ -30,8 +32,10 @@ from coding_trajectory.metrics.models import (
     SessionGraphMetrics,
     SessionGraphMetricsFlat,
     SessionGraphToolUsageFlat,
+    TurnUsageCompactFlat,
     TurnMetrics,
     TurnMetricsFlat,
+    UsageEfficiencyFlat,
 )
 from coding_trajectory.metrics.pricing import estimate_observation_cost
 
@@ -91,6 +95,100 @@ def build_session_graph_metrics(
         sessions=sessions_flat,
         warnings=full.warnings,
     ).model_dump(mode="json")
+
+
+def build_session_graph_usage(
+    session_graph: SessionGraph,
+    *,
+    extra_billing: bool = False,
+    turn_id: str | None = None,
+) -> dict[str, Any]:
+    """Return compact turn-level usage, cost, and efficiency analysis."""
+    full = _build_full_metrics(session_graph, extra_billing=extra_billing)
+    multi_session = len(full.sessions) > 1
+    turns: list[TurnUsageCompactFlat] = []
+
+    for session in full.sessions:
+        for turn in session.turns:
+            if turn_id is not None and str(turn.turn_id) != turn_id:
+                continue
+            turns.append(_compact_turn_usage(turn, session_id=session.session_id if multi_session else None))
+
+    return SessionUsageCompactFlat(
+        root_session_id=full.root_session_id,
+        extra_billing=full.cost_estimate.extra_billing,
+        turns=turns,
+        totals={
+            "tokens": full.token_usage.model_dump(mode="json"),
+            "cost_usd": full.cost_estimate.amount_usd,
+            "efficiency": _usage_efficiency(full.token_usage).model_dump(mode="json"),
+        },
+        warnings=full.warnings,
+    ).model_dump(mode="json")
+
+
+def _compact_turn_usage(turn: TurnMetrics, *, session_id: UUID | None) -> TurnUsageCompactFlat:
+    cost_drivers = _turn_cost_drivers(turn)
+    return TurnUsageCompactFlat(
+        turn_id=turn.turn_id,
+        session_id=session_id,
+        seq=turn.sequence,
+        activity=_turn_activity(turn),
+        model=_turn_model(turn),
+        tokens=turn.token_usage,
+        efficiency=_usage_efficiency(turn.token_usage),
+        cost_usd=turn.cost_estimate.amount_usd,
+        cost_drivers=cost_drivers,
+    )
+
+
+def _turn_activity(turn: TurnMetrics) -> str:
+    tool_steps = sum(1 for step in turn.steps if step.tool_count > 0)
+    response_steps = sum(1 for step in turn.steps if step.kind == "response")
+    mixed_steps = sum(1 for step in turn.steps if step.kind == "mixed")
+    active_steps = tool_steps + response_steps + mixed_steps
+    if active_steps == 0:
+        return "no measured activity"
+    if mixed_steps:
+        return "mixed activity"
+    if tool_steps > response_steps:
+        return "tool-heavy activity"
+    if response_steps > tool_steps:
+        return "response-heavy activity"
+    return "balanced activity"
+
+
+def _turn_cost_drivers(turn: TurnMetrics) -> list[ActivityCostDriverFlat]:
+    totals = {
+        "tool_steps": 0.0,
+        "response_steps": 0.0,
+        "mixed_steps": 0.0,
+        "other_steps": 0.0,
+    }
+    for step in turn.steps:
+        if step.tool_count > 0 and step.kind != "mixed":
+            key = "tool_steps"
+        elif step.kind == "response":
+            key = "response_steps"
+        elif step.kind == "mixed":
+            key = "mixed_steps"
+        else:
+            key = "other_steps"
+        totals[key] += step.cost_estimate.amount_usd
+    return [
+        ActivityCostDriverFlat(kind=key, cost_usd=round(value, 8))
+        for key, value in totals.items()
+        if value > 0
+    ]
+
+
+def _usage_efficiency(usage: TokenUsage) -> UsageEfficiencyFlat:
+    non_cached_input = max(usage.input_tokens - usage.cached_input_tokens, 0)
+    all_input = non_cached_input + usage.cached_input_tokens
+    return UsageEfficiencyFlat(
+        cache_reuse_ratio=round(usage.cached_input_tokens / all_input, 4) if all_input else 0.0,
+        output_per_1k_input=round((usage.output_tokens / all_input) * 1000, 2) if all_input else 0.0,
+    )
 
 
 def _turn_step_deltas(turn: TurnMetrics) -> list[StepMetricsFlat]:

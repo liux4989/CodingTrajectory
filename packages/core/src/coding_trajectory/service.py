@@ -442,7 +442,11 @@ def dispatch(
         build_session_graph_narrative,
         build_session_graph_overview,
     )
-    from coding_trajectory.metrics import build_session_graph_metrics, build_session_graph_tool_usage
+    from coding_trajectory.metrics import (
+        build_session_graph_metrics,
+        build_session_graph_tool_usage,
+        build_session_graph_usage,
+    )
 
     if method == "project.sessions":
         session_graphs = resolve_collection(
@@ -559,6 +563,17 @@ def dispatch(
             "turns": turns,
             "warnings": result.get("warnings") or [],
         }
+
+    if method == "session.usage":
+        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
+        extra_billing = bool(params.get("extra_billing"))
+        for session in session_graph.sessions:
+            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
+        return build_session_graph_usage(
+            session_graph,
+            extra_billing=extra_billing,
+            turn_id=params.get("turn_id"),
+        )
 
     if method == "session.tool_usage":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))

@@ -15,6 +15,8 @@ Three goals:
 
 - session hierarchy for orientation
 - evidence of atomic action for detail
+- YAML for agent-readable hierarchy
+- JSON for exact scripting and batch query
 
 ## Glossary
 
@@ -27,33 +29,50 @@ Three goals:
 - **Usage** — token, cost, quota, duration, and output-size accounting. Usage is
   resource accounting, not hierarchy disclosure.
 
+## Output Formats
+
+The CLI exposes two structured stdout formats:
+
+- `--format yaml` — best for agent and human reading. Use this for hierarchy,
+  narrative, and drill-down orientation.
+- `--format json` — best for exact machine use. Use this for `jq`, batch
+  scripts, schema checks, and saved artifacts.
+
+`--output FILE` always writes JSON, regardless of stdout format. This keeps file
+output stable for automation while allowing YAML to optimize interactive agent
+reading.
+
+`session stats` and `session usage` also retain their compact `text` stdout
+mode for terminal summaries.
 
 ## Intended Reading Flow
 
 Structured View
 1. `project list` — find project names
 2. `project sessions <project_name>` — list sessions for a project, get the session id to use as an entry point
-3. `session overview <session_id> [--turns N] [--drop-turns K]` — read the compact session hierarchy, identify relevant steps
+3. `session overview <session_id> [--turns N] [--drop-turns K] [--format yaml|json]` — read the compact session hierarchy, identify relevant steps
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
    - activity uses compact render keys such as `text`, `tool`, `path`, `query`, `url`, `count`, and plural variants
    - repeated consecutive low-value tool calls are grouped by tool profile with ordered unique targets and repeat counts when useful
    - mutating or high-signal tools such as edits, writes, shell commands, subagents, and handoffs stay ungrouped; use `session overview --view narrative` or `session step-detail` to expand the evidence
-4. `session overview --view narrative <session_id> [--turns N] [--drop-turns K]` — read deterministic user/assistant/tool activity for summarization
-5. `session stats <session_id>` — inspect token/cost rollups joined to the session tree
-6. `session turn-usage <turn_id>` — inspect token/cost usage for one turn, with compact step token deltas
-7. `session tool-usage <session_id>` — inspect tool-step cost boundaries and per-tool output-size signals
-8. `session step-detail <step_id>` — read the evidence for a specific step
+4. `session overview --view narrative <session_id> [--turns N] [--drop-turns K] [--format yaml|json]` — read deterministic user/assistant/tool activity for summarization
+5. `session stats <session_id> [--format text|yaml|json]` — inspect compact context/token usage composition
+6. `session usage <session_id> [--turn TURN_ID] [--format text|yaml|json]` — compare turn-level activity cost and token efficiency
+7. `session step-detail <step_id> [--format yaml|json]` — read the evidence for a specific step
 
-`session tool-usage` keeps billing boundaries explicit:
-`observed_step_cost` is the
-measured/estimated cost for the enclosing tool step, while each individual tool
-entry only reports output-size signals. Individual shell commands do not have
-separate observed costs.
+`session usage` is intentionally turn-focused. It reports coarse activity,
+token buckets, cache reuse, output/input efficiency, and cost drivers without
+expanding paths, queries, commands, or individual tool calls. Use
+`session overview`, `session step-detail`, or `session event-detail` when you
+need tree/navigation detail.
 
 
 Raw View
-1. `session event-detail <event_id>` — resolve the full content of an event
-2. `session event-scan <session_id> --type TYPE [--filter ...]` — query raw events by type, optionally narrowed by payload predicates
+1. `session event-detail <event_id> [--format yaml|json]` — resolve the full content of an event
+2. `session event-scan <session_id> --type TYPE [--filter ...] [--format yaml|json]` — query raw events by type, optionally narrowed by payload predicates
+
+See [`cli-agent-notebook.md`](cli-agent-notebook.md) for an agent-oriented
+tutorial that uses YAML for reading and JSON for exact queries.
 ---

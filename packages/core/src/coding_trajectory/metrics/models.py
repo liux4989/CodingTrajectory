@@ -207,6 +207,47 @@ class SessionGraphMetricsFlat(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class UsageEfficiencyFlat(BaseModel):
+    cache_reuse_ratio: float = 0.0
+    output_per_1k_input: float = 0.0
+
+
+class ActivityCostDriverFlat(BaseModel):
+    kind: Literal["tool_steps", "response_steps", "mixed_steps", "other_steps"]
+    cost_usd: float = 0.0
+
+
+class TurnUsageCompactFlat(BaseModel):
+    turn_id: UUID
+    session_id: UUID | None = None
+    seq: int
+    activity: str
+    model: str | None = None
+    tokens: TokenUsage = Field(default_factory=TokenUsage)
+    efficiency: UsageEfficiencyFlat = Field(default_factory=UsageEfficiencyFlat)
+    cost_usd: float = 0.0
+    cost_drivers: list[ActivityCostDriverFlat] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("session_id") is None:
+            data.pop("session_id", None)
+        if data.get("model") is None:
+            data.pop("model", None)
+        if not data.get("cost_drivers"):
+            data.pop("cost_drivers", None)
+        return data
+
+
+class SessionUsageCompactFlat(BaseModel):
+    root_session_id: UUID
+    extra_billing: bool = False
+    turns: list[TurnUsageCompactFlat] = Field(default_factory=list)
+    totals: dict[str, object] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ToolCostSemantics(BaseModel):
     observed_cost_scope: Literal["tool_step"] = "tool_step"
     per_tool_cost: Literal["not_measured"] = "not_measured"
