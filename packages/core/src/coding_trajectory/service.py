@@ -521,27 +521,30 @@ def dispatch(
                 extra_billing=extra_billing,
                 include_steps=True,
             )
+            turn_id = str(params["turn_id"]) if params.get("turn_id") else None
+            turns = [
+                {
+                    "session_id": session["session_id"],
+                    "vendor": session["vendor"],
+                    "session_status": session.get("status"),
+                    "turn_id": turn["turn_id"],
+                    "sequence": turn["sequence"],
+                    "status": turn.get("status"),
+                    "token_usage": turn["token_usage"],
+                    "cost": turn["cost"],
+                    "extra_billing": turn["extra_billing"],
+                    "steps": turn.get("steps", []),
+                }
+                for session in result["sessions"]
+                for turn in session["turns"]
+                if turn_id is None or str(turn["turn_id"]) == turn_id
+            ]
             return {
                 "root_session_id": result["root_session_id"],
                 "token_usage": result["token_usage"],
                 "cost": result["cost"],
                 "extra_billing": result["extra_billing"],
-                "turns": [
-                    {
-                        "session_id": session["session_id"],
-                        "vendor": session["vendor"],
-                        "session_status": session.get("status"),
-                        "turn_id": turn["turn_id"],
-                        "sequence": turn["sequence"],
-                        "status": turn.get("status"),
-                        "token_usage": turn["token_usage"],
-                        "cost": turn["cost"],
-                        "extra_billing": turn["extra_billing"],
-                        "steps": turn.get("steps", []),
-                    }
-                    for session in result["sessions"]
-                    for turn in session["turns"]
-                ],
+                "turns": turns,
                 "warnings": result.get("warnings") or [],
             }
         if scope == "tool":

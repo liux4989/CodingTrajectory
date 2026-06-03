@@ -82,6 +82,7 @@ def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
         "scope": args.scope,
         "extra_billing": args.extra_billing,
         **({"session_id": args.session_id} if args.session_id else {}),
+        **({"turn_id": args.turn_id} if args.turn_id else {}),
     }
 
 
@@ -124,7 +125,8 @@ SESSION
   ct session overview --view narrative [SESSION_ID]
                                                    deterministic activity narrative
   ct session usage [SESSION_ID]                    token/cost rollup for the session tree
-  ct session usage --scope turn [SESSION_ID]       token/cost comparison by turn
+  ct session usage --scope turn [SESSION_ID] [TURN_ID]
+                                                   token/cost comparison by turn
   ct session usage --scope tool [SESSION_ID]       tool-step cost boundaries and output-size signals
   ct session step-detail STEP_ID [...]             full detail for one or more steps
   ct session event-scan [SESSION_ID] --type TYPE [--filter KEY=VALUE]
@@ -319,6 +321,13 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_GhFormatter,
     )
     _add_session_source(session_usage)
+    session_usage.add_argument(
+        "turn_id",
+        metavar="TURN_ID",
+        nargs="?",
+        default=None,
+        help="Turn ID to inspect when using --scope turn.",
+    )
     session_usage.add_argument(
         "--scope",
         choices=("session", "turn", "tool"),

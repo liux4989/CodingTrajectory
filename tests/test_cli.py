@@ -36,6 +36,20 @@ def test_session_usage_accepts_scope() -> None:
     }
 
 
+def test_session_usage_turn_scope_accepts_turn_id() -> None:
+    args = _build_parser().parse_args(
+        ["session", "usage", "--scope", "turn", "session-1", "turn-1"]
+    )
+
+    assert args._method == "session.usage"
+    assert args._params(args) == {
+        "scope": "turn",
+        "extra_billing": False,
+        "session_id": "session-1",
+        "turn_id": "turn-1",
+    }
+
+
 @pytest.mark.parametrize(
     "argv",
     [
