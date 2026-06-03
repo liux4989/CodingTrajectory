@@ -49,7 +49,7 @@ def _project_list_params(args: argparse.Namespace) -> dict[str, Any]:
     return params
 
 
-def _project_graphs_params(args: argparse.Namespace) -> dict[str, Any]:
+def _project_sessions_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {}
     if args.project_name:
         params["project_name"] = args.project_name
@@ -59,7 +59,7 @@ def _project_graphs_params(args: argparse.Namespace) -> dict[str, Any]:
     return params
 
 
-def _session_graph_turns_params(args: argparse.Namespace) -> dict[str, Any]:
+def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {}
     if args.session_id:
         params["session_id"] = args.session_id
@@ -68,6 +68,21 @@ def _session_graph_turns_params(args: argparse.Namespace) -> dict[str, Any]:
     if args.drop_turns is not None:
         params["drop_turns"] = args.drop_turns
     return params
+
+
+def _session_overview_params(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "view": args.view,
+        **_session_turn_window_params(args),
+    }
+
+
+def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "scope": args.scope,
+        "extra_billing": args.extra_billing,
+        **({"session_id": args.session_id} if args.session_id else {}),
+    }
 
 
 def _positive_int(value: str) -> int:
@@ -100,24 +115,25 @@ def _add_turn_window_flags(p: argparse.ArgumentParser, *, view_name: str) -> Non
 
 
 _EPILOG = """\
-NAVIGATE
+PROJECT
   ct project list                                  list all known projects
-  ct project graphs [PROJECT_NAME]                 list session graphs for a project
-  ct session overview [SESSION_ID]                 compact session structure, step types, user requests
-  ct session narrative [SESSION_ID]                deterministic turn narrative for summarizers
-  ct graph usage [SESSION_ID]                     token/cost rollup by session graph hierarchy
-  ct graph turn-usage [SESSION_ID]                token/cost comparison by turn
-  ct graph tool-usage [SESSION_ID]                tool-step cost boundaries and output-size signals
-  ct step detail STEP_ID [...]                     full detail for one or more steps
+  ct project sessions [PROJECT_NAME]               list sessions for a project
 
-INSPECT COMMANDS
-  ct event scan [SESSION_ID] --type TYPE [--filter KEY=VALUE]
+SESSION
+  ct session overview [SESSION_ID]                 compact session hierarchy
+  ct session overview --view narrative [SESSION_ID]
+                                                   deterministic activity narrative
+  ct session usage [SESSION_ID]                    token/cost rollup for the session tree
+  ct session usage --scope turn [SESSION_ID]       token/cost comparison by turn
+  ct session usage --scope tool [SESSION_ID]       tool-step cost boundaries and output-size signals
+  ct session step-detail STEP_ID [...]             full detail for one or more steps
+  ct session event-scan [SESSION_ID] --type TYPE [--filter KEY=VALUE]
                                                    query raw events by type
-  ct event detail EVENT_ID                         expand $truncated fields from step details
+  ct session event-detail EVENT_ID                 expand $truncated fields from step details
 
 NOTE
-  Session graphs are located automatically via cache; pass a SESSION_ID to use
-  that coding session as the graph entry point, or omit it to use the
+  Sessions are located automatically via cache; pass a SESSION_ID to use
+  that coding session as the session tree entry point, or omit it to use the
   most-recent session in the current working directory.
 """
 
@@ -175,14 +191,14 @@ class _GhFormatter(argparse.RawDescriptionHelpFormatter):
         return text
 
 
-def _add_session_graph_source(p: argparse.ArgumentParser) -> None:
-    """Add optional SESSION_ID positional as the session graph entry point."""
+def _add_session_source(p: argparse.ArgumentParser) -> None:
+    """Add optional SESSION_ID positional as the session tree entry point."""
     p.add_argument(
         "session_id",
         metavar="SESSION_ID",
         nargs="?",
         default=None,
-        help="Session ID to use as the graph entry point. Omit to use the most-recent session.",
+        help="Session ID to use as the session tree entry point. Omit to use the most-recent session.",
     )
 
 
@@ -222,7 +238,7 @@ def _add_agent_vendor_flag(p: argparse.ArgumentParser) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct",
-        description="Inspect coding-session graphs stored in JSONL log files.",
+        description="Inspect coding sessions stored in JSONL log files.",
         usage="ct <command> <subcommand> [flags]",
         epilog=_EPILOG,
         formatter_class=_GhFormatter,
@@ -234,7 +250,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # -- project --------------------------------------------------------
     project_parser = subparsers.add_parser(
         "project",
-        help="List projects or list session graphs within a project.",
+        help="List projects or sessions within a project.",
         formatter_class=_GhFormatter,
     )
     project_sub = project_parser.add_subparsers(dest="action", required=True)
@@ -251,173 +267,111 @@ def _build_parser() -> argparse.ArgumentParser:
         _params=_project_list_params,
     )
 
-    project_graphs = project_sub.add_parser(
-        "graphs",
-        help="List session graphs for a given project.",
+    project_sessions = project_sub.add_parser(
+        "sessions",
+        help="List sessions for a given project.",
         formatter_class=_GhFormatter,
     )
-    project_graphs.add_argument(
+    project_sessions.add_argument(
         "project_name",
         metavar="PROJECT_NAME",
         nargs="?",
         default=None,
-        help="Project name to list session graphs for. Defaults to the current directory.",
+        help="Project name to list sessions for. Defaults to the current directory.",
     )
-    _add_agent_vendor_flag(project_graphs)
-    _add_output_flags(project_graphs)
-    project_graphs.set_defaults(
-        _method="graph.list",
-        _params=_project_graphs_params,
+    _add_agent_vendor_flag(project_sessions)
+    _add_output_flags(project_sessions)
+    project_sessions.set_defaults(
+        _method="project.sessions",
+        _params=_project_sessions_params,
     )
 
     # -- session ---------------------------------------------------------
     session_parser = subparsers.add_parser(
         "session",
-        help="Inspect a session and its connected graph.",
+        help="Analyze a session and its connected session tree.",
         formatter_class=_GhFormatter,
     )
     session_sub = session_parser.add_subparsers(dest="action", required=True)
 
     session_overview = session_sub.add_parser(
         "overview",
-        help="Show compact session structure, step types, and user requests.",
+        help="Show a compact session hierarchy or deterministic activity narrative.",
         formatter_class=_GhFormatter,
     )
-    _add_session_graph_source(session_overview)
-    _add_turn_window_flags(session_overview, view_name="overview")
+    _add_session_source(session_overview)
+    session_overview.add_argument(
+        "--view",
+        choices=("overview", "narrative"),
+        default="overview",
+        help="Select the session analysis projection.",
+    )
+    _add_turn_window_flags(session_overview, view_name="projection")
     _add_output_flags(session_overview)
     session_overview.set_defaults(
         _method="session.overview",
-        _params=_session_graph_turns_params,
+        _params=_session_overview_params,
     )
 
-    session_narrative = session_sub.add_parser(
-        "narrative",
-        help="Show deterministic user request, assistant response, and tool activity narrative.",
-        formatter_class=_GhFormatter,
-    )
-    _add_session_graph_source(session_narrative)
-    _add_turn_window_flags(session_narrative, view_name="narrative")
-    _add_output_flags(session_narrative)
-    session_narrative.set_defaults(
-        _method="session.narrative",
-        _params=_session_graph_turns_params,
-    )
-
-    # -- graph ----------------------------------------------------------
-    graph_parser = subparsers.add_parser(
-        "graph",
-        help="Inspect session graph usage and turn summaries.",
-        formatter_class=_GhFormatter,
-    )
-    graph_sub = graph_parser.add_subparsers(dest="action", required=True)
-
-    graph_metrics = graph_sub.add_parser(
+    session_usage = session_sub.add_parser(
         "usage",
-        aliases=["metrics"],
-        help="Show token and cost usage projected onto the session graph hierarchy.",
+        help="Show resource usage for the session tree.",
         formatter_class=_GhFormatter,
     )
-    _add_session_graph_source(graph_metrics)
-    _add_output_flags(graph_metrics)
-    _add_metrics_flags(graph_metrics)
-    graph_metrics.set_defaults(
-        _method="metrics.session",
-        _params=lambda args: {
-            "extra_billing": args.extra_billing,
-            **({"session_id": args.session_id} if args.session_id else {}),
-        },
+    _add_session_source(session_usage)
+    session_usage.add_argument(
+        "--scope",
+        choices=("session", "turn", "tool"),
+        default="session",
+        help="Select the resource usage projection.",
+    )
+    _add_output_flags(session_usage)
+    _add_metrics_flags(session_usage)
+    session_usage.set_defaults(
+        _method="session.usage",
+        _params=_session_usage_params,
     )
 
-    graph_turns = graph_sub.add_parser(
-        "turn-usage",
-        aliases=["turns"],
-        help="Show token and cost usage summarized by turn.",
-        formatter_class=_GhFormatter,
-    )
-    _add_session_graph_source(graph_turns)
-    _add_output_flags(graph_turns)
-    _add_metrics_flags(graph_turns)
-    graph_turns.set_defaults(
-        _method="metrics.turns",
-        _params=lambda args: {
-            "extra_billing": args.extra_billing,
-            **({"session_id": args.session_id} if args.session_id else {}),
-        },
-    )
-
-    graph_tools = graph_sub.add_parser(
-        "tool-usage",
-        aliases=["tools"],
-        help="Show tool-step cost boundaries and per-tool output-size signals.",
-        formatter_class=_GhFormatter,
-    )
-    _add_session_graph_source(graph_tools)
-    _add_output_flags(graph_tools)
-    _add_metrics_flags(graph_tools)
-    graph_tools.set_defaults(
-        _method="metrics.tools",
-        _params=lambda args: {
-            "extra_billing": args.extra_billing,
-            **({"session_id": args.session_id} if args.session_id else {}),
-        },
-    )
-
-    # -- step -----------------------------------------------------------
-    step_parser = subparsers.add_parser(
-        "step",
-        help="Inspect one or more steps by ID.",
-        formatter_class=_GhFormatter,
-    )
-    step_sub = step_parser.add_subparsers(dest="action", required=True)
-    step_detail = step_sub.add_parser(
-        "detail",
+    session_step_detail = session_sub.add_parser(
+        "step-detail",
         help="Show full detail for one or more steps.",
         formatter_class=_GhFormatter,
     )
-    step_detail.add_argument("resource_ids", metavar="STEP_ID", nargs="+")
-    _add_base_output_flags(step_detail)
-    step_detail.set_defaults(
+    session_step_detail.add_argument("resource_ids", metavar="STEP_ID", nargs="+")
+    _add_base_output_flags(session_step_detail)
+    session_step_detail.set_defaults(
         _method="step.details",
         _params=lambda args: {"step_ids": args.resource_ids},
     )
 
-    # -- event ----------------------------------------------------------
-    event_parser = subparsers.add_parser(
-        "event",
-        help="Inspect events by ID or scan by type.",
-        formatter_class=_GhFormatter,
-    )
-    event_sub = event_parser.add_subparsers(dest="action", required=True)
-
-    event_detail = event_sub.add_parser(
-        "detail",
+    session_event_detail = session_sub.add_parser(
+        "event-detail",
         help="Expand the full content of a single event (resolves $truncated refs).",
         formatter_class=_GhFormatter,
     )
-    event_detail.add_argument("resource_id", metavar="EVENT_ID")
-    _add_base_output_flags(event_detail)
-    event_detail.set_defaults(
+    session_event_detail.add_argument("resource_id", metavar="EVENT_ID")
+    _add_base_output_flags(session_event_detail)
+    session_event_detail.set_defaults(
         _method="event.detail",
         _params=lambda args: {"event_id": args.resource_id},
     )
 
-    event_scan = event_sub.add_parser(
-        "scan",
+    session_event_scan = session_sub.add_parser(
+        "event-scan",
         help="Query events matching --type and optional --filter expressions.",
         epilog=_EVENT_SCAN_EPILOG,
         formatter_class=_GhFormatter,
     )
-    _add_session_graph_source(event_scan)
-    _add_output_flags(event_scan)
-    event_scan.add_argument(
+    _add_session_source(session_event_scan)
+    _add_output_flags(session_event_scan)
+    session_event_scan.add_argument(
         "--type",
         dest="event_type",
         required=True,
         metavar="TYPE",
         help="Event type to match (e.g. tool.call.succeeded, llm.response).",
     )
-    event_scan.add_argument(
+    session_event_scan.add_argument(
         "--filter",
         dest="filters",
         action="append",
@@ -428,7 +382,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "VALUE=* means field must exist; VALUE=! means field must be absent."
         ),
     )
-    event_scan.set_defaults(
+    session_event_scan.set_defaults(
         _method="event.scan",
         _params=lambda args: {
             "type": args.event_type,

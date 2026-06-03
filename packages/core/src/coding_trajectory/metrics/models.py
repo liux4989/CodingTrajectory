@@ -148,7 +148,7 @@ class SessionGraphMetrics(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Simplified flat output for ct graph usage / turn-usage
+# Simplified flat output for ct session usage scopes
 # ---------------------------------------------------------------------------
 
 class StepMetricsFlat(BaseModel):

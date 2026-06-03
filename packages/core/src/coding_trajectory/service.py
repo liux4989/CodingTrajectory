@@ -437,7 +437,7 @@ def dispatch(
     )
     from coding_trajectory.metrics import build_session_graph_metrics, build_session_graph_tool_usage
 
-    if method == "graph.list":
+    if method == "project.sessions":
         session_graphs = resolve_collection(
             store,
             "session_graph",
@@ -485,73 +485,71 @@ def dispatch(
 
     if method == "session.overview":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        result = build_session_graph_overview(
-            session_graph,
-            num_turns=_optional_positive_int(params, "num_turns"),
-            drop_turns=_optional_positive_int(params, "drop_turns"),
-        )
+        view = params.get("view", "overview")
+        if view == "overview":
+            result = build_session_graph_overview(
+                session_graph,
+                num_turns=_optional_positive_int(params, "num_turns"),
+                drop_turns=_optional_positive_int(params, "drop_turns"),
+            )
+        elif view == "narrative":
+            result = build_session_graph_narrative(
+                session_graph,
+                num_turns=_optional_positive_int(params, "num_turns"),
+                drop_turns=_optional_positive_int(params, "drop_turns"),
+            )
+        else:
+            raise ValueError(f"unsupported session overview view: {view}")
         for session in session_graph.sessions:
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
         return result
 
-    if method == "session.narrative":
+    if method == "session.usage":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        result = build_session_graph_narrative(
-            session_graph,
-            num_turns=_optional_positive_int(params, "num_turns"),
-            drop_turns=_optional_positive_int(params, "drop_turns"),
-        )
+        scope = params.get("scope", "session")
+        extra_billing = bool(params.get("extra_billing"))
         for session in session_graph.sessions:
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return result
-
-    if method == "metrics.session":
-        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        result = build_session_graph_metrics(
-            session_graph,
-            extra_billing=bool(params.get("extra_billing")),
-        )
-        for session in session_graph.sessions:
-            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return result
-
-    if method == "metrics.turns":
-        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        result = build_session_graph_metrics(
-            session_graph,
-            extra_billing=bool(params.get("extra_billing")),
-            include_steps=True,
-        )
-        return {
-            "root_session_id": result["root_session_id"],
-            "token_usage": result["token_usage"],
-            "cost": result["cost"],
-            "extra_billing": result["extra_billing"],
-            "turns": [
-                {
-                    "session_id": session["session_id"],
-                    "vendor": session["vendor"],
-                    "session_status": session.get("status"),
-                    "turn_id": turn["turn_id"],
-                    "sequence": turn["sequence"],
-                    "status": turn.get("status"),
-                    "token_usage": turn["token_usage"],
-                    "cost": turn["cost"],
-                    "extra_billing": turn["extra_billing"],
-                    "steps": turn.get("steps", []),
-                }
-                for session in result["sessions"]
-                for turn in session["turns"]
-            ],
-            "warnings": result.get("warnings") or [],
-        }
-
-    if method == "metrics.tools":
-        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        return build_session_graph_tool_usage(
-            session_graph,
-            extra_billing=bool(params.get("extra_billing")),
-        )
+        if scope == "session":
+            return build_session_graph_metrics(
+                session_graph,
+                extra_billing=extra_billing,
+            )
+        if scope == "turn":
+            result = build_session_graph_metrics(
+                session_graph,
+                extra_billing=extra_billing,
+                include_steps=True,
+            )
+            return {
+                "root_session_id": result["root_session_id"],
+                "token_usage": result["token_usage"],
+                "cost": result["cost"],
+                "extra_billing": result["extra_billing"],
+                "turns": [
+                    {
+                        "session_id": session["session_id"],
+                        "vendor": session["vendor"],
+                        "session_status": session.get("status"),
+                        "turn_id": turn["turn_id"],
+                        "sequence": turn["sequence"],
+                        "status": turn.get("status"),
+                        "token_usage": turn["token_usage"],
+                        "cost": turn["cost"],
+                        "extra_billing": turn["extra_billing"],
+                        "steps": turn.get("steps", []),
+                    }
+                    for session in result["sessions"]
+                    for turn in session["turns"]
+                ],
+                "warnings": result.get("warnings") or [],
+            }
+        if scope == "tool":
+            return build_session_graph_tool_usage(
+                session_graph,
+                extra_billing=extra_billing,
+            )
+        raise ValueError(f"unsupported session usage scope: {scope}")
 
     if method == "step.details":
         step_ids = params.get("step_ids")
