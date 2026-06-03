@@ -207,6 +207,119 @@ class SessionGraphMetricsFlat(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ContextCategoryFlat(BaseModel):
+    key: str
+    label: str
+    tokens: int = 0
+    percent: float | None = None
+    confidence: Literal["exact_usage", "exact_text", "estimated_tokens", "text_chars", "structural"] = (
+        "estimated_tokens"
+    )
+    source: str | None = None
+    children: list["ContextCategoryFlat"] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("percent") is None:
+            data.pop("percent", None)
+        if data.get("source") is None:
+            data.pop("source", None)
+        if not data.get("children"):
+            data.pop("children", None)
+        return data
+
+
+class ContextWindowStatsFlat(BaseModel):
+    used_tokens: int = 0
+    used_percent: float | None = None
+    source: str | None = None
+    categories: list[ContextCategoryFlat] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("used_percent") is None:
+            data.pop("used_percent", None)
+        if data.get("source") is None:
+            data.pop("source", None)
+        return data
+
+
+class RuntimeStatsFlat(BaseModel):
+    status: str | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    duration_seconds: int | None = None
+    turns: int = 0
+    model_steps: int = 0
+    tool_calls: int = 0
+    subagent_sessions: int = 0
+    compactions: int = 0
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        for key in ("status", "started_at", "ended_at", "duration_seconds"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
+
+
+class MessageStatsFlat(BaseModel):
+    user: int = 0
+    assistant: int = 0
+    developer: int = 0
+    tool_outputs: int = 0
+    reasoning_items: int = 0
+    compacted_contexts: int = 0
+
+
+class ContextModelStatsFlat(BaseModel):
+    name: str | None = None
+    context_window_tokens: int | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("name") is None:
+            data.pop("name", None)
+        if data.get("context_window_tokens") is None:
+            data.pop("context_window_tokens", None)
+        return data
+
+
+class QuotaStatsFlat(BaseModel):
+    plan_type: str | None = None
+    primary_used_percent: float | None = None
+    secondary_used_percent: float | None = None
+    resets_at: int | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        return {key: value for key, value in data.items() if value is not None}
+
+
+class SessionContextStatsFlat(BaseModel):
+    root_session_id: UUID
+    vendor: str
+    model: ContextModelStatsFlat = Field(default_factory=ContextModelStatsFlat)
+    context_window: ContextWindowStatsFlat = Field(default_factory=ContextWindowStatsFlat)
+    runtime: RuntimeStatsFlat = Field(default_factory=RuntimeStatsFlat)
+    messages: MessageStatsFlat = Field(default_factory=MessageStatsFlat)
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    quota: QuotaStatsFlat | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("quota") is None:
+            data.pop("quota", None)
+        return data
+
+
 class UsageEfficiencyFlat(BaseModel):
     cache_reuse_ratio: float = 0.0
     output_per_1k_input: float = 0.0

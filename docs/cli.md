@@ -25,42 +25,45 @@ Three goals:
 - **Session tree** — the same session hierarchy when resource usage is projected
   onto it.
 - **Overview** — compact hierarchy and activity keys for finding where to drill in.
-- **Narrative** — deterministic user/assistant/tool activity for summarizers.
 - **Usage** — token, cost, quota, duration, and output-size accounting. Usage is
   resource accounting, not hierarchy disclosure.
 
 ## Output Formats
 
-The CLI exposes two structured stdout formats:
+The CLI exposes one human navigation format and one exact structured format:
 
-- `--format yaml` — default for structured hierarchy/detail commands. Use this
-  for agent and human reading, narrative, and drill-down orientation.
+- Report commands default to human-readable stdout. For `session overview` and
+  `session stats`, this is a curated text report: hierarchy, summaries, top
+  signals, and drill-down ids without raw tool output or full assistant response
+  text. Use `--data` to print the structured JSON projection behind the report.
+- `--format yaml` — structured but pruned detail output for drill-down commands
+  that still expose YAML.
 - `--format json` — best for exact machine use. Use this for `jq`, batch
   scripts, schema checks, and saved artifacts.
 
 `--output FILE` always writes JSON, regardless of stdout format. This keeps file
-output stable for automation while allowing YAML to optimize interactive agent
+output stable for automation while allowing stdout to optimize interactive
 reading.
 
-`session stats` and `session usage` use YAML for readable stdout and JSON for
-exact scripting or saved artifacts.
+`session stats` uses a fixed-width report for readable stdout and `--data` or
+`--output` for exact JSON. `session usage` keeps YAML for compact structured
+turn/accounting summaries.
 
 ## Intended Reading Flow
 
 Structured View
 1. `project list` — find project names
 2. `project sessions <project_name>` — list sessions for a project, get the session id to use as an entry point
-3. `session overview <session_id> [--turns N] [--drop-turns K] [--format yaml|json]` — read the compact session hierarchy, identify relevant steps
+3. `session overview <session_id> [--turns N] [--drop-turns K] [--data]` — read the compact session hierarchy, identify relevant steps
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
-   - activity uses compact render keys such as `text`, `tool`, `path`, `query`, `url`, `count`, and plural variants
+   - activity renders as short human labels with truncated assistant response previews
    - repeated consecutive low-value tool calls are grouped by tool profile with ordered unique targets and repeat counts when useful
-   - mutating or high-signal tools such as edits, writes, shell commands, subagents, and handoffs stay ungrouped; use `session overview --view narrative` or `session step-detail` to expand the evidence
-4. `session overview --view narrative <session_id> [--turns N] [--drop-turns K] [--format yaml|json]` — read deterministic user/assistant/tool activity for summarization
-5. `session stats <session_id> [--format yaml|json]` — inspect session stats with compact usage sections
-6. `session usage <session_id> [--turn TURN_ID] [--format yaml|json]` — compare turn-level activity cost and token efficiency
-7. `session step-detail <step_id> [--format yaml|json]` — read the evidence for a specific step
+   - mutating or high-signal tools such as edits, writes, shell commands, subagents, and handoffs stay ungrouped; use `session step-detail` to expand the evidence
+4. `session stats <session_id> [--data]` — inspect session stats with compact context/token sections
+5. `session usage <session_id> [--turn TURN_ID] [--format yaml|json]` — compare turn-level activity cost and token efficiency
+6. `session step-detail <step_id> [--format yaml|json]` — read the evidence for a specific step
 
 `session usage` is intentionally turn-focused. It reports token buckets, cache
 reuse, output/input efficiency, and batched activity-category usage without

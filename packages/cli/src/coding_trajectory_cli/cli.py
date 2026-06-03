@@ -85,10 +85,7 @@ def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _session_overview_params(args: argparse.Namespace) -> dict[str, Any]:
-    return {
-        "view": args.view,
-        **_session_turn_window_params(args),
-    }
+    return _session_turn_window_params(args)
 
 
 def _session_stats_params(args: argparse.Namespace) -> dict[str, Any]:
@@ -142,8 +139,6 @@ PROJECT
 
 SESSION
   ct session overview [SESSION_ID]                 compact session hierarchy
-  ct session overview --view narrative [SESSION_ID]
-                                                   deterministic activity narrative
   ct session stats [SESSION_ID]                    compact context/token usage overview
   ct session usage [SESSION_ID] [--turn TURN_ID]   turn-level activity cost and efficiency
   ct session step-detail STEP_ID [...]             full detail for one or more steps
@@ -234,6 +229,14 @@ def _add_output_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--global-scope", action="store_true", help="Search all known log files instead of the most-recent session.")
 
 
+def _add_data_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--data",
+        action="store_true",
+        help="Print the structured JSON data behind the human report.",
+    )
+
+
 def _add_metrics_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--extra-billing",
@@ -245,14 +248,17 @@ def _add_metrics_flags(p: argparse.ArgumentParser) -> None:
 def _add_format_flag(
     p: argparse.ArgumentParser,
     *,
-    choices: tuple[str, ...] = ("json", "yaml"),
+    choices: tuple[str, ...] = ("json", "yaml", "overview"),
     default: str = "yaml",
 ) -> None:
+    help_text = "Select stdout format. --output always writes JSON."
+    if choices == ("overview", "json"):
+        help_text = "Select stdout format: overview for reading, json for exact data. --output always writes JSON."
     p.add_argument(
         "--format",
         choices=choices,
         default=default,
-        help="Select stdout format. --output always writes JSON.",
+        help=help_text,
     )
 
 
@@ -332,19 +338,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     session_overview = session_sub.add_parser(
         "overview",
-        help="Show a compact session hierarchy or deterministic activity narrative.",
+        help="Show a compact session hierarchy.",
         formatter_class=_GhFormatter,
     )
     _add_session_source(session_overview)
-    session_overview.add_argument(
-        "--view",
-        choices=("overview", "narrative"),
-        default="overview",
-        help="Select the session analysis projection.",
-    )
     _add_turn_window_flags(session_overview, view_name="projection")
     _add_output_flags(session_overview)
-    _add_format_flag(session_overview)
+    _add_data_flag(session_overview)
     session_overview.set_defaults(
         _method="session.overview",
         _params=_session_overview_params,
@@ -357,7 +357,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_session_source(session_stats)
     _add_output_flags(session_stats)
-    _add_format_flag(session_stats)
+    _add_data_flag(session_stats)
     _add_metrics_flags(session_stats)
     session_stats.set_defaults(
         _method="session.stats",
@@ -467,19 +467,6 @@ def _token_rows(tokens: dict[str, Any]) -> list[tuple[str, int]]:
     return [(label, value) for label, value in rows if value]
 
 
-def _first_model(payload: dict[str, Any]) -> str | None:
-    for session in payload.get("sessions") or []:
-        for turn in session.get("turns") or []:
-            model = turn.get("model")
-            if isinstance(model, str) and model:
-                return model
-    for turn in payload.get("turns") or []:
-        model = turn.get("model")
-        if isinstance(model, str) and model:
-            return model
-    return None
-
-
 def _usage_summary(tokens: dict[str, Any], *, cost_usd: float | None = None) -> dict[str, Any]:
     rows = dict(_token_rows(tokens))
     used = _usage_total_tokens(tokens)
@@ -501,39 +488,209 @@ def _usage_summary(tokens: dict[str, Any], *, cost_usd: float | None = None) -> 
     return {key: value for key, value in result.items() if value not in (0, 0.0, None)}
 
 
-def _project_stats_for_reading(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "root_session_id": payload.get("root_session_id"),
-        "model": _first_model(payload),
-        "usage": _usage_summary(payload.get("token_usage") or {}, cost_usd=float(payload.get("cost") or 0)),
-        "extra_billing": payload.get("extra_billing"),
-        "sessions": [_project_stats_session_for_reading(session) for session in payload.get("sessions") or []],
-        "warnings": payload.get("warnings") or [],
-    }
+def _short_id(value: Any) -> str:
+    text = str(value or "")
+    return text[:8] if text else "-"
 
 
-def _project_stats_session_for_reading(session: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "session_id": session.get("session_id"),
-        "vendor": session.get("vendor"),
-        "status": session.get("status"),
-        "usage": _usage_summary(session.get("token_usage") or {}, cost_usd=float(session.get("cost") or 0)),
-        "extra_billing": session.get("extra_billing"),
-        "turns": [_project_stats_turn_for_reading(turn) for turn in session.get("turns") or []],
-    }
+def _display_value(value: Any) -> str:
+    if hasattr(value, "value"):
+        return str(value.value)
+    text = str(value or "")
+    if "." in text:
+        return text.rsplit(".", 1)[-1].lower()
+    return text
 
 
-def _project_stats_turn_for_reading(turn: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "turn_id": turn.get("turn_id"),
-        "seq": turn.get("sequence"),
-        "status": turn.get("status"),
-        "model": turn.get("model"),
-        "started_at": turn.get("started_at"),
-        "completed_at": turn.get("completed_at"),
-        "usage": _usage_summary(turn.get("token_usage") or {}, cost_usd=float(turn.get("cost") or 0)),
-        "extra_billing": turn.get("extra_billing"),
-    }
+def _one_line(value: Any, *, limit: int = 96) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 1, 0)].rstrip() + "..."
+
+
+def _format_tokens(value: Any) -> str:
+    try:
+        tokens = int(value or 0)
+    except (TypeError, ValueError):
+        return "-"
+    if abs(tokens) >= 1_000_000:
+        return f"{tokens / 1_000_000:.1f}m"
+    if abs(tokens) >= 10_000:
+        return f"{tokens / 1_000:.1f}k"
+    if abs(tokens) >= 1_000:
+        return f"{tokens / 1_000:.1f}k"
+    return str(tokens)
+
+
+def _format_percent(value: Any) -> str:
+    try:
+        percent = float(value or 0)
+    except (TypeError, ValueError):
+        return ""
+    return f"({percent:.1f}%)"
+
+
+def _format_duration(seconds: Any) -> str:
+    try:
+        total = int(seconds or 0)
+    except (TypeError, ValueError):
+        return "-"
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _overview_request_label(request: Any) -> str:
+    if not isinstance(request, dict):
+        return "-"
+    content = request.get("content") or request.get("summary") or request.get("text")
+    return _one_line(content, limit=88)
+
+
+def _overview_activity_label(activity: dict[str, Any]) -> str:
+    if "tool" in activity:
+        tool = str(activity.get("tool") or "tool")
+        count = activity.get("count")
+        suffix = f" x{count}" if count and count != 1 else ""
+        for key in ("cmd", "path", "query", "url"):
+            if activity.get(key):
+                return f"{tool}{suffix}: {_one_line(activity[key], limit=72)}"
+        for key in ("paths", "queries", "urls"):
+            values = activity.get(key)
+            if isinstance(values, list) and values:
+                joined = ", ".join(_one_line(item, limit=32) for item in values[:3])
+                more = f" +{len(values) - 3}" if len(values) > 3 else ""
+                return f"{tool}{suffix}: {joined}{more}"
+        return f"{tool}{suffix}"
+    if "teammate_summary" in activity:
+        return "teammate summary"
+    if "text" in activity:
+        return f"assistant: {_one_line(activity.get('text'), limit=84)}"
+    return _one_line(activity, limit=80)
+
+
+def _render_session_overview_text(payload: dict[str, Any]) -> str:
+    sessions = payload.get("sessions") or []
+    turn_count = sum(len(session.get("turns") or []) for session in sessions)
+    lines = [
+        f"Session {_short_id(payload.get('root_session_id'))}",
+        f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}, {turn_count} visible turn{'s' if turn_count != 1 else ''}",
+        "",
+    ]
+
+    for session_index, session in enumerate(sessions):
+        relationship = session.get("relationship") or {}
+        role = relationship.get("role") or relationship.get("relationship") or "session"
+        header = f"{'`-' if session_index == len(sessions) - 1 else '+-'} session {_short_id(session.get('session_id'))}"
+        header += f"  {role}, {session.get('vendor') or '-'}, {_display_value(session.get('status')) or '-'}"
+        if session.get("agent_name"):
+            header += f", {session['agent_name']}"
+        lines.append(header)
+        if session.get("cwd"):
+            lines.append(f"   cwd: {session['cwd']}")
+
+        turns = session.get("turns") or []
+        for turn_index, turn in enumerate(turns):
+            turn_prefix = "   `-" if turn_index == len(turns) - 1 else "   +-"
+            step_ids = turn.get("step_ids") or []
+            refs = ""
+            if step_ids:
+                shown = ",".join(_short_id(step_id) for step_id in step_ids[:4])
+                more = f"+{len(step_ids) - 4}" if len(step_ids) > 4 else ""
+                refs = f"  [{shown}{more}]"
+            lines.append(
+                f"{turn_prefix} turn {_short_id(turn.get('turn_id'))}  "
+                f"{_display_value(turn.get('status')) or '-'}{refs}  {_overview_request_label(turn.get('user_request'))}"
+            )
+
+            activities = turn.get("activity") or []
+            if turn.get("teammate_summary"):
+                activities = [{"teammate_summary": turn.get("teammate_summary")}]
+            visible_activities = activities[:8]
+            for activity_index, activity in enumerate(visible_activities):
+                branch = "      `-" if activity_index == len(visible_activities) - 1 and len(activities) <= 8 else "      +-"
+                if isinstance(activity, dict):
+                    lines.append(f"{branch} {_overview_activity_label(activity)}")
+            if len(activities) > len(visible_activities):
+                lines.append(f"      `- ... {len(activities) - len(visible_activities)} more activities")
+
+    return "\n".join(lines).rstrip()
+
+
+def _render_context_category(lines: list[str], category: dict[str, Any], *, indent: int = 0) -> None:
+    label = str(category.get("label") or category.get("key") or "-")
+    confidence = str(category.get("confidence") or "")
+    if confidence.endswith("_tokens"):
+        confidence = confidence.removesuffix("_tokens")
+    source_note = f"  {confidence}" if confidence else ""
+    lines.append(
+        f"{' ' * indent}{label:<30} {_format_tokens(category.get('tokens')):>7} "
+        f"{_format_percent(category.get('percent')):>8}{source_note}"
+    )
+    for child in category.get("children") or []:
+        if isinstance(child, dict):
+            _render_context_category(lines, child, indent=indent + 2)
+
+
+def _render_session_stats_text(payload: dict[str, Any]) -> str:
+    model = payload.get("model") or {}
+    context_window = payload.get("context_window") or {}
+    runtime = payload.get("runtime") or {}
+    messages = payload.get("messages") or {}
+    usage = payload.get("usage") or {}
+
+    model_name = model.get("name") or "-"
+    context_tokens = model.get("context_window_tokens")
+    lines = [f"Model: {model_name} ({_format_tokens(context_tokens)} context)", ""]
+
+    for category in context_window.get("categories") or []:
+        if isinstance(category, dict):
+            _render_context_category(lines, category)
+
+    used_tokens = context_window.get("used_tokens") or usage.get("input_tokens")
+    used_percent = context_window.get("used_percent")
+    lines.extend(
+        [
+            "",
+            f"Used: {_format_tokens(used_tokens)} tokens {_format_percent(used_percent)} used",
+            (
+                f"Runtime: {_format_duration(runtime.get('duration_seconds'))}, "
+                f"{runtime.get('turns') or 0} turns, "
+                f"{runtime.get('model_steps') or 0} model steps, "
+                f"{runtime.get('tool_calls') or 0} tool calls, "
+                f"{runtime.get('subagent_sessions') or 0} subagent sessions"
+            ),
+        ]
+    )
+    if runtime.get("compactions"):
+        lines[-1] += f", {runtime['compactions']} compactions"
+    if messages:
+        lines.append(
+            "Messages: "
+            f"{messages.get('user') or 0} user, "
+            f"{messages.get('assistant') or 0} assistant, "
+            f"{messages.get('tool_outputs') or 0} tool outputs, "
+            f"{messages.get('reasoning_items') or 0} reasoning items"
+        )
+    quota = payload.get("quota") or {}
+    if quota:
+        quota_bits = [f"plan {quota.get('plan_type')}"] if quota.get("plan_type") else []
+        if quota.get("primary_used_percent") is not None:
+            quota_bits.append(f"primary {quota['primary_used_percent']:.1f}%")
+        if quota.get("secondary_used_percent") is not None:
+            quota_bits.append(f"secondary {quota['secondary_used_percent']:.1f}%")
+        if quota_bits:
+            lines.append("Quota: " + ", ".join(quota_bits))
+    warnings = payload.get("warnings") or []
+    if warnings:
+        lines.append("")
+        lines.extend(f"Warning: {_one_line(warning, limit=110)}" for warning in warnings)
+    return "\n".join(lines).rstrip()
 
 
 def _project_usage_for_reading(payload: dict[str, Any]) -> dict[str, Any]:
@@ -587,13 +744,19 @@ def _is_empty_yaml_value(value: Any) -> bool:
 
 
 def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
+    if getattr(args, "data", False):
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+
+    if args._method == "session.overview":
+        return _render_session_overview_text(payload)
+    if args._method == "session.stats":
+        return _render_session_stats_text(payload)
+
     fmt = getattr(args, "format", "json")
     if fmt == "json":
         return json.dumps(payload, indent=2, ensure_ascii=False)
-    if fmt == "yaml":
-        if args._method == "session.stats":
-            payload = _project_stats_for_reading(payload)
-        elif args._method == "session.usage":
+    if fmt in {"yaml", "overview"}:
+        if args._method == "session.usage":
             payload = _project_usage_for_reading(payload)
         json_compatible = _prune_empty(json.loads(json.dumps(payload, ensure_ascii=False)))
         return yaml.dump(json_compatible, Dumper=_YamlDumper, allow_unicode=True, sort_keys=False, width=120)

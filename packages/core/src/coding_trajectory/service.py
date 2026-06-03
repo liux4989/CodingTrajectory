@@ -439,10 +439,10 @@ def dispatch(
     from coding_trajectory.analysis.projections import (
         build_event_scan,
         build_step_details,
-        build_session_graph_narrative,
         build_session_graph_overview,
     )
     from coding_trajectory.metrics import (
+        build_session_graph_context_stats,
         build_session_graph_metrics,
         build_session_graph_tool_usage,
         build_session_graph_usage,
@@ -496,34 +496,20 @@ def dispatch(
 
     if method == "session.overview":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        view = params.get("view", "overview")
-        if view == "overview":
-            result = build_session_graph_overview(
-                session_graph,
-                num_turns=_optional_positive_int(params, "num_turns"),
-                drop_turns=_optional_positive_int(params, "drop_turns"),
-            )
-        elif view == "narrative":
-            result = build_session_graph_narrative(
-                session_graph,
-                num_turns=_optional_positive_int(params, "num_turns"),
-                drop_turns=_optional_positive_int(params, "drop_turns"),
-            )
-        else:
-            raise ValueError(f"unsupported session overview view: {view}")
+        result = build_session_graph_overview(
+            session_graph,
+            num_turns=_optional_positive_int(params, "num_turns"),
+            drop_turns=_optional_positive_int(params, "drop_turns"),
+        )
         for session in session_graph.sessions:
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
         return result
 
     if method == "session.stats":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        extra_billing = bool(params.get("extra_billing"))
         for session in session_graph.sessions:
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return build_session_graph_metrics(
-            session_graph,
-            extra_billing=extra_billing,
-        )
+        return build_session_graph_context_stats(session_graph)
 
     if method == "session.turn_usage":
         if not params.get("turn_id"):

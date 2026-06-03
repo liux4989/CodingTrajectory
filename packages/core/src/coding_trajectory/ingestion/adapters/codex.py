@@ -175,6 +175,15 @@ def _derive_session_status(turns: list) -> SessionStatus:
     return SessionStatus.COMPLETED
 
 
+def _codex_prompt_block_name(text: str, index: int) -> str:
+    stripped = text.lstrip()
+    if stripped.startswith("<") and ">" in stripped:
+        tag = stripped[1 : stripped.index(">")].strip().split()[0]
+        if tag:
+            return tag
+    return f"developer_block_{index}"
+
+
 class CodexAdapter(BaseAdapter):
     """Ingest Codex CLI JSONL rollout files from ~/.codex/sessions/."""
 
@@ -245,6 +254,7 @@ class CodexAdapter(BaseAdapter):
         for record in records:
             outer_type = record.get("type", "")
             payload = record.get("payload") or {}
+            ts = parse_iso_timestamp(record.get("timestamp"))
 
             if outer_type == "session_meta":
                 if state.session_meta:
@@ -256,13 +266,31 @@ class CodexAdapter(BaseAdapter):
                     except ValueError:
                         pass
                 state.session_meta = payload
+                base_instructions = payload.get("base_instructions")
+                base_text = base_instructions.get("text") if isinstance(base_instructions, dict) else None
+                if ts is not None and isinstance(base_text, str) and base_text:
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CODEX_CLI,
+                            role="runtime",
+                            kind="runtime",
+                            data={
+                                "raw_type": "prompt_block",
+                                "prompt_role": "system",
+                                "prompt_block": "base_instructions",
+                                "text": base_text,
+                            },
+                            fidelity="synthetic",
+                        )
+                    )
                 continue
 
             if outer_type == "turn_context":
                 state.turn_context = payload
                 continue
 
-            ts = parse_iso_timestamp(record.get("timestamp"))
             if ts is None:
                 continue
 
@@ -349,6 +377,24 @@ class CodexAdapter(BaseAdapter):
                         )
                     )
 
+                elif inner_type == "task_started":
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CODEX_CLI,
+                            role="runtime",
+                            kind="runtime",
+                            data={
+                                "turn_id_raw": turn_id,
+                                "raw_type": "task_started",
+                                "model_context_window": payload.get("model_context_window"),
+                                "collaboration_mode_kind": payload.get("collaboration_mode_kind"),
+                            },
+                            fidelity="synthetic",
+                        )
+                    )
+
             elif outer_type == "response_item":
                 inner_type = payload.get("type", "")
 
@@ -407,7 +453,33 @@ class CodexAdapter(BaseAdapter):
                     continue
 
                 elif inner_type == "message":
-                    if payload.get("role") == "assistant":
+                    message_role = payload.get("role")
+                    if message_role in {"developer", "system"}:
+                        content = payload.get("content")
+                        if isinstance(content, list):
+                            for index, item in enumerate(content):
+                                if not isinstance(item, dict):
+                                    continue
+                                text = item.get("text")
+                                if not isinstance(text, str) or not text:
+                                    continue
+                                transcript.append(
+                                    TranscriptRecord(
+                                        sequence=len(transcript),
+                                        timestamp=ts,
+                                        vendor=Vendor.CODEX_CLI,
+                                        role="runtime",
+                                        kind="runtime",
+                                        data={
+                                            "raw_type": "prompt_block",
+                                            "prompt_role": message_role,
+                                            "prompt_block": _codex_prompt_block_name(text, index),
+                                            "text": text,
+                                        },
+                                        fidelity="synthetic",
+                                    )
+                                )
+                    elif message_role == "assistant":
                         phase = payload.get("phase")
                         text = _extract_response_text(payload)
                         transcript.append(
