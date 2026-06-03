@@ -77,7 +77,7 @@ def _session_overview_params(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
+def _session_stats_params(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "extra_billing": args.extra_billing,
         **({"session_id": args.session_id} if args.session_id else {}),
@@ -129,7 +129,7 @@ SESSION
   ct session overview [SESSION_ID]                 compact session hierarchy
   ct session overview --view narrative [SESSION_ID]
                                                    deterministic activity narrative
-  ct session usage [SESSION_ID]                    token/cost rollup for the session tree
+  ct session stats [SESSION_ID]                    token/cost rollup for the session tree
   ct session turn-usage TURN_ID                    token/cost comparison for one turn
   ct session tool-usage [SESSION_ID]               tool-step cost boundaries and output-size signals
   ct session step-detail STEP_ID [...]             full detail for one or more steps
@@ -319,17 +319,17 @@ def _build_parser() -> argparse.ArgumentParser:
         _params=_session_overview_params,
     )
 
-    session_usage = session_sub.add_parser(
-        "usage",
+    session_stats = session_sub.add_parser(
+        "stats",
         help="Show resource usage for the session tree.",
         formatter_class=_GhFormatter,
     )
-    _add_session_source(session_usage)
-    _add_output_flags(session_usage)
-    _add_metrics_flags(session_usage)
-    session_usage.set_defaults(
-        _method="session.usage",
-        _params=_session_usage_params,
+    _add_session_source(session_stats)
+    _add_output_flags(session_stats)
+    _add_metrics_flags(session_stats)
+    session_stats.set_defaults(
+        _method="session.stats",
+        _params=_session_stats_params,
     )
 
     session_turn_usage = session_sub.add_parser(
@@ -355,7 +355,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_metrics_flags(session_tool_usage)
     session_tool_usage.set_defaults(
         _method="session.tool_usage",
-        _params=_session_usage_params,
+        _params=_session_stats_params,
     )
 
     session_step_detail = session_sub.add_parser(

@@ -148,7 +148,7 @@ class SessionGraphMetrics(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Simplified flat output for ct session usage scopes
+# Simplified flat output for ct session stats scopes
 # ---------------------------------------------------------------------------
 
 class StepMetricsFlat(BaseModel):

@@ -511,7 +511,7 @@ def dispatch(
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
         return result
 
-    if method == "session.usage":
+    if method == "session.stats":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
         extra_billing = bool(params.get("extra_billing"))
         for session in session_graph.sessions:
