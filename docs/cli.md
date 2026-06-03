@@ -35,6 +35,9 @@ The CLI exposes readable reports for navigation and JSON for exact data:
 - Report commands default to human-readable stdout. Use `--data` to print the
   structured JSON projection behind the report.
 - Detail and raw-query commands print JSON.
+- `project` commands accept `--format json|overview`; the default is `json`.
+- Detail and raw-query commands currently accept `--format json|overview` for
+  command-shape consistency, but their stdout payload is JSON.
 
 `--output FILE` always writes JSON, regardless of stdout format. This keeps file
 output stable for automation while allowing stdout to optimize interactive
@@ -43,19 +46,26 @@ reading.
 `session stats` and `session usage` use fixed reports for readable stdout and
 `--data` or `--output` for exact JSON.
 
+Most session-scoped commands locate sessions automatically from the most-recent
+session in the current working directory. Use `--global-scope` on commands that
+support it to search all known log files instead. `project list` always uses the
+global project index.
+
 ## Intended Reading Flow
 
 Structured View
-1. `project list` — find project names
-2. `project sessions <project_name>` — list sessions for a project, get the session id to use as an entry point
-3. `session overview <session_id> [--turns N] [--drop-turns K] [--data]` — read the compact session hierarchy, identify relevant steps
+1. `project list [--agent-vendor VENDOR] [--format json|overview]` — find project names
+2. `project sessions [project_name] [--agent-vendor VENDOR] [--format json|overview]` — list sessions for a project, get the session id to use as an entry point
+   - omit `project_name` to use the current directory
+   - known agent vendors are `claude_code`, `codex_cli`, `gemini_cli`, and `amp`
+3. `session overview [session_id] [--turns N] [--drop-turns K] [--data]` — read the compact session hierarchy, identify relevant steps
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
    - activity renders as short human labels with truncated assistant response previews
-4. `session stats <session_id> [--data]` — inspect session stats with compact context/token sections
-5. `session usage <session_id> [--turn TURN_ID] [--data]` — inspect turn-level activity token and cost accounting
-6. `session step-detail <step_id>` — read the JSON evidence for a specific step
+4. `session stats [session_id] [--extra-billing] [--data]` — inspect session stats with compact context/token sections
+5. `session usage [session_id] [--turn TURN_ID] [--extra-billing] [--data]` — inspect turn-level activity token and cost accounting
+6. `session step-detail <step_id> [...]` — read the JSON evidence for one or more steps
 
 `session usage` is intentionally turn-focused. It reports token buckets and cost
 grouped by turn and activity category without expanding paths, queries,
@@ -66,7 +76,12 @@ detail commands when you need hierarchy/navigation detail or causal drill-down.
 
 Raw View
 1. `session event-detail <event_id>` — resolve the full JSON content of an event
-2. `session event-scan <session_id> --type TYPE [--filter ...]` — query raw JSON events by type, optionally narrowed by payload predicates
+2. `session event-scan [session_id] --type TYPE [--filter KEY=VALUE]` — query raw JSON events by type, optionally narrowed by payload predicates
+   - repeat `--filter` to combine predicates
+   - `key=value` requires an exact payload-field match
+   - `key=*` requires a payload field to exist
+   - `key=!` requires a payload field to be absent or null
+   - dot paths such as `result.error=*` are supported
 
 See [`cli-agent-notebook.ipynb`](cli-agent-notebook.ipynb) for an interactive
 Jupyter tutorial with examples and workflow guidance.
