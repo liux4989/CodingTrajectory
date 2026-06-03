@@ -357,7 +357,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_session_source(session_stats)
     _add_output_flags(session_stats)
-    _add_format_flag(session_stats, choices=("text", "json", "yaml"), default="text")
+    _add_format_flag(session_stats)
     _add_metrics_flags(session_stats)
     session_stats.set_defaults(
         _method="session.stats",
@@ -378,7 +378,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Limit usage analysis to one turn.",
     )
     _add_output_flags(session_usage)
-    _add_format_flag(session_usage, choices=("text", "json", "yaml"), default="text")
+    _add_format_flag(session_usage)
     _add_metrics_flags(session_usage)
     session_usage.set_defaults(
         _method="session.usage",
@@ -450,24 +450,6 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _format_number(value: int | float) -> str:
-    if isinstance(value, float):
-        value = int(round(value))
-    if abs(value) >= 1_000_000:
-        return f"{value / 1_000_000:.1f}m"
-    if abs(value) >= 1_000:
-        return f"{value / 1_000:.1f}k"
-    return str(value)
-
-
-def _format_money(value: float) -> str:
-    return f"${value:.4f}" if value else "$0"
-
-
-def _format_percent(value: float) -> str:
-    return f"{value * 100:.0f}%"
-
-
 def _usage_total_tokens(tokens: dict[str, Any]) -> int:
     return sum(value for _, value in _token_rows(tokens))
 
@@ -498,96 +480,110 @@ def _first_model(payload: dict[str, Any]) -> str | None:
     return None
 
 
-def _render_stats_text(payload: dict[str, Any]) -> str:
-    tokens = payload.get("token_usage") if isinstance(payload.get("token_usage"), dict) else {}
-    rows = _token_rows(tokens)
+def _usage_summary(tokens: dict[str, Any], *, cost_usd: float | None = None) -> dict[str, Any]:
+    rows = dict(_token_rows(tokens))
     used = _usage_total_tokens(tokens)
-    denominator = used or 1
-    lines = [f"Model: {_first_model(payload) or 'unknown'}", ""]
-    for label, value in rows:
-        share = value / denominator if denominator else 0
-        lines.append(f"{label:<24} {_format_number(value):>8}  ({share * 100:.1f}%)")
-    lines.append("")
-    lines.append(f"Used: {_format_number(used)} tokens")
-    cost = float(payload.get("cost") or 0)
-    if cost:
-        lines.append(f"Cost: {_format_money(cost)}")
-    warnings = payload.get("warnings") or []
-    if warnings:
-        lines.append("")
-        lines.extend(f"Warning: {warning}" for warning in warnings)
-    return "\n".join(lines)
+    input_tokens = int(tokens.get("input_tokens") or 0)
+    cached_input_tokens = int(tokens.get("cached_input_tokens") or 0)
+    result: dict[str, Any] = {
+        "fresh_input_tokens": rows.get("Fresh input", 0),
+        "cached_input_tokens": cached_input_tokens,
+        "output_tokens": int(tokens.get("output_tokens") or 0),
+        "reasoning_output_tokens": int(tokens.get("reasoning_output_tokens") or 0),
+        "used_tokens": used,
+        "cache_reuse_ratio": round(cached_input_tokens / input_tokens, 4) if input_tokens else 0.0,
+        "output_per_1k_input": round((int(tokens.get("output_tokens") or 0) / input_tokens) * 1000, 2)
+        if input_tokens
+        else 0.0,
+    }
+    if cost_usd is not None:
+        result["cost_usd"] = cost_usd
+    return {key: value for key, value in result.items() if value not in (0, 0.0, None)}
 
 
-def _render_usage_text(payload: dict[str, Any]) -> str:
-    turns = payload.get("turns") or []
-    if not turns:
-        return "No matching turns."
+def _project_stats_for_reading(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "root_session_id": payload.get("root_session_id"),
+        "model": _first_model(payload),
+        "usage": _usage_summary(payload.get("token_usage") or {}, cost_usd=float(payload.get("cost") or 0)),
+        "extra_billing": payload.get("extra_billing"),
+        "sessions": [_project_stats_session_for_reading(session) for session in payload.get("sessions") or []],
+        "warnings": payload.get("warnings") or [],
+    }
 
-    if len(turns) == 1:
-        turn = turns[0]
-        tokens = turn.get("tokens") or {}
-        efficiency = turn.get("efficiency") or {}
-        lines = [
-            f"Turn {turn.get('seq')}  {turn.get('activity')}",
-            "",
-        ]
-        model = turn.get("model")
-        if model:
-            lines.append(f"{'Model':<18} {model}")
-        lines.extend(
-            [
-                f"{'Input tokens':<18} {_format_number(int(tokens.get('input_tokens') or 0))}",
-                f"{'Output tokens':<18} {_format_number(int(tokens.get('output_tokens') or 0))}",
-                f"{'Cached input':<18} {_format_number(int(tokens.get('cached_input_tokens') or 0))}",
-                f"{'Cache reuse':<18} {_format_percent(float(efficiency.get('cache_reuse_ratio') or 0))}",
-                f"{'Output/1k input':<18} {float(efficiency.get('output_per_1k_input') or 0):.1f}",
-                f"{'Cost':<18} {_format_money(float(turn.get('cost_usd') or 0))}",
-            ]
-        )
-        drivers = turn.get("cost_drivers") or []
-        if drivers:
-            lines.append("")
-            lines.append("Cost drivers")
-            for driver in drivers:
-                lines.append(f"{str(driver.get('kind') or '').replace('_', ' '):<18} {_format_money(float(driver.get('cost_usd') or 0))}")
-        return "\n".join(lines)
 
-    lines = [
-        f"{'Turn':<5} {'Activity':<24} {'Input':>8} {'Output':>8} {'Cache':>8} {'Reuse':>7} {'Out/1k':>8} {'Cost':>10}"
-    ]
-    for turn in turns:
-        tokens = turn.get("tokens") or {}
-        efficiency = turn.get("efficiency") or {}
-        lines.append(
-            f"{str(turn.get('seq')):<5} "
-            f"{str(turn.get('activity') or '')[:24]:<24} "
-            f"{_format_number(int(tokens.get('input_tokens') or 0)):>8} "
-            f"{_format_number(int(tokens.get('output_tokens') or 0)):>8} "
-            f"{_format_number(int(tokens.get('cached_input_tokens') or 0)):>8} "
-            f"{_format_percent(float(efficiency.get('cache_reuse_ratio') or 0)):>7} "
-            f"{float(efficiency.get('output_per_1k_input') or 0):>8.1f} "
-            f"{_format_money(float(turn.get('cost_usd') or 0)):>10}"
-        )
+def _project_stats_session_for_reading(session: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "session_id": session.get("session_id"),
+        "vendor": session.get("vendor"),
+        "status": session.get("status"),
+        "usage": _usage_summary(session.get("token_usage") or {}, cost_usd=float(session.get("cost") or 0)),
+        "extra_billing": session.get("extra_billing"),
+        "turns": [_project_stats_turn_for_reading(turn) for turn in session.get("turns") or []],
+    }
 
+
+def _project_stats_turn_for_reading(turn: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "turn_id": turn.get("turn_id"),
+        "seq": turn.get("sequence"),
+        "status": turn.get("status"),
+        "model": turn.get("model"),
+        "started_at": turn.get("started_at"),
+        "completed_at": turn.get("completed_at"),
+        "usage": _usage_summary(turn.get("token_usage") or {}, cost_usd=float(turn.get("cost") or 0)),
+        "extra_billing": turn.get("extra_billing"),
+    }
+
+
+def _project_usage_for_reading(payload: dict[str, Any]) -> dict[str, Any]:
     totals = payload.get("totals") or {}
-    total_tokens = totals.get("tokens") if isinstance(totals.get("tokens"), dict) else {}
-    total_efficiency = totals.get("efficiency") if isinstance(totals.get("efficiency"), dict) else {}
-    lines.append(
-        f"{'Total':<5} "
-        f"{'':<24} "
-        f"{_format_number(int(total_tokens.get('input_tokens') or 0)):>8} "
-        f"{_format_number(int(total_tokens.get('output_tokens') or 0)):>8} "
-        f"{_format_number(int(total_tokens.get('cached_input_tokens') or 0)):>8} "
-        f"{_format_percent(float(total_efficiency.get('cache_reuse_ratio') or 0)):>7} "
-        f"{float(total_efficiency.get('output_per_1k_input') or 0):>8.1f} "
-        f"{_format_money(float(totals.get('cost_usd') or 0)):>10}"
-    )
-    warnings = payload.get("warnings") or []
-    if warnings:
-        lines.append("")
-        lines.extend(f"Warning: {warning}" for warning in warnings)
-    return "\n".join(lines)
+    return {
+        "root_session_id": payload.get("root_session_id"),
+        "turns": [_project_usage_turn_for_reading(turn) for turn in payload.get("turns") or []],
+        "totals": {
+            "usage": _usage_summary(totals.get("tokens") or {}, cost_usd=float(totals.get("cost_usd") or 0)),
+        },
+        "extra_billing": payload.get("extra_billing"),
+        "warnings": payload.get("warnings") or [],
+    }
+
+
+def _project_usage_turn_for_reading(turn: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "turn_id": turn.get("turn_id"),
+        "session_id": turn.get("session_id"),
+        "seq": turn.get("seq"),
+        "model": turn.get("model"),
+        "usage": _usage_summary(turn.get("tokens") or {}, cost_usd=float(turn.get("cost_usd") or 0)),
+        "activities": [_project_usage_activity_for_reading(item) for item in turn.get("activities") or []],
+    }
+
+
+def _project_usage_activity_for_reading(activity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": activity.get("kind"),
+        "step_count": activity.get("step_count"),
+        "tool_call_count": activity.get("tool_call_count"),
+        "duration_ms": activity.get("duration_ms"),
+        "usage": _usage_summary(activity.get("tokens") or {}, cost_usd=float(activity.get("cost_usd") or 0)),
+    }
+
+
+def _prune_empty(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: pruned
+            for key, item in value.items()
+            if not _is_empty_yaml_value(pruned := _prune_empty(item))
+        }
+    if isinstance(value, list):
+        return [pruned for item in value if not _is_empty_yaml_value(pruned := _prune_empty(item))]
+    return value
+
+
+def _is_empty_yaml_value(value: Any) -> bool:
+    return value is None or value is False or value == {} or value == []
 
 
 def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
@@ -595,12 +591,12 @@ def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
     if fmt == "json":
         return json.dumps(payload, indent=2, ensure_ascii=False)
     if fmt == "yaml":
-        json_compatible = json.loads(json.dumps(payload, ensure_ascii=False))
+        if args._method == "session.stats":
+            payload = _project_stats_for_reading(payload)
+        elif args._method == "session.usage":
+            payload = _project_usage_for_reading(payload)
+        json_compatible = _prune_empty(json.loads(json.dumps(payload, ensure_ascii=False)))
         return yaml.dump(json_compatible, Dumper=_YamlDumper, allow_unicode=True, sort_keys=False, width=120)
-    if args._method == "session.stats":
-        return _render_stats_text(payload)
-    if args._method == "session.usage":
-        return _render_usage_text(payload)
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 

@@ -15,7 +15,7 @@ from coding_trajectory.ingestion.indexes import (
 )
 from coding_trajectory.ingestion.models import Event, EventType, Session, Step, SessionGraph, Turn, Vendor
 from coding_trajectory.metrics.models import (
-    ActivityCostDriverFlat,
+    ActivityUsageBreakdownFlat,
     CostEstimate,
     MetricSource,
     QuotaSnapshot,
@@ -128,58 +128,55 @@ def build_session_graph_usage(
 
 
 def _compact_turn_usage(turn: TurnMetrics, *, session_id: UUID | None) -> TurnUsageCompactFlat:
-    cost_drivers = _turn_cost_drivers(turn)
     return TurnUsageCompactFlat(
         turn_id=turn.turn_id,
         session_id=session_id,
         seq=turn.sequence,
-        activity=_turn_activity(turn),
         model=_turn_model(turn),
         tokens=turn.token_usage,
         efficiency=_usage_efficiency(turn.token_usage),
         cost_usd=turn.cost_estimate.amount_usd,
-        cost_drivers=cost_drivers,
+        activities=_turn_activity_breakdown(turn),
     )
 
 
-def _turn_activity(turn: TurnMetrics) -> str:
-    tool_steps = sum(1 for step in turn.steps if step.tool_count > 0)
-    response_steps = sum(1 for step in turn.steps if step.kind == "response")
-    mixed_steps = sum(1 for step in turn.steps if step.kind == "mixed")
-    active_steps = tool_steps + response_steps + mixed_steps
-    if active_steps == 0:
-        return "no measured activity"
-    if mixed_steps:
-        return "mixed activity"
-    if tool_steps > response_steps:
-        return "tool-heavy activity"
-    if response_steps > tool_steps:
-        return "response-heavy activity"
-    return "balanced activity"
-
-
-def _turn_cost_drivers(turn: TurnMetrics) -> list[ActivityCostDriverFlat]:
-    totals = {
-        "tool_steps": 0.0,
-        "response_steps": 0.0,
-        "mixed_steps": 0.0,
-        "other_steps": 0.0,
+def _turn_activity_breakdown(turn: TurnMetrics) -> list[ActivityUsageBreakdownFlat]:
+    totals: dict[str, dict[str, Any]] = {
+        "tool_steps": {"step_count": 0, "tool_call_count": 0, "duration_ms": 0, "tokens": TokenUsage(), "cost_usd": 0.0},
+        "response_steps": {"step_count": 0, "tool_call_count": 0, "duration_ms": 0, "tokens": TokenUsage(), "cost_usd": 0.0},
+        "mixed_steps": {"step_count": 0, "tool_call_count": 0, "duration_ms": 0, "tokens": TokenUsage(), "cost_usd": 0.0},
+        "other_steps": {"step_count": 0, "tool_call_count": 0, "duration_ms": 0, "tokens": TokenUsage(), "cost_usd": 0.0},
     }
     for step in turn.steps:
-        if step.tool_count > 0 and step.kind != "mixed":
-            key = "tool_steps"
-        elif step.kind == "response":
-            key = "response_steps"
-        elif step.kind == "mixed":
-            key = "mixed_steps"
-        else:
-            key = "other_steps"
-        totals[key] += step.cost_estimate.amount_usd
+        key = _activity_breakdown_kind(step)
+        totals[key]["step_count"] += 1
+        totals[key]["tool_call_count"] += step.tool_count
+        totals[key]["duration_ms"] += step.tool_duration_ms or 0
+        totals[key]["tokens"] = totals[key]["tokens"].plus(step.token_usage)
+        totals[key]["cost_usd"] += step.cost_estimate.amount_usd
     return [
-        ActivityCostDriverFlat(kind=key, cost_usd=round(value, 8))
+        ActivityUsageBreakdownFlat(
+            kind=key,
+            step_count=int(value["step_count"]),
+            tool_call_count=int(value["tool_call_count"]),
+            duration_ms=int(value["duration_ms"]) or None,
+            tokens=value["tokens"],
+            efficiency=_usage_efficiency(value["tokens"]),
+            cost_usd=round(float(value["cost_usd"]), 8),
+        )
         for key, value in totals.items()
-        if value > 0
+        if value["step_count"] > 0
     ]
+
+
+def _activity_breakdown_kind(step: StepMetrics) -> str:
+    if step.kind == "mixed":
+        return "mixed_steps"
+    if step.tool_count > 0:
+        return "tool_steps"
+    if step.kind == "response":
+        return "response_steps"
+    return "other_steps"
 
 
 def _usage_efficiency(usage: TokenUsage) -> UsageEfficiencyFlat:

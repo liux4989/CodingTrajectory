@@ -6,7 +6,7 @@ from coding_trajectory.metrics.analysis import (
     build_session_graph_usage,
 )
 from coding_trajectory.metrics.models import (
-    ActivityCostDriverFlat,
+    ActivityUsageBreakdownFlat,
     CostBreakdown,
     CostEstimate,
     MetricSource,
@@ -40,7 +40,7 @@ __all__ = [
     "CostBreakdown",
     "CostEstimate",
     "DEFAULT_PRICE_RULES",
-    "ActivityCostDriverFlat",
+    "ActivityUsageBreakdownFlat",
     "MetricSource",
     "PriceRule",
     "QuotaSnapshot",

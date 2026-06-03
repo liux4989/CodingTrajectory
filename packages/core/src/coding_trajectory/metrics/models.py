@@ -212,21 +212,34 @@ class UsageEfficiencyFlat(BaseModel):
     output_per_1k_input: float = 0.0
 
 
-class ActivityCostDriverFlat(BaseModel):
+class ActivityUsageBreakdownFlat(BaseModel):
     kind: Literal["tool_steps", "response_steps", "mixed_steps", "other_steps"]
+    step_count: int = 0
+    tool_call_count: int = 0
+    duration_ms: int | None = None
+    tokens: TokenUsage = Field(default_factory=TokenUsage)
+    efficiency: UsageEfficiencyFlat = Field(default_factory=UsageEfficiencyFlat)
     cost_usd: float = 0.0
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("tool_call_count") == 0:
+            data.pop("tool_call_count", None)
+        if data.get("duration_ms") is None:
+            data.pop("duration_ms", None)
+        return data
 
 
 class TurnUsageCompactFlat(BaseModel):
     turn_id: UUID
     session_id: UUID | None = None
     seq: int
-    activity: str
     model: str | None = None
     tokens: TokenUsage = Field(default_factory=TokenUsage)
     efficiency: UsageEfficiencyFlat = Field(default_factory=UsageEfficiencyFlat)
     cost_usd: float = 0.0
-    cost_drivers: list[ActivityCostDriverFlat] = Field(default_factory=list)
+    activities: list[ActivityUsageBreakdownFlat] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -235,8 +248,8 @@ class TurnUsageCompactFlat(BaseModel):
             data.pop("session_id", None)
         if data.get("model") is None:
             data.pop("model", None)
-        if not data.get("cost_drivers"):
-            data.pop("cost_drivers", None)
+        if not data.get("activities"):
+            data.pop("activities", None)
         return data
 
 
