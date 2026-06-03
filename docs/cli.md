@@ -42,8 +42,8 @@ The CLI exposes two structured stdout formats:
 output stable for automation while allowing YAML to optimize interactive agent
 reading.
 
-`session stats` and `session usage` retain their compact `text` stdout default
-for terminal summaries, with `--format yaml` and `--format json` available.
+`session stats` and `session usage` use YAML for readable stdout and JSON for
+exact scripting or saved artifacts.
 
 ## Intended Reading Flow
 
@@ -58,12 +58,12 @@ Structured View
    - repeated consecutive low-value tool calls are grouped by tool profile with ordered unique targets and repeat counts when useful
    - mutating or high-signal tools such as edits, writes, shell commands, subagents, and handoffs stay ungrouped; use `session overview --view narrative` or `session step-detail` to expand the evidence
 4. `session overview --view narrative <session_id> [--turns N] [--drop-turns K] [--format yaml|json]` — read deterministic user/assistant/tool activity for summarization
-5. `session stats <session_id> [--format text|yaml|json]` — inspect compact context/token usage composition
-6. `session usage <session_id> [--turn TURN_ID] [--format text|yaml|json]` — compare turn-level activity cost and token efficiency
+5. `session stats <session_id> [--format yaml|json]` — inspect session stats with compact usage sections
+6. `session usage <session_id> [--turn TURN_ID] [--format yaml|json]` — compare turn-level activity cost and token efficiency
 7. `session step-detail <step_id> [--format yaml|json]` — read the evidence for a specific step
 
-`session usage` is intentionally turn-focused. It reports coarse activity,
-token buckets, cache reuse, output/input efficiency, and cost drivers without
+`session usage` is intentionally turn-focused. It reports token buckets, cache
+reuse, output/input efficiency, and batched activity-category usage without
 expanding paths, queries, commands, or individual tool calls. Use
 `session overview`, `session step-detail`, or `session event-detail` when you
 need tree/navigation detail.
@@ -73,6 +73,6 @@ Raw View
 1. `session event-detail <event_id> [--format yaml|json]` — resolve the full content of an event
 2. `session event-scan <session_id> --type TYPE [--filter ...] [--format yaml|json]` — query raw events by type, optionally narrowed by payload predicates
 
-See [`cli-agent-notebook.md`](cli-agent-notebook.md) for an agent-oriented
-tutorial that uses YAML for reading and JSON for exact queries.
+See [`cli-agent-notebook.ipynb`](cli-agent-notebook.ipynb) for an interactive
+Jupyter tutorial that uses YAML for reading and JSON for exact queries.
 ---
