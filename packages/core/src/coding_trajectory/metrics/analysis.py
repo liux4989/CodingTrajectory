@@ -42,7 +42,6 @@ from coding_trajectory.metrics.models import (
     TurnUsageCompactFlat,
     TurnMetrics,
     TurnMetricsFlat,
-    UsageEfficiencyFlat,
 )
 from coding_trajectory.metrics.pricing import estimate_observation_cost
 
@@ -165,7 +164,7 @@ def build_session_graph_usage(
     extra_billing: bool = False,
     turn_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return compact turn-level usage, cost, and efficiency analysis."""
+    """Return compact turn-level usage and cost accounting."""
     full = _build_full_metrics(session_graph, extra_billing=extra_billing)
     multi_session = len(full.sessions) > 1
     turns: list[TurnUsageCompactFlat] = []
@@ -177,14 +176,11 @@ def build_session_graph_usage(
             turns.append(_compact_turn_usage(turn, session_id=session.session_id if multi_session else None))
 
     return SessionUsageCompactFlat(
-        root_session_id=full.root_session_id,
+        session_id=full.root_session_id,
         extra_billing=full.cost_estimate.extra_billing,
         turns=turns,
-        totals={
-            "tokens": full.token_usage.model_dump(mode="json"),
-            "cost_usd": full.cost_estimate.amount_usd,
-            "efficiency": _usage_efficiency(full.token_usage).model_dump(mode="json"),
-        },
+        total_usage=full.token_usage,
+        cost_usd=full.cost_estimate.amount_usd,
         warnings=full.warnings,
     ).model_dump(mode="json")
 
@@ -450,37 +446,28 @@ def _compact_turn_usage(turn: TurnMetrics, *, session_id: UUID | None) -> TurnUs
     return TurnUsageCompactFlat(
         turn_id=turn.turn_id,
         session_id=session_id,
-        seq=turn.sequence,
-        model=_turn_model(turn),
-        tokens=turn.token_usage,
-        efficiency=_usage_efficiency(turn.token_usage),
+        usage=turn.token_usage,
         cost_usd=turn.cost_estimate.amount_usd,
-        activities=_turn_activity_breakdown(turn),
+        activity_usage=_turn_activity_breakdown(turn),
     )
 
 
 def _turn_activity_breakdown(turn: TurnMetrics) -> list[ActivityUsageBreakdownFlat]:
     totals: dict[str, dict[str, Any]] = {
-        "tool_steps": {"step_count": 0, "tool_call_count": 0, "duration_ms": 0, "tokens": TokenUsage(), "cost_usd": 0.0},
-        "response_steps": {"step_count": 0, "tool_call_count": 0, "duration_ms": 0, "tokens": TokenUsage(), "cost_usd": 0.0},
-        "mixed_steps": {"step_count": 0, "tool_call_count": 0, "duration_ms": 0, "tokens": TokenUsage(), "cost_usd": 0.0},
-        "other_steps": {"step_count": 0, "tool_call_count": 0, "duration_ms": 0, "tokens": TokenUsage(), "cost_usd": 0.0},
+        "tool_steps": {"step_count": 0, "usage": TokenUsage(), "cost_usd": 0.0},
+        "response_steps": {"step_count": 0, "usage": TokenUsage(), "cost_usd": 0.0},
+        "mixed_steps": {"step_count": 0, "usage": TokenUsage(), "cost_usd": 0.0},
+        "other_steps": {"step_count": 0, "usage": TokenUsage(), "cost_usd": 0.0},
     }
     for step in turn.steps:
         key = _activity_breakdown_kind(step)
         totals[key]["step_count"] += 1
-        totals[key]["tool_call_count"] += step.tool_count
-        totals[key]["duration_ms"] += step.tool_duration_ms or 0
-        totals[key]["tokens"] = totals[key]["tokens"].plus(step.token_usage)
+        totals[key]["usage"] = totals[key]["usage"].plus(step.token_usage)
         totals[key]["cost_usd"] += step.cost_estimate.amount_usd
     return [
         ActivityUsageBreakdownFlat(
-            kind=key,
-            step_count=int(value["step_count"]),
-            tool_call_count=int(value["tool_call_count"]),
-            duration_ms=int(value["duration_ms"]) or None,
-            tokens=value["tokens"],
-            efficiency=_usage_efficiency(value["tokens"]),
+            category=key,
+            usage=value["usage"],
             cost_usd=round(float(value["cost_usd"]), 8),
         )
         for key, value in totals.items()
@@ -496,15 +483,6 @@ def _activity_breakdown_kind(step: StepMetrics) -> str:
     if step.kind == "response":
         return "response_steps"
     return "other_steps"
-
-
-def _usage_efficiency(usage: TokenUsage) -> UsageEfficiencyFlat:
-    non_cached_input = max(usage.input_tokens - usage.cached_input_tokens, 0)
-    all_input = non_cached_input + usage.cached_input_tokens
-    return UsageEfficiencyFlat(
-        cache_reuse_ratio=round(usage.cached_input_tokens / all_input, 4) if all_input else 0.0,
-        output_per_1k_input=round((usage.output_tokens / all_input) * 1000, 2) if all_input else 0.0,
-    )
 
 
 def _turn_step_deltas(turn: TurnMetrics) -> list[StepMetricsFlat]:

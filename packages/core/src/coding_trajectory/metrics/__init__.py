@@ -35,7 +35,6 @@ from coding_trajectory.metrics.models import (
     TurnMetrics,
     TurnMetricsFlat,
     TurnUsageCompactFlat,
-    UsageEfficiencyFlat,
 )
 from coding_trajectory.metrics.pricing import (
     DEFAULT_PRICE_RULES,
@@ -75,7 +74,6 @@ __all__ = [
     "TurnMetrics",
     "TurnMetricsFlat",
     "TurnUsageCompactFlat",
-    "UsageEfficiencyFlat",
     "build_session_graph_context_stats",
     "build_session_graph_metrics",
     "build_session_graph_tool_usage",

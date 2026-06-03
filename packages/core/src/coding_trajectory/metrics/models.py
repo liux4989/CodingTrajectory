@@ -26,6 +26,17 @@ class TokenUsage(BaseModel):
         )
 
 
+def _usage_accounting_payload(usage: dict[str, int], *, cost_usd: float) -> dict[str, int | float]:
+    total_tokens = int(usage.get("total_tokens") or 0)
+    if total_tokens == 0:
+        total_tokens = (
+            int(usage.get("input_tokens") or 0)
+            + int(usage.get("output_tokens") or 0)
+            + int(usage.get("reasoning_output_tokens") or 0)
+        )
+    return {**usage, "total_tokens": total_tokens, "cost_usd": cost_usd}
+
+
 class MetricSource(BaseModel):
     vendor: str
     source_type: Literal["step.vendor_data", "event.payload"]
@@ -320,58 +331,55 @@ class SessionContextStatsFlat(BaseModel):
         return data
 
 
-class UsageEfficiencyFlat(BaseModel):
-    cache_reuse_ratio: float = 0.0
-    output_per_1k_input: float = 0.0
-
-
 class ActivityUsageBreakdownFlat(BaseModel):
-    kind: Literal["tool_steps", "response_steps", "mixed_steps", "other_steps"]
-    step_count: int = 0
-    tool_call_count: int = 0
-    duration_ms: int | None = None
-    tokens: TokenUsage = Field(default_factory=TokenUsage)
-    efficiency: UsageEfficiencyFlat = Field(default_factory=UsageEfficiencyFlat)
+    category: Literal["tool_steps", "response_steps", "mixed_steps", "other_steps"]
+    usage: TokenUsage = Field(default_factory=TokenUsage)
     cost_usd: float = 0.0
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
-        if data.get("tool_call_count") == 0:
-            data.pop("tool_call_count", None)
-        if data.get("duration_ms") is None:
-            data.pop("duration_ms", None)
+        if data.get("usage"):
+            data["usage"] = _usage_accounting_payload(data["usage"], cost_usd=self.cost_usd)
+        data.pop("cost_usd", None)
         return data
 
 
 class TurnUsageCompactFlat(BaseModel):
     turn_id: UUID
     session_id: UUID | None = None
-    seq: int
-    model: str | None = None
-    tokens: TokenUsage = Field(default_factory=TokenUsage)
-    efficiency: UsageEfficiencyFlat = Field(default_factory=UsageEfficiencyFlat)
+    usage: TokenUsage = Field(default_factory=TokenUsage)
     cost_usd: float = 0.0
-    activities: list[ActivityUsageBreakdownFlat] = Field(default_factory=list)
+    activity_usage: list[ActivityUsageBreakdownFlat] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
         if data.get("session_id") is None:
             data.pop("session_id", None)
-        if data.get("model") is None:
-            data.pop("model", None)
-        if not data.get("activities"):
-            data.pop("activities", None)
+        if data.get("usage"):
+            data["usage"] = _usage_accounting_payload(data["usage"], cost_usd=self.cost_usd)
+        data.pop("cost_usd", None)
+        if not data.get("activity_usage"):
+            data.pop("activity_usage", None)
         return data
 
 
 class SessionUsageCompactFlat(BaseModel):
-    root_session_id: UUID
+    session_id: UUID
     extra_billing: bool = False
     turns: list[TurnUsageCompactFlat] = Field(default_factory=list)
-    totals: dict[str, object] = Field(default_factory=dict)
+    total_usage: TokenUsage = Field(default_factory=TokenUsage)
+    cost_usd: float = 0.0
     warnings: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("total_usage"):
+            data["total_usage"] = _usage_accounting_payload(data["total_usage"], cost_usd=self.cost_usd)
+        data.pop("cost_usd", None)
+        return data
 
 
 class ToolCostSemantics(BaseModel):

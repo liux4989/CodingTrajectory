@@ -140,7 +140,7 @@ PROJECT
 SESSION
   ct session overview [SESSION_ID]                 compact session hierarchy
   ct session stats [SESSION_ID]                    compact context/token usage overview
-  ct session usage [SESSION_ID] [--turn TURN_ID]   turn-level activity cost and efficiency
+  ct session usage [SESSION_ID] [--turn TURN_ID]   turn-level token and cost accounting
   ct session step-detail STEP_ID [...]             full detail for one or more steps
   ct session event-scan [SESSION_ID] --type TYPE [--filter KEY=VALUE]
                                                    query raw events by type
@@ -366,7 +366,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     session_usage = session_sub.add_parser(
         "usage",
-        help="Show turn-level activity cost and token efficiency.",
+        help="Show turn-level token and cost accounting.",
         formatter_class=_GhFormatter,
     )
     _add_session_source(session_usage)
@@ -378,7 +378,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Limit usage analysis to one turn.",
     )
     _add_output_flags(session_usage)
-    _add_format_flag(session_usage)
+    _add_data_flag(session_usage)
     _add_metrics_flags(session_usage)
     session_usage.set_defaults(
         _method="session.usage",
@@ -450,44 +450,6 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _usage_total_tokens(tokens: dict[str, Any]) -> int:
-    return sum(value for _, value in _token_rows(tokens))
-
-
-def _token_rows(tokens: dict[str, Any]) -> list[tuple[str, int]]:
-    input_tokens = int(tokens.get("input_tokens") or 0)
-    cached_input_tokens = int(tokens.get("cached_input_tokens") or 0)
-    fresh_input_tokens = max(input_tokens - cached_input_tokens, 0)
-    rows = [
-        ("Fresh input", fresh_input_tokens),
-        ("Cached input", cached_input_tokens),
-        ("Output", int(tokens.get("output_tokens") or 0)),
-        ("Reasoning output", int(tokens.get("reasoning_output_tokens") or 0)),
-    ]
-    return [(label, value) for label, value in rows if value]
-
-
-def _usage_summary(tokens: dict[str, Any], *, cost_usd: float | None = None) -> dict[str, Any]:
-    rows = dict(_token_rows(tokens))
-    used = _usage_total_tokens(tokens)
-    input_tokens = int(tokens.get("input_tokens") or 0)
-    cached_input_tokens = int(tokens.get("cached_input_tokens") or 0)
-    result: dict[str, Any] = {
-        "fresh_input_tokens": rows.get("Fresh input", 0),
-        "cached_input_tokens": cached_input_tokens,
-        "output_tokens": int(tokens.get("output_tokens") or 0),
-        "reasoning_output_tokens": int(tokens.get("reasoning_output_tokens") or 0),
-        "used_tokens": used,
-        "cache_reuse_ratio": round(cached_input_tokens / input_tokens, 4) if input_tokens else 0.0,
-        "output_per_1k_input": round((int(tokens.get("output_tokens") or 0) / input_tokens) * 1000, 2)
-        if input_tokens
-        else 0.0,
-    }
-    if cost_usd is not None:
-        result["cost_usd"] = cost_usd
-    return {key: value for key, value in result.items() if value not in (0, 0.0, None)}
-
-
 def _short_id(value: Any) -> str:
     text = str(value or "")
     return text[:8] if text else "-"
@@ -543,6 +505,25 @@ def _format_duration(seconds: Any) -> str:
     if minutes:
         return f"{minutes}m {secs}s"
     return f"{secs}s"
+
+
+def _format_cost(value: Any) -> str:
+    try:
+        cost = float(value or 0)
+    except (TypeError, ValueError):
+        return "$0.00"
+    return f"${cost:.4f}" if cost and cost < 0.01 else f"${cost:.2f}"
+
+
+def _render_usage_line(usage: dict[str, Any]) -> str:
+    return (
+        f"input {_format_tokens(usage.get('input_tokens'))}  "
+        f"cached {_format_tokens(usage.get('cached_input_tokens'))}  "
+        f"output {_format_tokens(usage.get('output_tokens'))}  "
+        f"reasoning {_format_tokens(usage.get('reasoning_output_tokens'))}  "
+        f"total {_format_tokens(usage.get('total_tokens'))}  "
+        f"cost {_format_cost(usage.get('cost_usd'))}"
+    )
 
 
 def _overview_request_label(request: Any) -> str:
@@ -693,38 +674,25 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _project_usage_for_reading(payload: dict[str, Any]) -> dict[str, Any]:
-    totals = payload.get("totals") or {}
-    return {
-        "root_session_id": payload.get("root_session_id"),
-        "turns": [_project_usage_turn_for_reading(turn) for turn in payload.get("turns") or []],
-        "totals": {
-            "usage": _usage_summary(totals.get("tokens") or {}, cost_usd=float(totals.get("cost_usd") or 0)),
-        },
-        "extra_billing": payload.get("extra_billing"),
-        "warnings": payload.get("warnings") or [],
-    }
+def _render_session_usage_text(payload: dict[str, Any]) -> str:
+    lines = ["Session Usage", "", "Total"]
+    lines.append(f"  {_render_usage_line(payload.get('total_usage') or {})}")
 
+    turns = payload.get("turns") or []
+    if turns:
+        lines.extend(["", "Turns"])
+    for turn in turns:
+        lines.append(f"  turn {_short_id(turn.get('turn_id'))}")
+        lines.append(f"    {_render_usage_line(turn.get('usage') or {})}")
+        for activity in turn.get("activity_usage") or []:
+            category = str(activity.get("category") or "-")
+            lines.append(f"    {category:<14} {_render_usage_line(activity.get('usage') or {})}")
 
-def _project_usage_turn_for_reading(turn: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "turn_id": turn.get("turn_id"),
-        "session_id": turn.get("session_id"),
-        "seq": turn.get("seq"),
-        "model": turn.get("model"),
-        "usage": _usage_summary(turn.get("tokens") or {}, cost_usd=float(turn.get("cost_usd") or 0)),
-        "activities": [_project_usage_activity_for_reading(item) for item in turn.get("activities") or []],
-    }
-
-
-def _project_usage_activity_for_reading(activity: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "kind": activity.get("kind"),
-        "step_count": activity.get("step_count"),
-        "tool_call_count": activity.get("tool_call_count"),
-        "duration_ms": activity.get("duration_ms"),
-        "usage": _usage_summary(activity.get("tokens") or {}, cost_usd=float(activity.get("cost_usd") or 0)),
-    }
+    warnings = payload.get("warnings") or []
+    if warnings:
+        lines.append("")
+        lines.extend(f"Warning: {_one_line(warning, limit=110)}" for warning in warnings)
+    return "\n".join(lines).rstrip()
 
 
 def _prune_empty(value: Any) -> Any:
@@ -751,13 +719,13 @@ def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
         return _render_session_overview_text(payload)
     if args._method == "session.stats":
         return _render_session_stats_text(payload)
+    if args._method == "session.usage":
+        return _render_session_usage_text(payload)
 
     fmt = getattr(args, "format", "json")
     if fmt == "json":
         return json.dumps(payload, indent=2, ensure_ascii=False)
     if fmt in {"yaml", "overview"}:
-        if args._method == "session.usage":
-            payload = _project_usage_for_reading(payload)
         json_compatible = _prune_empty(json.loads(json.dumps(payload, ensure_ascii=False)))
         return yaml.dump(json_compatible, Dumper=_YamlDumper, allow_unicode=True, sort_keys=False, width=120)
     return json.dumps(payload, indent=2, ensure_ascii=False)

@@ -15,27 +15,25 @@ Three goals:
 
 - session hierarchy for orientation
 - evidence of atomic action for detail
-- YAML for agent-readable hierarchy
+- text reports for reading
 - JSON for exact scripting and batch query
 
 ## Glossary
 
 - **Session hierarchy** — the structural shape of a run: sessions, child sessions,
-  turns, and steps. This is the progressive-disclosure surface.
-- **Session tree** — the same session hierarchy when resource usage is projected
-  onto it.
+  turns, and steps. This is the progressive-disclosure surface. The session id
+  passed to `session ...` commands is the entry point into this connected
+  hierarchy.
 - **Overview** — compact hierarchy and activity keys for finding where to drill in.
-- **Usage** — token, cost, quota, duration, and output-size accounting. Usage is
-  resource accounting, not hierarchy disclosure.
+- **Usage** — token and cost accounting. Usage is resource accounting, not
+  hierarchy disclosure or diagnosis.
 
 ## Output Formats
 
 The CLI exposes one human navigation format and one exact structured format:
 
-- Report commands default to human-readable stdout. For `session overview` and
-  `session stats`, this is a curated text report: hierarchy, summaries, top
-  signals, and drill-down ids without raw tool output or full assistant response
-  text. Use `--data` to print the structured JSON projection behind the report.
+- Report commands default to human-readable stdout. Use `--data` to print the
+  structured JSON projection behind the report.
 - `--format yaml` — structured but pruned detail output for drill-down commands
   that still expose YAML.
 - `--format json` — best for exact machine use. Use this for `jq`, batch
@@ -45,9 +43,8 @@ The CLI exposes one human navigation format and one exact structured format:
 output stable for automation while allowing stdout to optimize interactive
 reading.
 
-`session stats` uses a fixed-width report for readable stdout and `--data` or
-`--output` for exact JSON. `session usage` keeps YAML for compact structured
-turn/accounting summaries.
+`session stats` and `session usage` use fixed reports for readable stdout and
+`--data` or `--output` for exact JSON.
 
 ## Intended Reading Flow
 
@@ -59,17 +56,15 @@ Structured View
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
    - activity renders as short human labels with truncated assistant response previews
-   - repeated consecutive low-value tool calls are grouped by tool profile with ordered unique targets and repeat counts when useful
-   - mutating or high-signal tools such as edits, writes, shell commands, subagents, and handoffs stay ungrouped; use `session step-detail` to expand the evidence
 4. `session stats <session_id> [--data]` — inspect session stats with compact context/token sections
-5. `session usage <session_id> [--turn TURN_ID] [--format yaml|json]` — compare turn-level activity cost and token efficiency
+5. `session usage <session_id> [--turn TURN_ID] [--data]` — inspect turn-level activity token and cost accounting
 6. `session step-detail <step_id> [--format yaml|json]` — read the evidence for a specific step
 
-`session usage` is intentionally turn-focused. It reports token buckets, cache
-reuse, output/input efficiency, and batched activity-category usage without
-expanding paths, queries, commands, or individual tool calls. Use
-`session overview`, `session step-detail`, or `session event-detail` when you
-need tree/navigation detail.
+`session usage` is intentionally turn-focused. It reports token buckets and cost
+grouped by turn and activity category without expanding paths, queries,
+commands, individual tool calls, derived efficiency, or explanatory semantics.
+Use `session overview`, `session step-detail`, `session event-detail`, or
+detail commands when you need hierarchy/navigation detail or causal drill-down.
 
 
 Raw View
@@ -77,5 +72,5 @@ Raw View
 2. `session event-scan <session_id> --type TYPE [--filter ...] [--format yaml|json]` — query raw events by type, optionally narrowed by payload predicates
 
 See [`cli-agent-notebook.ipynb`](cli-agent-notebook.ipynb) for an interactive
-Jupyter tutorial that uses YAML for reading and JSON for exact queries.
+Jupyter tutorial with examples and workflow guidance.
 ---
