@@ -8,8 +8,7 @@ from coding_trajectory.ingestion import (
     CodexAdapter,
     Event,
     EventType,
-    GeminiExtensions,
-    GeminiAdapter,
+
     Session,
     SessionStatus,
     Step,
@@ -38,8 +37,7 @@ __all__ = [
     "DocumentStore",
     "Event",
     "EventType",
-    "GeminiAdapter",
-    "GeminiExtensions",
+
     "Session",
     "SessionStatus",
     "Step",

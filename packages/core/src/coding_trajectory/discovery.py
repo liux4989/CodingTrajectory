@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter, GeminiAdapter, PiAdapter
+from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter, PiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import Event, Session, Step, SessionGraph, Turn, Vendor
@@ -38,7 +38,6 @@ def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     return [
         (Vendor.CODEX_CLI, CodexAdapter, home / ".codex" / "sessions", "*.jsonl"),
         (Vendor.CLAUDE_CODE, ClaudeCodeAdapter, home / ".claude" / "projects", "*.jsonl"),
-        (Vendor.GEMINI_CLI, GeminiAdapter, home / ".gemini" / "tmp", "session-*.json"),
         (Vendor.AMP, AmpAdapter, home / ".local" / "share" / "amp" / "threads", "T-*.json"),
         (Vendor.PI, PiAdapter, home / ".pi" / "agent" / "sessions", "*.jsonl"),
     ]
@@ -221,22 +220,6 @@ def _extract_session_cwd(session: Session, source: Path | None = None) -> str | 
             encoded = source.relative_to(base).parts[0]
             return _decode_claude_encoded_path(encoded)
         except ValueError:
-            pass
-
-    # Gemini CLI stores sessions under .gemini/tmp/<projectHash>/chats/session-*.json
-    # projects.json maps CWD path -> projectHash; invert it to resolve the hash to a CWD.
-    if source and session.vendor == Vendor.GEMINI_CLI:
-        base = Path.home() / ".gemini" / "tmp"
-        projects_file = Path.home() / ".gemini" / "projects.json"
-        try:
-            project_hash = source.relative_to(base).parts[0]
-            if projects_file.exists():
-                data = json.loads(projects_file.read_text(encoding="utf-8"))
-                hash_to_cwd = {v: k for k, v in (data.get("projects") or {}).items()}
-                cwd = hash_to_cwd.get(project_hash)
-                if cwd:
-                    return cwd
-        except (ValueError, KeyError, OSError):
             pass
 
     return None

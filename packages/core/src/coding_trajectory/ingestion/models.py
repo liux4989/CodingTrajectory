@@ -22,7 +22,6 @@ class EventType(str, Enum):
 class Vendor(str, Enum):
     CODEX_CLI   = "codex_cli"
     CLAUDE_CODE = "claude_code"
-    GEMINI_CLI  = "gemini_cli"
     AMP         = "amp"
     PI          = "pi"
 
@@ -79,14 +78,6 @@ class CodexExtensions(BaseModel):
     spawn_agent_role:   str | None = None
 
 
-class GeminiExtensions(BaseModel):
-    session_file:    str | None = None
-    title:           str | None = None
-    raw_tool_type:   str | None = None
-    model_version:   str | None = None
-    realtime_active: bool | None = None
-
-
 class AmpExtensions(BaseModel):
     thread_id:        str | None = None
     thread_version:   int | None = None
@@ -114,7 +105,6 @@ class PiExtensions(BaseModel):
 class VendorExtensions(BaseModel):
     claude_code: ClaudeCodeExtensions | None = None
     codex:       CodexExtensions | None = None
-    gemini:      GeminiExtensions | None = None
     amp:         AmpExtensions | None = None
     pi:          PiExtensions | None = None
 

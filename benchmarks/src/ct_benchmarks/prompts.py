@@ -49,7 +49,6 @@ Common fields in each line vary by vendor but typically include:
 ## Vendor-specific patterns
 - Claude Code: events keyed by `type` (e.g. "assistant", "tool_use", "tool_result"), session files in ~/.claude/projects/
 - Codex CLI: events with `type` field (e.g. "message", "function_call"), thread-based
-- Gemini CLI: events in session JSONL files
 - Amp: thread-based, events with `type` field, parent_thread_id for subagents
 
 Use your available tools (Read, Grep, Bash, etc.) to explore the file.

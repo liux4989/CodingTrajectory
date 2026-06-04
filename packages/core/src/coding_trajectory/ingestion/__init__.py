@@ -2,7 +2,6 @@ from coding_trajectory.ingestion.adapters.amp import AmpAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
-from coding_trajectory.ingestion.adapters.gemini import GeminiAdapter
 from coding_trajectory.ingestion.adapters.pi import PiAdapter
 from coding_trajectory.ingestion.graph import (
     assemble_project_session_graphs,
@@ -23,7 +22,6 @@ from coding_trajectory.ingestion.models import (
     ToolStatus,
     Event,
     EventType,
-    GeminiExtensions,
     Session,
     Step,
     SessionGraph,
@@ -43,7 +41,6 @@ __all__ = [
     "PiExtensions",
     "Event",
     "EventType",
-    "GeminiExtensions",
     "Session",
     "Step",
     "StepItem",
@@ -69,6 +66,5 @@ __all__ = [
     "BaseAdapter",
     "ClaudeCodeAdapter",
     "CodexAdapter",
-    "GeminiAdapter",
     "PiAdapter",
 ]

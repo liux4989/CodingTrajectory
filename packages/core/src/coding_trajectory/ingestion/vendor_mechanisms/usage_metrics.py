@@ -82,10 +82,6 @@ def normalize_amp_usage(*, model: Any, usage: Any) -> dict[str, Any]:
     )
 
 
-def normalize_gemini_usage(*, model: Any, tokens: Any) -> dict[str, Any]:
-    return _normalized_step_usage(model=model, usage=tokens)
-
-
 def normalize_quota_snapshot(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
