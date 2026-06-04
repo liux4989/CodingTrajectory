@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_AMP_THREADS_DIR = Path.home() / ".local" / "share" / "amp" / "threads"
 
 
+class AmpNoUserRequestError(ValueError):
+    pass
+
+
 def _content_text(blocks: list[dict]) -> str | None:
     texts = [
         block.get("text", "")
@@ -39,6 +43,15 @@ def _content_text(blocks: list[dict]) -> str | None:
     ]
     joined = " ".join(text for text in texts if text).strip()
     return joined or None
+
+
+def _has_user_request(messages: list[dict]) -> bool:
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        if _content_text(msg.get("content") or []):
+            return True
+    return False
 
 
 def _thinking_blocks(blocks: list[dict]) -> list[str]:
@@ -93,6 +106,15 @@ class AmpAdapter(BaseAdapter):
     def ingest_default(self) -> list[Session]:
         return self.ingest_directory(_DEFAULT_AMP_THREADS_DIR)
 
+    def ingest_directory(self, directory: Path) -> list[Session]:
+        sessions: list[Session] = []
+        for source_file in sorted(directory.glob(self._file_glob)):
+            try:
+                sessions.append(self.ingest_file(source_file))
+            except AmpNoUserRequestError:
+                continue
+        return sessions
+
     def _build_session(self, source: Path, records: list[dict]) -> Session:
         if not records:
             raise ValueError(f"AmpAdapter: no valid records found in {source}")
@@ -106,6 +128,8 @@ class AmpAdapter(BaseAdapter):
 
         created_at = parse_timestamp(thread.get("created")) or datetime.now(timezone.utc)
         messages = thread.get("messages") or []
+        if not _has_user_request(messages):
+            raise AmpNoUserRequestError(f"AmpAdapter: no user request found in {source}")
         traces = ((thread.get("meta") or {}).get("traces") or [])
         message_timestamps = self._build_message_timestamps(
             thread_created=created_at,

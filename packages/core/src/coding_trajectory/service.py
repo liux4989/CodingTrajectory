@@ -16,7 +16,7 @@ from coding_trajectory.discovery import (
     format_discovery_sources,
 )
 from coding_trajectory.ingestion.common import format_datetime, normalize_project_key, prune_nones
-from coding_trajectory.ingestion.models import Event, EventType, Session, Step, StepItem, SessionGraph, Turn
+from coding_trajectory.ingestion.models import Event, EventType, Session, Step, StepItem, SessionGraph, Turn, Vendor
 from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
 
 
@@ -70,6 +70,62 @@ def _session_graph_title(session_graph: SessionGraph) -> str | None:
         if title:
             return title
     return None
+
+
+def _amp_public_session_id(session: Session) -> str:
+    if session.extensions and session.extensions.amp and session.extensions.amp.thread_id:
+        return session.extensions.amp.thread_id
+    return f"T-{session.session_id}"
+
+
+def _public_session_id_for_session(session: Session) -> str:
+    if session.vendor == Vendor.AMP:
+        return _amp_public_session_id(session)
+    return str(session.session_id)
+
+
+def _public_session_id_map(session_graph: SessionGraph) -> dict[str, str]:
+    return {
+        str(session.session_id): _public_session_id_for_session(session)
+        for session in session_graph.sessions
+    }
+
+
+def _public_session_id_value(raw_id: str, session_ids: dict[str, str]) -> str:
+    try:
+        normalized = str(UUID(raw_id.removeprefix("T-")))
+    except ValueError:
+        return raw_id
+    return session_ids.get(normalized, raw_id)
+
+
+def _render_public_session_ids(value: Any, session_ids: dict[str, str]) -> Any:
+    if isinstance(value, list):
+        return [_render_public_session_ids(item, session_ids) for item in value]
+
+    if not isinstance(value, dict):
+        return value
+
+    rendered: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "payload":
+            rendered[key] = item
+            continue
+        if key in {"root_session_id", "session_id", "parent_session_id", "agent_session_id", "handoff_session_id"}:
+            rendered[key] = _public_session_id_value(item, session_ids) if isinstance(item, str) else item
+            continue
+        if key in {"session_ids", "forked_session_ids"} and isinstance(item, list):
+            rendered[key] = [
+                _public_session_id_value(entry, session_ids) if isinstance(entry, str) else entry
+                for entry in item
+            ]
+            continue
+        rendered[key] = _render_public_session_ids(item, session_ids)
+    return rendered
+
+
+def _public_output_for_session_graph(session_graph: SessionGraph, payload: Any) -> Any:
+    return _render_public_session_ids(payload, _public_session_id_map(session_graph))
 
 
 def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any]:
@@ -184,6 +240,10 @@ def serialize_text_detail(event: Event) -> dict[str, Any] | None:
 def _parse_user_id(raw_id: str) -> UUID:
     """Parse a user-provided ID, stripping vendor-specific prefixes (e.g. AMP 'T-')."""
     return UUID(raw_id.removeprefix("T-"))
+
+
+def _normalize_user_id(raw_id: str) -> str:
+    return str(_parse_user_id(raw_id))
 
 
 def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> SessionGraph | Session | Turn | Event | Step:
@@ -361,9 +421,21 @@ def _update_session_index(cache: IndexCache, store: DocumentStore) -> None:
             cache.session_to_session_graph[str(turn_id)] = str(root_session_id)
 
 
-def _build_store_full(*, global_scope: bool, current_dir: Path, cache: IndexCache) -> tuple[DocumentStore, str]:
+def _build_store_full(
+    *,
+    global_scope: bool,
+    current_dir: Path,
+    cache: IndexCache,
+    project_name: str | None = None,
+    since_days: int | None = None,
+) -> tuple[DocumentStore, str]:
     """Full discovery — populates cache.path_to_session_graph."""
-    discovery = discover_store(current_dir=current_dir, global_scope=global_scope)
+    discovery = discover_store(
+        current_dir=current_dir,
+        global_scope=global_scope,
+        project_name=project_name,
+        since_days=since_days,
+    )
     _update_path_index(cache, discovery.sources)
     _update_session_index(cache, discovery.store)
 
@@ -418,13 +490,19 @@ def resolve_store(
 
     entrypoint_id = _session_graph_entrypoint_id(params)
     if entrypoint_id and cache.path_to_session_graph:
-        target_session_graph_id = cache.session_to_session_graph.get(entrypoint_id, entrypoint_id)
+        normalized_entrypoint_id = _normalize_user_id(entrypoint_id)
+        target_session_graph_id = cache.session_to_session_graph.get(normalized_entrypoint_id, normalized_entrypoint_id)
         cached_paths = cache.paths_for_session_graph(target_session_graph_id)
         if cached_paths:
             return _build_store_targeted(cached_paths, cache)
 
-    effective_global_scope = global_scope or bool(params.get("project_name"))
-    return _build_store_full(global_scope=effective_global_scope, current_dir=current_dir, cache=cache)
+    return _build_store_full(
+        global_scope=global_scope,
+        current_dir=current_dir,
+        cache=cache,
+        project_name=params.get("project_name"),
+        since_days=params.get("since_days"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +541,7 @@ def dispatch(
             project_name=params.get("project_name"),
             agent_vendor=params.get("agent_vendor"),
         )
-        return {"items": [serialize_session_graph_detail(t) for t in session_graphs]}
+        return {"items": [_public_output_for_session_graph(t, serialize_session_graph_detail(t)) for t in session_graphs]}
 
     if method == "project.list":
         session_graphs = resolve_collection(
@@ -498,7 +576,7 @@ def dispatch(
         session_graphs = list(store.session_graphs.values())
         if not session_graphs:
             raise ValueError("no session_graphs found in log file")
-        return {"items": [serialize_session_graph_detail(t) for t in session_graphs]}
+        return {"items": [_public_output_for_session_graph(t, serialize_session_graph_detail(t)) for t in session_graphs]}
 
     if method == "session.overview":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
@@ -509,13 +587,13 @@ def dispatch(
         )
         for session in session_graph.sessions:
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return result
+        return _public_output_for_session_graph(session_graph, result)
 
     if method == "session.stats":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
         for session in session_graph.sessions:
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return build_session_graph_context_stats(session_graph)
+        return _public_output_for_session_graph(session_graph, build_session_graph_context_stats(session_graph))
 
     if method == "session.turn_usage":
         if not params.get("turn_id"):
@@ -547,24 +625,27 @@ def dispatch(
             for turn in session["turns"]
             if str(turn["turn_id"]) == turn_id
         ]
-        return {
+        return _public_output_for_session_graph(session_graph, {
             "root_session_id": result["root_session_id"],
             "token_usage": result["token_usage"],
             "cost": result["cost"],
             "extra_billing": result["extra_billing"],
             "turns": turns,
             "warnings": result.get("warnings") or [],
-        }
+        })
 
     if method == "session.usage":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
         extra_billing = bool(params.get("extra_billing"))
         for session in session_graph.sessions:
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return build_session_graph_usage(
+        return _public_output_for_session_graph(
             session_graph,
-            extra_billing=extra_billing,
-            turn_id=params.get("turn_id"),
+            build_session_graph_usage(
+                session_graph,
+                extra_billing=extra_billing,
+                turn_id=params.get("turn_id"),
+            ),
         )
 
     if method == "session.tool_usage":
@@ -572,9 +653,12 @@ def dispatch(
         extra_billing = bool(params.get("extra_billing"))
         for session in session_graph.sessions:
             cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return build_session_graph_tool_usage(
+        return _public_output_for_session_graph(
             session_graph,
-            extra_billing=extra_billing,
+            build_session_graph_tool_usage(
+                session_graph,
+                extra_billing=extra_billing,
+            ),
         )
 
     if method == "step.details":
@@ -587,7 +671,7 @@ def dispatch(
         for step_id in step_ids:
             step = resolve_resource(store, "step", step_id)
             session_graph = store.get_session_graph_for_session(step.session_id)
-            result.append(build_step_details(step, session_graph=session_graph))
+            result.append(_public_output_for_session_graph(session_graph, build_step_details(step, session_graph=session_graph)))
         return result
 
     if method == "event.detail":
@@ -595,7 +679,8 @@ def dispatch(
         if not event_id:
             raise ValueError("missing required param: event_id")
         event = resolve_resource(store, "event", event_id)
-        return serialize_event_detail(event)
+        session_graph = store.get_session_graph_for_session(event.session_id)
+        return _public_output_for_session_graph(session_graph, serialize_event_detail(event))
 
     if method == "event.scan":
         session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
@@ -603,6 +688,9 @@ def dispatch(
         if not event_type:
             raise ValueError("missing required param: type")
         filters: list[str] = params.get("filters") or []
-        return build_event_scan(session_graph, event_type=event_type, filters=filters)
+        return _public_output_for_session_graph(
+            session_graph,
+            build_event_scan(session_graph, event_type=event_type, filters=filters),
+        )
 
     raise KeyError(method)

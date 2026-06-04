@@ -6,6 +6,7 @@ import fnmatch
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -16,8 +17,6 @@ from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import Event, Session, Step, SessionGraph, Turn, Vendor
 from coding_trajectory.query import DocumentError, DocumentStore
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
-
-_SEARCH_LIMIT = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,33 +42,48 @@ def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     ]
 
 
-def discover_store(*, current_dir: Path, global_scope: bool = False) -> DiscoveryResult:
+def discover_store(
+    *,
+    current_dir: Path,
+    global_scope: bool = False,
+    project_name: str | None = None,
+    since_days: int | None = None,
+) -> DiscoveryResult:
     current_dir = current_dir.resolve()
-    current_project = normalize_project_key(current_dir.name)
+    scoped_project = project_name or (None if global_scope else current_dir.name)
+    scoped_project_key = normalize_project_key(scoped_project) if scoped_project else None
+    modified_since = _modified_since(since_days)
 
     sessions_by_project: dict[str, list[Session]] = {}
     path_session_meta: list[tuple[Vendor, Path, UUID]] = []
 
     for vendor, adapter_cls, base_dir, pattern in _vendor_configs():
-        for path in _recent_files(base_dir, pattern):
-            if not global_scope and not _matches_project(path, current_dir, current_project):
-                continue
-
+        for path in _candidate_files(
+            vendor,
+            base_dir,
+            pattern,
+            current_dir=current_dir,
+            scoped_project=scoped_project,
+            scoped_project_key=scoped_project_key,
+            modified_since=modified_since,
+        ):
             adapter = adapter_cls()
             try:
                 session = stabilize_session(adapter.ingest_file(path), vendor=vendor, source=path)
             except Exception:
                 continue
 
-            project_identifier = infer_project_identifier(session, path, fallback=current_dir.name if not global_scope else None)
+            project_identifier = infer_project_identifier(session, path, fallback=scoped_project)
             if project_identifier is None:
-                if global_scope:
+                if scoped_project is None:
                     project_identifier = f"unknown-{vendor.value}"
                 else:
                     continue
 
             key = normalize_project_key(project_identifier)
             if not key:
+                continue
+            if scoped_project_key and key != scoped_project_key:
                 continue
 
             sessions_by_project.setdefault(project_identifier, []).append(session)
@@ -136,24 +150,210 @@ def _normalize_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
-def _recent_files(base_dir: Path, pattern: str) -> list[Path]:
+def _modified_since(since_days: int | None) -> datetime | None:
+    if since_days is None:
+        return None
+    return datetime.now(timezone.utc) - timedelta(days=since_days)
+
+
+def _all_files(base_dir: Path, pattern: str, *, modified_since: datetime | None) -> list[Path]:
     if not base_dir.is_dir():
         return []
-    return sorted(base_dir.rglob(pattern), key=lambda item: item.stat().st_mtime, reverse=True)[:_SEARCH_LIMIT]
+    return [
+        path
+        for path in sorted(base_dir.rglob(pattern), key=lambda item: item.stat().st_mtime, reverse=True)
+        if _is_recent_enough(path, modified_since)
+    ]
 
 
-def _matches_project(path: Path, current_dir: Path, current_project: str) -> bool:
-    if _file_contains(path, str(current_dir)):
+def _candidate_files(
+    vendor: Vendor,
+    base_dir: Path,
+    pattern: str,
+    *,
+    current_dir: Path,
+    scoped_project: str | None,
+    scoped_project_key: str | None,
+    modified_since: datetime | None,
+) -> list[Path]:
+    if scoped_project_key is None:
+        return _all_files(base_dir, pattern, modified_since=modified_since)
+    if not base_dir.is_dir():
+        return []
+    paths = _all_files(base_dir, pattern, modified_since=modified_since)
+    return [
+        path
+        for path in paths
+        if _path_matches_project_scope(
+            vendor,
+            path,
+            current_dir,
+            scoped_project=scoped_project,
+            scoped_project_key=scoped_project_key,
+        )
+    ]
+
+
+def _is_recent_enough(path: Path, modified_since: datetime | None) -> bool:
+    if modified_since is None:
         return True
-    token = _normalize_token(current_project)
-    return any(_normalize_token(part) == token for part in path.parts)
-
-
-def _file_contains(path: Path, needle: str) -> bool:
     try:
-        return needle in path.read_text(encoding="utf-8", errors="ignore")
+        modified_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
     except OSError:
         return False
+    return modified_at >= modified_since
+
+
+def _path_matches_project_scope(
+    vendor: Vendor,
+    path: Path,
+    current_dir: Path,
+    *,
+    scoped_project: str | None,
+    scoped_project_key: str,
+) -> bool:
+    if vendor == Vendor.CLAUDE_CODE:
+        project_path = _claude_project_path_from_source(path)
+        if project_path is not None:
+            return _project_scope_matches_path(project_path, current_dir, scoped_project, scoped_project_key)
+
+    if vendor == Vendor.PI:
+        project_path = _pi_project_path_from_source(path)
+        if project_path is not None:
+            return _project_scope_matches_path(project_path, current_dir, scoped_project, scoped_project_key)
+
+    if vendor == Vendor.AMP:
+        workspace = _amp_workspace_from_source(path)
+        project_path = _amp_workspace_path(workspace)
+        project_name = _amp_workspace_name(workspace)
+        if project_path is not None and _project_scope_matches_path(
+            project_path,
+            current_dir,
+            scoped_project,
+            scoped_project_key,
+        ):
+            return True
+        if project_name is not None and normalize_project_key(project_name) == scoped_project_key:
+            return True
+        return False
+
+    if vendor == Vendor.CODEX_CLI:
+        project_path = _codex_project_path_from_source(path)
+        if project_path is not None:
+            return _project_scope_matches_path(project_path, current_dir, scoped_project, scoped_project_key)
+
+    path_token = _normalize_token(scoped_project_key)
+    return any(_normalize_token(part) == path_token for part in path.parts)
+
+
+def _project_scope_matches_path(
+    project_path: Path,
+    current_dir: Path,
+    scoped_project: str | None,
+    scoped_project_key: str,
+) -> bool:
+    try:
+        resolved = project_path.resolve()
+    except OSError:
+        resolved = project_path
+    if resolved == current_dir:
+        return True
+    if normalize_project_key(resolved.name) == scoped_project_key:
+        return True
+    if scoped_project and normalize_project_key(scoped_project) == normalize_project_key(resolved.name):
+        return True
+    return False
+
+
+def _claude_project_path_from_source(path: Path) -> Path | None:
+    base = Path.home() / ".claude" / "projects"
+    try:
+        encoded = path.resolve().relative_to(base).parts[0]
+    except (IndexError, ValueError):
+        return None
+    decoded = _decode_claude_encoded_path(encoded)
+    return Path(decoded) if decoded else None
+
+
+def _pi_project_path_from_source(path: Path) -> Path | None:
+    base = Path.home() / ".pi" / "agent" / "sessions"
+    try:
+        encoded = path.resolve().relative_to(base).parts[0]
+    except (IndexError, ValueError):
+        return None
+    stripped = encoded.strip("-")
+    if not stripped:
+        return None
+    return Path("/" + stripped.replace("-", "/"))
+
+
+def _amp_workspace_path(workspace: dict[str, object]) -> Path | None:
+    workspace_id = workspace.get("uri")
+    if not isinstance(workspace_id, str) or not workspace_id.startswith("file://"):
+        return None
+    return Path(workspace_id.removeprefix("file://"))
+
+
+def _amp_workspace_name(workspace: dict[str, object]) -> str | None:
+    name = workspace.get("displayName")
+    return name if isinstance(name, str) and name else None
+
+
+def _amp_workspace_from_source(path: Path) -> dict[str, object]:
+    workspace: dict[str, object] = {}
+    in_env = False
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if line == '"env": {' or line.startswith('"env": {'):
+                    in_env = True
+                    continue
+                if not in_env:
+                    continue
+                if line.startswith('"displayName":'):
+                    workspace["displayName"] = _json_string_value(line)
+                elif line.startswith('"uri":'):
+                    workspace["uri"] = _json_string_value(line)
+                if workspace.get("displayName") and workspace.get("uri"):
+                    break
+    except OSError:
+        return {}
+    return workspace
+
+
+def _json_string_value(line: str) -> str | None:
+    _, _, raw_value = line.partition(":")
+    raw_value = raw_value.rstrip(",").strip()
+    try:
+        value = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _codex_project_path_from_source(path: Path, *, max_records: int = 8) -> Path | None:
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for index, raw_line in enumerate(handle):
+                if index >= max_records:
+                    break
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    record = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                payload = record.get("payload") or {}
+                if not isinstance(payload, dict):
+                    continue
+                cwd = payload.get("cwd")
+                if isinstance(cwd, str) and cwd:
+                    return Path(cwd)
+    except OSError:
+        return None
+    return None
 
 
 def infer_project_identifier(session: Session, source: Path, *, fallback: str | None) -> str | None:

@@ -54,6 +54,7 @@ def _project_sessions_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {}
     if args.project_name:
         params["project_name"] = args.project_name
+    params["since_days"] = None if args.all_time else args.since_days
     agent_vendor = getattr(args, "agent_vendor", None)
     if agent_vendor is not None:
         params["agent_vendor"] = agent_vendor
@@ -257,7 +258,7 @@ def _add_agent_vendor_flag(p: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Filter by agent vendor. "
-            "Known values: claude_code, codex_cli, amp."
+            "Known values: claude_code, codex_cli, amp, pi."
         ),
     )
 
@@ -306,6 +307,18 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=None,
         help="Project name to list sessions for. Defaults to the current directory.",
+    )
+    project_sessions.add_argument(
+        "--since-days",
+        type=_positive_int,
+        default=30,
+        metavar="N",
+        help="Only scan sessions modified in the last N days. Defaults to 30.",
+    )
+    project_sessions.add_argument(
+        "--all-time",
+        action="store_true",
+        help="Scan all matching sessions, ignoring the default 30-day window.",
     )
     _add_agent_vendor_flag(project_sessions)
     _add_output_flags(project_sessions)
