@@ -181,8 +181,13 @@ def serialize_text_detail(event: Event) -> dict[str, Any] | None:
     return {"text": text.strip()}
 
 
+def _parse_user_id(raw_id: str) -> UUID:
+    """Parse a user-provided ID, stripping vendor-specific prefixes (e.g. AMP 'T-')."""
+    return UUID(raw_id.removeprefix("T-"))
+
+
 def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> SessionGraph | Session | Turn | Event | Step:
-    resource_id = UUID(raw_id)
+    resource_id = _parse_user_id(raw_id)
 
     if resource == "session_graph":
         return store.get_session_graph(resource_id)
@@ -235,7 +240,7 @@ def resolve_collection(
     if resource == "session":
         sessions = list(store.sessions.values())
         if root_session_id:
-            tid = UUID(root_session_id)
+            tid = _parse_user_id(root_session_id)
             sessions = [
                 item
                 for item in sessions
@@ -316,7 +321,7 @@ class IndexCache:
 def _resolve_session_graph(store: Any, raw_id: str | None) -> Any:
     """Resolve a session graph by a session entry point."""
     if raw_id is not None:
-        resource_id = UUID(raw_id)
+        resource_id = _parse_user_id(raw_id)
         try:
             return store.get_session_graph(resource_id)
         except ResourceNotFoundError:
