@@ -7,6 +7,16 @@ from typing import Any
 _MISSING = object()
 _STEP_DETAIL_TRUNCATE_LEN = 500
 _EVENT_SCAN_PAYLOAD_PREVIEW_LEN = 300
+_ELLIPSIS = "..."
+
+
+def truncate_text_preview(value: Any, *, max_len: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_len:
+        return text
+    if max_len <= len(_ELLIPSIS):
+        return _ELLIPSIS[: max(max_len, 0)]
+    return text[: max_len - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
 
 
 def truncation_marker(length: int, event_ids: list) -> str:

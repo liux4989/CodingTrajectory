@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch, resolve_store
 
@@ -451,10 +452,7 @@ def _display_value(value: Any) -> str:
 
 
 def _one_line(value: Any, *, limit: int = 96) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(limit - 1, 0)].rstrip() + "..."
+    return truncate_text_preview(value, max_len=limit)
 
 
 def _format_tokens(value: Any) -> str:
@@ -564,27 +562,18 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
         turns = session.get("turns") or []
         for turn_index, turn in enumerate(turns):
             turn_prefix = "   `-" if turn_index == len(turns) - 1 else "   +-"
-            step_ids = turn.get("step_ids") or []
-            refs = ""
-            if step_ids:
-                shown = ",".join(_short_id(step_id) for step_id in step_ids[:4])
-                more = f"+{len(step_ids) - 4}" if len(step_ids) > 4 else ""
-                refs = f"  [{shown}{more}]"
             lines.append(
                 f"{turn_prefix} turn {_short_id(turn.get('turn_id'))}  "
-                f"{_display_value(turn.get('status')) or '-'}{refs}  {_overview_request_label(turn.get('user_request'))}"
+                f"{_display_value(turn.get('status')) or '-'}  {_overview_request_label(turn.get('user_request'))}"
             )
 
             activities = turn.get("activity") or []
             if turn.get("teammate_summary"):
                 activities = [{"teammate_summary": turn.get("teammate_summary")}]
-            visible_activities = activities[:8]
-            for activity_index, activity in enumerate(visible_activities):
-                branch = "      `-" if activity_index == len(visible_activities) - 1 and len(activities) <= 8 else "      +-"
+            for activity_index, activity in enumerate(activities):
+                branch = "      `-" if activity_index == len(activities) - 1 else "      +-"
                 if isinstance(activity, dict):
                     lines.append(f"{branch} {_overview_activity_label(activity)}")
-            if len(activities) > len(visible_activities):
-                lines.append(f"      `- ... {len(activities) - len(visible_activities)} more activities")
 
     return "\n".join(lines).rstrip()
 

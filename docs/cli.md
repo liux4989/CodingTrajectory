@@ -58,11 +58,12 @@ Structured View
 2. `project sessions [project_name] [--agent-vendor VENDOR] [--format json|overview]` — list sessions for a project, get the session id to use as an entry point
    - omit `project_name` to use the current directory
    - known agent vendors are `claude_code`, `codex_cli`, and `amp`
-3. `session overview [session_id] [--turns N] [--drop-turns K] [--data]` — read the compact session hierarchy, identify relevant steps
+3. `session overview [session_id] [--turns N] [--drop-turns K] [--data]` — read the compact session hierarchy, identify relevant turns
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
-   - activity renders as short human labels with truncated assistant response previews
+   - activity renders as grouped human labels with truncated assistant response previews
+   - use `--data` when you need full step ids for drill-down
 4. `session stats [session_id] [--extra-billing] [--data]` — inspect session stats with compact context/token sections
 5. `session usage [session_id] [--turn TURN_ID] [--extra-billing] [--data]` — inspect turn-level activity token and cost accounting
 6. `session step-detail <step_id> [...]` — read the JSON evidence for one or more steps

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from coding_trajectory.analysis.activity_flow import build_compact_flows
+from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.indexes import SessionGraphIndex, build_session_graph_index, ordered_sessions
 from coding_trajectory.ingestion.models import Session, StepTextItem, SessionGraph, Turn
@@ -246,6 +246,8 @@ def _turn_nav_node(
         "turn_id": str(turn.turn_id),
         "status": turn.status,
         "user_request": user_request,
-        "activity": build_compact_flows(turn.steps),
-        "step_ids": [str(step.step_id) for step in turn.steps],
+        "activity": build_overview_flows(turn.steps),
+        "refs": {
+            "step_ids": [str(step.step_id) for step in turn.steps],
+        },
     })
