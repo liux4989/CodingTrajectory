@@ -329,7 +329,10 @@ def _resolve_session_graph(store: Any, raw_id: str | None) -> Any:
                 session = store.get_session(resource_id)
                 return store.get_session_graph_for_session(session.session_id)
             except ResourceNotFoundError:
-                return store.get_session_graph_for_turn(resource_id)
+                try:
+                    return store.get_session_graph_for_turn(resource_id)
+                except ResourceNotFoundError:
+                    raise ResourceNotFoundError(f"resource not found: {raw_id}") from None
     session_graphs = list(store.session_graphs.values())
     if len(session_graphs) == 1:
         return session_graphs[0]
