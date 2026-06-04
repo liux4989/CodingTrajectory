@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
+from coding_trajectory_cli.plugins import CtPluginContext, LoadedPlugin, load_plugins
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch, resolve_store
 
@@ -156,6 +157,17 @@ FILTER SYNTAX
   Dot-paths supported: result.error=*
 """
 
+_PLUGIN_EPILOG = """\
+PLUGIN COMMANDS
+  ct plugin list                                 list installed ct CLI plugins
+
+NOTE
+  Third-party plugins register subcommands under `ct plugin` via the
+  `coding_trajectory.cli_plugins` entry point group.
+"""
+
+_PLUGIN_STATE: list[LoadedPlugin] = []
+
 
 class _GhFormatter(argparse.RawDescriptionHelpFormatter):
     """Help formatter that matches the gh/git style: ALL CAPS sections, USAGE prefix."""
@@ -261,6 +273,52 @@ def _add_agent_vendor_flag(p: argparse.ArgumentParser) -> None:
             "Known values: claude_code, codex_cli, amp, pi."
         ),
     )
+
+
+def _json_renderer(_args: argparse.Namespace, payload: dict[str, Any]) -> str:
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def _render_plugin_list_text(payload: dict[str, Any]) -> str:
+    plugins = payload.get("plugins") or []
+    loaded = sum(1 for plugin in plugins if plugin.get("status") == "loaded")
+    failed = len(plugins) - loaded
+    lines = [
+        f"Plugins: {loaded} loaded, {failed} failed",
+        "",
+    ]
+    for plugin in plugins:
+        name = plugin.get("plugin_name") or "-"
+        entry_point = plugin.get("entry_point") or "-"
+        lines.append(f"{name:<24} {plugin.get('status') or '-':<8} {entry_point}")
+        module = plugin.get("module")
+        if module:
+            lines.append(f"  module: {module}")
+        error = plugin.get("error")
+        if error:
+            lines.append(f"  error: {error}")
+    if not plugins:
+        lines.append("No plugins found.")
+    return "\n".join(lines).rstrip()
+
+
+def _plugin_list_payload(plugins: list[LoadedPlugin]) -> dict[str, Any]:
+    return {
+        "plugins": [
+            {
+                "entry_point": plugin.entry_point,
+                "module": plugin.module,
+                "plugin_name": plugin.plugin_name,
+                "status": "loaded" if plugin.loaded else "failed",
+                "error": plugin.error,
+            }
+            for plugin in plugins
+        ]
+    }
+
+
+def _handle_plugin_list(_args: argparse.Namespace) -> dict[str, Any]:
+    return _plugin_list_payload(_PLUGIN_STATE)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -451,6 +509,32 @@ def _build_parser() -> argparse.ArgumentParser:
             **({"session_id": args.session_id} if args.session_id else {}),
         },
     )
+
+    plugin_parser = subparsers.add_parser(
+        "plugin",
+        help="Run plugin-provided ct commands.",
+        epilog=_PLUGIN_EPILOG,
+        formatter_class=_GhFormatter,
+    )
+    plugin_sub = plugin_parser.add_subparsers(dest="plugin_action", required=True)
+
+    plugin_list = plugin_sub.add_parser(
+        "list",
+        help="List installed ct CLI plugins.",
+        formatter_class=_GhFormatter,
+    )
+    _add_base_output_flags(plugin_list)
+    _add_format_flag(plugin_list, choices=("overview", "json"), default="overview")
+    plugin_list.set_defaults(
+        _plugin_handler=_handle_plugin_list,
+        _render_payload=lambda args, payload: _json_renderer(args, payload)
+        if getattr(args, "format", "overview") == "json"
+        else _render_plugin_list_text(payload),
+    )
+
+    plugin_ctx = CtPluginContext(render_json=_json_renderer)
+    global _PLUGIN_STATE
+    _PLUGIN_STATE = load_plugins(plugin_sub, ctx=plugin_ctx)
 
     return parser
 
@@ -689,6 +773,10 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
 
 
 def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
+    plugin_renderer = getattr(args, "_render_payload", None)
+    if callable(plugin_renderer):
+        return plugin_renderer(args, payload)
+
     if getattr(args, "details", False) or getattr(args, "data", False):
         return json.dumps(payload, indent=2, ensure_ascii=False)
 
@@ -707,7 +795,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        payload = _dispatch(args)
+        plugin_handler = getattr(args, "_plugin_handler", None)
+        payload = plugin_handler(args) if callable(plugin_handler) else _dispatch(args)
     except ResourceNotFoundError as exc:
         print(json.dumps({"error": {"message": str(exc)}}, indent=2), file=sys.stderr)
         return 1
