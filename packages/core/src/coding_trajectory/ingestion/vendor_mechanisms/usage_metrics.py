@@ -96,29 +96,6 @@ def normalize_pi_usage(*, provider: Any = None, model: Any, usage: Any) -> dict[
     )
 
 
-def normalize_amp_usage(*, model: Any, usage: Any) -> dict[str, Any]:
-    usage_map = usage if isinstance(usage, dict) else {}
-    input_tokens = _as_int_or_none(usage_map.get("inputTokens")) or 0
-    cache_read = _as_int_or_none(usage_map.get("cacheReadInputTokens")) or 0
-    cache_creation = _as_int_or_none(usage_map.get("cacheCreationInputTokens")) or 0
-    output_tokens = _as_int_or_none(usage_map.get("outputTokens")) or 0
-    total_input = (
-        _as_int_or_none(usage_map.get("totalInputTokens"))
-        or (input_tokens + cache_read + cache_creation)
-    )
-    return _normalized_step_usage(
-        model=model or usage_map.get("model"),
-        usage={
-            "input_tokens": input_tokens,
-            "cached_input_tokens": cache_read,
-            "cache_creation_input_tokens": cache_creation,
-            "output_tokens": output_tokens,
-            "total_tokens": total_input + output_tokens,
-            "max_input_tokens": _as_int_or_none(usage_map.get("maxInputTokens")),
-        },
-        cumulative_input_tokens=total_input,
-    )
-
 
 def normalize_quota_snapshot(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from coding_trajectory.ingestion import AmpAdapter, ClaudeCodeAdapter, CodexAdapter, PiAdapter
+from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import Event, Session, Step, SessionGraph, Turn, Vendor
@@ -37,7 +37,6 @@ def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     return [
         (Vendor.CODEX_CLI, CodexAdapter, home / ".codex" / "sessions", "*.jsonl"),
         (Vendor.CLAUDE_CODE, ClaudeCodeAdapter, home / ".claude" / "projects", "*.jsonl"),
-        (Vendor.AMP, AmpAdapter, home / ".local" / "share" / "amp" / "threads", "T-*.json"),
         (Vendor.PI, PiAdapter, home / ".pi" / "agent" / "sessions", "*.jsonl"),
     ]
 
@@ -222,21 +221,6 @@ def _path_matches_project_scope(
         if project_path is not None:
             return _project_scope_matches_path(project_path, current_dir, scoped_project, scoped_project_key)
 
-    if vendor == Vendor.AMP:
-        workspace = _amp_workspace_from_source(path)
-        project_path = _amp_workspace_path(workspace)
-        project_name = _amp_workspace_name(workspace)
-        if project_path is not None and _project_scope_matches_path(
-            project_path,
-            current_dir,
-            scoped_project,
-            scoped_project_key,
-        ):
-            return True
-        if project_name is not None and normalize_project_key(project_name) == scoped_project_key:
-            return True
-        return False
-
     if vendor == Vendor.CODEX_CLI:
         project_path = _codex_project_path_from_source(path)
         if project_path is not None:
@@ -287,51 +271,6 @@ def _pi_project_path_from_source(path: Path) -> Path | None:
     return Path("/" + stripped.replace("-", "/"))
 
 
-def _amp_workspace_path(workspace: dict[str, object]) -> Path | None:
-    workspace_id = workspace.get("uri")
-    if not isinstance(workspace_id, str) or not workspace_id.startswith("file://"):
-        return None
-    return Path(workspace_id.removeprefix("file://"))
-
-
-def _amp_workspace_name(workspace: dict[str, object]) -> str | None:
-    name = workspace.get("displayName")
-    return name if isinstance(name, str) and name else None
-
-
-def _amp_workspace_from_source(path: Path) -> dict[str, object]:
-    workspace: dict[str, object] = {}
-    in_env = False
-    try:
-        with path.open(encoding="utf-8") as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if line == '"env": {' or line.startswith('"env": {'):
-                    in_env = True
-                    continue
-                if not in_env:
-                    continue
-                if line.startswith('"displayName":'):
-                    workspace["displayName"] = _json_string_value(line)
-                elif line.startswith('"uri":'):
-                    workspace["uri"] = _json_string_value(line)
-                if workspace.get("displayName") and workspace.get("uri"):
-                    break
-    except OSError:
-        return {}
-    return workspace
-
-
-def _json_string_value(line: str) -> str | None:
-    _, _, raw_value = line.partition(":")
-    raw_value = raw_value.rstrip(",").strip()
-    try:
-        value = json.loads(raw_value)
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, str) else None
-
-
 def _codex_project_path_from_source(path: Path, *, max_records: int = 8) -> Path | None:
     try:
         with path.open(encoding="utf-8") as handle:
@@ -357,14 +296,7 @@ def _codex_project_path_from_source(path: Path, *, max_records: int = 8) -> Path
 
 
 def infer_project_identifier(session: Session, source: Path, *, fallback: str | None) -> str | None:
-    if session.extensions and session.extensions.amp:
-        amp = session.extensions.amp
-        if amp.workspace_name:
-            return amp.workspace_name
-        if amp.workspace_id and amp.workspace_id.startswith("file://"):
-            return Path(amp.workspace_id.removeprefix("file://")).name
-
-    # For Claude Code the source path encodes the CWD authoritatively; event payloads
+# For Claude Code the source path encodes the CWD authoritatively; event payloads
     # can contain misleading cwds (e.g. when a session runs inside .claude/projects/).
     # Path structure: .claude/projects/<encoded-cwd>/<session-uuid>[/subagents]/file.jsonl
     if session.vendor == Vendor.CLAUDE_CODE:
@@ -396,11 +328,6 @@ def _extract_session_cwd(session: Session, source: Path | None = None) -> str | 
             return session.extensions.codex.cwd
         if session.extensions.pi and session.extensions.pi.cwd:
             return session.extensions.pi.cwd
-        if session.extensions.amp and session.extensions.amp.workspace_id:
-            ws_id = session.extensions.amp.workspace_id
-            if ws_id.startswith("file://"):
-                return ws_id.removeprefix("file://")
-
     for event in session.events:
         payload = cast(dict[str, object], event.payload)
         cwd = payload.get("cwd")

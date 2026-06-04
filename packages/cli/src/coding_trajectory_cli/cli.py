@@ -270,7 +270,7 @@ def _add_agent_vendor_flag(p: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Filter by agent vendor. "
-            "Known values: claude_code, codex_cli, amp, pi."
+            "Known values: claude_code, codex_cli, pi."
         ),
     )
 

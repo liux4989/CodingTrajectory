@@ -27,7 +27,4 @@ TOOL_CONCEPT_MAP: dict[str, StepType] = {
     "TodoWrite":   StepType.TODO_LIST,        # Claude Code
     "TodoRead":    StepType.TODO_LIST,        # Claude Code
 
-    # --- session handoff ---
-    "handoff":    StepType.SESSION_HANDOFF,   # Amp
-    "handoff_to": StepType.SESSION_HANDOFF,   # Amp
 }

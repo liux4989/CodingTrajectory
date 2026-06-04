@@ -57,7 +57,7 @@ Structured View
 1. `project list [--agent-vendor VENDOR] [--format json|overview]` — find project names
 2. `project sessions [project_name] [--agent-vendor VENDOR] [--format json|overview]` — list sessions for a project, get the session id to use as an entry point
    - omit `project_name` to use the current directory
-   - known agent vendors are `claude_code`, `codex_cli`, and `amp`
+   - known agent vendors are `claude_code`, `codex_cli`, and `pi`
 3. `session overview [session_id] [--turns N] [--drop-turns K] [--details]` — read the compact session hierarchy, identify relevant turns
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`

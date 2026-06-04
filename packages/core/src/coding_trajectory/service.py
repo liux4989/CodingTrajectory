@@ -39,8 +39,6 @@ def _session_title(session: Session) -> str | None:
     extensions = session.extensions
     if extensions and extensions.codex and extensions.codex.title:
         return extensions.codex.title
-    if extensions and extensions.amp and extensions.amp.title:
-        return extensions.amp.title
     if extensions and extensions.claude_code and extensions.claude_code.title:
         return extensions.claude_code.title
     return None
@@ -72,15 +70,7 @@ def _session_graph_title(session_graph: SessionGraph) -> str | None:
     return None
 
 
-def _amp_public_session_id(session: Session) -> str:
-    if session.extensions and session.extensions.amp and session.extensions.amp.thread_id:
-        return session.extensions.amp.thread_id
-    return f"T-{session.session_id}"
-
-
 def _public_session_id_for_session(session: Session) -> str:
-    if session.vendor == Vendor.AMP:
-        return _amp_public_session_id(session)
     return str(session.session_id)
 
 
@@ -93,7 +83,7 @@ def _public_session_id_map(session_graph: SessionGraph) -> dict[str, str]:
 
 def _public_session_id_value(raw_id: str, session_ids: dict[str, str]) -> str:
     try:
-        normalized = str(UUID(raw_id.removeprefix("T-")))
+        normalized = str(UUID(raw_id))
     except ValueError:
         return raw_id
     return session_ids.get(normalized, raw_id)
@@ -238,8 +228,8 @@ def serialize_text_detail(event: Event) -> dict[str, Any] | None:
 
 
 def _parse_user_id(raw_id: str) -> UUID:
-    """Parse a user-provided ID, stripping vendor-specific prefixes (e.g. AMP 'T-')."""
-    return UUID(raw_id.removeprefix("T-"))
+    """Parse a user-provided ID."""
+    return UUID(raw_id)
 
 
 def _normalize_user_id(raw_id: str) -> str:

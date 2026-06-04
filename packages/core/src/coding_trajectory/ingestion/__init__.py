@@ -1,4 +1,3 @@
-from coding_trajectory.ingestion.adapters.amp import AmpAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
@@ -11,7 +10,7 @@ from coding_trajectory.ingestion.graph import (
     decorate_sessions,
 )
 from coding_trajectory.ingestion.models import (
-    AmpExtensions,
+    AccountIdentity,
     ClaudeCodeExtensions,
     CodexExtensions,
     PiExtensions,
@@ -35,7 +34,7 @@ from coding_trajectory.ingestion.models import (
 
 __all__ = [
     # models
-    "AmpExtensions",
+    "AccountIdentity",
     "ClaudeCodeExtensions",
     "CodexExtensions",
     "PiExtensions",
@@ -62,7 +61,6 @@ __all__ = [
     "build_session_graph_summary",
     "decorate_sessions",
     # adapters
-    "AmpAdapter",
     "BaseAdapter",
     "ClaudeCodeAdapter",
     "CodexAdapter",

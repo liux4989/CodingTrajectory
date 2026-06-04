@@ -1,6 +1,5 @@
 from coding_trajectory.ingestion import (
-    AmpAdapter,
-    AmpExtensions,
+    AccountIdentity,
     BaseAdapter,
     ClaudeCodeExtensions,
     ClaudeCodeAdapter,
@@ -27,9 +26,8 @@ from coding_trajectory.ingestion import (
 from coding_trajectory.query import DocumentStore
 
 __all__ = [
-    "AmpAdapter",
-    "AmpExtensions",
     "BaseAdapter",
+    "AccountIdentity",
     "ClaudeCodeAdapter",
     "ClaudeCodeExtensions",
     "CodexAdapter",

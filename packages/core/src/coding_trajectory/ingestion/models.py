@@ -22,7 +22,6 @@ class EventType(str, Enum):
 class Vendor(str, Enum):
     CODEX_CLI   = "codex_cli"
     CLAUDE_CODE = "claude_code"
-    AMP         = "amp"
     PI          = "pi"
 
 
@@ -78,21 +77,6 @@ class CodexExtensions(BaseModel):
     spawn_agent_role:   str | None = None
 
 
-class AmpExtensions(BaseModel):
-    thread_id:        str | None = None
-    thread_version:   int | None = None
-    parent_thread_id: str | None = None
-    workspace_id:     str | None = None
-    workspace_name:   str | None = None
-    git_url:          str | None = None
-    git_ref:          str | None = None
-    agent_version:    str | None = None
-    client_type:      str | None = None
-    os_platform:      str | None = None
-    title:            str | None = None
-    agent_mode:       str | None = None
-
-
 class PiExtensions(BaseModel):
     session_file:  str | None = None
     cwd:           str | None = None
@@ -105,8 +89,13 @@ class PiExtensions(BaseModel):
 class VendorExtensions(BaseModel):
     claude_code: ClaudeCodeExtensions | None = None
     codex:       CodexExtensions | None = None
-    amp:         AmpExtensions | None = None
     pi:          PiExtensions | None = None
+
+
+class AccountIdentity(BaseModel):
+    key:    str
+    label:  str | None = None
+    vendor: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +186,7 @@ class Session(BaseModel):
     session_id:        UUID = Field(default_factory=uuid4)
     vendor:            Vendor
     agent_name:        str | None = None
+    account:           AccountIdentity | None = None
     started_at:        datetime
     ended_at:          datetime | None = None
     parent_session_id: UUID | None = None
