@@ -136,6 +136,33 @@ def get_default_price_rules(*, now: datetime | None = None) -> dict[str, PriceRu
     return merged
 
 
+def get_model_context_window(
+    model: str | None,
+    *,
+    provider: str | None = None,
+    now: datetime | None = None,
+) -> int | None:
+    """Lookup a model's context window (in tokens) from the cached models.dev catalog."""
+    if not model:
+        return None
+    artifact = _load_models_dev_cache(now=now or datetime.now(UTC))
+    if artifact is None:
+        return None
+    normalized_model = _normalize_model(model)
+    normalized_provider = _normalize_provider(provider)
+    for provider_key, prov in artifact.catalog.providers.items():
+        prov_id = _normalize_provider(prov.id or provider_key)
+        if normalized_provider and prov_id != normalized_provider:
+            continue
+        for map_key, dev_model in prov.models.items():
+            candidate = _normalize_model(dev_model.id or map_key)
+            if candidate != normalized_model:
+                continue
+            if dev_model.limit and dev_model.limit.context:
+                return dev_model.limit.context
+    return None
+
+
 _OPENAI_SOURCE = "https://developers.openai.com/api/docs/pricing"
 _ANTHROPIC_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing"
 

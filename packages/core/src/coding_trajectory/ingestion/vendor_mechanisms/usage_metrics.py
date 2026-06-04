@@ -15,6 +15,7 @@ class NormalizedUsageMetrics(BaseModel):
     last_token_usage: dict[str, Any] | None = None
     total_token_usage: dict[str, Any] | None = None
     model_context_window: int | None = None
+    cumulative_input_tokens: int | None = None
 
 
 class NormalizedQuotaWindow(BaseModel):
@@ -54,31 +55,68 @@ def normalize_codex_token_count(
 
 
 def normalize_claude_usage(*, model: Any, usage: Any) -> dict[str, Any]:
-    return _normalized_step_usage(model=model, usage=usage)
+    usage_map = usage if isinstance(usage, dict) else {}
+    input_tokens = _as_int_or_none(usage_map.get("input_tokens")) or 0
+    cache_read = _as_int_or_none(usage_map.get("cache_read_input_tokens")) or 0
+    cache_creation = _as_int_or_none(usage_map.get("cache_creation_input_tokens")) or 0
+    output_tokens = _as_int_or_none(usage_map.get("output_tokens")) or 0
+    total = input_tokens + cache_read + cache_creation + output_tokens
+    return _normalized_step_usage(
+        model=model,
+        usage={
+            "input_tokens": input_tokens,
+            "cached_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_creation,
+            "output_tokens": output_tokens,
+            "total_tokens": total,
+        },
+        cumulative_input_tokens=input_tokens + cache_read + cache_creation,
+    )
 
 
 def normalize_pi_usage(*, provider: Any = None, model: Any, usage: Any) -> dict[str, Any]:
     usage_map = usage if isinstance(usage, dict) else {}
+    input_tokens = _as_int_or_none(usage_map.get("input")) or 0
+    cache_read = _as_int_or_none(usage_map.get("cacheRead")) or 0
+    cache_write = _as_int_or_none(usage_map.get("cacheWrite")) or 0
+    output_tokens = _as_int_or_none(usage_map.get("output")) or 0
     return _normalized_step_usage(
         model=model,
         provider=provider,
         usage={
-            "input_tokens": usage_map.get("input"),
-            "output_tokens": usage_map.get("output"),
-            "total_tokens": usage_map.get("totalTokens"),
+            "input_tokens": input_tokens,
+            "cached_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_write,
+            "output_tokens": output_tokens,
+            "total_tokens": _as_int_or_none(usage_map.get("totalTokens"))
+            or (input_tokens + cache_read + cache_write + output_tokens),
             "cost_usd": _pi_cost_usd(usage_map.get("cost")),
         },
+        cumulative_input_tokens=input_tokens + cache_read + cache_write,
     )
 
 
 def normalize_amp_usage(*, model: Any, usage: Any) -> dict[str, Any]:
     usage_map = usage if isinstance(usage, dict) else {}
+    input_tokens = _as_int_or_none(usage_map.get("inputTokens")) or 0
+    cache_read = _as_int_or_none(usage_map.get("cacheReadInputTokens")) or 0
+    cache_creation = _as_int_or_none(usage_map.get("cacheCreationInputTokens")) or 0
+    output_tokens = _as_int_or_none(usage_map.get("outputTokens")) or 0
+    total_input = (
+        _as_int_or_none(usage_map.get("totalInputTokens"))
+        or (input_tokens + cache_read + cache_creation)
+    )
     return _normalized_step_usage(
         model=model or usage_map.get("model"),
         usage={
-            "input_tokens": usage_map.get("inputTokens"),
-            "output_tokens": usage_map.get("outputTokens"),
+            "input_tokens": input_tokens,
+            "cached_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_creation,
+            "output_tokens": output_tokens,
+            "total_tokens": total_input + output_tokens,
+            "max_input_tokens": _as_int_or_none(usage_map.get("maxInputTokens")),
         },
+        cumulative_input_tokens=total_input,
     )
 
 
@@ -96,11 +134,18 @@ def normalize_quota_snapshot(value: Any) -> dict[str, Any] | None:
     return dumped or None
 
 
-def _normalized_step_usage(*, model: Any, usage: Any, provider: Any = None) -> dict[str, Any]:
+def _normalized_step_usage(
+    *,
+    model: Any,
+    usage: Any,
+    provider: Any = None,
+    cumulative_input_tokens: int | None = None,
+) -> dict[str, Any]:
     usage_map = usage if isinstance(usage, dict) else {}
     metrics = NormalizedUsageMetrics(
         model=_as_str(model) or _as_str(usage_map.get("model")),
         usage=usage_map or None,
+        cumulative_input_tokens=cumulative_input_tokens,
     )
     dumped = metrics.model_dump(exclude_none=True)
     provider_value = _as_str(provider)
