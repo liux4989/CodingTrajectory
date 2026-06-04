@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from coding_trajectory.ingestion.adapters.base import BaseAdapter
+from coding_trajectory.ingestion.adapters.base import BaseAdapter, infer_account_identity
 from coding_trajectory.ingestion.common import compact_dict, infer_tool_success, parse_timestamp
 from coding_trajectory.ingestion.models import (
     Session,
@@ -221,6 +221,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             session_id=session_id,
             vendor=self.vendor,
             agent_name=extensions.claude_code.agent_name if extensions and extensions.claude_code else None,
+            account=_infer_claude_account(records),
             started_at=started_at,
             ended_at=ended_at,
             parent_session_id=parent_session_id,
@@ -239,6 +240,14 @@ class ClaudeCodeAdapter(BaseAdapter):
             except (ValueError, AttributeError):
                 continue
         return None
+
+
+def _infer_claude_account(records: list[dict]) -> object:
+    for record in records[:8]:
+        account = infer_account_identity(record, vendor=Vendor.CLAUDE_CODE)
+        if account is not None:
+            return account
+    return None
 
     def _build_transcript(self, records: list[dict]) -> tuple[list[TranscriptRecord], list[ClaudeTeamStateInput]]:
         """Extract only CT-useful transcript facts from Claude Code JSONL records."""

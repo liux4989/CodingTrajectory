@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from coding_trajectory.ingestion.adapters.base import BaseAdapter
+from coding_trajectory.ingestion.adapters.base import BaseAdapter, infer_account_identity
 from coding_trajectory.ingestion.common import (
     extract_exit_code,
     infer_tool_success,
@@ -235,6 +235,7 @@ class CodexAdapter(BaseAdapter):
             session_id=state.session_id,
             vendor=Vendor.CODEX_CLI,
             agent_name=extensions.codex.agent_nickname if extensions.codex else None,
+            account=infer_account_identity(meta, vendor=Vendor.CODEX_CLI),
             started_at=started_at,
             ended_at=ended_at,
             parent_session_id=parent_session_id,

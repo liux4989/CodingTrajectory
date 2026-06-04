@@ -5,8 +5,26 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
-from coding_trajectory.ingestion.models import Session, Vendor
+from coding_trajectory.ingestion.models import AccountIdentity, Session, Vendor
+
+_ACCOUNT_CANDIDATE_KEYS = (
+    "account_key",
+    "accountKey",
+    "account_id",
+    "accountId",
+    "account_email",
+    "accountEmail",
+    "email",
+    "user_email",
+    "userEmail",
+    "username",
+    "login",
+    "user_id",
+    "userId",
+)
+_ACCOUNT_CONTAINER_KEYS = ("account", "user", "owner", "profile", "auth")
 
 
 class BaseAdapter(ABC):
@@ -48,3 +66,48 @@ class BaseAdapter(ABC):
     @abstractmethod
     def _build_session(self, source: Path, records: list[dict]) -> Session:
         ...
+
+
+def infer_account_identity(raw: Any, *, vendor: Vendor, max_depth: int = 2) -> AccountIdentity | None:
+    if not isinstance(raw, dict) or max_depth < 0:
+        return None
+
+    value = _mapping_account_value(raw)
+    if isinstance(value, str):
+        label = _mapping_account_label(raw)
+        return AccountIdentity(key=value, label=label or value, vendor=vendor.value)
+
+    for key in _ACCOUNT_CONTAINER_KEYS:
+        nested = raw.get(key)
+        if isinstance(nested, dict):
+            account = infer_account_identity(nested, vendor=vendor, max_depth=max_depth - 1)
+            if account is not None:
+                return account
+
+    for value in raw.values():
+        if isinstance(value, dict):
+            account = infer_account_identity(value, vendor=vendor, max_depth=max_depth - 1)
+            if account is not None:
+                return account
+
+    return None
+
+
+def _mapping_account_value(raw: dict[str, Any]) -> str | None:
+    for key in _ACCOUNT_CANDIDATE_KEYS:
+        value = raw.get(key)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                return normalized
+    return None
+
+
+def _mapping_account_label(raw: dict[str, Any]) -> str | None:
+    for key in ("label", "display_name", "displayName", "name"):
+        value = raw.get(key)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                return normalized
+    return None
