@@ -331,7 +331,12 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_session_source(session_overview)
     _add_turn_window_flags(session_overview, view_name="projection")
     _add_output_flags(session_overview)
-    _add_data_flag(session_overview)
+    session_overview.add_argument(
+        "--details",
+        dest="details",
+        action="store_true",
+        help="Print the structured JSON data behind the human report.",
+    )
     session_overview.set_defaults(
         _method="session.overview",
         _params=_session_overview_params,
@@ -671,7 +676,7 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
 
 
 def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
-    if getattr(args, "data", False):
+    if getattr(args, "details", False) or getattr(args, "data", False):
         return json.dumps(payload, indent=2, ensure_ascii=False)
 
     if args._method == "session.overview":
