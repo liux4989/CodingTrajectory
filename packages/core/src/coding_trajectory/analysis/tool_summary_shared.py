@@ -53,11 +53,12 @@ VENDOR_TOOL_CONCEPT: dict[str, str] = {
 }
 
 SHELL_TOOL_NAMES: frozenset[str] = frozenset({
-    "exec_command",
-    "write_stdin",
+    "bash",
     "Bash",
+    "exec_command",
     "run_shell_command",
     "shell",
+    "write_stdin",
 })
 
 INFORMATIVE_HEADS: frozenset[str] = frozenset({

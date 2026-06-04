@@ -530,7 +530,7 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
         for key in ("cmd", "path", "query", "url"):
             if activity.get(key):
                 return f"{tool}{suffix}: {_one_line(activity[key], limit=72)}"
-        for key in ("paths", "queries", "urls"):
+        for key in ("paths", "queries", "urls", "targets"):
             values = activity.get(key)
             if isinstance(values, list) and values:
                 joined = ", ".join(_one_line(item, limit=32) for item in values[:3])
