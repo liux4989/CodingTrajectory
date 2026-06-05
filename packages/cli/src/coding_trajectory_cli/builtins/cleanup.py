@@ -142,16 +142,23 @@ def _handle_project(args: argparse.Namespace, ctx: CtPluginContext) -> dict[str,
     )
     recent_keys = set((recent_projects.get("items") or {}).keys())
     codex_config_paths_by_project = _codex_config_paths_by_project()
+    claude_metadata_paths_by_project = _claude_metadata_paths_by_project()
+    pi_metadata_paths_by_project = _pi_metadata_paths_by_project()
 
     candidates: list[ProjectTarget] = []
     skipped: list[SkippedTarget] = []
     for project_name, item in (all_projects.get("items") or {}).items():
+        metadata_paths = [
+            *claude_metadata_paths_by_project.get(project_name, []),
+            *pi_metadata_paths_by_project.get(project_name, []),
+        ]
         target, skip = _project_metadata_target(
             project_name,
             item,
             root=root,
             is_recent=project_name in recent_keys,
             codex_config_paths=codex_config_paths_by_project.get(project_name, []),
+            metadata_paths=metadata_paths,
         )
         if target is not None:
             candidates.append(target)
@@ -249,6 +256,7 @@ def _project_metadata_target(
     root: Path | None,
     is_recent: bool,
     codex_config_paths: list[Path],
+    metadata_paths: list[Path],
 ) -> tuple[ProjectTarget | None, list[SkippedTarget]]:
     raw_path = item.get("path")
     project_path = (
@@ -288,15 +296,21 @@ def _project_metadata_target(
     cleanup_config_paths = (
         [str(path) for path in codex_config_paths] if not resolved.exists() else []
     )
+    cleanup_paths = (
+        [str(path) for path in metadata_paths] if not resolved.exists() else []
+    )
     return (
         ProjectTarget(
             project=project_name,
             path=str(resolved),
+            cleanup_paths=cleanup_paths,
             cleanup_config_paths=cleanup_config_paths,
-            bytes=0 if not resolved.exists() else _path_size(resolved),
+            bytes=sum(_path_size(path) for path in metadata_paths)
+            if cleanup_paths
+            else (0 if not resolved.exists() else _path_size(resolved)),
             reason=reasons or ["old_project"],
             last_activity_at=None,
-            session_count=0,
+            session_count=len(metadata_paths) if cleanup_paths else 0,
             vendors=sorted(item.get("vendors") or []),
         ),
         [],
@@ -377,6 +391,139 @@ def _codex_config_paths_by_project() -> dict[str, list[Path]]:
         project: sorted(paths)
         for project, paths in paths_by_project.items()
     }
+
+
+def _claude_metadata_paths_by_project() -> dict[str, list[Path]]:
+    paths_by_project: dict[str, set[Path]] = {}
+    base = Path.home() / ".claude" / "projects"
+    if not base.is_dir():
+        return {}
+    for path in base.iterdir():
+        if not path.is_dir():
+            continue
+        decoded = _decode_claude_encoded_path(path.name)
+        if decoded is None:
+            continue
+        project_name = Path(decoded).name
+        if not project_name:
+            continue
+        paths_by_project.setdefault(_normalize_project_key(project_name), set()).add(
+            path
+        )
+    return {
+        project: sorted(paths)
+        for project, paths in paths_by_project.items()
+    }
+
+
+def _decode_claude_encoded_path(encoded: str) -> str | None:
+    if not encoded:
+        return None
+    stripped = encoded.lstrip("-")
+    if not stripped:
+        return None
+    return "/" + stripped.replace("-", "/")
+
+
+def _pi_metadata_paths_by_project() -> dict[str, list[Path]]:
+    paths_by_project: dict[str, set[Path]] = {}
+    session_root, custom_session_dir = _pi_session_root()
+    if not session_root.is_dir():
+        return {}
+
+    if custom_session_dir:
+        for path in session_root.iterdir():
+            if not path.is_file() or path.suffix != ".jsonl":
+                continue
+            project_key = _project_key_from_pi_session_file(path)
+            if project_key:
+                paths_by_project.setdefault(project_key, set()).add(path)
+    else:
+        for path in session_root.iterdir():
+            if not path.is_dir():
+                continue
+            project_key = _project_key_from_pi_project_dir(path)
+            if project_key:
+                paths_by_project.setdefault(project_key, set()).add(path)
+
+    return {
+        project: sorted(paths)
+        for project, paths in paths_by_project.items()
+    }
+
+
+def _pi_session_root() -> tuple[Path, bool]:
+    configured = os.environ.get("PI_CODING_AGENT_SESSION_DIR")
+    if configured:
+        return Path(configured).expanduser(), True
+
+    agent_dir = _pi_agent_dir()
+    settings_path = agent_dir / "settings.json"
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        settings = {}
+    if isinstance(settings, dict):
+        session_dir = settings.get("sessionDir")
+        if isinstance(session_dir, str) and session_dir:
+            return _resolve_pi_settings_path(session_dir, base_dir=agent_dir), True
+
+    return agent_dir / "sessions", False
+
+
+def _pi_agent_dir() -> Path:
+    configured = os.environ.get("PI_CODING_AGENT_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".pi" / "agent"
+
+
+def _resolve_pi_settings_path(raw_path: str, *, base_dir: Path) -> Path:
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    return base_dir / path
+
+
+def _project_key_from_pi_project_dir(path: Path) -> str | None:
+    for session_file in sorted(path.iterdir()):
+        if not session_file.is_file() or session_file.suffix != ".jsonl":
+            continue
+        project_key = _project_key_from_pi_session_file(session_file)
+        if project_key:
+            return project_key
+    decoded = _decode_pi_encoded_path(path.name)
+    if decoded is None:
+        return None
+    project_name = Path(decoded).name
+    return _normalize_project_key(project_name) if project_name else None
+
+
+def _project_key_from_pi_session_file(path: Path) -> str | None:
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for raw_line in handle:
+                stripped = raw_line.strip()
+                if not stripped:
+                    continue
+                record = json.loads(stripped)
+                if not isinstance(record, dict) or record.get("type") != "session":
+                    return None
+                cwd = record.get("cwd")
+                if not isinstance(cwd, str) or not cwd:
+                    return None
+                project_name = Path(cwd).expanduser().name
+                return _normalize_project_key(project_name) if project_name else None
+    except (OSError, json.JSONDecodeError):
+        return None
+    return None
+
+
+def _decode_pi_encoded_path(encoded: str) -> str | None:
+    stripped = encoded.strip("-")
+    if not stripped:
+        return None
+    return "/" + stripped.replace("-", "/")
 
 
 def _codex_config_path() -> Path:
