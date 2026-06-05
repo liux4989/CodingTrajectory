@@ -232,10 +232,10 @@ class ContextCategoryFlat(BaseModel):
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
+        data.pop("confidence", None)
+        data.pop("source", None)
         if data.get("percent") is None:
             data.pop("percent", None)
-        if data.get("source") is None:
-            data.pop("source", None)
         if not data.get("children"):
             data.pop("children", None)
         return data
@@ -250,10 +250,9 @@ class ContextWindowStatsFlat(BaseModel):
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
+        data.pop("source", None)
         if data.get("used_percent") is None:
             data.pop("used_percent", None)
-        if data.get("source") is None:
-            data.pop("source", None)
         return data
 
 

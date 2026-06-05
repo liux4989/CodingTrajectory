@@ -236,9 +236,11 @@ def _add_output_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--global-scope", action="store_true", help="Search all known log files instead of the most-recent session.")
 
 
-def _add_data_flag(p: argparse.ArgumentParser) -> None:
+def _add_details_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
+        "--details",
         "--data",
+        dest="details",
         action="store_true",
         help="Print the structured JSON data behind the human report.",
     )
@@ -252,20 +254,11 @@ def _add_metrics_flags(p: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_format_flag(
-    p: argparse.ArgumentParser,
-    *,
-    choices: tuple[str, ...] = ("json", "overview"),
-    default: str = "json",
-) -> None:
-    help_text = "Select stdout format. --output always writes JSON."
-    if choices == ("overview", "json"):
-        help_text = "Select stdout format: overview for reading, json for exact data. --output always writes JSON."
+def _add_detail_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
-        "--format",
-        choices=choices,
-        default=default,
-        help=help_text,
+        "--detail",
+        action="store_true",
+        help="Print the structured JSON data instead of the human-readable overview.",
     )
 
 
@@ -355,7 +348,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_agent_vendor_flag(project_list)
     _add_output_flags(project_list)
-    _add_format_flag(project_list)
+    _add_detail_flag(project_list)
     project_list.set_defaults(
         _method="project.list",
         _params=_project_list_params,
@@ -387,7 +380,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_agent_vendor_flag(project_sessions)
     _add_output_flags(project_sessions)
-    _add_format_flag(project_sessions)
+    _add_detail_flag(project_sessions)
     project_sessions.set_defaults(
         _method="project.sessions",
         _params=_project_sessions_params,
@@ -409,12 +402,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_session_source(session_overview)
     _add_turn_window_flags(session_overview, view_name="projection")
     _add_output_flags(session_overview)
-    session_overview.add_argument(
-        "--details",
-        dest="details",
-        action="store_true",
-        help="Print the structured JSON data behind the human report.",
-    )
+    _add_details_flag(session_overview)
     session_overview.set_defaults(
         _method="session.overview",
         _params=_session_overview_params,
@@ -427,7 +415,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_session_source(session_stats)
     _add_output_flags(session_stats)
-    _add_data_flag(session_stats)
+    _add_details_flag(session_stats)
     _add_metrics_flags(session_stats)
     session_stats.set_defaults(
         _method="session.stats",
@@ -448,7 +436,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Limit usage analysis to one turn.",
     )
     _add_output_flags(session_usage)
-    _add_data_flag(session_usage)
+    _add_details_flag(session_usage)
     _add_metrics_flags(session_usage)
     session_usage.set_defaults(
         _method="session.usage",
@@ -462,7 +450,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     session_step_detail.add_argument("resource_ids", metavar="STEP_ID", nargs="+")
     _add_base_output_flags(session_step_detail)
-    _add_format_flag(session_step_detail)
+    _add_detail_flag(session_step_detail)
     session_step_detail.set_defaults(
         _method="step.details",
         _params=lambda args: {"step_ids": args.resource_ids},
@@ -475,7 +463,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     session_event_detail.add_argument("resource_id", metavar="EVENT_ID")
     _add_base_output_flags(session_event_detail)
-    _add_format_flag(session_event_detail)
+    _add_detail_flag(session_event_detail)
     session_event_detail.set_defaults(
         _method="event.detail",
         _params=lambda args: {"event_id": args.resource_id},
@@ -489,7 +477,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_session_source(session_event_scan)
     _add_output_flags(session_event_scan)
-    _add_format_flag(session_event_scan)
+    _add_detail_flag(session_event_scan)
     session_event_scan.add_argument(
         "--type",
         dest="event_type",
@@ -531,11 +519,11 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_GhFormatter,
     )
     _add_base_output_flags(plugin_list)
-    _add_format_flag(plugin_list, choices=("overview", "json"), default="overview")
+    _add_detail_flag(plugin_list)
     plugin_list.set_defaults(
         _plugin_handler=_handle_plugin_list,
         _render_payload=lambda args, payload: _json_renderer(args, payload)
-        if getattr(args, "format", "overview") == "json"
+        if getattr(args, "detail", False)
         else _render_plugin_list_text(payload),
     )
 
@@ -689,13 +677,9 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
 
 def _render_context_category(lines: list[str], category: dict[str, Any], *, indent: int = 0) -> None:
     label = str(category.get("label") or category.get("key") or "-")
-    confidence = str(category.get("confidence") or "")
-    if confidence.endswith("_tokens"):
-        confidence = confidence.removesuffix("_tokens")
-    source_note = f"  {confidence}" if confidence else ""
     lines.append(
         f"{' ' * indent}{label:<30} {_format_tokens(category.get('tokens')):>7} "
-        f"{_format_percent(category.get('percent')):>8}{source_note}"
+        f"{_format_percent(category.get('percent')):>8}"
     )
     for child in category.get("children") or []:
         if isinstance(child, dict):
@@ -784,7 +768,7 @@ def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
     if callable(plugin_renderer):
         return plugin_renderer(args, payload)
 
-    if getattr(args, "details", False) or getattr(args, "data", False):
+    if getattr(args, "details", False):
         return json.dumps(payload, indent=2, ensure_ascii=False)
 
     if args._method == "session.overview":

@@ -142,19 +142,9 @@ def _codex_context_categories(
             if not isinstance(text, str) or not text:
                 continue
             key, label = _codex_prompt_category(event.payload)
-            bucket = buckets.setdefault(
-                key,
-                {"label": label, "tokens": 0, "source": set(), "children": {}},
-            )
+            bucket = buckets.setdefault(key, {"label": label, "tokens": 0})
             tokens = _estimate_text_tokens(text)
             bucket["tokens"] += tokens
-            source = event.payload.get("prompt_block")
-            if isinstance(source, str) and source:
-                bucket["source"].add(source)
-                child = bucket["children"].setdefault(
-                    source, {"tokens": 0, "label": _prompt_block_label(source)}
-                )
-                child["tokens"] += tokens
 
     denominator = context_window or used_tokens
     categories = [
@@ -164,18 +154,6 @@ def _codex_context_categories(
             tokens=int(value["tokens"]),
             percent=percent(int(value["tokens"]), denominator),
             confidence="estimated_tokens",
-            source=", ".join(sorted(value["source"])) if value["source"] else None,
-            children=[
-                ContextCategoryFlat(
-                    key=f"{key}.{child_key}",
-                    label=child["label"],
-                    tokens=int(child["tokens"]),
-                    percent=percent(int(child["tokens"]), denominator),
-                    confidence="estimated_tokens",
-                    source=child_key,
-                )
-                for child_key, child in sorted(value["children"].items())
-            ],
         )
         for key, value in sorted(buckets.items(), key=lambda item: _category_sort_key(item[0]))
         if int(value["tokens"]) > 0
@@ -186,7 +164,7 @@ def _codex_context_categories(
         categories.append(
             ContextCategoryFlat(
                 key="messages",
-                label="Messages",
+                label="Conversation",
                 tokens=message_tokens,
                 percent=percent(message_tokens, denominator),
                 confidence="estimated_tokens",
@@ -201,36 +179,28 @@ def _codex_prompt_category(payload: dict[str, Any]) -> tuple[str, str]:
     text = payload.get("text")
     haystack = f"{block}\n{text if isinstance(text, str) else ''}".lower()
     if block == "base_instructions":
-        return "system_prompt", "System prompt"
+        return "system_instructions", "System instructions"
     if "agents.md" in haystack:
-        return "agents_md", "AGENTS.md files"
+        return "project_instructions", "Project instructions"
     if "skills_instructions" in block or "### available skills" in haystack:
-        return "skills", "Skills"
+        return "tools_integrations", "Tools and integrations"
     if "plugins_instructions" in block or "### available plugins" in haystack:
-        return "plugins", "Plugins"
+        return "tools_integrations", "Tools and integrations"
     if "memory_summary" in haystack or "memory layout" in haystack or "## memory" in haystack:
         return "memory", "Memory"
     if "mcp" in haystack or "tools are grouped" in haystack:
-        return "tools", "Tool definitions"
-    return "developer_context", "Developer/app context"
-
-
-def _prompt_block_label(block: str) -> str:
-    if block == "base_instructions":
-        return "base instructions"
-    return block.replace("_", " ")
+        return "tools_integrations", "Tools and integrations"
+    return "developer_instructions", "Developer instructions"
 
 
 def _category_sort_key(key: str) -> int:
     order = {
-        "system_prompt": 0,
-        "developer_context": 1,
-        "agents_md": 2,
-        "skills": 3,
-        "plugins": 4,
-        "tools": 5,
-        "memory": 6,
-        "messages": 7,
+        "system_instructions": 0,
+        "developer_instructions": 1,
+        "project_instructions": 2,
+        "tools_integrations": 3,
+        "memory": 4,
+        "messages": 5,
     }
     return order.get(key, 99)
 
