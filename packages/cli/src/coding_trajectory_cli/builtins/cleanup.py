@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
-from coding_trajectory.ingestion.adapters.codex import CodexAdapter
-from coding_trajectory.ingestion.adapters.pi import PiAdapter
-from coding_trajectory.ingestion.models import EventType, Session, SessionStatus, Vendor
 
 from coding_trajectory_cli.plugins import CtPluginContext
 
@@ -32,6 +30,7 @@ class CleanupTarget(BaseModel):
 class ProjectTarget(CleanupTarget):
     project: str
     cleanup_paths: list[str] = Field(default_factory=list)
+    cleanup_config_paths: list[str] = Field(default_factory=list)
     last_activity_at: str | None = None
     session_count: int = 0
     vendors: list[str] = Field(default_factory=list)
@@ -142,6 +141,7 @@ def _handle_project(args: argparse.Namespace, ctx: CtPluginContext) -> dict[str,
         current_dir=Path.cwd(),
     )
     recent_keys = set((recent_projects.get("items") or {}).keys())
+    codex_config_paths_by_project = _codex_config_paths_by_project()
 
     candidates: list[ProjectTarget] = []
     skipped: list[SkippedTarget] = []
@@ -151,23 +151,30 @@ def _handle_project(args: argparse.Namespace, ctx: CtPluginContext) -> dict[str,
             item,
             root=root,
             is_recent=project_name in recent_keys,
+            codex_config_paths=codex_config_paths_by_project.get(project_name, []),
         )
         if target is not None:
             candidates.append(target)
         skipped.extend(skip)
 
     candidates = sorted(candidates, key=lambda item: item.path)
+    skipped = _dedupe_skips(skipped)
     action, selected = _resolve_interactive_selection(
-        action, candidates, target_kind="project"
+        action, candidates, skipped=skipped, target_kind="project"
     )
     manifest_path, action_errors = _apply_action(
         action,
         [
             Path(cleanup_path)
             for target in selected
-            for cleanup_path in (target.cleanup_paths or [target.path])
+            for cleanup_path in _target_cleanup_paths(target)
         ],
         target_kind="project",
+        config_entries=[
+            (Path(config_path), target.path)
+            for target in selected
+            for config_path in target.cleanup_config_paths
+        ],
     )
     return _payload(
         command="cleanup project",
@@ -176,9 +183,7 @@ def _handle_project(args: argparse.Namespace, ctx: CtPluginContext) -> dict[str,
         candidate_count=len(candidates),
         skipped=[
             item.model_dump(mode="json")
-            for item in sorted(
-                _dedupe_skips(skipped), key=lambda item: (item.kind, item.path)
-            )
+            for item in sorted(skipped, key=lambda item: (item.kind, item.path))
         ],
         manifest_path=manifest_path,
         filters={
@@ -196,7 +201,7 @@ def _handle_session(args: argparse.Namespace) -> dict[str, Any]:
     vendor_filter = _normalize_vendor(args.agent_vendor)
     candidates: list[SessionTarget] = []
     skipped: list[SkippedTarget] = []
-    for vendor, adapter_cls, base_dir in _session_sources(vendor_filter):
+    for vendor, base_dir in _session_sources(vendor_filter):
         if not base_dir.is_dir():
             skipped.append(
                 SkippedTarget(
@@ -207,15 +212,16 @@ def _handle_session(args: argparse.Namespace) -> dict[str, Any]:
             )
             continue
         for path in sorted(base_dir.rglob("*.jsonl")):
-            target, skip = _session_target(path, vendor=vendor, adapter=adapter_cls())
+            target, skip = _session_target(path, vendor=vendor)
             if target is not None:
                 candidates.append(target)
             if skip is not None:
                 skipped.append(skip)
 
     candidates = sorted(candidates, key=lambda item: item.path)
+    skipped = _dedupe_skips(skipped)
     action, selected = _resolve_interactive_selection(
-        action, candidates, target_kind="session"
+        action, candidates, skipped=skipped, target_kind="session"
     )
     manifest_path, action_errors = _apply_action(
         action, [Path(target.path) for target in selected], target_kind="session"
@@ -227,9 +233,7 @@ def _handle_session(args: argparse.Namespace) -> dict[str, Any]:
         candidate_count=len(candidates),
         skipped=[
             item.model_dump(mode="json")
-            for item in sorted(
-                _dedupe_skips(skipped), key=lambda item: (item.kind, item.path)
-            )
+            for item in sorted(skipped, key=lambda item: (item.kind, item.path))
         ],
         manifest_path=manifest_path,
         filters={"agent_vendor": vendor_filter},
@@ -244,6 +248,7 @@ def _project_metadata_target(
     *,
     root: Path | None,
     is_recent: bool,
+    codex_config_paths: list[Path],
 ) -> tuple[ProjectTarget | None, list[SkippedTarget]]:
     raw_path = item.get("path")
     project_path = (
@@ -263,18 +268,13 @@ def _project_metadata_target(
     if _is_current_or_parent(resolved, Path.cwd().resolve()):
         skips.append(_skip("project", str(resolved), "current_directory_or_parent"))
 
-    if is_recent:
-        skips.append(_skip("project", str(resolved), "newer_than_retention"))
-    else:
-        reasons.append("older_than_retention")
-
-    source_paths = _project_source_paths(item)
     if not resolved.exists():
-        if source_paths:
-            reasons.append("project_path_missing")
-        else:
-            skips.append(_skip("project", str(resolved), "project_path_missing"))
+        reasons.append("project_path_missing")
     else:
+        if is_recent:
+            skips.append(_skip("project", str(resolved), "newer_than_retention"))
+        else:
+            reasons.append("older_than_retention")
         if not _looks_like_project_directory(resolved):
             skips.append(_skip("project", str(resolved), "not_project_directory"))
         if (resolved / ".ct-cleanup-keep").exists():
@@ -285,20 +285,18 @@ def _project_metadata_target(
     if skips:
         return None, skips
 
-    cleanup_paths = (
-        [str(path) for path in source_paths] if not resolved.exists() else []
+    cleanup_config_paths = (
+        [str(path) for path in codex_config_paths] if not resolved.exists() else []
     )
     return (
         ProjectTarget(
             project=project_name,
             path=str(resolved),
-            cleanup_paths=cleanup_paths,
-            bytes=sum(_path_size(path) for path in source_paths)
-            if cleanup_paths
-            else _path_size(resolved),
+            cleanup_config_paths=cleanup_config_paths,
+            bytes=0 if not resolved.exists() else _path_size(resolved),
             reason=reasons or ["old_project"],
             last_activity_at=None,
-            session_count=len(source_paths) if cleanup_paths else 0,
+            session_count=0,
             vendors=sorted(item.get("vendors") or []),
         ),
         [],
@@ -308,8 +306,7 @@ def _project_metadata_target(
 def _session_target(
     path: Path,
     *,
-    vendor: Vendor,
-    adapter: Any,
+    vendor: str,
 ) -> tuple[SessionTarget | None, SkippedTarget | None]:
     if _recently_modified(path, timedelta(hours=24)):
         return None, _skip("session", str(path), "modified_in_last_24h")
@@ -317,46 +314,81 @@ def _session_target(
     if records is None:
         return None, _skip("session", str(path), "unreadable_or_invalid")
 
-    session: Session | None = None
-    try:
-        session = adapter.ingest_file(path)
-    except Exception:
-        if _has_useful_session_records(vendor, records):
-            return None, _skip("session", str(path), "parse_failed")
-
-    if session is not None:
-        if session.parent_session_id is not None:
-            return None, _skip("session", str(path), "has_parent_session")
-        if session.status in {SessionStatus.ACTIVE, SessionStatus.INCOMPLETE}:
-            return None, _skip("session", str(path), f"status_{session.status.value}")
-        if session.turns or _has_useful_events(session):
-            return None, None
-
     if _has_useful_session_records(vendor, records):
         return None, None
 
     return (
         SessionTarget(
-            vendor=vendor.value,
+            vendor=vendor,
             path=str(path.resolve()),
             bytes=_path_size(path),
             reason=["empty"],
             modified_at=_modified_at(path),
-            session_id=str(session.session_id) if session is not None else None,
+            session_id=_session_id_from_records(vendor, records),
         ),
         None,
     )
 
 
-def _project_source_paths(item: dict[str, Any]) -> list[Path]:
-    paths: list[Path] = []
-    for raw_path in item.get("sources") or []:
+def _remove_codex_project_config_entry(config_path: Path, project_path: str) -> None:
+    text = config_path.read_text(encoding="utf-8")
+    header = f'[projects."{project_path}"]'
+    lines = text.splitlines(keepends=True)
+    output: list[str] = []
+    index = 0
+    removed = False
+    while index < len(lines):
+        if lines[index].strip() != header:
+            output.append(lines[index])
+            index += 1
+            continue
+        removed = True
+        index += 1
+        while index < len(lines) and not lines[index].lstrip().startswith("["):
+            index += 1
+    if removed:
+        config_path.write_text("".join(output), encoding="utf-8")
+
+
+def _codex_config_paths_by_project() -> dict[str, list[Path]]:
+    paths_by_project: dict[str, set[Path]] = {}
+    config_path = _codex_config_path()
+    if not config_path.is_file():
+        return {}
+    try:
+        with config_path.open("rb") as handle:
+            config = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+    projects = config.get("projects")
+    if not isinstance(projects, dict):
+        return {}
+    for raw_path in projects:
         if not isinstance(raw_path, str) or not raw_path:
             continue
-        path = Path(raw_path).expanduser()
-        if path.exists():
-            paths.append(path)
-    return sorted(set(paths))
+        project_name = Path(raw_path).expanduser().name
+        if not project_name:
+            continue
+        paths_by_project.setdefault(_normalize_project_key(project_name), set()).add(
+            config_path
+        )
+    return {
+        project: sorted(paths)
+        for project, paths in paths_by_project.items()
+    }
+
+
+def _codex_config_path() -> Path:
+    configured = os.environ.get("CODEX_HOME")
+    if configured:
+        return Path(configured).expanduser() / "config.toml"
+    return Path.home() / ".codex" / "config.toml"
+
+
+def _normalize_project_key(value: str) -> str:
+    collapsed = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", value.strip())
+    return re.sub(r"[^a-zA-Z0-9]+", "-", collapsed).strip("-").lower()
 
 
 def _payload(
@@ -428,26 +460,35 @@ def _resolve_interactive_selection(
     action: Action,
     candidates: list[ProjectTarget | SessionTarget],
     *,
+    skipped: list[SkippedTarget],
     target_kind: str,
 ) -> tuple[Action, list[ProjectTarget | SessionTarget]]:
     if action != "interactive":
         return action, candidates
     if not candidates:
+        _browse_skipped_targets_when_no_candidates(skipped, target_kind=target_kind)
         return "cancelled", []
 
-    _print_interactive_candidates(candidates, target_kind=target_kind)
-    raw_selection = (
-        input("Select candidates to clean [numbers, a=all, q=cancel]: ").strip().lower()
-    )
-    if raw_selection in {"", "q", "quit", "cancel"}:
-        return "cancelled", []
-    if raw_selection == "a":
-        selected = candidates
-    else:
-        selected = _selected_candidates(candidates, raw_selection)
-    if not selected:
-        print("No candidates selected.", file=sys.stderr)
-        return "cancelled", []
+    selected: list[ProjectTarget | SessionTarget] = []
+    while not selected:
+        _print_interactive_candidates(candidates, target_kind=target_kind)
+        _print_skipped_summary(skipped)
+        raw_selection = (
+            input("Select candidates [cN/numbers, a=all, s=skips, q=cancel]: ")
+            .strip()
+            .lower()
+        )
+        if raw_selection in {"", "q", "quit", "cancel"}:
+            return "cancelled", []
+        if raw_selection in {"s", "skip", "skips"}:
+            _browse_skipped_targets(skipped)
+            continue
+        if raw_selection == "a":
+            selected = candidates
+        else:
+            selected = _selected_candidates(candidates, raw_selection)
+        if not selected:
+            print("No candidates selected.", file=sys.stderr)
 
     raw_action = input("Action [t=trash, d=delete, q=cancel]: ").strip().lower()
     if raw_action in {"t", "trash"}:
@@ -479,8 +520,75 @@ def _print_interactive_candidates(
             or getattr(candidate, "vendor", None)
             or target_kind
         )
-        print(f"{index:>3}. {label}  {_format_bytes(candidate.bytes)}")
+        print(f"  c{index:<2} {label}  {_format_bytes(candidate.bytes)}")
         print(f"     {candidate.path}")
+
+
+def _browse_skipped_targets_when_no_candidates(
+    skipped: list[SkippedTarget],
+    *,
+    target_kind: str,
+) -> None:
+    print(f"Cleanup {target_kind}: 0 candidate(s)")
+    _print_skipped_summary(skipped)
+    if not skipped:
+        return
+    raw_selection = input("Inspect skipped items [s=skips, q=close]: ").strip().lower()
+    if raw_selection in {"s", "skip", "skips"}:
+        _browse_skipped_targets(skipped)
+
+
+def _print_skipped_summary(skipped: list[SkippedTarget]) -> None:
+    if not skipped:
+        return
+    grouped = _skipped_by_reason(skipped)
+    print(f"Skipped: {len(skipped)} item(s)")
+    for index, (reason, items) in enumerate(grouped.items(), start=1):
+        print(f"  s{index:<2} {reason}: {len(items)}")
+
+
+def _browse_skipped_targets(skipped: list[SkippedTarget]) -> None:
+    if not skipped:
+        print("No skipped items.")
+        return
+    grouped = _skipped_by_reason(skipped)
+    categories = list(grouped.items())
+    while True:
+        print("Skipped categories:")
+        for index, (reason, items) in enumerate(categories, start=1):
+            print(f"  s{index:<2} {reason}: {len(items)}")
+        raw_category = (
+            input("Expand skipped category [sN/number, b/q=back]: ")
+            .strip()
+            .lower()
+        )
+        if raw_category in {"", "b", "back"}:
+            return
+        if raw_category in {"q", "quit", "cancel"}:
+            return
+        try:
+            category_index = _parse_prefixed_index(raw_category, prefix="s")
+        except ValueError:
+            print("Choose a category number.", file=sys.stderr)
+            continue
+        if not 1 <= category_index <= len(categories):
+            print("Choose a category number.", file=sys.stderr)
+            continue
+        reason, items = categories[category_index - 1]
+        print(f"Skipped: {reason}")
+        for item in sorted(items, key=lambda item: (item.kind, item.path)):
+            print(f"  {item.kind}  {_format_bytes(item.bytes)}")
+            print(f"    {item.path}")
+
+
+def _skipped_by_reason(
+    skipped: list[SkippedTarget],
+) -> dict[str, list[SkippedTarget]]:
+    grouped: dict[str, list[SkippedTarget]] = {}
+    for item in skipped:
+        for reason in item.reason or ["unknown"]:
+            grouped.setdefault(reason, []).append(item)
+    return dict(sorted(grouped.items()))
 
 
 def _selected_candidates(
@@ -492,7 +600,7 @@ def _selected_candidates(
         if not part:
             continue
         try:
-            index = int(part)
+            index = _parse_prefixed_index(part, prefix="c")
         except ValueError:
             continue
         if 1 <= index <= len(candidates):
@@ -504,22 +612,50 @@ def _selected_candidates(
     ]
 
 
+def _parse_prefixed_index(value: str, *, prefix: str) -> int:
+    stripped = value.strip().lower()
+    if stripped.startswith(prefix):
+        stripped = stripped[len(prefix) :]
+    return int(stripped)
+
+
+def _target_cleanup_paths(target: ProjectTarget | SessionTarget) -> list[str]:
+    if not isinstance(target, ProjectTarget):
+        return [target.path]
+    if "project_path_missing" in target.reason:
+        return target.cleanup_paths
+    if target.cleanup_config_paths:
+        return target.cleanup_paths
+    return target.cleanup_paths or [target.path]
+
+
 def _apply_action(
     action: Action,
     paths: list[Path],
     *,
     target_kind: str,
+    config_entries: list[tuple[Path, str]] | None = None,
 ) -> tuple[str | None, list[dict[str, str]]]:
-    if action in {"interactive", "cancelled"} or not paths:
+    config_entries = config_entries or []
+    if action in {"interactive", "cancelled"} or (not paths and not config_entries):
         return None, []
     manifest = {
         "action": action,
         "target_kind": target_kind,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "paths": [str(path) for path in paths],
+        "config_entries": [
+            {"config_path": str(path), "project_path": project_path}
+            for path, project_path in config_entries
+        ],
         "errors": [],
     }
     errors: list[dict[str, str]] = []
+    for config_path, project_path in config_entries:
+        try:
+            _remove_codex_project_config_entry(config_path, project_path)
+        except OSError as exc:
+            errors.append({"path": str(config_path), "error": str(exc)})
     for path in paths:
         try:
             if action == "trash":
@@ -570,15 +706,15 @@ def _unique_destination(path: Path) -> Path:
     raise ValueError(f"could not find unique trash destination for {path}")
 
 
-def _session_sources(vendor_filter: str | None) -> list[tuple[Vendor, type, Path]]:
+def _session_sources(vendor_filter: str | None) -> list[tuple[str, Path]]:
     home = Path.home()
-    sources: list[tuple[Vendor, type, Path]] = [
-        (Vendor.CODEX_CLI, CodexAdapter, home / ".codex" / "sessions"),
-        (Vendor.PI, PiAdapter, home / ".pi" / "agent" / "sessions"),
+    sources: list[tuple[str, Path]] = [
+        ("codex_cli", home / ".codex" / "sessions"),
+        ("pi", home / ".pi" / "agent" / "sessions"),
     ]
     if vendor_filter is None:
         return sources
-    return [source for source in sources if source[0].value == vendor_filter]
+    return [source for source in sources if source[0] == vendor_filter]
 
 
 def _normalize_vendor(value: str | None) -> str | None:
@@ -656,23 +792,27 @@ def _git(path: Path, *args: str) -> str | None:
     return result.stdout
 
 
-def _has_useful_events(session: Session) -> bool:
-    useful_types = {
-        EventType.USER_PROMPT_SUBMITTED,
-        EventType.TOOL_CALL_REQUESTED,
-        EventType.TOOL_CALL_SUCCEEDED,
-        EventType.TOOL_CALL_FAILED,
-        EventType.LLM_RESPONSE,
-    }
-    return any(event.type in useful_types for event in session.events)
-
-
-def _has_useful_session_records(vendor: Vendor, records: list[dict[str, Any]]) -> bool:
-    if vendor == Vendor.CODEX_CLI:
+def _has_useful_session_records(vendor: str, records: list[dict[str, Any]]) -> bool:
+    if vendor == "codex_cli":
         return any(_is_useful_codex_record(record) for record in records)
-    if vendor == Vendor.PI:
+    if vendor == "pi":
         return any(_is_useful_pi_record(record) for record in records)
     return True
+
+
+def _session_id_from_records(vendor: str, records: list[dict[str, Any]]) -> str | None:
+    if vendor == "codex_cli":
+        for record in records:
+            if record.get("type") != "session_meta":
+                continue
+            payload = record.get("payload")
+            if isinstance(payload, dict) and isinstance(payload.get("id"), str):
+                return payload["id"]
+    if vendor == "pi":
+        for record in records:
+            if record.get("type") == "session" and isinstance(record.get("id"), str):
+                return record["id"]
+    return None
 
 
 def _is_useful_codex_record(record: dict[str, Any]) -> bool:
@@ -719,8 +859,13 @@ def _recently_modified(path: Path, duration: timedelta) -> bool:
 
 
 def _modified_at(path: Path) -> str | None:
+    modified_at = _path_modified_at_datetime(path)
+    return modified_at.isoformat() if modified_at is not None else None
+
+
+def _path_modified_at_datetime(path: Path) -> datetime | None:
     try:
-        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
     except OSError:
         return None
 

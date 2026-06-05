@@ -280,6 +280,7 @@ Expected TUI flow:
 
 - scan old project candidates and empty session candidates;
 - show grouped candidates with paths, ages, sizes, and skip reasons;
+- let the user expand skipped categories and inspect the paths in each group;
 - let the user select or deselect candidates;
 - default to trash or archive actions;
 - require explicit confirmation before deletion;

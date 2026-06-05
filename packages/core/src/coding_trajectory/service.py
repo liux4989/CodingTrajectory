@@ -521,15 +521,14 @@ def project_list_metadata(
         key = item.project_identifier
         if key.startswith("unknown-"):
             continue
-        entry = projects.setdefault(key, {"path": None, "sources": set(), "vendors": set()})
+        entry = projects.setdefault(key, {"path": None, "vendors": set()})
         entry["vendors"].add(item.vendor.value)
-        entry["sources"].add(str(item.source_path))
         if entry["path"] is None and item.path is not None:
             entry["path"] = str(item.path)
 
     return {
         "items": {
-            key: {"path": value["path"], "sources": sorted(value["sources"]), "vendors": sorted(value["vendors"])}
+            key: {"path": value["path"], "vendors": sorted(value["vendors"])}
             for key, value in sorted(projects.items())
         }
     }
