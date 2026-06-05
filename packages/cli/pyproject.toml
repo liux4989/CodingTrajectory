@@ -7,6 +7,9 @@ dependencies = [
     "coding-trajectory-core",
 ]
 
+[project.optional-dependencies]
+tui = ["textual>=2.0"]
+
 [project.scripts]
 ct = "coding_trajectory_cli.cli:main"
 
