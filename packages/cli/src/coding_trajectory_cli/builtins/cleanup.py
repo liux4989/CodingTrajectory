@@ -703,58 +703,56 @@ else:
 # ---------------------------------------------------------------------------
 
 
-class CleanupPlugin:
-    name = "cleanup"
+def register_cleanup(
+    parent_subparsers: argparse._SubParsersAction, ctx: CtPluginContext
+) -> None:
+    """Add the `cleanup` command (project/session) to a subparsers action."""
+    cleanup = parent_subparsers.add_parser(
+        "cleanup",
+        help="Clean up old project directories and empty session logs.",
+    )
+    cleanup_sub = cleanup.add_subparsers(dest="cleanup_action", required=True)
 
-    def register(
-        self, namespace_subparsers: argparse._SubParsersAction, ctx: CtPluginContext
-    ) -> None:
-        cleanup = namespace_subparsers.add_parser(
-            "cleanup",
-            help="Clean up old project directories and empty session logs.",
-        )
-        cleanup_sub = cleanup.add_subparsers(dest="cleanup_action", required=True)
+    project = cleanup_sub.add_parser(
+        "project",
+        help="Preview or remove old project directories.",
+    )
+    project.add_argument(
+        "--older-than",
+        default="30d",
+        type=_parse_age,
+        metavar="AGE",
+        help="Select projects with no activity newer than AGE. Supports Nd or Nh. Defaults to 30d.",
+    )
+    project.add_argument(
+        "--path",
+        default=None,
+        help="Only consider project paths under this cleanup root. Defaults to all projects from ct project list.",
+    )
+    _add_action_flags(project)
+    project.set_defaults(_cleanup_handler=lambda args: _handle_project(args, ctx))
+    ctx.bind_command(
+        project,
+        handler=lambda args: args._cleanup_handler(args),
+        renderer=_render_cleanup,
+    )
 
-        project = cleanup_sub.add_parser(
-            "project",
-            help="Preview or remove old project directories.",
-        )
-        project.add_argument(
-            "--older-than",
-            default="30d",
-            type=_parse_age,
-            metavar="AGE",
-            help="Select projects with no activity newer than AGE. Supports Nd or Nh. Defaults to 30d.",
-        )
-        project.add_argument(
-            "--path",
-            default=None,
-            help="Only consider project paths under this cleanup root. Defaults to all projects from ct project list.",
-        )
-        _add_action_flags(project)
-        project.set_defaults(_cleanup_handler=lambda args: _handle_project(args, ctx))
-        ctx.bind_command(
-            project,
-            handler=lambda args: args._cleanup_handler(args),
-            renderer=_render_cleanup,
-        )
-
-        session = cleanup_sub.add_parser(
-            "session",
-            help="Preview or remove empty session logs.",
-        )
-        session.add_argument(
-            "--agent-vendor",
-            default=None,
-            help="Filter by vendor. Known values: codex_cli, codex, pi.",
-        )
-        _add_action_flags(session)
-        session.set_defaults(_cleanup_handler=_handle_session)
-        ctx.bind_command(
-            session,
-            handler=lambda args: args._cleanup_handler(args),
-            renderer=_render_cleanup,
-        )
+    session = cleanup_sub.add_parser(
+        "session",
+        help="Preview or remove empty session logs.",
+    )
+    session.add_argument(
+        "--agent-vendor",
+        default=None,
+        help="Filter by vendor. Known values: codex_cli, codex, pi.",
+    )
+    _add_action_flags(session)
+    session.set_defaults(_cleanup_handler=_handle_session)
+    ctx.bind_command(
+        session,
+        handler=lambda args: args._cleanup_handler(args),
+        renderer=_render_cleanup,
+    )
 
 
 def _add_action_flags(parser: argparse.ArgumentParser) -> None:
@@ -1652,6 +1650,3 @@ def _render_cleanup(args: argparse.Namespace, payload: dict[str, Any]) -> str:
         for item in errors[:10]:
             lines.append(f"  {item.get('path')}: {item.get('error')}")
     return "\n".join(lines).rstrip()
-
-
-plugin = CleanupPlugin()

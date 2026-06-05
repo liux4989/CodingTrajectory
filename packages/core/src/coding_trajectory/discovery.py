@@ -40,6 +40,51 @@ class ProjectDiscoveryItem:
     path: Path | None
     source_path: Path
     vendor: Vendor
+    category: str = "project"
+
+
+_PROJECT_MARKERS = (
+    ".git",
+    ".hg",
+    ".svn",
+    "package.json",
+    "pyproject.toml",
+    "Cargo.toml",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+)
+
+_SYSTEM_ROOTS = (Path("/tmp"), Path("/var"), Path("/private"), Path("/usr"))
+
+
+def _has_project_marker(path: Path) -> bool:
+    home = Path.home()
+    for ancestor in (path, *path.parents):
+        for marker in _PROJECT_MARKERS:
+            if (ancestor / marker).exists():
+                return True
+        if ancestor == home or ancestor == ancestor.parent:
+            break
+    return False
+
+
+def _classify_project_path(project_path: Path) -> str | None:
+    """Classify a recorded path as a real project, a temporary chat, or junk.
+
+    Returns ``"project"``, ``"temporary"``, or ``None`` (filter out).
+    """
+    resolved = project_path.expanduser()
+    if resolved == Path.home() or resolved == Path(resolved.anchor):
+        return None
+    if any(part.startswith(".") and part != ".." for part in resolved.parts):
+        return None
+    for sysroot in _SYSTEM_ROOTS:
+        if resolved == sysroot or sysroot in resolved.parents:
+            return None
+    if _has_project_marker(resolved):
+        return "project"
+    return "temporary"
 
 
 def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
@@ -199,7 +244,20 @@ def _metadata_item(
     ):
         return None
 
-    return ProjectDiscoveryItem(project_identifier=key, path=project_path, source_path=source_path, vendor=vendor)
+    if project_path is not None:
+        category = _classify_project_path(project_path)
+        if category is None:
+            return None
+    else:
+        category = "project"
+
+    return ProjectDiscoveryItem(
+        project_identifier=key,
+        path=project_path,
+        source_path=source_path,
+        vendor=vendor,
+        category=category,
+    )
 
 
 def _codex_home() -> Path:

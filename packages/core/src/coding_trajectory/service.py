@@ -502,6 +502,9 @@ def resolve_store(
     )
 
 
+TEMPORARY_PROJECT_KEY = "(temporary)"
+
+
 def project_list_metadata(
     params: dict[str, Any],
     *,
@@ -510,6 +513,8 @@ def project_list_metadata(
 ) -> dict[str, Any]:
     """Return project list data without fully ingesting session transcripts."""
     projects: dict[str, dict[str, Any]] = {}
+    temporary_vendors: set[str] = set()
+    temporary_sessions: list[dict[str, Any]] = []
     for item in discover_project_metadata(
         current_dir=current_dir,
         global_scope=global_scope,
@@ -521,17 +526,38 @@ def project_list_metadata(
         key = item.project_identifier
         if key.startswith("unknown-"):
             continue
+        if item.category == "temporary":
+            temporary_vendors.add(item.vendor.value)
+            temporary_sessions.append(
+                {
+                    "project": key,
+                    "path": str(item.path) if item.path is not None else None,
+                    "vendor": item.vendor.value,
+                }
+            )
+            continue
         entry = projects.setdefault(key, {"path": None, "vendors": set()})
         entry["vendors"].add(item.vendor.value)
         if entry["path"] is None and item.path is not None:
             entry["path"] = str(item.path)
 
-    return {
-        "items": {
-            key: {"path": value["path"], "vendors": sorted(value["vendors"])}
-            for key, value in sorted(projects.items())
+    items = {
+        key: {
+            "path": value["path"],
+            "vendors": sorted(value["vendors"]),
         }
+        for key, value in sorted(projects.items())
     }
+    if temporary_sessions:
+        items[TEMPORARY_PROJECT_KEY] = {
+            "path": None,
+            "vendors": sorted(temporary_vendors),
+            "sessions": sorted(
+                temporary_sessions, key=lambda session: (session["project"], session["vendor"])
+            ),
+        }
+
+    return {"items": items}
 
 
 # ---------------------------------------------------------------------------
