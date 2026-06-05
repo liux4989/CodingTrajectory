@@ -159,7 +159,7 @@ def _handle_project(args: argparse.Namespace, ctx: CtPluginContext) -> dict[str,
     action, selected = _resolve_interactive_selection(
         action, candidates, target_kind="project"
     )
-    manifest_path = _apply_action(
+    manifest_path, action_errors = _apply_action(
         action, [Path(target.path) for target in selected], target_kind="project"
     )
     return _payload(
@@ -180,6 +180,7 @@ def _handle_project(args: argparse.Namespace, ctx: CtPluginContext) -> dict[str,
             "path": str(root) if root else None,
         },
         discovery_note=None,
+        action_errors=action_errors,
     )
 
 
@@ -209,7 +210,7 @@ def _handle_session(args: argparse.Namespace) -> dict[str, Any]:
     action, selected = _resolve_interactive_selection(
         action, candidates, target_kind="session"
     )
-    manifest_path = _apply_action(
+    manifest_path, action_errors = _apply_action(
         action, [Path(target.path) for target in selected], target_kind="session"
     )
     return _payload(
@@ -226,6 +227,7 @@ def _handle_session(args: argparse.Namespace) -> dict[str, Any]:
         manifest_path=manifest_path,
         filters={"agent_vendor": vendor_filter},
         discovery_note=None,
+        action_errors=action_errors,
     )
 
 
@@ -251,6 +253,8 @@ def _project_metadata_target(
     skips: list[SkippedTarget] = []
     if not resolved.exists():
         skips.append(_skip("project", str(resolved), "project_path_missing"))
+    elif not _looks_like_project_directory(resolved):
+        skips.append(_skip("project", str(resolved), "not_project_directory"))
     if root is not None and not _is_relative_to(resolved, root):
         skips.append(_skip("project", str(resolved), "outside_cleanup_root"))
     if _is_current_or_parent(resolved, Path.cwd().resolve()):
@@ -336,6 +340,7 @@ def _payload(
     manifest_path: str | None,
     filters: dict[str, Any],
     discovery_note: str | None,
+    action_errors: list[dict[str, str]],
 ) -> dict[str, Any]:
     return {
         "command": command,
@@ -347,6 +352,7 @@ def _payload(
             "candidate_count": candidate_count,
             "target_bytes": sum(int(item.get("bytes") or 0) for item in targets),
             "skipped_count": len(skipped),
+            "error_count": len(action_errors),
             "skipped_reasons": dict(
                 Counter(reason for item in skipped for reason in item.get("reason", []))
             ),
@@ -355,6 +361,7 @@ def _payload(
         "skipped": skipped,
         "manifest_path": manifest_path,
         "discovery_note": discovery_note,
+        "errors": action_errors,
     }
 
 
@@ -468,22 +475,33 @@ def _selected_candidates(
     ]
 
 
-def _apply_action(action: Action, paths: list[Path], *, target_kind: str) -> str | None:
+def _apply_action(
+    action: Action,
+    paths: list[Path],
+    *,
+    target_kind: str,
+) -> tuple[str | None, list[dict[str, str]]]:
     if action in {"interactive", "cancelled"} or not paths:
-        return None
+        return None, []
     manifest = {
         "action": action,
         "target_kind": target_kind,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "paths": [str(path) for path in paths],
+        "errors": [],
     }
-    manifest_path = _write_manifest(manifest)
+    errors: list[dict[str, str]] = []
     for path in paths:
-        if action == "trash":
-            _move_to_trash(path)
-        elif action == "delete":
-            _delete_path(path)
-    return str(manifest_path)
+        try:
+            if action == "trash":
+                _move_to_trash(path)
+            elif action == "delete":
+                _delete_path(path)
+        except OSError as exc:
+            errors.append({"path": str(path), "error": str(exc)})
+    manifest["errors"] = errors
+    manifest_path = _write_manifest(manifest)
+    return str(manifest_path), errors
 
 
 def _write_manifest(manifest: dict[str, Any]) -> Path:
@@ -699,6 +717,26 @@ def _is_current_or_parent(path: Path, current: Path) -> bool:
     return path == current or path in current.parents
 
 
+def _looks_like_project_directory(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    project_markers = {
+        ".git",
+        ".hg",
+        ".svn",
+        "pyproject.toml",
+        "package.json",
+        "Cargo.toml",
+        "go.mod",
+        "pom.xml",
+        "build.gradle",
+        "settings.gradle",
+        "Makefile",
+        "README.md",
+    }
+    return any((path / marker).exists() for marker in project_markers)
+
+
 def _skip(kind: str, path: str, reason: str) -> SkippedTarget:
     return SkippedTarget(kind=kind, path=path, reason=[reason])
 
@@ -713,6 +751,8 @@ def _render_cleanup(args: argparse.Namespace, payload: dict[str, Any]) -> str:
         f"Selected: {summary.get('target_count') or 0} of {summary.get('candidate_count') or 0}  Bytes: {_format_bytes(summary.get('target_bytes'))}",
         f"Skipped: {summary.get('skipped_count') or 0}",
     ]
+    if summary.get("error_count"):
+        lines.append(f"Errors: {summary['error_count']}")
     skipped_reasons = summary.get("skipped_reasons") or {}
     if skipped_reasons:
         lines.append("Skip reasons:")
@@ -737,6 +777,11 @@ def _render_cleanup(args: argparse.Namespace, payload: dict[str, Any]) -> str:
             )
     if payload.get("manifest_path"):
         lines.append(f"Manifest: {payload['manifest_path']}")
+    errors = payload.get("errors") or []
+    if errors:
+        lines.append("Action errors:")
+        for item in errors[:10]:
+            lines.append(f"  {item.get('path')}: {item.get('error')}")
     return "\n".join(lines).rstrip()
 
 
