@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from coding_trajectory.ingestion.models import Event, EventType, SessionGraph, Vendor
@@ -47,7 +48,7 @@ def build_codex_context_stats(session_graph: SessionGraph) -> dict[str, Any]:
     messages = message_stats(session_graph)
 
     warnings = [
-        "Category token counts are estimated from Codex JSONL prompt text, not vendor category attribution.",
+        "Category token counts are estimated from Codex JSONL text; agent-work buckets are scaled to the latest context window residual, not total historical tool output.",
     ]
     if not categories:
         warnings.append("No Codex prompt blocks were found for context category breakdown.")
@@ -131,7 +132,7 @@ def _codex_context_categories(
     used_tokens: int,
     context_window: int,
 ) -> list[ContextCategoryFlat]:
-    buckets: dict[str, dict[str, Any]] = {}
+    setup_raw = Counter[str]()
     for session in session_graph.sessions:
         for event in session.events:
             if event.vendor_source != Vendor.CODEX_CLI:
@@ -141,68 +142,198 @@ def _codex_context_categories(
             text = event.payload.get("text")
             if not isinstance(text, str) or not text:
                 continue
-            key, label = _codex_prompt_category(event.payload)
-            bucket = buckets.setdefault(key, {"label": label, "tokens": 0})
-            tokens = _estimate_text_tokens(text)
-            bucket["tokens"] += tokens
+            setup_raw[_codex_setup_key(event.payload)] += _estimate_text_tokens(text)
 
     denominator = context_window or used_tokens
-    categories = [
-        ContextCategoryFlat(
-            key=key,
-            label=value["label"],
-            tokens=int(value["tokens"]),
-            percent=percent(int(value["tokens"]), denominator),
-            confidence="estimated_tokens",
-        )
-        for key, value in sorted(buckets.items(), key=lambda item: _category_sort_key(item[0]))
-        if int(value["tokens"]) > 0
-    ]
-    prompt_tokens = sum(category.tokens for category in categories)
-    message_tokens = max(used_tokens - prompt_tokens, 0)
-    if message_tokens:
+    setup_tokens = min(sum(setup_raw.values()), used_tokens)
+    residual_tokens = max(used_tokens - setup_tokens, 0)
+
+    prompt_raw, agent_raw, tool_raw = _codex_conversation_raw_tokens(session_graph)
+    scaled = _scaled_context_tokens(
+        {
+            "user_request": prompt_raw["user_request"],
+            "files": prompt_raw["files"],
+            "agent_response": agent_raw["agent_response"],
+            **{f"tool:{tool_name}": tokens for tool_name, tokens in tool_raw.items()},
+        },
+        target_total=residual_tokens,
+    )
+
+    setup_children = _category_children(
+        [
+            ("system", "System", setup_raw["system"]),
+            ("agents_md", "AGENTS.md", setup_raw["agents_md"]),
+            ("skills", "Skills", setup_raw["skills"]),
+            ("mcp", "MCP/tools", setup_raw["mcp"]),
+            ("memory", "Memory", setup_raw["memory"]),
+        ],
+        denominator=denominator,
+        keep_zero_keys={"system", "agents_md", "skills", "mcp", "memory"},
+    )
+    user_text = _latest_user_request_text(session_graph)
+    prompt_children = _category_children(
+        [
+            ("user_request", f"You (User Request): {_label_snippet(user_text)}", scaled["user_request"]),
+            ("files", "Files", scaled["files"]),
+        ],
+        denominator=denominator,
+        keep_zero_keys={"files"},
+    )
+    tool_children = _category_children(
+        [
+            (f"tool_{_slug(tool_name)}", _tool_label(tool_name), scaled[f"tool:{tool_name}"])
+            for tool_name in sorted(tool_raw, key=lambda name: (-scaled[f"tool:{name}"], name))
+        ],
+        denominator=denominator,
+    )
+    agent_children = _category_children(
+        [
+            ("agent_response", "Output (Agent Response)", scaled["agent_response"]),
+            (
+                "tool_breakdown",
+                "Tool breakdown",
+                sum(child.tokens for child in tool_children),
+                tool_children,
+            ),
+        ],
+        denominator=denominator,
+    )
+
+    return _category_children(
+        [
+            ("before_typing", "Before you type anything", sum(child.tokens for child in setup_children), setup_children),
+            ("your_prompt", "Your prompt", sum(child.tokens for child in prompt_children), prompt_children),
+            ("agent_work", "Agent Works", sum(child.tokens for child in agent_children), agent_children),
+        ],
+        denominator=denominator,
+    )
+
+
+def _codex_setup_key(payload: dict[str, Any]) -> str:
+    block = _as_str(payload.get("prompt_block")) or ""
+    text = payload.get("text")
+    haystack = f"{block}\n{text if isinstance(text, str) else ''}".lower()
+    if block == "base_instructions":
+        return "system"
+    if "agents.md" in haystack:
+        return "agents_md"
+    if "skills_instructions" in block or "### available skills" in haystack:
+        return "skills"
+    if "plugins_instructions" in block or "### available plugins" in haystack:
+        return "mcp"
+    if "memory_summary" in haystack or "memory layout" in haystack or "## memory" in haystack:
+        return "memory"
+    if "mcp" in haystack or "tools are grouped" in haystack:
+        return "mcp"
+    return "system"
+
+
+def _codex_conversation_raw_tokens(
+    session_graph: SessionGraph,
+) -> tuple[Counter[str], Counter[str], Counter[str]]:
+    prompt_raw = Counter[str]()
+    agent_raw = Counter[str]()
+    tool_raw = Counter[str]()
+    for session in session_graph.sessions:
+        tool_names_by_id: dict[str, str] = {}
+        for event in session.events:
+            if event.vendor_source != Vendor.CODEX_CLI:
+                continue
+            if event.type == EventType.USER_PROMPT_SUBMITTED:
+                prompt_raw["user_request"] += _estimate_text_tokens(_as_str(event.payload.get("text")) or "")
+            elif event.type == EventType.LLM_RESPONSE:
+                agent_raw["agent_response"] += _estimate_text_tokens(_as_str(event.payload.get("text")) or "")
+            elif event.type == EventType.TOOL_CALL_REQUESTED:
+                call_id = _as_str(event.payload.get("tool_call_id"))
+                tool_name = _as_str(event.payload.get("tool_name")) or "tool"
+                if call_id:
+                    tool_names_by_id[call_id] = tool_name
+            elif event.type in {EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED}:
+                call_id = _as_str(event.payload.get("tool_call_id"))
+                tool_name = tool_names_by_id.get(call_id or "", "tool")
+                tool_raw[tool_name] += _estimate_text_tokens(_stringify_tool_output(event.payload.get("output")))
+    return prompt_raw, agent_raw, tool_raw
+
+
+def _category_children(
+    specs: list[tuple[str, str, int] | tuple[str, str, int, list[ContextCategoryFlat]]],
+    *,
+    denominator: int,
+    keep_zero_keys: set[str] | None = None,
+) -> list[ContextCategoryFlat]:
+    keep_zero_keys = keep_zero_keys or set()
+    categories: list[ContextCategoryFlat] = []
+    for spec in specs:
+        key, label, tokens = spec[:3]
+        children = spec[3] if len(spec) == 4 else []
+        if tokens <= 0 and key not in keep_zero_keys and not children:
+            continue
         categories.append(
             ContextCategoryFlat(
-                key="messages",
-                label="Conversation",
-                tokens=message_tokens,
-                percent=percent(message_tokens, denominator),
+                key=key,
+                label=label,
+                tokens=max(int(tokens), 0),
+                percent=percent(max(int(tokens), 0), denominator),
                 confidence="estimated_tokens",
-                source="latest_input_minus_prompt_blocks",
+                children=children,
             )
         )
     return categories
 
 
-def _codex_prompt_category(payload: dict[str, Any]) -> tuple[str, str]:
-    block = _as_str(payload.get("prompt_block")) or ""
-    text = payload.get("text")
-    haystack = f"{block}\n{text if isinstance(text, str) else ''}".lower()
-    if block == "base_instructions":
-        return "system_instructions", "System instructions"
-    if "agents.md" in haystack:
-        return "project_instructions", "Project instructions"
-    if "skills_instructions" in block or "### available skills" in haystack:
-        return "tools_integrations", "Tools and integrations"
-    if "plugins_instructions" in block or "### available plugins" in haystack:
-        return "tools_integrations", "Tools and integrations"
-    if "memory_summary" in haystack or "memory layout" in haystack or "## memory" in haystack:
-        return "memory", "Memory"
-    if "mcp" in haystack or "tools are grouped" in haystack:
-        return "tools_integrations", "Tools and integrations"
-    return "developer_instructions", "Developer instructions"
+def _scaled_context_tokens(raw_tokens: dict[str, int], *, target_total: int) -> dict[str, int]:
+    raw_total = sum(max(value, 0) for value in raw_tokens.values())
+    if raw_total <= 0 or target_total <= 0:
+        return {key: 0 for key in raw_tokens}
 
-
-def _category_sort_key(key: str) -> int:
-    order = {
-        "system_instructions": 0,
-        "developer_instructions": 1,
-        "project_instructions": 2,
-        "tools_integrations": 3,
-        "memory": 4,
-        "messages": 5,
+    scaled = {
+        key: int((max(value, 0) * target_total) // raw_total)
+        for key, value in raw_tokens.items()
     }
-    return order.get(key, 99)
+    remainder = target_total - sum(scaled.values())
+    fractional_order = sorted(
+        raw_tokens,
+        key=lambda key: ((max(raw_tokens[key], 0) * target_total) / raw_total) % 1,
+        reverse=True,
+    )
+    for key in fractional_order[:remainder]:
+        scaled[key] += 1
+    return scaled
+
+
+def _latest_user_request_text(session_graph: SessionGraph) -> str | None:
+    user_events = [
+        event
+        for session in session_graph.sessions
+        for event in session.events
+        if event.vendor_source == Vendor.CODEX_CLI and event.type == EventType.USER_PROMPT_SUBMITTED
+    ]
+    if not user_events:
+        return None
+    return _as_str(max(user_events, key=lambda item: item.timestamp).payload.get("text"))
+
+
+def _label_snippet(text: str | None, *, limit: int = 80) -> str:
+    if not text:
+        return "-"
+    collapsed = " ".join(text.split())
+    return collapsed if len(collapsed) <= limit else collapsed[: limit - 1].rstrip() + "..."
+
+
+def _tool_label(tool_name: str) -> str:
+    return tool_name.replace("_", " ")
+
+
+def _slug(value: str) -> str:
+    return "".join(char if char.isalnum() else "_" for char in value.lower()).strip("_") or "tool"
+
+
+def _stringify_tool_output(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
 
 
 def _estimate_text_tokens(text: str) -> int:

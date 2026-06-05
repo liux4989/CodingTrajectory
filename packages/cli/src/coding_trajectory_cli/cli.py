@@ -673,10 +673,15 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip()
 
 
+_CONTEXT_CATEGORY_WIDTH = 56
+
+
 def _render_context_category(lines: list[str], category: dict[str, Any], *, indent: int = 0) -> None:
     label = str(category.get("label") or category.get("key") or "-")
+    display_width = max(_CONTEXT_CATEGORY_WIDTH - indent, 16)
+    label = truncate_text_preview(label, max_len=display_width)
     lines.append(
-        f"{' ' * indent}{label:<30} {_format_tokens(category.get('tokens')):>7} "
+        f"{' ' * indent}{label:<{display_width}} {_format_tokens(category.get('tokens')):>7} "
         f"{_format_percent(category.get('percent')):>8}"
     )
     for child in category.get("children") or []:
@@ -693,7 +698,11 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
 
     model_name = model.get("name") or "-"
     context_tokens = model.get("context_window_tokens")
-    lines = [f"Model: {model_name} ({_format_tokens(context_tokens)} context)", ""]
+    lines = [
+        f"Model: {model_name} ({_format_tokens(context_tokens)} context)",
+        "",
+        f"{'Category':<{_CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Context':>8}",
+    ]
 
     for category in context_window.get("categories") or []:
         if isinstance(category, dict):
@@ -704,7 +713,7 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            f"Used: {_format_tokens(used_tokens)} tokens {_format_percent(used_percent)} used",
+            f"Used: {_format_tokens(used_tokens)} tokens {_format_percent(used_percent)} of context",
             (
                 f"Runtime: {_format_duration(runtime.get('duration_seconds'))}, "
                 f"{runtime.get('turns') or 0} turns, "
