@@ -4,13 +4,14 @@ import argparse
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from heapq import nlargest
 from pathlib import Path
 from typing import Any
 
 from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.ingestion.common import format_datetime, normalize_project_key
 from coding_trajectory.ingestion.models import Session, SessionGraph
-from coding_trajectory.metrics import build_session_graph_metrics, build_session_graph_usage
+from coding_trajectory.metrics import SessionMetrics, TurnMetrics, build_session_graph_full_metrics
 
 from coding_trajectory_cli.plugins import CtPluginContext
 
@@ -29,7 +30,8 @@ class ActivityPlugin:
 
     def register(self, namespace_subparsers: argparse._SubParsersAction, ctx: CtPluginContext) -> None:
         def handler(args: argparse.Namespace) -> dict[str, Any]:
-            params: dict[str, Any] = {"since_days": _window_since_days(args.window)}
+            window = _resolve_window(args.window)
+            params: dict[str, Any] = {"since_days": _window_since_days(args.window), "modified_since": window.start}
             if args.project:
                 params["project_name"] = args.project
             store, _discovery_note = ctx.resolve_document_store(
@@ -37,7 +39,7 @@ class ActivityPlugin:
                 global_scope=True,
                 current_dir=Path.cwd(),
             )
-            return _build_activity_payload(store.session_graphs.values(), args)
+            return _build_activity_payload(store.session_graphs.values(), args, window=window)
 
         activity = namespace_subparsers.add_parser("activity", help="Inspect recent activity across sessions.")
         sub = activity.add_subparsers(dest="activity_action", required=True)
@@ -83,14 +85,24 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         default="overview",
         help="Select stdout format: overview for reading, json for exact data. --output always writes JSON.",
     )
-def _build_activity_payload(session_graphs: Any, args: argparse.Namespace) -> dict[str, Any]:
-    window = _resolve_window(args.window)
+
+
+def _build_activity_payload(
+    session_graphs: Any,
+    args: argparse.Namespace,
+    *,
+    window: _Window | None = None,
+) -> dict[str, Any]:
+    window = window or _resolve_window(args.window)
     action = str(args.activity_action)
     extra_billing = bool(getattr(args, "extra_billing", False))
     project_filter = normalize_project_key(args.project) if args.project else None
     account_filter = (args.account or "").strip() or None
+    include_activity_usage = action in {"summary", "usage"}
+    include_activity_preview = action == "sessions"
 
     matching_sessions: list[dict[str, Any]] = []
+    summary_sessions: list[dict[str, Any]] = []
     project_rollup: dict[str, dict[str, Any]] = {}
     account_rollup: dict[str, dict[str, Any]] = {}
     total_usage = _new_usage_totals()
@@ -103,16 +115,7 @@ def _build_activity_payload(session_graphs: Any, args: argparse.Namespace) -> di
         if project_filter and normalize_project_key(project_name) != project_filter:
             continue
 
-        metrics_payload = build_session_graph_metrics(session_graph, extra_billing=extra_billing, include_steps=False)
-        usage_payload = build_session_graph_usage(session_graph, extra_billing=extra_billing)
-        metrics_by_session = {
-            str(session_data["session_id"]): session_data
-            for session_data in metrics_payload.get("sessions") or []
-            if isinstance(session_data, dict) and session_data.get("session_id")
-        }
-        session_ids = [str(session.session_id) for session in session_graph.sessions]
-        per_session_turns = _group_usage_turns_by_session(usage_payload, session_ids)
-
+        graph_matches: list[tuple[Session, dict[str, str | None]]] = []
         for session in session_graph.sessions:
             if not _session_matches_window(session, window):
                 continue
@@ -121,14 +124,27 @@ def _build_activity_payload(session_graphs: Any, args: argparse.Namespace) -> di
             if account_filter and account_filter not in {account["key"], account["id"]}:
                 continue
 
-            session_metrics = metrics_by_session.get(str(session.session_id), {})
-            session_turns = per_session_turns.get(str(session.session_id), [])
-            usage = dict(session_metrics.get("token_usage") or _new_usage_totals())
-            if "cost_usd" not in usage:
-                usage["cost_usd"] = float(session_metrics.get("cost") or 0.0)
-            activity_usage = _aggregate_turn_activity_usage(session_turns)
+            graph_matches.append((session, account))
+
+        if not graph_matches:
+            continue
+
+        full_metrics = build_session_graph_full_metrics(session_graph, extra_billing=extra_billing)
+        metrics_by_session = {
+            session_metrics.session_id: session_metrics
+            for session_metrics in full_metrics.sessions
+        }
+
+        for session, account in graph_matches:
+            session_metrics = metrics_by_session.get(session.session_id)
+            usage = _session_metrics_usage(session_metrics)
+            activity_usage = (
+                _aggregate_turn_activity_usage(session_metrics.turns)
+                if include_activity_usage and session_metrics
+                else []
+            )
             turn_count = len(session.turns)
-            activity_preview = _session_activity_preview(session)
+            activity_preview = _session_activity_preview(session) if include_activity_preview else []
 
             session_row = {
                 "session_id": str(session.session_id),
@@ -145,7 +161,10 @@ def _build_activity_payload(session_graphs: Any, args: argparse.Namespace) -> di
                 "activity_usage": activity_usage,
                 "activity_preview": activity_preview,
             }
-            matching_sessions.append(session_row)
+            if action == "summary":
+                summary_sessions.append(session_row)
+            else:
+                matching_sessions.append(session_row)
 
             _add_usage(total_usage, usage)
             _merge_activity_usage(total_activity_usage, activity_usage)
@@ -174,7 +193,10 @@ def _build_activity_payload(session_graphs: Any, args: argparse.Namespace) -> di
             account_entry["projects"].add(project_name)
             _add_usage(account_entry["usage"], usage)
 
-    matching_sessions.sort(key=lambda item: item.get("started_at") or "", reverse=True)
+    if action == "summary":
+        matching_sessions = nlargest(10, summary_sessions, key=lambda item: str(item.get("started_at") or ""))
+    else:
+        matching_sessions.sort(key=lambda item: item.get("started_at") or "", reverse=True)
     projects = [
         {
             "project": entry["project"],
@@ -221,7 +243,7 @@ def _build_activity_payload(session_graphs: Any, args: argparse.Namespace) -> di
         "accounts": accounts,
     }
     if action == "summary":
-        payload["sessions"] = matching_sessions[:10]
+        payload["sessions"] = matching_sessions
         return payload
     if action == "sessions":
         payload["sessions"] = matching_sessions
@@ -291,30 +313,33 @@ def _session_account(session: Session) -> dict[str, str | None]:
     }
 
 
-def _group_usage_turns_by_session(payload: dict[str, Any], session_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
-    turns = payload.get("turns") or []
-    grouped: dict[str, list[dict[str, Any]]] = {session_id: [] for session_id in session_ids}
-    single_session_id = session_ids[0] if len(session_ids) == 1 else None
-    for turn in turns:
-        if not isinstance(turn, dict):
-            continue
-        session_id = turn.get("session_id") or single_session_id
-        if isinstance(session_id, str):
-            grouped.setdefault(session_id, []).append(turn)
-    return grouped
+def _session_metrics_usage(session_metrics: SessionMetrics | None) -> dict[str, float]:
+    if session_metrics is None:
+        return _new_usage_totals()
+    usage = session_metrics.token_usage.model_dump(mode="json")
+    return {**usage, "cost_usd": float(session_metrics.cost_estimate.amount_usd)}
 
 
-def _aggregate_turn_activity_usage(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _aggregate_turn_activity_usage(turns: list[TurnMetrics]) -> list[dict[str, Any]]:
     totals: dict[str, dict[str, float]] = {}
     for turn in turns:
-        for activity in turn.get("activity_usage") or []:
-            if not isinstance(activity, dict):
-                continue
-            category = str(activity.get("category") or "-")
-            usage = activity.get("usage") or {}
+        for step in turn.steps:
+            category = _activity_breakdown_kind(step)
+            usage = step.token_usage.model_dump(mode="json")
             bucket = totals.setdefault(category, _new_usage_totals())
             _add_usage(bucket, usage)
+            bucket["cost_usd"] += float(step.cost_estimate.amount_usd)
     return _activity_usage_list(totals)
+
+
+def _activity_breakdown_kind(step: Any) -> str:
+    if step.kind == "mixed":
+        return "mixed_steps"
+    if step.tool_count > 0:
+        return "tool_steps"
+    if step.kind == "response":
+        return "response_steps"
+    return "other_steps"
 
 
 def _activity_usage_list(totals: dict[str, dict[str, float]]) -> list[dict[str, Any]]:

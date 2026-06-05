@@ -2,6 +2,7 @@
 
 from coding_trajectory.metrics.analysis import (
     build_session_graph_context_stats,
+    build_session_graph_full_metrics,
     build_session_graph_metrics,
     build_session_graph_tool_usage,
     build_session_graph_usage,
@@ -75,6 +76,7 @@ __all__ = [
     "TurnMetricsFlat",
     "TurnUsageCompactFlat",
     "build_session_graph_context_stats",
+    "build_session_graph_full_metrics",
     "build_session_graph_metrics",
     "build_session_graph_tool_usage",
     "build_session_graph_usage",

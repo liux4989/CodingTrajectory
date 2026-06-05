@@ -418,6 +418,7 @@ def _build_store_full(
     cache: IndexCache,
     project_name: str | None = None,
     since_days: int | None = None,
+    modified_since: Any | None = None,
 ) -> tuple[DocumentStore, str]:
     """Full discovery — populates cache.path_to_session_graph."""
     discovery = discover_store(
@@ -425,6 +426,7 @@ def _build_store_full(
         global_scope=global_scope,
         project_name=project_name,
         since_days=since_days,
+        modified_since=modified_since,
     )
     _update_path_index(cache, discovery.sources)
     _update_session_index(cache, discovery.store)
@@ -492,6 +494,7 @@ def resolve_store(
         cache=cache,
         project_name=params.get("project_name"),
         since_days=params.get("since_days"),
+        modified_since=params.get("modified_since"),
     )
 
 

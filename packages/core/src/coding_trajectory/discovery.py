@@ -47,11 +47,12 @@ def discover_store(
     global_scope: bool = False,
     project_name: str | None = None,
     since_days: int | None = None,
+    modified_since: datetime | None = None,
 ) -> DiscoveryResult:
     current_dir = current_dir.resolve()
     scoped_project = project_name or (None if global_scope else current_dir.name)
     scoped_project_key = normalize_project_key(scoped_project) if scoped_project else None
-    modified_since = _modified_since(since_days)
+    modified_since = _modified_since(since_days, modified_since=modified_since)
 
     sessions_by_project: dict[str, list[Session]] = {}
     path_session_meta: list[tuple[Vendor, Path, UUID]] = []
@@ -149,7 +150,9 @@ def _normalize_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
-def _modified_since(since_days: int | None) -> datetime | None:
+def _modified_since(since_days: int | None, *, modified_since: datetime | None = None) -> datetime | None:
+    if modified_since is not None:
+        return modified_since.astimezone(timezone.utc)
     if since_days is None:
         return None
     return datetime.now(timezone.utc) - timedelta(days=since_days)

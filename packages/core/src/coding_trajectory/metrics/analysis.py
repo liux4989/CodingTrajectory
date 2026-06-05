@@ -96,6 +96,15 @@ def build_session_graph_metrics(
     ).model_dump(mode="json")
 
 
+def build_session_graph_full_metrics(
+    session_graph: SessionGraph,
+    *,
+    extra_billing: bool = False,
+) -> SessionGraphMetrics:
+    """Return full metrics for callers that need multiple derived views."""
+    return _build_full_metrics(session_graph, extra_billing=extra_billing)
+
+
 def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, Any]:
     """Return provider-specific context-window stats by dispatching to a vendor handler."""
     from coding_trajectory.metrics.context_stats import build_session_graph_context_stats as dispatch
