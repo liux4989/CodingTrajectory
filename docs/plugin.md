@@ -101,22 +101,22 @@ existing core session, overview, and usage data.
 - Break activity down by user account so multiple coding agents can be compared.
 - Break activity down by session usage to understand token and cost shape.
 
-### Proposed Command Shape
+### Command Shape
 
 ```text
-ct plugin activity summary [--window 5h|today|72h|7d] [--project PROJECT] [--account ACCOUNT]
-ct plugin activity sessions [--window 5h|today|72h|7d] [--project PROJECT] [--account ACCOUNT]
-ct plugin activity usage [--window 5h|today|72h|7d] [--project PROJECT] [--account ACCOUNT]
+ct plugin activity [--window 5h|today|72h|7d] [--project PROJECT] [--account ACCOUNT] [--extra-billing] [--format overview|json]
 ```
 
-Suggested behavior:
+A single command emits one unified report for the selected scope:
 
-- `summary` returns aggregate counts and rollups for the selected scope.
-- `sessions` lists matching sessions with timestamps, project, account, and
-  compact activity labels.
-- `usage` returns the session usage breakdown aggregated across matching
-  sessions, reusing the same activity usage categories already exposed by
-  `ct session usage`.
+- aggregate counts and usage totals for the window;
+- activity usage broken down by category, reusing the categories already
+  exposed by `ct session usage`;
+- per-project rollups;
+- matching sessions with timestamps, project, account, usage, and compact
+  activity labels.
+
+Use `--format json` (or `--output FILE`) for the exact structured payload.
 
 ### Filter Model
 

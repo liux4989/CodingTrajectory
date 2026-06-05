@@ -4,7 +4,6 @@ import argparse
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from heapq import nlargest
 from pathlib import Path
 from typing import Any
 
@@ -41,25 +40,17 @@ class ActivityPlugin:
             )
             return _build_activity_payload(store.session_graphs.values(), args, window=window)
 
-        activity = namespace_subparsers.add_parser("activity", help="Inspect recent activity across sessions.")
-        sub = activity.add_subparsers(dest="activity_action", required=True)
-
-        summary = sub.add_parser("summary", help="Show aggregate activity for a time window.")
-        _add_common_flags(summary)
-        ctx.bind_command(summary, handler=handler, renderer=_render_activity)
-
-        sessions = sub.add_parser("sessions", help="List sessions matching the activity filters.")
-        _add_common_flags(sessions)
-        ctx.bind_command(sessions, handler=handler, renderer=_render_activity)
-
-        usage = sub.add_parser("usage", help="Show usage breakdown across matching sessions.")
-        _add_common_flags(usage)
-        usage.add_argument(
+        activity = namespace_subparsers.add_parser(
+            "activity",
+            help="Inspect recent activity across sessions: usage totals, project rollups, and sessions.",
+        )
+        _add_common_flags(activity)
+        activity.add_argument(
             "--extra-billing",
             action="store_true",
             help="Mark cost estimates as outside-plan/API billing instead of plan-usage estimates.",
         )
-        ctx.bind_command(usage, handler=handler, renderer=_render_activity)
+        ctx.bind_command(activity, handler=handler, renderer=_render_activity)
 
 
 def _add_common_flags(parser: argparse.ArgumentParser) -> None:
@@ -94,15 +85,11 @@ def _build_activity_payload(
     window: _Window | None = None,
 ) -> dict[str, Any]:
     window = window or _resolve_window(args.window)
-    action = str(args.activity_action)
     extra_billing = bool(getattr(args, "extra_billing", False))
     project_filter = normalize_project_key(args.project) if args.project else None
     account_filter = (args.account or "").strip() or None
-    include_activity_usage = action in {"summary", "usage"}
-    include_activity_preview = action == "sessions"
 
     matching_sessions: list[dict[str, Any]] = []
-    summary_sessions: list[dict[str, Any]] = []
     project_rollup: dict[str, dict[str, Any]] = {}
     account_rollup: dict[str, dict[str, Any]] = {}
     total_usage = _new_usage_totals()
@@ -139,12 +126,10 @@ def _build_activity_payload(
             session_metrics = metrics_by_session.get(session.session_id)
             usage = _session_metrics_usage(session_metrics)
             activity_usage = (
-                _aggregate_turn_activity_usage(session_metrics.turns)
-                if include_activity_usage and session_metrics
-                else []
+                _aggregate_turn_activity_usage(session_metrics.turns) if session_metrics else []
             )
             turn_count = len(session.turns)
-            activity_preview = _session_activity_preview(session) if include_activity_preview else []
+            activity_preview = _session_activity_preview(session)
 
             session_row = {
                 "session_id": str(session.session_id),
@@ -161,10 +146,7 @@ def _build_activity_payload(
                 "activity_usage": activity_usage,
                 "activity_preview": activity_preview,
             }
-            if action == "summary":
-                summary_sessions.append(session_row)
-            else:
-                matching_sessions.append(session_row)
+            matching_sessions.append(session_row)
 
             _add_usage(total_usage, usage)
             _merge_activity_usage(total_activity_usage, activity_usage)
@@ -193,10 +175,7 @@ def _build_activity_payload(
             account_entry["projects"].add(project_name)
             _add_usage(account_entry["usage"], usage)
 
-    if action == "summary":
-        matching_sessions = nlargest(10, summary_sessions, key=lambda item: str(item.get("started_at") or ""))
-    else:
-        matching_sessions.sort(key=lambda item: item.get("started_at") or "", reverse=True)
+    matching_sessions.sort(key=lambda item: item.get("started_at") or "", reverse=True)
     projects = [
         {
             "project": entry["project"],
@@ -219,7 +198,7 @@ def _build_activity_payload(
     ]
 
     payload = {
-        "command": action,
+        "command": "activity",
         "window": {
             "key": window.key,
             "label": window.label,
@@ -241,27 +220,8 @@ def _build_activity_payload(
         },
         "projects": projects,
         "accounts": accounts,
+        "sessions": matching_sessions,
     }
-    if action == "summary":
-        payload["sessions"] = matching_sessions
-        return payload
-    if action == "sessions":
-        payload["sessions"] = matching_sessions
-        return payload
-    payload["sessions"] = [
-        {
-            "session_id": session["session_id"],
-            "project": session["project"],
-            "vendor": session["vendor"],
-            "account": session["account"],
-            "started_at": session["started_at"],
-            "ended_at": session["ended_at"],
-            "turn_count": session["turn_count"],
-            "usage": session["usage"],
-            "activity_usage": session["activity_usage"],
-        }
-        for session in matching_sessions
-    ]
     return payload
 
 
@@ -407,18 +367,9 @@ def _activity_label(item: dict[str, Any]) -> str | None:
 def _render_activity(args: argparse.Namespace, payload: dict[str, Any]) -> str:
     if getattr(args, "format", "overview") == "json":
         return json.dumps(payload, indent=2, ensure_ascii=False)
-    action = str(payload.get("command") or "")
-    if action == "sessions":
-        return _render_sessions(payload)
-    if action == "usage":
-        return _render_usage(payload)
-    return _render_summary(payload)
-
-
-def _render_summary(payload: dict[str, Any]) -> str:
     totals = payload.get("totals") or {}
     lines = [
-        f"Activity Summary ({payload['window']['label']})",
+        f"Activity ({payload['window']['label']})",
         f"Sessions {totals.get('session_count') or 0}  Turns {totals.get('turn_count') or 0}  "
         f"Projects {totals.get('project_count') or 0}  Accounts {totals.get('account_count') or 0}",
         "",
@@ -429,61 +380,33 @@ def _render_summary(payload: dict[str, Any]) -> str:
         lines.extend(["", "Activity Usage"])
         for item in activity_usage:
             lines.append(f"  {str(item.get('category') or '-'):14} {_render_usage_line(item.get('usage') or {})}")
+
     projects = payload.get("projects") or []
     if projects:
         lines.extend(["", "Projects"])
-        for project in projects[:8]:
+        for project in projects:
             lines.append(
                 f"  {project['project']:<24} sessions {project['session_count']:<3} turns {project['turn_count']:<4} "
                 f"{_render_usage_line(project['usage'])}"
             )
-    return "\n".join(lines).rstrip()
 
-
-def _render_sessions(payload: dict[str, Any]) -> str:
     sessions = payload.get("sessions") or []
-    lines = [f"Activity Sessions ({payload['window']['label']})", ""]
+    lines.extend(["", "Sessions"])
     if not sessions:
-        lines.append("No matching sessions.")
+        lines.append("  No matching sessions.")
         return "\n".join(lines).rstrip()
     for session in sessions:
         account = session.get("account") or {}
         lines.append(
-            f"{session['project']}  {_short_id(session['session_id'])}  {session['vendor']}  "
+            f"  {session['project']}  {_short_id(session['session_id'])}  {session['vendor']}  "
             f"{account.get('label') or '-'}  turns {session['turn_count']}"
         )
         lines.append(
-            f"  {session.get('started_at') or '-'} -> {session.get('ended_at') or '-'}  "
+            f"    {session.get('started_at') or '-'} -> {session.get('ended_at') or '-'}  "
             f"{_render_usage_line(session.get('usage') or {})}"
         )
         for item in session.get("activity_preview") or []:
-            lines.append(f"  - {item}")
-    return "\n".join(lines).rstrip()
-
-
-def _render_usage(payload: dict[str, Any]) -> str:
-    totals = payload.get("totals") or {}
-    lines = [
-        f"Activity Usage ({payload['window']['label']})",
-        "",
-        f"Total  {_render_usage_line(totals.get('usage') or {})}",
-    ]
-    activity_usage = totals.get("activity_usage") or []
-    if activity_usage:
-        lines.extend(["", "By Category"])
-        for item in activity_usage:
-            lines.append(f"  {str(item.get('category') or '-'):14} {_render_usage_line(item.get('usage') or {})}")
-    sessions = payload.get("sessions") or []
-    if sessions:
-        lines.extend(["", "Sessions"])
-        for session in sessions:
-            account = session.get("account") or {}
-            lines.append(
-                f"  {session['project']:<20} {_short_id(session['session_id'])}  "
-                f"{account.get('label') or '-'}  {_render_usage_line(session.get('usage') or {})}"
-            )
-            for item in session.get("activity_usage") or []:
-                lines.append(f"    {str(item.get('category') or '-'):12} {_render_usage_line(item.get('usage') or {})}")
+            lines.append(f"    - {item}")
     return "\n".join(lines).rstrip()
 
 
