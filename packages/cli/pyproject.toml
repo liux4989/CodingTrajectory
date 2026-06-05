@@ -12,6 +12,7 @@ ct = "coding_trajectory_cli.cli:main"
 
 [project.entry-points."coding_trajectory.cli_plugins"]
 activity = "coding_trajectory_cli.builtins.activity:plugin"
+cleanup = "coding_trajectory_cli.builtins.cleanup:plugin"
 
 [tool.uv.sources]
 coding-trajectory-core = { workspace = true }

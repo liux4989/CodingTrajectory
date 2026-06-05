@@ -212,8 +212,8 @@ uses local policy about what is safe to delete.
 ### Command Shape
 
 ```text
-ct plugin cleanup project [--older-than 30d] [--path PATH] [--dry-run] [--trash|--delete] [--detail]
-ct plugin cleanup session [--agent-vendor codex|pi] [--dry-run] [--trash|--delete] [--detail]
+ct plugin cleanup project [--older-than 30d] [--path PATH] [--dry-run] [--trash|--delete] [--confirm] [--detail]
+ct plugin cleanup session [--agent-vendor codex|pi] [--dry-run] [--trash|--delete] [--confirm] [--detail]
 ```
 
 Default behavior should be conservative:
@@ -222,6 +222,7 @@ Default behavior should be conservative:
 - `--trash` is the default when an action is requested.
 - `--delete` requires an explicit flag and should not be implied by any
   shorthand command.
+- `--trash` and `--delete` require `--confirm`.
 - A non-dry-run command should require a visible summary of the deletion plan.
 
 The first command surface should remain this small. More complex cleanup flows
