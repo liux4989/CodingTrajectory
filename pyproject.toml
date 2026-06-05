@@ -11,4 +11,5 @@ members = ["packages/*", "benchmarks"]
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.0",
+    "ruff>=0.15.16",
 ]
