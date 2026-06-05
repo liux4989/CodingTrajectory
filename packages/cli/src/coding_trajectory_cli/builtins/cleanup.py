@@ -31,6 +31,7 @@ class CleanupTarget(BaseModel):
 
 class ProjectTarget(CleanupTarget):
     project: str
+    cleanup_paths: list[str] = Field(default_factory=list)
     last_activity_at: str | None = None
     session_count: int = 0
     vendors: list[str] = Field(default_factory=list)
@@ -160,7 +161,13 @@ def _handle_project(args: argparse.Namespace, ctx: CtPluginContext) -> dict[str,
         action, candidates, target_kind="project"
     )
     manifest_path, action_errors = _apply_action(
-        action, [Path(target.path) for target in selected], target_kind="project"
+        action,
+        [
+            Path(cleanup_path)
+            for target in selected
+            for cleanup_path in (target.cleanup_paths or [target.path])
+        ],
+        target_kind="project",
     )
     return _payload(
         command="cleanup project",
@@ -251,36 +258,47 @@ def _project_metadata_target(
 
     reasons: list[str] = []
     skips: list[SkippedTarget] = []
-    if not resolved.exists():
-        skips.append(_skip("project", str(resolved), "project_path_missing"))
-    elif not _looks_like_project_directory(resolved):
-        skips.append(_skip("project", str(resolved), "not_project_directory"))
     if root is not None and not _is_relative_to(resolved, root):
         skips.append(_skip("project", str(resolved), "outside_cleanup_root"))
     if _is_current_or_parent(resolved, Path.cwd().resolve()):
         skips.append(_skip("project", str(resolved), "current_directory_or_parent"))
-    if (resolved / ".ct-cleanup-keep").exists():
-        skips.append(_skip("project", str(resolved), "keep_marker"))
 
     if is_recent:
         skips.append(_skip("project", str(resolved), "newer_than_retention"))
     else:
         reasons.append("older_than_retention")
 
-    git_skips = _git_skip_reasons(resolved)
-    skips.extend(_skip("project", str(resolved), reason) for reason in git_skips)
+    source_paths = _project_source_paths(item)
+    if not resolved.exists():
+        if source_paths:
+            reasons.append("project_path_missing")
+        else:
+            skips.append(_skip("project", str(resolved), "project_path_missing"))
+    else:
+        if not _looks_like_project_directory(resolved):
+            skips.append(_skip("project", str(resolved), "not_project_directory"))
+        if (resolved / ".ct-cleanup-keep").exists():
+            skips.append(_skip("project", str(resolved), "keep_marker"))
+        git_skips = _git_skip_reasons(resolved)
+        skips.extend(_skip("project", str(resolved), reason) for reason in git_skips)
 
     if skips:
         return None, skips
 
+    cleanup_paths = (
+        [str(path) for path in source_paths] if not resolved.exists() else []
+    )
     return (
         ProjectTarget(
             project=project_name,
             path=str(resolved),
-            bytes=_path_size(resolved),
+            cleanup_paths=cleanup_paths,
+            bytes=sum(_path_size(path) for path in source_paths)
+            if cleanup_paths
+            else _path_size(resolved),
             reason=reasons or ["old_project"],
             last_activity_at=None,
-            session_count=0,
+            session_count=len(source_paths) if cleanup_paths else 0,
             vendors=sorted(item.get("vendors") or []),
         ),
         [],
@@ -328,6 +346,17 @@ def _session_target(
         ),
         None,
     )
+
+
+def _project_source_paths(item: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    for raw_path in item.get("sources") or []:
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+        path = Path(raw_path).expanduser()
+        if path.exists():
+            paths.append(path)
+    return sorted(set(paths))
 
 
 def _payload(

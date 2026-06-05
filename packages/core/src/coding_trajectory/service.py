@@ -17,8 +17,8 @@ from coding_trajectory.discovery import (
     format_discovery_sources,
 )
 from coding_trajectory.ingestion.common import format_datetime, normalize_project_key, prune_nones
-from coding_trajectory.ingestion.models import Event, EventType, Session, Step, StepItem, SessionGraph, Turn, Vendor
-from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
+from coding_trajectory.ingestion.models import Event, EventType, Session, Step, StepItem, SessionGraph, Turn
+from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 
 
 def _optional_positive_int(params: dict[str, Any], key: str) -> int | None:
@@ -521,14 +521,15 @@ def project_list_metadata(
         key = item.project_identifier
         if key.startswith("unknown-"):
             continue
-        entry = projects.setdefault(key, {"path": None, "vendors": set()})
+        entry = projects.setdefault(key, {"path": None, "sources": set(), "vendors": set()})
         entry["vendors"].add(item.vendor.value)
+        entry["sources"].add(str(item.source_path))
         if entry["path"] is None and item.path is not None:
             entry["path"] = str(item.path)
 
     return {
         "items": {
-            key: {"path": value["path"], "vendors": sorted(value["vendors"])}
+            key: {"path": value["path"], "sources": sorted(value["sources"]), "vendors": sorted(value["vendors"])}
             for key, value in sorted(projects.items())
         }
     }

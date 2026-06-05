@@ -36,6 +36,7 @@ class DiscoveryResult:
 class ProjectDiscoveryItem:
     project_identifier: str
     path: Path | None
+    source_path: Path
     vendor: Vendor
 
 
@@ -164,7 +165,7 @@ def discover_project_metadata(
             if scoped_project_key and key != scoped_project_key:
                 continue
 
-            items.append(ProjectDiscoveryItem(project_identifier=key, path=project_path, vendor=vendor))
+            items.append(ProjectDiscoveryItem(project_identifier=key, path=project_path, source_path=path, vendor=vendor))
 
     return items
 
