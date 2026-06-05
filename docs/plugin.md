@@ -189,3 +189,160 @@ The most useful top-level metrics are:
   presentation.
 - Account identity should be added once in core, not rediscovered separately by
   each plugin.
+
+## Cleanup Plugin
+
+### Goal
+
+Add a `cleanup` plugin that finds and removes low-value artifacts created by
+coding agents. The first version should stay narrow: clean up old projects and
+clean up empty session logs.
+
+This is intentionally a plugin concern rather than a first-party `ct project`
+or `ct session` command because it performs destructive filesystem actions and
+uses local policy about what is safe to delete.
+
+### Primary Use Cases
+
+- Preview old projects that are likely safe to remove.
+- Remove empty session logs that contain no useful turns or events.
+- Keep the Codex and Pi session stores small enough for fast discovery.
+- Produce an auditable cleanup report before and after deletion.
+
+### Command Shape
+
+```text
+ct plugin cleanup project [--older-than 30d] [--path PATH] [--dry-run] [--trash|--delete] [--detail]
+ct plugin cleanup session [--agent-vendor codex|pi] [--dry-run] [--trash|--delete] [--detail]
+```
+
+Default behavior should be conservative:
+
+- `--dry-run` is the default.
+- `--trash` is the default when an action is requested.
+- `--delete` requires an explicit flag and should not be implied by any
+  shorthand command.
+- A non-dry-run command should require a visible summary of the deletion plan.
+
+The first command surface should remain this small. More complex cleanup flows
+should move into the interactive TUI rather than adding many one-off flags to
+the CLI.
+
+### Project Cleanup Rules
+
+Project candidates should be selected from discovered project metadata and
+filesystem inspection, not from name matching alone. The first version only
+needs to classify projects that are older than the configured retention window.
+
+Recommended candidate signals:
+
+- project has no sessions newer than `--older-than`;
+- project directory is under a configured cleanup root;
+- project has no uncommitted git changes;
+- project has no unpushed commits on the current branch;
+- project has no active lock file or running dev-server marker recognized by a
+  local policy file.
+
+Recommended exclusions:
+
+- current working directory and its parents;
+- git repositories with dirty working trees;
+- repositories with local commits that are not reachable from a configured
+  remote;
+- directories outside explicitly allowed cleanup roots;
+- directories with a local `.ct-cleanup-keep` marker.
+
+### Session Cleanup Rules
+
+Session cleanup should classify logs before removing anything. The first
+version only needs to remove empty sessions.
+
+Recommended candidate classes:
+
+- `empty`: session file has metadata but no user-visible turns or useful
+  events.
+
+Recommended exclusions:
+
+- sessions modified in the last 24 hours;
+- sessions connected to a non-empty parent or child session tree;
+- sessions that contain failed, interrupted, or in-progress status;
+- sessions with a local keep marker in companion metadata.
+
+### TUI Workflow
+
+The full cleanup workflow should be exposed through an interactive TUI instead
+of a large flag surface. The TUI can guide the user through discovery, review,
+selection, and execution while keeping the simple CLI useful for automation.
+
+Expected TUI flow:
+
+- scan old project candidates and empty session candidates;
+- show grouped candidates with paths, ages, sizes, and skip reasons;
+- let the user select or deselect candidates;
+- default to trash or archive actions;
+- require explicit confirmation before deletion;
+- write the same cleanup manifest as the CLI.
+
+### Safety Model
+
+The plugin should make cleanup safe by default:
+
+- Always compute candidates before taking action.
+- Print counts, total bytes, and representative paths in overview mode.
+- Require `--confirm` or equivalent explicit acknowledgement for non-dry-run
+  actions if the command is run interactively.
+- Prefer moving files to the operating-system trash or a configured archive
+  directory before permanent deletion.
+- Write a machine-readable cleanup manifest for every non-dry-run action.
+- Treat unreadable files, parse failures, and unknown vendor formats as
+  skipped, not deleted.
+
+Example manifest shape:
+
+```json
+{
+  "action": "trash",
+  "dry_run": false,
+  "generated_at": "2026-06-05T12:00:00Z",
+  "projects": [
+    {
+      "path": "/tmp/example-project",
+      "reason": ["older_than_retention", "temporary_root"],
+      "bytes": 120034
+    }
+  ],
+  "sessions": [
+    {
+      "path": "~/.codex/sessions/2026/05/old-session.jsonl",
+      "vendor": "codex",
+      "class": "empty",
+      "bytes": 930
+    }
+  ]
+}
+```
+
+### Output Expectations
+
+Default text output should stay compact:
+
+- total project candidates and bytes reclaimable;
+- total session candidates and bytes reclaimable;
+- skipped counts grouped by reason;
+- action mode: dry run, trash, archive, or delete;
+- path to the cleanup manifest for non-dry-run actions.
+
+Use `--detail` or `--output FILE` for the full candidate list and skip
+reasons.
+
+### Boundary
+
+- Core remains responsible for discovering projects and parsing sessions into
+  canonical metadata.
+- The plugin remains responsible for cleanup policy, safety checks, candidate
+  classification, and filesystem actions.
+- Vendor-specific deletion paths should live in the plugin, but candidate
+  classification should reuse canonical session metadata wherever possible.
+- Permanent deletion should never be required for normal operation; archive or
+  trash should be sufficient for routine cleanup.
