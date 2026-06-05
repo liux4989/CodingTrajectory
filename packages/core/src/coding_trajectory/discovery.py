@@ -32,6 +32,13 @@ class DiscoveryResult:
     sources: list[DiscoverySource]
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectDiscoveryItem:
+    project_identifier: str
+    path: Path | None
+    vendor: Vendor
+
+
 def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     home = Path.home()
     return [
@@ -41,6 +48,13 @@ def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     ]
 
 
+def _selected_vendor_configs(agent_vendor: str | None) -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
+    configs = _vendor_configs()
+    if agent_vendor is None:
+        return configs
+    return [config for config in configs if config[0].value == agent_vendor]
+
+
 def discover_store(
     *,
     current_dir: Path,
@@ -48,6 +62,7 @@ def discover_store(
     project_name: str | None = None,
     since_days: int | None = None,
     modified_since: datetime | None = None,
+    agent_vendor: str | None = None,
 ) -> DiscoveryResult:
     current_dir = current_dir.resolve()
     scoped_project = project_name or (None if global_scope else current_dir.name)
@@ -57,7 +72,7 @@ def discover_store(
     sessions_by_project: dict[str, list[Session]] = {}
     path_session_meta: list[tuple[Vendor, Path, UUID]] = []
 
-    for vendor, adapter_cls, base_dir, pattern in _vendor_configs():
+    for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(agent_vendor):
         for path in _candidate_files(
             vendor,
             base_dir,
@@ -107,6 +122,51 @@ def discover_store(
     ]
 
     return DiscoveryResult(store=DocumentStore.from_session_graphs(session_graphs), sources=sources)
+
+
+def discover_project_metadata(
+    *,
+    current_dir: Path,
+    global_scope: bool = True,
+    project_name: str | None = None,
+    since_days: int | None = None,
+    modified_since: datetime | None = None,
+    agent_vendor: str | None = None,
+) -> list[ProjectDiscoveryItem]:
+    """Discover project/vendor metadata without building full session graphs."""
+    current_dir = current_dir.resolve()
+    scoped_project = project_name or (None if global_scope else current_dir.name)
+    scoped_project_key = normalize_project_key(scoped_project) if scoped_project else None
+    modified_since = _modified_since(since_days, modified_since=modified_since)
+    items: list[ProjectDiscoveryItem] = []
+
+    for vendor, _adapter_cls, base_dir, pattern in _selected_vendor_configs(agent_vendor):
+        for path in _candidate_files(
+            vendor,
+            base_dir,
+            pattern,
+            current_dir=current_dir,
+            scoped_project=scoped_project,
+            scoped_project_key=scoped_project_key,
+            modified_since=modified_since,
+        ):
+            project_path = _project_path_from_source(vendor, path)
+            project_identifier = _project_identifier_from_path(project_path)
+            if project_identifier is None:
+                if scoped_project is None:
+                    project_identifier = f"unknown-{vendor.value}"
+                else:
+                    continue
+
+            key = normalize_project_key(project_identifier)
+            if not key:
+                continue
+            if scoped_project_key and key != scoped_project_key:
+                continue
+
+            items.append(ProjectDiscoveryItem(project_identifier=key, path=project_path, vendor=vendor))
+
+    return items
 
 
 def _decode_claude_encoded_path(encoded: str) -> str | None:
@@ -231,6 +291,23 @@ def _path_matches_project_scope(
 
     path_token = _normalize_token(scoped_project_key)
     return any(_normalize_token(part) == path_token for part in path.parts)
+
+
+def _project_path_from_source(vendor: Vendor, path: Path) -> Path | None:
+    if vendor == Vendor.CLAUDE_CODE:
+        return _claude_project_path_from_source(path)
+    if vendor == Vendor.PI:
+        return _pi_project_path_from_source(path)
+    if vendor == Vendor.CODEX_CLI:
+        return _codex_project_path_from_source(path)
+    return None
+
+
+def _project_identifier_from_path(project_path: Path | None) -> str | None:
+    if project_path is None:
+        return None
+    name = project_path.name
+    return name if name else None
 
 
 def _project_scope_matches_path(

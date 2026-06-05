@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from coding_trajectory.query import DocumentStore
-from coding_trajectory.service import IndexCache, dispatch, resolve_store
+from coding_trajectory.service import IndexCache, dispatch, project_list_metadata, resolve_store
 
 PLUGIN_ENTRY_POINT_GROUP = "coding_trajectory.cli_plugins"
 
@@ -69,8 +69,14 @@ class CtPluginContext:
     ) -> dict[str, Any]:
         """Run a first-party ct core method using the standard discovery path."""
         effective_current_dir = current_dir or Path.cwd()
-        cache = IndexCache.load()
         effective_global_scope = True if method == "project.list" else global_scope
+        if method == "project.list":
+            return project_list_metadata(
+                params,
+                global_scope=effective_global_scope,
+                current_dir=effective_current_dir,
+            )
+        cache = IndexCache.load()
         store, discovery_note = resolve_store(
             params,
             log_file=None,

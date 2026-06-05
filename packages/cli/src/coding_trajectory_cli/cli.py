@@ -12,17 +12,24 @@ from typing import Any
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory_cli.plugins import CtPluginContext, LoadedPlugin, load_plugins
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
-from coding_trajectory.service import IndexCache, dispatch, resolve_store
+from coding_trajectory.service import IndexCache, dispatch, project_list_metadata, resolve_store
 
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     current_dir = Path.cwd()
-    cache = IndexCache.load()
 
     method: str = args._method
     params: dict[str, Any] = args._params(args)
 
     effective_global_scope = True if method == "project.list" else args.global_scope
+    if method == "project.list":
+        return project_list_metadata(
+            params,
+            global_scope=effective_global_scope,
+            current_dir=current_dir,
+        )
+
+    cache = IndexCache.load()
     store, discovery_note = resolve_store(
         params,
         log_file=None,

@@ -10,6 +10,7 @@ from uuid import UUID
 
 from coding_trajectory.discovery import (
     DiscoverySource,
+    discover_project_metadata,
     discover_store,
     discover_store_from_file,
     discover_store_from_files,
@@ -419,6 +420,7 @@ def _build_store_full(
     project_name: str | None = None,
     since_days: int | None = None,
     modified_since: Any | None = None,
+    agent_vendor: str | None = None,
 ) -> tuple[DocumentStore, str]:
     """Full discovery — populates cache.path_to_session_graph."""
     discovery = discover_store(
@@ -427,6 +429,7 @@ def _build_store_full(
         project_name=project_name,
         since_days=since_days,
         modified_since=modified_since,
+        agent_vendor=agent_vendor,
     )
     _update_path_index(cache, discovery.sources)
     _update_session_index(cache, discovery.store)
@@ -495,7 +498,40 @@ def resolve_store(
         project_name=params.get("project_name"),
         since_days=params.get("since_days"),
         modified_since=params.get("modified_since"),
+        agent_vendor=params.get("agent_vendor"),
     )
+
+
+def project_list_metadata(
+    params: dict[str, Any],
+    *,
+    global_scope: bool,
+    current_dir: Path,
+) -> dict[str, Any]:
+    """Return project list data without fully ingesting session transcripts."""
+    projects: dict[str, dict[str, Any]] = {}
+    for item in discover_project_metadata(
+        current_dir=current_dir,
+        global_scope=global_scope,
+        project_name=params.get("project_name"),
+        since_days=params.get("since_days"),
+        modified_since=params.get("modified_since"),
+        agent_vendor=params.get("agent_vendor"),
+    ):
+        key = item.project_identifier
+        if key.startswith("unknown-"):
+            continue
+        entry = projects.setdefault(key, {"path": None, "vendors": set()})
+        entry["vendors"].add(item.vendor.value)
+        if entry["path"] is None and item.path is not None:
+            entry["path"] = str(item.path)
+
+    return {
+        "items": {
+            key: {"path": value["path"], "vendors": sorted(value["vendors"])}
+            for key, value in sorted(projects.items())
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
