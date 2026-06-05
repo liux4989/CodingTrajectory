@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.ingestion.common import format_datetime, normalize_project_key
 from coding_trajectory.ingestion.models import Session, SessionGraph
 from coding_trajectory.metrics import SessionMetrics, TurnMetrics, build_session_graph_full_metrics
@@ -71,10 +70,9 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         help="Filter to one account key. Accepts either ACCOUNT or VENDOR:ACCOUNT.",
     )
     parser.add_argument(
-        "--format",
-        choices=("overview", "json"),
-        default="overview",
-        help="Select stdout format: overview for reading, json for exact data. --output always writes JSON.",
+        "--detail",
+        action="store_true",
+        help="Print the structured JSON data instead of the human-readable overview.",
     )
 
 
@@ -129,7 +127,6 @@ def _build_activity_payload(
                 _aggregate_turn_activity_usage(session_metrics.turns) if session_metrics else []
             )
             turn_count = len(session.turns)
-            activity_preview = _session_activity_preview(session)
 
             session_row = {
                 "session_id": str(session.session_id),
@@ -144,7 +141,6 @@ def _build_activity_payload(
                 "turn_count": turn_count,
                 "usage": usage,
                 "activity_usage": activity_usage,
-                "activity_preview": activity_preview,
             }
             matching_sessions.append(session_row)
 
@@ -336,36 +332,8 @@ def _add_usage(target: dict[str, float], usage: dict[str, Any]) -> None:
             continue
 
 
-def _session_activity_preview(session: Session) -> list[str]:
-    preview: list[str] = []
-    for turn in session.turns[-3:]:
-        for item in build_overview_flows(turn.steps)[:3]:
-            label = _activity_label(item)
-            if label:
-                preview.append(label)
-            if len(preview) >= 4:
-                return preview
-    return preview
-
-
-def _activity_label(item: dict[str, Any]) -> str | None:
-    tool = item.get("tool")
-    if isinstance(tool, str) and tool:
-        count = int(item.get("count") or 1)
-        suffix = f" x{count}" if count > 1 else ""
-        for key in ("cmd", "path", "query", "url"):
-            value = item.get(key)
-            if isinstance(value, str) and value:
-                return f"{tool}{suffix}: {value}"
-        return f"{tool}{suffix}"
-    text = item.get("text")
-    if isinstance(text, str) and text:
-        return text
-    return None
-
-
 def _render_activity(args: argparse.Namespace, payload: dict[str, Any]) -> str:
-    if getattr(args, "format", "overview") == "json":
+    if getattr(args, "detail", False):
         return json.dumps(payload, indent=2, ensure_ascii=False)
     totals = payload.get("totals") or {}
     lines = [
@@ -391,22 +359,19 @@ def _render_activity(args: argparse.Namespace, payload: dict[str, Any]) -> str:
             )
 
     sessions = payload.get("sessions") or []
-    lines.extend(["", "Sessions"])
+    lines.extend(["", f"Recent Sessions ({len(sessions)})"])
     if not sessions:
         lines.append("  No matching sessions.")
         return "\n".join(lines).rstrip()
-    for session in sessions:
-        account = session.get("account") or {}
+    for session in sessions[:10]:
+        usage = session.get("usage") or {}
         lines.append(
-            f"  {session['project']}  {_short_id(session['session_id'])}  {session['vendor']}  "
-            f"{account.get('label') or '-'}  turns {session['turn_count']}"
+            f"  {_short_id(session['session_id'])}  {session.get('started_at') or '-':<27} "
+            f"{session['project']:<24} {session['vendor']:<10} turns {session['turn_count']:<3} "
+            f"cost {_format_cost(usage.get('cost_usd'))}"
         )
-        lines.append(
-            f"    {session.get('started_at') or '-'} -> {session.get('ended_at') or '-'}  "
-            f"{_render_usage_line(session.get('usage') or {})}"
-        )
-        for item in session.get("activity_preview") or []:
-            lines.append(f"    - {item}")
+    if len(sessions) > 10:
+        lines.append(f"  ... {len(sessions) - 10} more (use --detail for the full list)")
     return "\n".join(lines).rstrip()
 
 
