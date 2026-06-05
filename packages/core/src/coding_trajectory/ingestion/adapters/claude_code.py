@@ -241,14 +241,6 @@ class ClaudeCodeAdapter(BaseAdapter):
                 continue
         return None
 
-
-def _infer_claude_account(records: list[dict]) -> object:
-    for record in records[:8]:
-        account = infer_account_identity(record, vendor=Vendor.CLAUDE_CODE)
-        if account is not None:
-            return account
-    return None
-
     def _build_transcript(self, records: list[dict]) -> tuple[list[TranscriptRecord], list[ClaudeTeamStateInput]]:
         """Extract only CT-useful transcript facts from Claude Code JSONL records."""
         transcript: list[TranscriptRecord] = []
@@ -390,3 +382,11 @@ def _infer_claude_account(records: list[dict]) -> object:
             except Exception as exc:
                 logger.warning("ClaudeCodeAdapter: failed to ingest %s: %s", jsonl_path, exc)
         return sessions
+
+
+def _infer_claude_account(records: list[dict]) -> object:
+    for record in records[:8]:
+        account = infer_account_identity(record, vendor=Vendor.CLAUDE_CODE)
+        if account is not None:
+            return account
+    return None
