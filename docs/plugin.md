@@ -212,18 +212,18 @@ uses local policy about what is safe to delete.
 ### Command Shape
 
 ```text
-ct plugin cleanup project [--older-than 30d] [--path PATH] [--dry-run] [--trash|--delete] [--confirm] [--detail]
-ct plugin cleanup session [--agent-vendor codex|pi] [--dry-run] [--trash|--delete] [--confirm] [--detail]
+ct plugin cleanup project [--older-than 30d] [--path PATH] [--trash|--delete] [--confirm] [--detail]
+ct plugin cleanup session [--agent-vendor codex|pi] [--trash|--delete] [--confirm] [--detail]
 ```
 
 Default behavior should be conservative:
 
-- `--dry-run` is the default.
-- `--trash` is the default when an action is requested.
+- Running without `--trash` or `--delete` opens the interactive cleanup flow.
+- `cleanup project` reads candidates from the global `ct project list` result.
 - `--delete` requires an explicit flag and should not be implied by any
   shorthand command.
 - `--trash` and `--delete` require `--confirm`.
-- A non-dry-run command should require a visible summary of the deletion plan.
+- Non-interactive action flags operate on all matching candidates.
 
 The first command surface should remain this small. More complex cleanup flows
 should move into the interactive TUI rather than adding many one-off flags to

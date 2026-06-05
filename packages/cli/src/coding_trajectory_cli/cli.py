@@ -239,8 +239,6 @@ def _add_output_flags(p: argparse.ArgumentParser) -> None:
 def _add_details_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--details",
-        "--data",
-        dest="details",
         action="store_true",
         help="Print the structured JSON data behind the human report.",
     )

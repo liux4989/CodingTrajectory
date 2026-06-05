@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +20,7 @@ from coding_trajectory.ingestion.models import EventType, Session, SessionStatus
 from coding_trajectory_cli.plugins import CtPluginContext
 
 
-Action = Literal["dry_run", "trash", "delete"]
+Action = Literal["interactive", "trash", "delete", "cancelled"]
 
 
 class CleanupTarget(BaseModel):
@@ -71,7 +72,7 @@ class CleanupPlugin:
         project.add_argument(
             "--path",
             default=None,
-            help="Cleanup root. Defaults to the parent of the current directory.",
+            help="Only consider project paths under this cleanup root. Defaults to all projects from ct project list.",
         )
         _add_action_flags(project)
         project.set_defaults(_cleanup_handler=lambda args: _handle_project(args, ctx))
@@ -100,21 +101,16 @@ class CleanupPlugin:
 
 
 def _add_action_flags(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview cleanup candidates without changing the filesystem. This is the default.",
-    )
     action = parser.add_mutually_exclusive_group()
     action.add_argument(
         "--trash",
         action="store_true",
-        help="Move selected candidates to the user trash after confirmation.",
+        help="Move all selected candidates to the user trash after confirmation.",
     )
     action.add_argument(
         "--delete",
         action="store_true",
-        help="Permanently delete selected candidates after confirmation.",
+        help="Permanently delete all selected candidates after confirmation.",
     )
     parser.add_argument(
         "--confirm",
@@ -130,7 +126,7 @@ def _add_action_flags(parser: argparse.ArgumentParser) -> None:
 
 def _handle_project(args: argparse.Namespace, ctx: CtPluginContext) -> dict[str, Any]:
     action = _resolve_action(args)
-    root = _cleanup_root(args.path)
+    root = _cleanup_root(args.path) if args.path else None
     cutoff = datetime.now(timezone.utc) - args.older_than
     all_projects = ctx.dispatch_core(
         method="project.list",
@@ -159,16 +155,18 @@ def _handle_project(args: argparse.Namespace, ctx: CtPluginContext) -> dict[str,
             candidates.append(target)
         skipped.extend(skip)
 
+    candidates = sorted(candidates, key=lambda item: item.path)
+    action, selected = _resolve_interactive_selection(
+        action, candidates, target_kind="project"
+    )
     manifest_path = _apply_action(
-        action, [Path(target.path) for target in candidates], target_kind="project"
+        action, [Path(target.path) for target in selected], target_kind="project"
     )
     return _payload(
         command="cleanup project",
         action=action,
-        targets=[
-            target.model_dump(mode="json")
-            for target in sorted(candidates, key=lambda item: item.path)
-        ],
+        targets=[target.model_dump(mode="json") for target in selected],
+        candidate_count=len(candidates),
         skipped=[
             item.model_dump(mode="json")
             for item in sorted(
@@ -179,7 +177,7 @@ def _handle_project(args: argparse.Namespace, ctx: CtPluginContext) -> dict[str,
         filters={
             "older_than": _format_timedelta(args.older_than),
             "cutoff": cutoff.isoformat(),
-            "path": str(root),
+            "path": str(root) if root else None,
         },
         discovery_note=None,
     )
@@ -207,16 +205,18 @@ def _handle_session(args: argparse.Namespace) -> dict[str, Any]:
             if skip is not None:
                 skipped.append(skip)
 
+    candidates = sorted(candidates, key=lambda item: item.path)
+    action, selected = _resolve_interactive_selection(
+        action, candidates, target_kind="session"
+    )
     manifest_path = _apply_action(
-        action, [Path(target.path) for target in candidates], target_kind="session"
+        action, [Path(target.path) for target in selected], target_kind="session"
     )
     return _payload(
         command="cleanup session",
         action=action,
-        targets=[
-            target.model_dump(mode="json")
-            for target in sorted(candidates, key=lambda item: item.path)
-        ],
+        targets=[target.model_dump(mode="json") for target in selected],
+        candidate_count=len(candidates),
         skipped=[
             item.model_dump(mode="json")
             for item in sorted(
@@ -233,7 +233,7 @@ def _project_metadata_target(
     project_name: str,
     item: dict[str, Any],
     *,
-    root: Path,
+    root: Path | None,
     is_recent: bool,
 ) -> tuple[ProjectTarget | None, list[SkippedTarget]]:
     raw_path = item.get("path")
@@ -251,7 +251,7 @@ def _project_metadata_target(
     skips: list[SkippedTarget] = []
     if not resolved.exists():
         skips.append(_skip("project", str(resolved), "project_path_missing"))
-    if not _is_relative_to(resolved, root):
+    if root is not None and not _is_relative_to(resolved, root):
         skips.append(_skip("project", str(resolved), "outside_cleanup_root"))
     if _is_current_or_parent(resolved, Path.cwd().resolve()):
         skips.append(_skip("project", str(resolved), "current_directory_or_parent"))
@@ -331,6 +331,7 @@ def _payload(
     command: str,
     action: Action,
     targets: list[dict[str, Any]],
+    candidate_count: int,
     skipped: list[dict[str, Any]],
     manifest_path: str | None,
     filters: dict[str, Any],
@@ -339,11 +340,11 @@ def _payload(
     return {
         "command": command,
         "action": action,
-        "dry_run": action == "dry_run",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "filters": filters,
         "summary": {
             "target_count": len(targets),
+            "candidate_count": candidate_count,
             "target_bytes": sum(int(item.get("bytes") or 0) for item in targets),
             "skipped_count": len(skipped),
             "skipped_reasons": dict(
@@ -381,16 +382,94 @@ def _resolve_action(args: argparse.Namespace) -> Action:
     elif getattr(args, "trash", False):
         action = "trash"
     else:
-        return "dry_run"
-    if getattr(args, "dry_run", False):
-        return "dry_run"
+        return "interactive"
     if not getattr(args, "confirm", False):
         raise ValueError(f"--{action} requires --confirm")
     return action
 
 
+def _resolve_interactive_selection(
+    action: Action,
+    candidates: list[ProjectTarget | SessionTarget],
+    *,
+    target_kind: str,
+) -> tuple[Action, list[ProjectTarget | SessionTarget]]:
+    if action != "interactive":
+        return action, candidates
+    if not candidates:
+        return "cancelled", []
+
+    _print_interactive_candidates(candidates, target_kind=target_kind)
+    raw_selection = (
+        input("Select candidates to clean [numbers, a=all, q=cancel]: ").strip().lower()
+    )
+    if raw_selection in {"", "q", "quit", "cancel"}:
+        return "cancelled", []
+    if raw_selection == "a":
+        selected = candidates
+    else:
+        selected = _selected_candidates(candidates, raw_selection)
+    if not selected:
+        print("No candidates selected.", file=sys.stderr)
+        return "cancelled", []
+
+    raw_action = input("Action [t=trash, d=delete, q=cancel]: ").strip().lower()
+    if raw_action in {"t", "trash"}:
+        selected_action: Action = "trash"
+    elif raw_action in {"d", "delete"}:
+        selected_action = "delete"
+    else:
+        return "cancelled", []
+
+    confirmation = (
+        input(f"Type {selected_action} to confirm {len(selected)} item(s): ")
+        .strip()
+        .lower()
+    )
+    if confirmation != selected_action:
+        return "cancelled", []
+    return selected_action, selected
+
+
+def _print_interactive_candidates(
+    candidates: list[ProjectTarget | SessionTarget],
+    *,
+    target_kind: str,
+) -> None:
+    print(f"Cleanup {target_kind}: {len(candidates)} candidate(s)")
+    for index, candidate in enumerate(candidates, start=1):
+        label = (
+            getattr(candidate, "project", None)
+            or getattr(candidate, "vendor", None)
+            or target_kind
+        )
+        print(f"{index:>3}. {label}  {_format_bytes(candidate.bytes)}")
+        print(f"     {candidate.path}")
+
+
+def _selected_candidates(
+    candidates: list[ProjectTarget | SessionTarget],
+    raw_selection: str,
+) -> list[ProjectTarget | SessionTarget]:
+    indexes: set[int] = set()
+    for part in re.split(r"[\s,]+", raw_selection):
+        if not part:
+            continue
+        try:
+            index = int(part)
+        except ValueError:
+            continue
+        if 1 <= index <= len(candidates):
+            indexes.add(index)
+    return [
+        candidate
+        for index, candidate in enumerate(candidates, start=1)
+        if index in indexes
+    ]
+
+
 def _apply_action(action: Action, paths: list[Path], *, target_kind: str) -> str | None:
-    if action == "dry_run" or not paths:
+    if action in {"interactive", "cancelled"} or not paths:
         return None
     manifest = {
         "action": action,
@@ -489,9 +568,7 @@ def _format_timedelta(delta: timedelta) -> str:
 
 
 def _cleanup_root(raw_path: str | None) -> Path:
-    if raw_path:
-        return Path(raw_path).expanduser().resolve()
-    return Path.cwd().resolve().parent
+    return Path(raw_path).expanduser().resolve()
 
 
 def _git_skip_reasons(path: Path) -> list[str]:
@@ -632,8 +709,8 @@ def _render_cleanup(args: argparse.Namespace, payload: dict[str, Any]) -> str:
     summary = payload.get("summary") or {}
     lines = [
         payload.get("command", "cleanup"),
-        f"Action: {payload.get('action') or 'dry_run'}",
-        f"Targets: {summary.get('target_count') or 0}  Bytes: {_format_bytes(summary.get('target_bytes'))}",
+        f"Action: {payload.get('action') or 'interactive'}",
+        f"Selected: {summary.get('target_count') or 0} of {summary.get('candidate_count') or 0}  Bytes: {_format_bytes(summary.get('target_bytes'))}",
         f"Skipped: {summary.get('skipped_count') or 0}",
     ]
     skipped_reasons = summary.get("skipped_reasons") or {}
@@ -660,10 +737,6 @@ def _render_cleanup(args: argparse.Namespace, payload: dict[str, Any]) -> str:
             )
     if payload.get("manifest_path"):
         lines.append(f"Manifest: {payload['manifest_path']}")
-    if payload.get("action") == "dry_run":
-        lines.append(
-            "Dry run only. Re-run with --trash --confirm or --delete --confirm to apply."
-        )
     return "\n".join(lines).rstrip()
 
 
