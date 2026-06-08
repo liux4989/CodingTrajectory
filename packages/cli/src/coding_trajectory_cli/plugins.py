@@ -140,7 +140,7 @@ def run_plugin(manifest: PluginManifest, source: Path, plugin_args: list[str]) -
         )
         return 127
     try:
-        completed = subprocess.run([command, *plugin_args], check=False)
+        completed = subprocess.run([*command, *plugin_args], check=False)
     except OSError as exc:
         print(json.dumps({"error": {"message": str(exc)}}, indent=2), file=sys.stderr)
         return 1
@@ -212,11 +212,18 @@ def _dedupe_plugins(plugins: list[LoadedPlugin]) -> list[LoadedPlugin]:
     return unique
 
 
-def _resolve_command(command: str, source: Path) -> str | None:
+def _resolve_command(command: str, source: Path) -> list[str] | None:
     command_path = Path(command).expanduser()
     if command_path.is_absolute():
-        return str(command_path) if command_path.exists() else None
+        return _python_or_executable(command_path) if command_path.exists() else None
     if os.sep in command or (os.altsep and os.altsep in command):
         resolved = (source.parent / command_path).resolve(strict=False)
-        return str(resolved) if resolved.exists() else None
-    return shutil.which(command)
+        return _python_or_executable(resolved) if resolved.exists() else None
+    resolved_command = shutil.which(command)
+    return [resolved_command] if resolved_command else None
+
+
+def _python_or_executable(path: Path) -> list[str]:
+    if path.suffix == ".py":
+        return [sys.executable, str(path)]
+    return [str(path)]

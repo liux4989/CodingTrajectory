@@ -69,7 +69,7 @@ Required fields:
 - `name`: the namespace mounted under `ct plugin NAME`.
 - `version`: plugin version.
 - `description`: one-line help text for `ct plugin list` and `ct plugin --help`.
-- `command`: command name or path to execute.
+- `command`: command name, executable path, or `.py` file path to run.
 
 Optional fields:
 
@@ -95,6 +95,7 @@ manifest executable as a subprocess.
 Dispatch rules:
 
 - The executable receives the remaining command-line arguments unchanged.
+- Manifest commands ending in `.py` are run with the current Python interpreter.
 - The subprocess working directory is the caller's current directory.
 - The subprocess inherits stdin, stdout, stderr, and the relevant `CT_*`
   environment.

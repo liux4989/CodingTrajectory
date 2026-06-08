@@ -10,8 +10,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 artifacts = [
-    "activity/ct-activity",
+    "activity/activity.py",
     "activity/ct-plugin.json",
-    "dashboard/ct-dashboard",
+    "dashboard/dashboard.py",
     "dashboard/ct-plugin.json",
 ]

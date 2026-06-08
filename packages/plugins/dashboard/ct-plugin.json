@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "requiresCt": ">=0.1.0",
   "description": "Project and session management dashboard.",
-  "command": "./ct-dashboard",
+  "command": "./dashboard.py",
   "commands": [
     {
       "name": ".",
