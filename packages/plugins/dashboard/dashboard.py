@@ -154,14 +154,15 @@ def _root_entry_text() -> str:
             "Dashboard executable plugin",
             "",
             "Commands:",
-            "  ct plugin dashboard --tui",
-            "  ct plugin dashboard web [--host HOST] [--port PORT] [--open]",
+            "  ct plugin dashboard --tui          Quick inspection and cleanup (terminal)",
+            "  ct plugin dashboard web [flags]    Rich dashboard with analytics (browser)",
             "  ct plugin dashboard project [--agent-vendor VENDOR]",
             "  ct plugin dashboard project cleanup [--tui] [flags]",
             "  ct plugin dashboard session [PROJECT] [--since-days N|--all-time]",
             "  ct plugin dashboard session cleanup [--tui] [flags]",
             "",
-            "A richer web dashboard can live in this plugin package and call the same ct JSON surfaces.",
+            "TUI:  Simple interaction, browse projects/sessions, cleanup with keyboard.",
+            "Web:  Rich UI with charts, filters, vendor breakdown, session timeline.",
         ]
     )
 

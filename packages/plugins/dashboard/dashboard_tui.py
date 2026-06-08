@@ -12,7 +12,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
+from textual.widgets import Button, DataTable, Footer, Header, Label, Static
 
 
 @dataclass(slots=True)
@@ -114,10 +114,6 @@ class DashboardApp(App[None]):
         margin-bottom: 1;
     }
 
-    #dashboard-filter {
-        margin-top: 1;
-    }
-
     #dashboard-hint {
         margin-top: 1;
         color: $text-muted;
@@ -142,17 +138,6 @@ class DashboardApp(App[None]):
     #dashboard-table {
         height: 1fr;
         border: solid $panel;
-    }
-
-    #dashboard-detail-panel {
-        width: 40%;
-        height: 1fr;
-        border-left: solid $panel;
-        padding: 1 2;
-    }
-
-    #dashboard-detail {
-        color: $text-muted;
     }
 
     #dashboard-status {
@@ -225,10 +210,7 @@ class DashboardApp(App[None]):
         Binding("x", "skipped_current", "Skipped"),
         Binding("P", "cleanup_projects", "Clean projects", show=False),
         Binding("S", "cleanup_sessions", "Clean sessions", show=False),
-        Binding("/", "focus_filter", "Filter"),
         Binding("space", "toggle_selected", "Select"),
-        Binding("enter", "show_detail", "Detail"),
-        Binding("?", "help", "Help"),
         Binding("r", "refresh", "Refresh"),
         Binding("q", "quit", "Quit"),
     ]
@@ -237,10 +219,9 @@ class DashboardApp(App[None]):
         super().__init__()
         self._services = services
         self._busy = False
-        self._section = "overview"
+        self._section = "projects"
         self._view = "browse"
         self._cleanup_kind = "project"
-        self._filter = ""
         self._projects_payload: dict[str, Any] = {}
         self._sessions_payload: dict[str, Any] = {}
         self._project_cleanup_preview: CleanupPreview | None = None
@@ -254,12 +235,10 @@ class DashboardApp(App[None]):
         yield Label("CodingTrajectory Dashboard", id="dashboard-title")
         with Horizontal(id="dashboard-body"):
             yield Vertical(
-                Button("Overview", variant="primary", id="nav-overview"),
-                Button("Projects", variant="default", id="nav-projects"),
+                Button("Projects", variant="primary", id="nav-projects"),
                 Button("Sessions", variant="default", id="nav-sessions"),
-                Input(placeholder="Filter with /", id="dashboard-filter"),
                 Static(
-                    "Keys: p/s browse, c cleanup, x skipped, / filter, Space select",
+                    "Keys: p/s browse, c cleanup, x skipped, Space select, r refresh",
                     id="dashboard-hint",
                 ),
                 id="dashboard-sidebar",
@@ -287,9 +266,6 @@ class DashboardApp(App[None]):
                 DataTable(id="dashboard-table"),
                 id="dashboard-main",
             )
-            yield VerticalScroll(
-                Static("Loading...", id="dashboard-detail"), id="dashboard-detail-panel"
-            )
         yield Static("", id="dashboard-status")
         yield Footer()
 
@@ -301,7 +277,6 @@ class DashboardApp(App[None]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         actions = {
-            "nav-overview": self.action_overview,
             "nav-projects": self.action_browse_projects,
             "nav-sessions": self.action_browse_sessions,
             "browse-current": self.action_browse_current,
@@ -315,23 +290,10 @@ class DashboardApp(App[None]):
         if handler is not None:
             handler()
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "dashboard-filter":
-            self._filter = event.value.strip().lower()
-            self._render_current_section()
-
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         key = str(event.row_key.value)
         if (self._rows.get(key) or {}).get("kind") == "cleanup":
             self._toggle_cleanup_key(key)
-            return
-        self._render_detail(key)
-
-    def action_overview(self) -> None:
-        if not self._busy:
-            self._section = "overview"
-            self._view = "browse"
-            self._render_current_section()
 
     def action_browse_projects(self) -> None:
         if not self._busy:
@@ -349,16 +311,12 @@ class DashboardApp(App[None]):
 
     def action_browse_current(self) -> None:
         if not self._busy:
-            if self._section == "overview":
-                self._section = "projects"
             self._view = "browse"
             self._cleanup_kind = self._current_entity_kind()
             self._render_current_section()
 
     def action_cleanup_current(self) -> None:
         if not self._busy:
-            if self._section == "overview":
-                self._section = "projects"
             self._view = "cleanup"
             self._cleanup_kind = self._current_entity_kind()
             self._render_current_section()
@@ -379,8 +337,6 @@ class DashboardApp(App[None]):
 
     def action_skipped_current(self) -> None:
         if not self._busy:
-            if self._section == "overview":
-                self._section = "projects"
             self._view = "skipped"
             self._cleanup_kind = self._current_entity_kind()
             self._render_current_section()
@@ -389,9 +345,6 @@ class DashboardApp(App[None]):
         if not self._busy:
             self._refresh_summary()
 
-    def action_focus_filter(self) -> None:
-        self.query_one("#dashboard-filter", Input).focus()
-
     def action_toggle_selected(self) -> None:
         table = self.query_one("#dashboard-table", DataTable)
         if not self._visible_row_keys or table.cursor_row >= len(
@@ -399,40 +352,6 @@ class DashboardApp(App[None]):
         ):
             return
         self._toggle_cleanup_key(self._visible_row_keys[table.cursor_row])
-
-    def action_show_detail(self) -> None:
-        table = self.query_one("#dashboard-table", DataTable)
-        if not self._visible_row_keys or table.cursor_row >= len(
-            self._visible_row_keys
-        ):
-            return
-        self._render_detail(self._visible_row_keys[table.cursor_row])
-
-    async def action_help(self) -> None:
-        await self.push_screen_wait(
-            TextModal(
-                "Dashboard Help",
-                "\n".join(
-                    [
-                        "Navigation",
-                        "  p / s          switch to projects or sessions",
-                        "  c / x          show cleanup candidates or skipped items for the current section",
-                        "  /              focus filter",
-                        "  r              refresh all dashboard data",
-                        "  q              quit",
-                        "",
-                        "Tables",
-                        "  Enter          show selected row details",
-                        "  Space          toggle cleanup row selection",
-                        "",
-                        "Cleanup",
-                        "  Cleanup is scoped to Projects or Sessions, matching the CLI subcommands.",
-                        "  Trash is reversible through the system trash when available.",
-                        "  Delete is permanent and asks for confirmation.",
-                    ]
-                ),
-            )
-        )
 
     def action_quit(self) -> None:
         self.exit(None)
@@ -468,15 +387,20 @@ class DashboardApp(App[None]):
                 asyncio.to_thread(self._services.preview_session_cleanup),
             )
         except Exception as exc:
-            self.query_one("#dashboard-detail", Static).update(
-                f"Dashboard load failed.\n\n{exc}"
-            )
+            self.query_one("#dashboard-status", Static).update(f"Load failed: {exc}")
             self._clear_busy()
             return
 
         self._selected_cleanup_keys.clear()
         self._render_current_section()
-        self._clear_busy("Loaded")
+        self._clear_busy(self._summary_line())
+
+    def _summary_line(self) -> str:
+        projects = self._projects_payload.get("items") or {}
+        sessions = self._sessions_payload.get("items") or []
+        pc = len(self._project_cleanup_preview.candidates) if self._project_cleanup_preview else 0
+        sc = len(self._session_cleanup_preview.candidates) if self._session_cleanup_preview else 0
+        return f"Projects: {len(projects)} | Sessions: {len(sessions)} | Cleanup: {pc} projects, {sc} sessions"
 
     def _render_current_section(self) -> None:
         self._sync_nav_buttons()
@@ -487,15 +411,12 @@ class DashboardApp(App[None]):
             self._render_skipped_table()
         elif self._section == "projects":
             self._render_projects_table()
-        elif self._section == "sessions":
-            self._render_sessions_table()
         else:
-            self._render_overview_table()
+            self._render_sessions_table()
         self._update_cleanup_buttons()
 
     def _sync_nav_buttons(self) -> None:
         variants = {
-            "nav-overview": "primary" if self._section == "overview" else "default",
             "nav-projects": "primary" if self._section == "projects" else "default",
             "nav-sessions": "primary" if self._section == "sessions" else "default",
         }
@@ -503,9 +424,6 @@ class DashboardApp(App[None]):
             self.query_one(f"#{button_id}", Button).variant = variant
 
     def _sync_toolbar(self) -> None:
-        entity_visible = self._section in {"projects", "sessions"}
-        for button_id in ("browse-current", "cleanup-current", "skipped-current"):
-            self.query_one(f"#{button_id}", Button).display = entity_visible
         for button_id in (
             "trash-selected",
             "delete-selected",
@@ -529,62 +447,8 @@ class DashboardApp(App[None]):
         self._visible_row_keys.clear()
         return table
 
-    def _matches_filter(self, *values: Any) -> bool:
-        if not self._filter:
-            return True
-        haystack = " ".join(str(value or "") for value in values).lower()
-        return self._filter in haystack
-
     def _current_entity_kind(self) -> str:
         return "session" if self._section == "sessions" else "project"
-
-    def _current_entity_label(self) -> str:
-        return "Sessions" if self._cleanup_kind == "session" else "Projects"
-
-    def _render_overview_table(self) -> None:
-        table = self._reset_table(["Metric", "Value", "Signal"])
-        projects = self._projects_payload.get("items") or {}
-        sessions = self._sessions_payload.get("items") or []
-        project_preview = self._project_cleanup_preview
-        session_preview = self._session_cleanup_preview
-        vendor_counts: dict[str, int] = {}
-        for item in projects.values():
-            for vendor in item.get("vendors") or []:
-                vendor_counts[vendor] = vendor_counts.get(vendor, 0) + 1
-        vendor_text = (
-            ", ".join(
-                f"{vendor}: {count}" for vendor, count in sorted(vendor_counts.items())
-            )
-            or "-"
-        )
-        rows = [
-            ("Projects", len(projects), "known project roots"),
-            ("Recent sessions", len(sessions), "last 30 days"),
-            (
-                "Temporary sessions",
-                len((projects.get("(temporary)") or {}).get("sessions") or []),
-                "not mapped to a project root",
-            ),
-            ("Project vendors", vendor_text, "provider coverage"),
-            (
-                "Project cleanup candidates",
-                len(project_preview.candidates) if project_preview else 0,
-                f"{len(project_preview.skipped) if project_preview else 0} skipped",
-            ),
-            (
-                "Session cleanup candidates",
-                len(session_preview.candidates) if session_preview else 0,
-                f"{len(session_preview.skipped) if session_preview else 0} skipped",
-            ),
-        ]
-        for index, row in enumerate(rows):
-            if not self._matches_filter(*row):
-                continue
-            key = f"overview:{index}"
-            self._rows[key] = {"kind": "overview", "row": row}
-            self._visible_row_keys.append(key)
-            table.add_row(*[str(value) for value in row], key=key)
-        self._render_first_detail("Overview")
 
     def _render_projects_table(self) -> None:
         table = self._reset_table(["Project", "Vendors", "Path"])
@@ -592,13 +456,11 @@ class DashboardApp(App[None]):
         for name, meta in sorted(items.items()):
             vendors = ", ".join(meta.get("vendors") or []) or "-"
             path = meta.get("path") or "-"
-            if not self._matches_filter(name, vendors, path):
-                continue
             key = f"project:{name}"
             self._rows[key] = {"kind": "project", "name": name, "meta": meta}
             self._visible_row_keys.append(key)
             table.add_row(name, vendors, _one_line(path, 80), key=key)
-        self._render_first_detail("Projects")
+        self._update_status(f"Projects: {len(self._visible_row_keys)} row(s)")
 
     def _render_sessions_table(self) -> None:
         table = self._reset_table(["Session", "Vendors", "Title", "Merged"])
@@ -608,30 +470,22 @@ class DashboardApp(App[None]):
             vendors = ", ".join(item.get("vendors") or []) or "-"
             title = _one_line(item.get("title") or "-", 90)
             merged = str(len(item.get("session_ids") or []))
-            if not self._matches_filter(root_id, vendors, title, merged):
-                continue
             key = f"session:{root_id}"
             self._rows[key] = {"kind": "session", "item": item}
             self._visible_row_keys.append(key)
             table.add_row(root_id[:8], vendors, title, merged, key=key)
-        self._render_first_detail("Sessions")
+        self._update_status(f"Sessions: {len(self._visible_row_keys)} row(s)")
 
     def _render_cleanup_table(self) -> None:
         table = self._reset_table(["Sel", "Target", "Label", "Detail"])
         preview = self._active_cleanup_preview()
         if preview is None:
-            self.query_one("#dashboard-detail", Static).update(
-                "Cleanup preview has not loaded."
-            )
+            self._update_status("Cleanup preview has not loaded.")
             return
         for index, candidate in enumerate(preview.candidates):
             key = f"cleanup:{self._cleanup_kind}:{index}"
             selected = "*" if key in self._selected_cleanup_keys else ""
             target_kind = _cleanup_target_kind(candidate)
-            if not self._matches_filter(
-                target_kind, candidate.display_label, candidate.display_detail
-            ):
-                continue
             self._rows[key] = {
                 "kind": "cleanup",
                 "candidate": candidate,
@@ -645,7 +499,9 @@ class DashboardApp(App[None]):
                 _one_line(candidate.display_detail, 90),
                 key=key,
             )
-        self._render_first_detail(f"{self._cleanup_kind.capitalize()} Cleanup")
+        self._update_status(
+            f"{self._cleanup_kind.capitalize()} cleanup: {len(self._visible_row_keys)} candidate(s)"
+        )
 
     def _render_skipped_table(self) -> None:
         table = self._reset_table(["Target", "Reason", "Path"])
@@ -653,10 +509,6 @@ class DashboardApp(App[None]):
         rows: list[cleanup_mod.SkippedTarget] = preview.skipped if preview else []
         for index, target in enumerate(rows):
             reasons = ", ".join(target.reason or ["unknown"])
-            if not self._matches_filter(
-                self._cleanup_kind, target.kind, reasons, target.path
-            ):
-                continue
             key = f"skipped:{index}"
             self._rows[key] = {
                 "kind": "skipped",
@@ -671,76 +523,12 @@ class DashboardApp(App[None]):
                 _one_line(target.path, 90),
                 key=key,
             )
-        self._render_first_detail(f"{self._current_entity_label()} Skipped")
-
-    def _render_first_detail(self, fallback_title: str) -> None:
-        table = self.query_one("#dashboard-table", DataTable)
-        self.query_one("#dashboard-status", Static).update(
-            f"{fallback_title}: {len(self._visible_row_keys)} row(s)"
+        self._update_status(
+            f"{self._cleanup_kind.capitalize()} skipped: {len(self._visible_row_keys)} item(s)"
         )
-        if not self._visible_row_keys:
-            self.query_one("#dashboard-detail", Static).update(
-                f"No {fallback_title.lower()} rows match the filter."
-            )
-            return
-        table.move_cursor(row=0)
-        self._render_detail(self._visible_row_keys[0])
 
-    def _render_detail(self, key: str) -> None:
-        row = self._rows.get(key)
-        if not row:
-            return
-        kind = row.get("kind")
-        if kind == "project":
-            meta = row["meta"]
-            sessions = meta.get("sessions") or []
-            detail = [
-                row["name"],
-                "",
-                f"Path: {meta.get('path') or '-'}",
-                f"Vendors: {', '.join(meta.get('vendors') or []) or '-'}",
-                f"Temporary sessions: {len(sessions)}",
-            ]
-            for session in sessions[:8]:
-                detail.append(
-                    f"  {session.get('project') or '-'} -> {session.get('path') or '-'}"
-                )
-        elif kind == "session":
-            item = row["item"]
-            ids = item.get("session_ids") or []
-            detail = [
-                str(item.get("root_session_id") or "-"),
-                "",
-                _one_line(item.get("title") or "-", 500),
-                "",
-                f"Vendors: {', '.join(item.get('vendors') or []) or '-'}",
-                f"Merged sessions: {len(ids)}",
-            ]
-            detail.extend(f"  {session_id}" for session_id in ids[:12])
-        elif kind == "cleanup":
-            candidate = row["candidate"]
-            selected = "yes" if key in self._selected_cleanup_keys else "no"
-            detail = [
-                f"{candidate.display_label}",
-                "",
-                f"Type: {_cleanup_target_kind(candidate)}",
-                f"Selected: {selected}",
-                "",
-                candidate.display_detail,
-            ]
-        elif kind == "skipped":
-            target = row["target"]
-            detail = [
-                f"{row['target_kind']}:{target.kind}",
-                "",
-                f"Reasons: {row['reasons']}",
-                "",
-                target.path,
-            ]
-        else:
-            metric, value, signal = row["row"]
-            detail = [str(metric), "", f"Value: {value}", f"Signal: {signal}"]
-        self.query_one("#dashboard-detail", Static).update("\n".join(detail))
+    def _update_status(self, text: str) -> None:
+        self.query_one("#dashboard-status", Static).update(text)
 
     def _toggle_cleanup_key(self, key: str) -> None:
         row = self._rows.get(key)

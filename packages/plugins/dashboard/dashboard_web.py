@@ -123,8 +123,14 @@ def _handler_for(static_dir: Path) -> type[BaseHTTPRequestHandler]:
                     payload = _overview_payload()
                 elif path == "/api/projects":
                     payload = _project_payload(query)
+                elif path == "/api/projects/detail":
+                    payload = _project_detail_payload(query)
                 elif path == "/api/sessions":
                     payload = _session_payload(query)
+                elif path == "/api/sessions/timeline":
+                    payload = _session_timeline_payload(query)
+                elif path == "/api/vendors":
+                    payload = _vendor_payload(query)
                 elif path == "/api/cleanup/project/preview":
                     payload = _preview_payload(_project_cleanup_preview(query))
                 elif path == "/api/cleanup/session/preview":
@@ -204,18 +210,94 @@ def _overview_payload() -> dict[str, Any]:
     sessions = _session_payload({})
     project_cleanup = _preview_payload(_project_cleanup_preview({}))
     session_cleanup = _preview_payload(_session_cleanup_preview({}))
+    vendors = _vendor_payload({})
     project_items = projects.get("items", [])
-    vendors: dict[str, int] = {}
+    vendor_counts: dict[str, int] = {}
     for item in project_items:
         for vendor in item.get("vendors") or []:
-            vendors[vendor] = vendors.get(vendor, 0) + 1
+            vendor_counts[vendor] = vendor_counts.get(vendor, 0) + 1
     return {
-        "projects": {"count": len(project_items), "vendors": vendors},
+        "projects": {"count": len(project_items), "vendors": vendor_counts},
         "sessions": {"count": len(sessions.get("items", []))},
+        "vendors": vendors.get("vendors", {}),
         "cleanup": {
             "projects": project_cleanup["summary"],
             "sessions": session_cleanup["summary"],
         },
+    }
+
+
+def _project_detail_payload(query: dict[str, list[str]]) -> dict[str, Any]:
+    project_name = _first(query, "project_name")
+    if not project_name:
+        raise ValueError("project_name is required")
+    projects = _ct_json(["project", "list", "--params", json.dumps({}), "--output", "json"])
+    items = projects.get("items") or {}
+    meta = items.get(project_name)
+    if not meta:
+        raise ValueError(f"project not found: {project_name}")
+    sessions_params: dict[str, Any] = {"project_name": project_name, "since_days": None}
+    sessions = _ct_json(
+        ["project", "sessions", "--params", json.dumps(sessions_params), "--output", "json"]
+    )
+    return {
+        "name": project_name,
+        "path": meta.get("path"),
+        "vendors": meta.get("vendors") or [],
+        "sessions": sessions.get("items") or [],
+        "session_count": len(sessions.get("items") or []),
+    }
+
+
+def _session_timeline_payload(query: dict[str, list[str]]) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "since_days": None if _bool(query, "all_time") else _int(query, "since_days", 30)
+    }
+    project_name = _first(query, "project_name")
+    vendor = _first(query, "agent_vendor")
+    if project_name:
+        params["project_name"] = project_name
+    if vendor:
+        params["agent_vendor"] = vendor
+    payload = _ct_json(["project", "sessions", "--params", json.dumps(params), "--output", "json"])
+    items = payload.get("items") or []
+    by_date: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        date_key = str(item.get("date") or item.get("created_at") or "unknown")[:10]
+        by_date.setdefault(date_key, []).append(
+            {
+                "root_session_id": item.get("root_session_id"),
+                "title": item.get("title"),
+                "vendors": item.get("vendors") or [],
+            }
+        )
+    timeline = [
+        {"date": date, "count": len(entries), "sessions": entries}
+        for date, entries in sorted(by_date.items(), reverse=True)
+    ]
+    return {"timeline": timeline, "total": len(items)}
+
+
+def _vendor_payload(query: dict[str, list[str]]) -> dict[str, Any]:
+    projects = _ct_json(["project", "list", "--params", json.dumps({}), "--output", "json"])
+    items = projects.get("items") or {}
+    vendor_stats: dict[str, dict[str, Any]] = {}
+    for name, meta in items.items():
+        for vendor in meta.get("vendors") or []:
+            if vendor not in vendor_stats:
+                vendor_stats[vendor] = {"count": 0, "projects": []}
+            vendor_stats[vendor]["count"] += 1
+            vendor_stats[vendor]["projects"].append(name)
+    for vendor in vendor_stats:
+        vendor_stats[vendor]["projects"].sort()
+    return {
+        "vendors": {
+            vendor: {
+                "project_count": stats["count"],
+                "projects": stats["projects"],
+            }
+            for vendor, stats in sorted(vendor_stats.items(), key=lambda x: -x[1]["count"])
+        }
     }
 
 
