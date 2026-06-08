@@ -265,6 +265,7 @@ uses local policy about what is safe to delete.
 
 ```text
 ct plugin dashboard project [--agent-vendor VENDOR]
+ct plugin dashboard web [--host 127.0.0.1] [--port 8765] [--open]
 ct plugin dashboard project cleanup [--older-than 30d] [--path PATH] [--trash|--delete] [--confirm] [--tui]
 ct plugin dashboard session [PROJECT] [--since-days N|--all-time] [--agent-vendor VENDOR]
 ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm] [--tui]
@@ -330,6 +331,18 @@ The full cleanup workflow should be exposed through an interactive dashboard TUI
 instead of a large flag surface. The TUI can guide the user through discovery,
 review, selection, and execution while keeping the simple CLI useful for
 automation.
+
+The dashboard also provides a plugin-local web program:
+
+- `ct plugin dashboard web` starts a local HTTP server for the built React
+  dashboard.
+- The Python server exposes dashboard-owned JSON endpoints and serves the built
+  frontend from `packages/plugins/dashboard/web/dist`.
+- The frontend package lives under `packages/plugins/dashboard/web` and uses
+  React, TanStack Query, TanStack Router, and local shadcn-style UI primitives.
+- Cleanup actions remain preview-first and POST-only; the web UI sends explicit
+  selected paths and action names before the backend calls the existing
+  plugin-local cleanup functions.
 
 Expected TUI flow:
 

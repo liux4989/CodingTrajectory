@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if raw_args == ["--tui"]:
         return _run_dashboard_tui()
+    if raw_args[0] in {"web", "--web"}:
+        return _run_dashboard_web(raw_args[1:])
     action, rest = raw_args[0], raw_args[1:]
     if action == "project":
         return _handle_project_command(rest)
@@ -70,7 +72,9 @@ def _build_root_parser() -> argparse.ArgumentParser:
         description="Project and session management dashboard.",
     )
     parser.add_argument("--tui", action="store_true", help="Open the plugin-wide Textual dashboard.")
+    parser.add_argument("--web", action="store_true", help="Open the plugin web dashboard.")
     sub = parser.add_subparsers(dest="action")
+    sub.add_parser("web", help="Run the dashboard web program.")
     sub.add_parser("project", help="Project management commands.")
     sub.add_parser("session", help="Session management commands.")
     return parser
@@ -151,6 +155,7 @@ def _root_entry_text() -> str:
             "",
             "Commands:",
             "  ct plugin dashboard --tui",
+            "  ct plugin dashboard web [--host HOST] [--port PORT] [--open]",
             "  ct plugin dashboard project [--agent-vendor VENDOR]",
             "  ct plugin dashboard project cleanup [--tui] [flags]",
             "  ct plugin dashboard session [PROJECT] [--since-days N|--all-time]",
@@ -272,6 +277,15 @@ def _run_dashboard_tui() -> int:
     )
     run_dashboard_tui(services)
     return 0
+
+
+def _run_dashboard_web(args: list[str]) -> int:
+    try:
+        from dashboard_web import main as web_main
+    except ImportError as exc:
+        print(f"error: dashboard web entrypoint could not be loaded: {exc}", file=sys.stderr)
+        return 2
+    return web_main(args)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,10 @@
       "summary": "Show dashboard entry information."
     },
     {
+      "name": "web",
+      "summary": "Run the dashboard web program."
+    },
+    {
       "name": "project",
       "summary": "List managed projects and project actions."
     },
