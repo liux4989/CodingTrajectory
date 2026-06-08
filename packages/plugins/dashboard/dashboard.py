@@ -36,10 +36,7 @@ def _projects(args: argparse.Namespace) -> int:
     params: dict[str, Any] = {}
     if args.agent_vendor:
         params["agent_vendor"] = args.agent_vendor
-    payload = _ct_json(["project", "list", "--params", json.dumps(params), "--detail"])
-    if args.detail:
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
-        return 0
+    payload = _ct_json(["project", "list", "--params", json.dumps(params), "--output", "json"])
     items = payload.get("items") or {}
     print(f"Projects ({len(items)})")
     for name, meta in sorted(items.items()):
@@ -54,10 +51,7 @@ def _sessions(args: argparse.Namespace) -> int:
         params["project_name"] = args.project_name
     if args.agent_vendor:
         params["agent_vendor"] = args.agent_vendor
-    payload = _ct_json(["project", "sessions", "--params", json.dumps(params), "--detail"])
-    if args.detail:
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
-        return 0
+    payload = _ct_json(["project", "sessions", "--params", json.dumps(params), "--output", "json"])
     sessions = payload.get("items") or []
     print(f"Sessions ({len(sessions)})")
     for item in sessions[:20]:
@@ -66,7 +60,7 @@ def _sessions(args: argparse.Namespace) -> int:
         title = _one_line(item.get("title") or "-", 88)
         print(f"  {root_id[:8]}  {vendors:<18} {title}")
     if len(sessions) > 20:
-        print(f"  ... {len(sessions) - 20} more (use --detail for JSON)")
+        print(f"  ... {len(sessions) - 20} more")
     return 0
 
 
@@ -90,7 +84,6 @@ def _project_list_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--agent-vendor", default=None)
-    parser.add_argument("--detail", action="store_true")
     return parser
 
 
@@ -105,7 +98,6 @@ def _project_cleanup_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delete", action="store_true")
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--tui", action="store_true")
-    parser.add_argument("--detail", action="store_true")
     return parser
 
 
@@ -120,7 +112,6 @@ def _session_list_parser() -> argparse.ArgumentParser:
     parser.add_argument("--since-days", type=int, default=30)
     parser.add_argument("--all-time", action="store_true")
     parser.add_argument("--agent-vendor", default=None)
-    parser.add_argument("--detail", action="store_true")
     return parser
 
 
@@ -134,7 +125,6 @@ def _session_cleanup_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delete", action="store_true")
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--tui", action="store_true")
-    parser.add_argument("--detail", action="store_true")
     return parser
 
 
@@ -161,9 +151,9 @@ def _root_entry_text() -> str:
             "",
             "Commands:",
             "  ct plugin dashboard --tui",
-            "  ct plugin dashboard project [--agent-vendor VENDOR] [--detail]",
+            "  ct plugin dashboard project [--agent-vendor VENDOR]",
             "  ct plugin dashboard project cleanup [--tui] [flags]",
-            "  ct plugin dashboard session [PROJECT] [--since-days N|--all-time] [--detail]",
+            "  ct plugin dashboard session [PROJECT] [--since-days N|--all-time]",
             "  ct plugin dashboard session cleanup [--tui] [flags]",
             "",
             "A richer web dashboard can live in this plugin package and call the same ct JSON surfaces.",
@@ -212,12 +202,12 @@ def _one_line(value: Any, limit: int) -> str:
 
 
 def _project_payload() -> dict[str, Any]:
-    return _ct_json(["project", "list", "--params", json.dumps({}), "--detail"])
+    return _ct_json(["project", "list", "--params", json.dumps({}), "--output", "json"])
 
 
 def _session_payload() -> dict[str, Any]:
     params = {"since_days": 30}
-    return _ct_json(["project", "sessions", "--params", json.dumps(params), "--detail"])
+    return _ct_json(["project", "sessions", "--params", json.dumps(params), "--output", "json"])
 
 
 def _run_dashboard_tui() -> int:

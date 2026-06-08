@@ -126,8 +126,8 @@ Plugins that need first-party data should call stable CLI surfaces, preferably
 with machine-readable output:
 
 ```text
-ct session overview abc123 --data
-ct project list --format json
+ct session overview abc123 --output json
+ct project list --output json
 ```
 
 There is no compatibility layer for the old in-process Python plugin API.
@@ -166,7 +166,7 @@ A single command emits one unified report for the selected scope:
 - matching sessions with timestamps, project, account, usage, and compact
   activity labels.
 
-Use `--format json` (or `--output FILE`) for the exact structured payload.
+Use `--format json` inside the plugin surface, or `ct ... --output json` on core CLI commands, for exact structured payloads.
 
 ### Filter Model
 
@@ -264,10 +264,10 @@ uses local policy about what is safe to delete.
 ### Command Shape
 
 ```text
-ct plugin dashboard project [--agent-vendor VENDOR] [--detail]
-ct plugin dashboard project cleanup [--older-than 30d] [--path PATH] [--trash|--delete] [--confirm] [--tui] [--detail]
-ct plugin dashboard session [PROJECT] [--since-days N|--all-time] [--agent-vendor VENDOR] [--detail]
-ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm] [--tui] [--detail]
+ct plugin dashboard project [--agent-vendor VENDOR]
+ct plugin dashboard project cleanup [--older-than 30d] [--path PATH] [--trash|--delete] [--confirm] [--tui]
+ct plugin dashboard session [PROJECT] [--since-days N|--all-time] [--agent-vendor VENDOR]
+ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm] [--tui]
 ```
 
 Default behavior should be conservative:
@@ -390,8 +390,8 @@ Default text output should stay compact:
 - action mode: dry run, trash, archive, or delete;
 - path to the cleanup manifest for non-dry-run actions.
 
-Use `--detail` or `--output FILE` for the full candidate list and skip
-reasons.
+Default text output stays compact; use the TUI or underlying core `ct ... --output json`
+commands when you need the full candidate list and skip reasons.
 
 ### Boundary
 

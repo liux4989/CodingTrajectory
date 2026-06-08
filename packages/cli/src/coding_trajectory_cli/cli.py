@@ -204,6 +204,7 @@ NOTE
 """
 
 _PLUGIN_STATE: list[LoadedPlugin] = []
+_OUTPUT_CHOICES = ("markdown", "json")
 
 
 class _GhFormatter(argparse.RawDescriptionHelpFormatter):
@@ -255,14 +256,30 @@ def _add_session_source(p: argparse.ArgumentParser) -> None:
 
 
 def _add_base_output_flags(p: argparse.ArgumentParser) -> None:
-    """Add --output flag (for ID-based lookups that don't need scope)."""
-    p.add_argument("--output", "-o", metavar="FILE", dest="output_file", help="Write JSON output to FILE instead of stdout.")
+    """Add output/render flags (for ID-based lookups that don't need scope)."""
+    p.add_argument(
+        "--output",
+        "-o",
+        dest="output_format",
+        choices=_OUTPUT_CHOICES,
+        default=None,
+        metavar="{" + ",".join(_OUTPUT_CHOICES) + "}",
+        help="Select stdout format.",
+    )
     p.set_defaults(global_scope=False)
 
 
 def _add_output_flags(p: argparse.ArgumentParser) -> None:
-    """Add --output and --global-scope flags (for commands that need scope)."""
-    p.add_argument("--output", "-o", metavar="FILE", dest="output_file", help="Write JSON output to FILE instead of stdout.")
+    """Add output/render flags and --global-scope (for commands that need scope)."""
+    p.add_argument(
+        "--output",
+        "-o",
+        dest="output_format",
+        choices=_OUTPUT_CHOICES,
+        default=None,
+        metavar="{" + ",".join(_OUTPUT_CHOICES) + "}",
+        help="Select stdout format.",
+    )
     p.add_argument("--global-scope", action="store_true", help="Search all known log files instead of the most-recent session.")
 
 
@@ -277,28 +294,12 @@ def _add_params_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_details_flag(p: argparse.ArgumentParser) -> None:
-    p.add_argument(
-        "--details",
-        action="store_true",
-        help="Print the structured JSON data behind the human report.",
-    )
-
-
 def _add_metrics_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--extra-billing",
         action="store_true",
         default=None,
         help="Mark cost estimates as outside-plan/API billing instead of plan-usage estimates.",
-    )
-
-
-def _add_detail_flag(p: argparse.ArgumentParser) -> None:
-    p.add_argument(
-        "--detail",
-        action="store_true",
-        help="Print the structured JSON data instead of the human-readable overview.",
     )
 
 
@@ -316,7 +317,304 @@ def _add_agent_vendor_flag(p: argparse.ArgumentParser) -> None:
 
 
 def _json_renderer(_args: argparse.Namespace, payload: dict[str, Any]) -> str:
-    return json.dumps(payload, indent=2, ensure_ascii=False)
+    return _json_text(payload)
+
+
+def _json_text(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _selected_output(args: argparse.Namespace) -> str:
+    return getattr(args, "output_format", None) or getattr(args, "_default_output", "markdown")
+
+
+def _drop_none(item: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in item.items() if value is not None}
+
+
+def _compact_usage(usage: dict[str, Any] | None, *, include_cost: bool = True) -> dict[str, Any] | None:
+    if not isinstance(usage, dict):
+        return None
+    return _drop_none(
+        {
+            "in": usage.get("input_tokens"),
+            "cache": usage.get("cached_input_tokens"),
+            "out": usage.get("output_tokens"),
+            "reason": usage.get("reasoning_output_tokens"),
+            "total": usage.get("total_tokens"),
+            "cost": usage.get("cost_usd") if include_cost else None,
+        }
+    ) or None
+
+
+def _compact_request(request: Any) -> Any:
+    if not isinstance(request, dict):
+        return request
+    text = request.get("content") or request.get("summary") or request.get("text")
+    return _drop_none(
+        {
+            "text": text,
+            "src": request.get("source"),
+            "type": request.get("type") if request.get("type") not in {None, "message"} else None,
+        }
+    ) or None
+
+
+def _compact_activity(activity: Any) -> Any:
+    if not isinstance(activity, dict):
+        return activity
+    if "tool" in activity:
+        compact = {
+            "tool": activity.get("tool"),
+            "n": activity.get("count"),
+            "status": activity.get("status"),
+        }
+        for key in ("cmd", "path", "query", "url", "text"):
+            if activity.get(key) is not None:
+                compact[key] = activity.get(key)
+        for key in ("paths", "queries", "urls", "targets"):
+            if activity.get(key) is not None:
+                compact[key] = activity.get(key)
+        if compact.get("n") == 1:
+            compact.pop("n", None)
+        return _drop_none(compact)
+    if "text" in activity:
+        return {"text": activity.get("text")}
+    if "teammate_summary" in activity:
+        return {"team": activity.get("teammate_summary")}
+    return activity
+
+
+def _compact_relationship(relationship: Any) -> Any:
+    if not isinstance(relationship, dict):
+        return relationship
+    if relationship.get("role") == "main":
+        return _drop_none({"role": "main", "forks": relationship.get("forked_session_ids")})
+    return _drop_none(
+        {
+            "type": relationship.get("relationship"),
+            "parent": relationship.get("parent_session_id"),
+            "forks": relationship.get("forked_session_ids"),
+        }
+    ) or None
+
+
+def _compact_context_category(category: Any) -> Any:
+    if not isinstance(category, dict):
+        return category
+    return _drop_none(
+        {
+            "k": category.get("key"),
+            "l": category.get("label"),
+            "t": category.get("tokens"),
+            "p": category.get("percent"),
+            "c": [_compact_context_category(child) for child in category.get("children") or []] or None,
+        }
+    )
+
+
+def _compact_payload(method: str, payload: Any) -> Any:
+    if method == "project.list" and isinstance(payload, dict):
+        items = payload.get("items") or {}
+        return {
+            "items": {
+                name: _drop_none({"p": item.get("path"), "v": item.get("vendors"), "sessions": item.get("sessions")})
+                for name, item in items.items()
+                if isinstance(item, dict)
+            }
+        }
+
+    if method == "project.sessions" and isinstance(payload, dict):
+        return {
+            "items": [
+                _drop_none(
+                    {
+                        "id": item.get("root_session_id"),
+                        "title": item.get("title"),
+                        "v": item.get("vendors"),
+                        "sessions": item.get("session_ids"),
+                    }
+                )
+                for item in payload.get("items") or []
+                if isinstance(item, dict)
+            ]
+        }
+
+    if method == "session.overview" and isinstance(payload, dict):
+        return {
+            "id": payload.get("root_session_id"),
+            "sessions": [
+                _drop_none(
+                    {
+                        "id": session.get("session_id"),
+                        "rel": _compact_relationship(session.get("relationship")),
+                        "v": session.get("vendor"),
+                        "status": session.get("status"),
+                        "agent": session.get("agent_name"),
+                        "cwd": session.get("cwd"),
+                        "turns": [
+                            _drop_none(
+                                {
+                                    "id": turn.get("turn_id"),
+                                    "status": turn.get("status"),
+                                    "req": _compact_request(turn.get("user_request")),
+                                    "act": [_compact_activity(activity) for activity in turn.get("activity") or []] or None,
+                                    "team": turn.get("teammate_summary"),
+                                    "steps": ((turn.get("refs") or {}).get("step_ids") if isinstance(turn.get("refs"), dict) else None),
+                                }
+                            )
+                            for turn in session.get("turns") or []
+                            if isinstance(turn, dict)
+                        ],
+                    }
+                )
+                for session in payload.get("sessions") or []
+                if isinstance(session, dict)
+            ],
+        }
+
+    if method == "session.usage" and isinstance(payload, dict):
+        return _drop_none(
+            {
+                "id": payload.get("session_id"),
+                "extra_billing": payload.get("extra_billing"),
+                "usage": _compact_usage(payload.get("total_usage")),
+                "cost": payload.get("cost_usd"),
+                "turns": [
+                    _drop_none(
+                        {
+                            "id": turn.get("turn_id"),
+                            "session": turn.get("session_id"),
+                            "usage": _compact_usage(turn.get("usage")),
+                            "cost": turn.get("cost_usd"),
+                            "act": [
+                                _drop_none(
+                                    {
+                                        "kind": item.get("category"),
+                                        "usage": _compact_usage(item.get("usage")),
+                                        "cost": item.get("cost_usd"),
+                                    }
+                                )
+                                for item in turn.get("activity_usage") or []
+                                if isinstance(item, dict)
+                            ]
+                            or None,
+                        }
+                    )
+                    for turn in payload.get("turns") or []
+                    if isinstance(turn, dict)
+                ],
+                "warn": payload.get("warnings") or None,
+            }
+        )
+
+    if method == "session.stats" and isinstance(payload, dict):
+        model = payload.get("model") or {}
+        ctx = payload.get("context_window") or {}
+        runtime = payload.get("runtime") or {}
+        messages = payload.get("messages") or {}
+        quota = payload.get("quota") or {}
+        return _drop_none(
+            {
+                "id": payload.get("root_session_id"),
+                "v": payload.get("vendor"),
+                "model": _drop_none({"name": model.get("name"), "ctx": model.get("context_window_tokens")}) or None,
+                "ctx": _drop_none(
+                    {
+                        "used": ctx.get("used_tokens"),
+                        "pct": ctx.get("used_percent"),
+                        "cats": [_compact_context_category(item) for item in ctx.get("categories") or []] or None,
+                    }
+                )
+                or None,
+                "rt": _drop_none(
+                    {
+                        "status": runtime.get("status"),
+                        "start": runtime.get("started_at"),
+                        "end": runtime.get("ended_at"),
+                        "dur_s": runtime.get("duration_seconds"),
+                        "turns": runtime.get("turns"),
+                        "steps": runtime.get("model_steps"),
+                        "tools": runtime.get("tool_calls"),
+                        "subs": runtime.get("subagent_sessions"),
+                        "compactions": runtime.get("compactions"),
+                    }
+                )
+                or None,
+                "msg": _drop_none(
+                    {
+                        "user": messages.get("user"),
+                        "assistant": messages.get("assistant"),
+                        "developer": messages.get("developer"),
+                        "tools": messages.get("tool_outputs"),
+                        "reasoning": messages.get("reasoning_items"),
+                        "compacted": messages.get("compacted_contexts"),
+                    }
+                )
+                or None,
+                "usage": _compact_usage(payload.get("usage"), include_cost=False),
+                "quota": _drop_none(
+                    {
+                        "plan": quota.get("plan_type"),
+                        "primary_pct": quota.get("primary_used_percent"),
+                        "secondary_pct": quota.get("secondary_used_percent"),
+                        "reset_at": quota.get("resets_at"),
+                    }
+                )
+                or None,
+                "warn": payload.get("warnings") or None,
+            }
+        )
+
+    if method == "step.details" and isinstance(payload, list):
+        return [
+            _drop_none(
+                {
+                    "id": item.get("step_id"),
+                    "type": item.get("type"),
+                    "ops": item.get("operations"),
+                    "shape": item.get("shape"),
+                    "events": item.get("event_ids"),
+                }
+            )
+            for item in payload
+            if isinstance(item, dict)
+        ]
+
+    if method == "event.detail" and isinstance(payload, dict):
+        return _drop_none(
+            {
+                "id": payload.get("event_id"),
+                "session": payload.get("session_id"),
+                "ts": payload.get("timestamp"),
+                "type": payload.get("type"),
+                "tool": payload.get("tool_call"),
+                "llm": payload.get("llm"),
+                "text": payload.get("text"),
+            }
+        )
+
+    if method == "event.scan" and isinstance(payload, dict):
+        return _drop_none(
+            {
+                "id": payload.get("root_session_id"),
+                "type": payload.get("type"),
+                "matches": [
+                    _drop_none(
+                        {
+                            "id": item.get("event_id"),
+                            "session": item.get("session_id"),
+                            "ts": item.get("timestamp"),
+                            "payload": item.get("payload"),
+                        }
+                    )
+                    for item in payload.get("matches") or []
+                    if isinstance(item, dict)
+                ],
+            }
+        )
+
+    return payload
 
 
 def _render_plugin_list_text(payload: dict[str, Any]) -> str:
@@ -345,6 +643,37 @@ def _render_plugin_list_text(payload: dict[str, Any]) -> str:
     if not plugins:
         lines.append("No plugin manifests found.")
     return "\n".join(lines).rstrip()
+
+
+def _render_project_list_markdown(payload: dict[str, Any]) -> str:
+    items = payload.get("items") or {}
+    lines = [
+        "# Projects",
+        "",
+        "| Project | Vendors | Path |",
+        "| --- | --- | --- |",
+    ]
+    for name, item in items.items():
+        if not isinstance(item, dict):
+            continue
+        vendors = ", ".join(item.get("vendors") or []) or "-"
+        path = item.get("path") or "-"
+        lines.append(f"| `{name}` | {vendors} | `{path}` |")
+    return "\n".join(lines)
+
+
+def _render_project_sessions_markdown(payload: dict[str, Any]) -> str:
+    items = payload.get("items") or []
+    lines = ["# Sessions", ""]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title") or "-"
+        vendors = ", ".join(item.get("vendors") or []) or "-"
+        lines.append(f"- `{_short_id(item.get('root_session_id'))}` {title} [{vendors}]")
+    if len(lines) == 2:
+        lines.append("No sessions found.")
+    return "\n".join(lines)
 
 
 def _plugin_list_payload(plugins: list[LoadedPlugin]) -> dict[str, Any]:
@@ -430,10 +759,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_agent_vendor_flag(project_list)
     _add_output_flags(project_list)
     _add_params_flag(project_list)
-    _add_detail_flag(project_list)
     project_list.set_defaults(
         _method="project.list",
         _params=_project_list_params,
+        _default_output="markdown",
     )
 
     project_sessions = project_sub.add_parser(
@@ -464,10 +793,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_agent_vendor_flag(project_sessions)
     _add_output_flags(project_sessions)
     _add_params_flag(project_sessions)
-    _add_detail_flag(project_sessions)
     project_sessions.set_defaults(
         _method="project.sessions",
         _params=_project_sessions_params,
+        _default_output="markdown",
     )
 
     # -- session ---------------------------------------------------------
@@ -487,10 +816,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_turn_window_flags(session_overview, view_name="projection")
     _add_output_flags(session_overview)
     _add_params_flag(session_overview)
-    _add_details_flag(session_overview)
     session_overview.set_defaults(
         _method="session.overview",
         _params=_session_overview_params,
+        _default_output="markdown",
     )
 
     session_stats = session_sub.add_parser(
@@ -501,11 +830,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_session_source(session_stats)
     _add_output_flags(session_stats)
     _add_params_flag(session_stats)
-    _add_details_flag(session_stats)
     _add_metrics_flags(session_stats)
     session_stats.set_defaults(
         _method="session.stats",
         _params=_session_stats_params,
+        _default_output="markdown",
     )
 
     session_usage = session_sub.add_parser(
@@ -523,11 +852,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_output_flags(session_usage)
     _add_params_flag(session_usage)
-    _add_details_flag(session_usage)
     _add_metrics_flags(session_usage)
     session_usage.set_defaults(
         _method="session.usage",
         _params=_session_usage_params,
+        _default_output="markdown",
     )
 
     session_step_detail = session_sub.add_parser(
@@ -538,13 +867,13 @@ def _build_parser() -> argparse.ArgumentParser:
     session_step_detail.add_argument("resource_ids", metavar="STEP_ID", nargs="*")
     _add_base_output_flags(session_step_detail)
     _add_params_flag(session_step_detail)
-    _add_detail_flag(session_step_detail)
     session_step_detail.set_defaults(
         _method="step.details",
         _params=lambda args: {
             **_params_from_json(args),
             **({"step_ids": args.resource_ids} if args.resource_ids else {}),
         },
+        _default_output="json",
     )
 
     session_event_detail = session_sub.add_parser(
@@ -555,13 +884,13 @@ def _build_parser() -> argparse.ArgumentParser:
     session_event_detail.add_argument("resource_id", metavar="EVENT_ID", nargs="?")
     _add_base_output_flags(session_event_detail)
     _add_params_flag(session_event_detail)
-    _add_detail_flag(session_event_detail)
     session_event_detail.set_defaults(
         _method="event.detail",
         _params=lambda args: {
             **_params_from_json(args),
             **({"event_id": args.resource_id} if args.resource_id else {}),
         },
+        _default_output="json",
     )
 
     session_event_scan = session_sub.add_parser(
@@ -573,7 +902,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_session_source(session_event_scan)
     _add_output_flags(session_event_scan)
     _add_params_flag(session_event_scan)
-    _add_detail_flag(session_event_scan)
     session_event_scan.add_argument(
         "--type",
         dest="event_type",
@@ -600,6 +928,7 @@ def _build_parser() -> argparse.ArgumentParser:
             **({"filters": args.filters} if args.filters is not None else {}),
             **({"session_id": args.session_id} if args.session_id else {}),
         },
+        _default_output="json",
     )
 
     plugin_parser = subparsers.add_parser(
@@ -619,12 +948,12 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_GhFormatter,
     )
     _add_base_output_flags(plugin_list)
-    _add_detail_flag(plugin_list)
     plugin_list.set_defaults(
         _plugin_handler=_handle_plugin_list,
         _render_payload=lambda args, payload: _json_renderer(args, payload)
-        if getattr(args, "detail", False)
+        if _selected_output(args) == "json"
         else _render_plugin_list_text(payload),
+        _default_output="markdown",
     )
 
     for plugin in _PLUGIN_STATE:
@@ -749,7 +1078,8 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
     sessions = payload.get("sessions") or []
     turn_count = sum(len(session.get("turns") or []) for session in sessions)
     lines = [
-        f"Session {_short_id(payload.get('root_session_id'))}",
+        f"# Session `{_short_id(payload.get('root_session_id'))}`",
+        "",
         f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}, {turn_count} visible turn{'s' if turn_count != 1 else ''}",
         "",
     ]
@@ -757,7 +1087,7 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
     for session_index, session in enumerate(sessions):
         relationship = session.get("relationship") or {}
         role = relationship.get("role") or relationship.get("relationship") or "session"
-        header = f"{'`-' if session_index == len(sessions) - 1 else '+-'} session {_short_id(session.get('session_id'))}"
+        header = f"- session `{_short_id(session.get('session_id'))}`"
         header += f"  {role}, {session.get('vendor') or '-'}, {_display_value(session.get('status')) or '-'}"
         if session.get("agent_name"):
             header += f", {session['agent_name']}"
@@ -767,7 +1097,7 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
 
         turns = session.get("turns") or []
         for turn_index, turn in enumerate(turns):
-            turn_prefix = "   `-" if turn_index == len(turns) - 1 else "   +-"
+            turn_prefix = "  -"
             lines.append(
                 f"{turn_prefix} turn {_short_id(turn.get('turn_id'))}  "
                 f"{_display_value(turn.get('status')) or '-'}  {_overview_request_label(turn.get('user_request'))}"
@@ -777,7 +1107,7 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
             if turn.get("teammate_summary"):
                 activities = [{"teammate_summary": turn.get("teammate_summary")}]
             for activity_index, activity in enumerate(activities):
-                branch = "      `-" if activity_index == len(activities) - 1 else "      +-"
+                branch = "    -"
                 if isinstance(activity, dict):
                     lines.append(f"{branch} {_overview_activity_label(activity)}")
 
@@ -810,6 +1140,8 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     model_name = model.get("name") or "-"
     context_tokens = model.get("context_window_tokens")
     lines = [
+        "# Session Stats",
+        "",
         f"Model: {model_name} ({_format_tokens(context_tokens)} context)",
         "",
         f"{'Category':<{_CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Context':>8}",
@@ -861,7 +1193,7 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
 
 
 def _render_session_usage_text(payload: dict[str, Any]) -> str:
-    lines = ["Session Usage", "", "Total"]
+    lines = ["# Session Usage", "", "Total"]
     lines.append(f"  {_render_usage_line(payload.get('total_usage') or {})}")
 
     turns = payload.get("turns") or []
@@ -886,9 +1218,13 @@ def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
     if callable(plugin_renderer):
         return plugin_renderer(args, payload)
 
-    if getattr(args, "details", False):
-        return json.dumps(payload, indent=2, ensure_ascii=False)
+    if _selected_output(args) == "json":
+        return _json_text(_compact_payload(args._method, payload))
 
+    if args._method == "project.list":
+        return _render_project_list_markdown(payload)
+    if args._method == "project.sessions":
+        return _render_project_sessions_markdown(payload)
     if args._method == "session.overview":
         return _render_session_overview_text(payload)
     if args._method == "session.stats":
@@ -896,7 +1232,7 @@ def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
     if args._method == "session.usage":
         return _render_session_usage_text(payload)
 
-    return json.dumps(payload, indent=2, ensure_ascii=False)
+    return _json_text(_compact_payload(args._method, payload))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -923,13 +1259,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": {"message": str(exc)}}, indent=2), file=sys.stderr)
         return 1
 
-    json_text = json.dumps(payload, indent=2, ensure_ascii=False)
     text = _render_payload(args, payload)
 
-    if args.output_file:
-        Path(args.output_file).write_text(json_text + "\n", encoding="utf-8")
-    else:
-        print(text)
+    print(text)
     return 0
 
 

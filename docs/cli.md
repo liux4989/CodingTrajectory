@@ -30,25 +30,21 @@ Three goals:
 
 ## Output Formats
 
-The CLI exposes readable reports for navigation and JSON for exact data:
+The CLI exposes readable markdown reports for navigation and compact JSON for
+exact data:
 
-- Report commands default to human-readable stdout. Use `--data` to print the
-  structured JSON projection behind the report.
-- Detail and raw-query commands print JSON.
-- `project` commands accept `--format json|overview`; the default is `json`.
-- Detail and raw-query commands currently accept `--format json|overview` for
-  command-shape consistency, but their stdout payload is JSON.
-
-`--output FILE` always writes JSON, regardless of stdout format. This keeps file
-output stable for automation while allowing stdout to optimize interactive
-reading.
+- Report commands default to `--output markdown`.
+- Detail and raw-query commands default to `--output json`.
+- Any command can switch format with `--output markdown|json`.
+- JSON mode is minified and uses a compact public schema on the exposed CLI
+  surface to reduce token cost.
 
 Automation can pass command params as a JSON object with `--params JSON` on
 commands that dispatch to the core query surface. Explicit CLI flags override
 matching keys from `--params`.
 
-`session stats` and `session usage` use fixed reports for readable stdout and
-`--data` or `--output` for exact JSON.
+`session stats` and `session usage` default to markdown reports and switch to
+compact JSON with `--output json`.
 
 Most session-scoped commands locate sessions automatically from the most-recent
 session in the current working directory. Use `--global-scope` on commands that
@@ -58,18 +54,18 @@ global project index.
 ## Intended Reading Flow
 
 Structured View
-1. `project list [--agent-vendor VENDOR] [--format json|overview]` — find project names
-2. `project sessions [project_name] [--agent-vendor VENDOR] [--format json|overview]` — list sessions for a project, get the session id to use as an entry point
+1. `project list [--agent-vendor VENDOR] [--output markdown|json]` — find project names
+2. `project sessions [project_name] [--agent-vendor VENDOR] [--output markdown|json]` — list sessions for a project, get the session id to use as an entry point
    - omit `project_name` to use the current directory
    - known agent vendors are `claude_code`, `codex_cli`, and `pi`
-3. `session overview [session_id] [--turns N] [--drop-turns K] [--details]` — read the compact session hierarchy, identify relevant turns
+3. `session overview [session_id] [--turns N] [--drop-turns K] [--output markdown|json]` — read the compact session hierarchy, identify relevant turns
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
    - activity renders as grouped human labels with truncated assistant response previews
-   - use `--details` when you need full step ids for drill-down
-4. `session stats [session_id] [--extra-billing] [--data]` — inspect session stats with compact context/token sections
-5. `session usage [session_id] [--turn TURN_ID] [--extra-billing] [--data]` — inspect turn-level activity token and cost accounting
+   - use `--output json` when you need full step ids for drill-down
+4. `session stats [session_id] [--extra-billing] [--output markdown|json]` — inspect session stats with compact context/token sections
+5. `session usage [session_id] [--turn TURN_ID] [--extra-billing] [--output markdown|json]` — inspect turn-level activity token and cost accounting
 6. `session step-detail <step_id> [...]` — read the JSON evidence for one or more steps
 
 `session usage` is intentionally turn-focused. It reports token buckets and cost

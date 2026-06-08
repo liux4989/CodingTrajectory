@@ -241,7 +241,7 @@ def _run_cli_interactive(
 
 
 def _load_project_list(params: dict[str, Any]) -> dict[str, Any]:
-    return _ct_json(["project", "list", "--params", json.dumps(params), "--detail"])
+    return _ct_json(["project", "list", "--params", json.dumps(params), "--output", "json"])
 
 
 def _ct_json(args: list[str]) -> dict[str, Any]:
@@ -1172,9 +1172,7 @@ def render(args: argparse.Namespace, payload: dict[str, Any]) -> str:
                 lines.append("  " + "  ".join(details))
             lines.append(f"    {item.get('path')}")
         if len(targets) > 20:
-            lines.append(
-                f"  ... {len(targets) - 20} more. Use --detail for the full list."
-            )
+            lines.append(f"  ... {len(targets) - 20} more.")
     if payload.get("manifest_path"):
         lines.append(f"Manifest: {payload['manifest_path']}")
     errors = payload.get("errors") or []

@@ -24,7 +24,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project", default=None, help="Filter to one project name.")
     parser.add_argument("--account", default=None, help="Accepted for compatibility; currently shown as a filter only.")
     parser.add_argument("--agent-vendor", default=None, help="Filter by agent vendor.")
-    parser.add_argument("--detail", action="store_true", help="Print JSON payload.")
     args = parser.parse_args(argv)
 
     since_days = {"5h": 1, "today": 1, "72h": 3, "7d": 7}[args.window]
@@ -34,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.agent_vendor:
         params["agent_vendor"] = args.agent_vendor
 
-    payload = _ct_json(["project", "sessions", "--params", json.dumps(params), "--detail"])
+    payload = _ct_json(["project", "sessions", "--params", json.dumps(params), "--output", "json"])
     sessions = payload.get("items") or []
     projects = sorted({item.get("title") or item.get("project") or args.project or "unknown" for item in sessions})
     vendors = sorted({vendor for item in sessions for vendor in item.get("vendors") or []})
@@ -54,10 +53,6 @@ def main(argv: list[str] | None = None) -> int:
         "vendors": vendors,
         "sessions": sessions,
     }
-    if args.detail:
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-        return 0
-
     print(f"Activity ({args.window})")
     print(f"Sessions {len(sessions)}  Projects {len(projects)}  Vendors {len(vendors)}")
     if args.account:
@@ -72,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         vendors_text = ",".join(item.get("vendors") or []) or "-"
         print(f"{root_id[:8]}  {vendors_text:<18} {title}")
     if len(sessions) > 10:
-        print(f"... {len(sessions) - 10} more (use --detail for JSON)")
+        print(f"... {len(sessions) - 10} more")
     return 0
 
 
