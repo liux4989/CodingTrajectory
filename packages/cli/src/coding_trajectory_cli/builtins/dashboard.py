@@ -297,12 +297,15 @@ if _HAS_TEXTUAL:
         def _show_sessions(self, project: dict[str, Any]) -> None:
             table = self.query_one("#sessions", DataTable)
             table.clear()
-            sessions = _load_sessions(
-                self._ctx,
-                project_name=project["project"],
-                since_days=None,
-                agent_vendor=None,
-            )
+            try:
+                sessions = _load_sessions(
+                    self._ctx,
+                    project_name=project["project"],
+                    since_days=None,
+                    agent_vendor=None,
+                )
+            except Exception:
+                sessions = []
             for item in sessions:
                 root = str(item.get("root_session_id") or "-")[:8]
                 vendors = ", ".join(item.get("vendors") or []) or "-"
