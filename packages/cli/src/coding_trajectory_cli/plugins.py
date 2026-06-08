@@ -44,7 +44,7 @@ class PluginManifest(BaseModel):
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
     description: str = Field(min_length=1)
-    command: str = Field(min_length=1)
+    run: list[str] = Field(min_length=1)
     requires_ct: str | None = Field(default=None, alias="requiresCt")
     commands: list[PluginCommand] = Field(default_factory=list)
     capabilities: list[str] = Field(default_factory=list)
@@ -59,7 +59,7 @@ class PluginManifest(BaseModel):
             raise ValueError("name must not contain whitespace")
         return normalized
 
-    @field_validator("version", "description", "command", "requires_ct")
+    @field_validator("version", "description", "requires_ct")
     @classmethod
     def _strip_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -68,6 +68,14 @@ class PluginManifest(BaseModel):
         if not stripped:
             raise ValueError("must not be empty")
         return stripped
+
+    @field_validator("run")
+    @classmethod
+    def _strip_run(cls, value: list[str]) -> list[str]:
+        argv = [item.strip() for item in value if item.strip()]
+        if not argv:
+            raise ValueError("run must include at least one command token")
+        return argv
 
     @field_validator("capabilities")
     @classmethod
@@ -129,18 +137,18 @@ def discover_plugins(*, current_dir: Path | None = None) -> list[LoadedPlugin]:
 
 def run_plugin(manifest: PluginManifest, source: Path, plugin_args: list[str]) -> int:
     """Execute a manifest-backed plugin with inherited stdio."""
-    command = _resolve_command(manifest.command, source)
-    if command is None:
+    run = _resolve_run(manifest.run, source)
+    if run is None:
         print(
             json.dumps(
-                {"error": {"message": f"Plugin executable not found: {manifest.command}"}},
+                {"error": {"message": f"Plugin command not found: {manifest.run[0]}"}},
                 indent=2,
             ),
             file=sys.stderr,
         )
         return 127
     try:
-        completed = subprocess.run([*command, *plugin_args], check=False)
+        completed = subprocess.run([*run, *plugin_args], check=False)
     except OSError as exc:
         print(json.dumps({"error": {"message": str(exc)}}, indent=2), file=sys.stderr)
         return 1
@@ -155,7 +163,7 @@ def plugin_payload(plugins: list[LoadedPlugin]) -> dict[str, Any]:
                 "name": item.manifest.name if item.manifest else None,
                 "version": item.manifest.version if item.manifest else None,
                 "description": item.manifest.description if item.manifest else None,
-                "command": item.manifest.command if item.manifest else None,
+                "run": item.manifest.run if item.manifest else [],
                 "requires_ct": item.manifest.requires_ct if item.manifest else None,
                 "commands": [
                     command.model_dump()
@@ -212,18 +220,23 @@ def _dedupe_plugins(plugins: list[LoadedPlugin]) -> list[LoadedPlugin]:
     return unique
 
 
-def _resolve_command(command: str, source: Path) -> list[str] | None:
+def _resolve_run(run: list[str], source: Path) -> list[str] | None:
+    run = [_resolve_relative_arg(item, source) for item in run]
+    command = run[0]
     command_path = Path(command).expanduser()
     if command_path.is_absolute():
-        return _python_or_executable(command_path) if command_path.exists() else None
+        return [str(command_path), *run[1:]] if command_path.exists() else None
     if os.sep in command or (os.altsep and os.altsep in command):
         resolved = (source.parent / command_path).resolve(strict=False)
-        return _python_or_executable(resolved) if resolved.exists() else None
+        return [str(resolved), *run[1:]] if resolved.exists() else None
     resolved_command = shutil.which(command)
-    return [resolved_command] if resolved_command else None
+    return [resolved_command, *run[1:]] if resolved_command else None
 
 
-def _python_or_executable(path: Path) -> list[str]:
-    if path.suffix == ".py":
-        return [sys.executable, str(path)]
-    return [str(path)]
+def _resolve_relative_arg(value: str, source: Path) -> str:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return str(path)
+    if os.sep in value or (os.altsep and os.altsep in value):
+        return str((source.parent / path).resolve(strict=False))
+    return value

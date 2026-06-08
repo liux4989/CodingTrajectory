@@ -330,7 +330,7 @@ def _render_plugin_list_text(payload: dict[str, Any]) -> str:
     for plugin in plugins:
         name = plugin.get("name") or "-"
         version = plugin.get("version") or "-"
-        command = plugin.get("command") or "-"
+        command = " ".join(plugin.get("run") or []) or "-"
         description = plugin.get("description") or ""
         lines.append(f"{name:<24} {version:<10} {command:<24} {description}".rstrip())
         source = plugin.get("source")

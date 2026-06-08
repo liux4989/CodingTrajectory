@@ -52,7 +52,7 @@ Built-in inspection command:
   "version": "0.1.0",
   "requiresCt": ">=0.1.0",
   "description": "Export ct session data.",
-  "command": "ct-export",
+  "run": ["ct-export"],
   "commands": [
     {
       "name": "session",
@@ -69,7 +69,10 @@ Required fields:
 - `name`: the namespace mounted under `ct plugin NAME`.
 - `version`: plugin version.
 - `description`: one-line help text for `ct plugin list` and `ct plugin --help`.
-- `command`: command name, executable path, or `.py` file path to run.
+- `run`: argv list used to start the plugin process. The plugin owns the
+  executor, so Python plugins can use `["python3", "./plugin.py"]` and TS/web
+  plugins can use `["pnpm", "start"]`, `["node", "./dist/server.js"]`, or a
+  local server launcher.
 
 Optional fields:
 
@@ -84,18 +87,19 @@ Command descriptors are optional and intentionally small:
   plugin command.
 - `summary`: one-line help text.
 
-The manifest is not an argparse schema. The executable owns its own flags,
-validation, help text, and output.
+The manifest is not an argparse schema. The plugin process owns its own flags,
+validation, help text, runtime, local server lifecycle, and output.
 
 ## Executable Dispatch
 
 `ct plugin NAME ...` resolves `NAME` to a validated manifest and starts the
-manifest executable as a subprocess.
+manifest `run` argv as a subprocess.
 
 Dispatch rules:
 
-- The executable receives the remaining command-line arguments unchanged.
-- Manifest commands ending in `.py` are run with the current Python interpreter.
+- The plugin process receives the remaining command-line arguments unchanged.
+- `ct` does not infer Python, Node, TS, or server behavior. The manifest `run`
+  field is the executor contract.
 - The subprocess working directory is the caller's current directory.
 - The subprocess inherits stdin, stdout, stderr, and the relevant `CT_*`
   environment.
