@@ -103,7 +103,7 @@ def plugin_manifest_dirs(*, current_dir: Path | None = None) -> list[Path]:
     if builtin_dir is not None:
         dirs.append(builtin_dir)
     dirs.extend([
-        cwd / "plugins",
+        cwd / "packages" / "plugins",
         cwd / ".ct" / "plugins",
         Path.home() / ".ct" / "plugins",
     ])
@@ -182,7 +182,7 @@ def _manifest_paths(dirs: list[Path]) -> list[Path]:
 
 
 def _repo_builtin_plugin_dir() -> Path | None:
-    candidate = Path(__file__).resolve().parents[4] / "plugins"
+    candidate = Path(__file__).resolve().parents[4] / "packages" / "plugins"
     return candidate if candidate.is_dir() else None
 
 

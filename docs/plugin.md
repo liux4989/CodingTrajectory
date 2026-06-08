@@ -27,7 +27,7 @@ Supported manifest locations:
 
 - directories listed in `CT_PLUGIN_MANIFEST_PATH`, separated by the platform
   path separator;
-- repository built-in plugin manifests under `plugins/*/ct-plugin.json`
+- repository built-in plugin manifests under `packages/plugins/*/ct-plugin.json`
   beside this repo, when available from the installed source path;
 - project-level manifests under `.ct/plugins/`;
 - user-level manifests under `~/.ct/plugins/`.
@@ -35,7 +35,7 @@ Supported manifest locations:
 Each manifest describes one public plugin namespace. The CLI validates manifests
 before exposing commands.
 
-Built-in plugins for this repository live under `plugins/<name>/` with their
+Built-in plugins for this repository live under `packages/plugins/<name>/` with their
 manifest and executable together. They use the same manifest and subprocess
 contract as third-party plugins.
 

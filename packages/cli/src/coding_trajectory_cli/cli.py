@@ -198,8 +198,9 @@ PLUGIN COMMANDS
   ct plugin list                                 list installed ct CLI plugins
 
 NOTE
-  Plugins are manifest-backed executables discovered from `plugins/*/ct-plugin.json`,
-  `.ct/plugins/*.json`, `~/.ct/plugins/*.json`, and CT_PLUGIN_MANIFEST_PATH directories.
+  Plugins are manifest-backed executables discovered from
+  `packages/plugins/*/ct-plugin.json`, `.ct/plugins/*.json`,
+  `~/.ct/plugins/*.json`, and CT_PLUGIN_MANIFEST_PATH directories.
 """
 
 _PLUGIN_STATE: list[LoadedPlugin] = []
