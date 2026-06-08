@@ -23,10 +23,10 @@ After:
 
 ```
 ct plugin dashboard                      # interactive TUI
-ct plugin dashboard projects [flags]     # list managed projects
-ct plugin dashboard sessions [PROJECT]   # list sessions for a project
-ct plugin dashboard cleanup project ...  # migrated cleanup
-ct plugin dashboard cleanup session ...  # migrated cleanup
+ct plugin dashboard project [flags]      # list managed projects
+ct plugin dashboard project cleanup ...  # migrated cleanup
+ct plugin dashboard session [PROJECT]    # list sessions for a project
+ct plugin dashboard session cleanup ...  # migrated cleanup
 ```
 
 - The dashboard subparsers are `required=False`. With no subcommand, the
@@ -41,7 +41,7 @@ ct plugin dashboard cleanup session ...  # migrated cleanup
 │ ct-plugin.json                                 │
 │   name: dashboard                              │
 │   command: ct-dashboard                        │
-│   tools: ., projects, sessions,                │
+│   tools: ., project, session,                  │
 │          project/cleanup, session/cleanup      │
 ╰───────────────────────┬───────────────────────╯
                         │
@@ -72,8 +72,8 @@ ct plugin dashboard cleanup session ...  # migrated cleanup
 
 ### Dashboard Executable
 - Add a `dashboard` manifest whose command is `ct-dashboard`.
-- `ct-dashboard` sets the bare-command TUI handler and registers `projects`,
-  `sessions`, and `cleanup`.
+- `ct-dashboard` sets the bare-command TUI handler and registers `project`
+  and `session`, each with its own cleanup subcommand.
 - Shared loaders `_load_projects` / `_load_sessions` call `ct ... --data`
   command surfaces instead of importing CLI internals.
 - `DashboardApp` (Textual) renders a project ListView + sessions DataTable, with

@@ -11,12 +11,12 @@
       "summary": "Show dashboard entry information."
     },
     {
-      "name": "projects",
-      "summary": "List managed projects."
+      "name": "project",
+      "summary": "List managed projects and project actions."
     },
     {
-      "name": "sessions",
-      "summary": "List sessions for a project."
+      "name": "session",
+      "summary": "List sessions and session actions."
     },
     {
       "name": "project/cleanup",

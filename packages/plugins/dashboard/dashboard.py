@@ -9,60 +9,25 @@ import subprocess
 import sys
 from typing import Any
 
+import cleanup as cleanup_mod
+
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="ct plugin dashboard",
-        description="Project and session management dashboard.",
-    )
-    sub = parser.add_subparsers(dest="action")
-
-    projects = sub.add_parser("projects", help="List managed projects.")
-    projects.add_argument("--agent-vendor", default=None)
-    projects.add_argument("--detail", action="store_true")
-
-    sessions = sub.add_parser("sessions", help="List sessions for a project.")
-    sessions.add_argument("project_name", nargs="?")
-    sessions.add_argument("--since-days", type=int, default=30)
-    sessions.add_argument("--all-time", action="store_true")
-    sessions.add_argument("--agent-vendor", default=None)
-    sessions.add_argument("--detail", action="store_true")
-
-    cleanup = sub.add_parser("cleanup", help="Run dashboard-owned cleanup flows.")
-    cleanup_sub = cleanup.add_subparsers(dest="cleanup_action")
-
-    cleanup_project = cleanup_sub.add_parser("project", help="Clean old project directories.")
-    cleanup_project.add_argument("--older-than", default="30d")
-    cleanup_project.add_argument("--path", default=None)
-    cleanup_project.add_argument("--trash", action="store_true")
-    cleanup_project.add_argument("--delete", action="store_true")
-    cleanup_project.add_argument("--confirm", action="store_true")
-    cleanup_project.add_argument("--detail", action="store_true")
-
-    cleanup_session = cleanup_sub.add_parser("session", help="Clean empty or low-value session logs.")
-    cleanup_session.add_argument("--agent-vendor", default=None)
-    cleanup_session.add_argument("--trash", action="store_true")
-    cleanup_session.add_argument("--delete", action="store_true")
-    cleanup_session.add_argument("--confirm", action="store_true")
-    cleanup_session.add_argument("--detail", action="store_true")
-
-    args = parser.parse_args(argv)
-    if args.action == "projects":
-        return _projects(args)
-    if args.action == "sessions":
-        return _sessions(args)
-    if args.action == "cleanup":
-        return _cleanup(args)
-    print("Dashboard executable plugin")
-    print("")
-    print("Commands:")
-    print("  ct plugin dashboard projects [--agent-vendor VENDOR] [--detail]")
-    print("  ct plugin dashboard sessions [PROJECT] [--since-days N|--all-time] [--detail]")
-    print("  ct plugin dashboard cleanup project [flags]")
-    print("  ct plugin dashboard cleanup session [flags]")
-    print("")
-    print("A richer web dashboard can live in this plugin package and call the same ct JSON surfaces.")
-    return 0
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    parser = _build_root_parser()
+    if not raw_args:
+        print(_root_entry_text())
+        return 0
+    if raw_args[0] in {"-h", "--help"}:
+        parser.parse_args(["-h"])
+        return 0
+    action, rest = raw_args[0], raw_args[1:]
+    if action == "project":
+        return _handle_project_command(rest)
+    if action == "session":
+        return _handle_session_command(rest)
+    parser.parse_args(raw_args)
+    return 2
 
 
 def _projects(args: argparse.Namespace) -> int:
@@ -103,22 +68,121 @@ def _sessions(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cleanup(args: argparse.Namespace) -> int:
-    payload = {
-        "command": "dashboard cleanup",
-        "action": args.cleanup_action,
-        "available": False,
-        "note": (
-            "cleanup was preserved as a dashboard subcommand, but its old in-process "
-            "implementation has not been ported to the executable plugin package yet."
-        ),
-    }
-    if getattr(args, "detail", False):
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
-    else:
-        print("Dashboard cleanup is not available yet.")
-        print(payload["note"])
-    return 2
+def _build_root_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ct plugin dashboard",
+        description="Project and session management dashboard.",
+    )
+    sub = parser.add_subparsers(dest="action")
+    sub.add_parser("project", help="Project management commands.")
+    sub.add_parser("session", help="Session management commands.")
+    return parser
+
+
+def _project_list_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ct plugin dashboard project",
+        description="Project management commands.",
+        epilog="SUBCOMMANDS\n  cleanup   Clean old project directories.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--agent-vendor", default=None)
+    parser.add_argument("--detail", action="store_true")
+    return parser
+
+
+def _project_cleanup_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ct plugin dashboard project cleanup",
+        description="Clean old project directories.",
+    )
+    parser.add_argument("--older-than", default="30d")
+    parser.add_argument("--path", default=None)
+    parser.add_argument("--trash", action="store_true")
+    parser.add_argument("--delete", action="store_true")
+    parser.add_argument("--confirm", action="store_true")
+    parser.add_argument("--detail", action="store_true")
+    return parser
+
+
+def _session_list_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ct plugin dashboard session",
+        description="Session management commands.",
+        epilog="SUBCOMMANDS\n  cleanup   Clean empty or low-value session logs.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("project_name", nargs="?")
+    parser.add_argument("--since-days", type=int, default=30)
+    parser.add_argument("--all-time", action="store_true")
+    parser.add_argument("--agent-vendor", default=None)
+    parser.add_argument("--detail", action="store_true")
+    return parser
+
+
+def _session_cleanup_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ct plugin dashboard session cleanup",
+        description="Clean empty or low-value session logs.",
+    )
+    parser.add_argument("--agent-vendor", default=None)
+    parser.add_argument("--trash", action="store_true")
+    parser.add_argument("--delete", action="store_true")
+    parser.add_argument("--confirm", action="store_true")
+    parser.add_argument("--detail", action="store_true")
+    return parser
+
+
+def _handle_project_command(args: list[str]) -> int:
+    if args and args[0] == "cleanup":
+        parsed = _project_cleanup_parser().parse_args(args[1:])
+        return _project_cleanup(parsed)
+    parsed = _project_list_parser().parse_args(args)
+    return _projects(parsed)
+
+
+def _handle_session_command(args: list[str]) -> int:
+    if args and args[0] == "cleanup":
+        parsed = _session_cleanup_parser().parse_args(args[1:])
+        return _session_cleanup(parsed)
+    parsed = _session_list_parser().parse_args(args)
+    return _sessions(parsed)
+
+
+def _root_entry_text() -> str:
+    return "\n".join(
+        [
+            "Dashboard executable plugin",
+            "",
+            "Commands:",
+            "  ct plugin dashboard project [--agent-vendor VENDOR] [--detail]",
+            "  ct plugin dashboard project cleanup [flags]",
+            "  ct plugin dashboard session [PROJECT] [--since-days N|--all-time] [--detail]",
+            "  ct plugin dashboard session cleanup [flags]",
+            "",
+            "A richer web dashboard can live in this plugin package and call the same ct JSON surfaces.",
+        ]
+    )
+
+
+def _project_cleanup(args: argparse.Namespace) -> int:
+    try:
+        payload = cleanup_mod.handle_project(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(cleanup_mod.render(args, payload))
+    return 1 if (payload.get("summary") or {}).get("error_count") else 0
+
+
+def _session_cleanup(args: argparse.Namespace) -> int:
+    try:
+        payload = cleanup_mod.handle_session(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(cleanup_mod.render(args, payload))
+    return 1 if (payload.get("summary") or {}).get("error_count") else 0
 
 
 def _ct_json(args: list[str]) -> dict[str, Any]:

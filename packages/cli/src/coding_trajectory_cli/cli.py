@@ -368,12 +368,17 @@ def _dispatch_plugin_argv(raw_args: list[str]) -> int | None:
     if len(raw_args) < 2 or raw_args[0] != "plugin":
         return None
     plugin_name = raw_args[1]
-    if plugin_name in {"list", "-h", "--help"} or any(item in {"-h", "--help"} for item in raw_args[2:]):
+    plugin_args = raw_args[2:]
+    if plugin_name in {"list", "-h", "--help"}:
+        return None
+    if not plugin_args:
+        return None
+    if all(item in {"-h", "--help"} for item in plugin_args):
         return None
     plugins = discover_plugins()
     for plugin in plugins:
         if plugin.manifest and plugin.manifest.name == plugin_name:
-            return run_plugin(plugin.manifest, plugin.source, raw_args[2:])
+            return run_plugin(plugin.manifest, plugin.source, plugin_args)
     print(json.dumps({"error": {"message": f"Plugin not found: {plugin_name}"}}, indent=2), file=sys.stderr)
     return 2
 
@@ -386,6 +391,8 @@ def _plugin_epilog(plugin: LoadedPlugin) -> str | None:
     if manifest.tools:
         lines.append("PLUGIN COMMANDS")
         for tool in manifest.tools:
+            if "/" in tool.name:
+                continue
             usage = manifest.name if tool.name == "." else f"{manifest.name} {tool.name}"
             lines.append(f"  ct plugin {usage:<32} {tool.summary}")
     if manifest.requires_ct:
