@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "requiresCt": ">=0.1.0",
   "description": "Project and session management dashboard.",
-  "run": ["python3", "./dashboard.py"],
+  "run": ["uv", "run", "python", "./dashboard.py"],
   "tools": [
     {
       "name": ".",

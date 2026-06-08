@@ -10,23 +10,12 @@ import subprocess
 import sys
 import tomllib
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
-try:
-    import asyncio
-    from textual.app import App, ComposeResult
-    from textual.binding import Binding
-    from textual.containers import Horizontal, Vertical, VerticalScroll
-    from textual.screen import ModalScreen
-    from textual.widgets import Button, Checkbox, Footer, Header, Label, Static
-
-    _HAS_TEXTUAL = True
-except ImportError:
-    _HAS_TEXTUAL = False
 
 Action = Literal["interactive", "trash", "delete", "cancelled"]
 
@@ -84,617 +73,166 @@ class SkippedTarget(CleanupTarget):
     kind: str
 
 
-if _HAS_TEXTUAL:
+@dataclass(slots=True)
+class CleanupPreview:
+    target_kind: Literal["project", "session"]
+    candidates: list[AnyTarget]
+    skipped: list[SkippedTarget]
+    filters: dict[str, Any]
 
-    # ---------------------------------------------------------------------------
-    # Textual TUI
-    # ---------------------------------------------------------------------------
-    
-    class CandidateRow(Static):
-        """A single candidate row with a checkbox and details."""
-    
-        def __init__(self, candidate: AnyTarget, index: int) -> None:
-            self.candidate = candidate
-            self.index = index
-            super().__init__()
-    
-        def compose(self) -> ComposeResult:
-            yield Checkbox(
-                f" {self.candidate.display_label}",
-                id=f"cb-{self.index}",
-            )
-            yield Label(f"    {self.candidate.display_detail}", id=f"detail-{self.index}")
-    
-    
-    class SkippedList(Static):
-        """Displays a list of skipped targets."""
-    
-        def __init__(self, skipped: list[SkippedTarget]) -> None:
-            self.skipped = skipped
-            super().__init__()
-    
-        def render(self) -> str:
-            if not self.skipped:
-                return "No skipped items."
-            grouped: dict[str, list[SkippedTarget]] = {}
-            for item in self.skipped:
-                for reason in item.reason or ["unknown"]:
-                    grouped.setdefault(reason, []).append(item)
-    
-            lines = [f"Skipped: {len(self.skipped)} item(s)", ""]
-            for reason, items in sorted(grouped.items()):
-                lines.append(f"  {reason}: {len(items)}")
-                for item in sorted(items, key=lambda x: (x.kind, x.path)):
-                    lines.append(f"    [{item.kind}] {item.path}")
-            return "\n".join(lines)
-    
-    
-    class SkippedModal(ModalScreen[None]):
-        """Modal showing skipped targets."""
-    
-        BINDINGS = [Binding("escape", "dismiss", "Close")]
-    
-        def __init__(self, skipped: list[SkippedTarget]) -> None:
-            super().__init__()
-            self.skipped = skipped
-    
-        def compose(self) -> ComposeResult:
-            yield Vertical(
-                Label(f"Skipped Targets ({len(self.skipped)})", id="skipped-title"),
-                VerticalScroll(SkippedList(self.skipped), id="skipped-scroll"),
-                Button("Close", variant="primary", id="close-skipped"),
-                id="skipped-dialog",
-            )
-    
-        def on_button_pressed(self, event: Button.Pressed) -> None:
-            if event.button.id == "close-skipped":
-                self.dismiss()
-    
-        def action_dismiss(self) -> None:
-            self.dismiss()
-    
-    
-    class ConfirmModal(ModalScreen[bool]):
-        """Confirmation dialog before trashing/deleting."""
-    
-        def __init__(self, action: str, count: int) -> None:
-            super().__init__()
-            self.action = action
-            self.count = count
-    
-        def compose(self) -> ComposeResult:
-            yield Vertical(
-                Label(
-                    f"{self.action.capitalize()} {self.count} item(s)?",
-                    id="confirm-title",
-                ),
-                Label("This action cannot be undone.", id="confirm-warning"),
-                Horizontal(
-                    Button("Confirm", variant="error", id="confirm-yes"),
-                    Button("Cancel", variant="primary", id="confirm-no"),
-                    id="confirm-buttons",
-                ),
-                id="confirm-dialog",
-            )
-    
-        def on_button_pressed(self, event: Button.Pressed) -> None:
-            self.dismiss(event.button.id == "confirm-yes")
-    
-    
-    class NoCandidatesScreen(ModalScreen[None]):
-        """Shown when there are no candidates but skipped items exist."""
-    
-        BINDINGS = [Binding("escape", "dismiss", "Close")]
-    
-        def __init__(self, skipped: list[SkippedTarget]) -> None:
-            super().__init__()
-            self.skipped = skipped
-    
-        def compose(self) -> ComposeResult:
-            yield Vertical(
-                Label("No candidates found.", id="no-cand-title"),
-                Static(
-                    f"{len(self.skipped)} item(s) were skipped (see reasons below)."
-                    if self.skipped
-                    else "No skipped items either.",
-                    id="no-cand-msg",
-                ),
-                VerticalScroll(SkippedList(self.skipped), id="no-cand-scroll"),
-                Button("Close", variant="primary", id="no-cand-close"),
-                id="no-cand-dialog",
-            )
-    
-        def on_button_pressed(self, event: Button.Pressed) -> None:
-            if event.button.id == "no-cand-close":
-                self.dismiss()
-    
-        def action_dismiss(self) -> None:
-            self.dismiss()
-    
-    
-    class CleanupScreen(ModalScreen[tuple[str, list[AnyTarget]]]):
-        """Main interactive cleanup selection screen."""
-    
-        BINDINGS = [
-            Binding("escape", "cancel", "Cancel"),
-        ]
-    
-        def __init__(
-            self,
-            candidates: list[AnyTarget],
-            skipped: list[SkippedTarget],
-            target_kind: str,
-        ) -> None:
-            super().__init__()
-            self.candidates = candidates
-            self.skipped = skipped
-            self.target_kind = target_kind
-            self.selected: set[int] = set()
-    
-        def compose(self) -> ComposeResult:
-            yield Header()
-            yield Label(
-                f"Cleanup {self.target_kind}: {len(self.candidates)} candidate(s)",
-                id="main-title",
-            )
-    
-            with VerticalScroll(id="candidate-scroll"):
-                for i, candidate in enumerate(self.candidates):
-                    yield CandidateRow(candidate, i)
-    
-            yield Static(self._skipped_summary_text(), id="skipped-summary")
-    
-            with Horizontal(id="select-buttons"):
-                yield Button("Select All", variant="default", id="select-all")
-                yield Button("Deselect All", variant="default", id="deselect-all")
-    
-            with Horizontal(id="action-buttons"):
-                trash_btn = Button(
-                    "🗑 Trash Selected (0)",
-                    variant="warning",
-                    id="trash",
-                    disabled=True,
-                )
-                trash_btn.tooltip = "Move selected items to system trash"
-                yield trash_btn
-    
-                delete_btn = Button(
-                    "✕ Delete Selected (0)",
-                    variant="error",
-                    id="delete",
-                    disabled=True,
-                )
-                delete_btn.tooltip = "Permanently delete selected items"
-                yield delete_btn
-    
-                yield Button("View Skipped", variant="default", id="view-skipped")
-                yield Button("Cancel", variant="primary", id="cancel")
-    
-            yield Footer()
-    
-        def _skipped_summary_text(self) -> str:
-            if not self.skipped:
-                return "Skipped: 0"
-            by_reason = Counter(
-                reason for item in self.skipped for reason in (item.reason or ["unknown"])
-            )
-            reasons = ", ".join(f"{r}: {c}" for r, c in sorted(by_reason.items()))
-            return f"Skipped: {len(self.skipped)} ({reasons})"
-    
-        def _update_button_states(self) -> None:
-            count = len(self.selected)
-            trash_btn = self.query_one("#trash", Button)
-            delete_btn = self.query_one("#delete", Button)
-            trash_btn.label = f"🗑 Trash Selected ({count})"
-            delete_btn.label = f"✕ Delete Selected ({count})"
-            trash_btn.disabled = count == 0
-            delete_btn.disabled = count == 0
-    
-        def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-            try:
-                index = int(event.checkbox.id.split("-")[1])
-            except (IndexError, ValueError):
-                return
-            if event.checkbox.value:
-                self.selected.add(index)
-            else:
-                self.selected.discard(index)
-            self._update_button_states()
-    
-        def on_button_pressed(self, event: Button.Pressed) -> None:
-            btn_id = event.button.id
-    
-            if btn_id == "select-all":
-                for i in range(len(self.candidates)):
-                    self.selected.add(i)
-                    try:
-                        self.query_one(f"#cb-{i}", Checkbox).value = True
-                    except Exception:
-                        pass
-                self._update_button_states()
-    
-            elif btn_id == "deselect-all":
-                self.selected.clear()
-                for i in range(len(self.candidates)):
-                    try:
-                        self.query_one(f"#cb-{i}", Checkbox).value = False
-                    except Exception:
-                        pass
-                self._update_button_states()
-    
-            elif btn_id == "view-skipped":
-                self.app.push_screen(SkippedModal(self.skipped))
-    
-            elif btn_id == "cancel":
-                self.dismiss(("cancelled", []))
-    
-            elif btn_id in ("trash", "delete"):
-                if not self.selected:
-                    return
-                self._confirm_action(btn_id)
-    
-        async def _confirm_action(self, action: str) -> None:
-            confirmed = await self.app.push_screen_wait(
-                ConfirmModal(action, len(self.selected))
-            )
-            if not confirmed:
-                return
-            selected_targets = [
-                self.candidates[i] for i in sorted(self.selected)
-            ]
-            self.dismiss((action, selected_targets))
-    
-        def action_cancel(self) -> None:
-            self.dismiss(("cancelled", []))
-    
-    
-    class CleanupTui(App[tuple[str, list[AnyTarget]]]):
-        """Textual application for interactive cleanup selection."""
-    
-        CSS = """
-        CleanupTui {
-            width: 90%;
-            height: 90%;
-        }
-    
-        #main-title {
-            padding: 1 2;
-            background: $primary;
-            color: $text;
-            text-style: bold;
-            height: 3;
-            content-align: center middle;
-        }
-    
-        #candidate-scroll {
-            height: 1fr;
-            margin: 1 2;
-            border: solid $primary;
-            padding: 1;
-        }
-    
-        CandidateRow {
-            height: auto;
-            padding: 0 1;
-            margin: 1 0;
-        }
-    
-        CandidateRow:focus {
-            background: $surface;
-        }
-    
-        #skipped-summary {
-            margin: 0 2;
-            padding: 1 2;
-            color: $text-muted;
-            height: auto;
-        }
-    
-        #select-buttons {
-            margin: 0 2 1 2;
-            height: 3;
-            align: center middle;
-        }
-    
-        #select-buttons Button {
-            margin: 0 1;
-        }
-    
-        #action-buttons {
-            margin: 0 2 1 2;
-            height: 3;
-            align: center middle;
-        }
-    
-        #action-buttons Button {
-            margin: 0 1;
-        }
-    
-        /* Confirmation modal */
-        #confirm-dialog {
-            width: 50;
-            height: auto;
-            border: thick $error;
-            background: $surface;
-            padding: 1 2;
-            align: center middle;
-        }
-    
-        #confirm-title {
-            text-style: bold;
-            padding: 1 0;
-            text-align: center;
-        }
-    
-        #confirm-warning {
-            color: $text-muted;
-            text-align: center;
-            padding-bottom: 1;
-        }
-    
-        #confirm-buttons {
-            padding: 1 0;
-            align: center middle;
-        }
-    
-        #confirm-buttons Button {
-            margin: 0 1;
-        }
-    
-        /* Skipped modal */
-        #skipped-dialog {
-            width: 70%;
-            height: 80%;
-            border: thick $primary;
-            background: $surface;
-            padding: 1 2;
-        }
-    
-        #skipped-title {
-            text-style: bold;
-            padding: 1 0;
-            text-align: center;
-        }
-    
-        #skipped-scroll {
-            height: 1fr;
-            border: solid $panel;
-            padding: 1;
-        }
-    
-        #close-skipped {
-            margin-top: 1;
-        }
-    
-        /* No candidates screen */
-        #no-cand-dialog {
-            width: 60%;
-            height: auto;
-            border: thick $warning;
-            background: $surface;
-            padding: 1 2;
-        }
-    
-        #no-cand-title {
-            text-style: bold;
-            padding: 1 0;
-            text-align: center;
-            color: $warning;
-        }
-    
-        #no-cand-msg {
-            text-align: center;
-            padding: 1 0;
-        }
-    
-        #no-cand-scroll {
-            height: auto;
-            max-height: 20;
-            border: solid $panel;
-            padding: 1;
-            margin: 1 0;
-        }
-    
-        #no-cand-close {
-            margin-top: 1;
-        }
-        """
-    
-        def __init__(
-            self,
-            candidates: list[AnyTarget],
-            skipped: list[SkippedTarget],
-            target_kind: str,
-        ) -> None:
-            super().__init__()
-            self._candidates = candidates
-            self._skipped = skipped
-            self._target_kind = target_kind
-    
-        def on_mount(self) -> None:
-            if not self._candidates:
-                self.push_screen(NoCandidatesScreen(self._skipped), callback=self._on_no_candidates_done)
-            else:
-                self.push_screen(
-                    CleanupScreen(self._candidates, self._skipped, self._target_kind),
-                    callback=self._on_cleanup_done,
-                )
-    
-        def _on_no_candidates_done(self, _result: None) -> None:
-            self.exit(("cancelled", []))
-    
-        def _on_cleanup_done(self, result: tuple[str, list[AnyTarget]]) -> None:
-            if result is None:
-                self.exit(("cancelled", []))
-            else:
-                self.exit(result)
-    
-    
-    def _run_tui(
-        candidates: list[AnyTarget],
-        skipped: list[SkippedTarget],
-        target_kind: str,
-    ) -> tuple[str, list[AnyTarget]]:
-        """Launch the Textual TUI and return (action, selected_targets)."""
-        app = CleanupTui(candidates, skipped, target_kind)
-        result = asyncio.run(app.run_async())
-        if result is None:
-            return ("cancelled", [])
-        return result
-    
-    
 
-else:
+# -------------------------------------------------------------------
+# CLI interactive helpers
+# -------------------------------------------------------------------
 
-    # -------------------------------------------------------------------
-    # Fallback interactive helpers
-    # -------------------------------------------------------------------
 
-    def _print_interactive_candidates(
-        candidates: list[AnyTarget],
-        *,
-        target_kind: str,
-    ) -> None:
-        print(f"Cleanup {target_kind}: {len(candidates)} candidate(s)")
-        for index, candidate in enumerate(candidates, start=1):
-            label = candidate.display_label
-            print(f"  c{index:<2} {label}")
-            print(f"     {candidate.path}")
+def _print_interactive_candidates(
+    candidates: list[AnyTarget],
+    *,
+    target_kind: str,
+) -> None:
+    print(f"Cleanup {target_kind}: {len(candidates)} candidate(s)")
+    for index, candidate in enumerate(candidates, start=1):
+        label = candidate.display_label
+        print(f"  c{index:<2} {label}")
+        print(f"     {candidate.path}")
 
-    def _print_skipped_summary(skipped: list[SkippedTarget]) -> None:
-        if not skipped:
-            return
-        grouped = _skipped_by_reason(skipped)
-        print(f"Skipped: {len(skipped)} item(s)")
-        for index, (reason, items) in enumerate(grouped.items(), start=1):
+
+def _print_skipped_summary(skipped: list[SkippedTarget]) -> None:
+    if not skipped:
+        return
+    grouped = _skipped_by_reason(skipped)
+    print(f"Skipped: {len(skipped)} item(s)")
+    for index, (reason, items) in enumerate(grouped.items(), start=1):
+        print(f"  s{index:<2} {reason}: {len(items)}")
+
+
+def _browse_skipped_targets_when_no_candidates(
+    skipped: list[SkippedTarget],
+    *,
+    target_kind: str,
+) -> None:
+    print(f"Cleanup {target_kind}: 0 candidate(s)")
+    _print_skipped_summary(skipped)
+    if not skipped:
+        return
+    raw = input("Inspect skipped items [s=skips, q=close]: ").strip().lower()
+    if raw in {"s", "skip", "skips"}:
+        _browse_skipped_targets(skipped)
+
+
+def _browse_skipped_targets(skipped: list[SkippedTarget]) -> None:
+    if not skipped:
+        print("No skipped items.")
+        return
+    grouped = _skipped_by_reason(skipped)
+    categories = list(grouped.items())
+    while True:
+        print("Skipped categories:")
+        for index, (reason, items) in enumerate(categories, start=1):
             print(f"  s{index:<2} {reason}: {len(items)}")
-
-    def _browse_skipped_targets_when_no_candidates(
-        skipped: list[SkippedTarget],
-        *,
-        target_kind: str,
-    ) -> None:
-        print(f"Cleanup {target_kind}: 0 candidate(s)")
-        _print_skipped_summary(skipped)
-        if not skipped:
-            return
-        raw = input("Inspect skipped items [s=skips, q=close]: ").strip().lower()
-        if raw in {"s", "skip", "skips"}:
-            _browse_skipped_targets(skipped)
-
-    def _browse_skipped_targets(skipped: list[SkippedTarget]) -> None:
-        if not skipped:
-            print("No skipped items.")
-            return
-        grouped = _skipped_by_reason(skipped)
-        categories = list(grouped.items())
-        while True:
-            print("Skipped categories:")
-            for index, (reason, items) in enumerate(categories, start=1):
-                print(f"  s{index:<2} {reason}: {len(items)}")
-            raw = (
-                input("Expand skipped category [sN/number, b/q=back]: ")
-                .strip()
-                .lower()
-            )
-            if raw in {"", "b", "back", "q", "quit", "cancel"}:
-                return
-            try:
-                idx = _parse_prefixed_index(raw, prefix="s")
-            except ValueError:
-                print("Choose a category number.", file=sys.stderr)
-                continue
-            if not 1 <= idx <= len(categories):
-                print("Choose a category number.", file=sys.stderr)
-                continue
-            reason, items = categories[idx - 1]
-            print(f"Skipped: {reason}")
-            for item in sorted(items, key=lambda x: (x.kind, x.path)):
-                print(f"  {item.kind}")
-                print(f"    {item.path}")
-
-    def _skipped_by_reason(
-        skipped: list[SkippedTarget],
-    ) -> dict[str, list[SkippedTarget]]:
-        grouped: dict[str, list[SkippedTarget]] = {}
-        for item in skipped:
-            for reason in item.reason or ["unknown"]:
-                grouped.setdefault(reason, []).append(item)
-        return dict(sorted(grouped.items()))
-
-    def _selected_candidates(
-        candidates: list[AnyTarget],
-        raw_selection: str,
-    ) -> list[AnyTarget]:
-        indexes: set[int] = set()
-        for part in re.split(r"[\s,]+", raw_selection):
-            if not part:
-                continue
-            try:
-                index = _parse_prefixed_index(part, prefix="c")
-            except ValueError:
-                continue
-            if 1 <= index <= len(candidates):
-                indexes.add(index)
-        return [
-            c for i, c in enumerate(candidates, start=1) if i in indexes
-        ]
-
-    def _parse_prefixed_index(value: str, *, prefix: str) -> int:
-        stripped = value.strip().lower()
-        if stripped.startswith(prefix):
-            stripped = stripped[len(prefix):]
-        return int(stripped)
-
-    def _run_tui(
-        candidates: list[AnyTarget],
-        skipped: list[SkippedTarget],
-        target_kind: str,
-    ) -> tuple[str, list[AnyTarget]]:
-        """Fallback interactive selection using raw terminal I/O."""
-        if not candidates:
-            _browse_skipped_targets_when_no_candidates(skipped, target_kind=target_kind)
-            return ("cancelled", [])
-
-        selected: list[AnyTarget] = []
-        while not selected:
-            _print_interactive_candidates(candidates, target_kind=target_kind)
-            _print_skipped_summary(skipped)
-            raw_selection = (
-                input("Select candidates [cN/numbers, a=all, s=skips, q=cancel]: ")
-                .strip()
-                .lower()
-            )
-            if raw_selection in {"", "q", "quit", "cancel"}:
-                return ("cancelled", [])
-            if raw_selection in {"s", "skip", "skips"}:
-                _browse_skipped_targets(skipped)
-                continue
-            if raw_selection == "a":
-                selected = list(candidates)
-            else:
-                selected = _selected_candidates(candidates, raw_selection)
-            if not selected:
-                print("No candidates selected.", file=sys.stderr)
-
-        raw_action = (
-            input("Action [t=trash, d=delete, q=cancel]: ").strip().lower()
-        )
-        if raw_action in {"t", "trash"}:
-            result_action = "trash"
-        elif raw_action in {"d", "delete"}:
-            result_action = "delete"
-        else:
-            return ("cancelled", [])
-
-        confirmation = (
-            input(f"Type {result_action} to confirm {len(selected)} item(s): ")
+        raw = (
+            input("Expand skipped category [sN/number, b/q=back]: ")
             .strip()
             .lower()
         )
-        if confirmation != result_action:
+        if raw in {"", "b", "back", "q", "quit", "cancel"}:
+            return
+        try:
+            idx = _parse_prefixed_index(raw, prefix="s")
+        except ValueError:
+            print("Choose a category number.", file=sys.stderr)
+            continue
+        if not 1 <= idx <= len(categories):
+            print("Choose a category number.", file=sys.stderr)
+            continue
+        reason, items = categories[idx - 1]
+        print(f"Skipped: {reason}")
+        for item in sorted(items, key=lambda x: (x.kind, x.path)):
+            print(f"  {item.kind}")
+            print(f"    {item.path}")
+
+
+def _skipped_by_reason(
+    skipped: list[SkippedTarget],
+) -> dict[str, list[SkippedTarget]]:
+    grouped: dict[str, list[SkippedTarget]] = {}
+    for item in skipped:
+        for reason in item.reason or ["unknown"]:
+            grouped.setdefault(reason, []).append(item)
+    return dict(sorted(grouped.items()))
+
+
+def _selected_candidates(
+    candidates: list[AnyTarget],
+    raw_selection: str,
+) -> list[AnyTarget]:
+    indexes: set[int] = set()
+    for part in re.split(r"[\s,]+", raw_selection):
+        if not part:
+            continue
+        try:
+            index = _parse_prefixed_index(part, prefix="c")
+        except ValueError:
+            continue
+        if 1 <= index <= len(candidates):
+            indexes.add(index)
+    return [c for i, c in enumerate(candidates, start=1) if i in indexes]
+
+
+def _parse_prefixed_index(value: str, *, prefix: str) -> int:
+    stripped = value.strip().lower()
+    if stripped.startswith(prefix):
+        stripped = stripped[len(prefix):]
+    return int(stripped)
+
+
+def _run_cli_interactive(
+    candidates: list[AnyTarget],
+    skipped: list[SkippedTarget],
+    target_kind: str,
+) -> tuple[str, list[AnyTarget]]:
+    if not candidates:
+        _browse_skipped_targets_when_no_candidates(skipped, target_kind=target_kind)
+        return ("cancelled", [])
+
+    selected: list[AnyTarget] = []
+    while not selected:
+        _print_interactive_candidates(candidates, target_kind=target_kind)
+        _print_skipped_summary(skipped)
+        raw_selection = (
+            input("Select candidates [cN/numbers, a=all, s=skips, q=cancel]: ")
+            .strip()
+            .lower()
+        )
+        if raw_selection in {"", "q", "quit", "cancel"}:
             return ("cancelled", [])
-        return (result_action, selected)
+        if raw_selection in {"s", "skip", "skips"}:
+            _browse_skipped_targets(skipped)
+            continue
+        if raw_selection == "a":
+            selected = list(candidates)
+        else:
+            selected = _selected_candidates(candidates, raw_selection)
+        if not selected:
+            print("No candidates selected.", file=sys.stderr)
+
+    raw_action = input("Action [t=trash, d=delete, q=cancel]: ").strip().lower()
+    if raw_action in {"t", "trash"}:
+        result_action = "trash"
+    elif raw_action in {"d", "delete"}:
+        result_action = "delete"
+    else:
+        return ("cancelled", [])
+
+    confirmation = (
+        input(f"Type {result_action} to confirm {len(selected)} item(s): ")
+        .strip()
+        .lower()
+    )
+    if confirmation != result_action:
+        return ("cancelled", [])
+    return (result_action, selected)
 
 
 # ---------------------------------------------------------------------------
@@ -726,8 +264,7 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def handle_project(args: argparse.Namespace) -> dict[str, Any]:
-    action = _resolve_action(args)
+def preview_project_cleanup(args: argparse.Namespace) -> CleanupPreview:
     older_than = args.older_than if isinstance(args.older_than, timedelta) else _parse_age(args.older_than)
     root = _cleanup_root(args.path) if args.path else None
     cutoff = datetime.now(timezone.utc) - older_than
@@ -758,11 +295,42 @@ def handle_project(args: argparse.Namespace) -> dict[str, Any]:
             candidates.append(target)
         skipped.extend(skip)
 
-    candidates = sorted(candidates, key=lambda item: item.path)
-    skipped = _dedupe_skips(skipped)
-    action, selected = _resolve_interactive_selection(
-        action, candidates, skipped=skipped, target_kind="project"
+    return CleanupPreview(
+        target_kind="project",
+        candidates=sorted(candidates, key=lambda item: item.path),
+        skipped=_dedupe_skips(skipped),
+        filters={
+            "older_than": _format_timedelta(older_than),
+            "cutoff": cutoff.isoformat(),
+            "path": str(root) if root else None,
+        },
     )
+
+
+def handle_project(args: argparse.Namespace) -> dict[str, Any]:
+    preview = preview_project_cleanup(args)
+    action = _resolve_action(args)
+    action, selected = _resolve_interactive_selection(
+        action,
+        preview.candidates,
+        use_tui=getattr(args, "tui", False),
+        skipped=preview.skipped,
+        target_kind=preview.target_kind,
+    )
+    return apply_project_selection(
+        args,
+        preview,
+        action,
+        [target for target in selected if isinstance(target, ProjectTarget)],
+    )
+
+
+def apply_project_selection(
+    args: argparse.Namespace,
+    preview: CleanupPreview,
+    action: Action,
+    selected: list[ProjectTarget],
+) -> dict[str, Any]:
     manifest_path, action_errors = _apply_action(
         action,
         [
@@ -781,24 +349,19 @@ def handle_project(args: argparse.Namespace) -> dict[str, Any]:
         command="cleanup project",
         action=action,
         targets=[target.model_dump(mode="json") for target in selected],
-        candidate_count=len(candidates),
+        candidate_count=len(preview.candidates),
         skipped=[
             item.model_dump(mode="json")
-            for item in sorted(skipped, key=lambda item: (item.kind, item.path))
+            for item in sorted(preview.skipped, key=lambda item: (item.kind, item.path))
         ],
         manifest_path=manifest_path,
-        filters={
-            "older_than": _format_timedelta(older_than),
-            "cutoff": cutoff.isoformat(),
-            "path": str(root) if root else None,
-        },
+        filters=preview.filters,
         discovery_note=None,
         action_errors=action_errors,
     )
 
 
-def handle_session(args: argparse.Namespace) -> dict[str, Any]:
-    action = _resolve_action(args)
+def preview_session_cleanup(args: argparse.Namespace) -> CleanupPreview:
     vendor_filter = _normalize_vendor(args.agent_vendor)
     candidates: list[SessionTarget] = []
     skipped: list[SkippedTarget] = []
@@ -819,11 +382,38 @@ def handle_session(args: argparse.Namespace) -> dict[str, Any]:
             if skip is not None:
                 skipped.append(skip)
 
-    candidates = sorted(candidates, key=lambda item: item.path)
-    skipped = _dedupe_skips(skipped)
-    action, selected = _resolve_interactive_selection(
-        action, candidates, skipped=skipped, target_kind="session"
+    return CleanupPreview(
+        target_kind="session",
+        candidates=sorted(candidates, key=lambda item: item.path),
+        skipped=_dedupe_skips(skipped),
+        filters={"agent_vendor": vendor_filter},
     )
+
+
+def handle_session(args: argparse.Namespace) -> dict[str, Any]:
+    preview = preview_session_cleanup(args)
+    action = _resolve_action(args)
+    action, selected = _resolve_interactive_selection(
+        action,
+        preview.candidates,
+        use_tui=getattr(args, "tui", False),
+        skipped=preview.skipped,
+        target_kind=preview.target_kind,
+    )
+    return apply_session_selection(
+        args,
+        preview,
+        action,
+        [target for target in selected if isinstance(target, SessionTarget)],
+    )
+
+
+def apply_session_selection(
+    args: argparse.Namespace,
+    preview: CleanupPreview,
+    action: Action,
+    selected: list[SessionTarget],
+) -> dict[str, Any]:
     manifest_path, action_errors = _apply_action(
         action, [Path(target.path) for target in selected], target_kind="session"
     )
@@ -831,13 +421,13 @@ def handle_session(args: argparse.Namespace) -> dict[str, Any]:
         command="cleanup session",
         action=action,
         targets=[target.model_dump(mode="json") for target in selected],
-        candidate_count=len(candidates),
+        candidate_count=len(preview.candidates),
         skipped=[
             item.model_dump(mode="json")
-            for item in sorted(skipped, key=lambda item: (item.kind, item.path))
+            for item in sorted(preview.skipped, key=lambda item: (item.kind, item.path))
         ],
         manifest_path=manifest_path,
-        filters={"agent_vendor": vendor_filter},
+        filters=preview.filters,
         discovery_note=None,
         action_errors=action_errors,
     )
@@ -1218,12 +808,21 @@ def _resolve_interactive_selection(
     action: Action,
     candidates: list[ProjectTarget | SessionTarget],
     *,
+    use_tui: bool,
     skipped: list[SkippedTarget],
     target_kind: str,
 ) -> tuple[Action, list[ProjectTarget | SessionTarget]]:
     if action != "interactive":
         return action, list(candidates)
-    return _run_tui(list(candidates), skipped, target_kind)
+    if use_tui:
+        try:
+            from cleanup_tui import run_tui
+        except ImportError as exc:
+            raise ValueError(
+                "--tui requires the optional 'textual' dependency in the plugin environment"
+            ) from exc
+        return run_tui(list(candidates), skipped, target_kind)
+    return _run_cli_interactive(list(candidates), skipped, target_kind)
 
 
 def _target_cleanup_paths(target: ProjectTarget | SessionTarget) -> list[str]:

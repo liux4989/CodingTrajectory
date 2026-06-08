@@ -106,7 +106,9 @@ Dispatch rules:
 - The subprocess inherits stdin, stdout, stderr, and the relevant `CT_*`
   environment.
 - The subprocess exit status is the plugin exit status.
-- `--help` after the plugin namespace is rendered by `ct` from the manifest.
+- `ct plugin NAME -h` is rendered by `ct` from the manifest.
+- Nested help such as `ct plugin NAME subcommand -h` is passed through to the
+  plugin executable.
 
 Example:
 
@@ -239,16 +241,17 @@ The most useful top-level metrics are:
   each plugin. Executable plugins should consume that field from documented
   `ct` output.
 
-## Cleanup Plugin
+## Dashboard Cleanup
 
 ### Goal
 
-Add a `cleanup` plugin that finds and removes low-value artifacts created by
-coding agents. The first version should stay narrow: clean up old projects and
-clean up empty session logs.
+Add cleanup operations to the `dashboard` plugin so destructive actions live
+under the dashboard's `project` and `session` command families. The first
+version should stay narrow: clean up old projects and clean up empty session
+logs.
 
-This is intentionally a plugin concern rather than a first-party `ct project`
-or `ct session` command because it performs destructive filesystem actions and
+This stays a plugin concern rather than a first-party `ct project` or
+`ct session` command because it performs destructive filesystem actions and
 uses local policy about what is safe to delete.
 
 ### Primary Use Cases
@@ -261,22 +264,24 @@ uses local policy about what is safe to delete.
 ### Command Shape
 
 ```text
-ct plugin cleanup project [--older-than 30d] [--path PATH] [--trash|--delete] [--confirm] [--detail]
-ct plugin cleanup session [--agent-vendor codex|pi] [--trash|--delete] [--confirm] [--detail]
+ct plugin dashboard project [--agent-vendor VENDOR] [--detail]
+ct plugin dashboard project cleanup [--older-than 30d] [--path PATH] [--trash|--delete] [--confirm] [--tui] [--detail]
+ct plugin dashboard session [PROJECT] [--since-days N|--all-time] [--agent-vendor VENDOR] [--detail]
+ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm] [--tui] [--detail]
 ```
 
 Default behavior should be conservative:
 
 - Running without `--trash` or `--delete` opens the interactive cleanup flow.
-- `cleanup project` reads candidates from the global `ct project list` result.
+- `dashboard project` reads candidates from the global `ct project list` result.
 - `--delete` requires an explicit flag and should not be implied by any
   shorthand command.
 - `--trash` and `--delete` require `--confirm`.
 - Non-interactive action flags operate on all matching candidates.
 
 The first command surface should remain this small. More complex cleanup flows
-should move into the interactive TUI rather than adding many one-off flags to
-the CLI.
+should move into the dashboard-owned interactive TUI rather than adding many
+one-off flags to the CLI.
 
 ### Project Cleanup Rules
 
@@ -321,9 +326,10 @@ Recommended exclusions:
 
 ### TUI Workflow
 
-The full cleanup workflow should be exposed through an interactive TUI instead
-of a large flag surface. The TUI can guide the user through discovery, review,
-selection, and execution while keeping the simple CLI useful for automation.
+The full cleanup workflow should be exposed through an interactive dashboard TUI
+instead of a large flag surface. The TUI can guide the user through discovery,
+review, selection, and execution while keeping the simple CLI useful for
+automation.
 
 Expected TUI flow:
 

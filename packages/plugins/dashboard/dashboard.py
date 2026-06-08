@@ -21,6 +21,8 @@ def main(argv: list[str] | None = None) -> int:
     if raw_args[0] in {"-h", "--help"}:
         parser.parse_args(["-h"])
         return 0
+    if raw_args == ["--tui"]:
+        return _run_dashboard_tui()
     action, rest = raw_args[0], raw_args[1:]
     if action == "project":
         return _handle_project_command(rest)
@@ -73,6 +75,7 @@ def _build_root_parser() -> argparse.ArgumentParser:
         prog="ct plugin dashboard",
         description="Project and session management dashboard.",
     )
+    parser.add_argument("--tui", action="store_true", help="Open the plugin-wide Textual dashboard.")
     sub = parser.add_subparsers(dest="action")
     sub.add_parser("project", help="Project management commands.")
     sub.add_parser("session", help="Session management commands.")
@@ -101,6 +104,7 @@ def _project_cleanup_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trash", action="store_true")
     parser.add_argument("--delete", action="store_true")
     parser.add_argument("--confirm", action="store_true")
+    parser.add_argument("--tui", action="store_true")
     parser.add_argument("--detail", action="store_true")
     return parser
 
@@ -129,6 +133,7 @@ def _session_cleanup_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trash", action="store_true")
     parser.add_argument("--delete", action="store_true")
     parser.add_argument("--confirm", action="store_true")
+    parser.add_argument("--tui", action="store_true")
     parser.add_argument("--detail", action="store_true")
     return parser
 
@@ -155,10 +160,11 @@ def _root_entry_text() -> str:
             "Dashboard executable plugin",
             "",
             "Commands:",
+            "  ct plugin dashboard --tui",
             "  ct plugin dashboard project [--agent-vendor VENDOR] [--detail]",
-            "  ct plugin dashboard project cleanup [flags]",
+            "  ct plugin dashboard project cleanup [--tui] [flags]",
             "  ct plugin dashboard session [PROJECT] [--since-days N|--all-time] [--detail]",
-            "  ct plugin dashboard session cleanup [flags]",
+            "  ct plugin dashboard session cleanup [--tui] [flags]",
             "",
             "A richer web dashboard can live in this plugin package and call the same ct JSON surfaces.",
         ]
@@ -203,6 +209,79 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
 def _one_line(value: Any, limit: int) -> str:
     text = " ".join(str(value or "").split())
     return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _project_payload() -> dict[str, Any]:
+    return _ct_json(["project", "list", "--params", json.dumps({}), "--detail"])
+
+
+def _session_payload() -> dict[str, Any]:
+    params = {"since_days": 30}
+    return _ct_json(["project", "sessions", "--params", json.dumps(params), "--detail"])
+
+
+def _run_dashboard_tui() -> int:
+    try:
+        from dashboard_tui import DashboardServices, run_dashboard_tui
+    except ImportError:
+        print(
+            "error: --tui requires the optional 'textual' dependency in the plugin environment",
+            file=sys.stderr,
+        )
+        return 2
+
+    project_cleanup_args = argparse.Namespace(
+        older_than="30d",
+        path=None,
+        trash=False,
+        delete=False,
+        confirm=False,
+        tui=False,
+        detail=False,
+    )
+    session_cleanup_args = argparse.Namespace(
+        agent_vendor=None,
+        trash=False,
+        delete=False,
+        confirm=False,
+        tui=False,
+        detail=False,
+    )
+    services = DashboardServices(
+        load_projects=_project_payload,
+        load_sessions=_session_payload,
+        preview_project_cleanup=lambda: cleanup_mod.preview_project_cleanup(project_cleanup_args),
+        preview_session_cleanup=lambda: cleanup_mod.preview_session_cleanup(session_cleanup_args),
+        apply_project_cleanup=lambda preview, action, selected: cleanup_mod.apply_project_selection(
+            argparse.Namespace(
+                older_than="30d",
+                path=None,
+                trash=action == "trash",
+                delete=action == "delete",
+                confirm=True,
+                tui=False,
+                detail=False,
+            ),
+            preview,
+            action,
+            selected,
+        ),
+        apply_session_cleanup=lambda preview, action, selected: cleanup_mod.apply_session_selection(
+            argparse.Namespace(
+                agent_vendor=None,
+                trash=action == "trash",
+                delete=action == "delete",
+                confirm=True,
+                tui=False,
+                detail=False,
+            ),
+            preview,
+            action,
+            selected,
+        ),
+    )
+    run_dashboard_tui(services)
+    return 0
 
 
 if __name__ == "__main__":
