@@ -53,13 +53,16 @@ Built-in inspection command:
   "requiresCt": ">=0.1.0",
   "description": "Export ct session data.",
   "run": ["ct-export"],
-  "commands": [
+  "tools": [
     {
       "name": "session",
       "summary": "Export one session."
+    },
+    {
+      "name": "cleanup/cache",
+      "summary": "Delete cached export files."
     }
-  ],
-  "capabilities": ["session.read"]
+  ]
 }
 ```
 
@@ -77,14 +80,13 @@ Required fields:
 Optional fields:
 
 - `requiresCt`: version requirement for the installed `ct` command.
-- `commands`: command descriptors for manifest-rendered help.
-- `capabilities`: short data/action labels such as `project.read` or
-  `session.read`.
+- `tools`: tool descriptors for manifest-rendered help.
 
-Command descriptors are optional and intentionally small:
+Tool descriptors are optional and intentionally small:
 
 - `name`: command segment under the plugin namespace, or `.` for the bare
-  plugin command.
+  plugin command. Slash-delimited names such as `cleanup/cache` represent
+  sub-level tools in one flat list.
 - `summary`: one-line help text.
 
 The manifest is not an argparse schema. The plugin process owns its own flags,

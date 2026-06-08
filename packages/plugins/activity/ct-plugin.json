@@ -5,14 +5,10 @@
   "requiresCt": ">=0.1.0",
   "description": "Inspect recent activity across sessions.",
   "run": ["python3", "./activity.py"],
-  "commands": [
+  "tools": [
     {
       "name": ".",
       "summary": "Show recent project/session activity."
     }
-  ],
-  "capabilities": [
-    "project.read",
-    "session.read"
   ]
 }

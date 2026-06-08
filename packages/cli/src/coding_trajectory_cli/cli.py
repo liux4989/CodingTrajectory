@@ -339,9 +339,6 @@ def _render_plugin_list_text(payload: dict[str, Any]) -> str:
         requires_ct = plugin.get("requires_ct")
         if requires_ct:
             lines.append(f"  requires ct: {requires_ct}")
-        capabilities = plugin.get("capabilities") or []
-        if capabilities:
-            lines.append(f"  capabilities: {', '.join(capabilities)}")
         error = plugin.get("error")
         if error:
             lines.append(f"  error: {error}")
@@ -386,16 +383,11 @@ def _plugin_epilog(plugin: LoadedPlugin) -> str | None:
     if manifest is None:
         return None
     lines: list[str] = []
-    if manifest.commands:
+    if manifest.tools:
         lines.append("PLUGIN COMMANDS")
-        for command in manifest.commands:
-            usage = manifest.name if command.name == "." else f"{manifest.name} {command.name}"
-            lines.append(f"  ct plugin {usage:<32} {command.summary}")
-    if manifest.capabilities:
-        if lines:
-            lines.append("")
-        lines.append("CAPABILITIES")
-        lines.append("  " + ", ".join(manifest.capabilities))
+        for tool in manifest.tools:
+            usage = manifest.name if tool.name == "." else f"{manifest.name} {tool.name}"
+            lines.append(f"  ct plugin {usage:<32} {tool.summary}")
     if manifest.requires_ct:
         if lines:
             lines.append("")

@@ -5,7 +5,7 @@
   "requiresCt": ">=0.1.0",
   "description": "Project and session management dashboard.",
   "run": ["python3", "./dashboard.py"],
-  "commands": [
+  "tools": [
     {
       "name": ".",
       "summary": "Show dashboard entry information."
@@ -17,10 +17,14 @@
     {
       "name": "sessions",
       "summary": "List sessions for a project."
+    },
+    {
+      "name": "project/cleanup",
+      "summary": "Clean old project directories."
+    },
+    {
+      "name": "session/cleanup",
+      "summary": "Clean empty or low-value session logs."
     }
-  ],
-  "capabilities": [
-    "project.read",
-    "session.read"
   ]
 }

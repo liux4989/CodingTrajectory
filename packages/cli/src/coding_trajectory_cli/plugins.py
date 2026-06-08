@@ -18,8 +18,8 @@ PLUGIN_MANIFEST_ENV = "CT_PLUGIN_MANIFEST_PATH"
 RESERVED_PLUGIN_NAMES = {"list"}
 
 
-class PluginCommand(BaseModel):
-    """One manifest-provided help row for a plugin-owned command."""
+class PluginTool(BaseModel):
+    """One manifest-provided help row for a plugin-owned tool."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -46,8 +46,7 @@ class PluginManifest(BaseModel):
     description: str = Field(min_length=1)
     run: list[str] = Field(min_length=1)
     requires_ct: str | None = Field(default=None, alias="requiresCt")
-    commands: list[PluginCommand] = Field(default_factory=list)
-    capabilities: list[str] = Field(default_factory=list)
+    tools: list[PluginTool] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
@@ -76,11 +75,6 @@ class PluginManifest(BaseModel):
         if not argv:
             raise ValueError("run must include at least one command token")
         return argv
-
-    @field_validator("capabilities")
-    @classmethod
-    def _strip_capabilities(cls, value: list[str]) -> list[str]:
-        return [item.strip() for item in value if item.strip()]
 
 
 @dataclass(frozen=True)
@@ -165,11 +159,10 @@ def plugin_payload(plugins: list[LoadedPlugin]) -> dict[str, Any]:
                 "description": item.manifest.description if item.manifest else None,
                 "run": item.manifest.run if item.manifest else [],
                 "requires_ct": item.manifest.requires_ct if item.manifest else None,
-                "commands": [
-                    command.model_dump()
-                    for command in item.manifest.commands
+                "tools": [
+                    tool.model_dump()
+                    for tool in item.manifest.tools
                 ] if item.manifest else [],
-                "capabilities": item.manifest.capabilities if item.manifest else [],
                 "source": str(item.source),
                 "status": "loaded" if item.loaded else "failed",
                 "error": item.error,

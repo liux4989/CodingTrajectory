@@ -41,7 +41,8 @@ ct plugin dashboard cleanup session ...  # migrated cleanup
 │ ct-plugin.json                                 │
 │   name: dashboard                              │
 │   command: ct-dashboard                        │
-│   commands: ., projects, sessions, cleanup     │
+│   tools: ., projects, sessions,                │
+│          project/cleanup, session/cleanup      │
 ╰───────────────────────┬───────────────────────╯
                         │
             ╭───────────▼────────────╮
@@ -65,8 +66,9 @@ ct plugin dashboard cleanup session ...  # migrated cleanup
 - Remove the standalone `cleanup` manifest.
 - Mount cleanup subcommands under the dashboard executable's local argument
   parser.
-- Keep cleanup policy, targets, actions, TUI, and renderers inside the
-  executable package, not `coding_trajectory_cli`.
+- Port cleanup policy, targets, actions, TUI, and renderers into the executable
+  package, not `coding_trajectory_cli`. Until that port is complete, the
+  executable should keep the `cleanup` namespace visible and fail safely.
 
 ### Dashboard Executable
 - Add a `dashboard` manifest whose command is `ct-dashboard`.
