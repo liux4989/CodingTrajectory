@@ -58,6 +58,7 @@ def add_session_source(parser: argparse.ArgumentParser) -> None:
 def add_base_output_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output",
+        "--format",
         "-o",
         dest="output_format",
         choices=OUTPUT_CHOICES,
@@ -71,6 +72,7 @@ def add_base_output_flags(parser: argparse.ArgumentParser) -> None:
 def add_output_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output",
+        "--format",
         "-o",
         dest="output_format",
         choices=OUTPUT_CHOICES,
@@ -88,7 +90,7 @@ def add_params_flag(parser: argparse.ArgumentParser) -> None:
         type=json_object_arg,
         default=None,
         metavar="JSON",
-        help="Merge JSON object params into the command request. Explicit CLI flags override matching params.",
+        help="Merge a JSON object into the command request. Explicit CLI flags override matching keys.",
     )
 
 
@@ -521,4 +523,3 @@ def render_usage_line(usage: dict[str, Any]) -> str:
         f"total {format_tokens(usage.get('total_tokens'))}  "
         f"cost {format_cost(usage.get('cost_usd'))}"
     )
-
