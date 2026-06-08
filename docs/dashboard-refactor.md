@@ -4,7 +4,7 @@
 
 Turn the existing `cleanup` plugin into a **project/session management dashboard**.
 `cleanup` stops being a top-level plugin and becomes one command inside the
-dashboard. The dashboard ships:
+dashboard. The dashboard ships as a manifest-backed executable plugin:
 
 1. CLI subcommands that expose project/session data and actions.
 2. An interactive Textual TUI (launched by the bare `dashboard` command) built
@@ -38,59 +38,58 @@ ct plugin dashboard cleanup session ...  # migrated cleanup
 
 ```diagram
 ╭───────────────────────────────────────────────╮
-│ pyproject.toml                                 │
-│   entry point: dashboard -> dashboard:plugin   │
-│   (cleanup entry point removed)                │
+│ ct-plugin.json                                 │
+│   name: dashboard                              │
+│   command: ct-dashboard                        │
+│   commands: ., projects, sessions, cleanup     │
 ╰───────────────────────┬───────────────────────╯
                         │
             ╭───────────▼────────────╮
-            │ builtins/dashboard.py  │
-            │  DashboardPlugin       │  registers namespace + TUI
-            │  _load_projects()      │  shared data loaders
-            │  _load_sessions()      │
+            │ ct-dashboard           │
+            │  registers local argv  │
+            │  _load_projects()      │  calls ct project list --format json
+            │  _load_sessions()      │  calls ct project sessions --format json
             │  DashboardApp (TUI)    │
             ╰───────────┬────────────╯
-                        │ register_cleanup(sub, ctx)
+                        │
             ╭───────────▼────────────╮
-            │ builtins/cleanup.py    │
-            │  register_cleanup(...)  │  was CleanupPlugin.register
-            │  _handle_project/...    │  unchanged cleanup logic
+            │ cleanup flow           │
+            │  mounted under argv    │
+            │  project/session tasks │  owned by executable
             ╰─────────────────────────╯
 ```
 
 ## Changes
 
-### `builtins/cleanup.py`
-- Replace `class CleanupPlugin` / `CleanupPlugin.register` with a module-level
-  `register_cleanup(parent_subparsers, ctx)` that mounts the `cleanup` parser and
-  its `project` / `session` subcommands onto any subparsers action.
-- Remove `plugin = CleanupPlugin()` (no longer an entry point).
-- All cleanup logic (targets, actions, TUI, renderers) stays unchanged.
+### Cleanup
+- Remove the standalone `cleanup` manifest.
+- Mount cleanup subcommands under the dashboard executable's local argument
+  parser.
+- Keep cleanup policy, targets, actions, TUI, and renderers inside the
+  executable package, not `coding_trajectory_cli`.
 
-### `builtins/dashboard.py` (new)
-- `DashboardPlugin.register` adds the `dashboard` namespace, sets the bare-command
-  TUI handler, and registers `projects`, `sessions`, and `cleanup`
-  (via `register_cleanup`).
-- Shared loaders `_load_projects` / `_load_sessions` call `ctx.dispatch_core`
-  (`project.list`, `project.sessions`).
+### Dashboard Executable
+- Add a `dashboard` manifest whose command is `ct-dashboard`.
+- `ct-dashboard` sets the bare-command TUI handler and registers `projects`,
+  `sessions`, and `cleanup`.
+- Shared loaders `_load_projects` / `_load_sessions` call `ct ... --data`
+  command surfaces instead of importing CLI internals.
 - `DashboardApp` (Textual) renders a project ListView + sessions DataTable, with
   `r` refresh / `q` quit. Gracefully degrades when Textual is absent.
 
-### `pyproject.toml`
-- Swap the `cleanup` entry point for `dashboard`.
+### Manifest
+- Swap the `cleanup` plugin manifest for `dashboard`.
 
 ## Data Sources
 
-| Command   | Core method        | Loader            |
-|-----------|--------------------|-------------------|
-| projects  | `project.list`     | `_load_projects`  |
-| sessions  | `project.sessions` | `_load_sessions`  |
-| cleanup   | (existing)         | cleanup handlers  |
+| Command   | Source command                  | Loader           |
+|-----------|---------------------------------|------------------|
+| projects  | `ct project list --format json`        | `_load_projects` |
+| sessions  | `ct project sessions ... --format json` | `_load_sessions` |
+| cleanup   | dashboard executable policy     | cleanup handlers |
 
 ## Follow-ups (not in this pass)
 
 - Trigger cleanup directly from the TUI (action binding into the cleanup flow).
 - Session drill-down (open `session overview` from the dashboard).
 - Activity/usage columns in the project list.
-```
-

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
-from coding_trajectory_cli.plugins import CtPluginContext, LoadedPlugin, load_plugins
+from coding_trajectory_cli.plugins import LoadedPlugin, discover_plugins, plugin_payload, run_plugin
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch, project_list_metadata, resolve_store
 
@@ -51,7 +51,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _project_list_params(args: argparse.Namespace) -> dict[str, Any]:
-    params: dict[str, Any] = {}
+    params = _params_from_json(args)
     agent_vendor = getattr(args, "agent_vendor", None)
     if agent_vendor is not None:
         params["agent_vendor"] = agent_vendor
@@ -59,10 +59,15 @@ def _project_list_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _project_sessions_params(args: argparse.Namespace) -> dict[str, Any]:
-    params: dict[str, Any] = {}
+    params = _params_from_json(args)
     if args.project_name:
         params["project_name"] = args.project_name
-    params["since_days"] = None if args.all_time else args.since_days
+    if args.all_time is True:
+        params["since_days"] = None
+    elif args.since_days is not None:
+        params["since_days"] = args.since_days
+    elif "since_days" not in params:
+        params["since_days"] = 30
     agent_vendor = getattr(args, "agent_vendor", None)
     if agent_vendor is not None:
         params["agent_vendor"] = agent_vendor
@@ -70,7 +75,7 @@ def _project_sessions_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
-    params: dict[str, Any] = {}
+    params = _params_from_json(args)
     if args.session_id:
         params["session_id"] = args.session_id
     if args.num_turns is not None:
@@ -85,18 +90,42 @@ def _session_overview_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _session_stats_params(args: argparse.Namespace) -> dict[str, Any]:
-    return {
-        "extra_billing": args.extra_billing,
-        **({"session_id": args.session_id} if args.session_id else {}),
-    }
+    params = _params_from_json(args)
+    if args.extra_billing is not None:
+        params["extra_billing"] = args.extra_billing
+    elif "extra_billing" not in params:
+        params["extra_billing"] = False
+    if args.session_id:
+        params["session_id"] = args.session_id
+    return params
 
 
 def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
-    return {
-        "extra_billing": args.extra_billing,
-        **({"session_id": args.session_id} if args.session_id else {}),
-        **({"turn_id": args.turn_id} if args.turn_id else {}),
-    }
+    params = _params_from_json(args)
+    if args.extra_billing is not None:
+        params["extra_billing"] = args.extra_billing
+    elif "extra_billing" not in params:
+        params["extra_billing"] = False
+    if args.session_id:
+        params["session_id"] = args.session_id
+    if args.turn_id:
+        params["turn_id"] = args.turn_id
+    return params
+
+
+def _params_from_json(args: argparse.Namespace) -> dict[str, Any]:
+    params = getattr(args, "params_json", None)
+    return dict(params or {})
+
+
+def _json_object_arg(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("must be a JSON object")
+    return parsed
 
 
 def _positive_int(value: str) -> int:
@@ -169,8 +198,8 @@ PLUGIN COMMANDS
   ct plugin list                                 list installed ct CLI plugins
 
 NOTE
-  Third-party plugins register subcommands under `ct plugin` via the
-  `coding_trajectory.cli_plugins` entry point group.
+  Plugins are manifest-backed executables discovered from `.ct/plugins/*.json`,
+  `~/.ct/plugins/*.json`, and CT_PLUGIN_MANIFEST_PATH directories.
 """
 
 _PLUGIN_STATE: list[LoadedPlugin] = []
@@ -236,6 +265,17 @@ def _add_output_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--global-scope", action="store_true", help="Search all known log files instead of the most-recent session.")
 
 
+def _add_params_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--params",
+        dest="params_json",
+        type=_json_object_arg,
+        default=None,
+        metavar="JSON",
+        help="Merge JSON object params into the command request. Explicit CLI flags override matching params.",
+    )
+
+
 def _add_details_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--details",
@@ -248,6 +288,7 @@ def _add_metrics_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--extra-billing",
         action="store_true",
+        default=None,
         help="Mark cost estimates as outside-plan/API billing instead of plan-usage estimates.",
     )
 
@@ -282,41 +323,69 @@ def _render_plugin_list_text(payload: dict[str, Any]) -> str:
     loaded = sum(1 for plugin in plugins if plugin.get("status") == "loaded")
     failed = len(plugins) - loaded
     lines = [
-        f"Plugins: {loaded} loaded, {failed} failed",
+        f"Plugins: {loaded} available, {failed} failed",
         "",
     ]
     for plugin in plugins:
-        name = plugin.get("plugin_name") or "-"
-        entry_point = plugin.get("entry_point") or "-"
-        lines.append(f"{name:<24} {plugin.get('status') or '-':<8} {entry_point}")
-        module = plugin.get("module")
-        if module:
-            lines.append(f"  module: {module}")
+        name = plugin.get("name") or "-"
+        version = plugin.get("version") or "-"
+        command = plugin.get("command") or "-"
+        description = plugin.get("description") or ""
+        lines.append(f"{name:<24} {version:<10} {command:<24} {description}".rstrip())
+        source = plugin.get("source")
+        if source:
+            lines.append(f"  source: {source}")
+        requires_ct = plugin.get("requires_ct")
+        if requires_ct:
+            lines.append(f"  requires ct: {requires_ct}")
+        capabilities = plugin.get("capabilities") or []
+        if capabilities:
+            lines.append(f"  capabilities: {', '.join(capabilities)}")
         error = plugin.get("error")
         if error:
             lines.append(f"  error: {error}")
     if not plugins:
-        lines.append("No plugins found.")
+        lines.append("No plugin manifests found.")
     return "\n".join(lines).rstrip()
 
 
 def _plugin_list_payload(plugins: list[LoadedPlugin]) -> dict[str, Any]:
-    return {
-        "plugins": [
-            {
-                "entry_point": plugin.entry_point,
-                "module": plugin.module,
-                "plugin_name": plugin.plugin_name,
-                "status": "loaded" if plugin.loaded else "failed",
-                "error": plugin.error,
-            }
-            for plugin in plugins
-        ]
-    }
+    return plugin_payload(plugins)
 
 
 def _handle_plugin_list(_args: argparse.Namespace) -> dict[str, Any]:
     return _plugin_list_payload(_PLUGIN_STATE)
+
+
+def _handle_plugin_exec(args: argparse.Namespace) -> int:
+    plugin = getattr(args, "_plugin", None)
+    if not isinstance(plugin, LoadedPlugin) or plugin.manifest is None:
+        print(json.dumps({"error": {"message": "Plugin is not available"}}, indent=2), file=sys.stderr)
+        return 1
+    plugin_args = getattr(args, "plugin_args", None) or []
+    return run_plugin(plugin.manifest, plugin.source, plugin_args)
+
+
+def _plugin_epilog(plugin: LoadedPlugin) -> str | None:
+    manifest = plugin.manifest
+    if manifest is None:
+        return None
+    lines: list[str] = []
+    if manifest.commands:
+        lines.append("PLUGIN COMMANDS")
+        for command in manifest.commands:
+            usage = manifest.name if command.name == "." else f"{manifest.name} {command.name}"
+            lines.append(f"  ct plugin {usage:<32} {command.summary}")
+    if manifest.capabilities:
+        if lines:
+            lines.append("")
+        lines.append("CAPABILITIES")
+        lines.append("  " + ", ".join(manifest.capabilities))
+    if manifest.requires_ct:
+        if lines:
+            lines.append("")
+        lines.append(f"REQUIRES CT\n  {manifest.requires_ct}")
+    return "\n".join(lines) if lines else None
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -346,6 +415,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_agent_vendor_flag(project_list)
     _add_output_flags(project_list)
+    _add_params_flag(project_list)
     _add_detail_flag(project_list)
     project_list.set_defaults(
         _method="project.list",
@@ -367,17 +437,19 @@ def _build_parser() -> argparse.ArgumentParser:
     project_sessions.add_argument(
         "--since-days",
         type=_positive_int,
-        default=30,
+        default=None,
         metavar="N",
         help="Only scan sessions modified in the last N days. Defaults to 30.",
     )
     project_sessions.add_argument(
         "--all-time",
         action="store_true",
+        default=None,
         help="Scan all matching sessions, ignoring the default 30-day window.",
     )
     _add_agent_vendor_flag(project_sessions)
     _add_output_flags(project_sessions)
+    _add_params_flag(project_sessions)
     _add_detail_flag(project_sessions)
     project_sessions.set_defaults(
         _method="project.sessions",
@@ -400,6 +472,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_session_source(session_overview)
     _add_turn_window_flags(session_overview, view_name="projection")
     _add_output_flags(session_overview)
+    _add_params_flag(session_overview)
     _add_details_flag(session_overview)
     session_overview.set_defaults(
         _method="session.overview",
@@ -413,6 +486,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_session_source(session_stats)
     _add_output_flags(session_stats)
+    _add_params_flag(session_stats)
     _add_details_flag(session_stats)
     _add_metrics_flags(session_stats)
     session_stats.set_defaults(
@@ -434,6 +508,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Limit usage analysis to one turn.",
     )
     _add_output_flags(session_usage)
+    _add_params_flag(session_usage)
     _add_details_flag(session_usage)
     _add_metrics_flags(session_usage)
     session_usage.set_defaults(
@@ -446,12 +521,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show full detail for one or more steps.",
         formatter_class=_GhFormatter,
     )
-    session_step_detail.add_argument("resource_ids", metavar="STEP_ID", nargs="+")
+    session_step_detail.add_argument("resource_ids", metavar="STEP_ID", nargs="*")
     _add_base_output_flags(session_step_detail)
+    _add_params_flag(session_step_detail)
     _add_detail_flag(session_step_detail)
     session_step_detail.set_defaults(
         _method="step.details",
-        _params=lambda args: {"step_ids": args.resource_ids},
+        _params=lambda args: {
+            **_params_from_json(args),
+            **({"step_ids": args.resource_ids} if args.resource_ids else {}),
+        },
     )
 
     session_event_detail = session_sub.add_parser(
@@ -459,12 +538,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Expand the full content of a single event (resolves $truncated refs).",
         formatter_class=_GhFormatter,
     )
-    session_event_detail.add_argument("resource_id", metavar="EVENT_ID")
+    session_event_detail.add_argument("resource_id", metavar="EVENT_ID", nargs="?")
     _add_base_output_flags(session_event_detail)
+    _add_params_flag(session_event_detail)
     _add_detail_flag(session_event_detail)
     session_event_detail.set_defaults(
         _method="event.detail",
-        _params=lambda args: {"event_id": args.resource_id},
+        _params=lambda args: {
+            **_params_from_json(args),
+            **({"event_id": args.resource_id} if args.resource_id else {}),
+        },
     )
 
     session_event_scan = session_sub.add_parser(
@@ -475,11 +558,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_session_source(session_event_scan)
     _add_output_flags(session_event_scan)
+    _add_params_flag(session_event_scan)
     _add_detail_flag(session_event_scan)
     session_event_scan.add_argument(
         "--type",
         dest="event_type",
-        required=True,
+        required=False,
         metavar="TYPE",
         help="Event type to match (e.g. tool.call.succeeded, llm.response).",
     )
@@ -488,7 +572,7 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="filters",
         action="append",
         metavar="KEY=VALUE",
-        default=[],
+        default=None,
         help=(
             "Filter on event payload fields. Repeatable. "
             "VALUE=* means field must exist; VALUE=! means field must be absent."
@@ -497,8 +581,9 @@ def _build_parser() -> argparse.ArgumentParser:
     session_event_scan.set_defaults(
         _method="event.scan",
         _params=lambda args: {
-            "type": args.event_type,
-            "filters": args.filters,
+            **_params_from_json(args),
+            **({"type": args.event_type} if args.event_type else {}),
+            **({"filters": args.filters} if args.filters is not None else {}),
             **({"session_id": args.session_id} if args.session_id else {}),
         },
     )
@@ -510,6 +595,9 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_GhFormatter,
     )
     plugin_sub = plugin_parser.add_subparsers(dest="plugin_action", required=True)
+
+    global _PLUGIN_STATE
+    _PLUGIN_STATE = discover_plugins()
 
     plugin_list = plugin_sub.add_parser(
         "list",
@@ -525,9 +613,18 @@ def _build_parser() -> argparse.ArgumentParser:
         else _render_plugin_list_text(payload),
     )
 
-    plugin_ctx = CtPluginContext(render_json=_json_renderer)
-    global _PLUGIN_STATE
-    _PLUGIN_STATE = load_plugins(plugin_sub, ctx=plugin_ctx)
+    for plugin in _PLUGIN_STATE:
+        manifest = plugin.manifest
+        if manifest is None or manifest.name == "list":
+            continue
+        plugin_command = plugin_sub.add_parser(
+            manifest.name,
+            help=manifest.description,
+            epilog=_plugin_epilog(plugin),
+            formatter_class=_GhFormatter,
+        )
+        plugin_command.add_argument("plugin_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+        plugin_command.set_defaults(_plugin_handler=_handle_plugin_exec, _plugin=plugin)
 
     return parser
 
@@ -795,6 +892,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         plugin_handler = getattr(args, "_plugin_handler", None)
         payload = plugin_handler(args) if callable(plugin_handler) else _dispatch(args)
+        if isinstance(payload, int):
+            return payload
     except ResourceNotFoundError as exc:
         print(json.dumps({"error": {"message": str(exc)}}, indent=2), file=sys.stderr)
         return 1

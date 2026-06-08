@@ -43,6 +43,10 @@ The CLI exposes readable reports for navigation and JSON for exact data:
 output stable for automation while allowing stdout to optimize interactive
 reading.
 
+Automation can pass command params as a JSON object with `--params JSON` on
+commands that dispatch to the core query surface. Explicit CLI flags override
+matching keys from `--params`.
+
 `session stats` and `session usage` use fixed reports for readable stdout and
 `--data` or `--output` for exact JSON.
 

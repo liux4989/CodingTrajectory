@@ -10,8 +10,10 @@ The public namespace for these commands is `ct plugin ...`.
 ## Boundary
 
 - First-party infrastructure stays under `ct project ...` and `ct session ...`.
-- Plugin packages register commands under `ct plugin ...`.
-- Plugins may call stable core helpers exposed by `coding_trajectory_cli`.
+- Plugin manifests register commands under `ct plugin ...`.
+- Plugins run as separate executables. They do not import `coding_trajectory`
+  or `coding_trajectory_cli`.
+- Plugins may call the `ct` CLI or read documented machine-readable outputs.
 - Plugins should not patch core discovery, ingestion, or canonical models.
 
 This keeps the core query surface stable while allowing package-specific command
@@ -19,68 +21,101 @@ packs to ship independently.
 
 ## Discovery
 
-Plugins are loaded from the Python entry point group
-`coding_trajectory.cli_plugins`.
+Plugins are discovered from manifest files, not Python entry points.
+
+Supported manifest locations:
+
+- directories listed in `CT_PLUGIN_MANIFEST_PATH`, separated by the platform
+  path separator;
+- project-level manifests under `.ct/plugins/`;
+- user-level manifests under `~/.ct/plugins/`.
+
+Each manifest describes one public plugin namespace. The CLI validates manifests
+before exposing commands.
 
 Built-in inspection command:
 
-- `ct plugin list` shows installed plugins and any load failures.
+- `ct plugin list` shows discovered manifests and validation failures.
 
-## Minimal Package Shape
+## Minimal Manifest
 
-```toml
-[project]
-name = "ct-export-pack"
-dependencies = ["coding-trajectory"]
-
-[project.entry-points."coding_trajectory.cli_plugins"]
-export = "ct_export_pack.plugin:plugin"
+```json
+{
+  "schemaVersion": 1,
+  "name": "export",
+  "version": "0.1.0",
+  "requiresCt": ">=0.1.0",
+  "description": "Export ct session data.",
+  "command": "ct-export",
+  "commands": [
+    {
+      "name": "session",
+      "summary": "Export one session."
+    }
+  ],
+  "capabilities": ["session.read"]
+}
 ```
 
-## Minimal Plugin
+Required fields:
 
-```python
-from __future__ import annotations
+- `schemaVersion`: currently `1`.
+- `name`: the namespace mounted under `ct plugin NAME`.
+- `version`: plugin version.
+- `description`: one-line help text for `ct plugin list` and `ct plugin --help`.
+- `command`: command name or path to execute.
 
-import argparse
+Optional fields:
 
-from coding_trajectory_cli import CtPluginContext
+- `requiresCt`: version requirement for the installed `ct` command.
+- `commands`: command descriptors for manifest-rendered help.
+- `capabilities`: short data/action labels such as `project.read` or
+  `session.read`.
 
+Command descriptors are optional and intentionally small:
 
-class ExportPlugin:
-    name = "export"
+- `name`: command segment under the plugin namespace, or `.` for the bare
+  plugin command.
+- `summary`: one-line help text.
 
-    def register(self, namespace_subparsers: argparse._SubParsersAction, ctx: CtPluginContext) -> None:
-        export = namespace_subparsers.add_parser("export", help="Example plugin command.")
-        export.add_argument("session_id", nargs="?")
+The manifest is not an argparse schema. The executable owns its own flags,
+validation, help text, and output.
 
-        def handler(args: argparse.Namespace) -> dict:
-            return ctx.dispatch_core(
-                method="session.overview",
-                params={"session_id": args.session_id} if args.session_id else {},
-            )
+## Executable Dispatch
 
-        ctx.bind_command(export, handler=handler)
+`ct plugin NAME ...` resolves `NAME` to a validated manifest and starts the
+manifest executable as a subprocess.
 
+Dispatch rules:
 
-plugin = ExportPlugin()
+- The executable receives the remaining command-line arguments unchanged.
+- The subprocess working directory is the caller's current directory.
+- The subprocess inherits stdin, stdout, stderr, and the relevant `CT_*`
+  environment.
+- The subprocess exit status is the plugin exit status.
+- `--help` after the plugin namespace is rendered by `ct` from the manifest.
+
+Example:
+
+```text
+ct plugin export session abc123 --format json
 ```
 
-## Plugin API
+Dispatches as:
 
-`coding_trajectory_cli` exports:
+```text
+ct-export session abc123 --format json
+```
 
-- `CtPluginContext`
-- `CtCliPlugin`
-- `PLUGIN_ENTRY_POINT_GROUP`
+Plugins that need first-party data should call stable CLI surfaces, preferably
+with machine-readable output:
 
-`CtPluginContext` provides:
+```text
+ct session overview abc123 --data
+ct project list --format json
+```
 
-- `bind_command(...)` to attach a handler and renderer to a plugin parser
-- `dispatch_core(...)` to invoke first-party ct methods through the normal
-  discovery and cache path
-- `resolve_document_store(...)` when a plugin needs a resolved store without
-  using the first-party dispatch table
+There is no compatibility layer for the old in-process Python plugin API.
 
 ## Activity Plugin
 
@@ -188,7 +223,8 @@ The most useful top-level metrics are:
 - The plugin remains responsible for multi-session filtering, aggregation, and
   presentation.
 - Account identity should be added once in core, not rediscovered separately by
-  each plugin.
+  each plugin. Executable plugins should consume that field from documented
+  `ct` output.
 
 ## Cleanup Plugin
 
@@ -345,6 +381,7 @@ reasons.
 - The plugin remains responsible for cleanup policy, safety checks, candidate
   classification, and filesystem actions.
 - Vendor-specific deletion paths should live in the plugin, but candidate
-  classification should reuse canonical session metadata wherever possible.
+  classification should reuse canonical session metadata from documented `ct`
+  output wherever possible.
 - Permanent deletion should never be required for normal operation; archive or
   trash should be sufficient for routine cleanup.
