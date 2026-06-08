@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -119,7 +120,14 @@ class NoCandidatesScreen(ModalScreen[None]):
 
 
 class CleanupScreen(ModalScreen[tuple[str, list[AnyTarget]]]):
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("a", "select_all", "Select all"),
+        Binding("n", "deselect_all", "Deselect all"),
+        Binding("t", "trash", "Trash"),
+        Binding("d", "delete", "Delete"),
+        Binding("v", "view_skipped", "Skipped"),
+    ]
 
     def __init__(
         self,
@@ -204,39 +212,48 @@ class CleanupScreen(ModalScreen[tuple[str, list[AnyTarget]]]):
         self._update_button_states()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        button_id = event.button.id
+        actions = {
+            "select-all": self.action_select_all,
+            "deselect-all": self.action_deselect_all,
+            "view-skipped": self.action_view_skipped,
+            "cancel": self.action_cancel,
+            "trash": self.action_trash,
+            "delete": self.action_delete,
+        }
+        handler = actions.get(event.button.id or "")
+        if handler is not None:
+            handler()
 
-        if button_id == "select-all":
-            for index in range(len(self.candidates)):
-                self.selected.add(index)
-                try:
-                    self.query_one(f"#cb-{index}", Checkbox).value = True
-                except Exception:
-                    pass
-            self._update_button_states()
-            return
+    def action_select_all(self) -> None:
+        for index in range(len(self.candidates)):
+            self.selected.add(index)
+            try:
+                self.query_one(f"#cb-{index}", Checkbox).value = True
+            except Exception:
+                pass
+        self._update_button_states()
 
-        if button_id == "deselect-all":
-            self.selected.clear()
-            for index in range(len(self.candidates)):
-                try:
-                    self.query_one(f"#cb-{index}", Checkbox).value = False
-                except Exception:
-                    pass
-            self._update_button_states()
-            return
+    def action_deselect_all(self) -> None:
+        self.selected.clear()
+        for index in range(len(self.candidates)):
+            try:
+                self.query_one(f"#cb-{index}", Checkbox).value = False
+            except Exception:
+                pass
+        self._update_button_states()
 
-        if button_id == "view-skipped":
-            self.app.push_screen(SkippedModal(self.skipped))
-            return
+    def action_view_skipped(self) -> None:
+        self.app.push_screen(SkippedModal(self.skipped))
 
-        if button_id == "cancel":
-            self.dismiss(("cancelled", []))
-            return
+    def action_trash(self) -> None:
+        if self.selected:
+            self._confirm_action("trash")
 
-        if button_id in {"trash", "delete"} and self.selected:
-            self._confirm_action(button_id)
+    def action_delete(self) -> None:
+        if self.selected:
+            self._confirm_action("delete")
 
+    @work
     async def _confirm_action(self, action: str) -> None:
         confirmed = await self.app.push_screen_wait(ConfirmModal(action, len(self.selected)))
         if not confirmed:
