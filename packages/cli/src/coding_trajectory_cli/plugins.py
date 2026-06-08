@@ -99,7 +99,14 @@ def plugin_manifest_dirs(*, current_dir: Path | None = None) -> list[Path]:
     env_value = os.environ.get(PLUGIN_MANIFEST_ENV)
     if env_value:
         dirs.extend(Path(item).expanduser() for item in env_value.split(os.pathsep) if item)
-    dirs.extend([cwd / ".ct" / "plugins", Path.home() / ".ct" / "plugins"])
+    builtin_dir = _repo_builtin_plugin_dir()
+    if builtin_dir is not None:
+        dirs.append(builtin_dir)
+    dirs.extend([
+        cwd / "plugins",
+        cwd / ".ct" / "plugins",
+        Path.home() / ".ct" / "plugins",
+    ])
     return _dedupe_paths(dirs)
 
 
@@ -170,7 +177,13 @@ def _manifest_paths(dirs: list[Path]) -> list[Path]:
         if not manifest_dir.is_dir():
             continue
         paths.extend(sorted(manifest_dir.glob("*.json")))
+        paths.extend(sorted(manifest_dir.glob("*/ct-plugin.json")))
     return _dedupe_paths(paths)
+
+
+def _repo_builtin_plugin_dir() -> Path | None:
+    candidate = Path(__file__).resolve().parents[4] / "plugins"
+    return candidate if candidate.is_dir() else None
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:

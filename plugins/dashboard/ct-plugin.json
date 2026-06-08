@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "name": "dashboard",
+  "version": "0.1.0",
+  "requiresCt": ">=0.1.0",
+  "description": "Project and session management dashboard.",
+  "command": "./ct-dashboard",
+  "commands": [
+    {
+      "name": ".",
+      "summary": "Show dashboard entry information."
+    },
+    {
+      "name": "projects",
+      "summary": "List managed projects."
+    },
+    {
+      "name": "sessions",
+      "summary": "List sessions for a project."
+    }
+  ],
+  "capabilities": [
+    "project.read",
+    "session.read"
+  ]
+}

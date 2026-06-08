@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "name": "activity",
+  "version": "0.1.0",
+  "requiresCt": ">=0.1.0",
+  "description": "Inspect recent activity across sessions.",
+  "command": "./ct-activity",
+  "commands": [
+    {
+      "name": ".",
+      "summary": "Show recent project/session activity."
+    }
+  ],
+  "capabilities": [
+    "project.read",
+    "session.read"
+  ]
+}

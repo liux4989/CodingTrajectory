@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from typing import Any
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="ct plugin dashboard",
+        description="Project and session management dashboard.",
+    )
+    sub = parser.add_subparsers(dest="action")
+
+    projects = sub.add_parser("projects", help="List managed projects.")
+    projects.add_argument("--agent-vendor", default=None)
+    projects.add_argument("--detail", action="store_true")
+
+    sessions = sub.add_parser("sessions", help="List sessions for a project.")
+    sessions.add_argument("project_name", nargs="?")
+    sessions.add_argument("--since-days", type=int, default=30)
+    sessions.add_argument("--all-time", action="store_true")
+    sessions.add_argument("--agent-vendor", default=None)
+    sessions.add_argument("--detail", action="store_true")
+
+    args = parser.parse_args(argv)
+    if args.action == "projects":
+        return _projects(args)
+    if args.action == "sessions":
+        return _sessions(args)
+    print("Dashboard executable plugin")
+    print("")
+    print("Commands:")
+    print("  ct plugin dashboard projects [--agent-vendor VENDOR] [--detail]")
+    print("  ct plugin dashboard sessions [PROJECT] [--since-days N|--all-time] [--detail]")
+    print("")
+    print("A richer web dashboard can live in this plugin package and call the same ct JSON surfaces.")
+    return 0
+
+
+def _projects(args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {}
+    if args.agent_vendor:
+        params["agent_vendor"] = args.agent_vendor
+    payload = _ct_json(["project", "list", "--params", json.dumps(params), "--detail"])
+    if args.detail:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    items = payload.get("items") or {}
+    print(f"Projects ({len(items)})")
+    for name, meta in sorted(items.items()):
+        vendors = ", ".join(meta.get("vendors") or []) or "-"
+        print(f"  {name:<28} {vendors:<20} {meta.get('path') or '-'}")
+    return 0
+
+
+def _sessions(args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {"since_days": None if args.all_time else args.since_days}
+    if args.project_name:
+        params["project_name"] = args.project_name
+    if args.agent_vendor:
+        params["agent_vendor"] = args.agent_vendor
+    payload = _ct_json(["project", "sessions", "--params", json.dumps(params), "--detail"])
+    if args.detail:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    sessions = payload.get("items") or []
+    print(f"Sessions ({len(sessions)})")
+    for item in sessions[:20]:
+        root_id = str(item.get("root_session_id") or "-")
+        vendors = ", ".join(item.get("vendors") or []) or "-"
+        title = _one_line(item.get("title") or "-", 88)
+        print(f"  {root_id[:8]}  {vendors:<18} {title}")
+    if len(sessions) > 20:
+        print(f"  ... {len(sessions) - 20} more (use --detail for JSON)")
+    return 0
+
+
+def _ct_json(args: list[str]) -> dict[str, Any]:
+    ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
+    if not ct:
+        raise SystemExit("ct executable not found; set CT_COMMAND to the ct command path")
+    command = [*shlex.split(ct), *args]
+    try:
+        completed = subprocess.run(command, check=False, text=True, capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired as exc:
+        raise SystemExit(f"ct command timed out: {' '.join(command)}") from exc
+    if completed.returncode != 0:
+        sys.stderr.write(completed.stderr or completed.stdout)
+        raise SystemExit(completed.returncode)
+    return json.loads(completed.stdout)
+
+
+def _one_line(value: Any, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

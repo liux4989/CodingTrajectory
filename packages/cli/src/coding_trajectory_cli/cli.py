@@ -198,8 +198,8 @@ PLUGIN COMMANDS
   ct plugin list                                 list installed ct CLI plugins
 
 NOTE
-  Plugins are manifest-backed executables discovered from `.ct/plugins/*.json`,
-  `~/.ct/plugins/*.json`, and CT_PLUGIN_MANIFEST_PATH directories.
+  Plugins are manifest-backed executables discovered from `plugins/*/ct-plugin.json`,
+  `.ct/plugins/*.json`, `~/.ct/plugins/*.json`, and CT_PLUGIN_MANIFEST_PATH directories.
 """
 
 _PLUGIN_STATE: list[LoadedPlugin] = []
@@ -364,6 +364,20 @@ def _handle_plugin_exec(args: argparse.Namespace) -> int:
         return 1
     plugin_args = getattr(args, "plugin_args", None) or []
     return run_plugin(plugin.manifest, plugin.source, plugin_args)
+
+
+def _dispatch_plugin_argv(raw_args: list[str]) -> int | None:
+    if len(raw_args) < 2 or raw_args[0] != "plugin":
+        return None
+    plugin_name = raw_args[1]
+    if plugin_name in {"list", "-h", "--help"} or any(item in {"-h", "--help"} for item in raw_args[2:]):
+        return None
+    plugins = discover_plugins()
+    for plugin in plugins:
+        if plugin.manifest and plugin.manifest.name == plugin_name:
+            return run_plugin(plugin.manifest, plugin.source, raw_args[2:])
+    print(json.dumps({"error": {"message": f"Plugin not found: {plugin_name}"}}, indent=2), file=sys.stderr)
+    return 2
 
 
 def _plugin_epilog(plugin: LoadedPlugin) -> str | None:
@@ -886,8 +900,13 @@ def _render_payload(args: argparse.Namespace, payload: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    plugin_exit = _dispatch_plugin_argv(raw_args)
+    if plugin_exit is not None:
+        return plugin_exit
+
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_args)
 
     try:
         plugin_handler = getattr(args, "_plugin_handler", None)
