@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-Action = Literal["interactive", "trash", "delete", "cancelled"]
+Action = Literal["list", "interactive", "trash", "delete", "cancelled"]
 
 
 class CleanupTarget(BaseModel):
@@ -313,7 +313,10 @@ def handle_project(args: argparse.Namespace) -> dict[str, Any]:
     action, selected = _resolve_interactive_selection(
         action,
         preview.candidates,
-        use_tui=getattr(args, "tui", False),
+        use_tui=(
+            getattr(args, "cleanup_action", None) == "tui"
+            or getattr(args, "tui", False)
+        ),
         skipped=preview.skipped,
         target_kind=preview.target_kind,
     )
@@ -793,14 +796,21 @@ def _dedupe_skips(skipped: list[SkippedTarget]) -> list[SkippedTarget]:
 
 
 def _resolve_action(args: argparse.Namespace) -> Action:
-    if getattr(args, "delete", False):
-        action: Action = "delete"
+    cleanup_action = getattr(args, "cleanup_action", None)
+    if cleanup_action == "tui":
+        return "interactive"
+    if cleanup_action in {"list", "trash", "delete"}:
+        action: Action = cleanup_action
+    elif getattr(args, "delete", False):
+        action = "delete"
     elif getattr(args, "trash", False):
         action = "trash"
     else:
         return "interactive"
+    if action == "list":
+        return action
     if not getattr(args, "confirm", False):
-        raise ValueError(f"--{action} requires --confirm")
+        raise ValueError(f"{action} requires --confirm")
     return action
 
 
@@ -843,7 +853,7 @@ def _apply_action(
     config_entries: list[tuple[Path, str]] | None = None,
 ) -> tuple[str | None, list[dict[str, str]]]:
     config_entries = config_entries or []
-    if action in {"interactive", "cancelled"} or (not paths and not config_entries):
+    if action in {"list", "interactive", "cancelled"} or (not paths and not config_entries):
         return None, []
     manifest = {
         "action": action,
