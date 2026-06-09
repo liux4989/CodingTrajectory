@@ -255,10 +255,22 @@ def _codex_context_categories(
     )
 
     code_children = _leaves("tool", [k for k in tool_raw if k in _CODE_CHANGE_CONCEPTS], _TOOL_CONCEPT_LABELS.get)
-    command_children = _leaves(
+    command_family_children = _leaves(
         "tool",
-        [k for k in tool_raw if k.startswith(f"{RUN_COMMAND}:")],
-        lambda key: _COMMAND_FAMILY_LABELS.get(key.split(":", 1)[1], "Other command output"),
+        [
+            k for k in tool_raw
+            if k.startswith(f"{RUN_COMMAND}:") and not k.startswith(f"{RUN_COMMAND}:other:")
+        ],
+        lambda key: _COMMAND_FAMILY_LABELS[key.split(":", 1)[1]],
+    )
+    command_other_leaves = _leaves(
+        "tool",
+        [k for k in tool_raw if k.startswith(f"{RUN_COMMAND}:other:")],
+        lambda key: key.split(":", 2)[2] or "command",
+    )
+    command_children = command_family_children + _category_children(
+        [_parent("command_other", "Other command output", command_other_leaves)],
+        denominator=denominator,
     )
     coordination_children = _leaves("tool", [k for k in tool_raw if k in _COORDINATION_CONCEPTS], _TOOL_CONCEPT_LABELS.get)
     classified = _CODE_CHANGE_CONCEPTS | _COORDINATION_CONCEPTS
@@ -358,7 +370,9 @@ def _codex_conversation_raw_tokens(
                 if concept in _CONTEXT_CONCEPTS:
                     prompt_raw[concept] += output_tokens
                 elif concept == RUN_COMMAND:
-                    tool_raw[f"{RUN_COMMAND}:{_command_family(tool_input)}"] += output_tokens
+                    family, head = _command_bucket(tool_input)
+                    key = f"{RUN_COMMAND}:other:{head}" if family == "other" else f"{RUN_COMMAND}:{family}"
+                    tool_raw[key] += output_tokens
                 else:
                     tool_raw[concept] += output_tokens
     return prompt_raw, agent_raw, tool_raw
@@ -377,25 +391,43 @@ _PACKAGE_MANAGERS: frozenset[str] = frozenset({
     "cargo", "gem", "bundle", "brew", "conda", "apt", "apt-get",
 })
 _INSTALL_TOKENS: frozenset[str] = frozenset({"install", "add", "ci", "sync", "get"})
+_COMMAND_RUNNERS: frozenset[str] = frozenset(
+    {"uv", "poetry", "pdm", "pipenv", "rye", "hatch", "npx", "bunx", "pnpm", "yarn", "bun"}
+)
+_RUNNER_SUBWORDS: frozenset[str] = frozenset({"run", "exec", "dlx", "tool"})
 
 
-def _command_family(tool_input: Any) -> str:
+def _command_head(tokens: list[str]) -> str:
+    index = 0
+    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
+        index += 1
+    if index < len(tokens) and tokens[index] in _COMMAND_RUNNERS:
+        index += 1
+        while index < len(tokens) and tokens[index] in _RUNNER_SUBWORDS:
+            index += 1
+    if index + 2 < len(tokens) and tokens[index] in {"python", "python3"} and tokens[index + 1] == "-m":
+        return tokens[index + 2]
+    return tokens[index] if index < len(tokens) else "command"
+
+
+def _command_bucket(tool_input: Any) -> tuple[str, str]:
     cmd = shell_cmd(tool_input)
     if not cmd:
-        return "other"
+        return "other", "command"
     tokens = [os.path.basename(token.lower()) for token in safe_split(primary_stage(cmd))]
     if not tokens:
-        return "other"
-    if tokens[0] in {"git", "gh", "hg", "svn"}:
-        return "git"
+        return "other", "command"
+    head = _command_head(tokens)
     token_set = set(tokens)
+    if head in {"git", "gh", "hg", "svn"} or tokens[0] in {"git", "gh", "hg", "svn"}:
+        return "git", head
     if token_set & _TEST_TOKENS:
-        return "tests"
+        return "tests", head
     if token_set & _BUILD_TOKENS:
-        return "build"
+        return "build", head
     if token_set & _PACKAGE_MANAGERS and token_set & _INSTALL_TOKENS:
-        return "package"
-    return "other"
+        return "package", head
+    return "other", head
 
 
 def _prompt_label(source: str) -> str:
