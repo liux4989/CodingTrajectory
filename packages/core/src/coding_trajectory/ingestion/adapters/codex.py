@@ -184,6 +184,13 @@ def _codex_prompt_block_name(text: str, index: int) -> str:
     return f"developer_block_{index}"
 
 
+def _codex_user_prompt_block_name(text: str) -> str | None:
+    stripped = text.lstrip()
+    if stripped.startswith("# AGENTS.md instructions"):
+        return "agents_md"
+    return None
+
+
 class CodexAdapter(BaseAdapter):
     """Ingest Codex CLI JSONL rollout files from ~/.codex/sessions/."""
 
@@ -475,6 +482,34 @@ class CodexAdapter(BaseAdapter):
                                             "raw_type": "prompt_block",
                                             "prompt_role": message_role,
                                             "prompt_block": _codex_prompt_block_name(text, index),
+                                            "text": text,
+                                        },
+                                        fidelity="synthetic",
+                                    )
+                                )
+                    elif message_role == "user":
+                        content = payload.get("content")
+                        if isinstance(content, list):
+                            for item in content:
+                                if not isinstance(item, dict):
+                                    continue
+                                text = item.get("text")
+                                if not isinstance(text, str) or not text:
+                                    continue
+                                block_name = _codex_user_prompt_block_name(text)
+                                if block_name is None:
+                                    continue
+                                transcript.append(
+                                    TranscriptRecord(
+                                        sequence=len(transcript),
+                                        timestamp=ts,
+                                        vendor=Vendor.CODEX_CLI,
+                                        role="runtime",
+                                        kind="runtime",
+                                        data={
+                                            "raw_type": "prompt_block",
+                                            "prompt_role": message_role,
+                                            "prompt_block": block_name,
                                             "text": text,
                                         },
                                         fidelity="synthetic",

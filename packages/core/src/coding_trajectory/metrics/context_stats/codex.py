@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from collections import Counter
+import re
 from typing import Any
 
-from coding_trajectory.ingestion.models import Event, EventType, SessionGraph, Vendor
+from coding_trajectory.analysis.tool_summary import summarize_tool_call
+from coding_trajectory.analysis.tool_summary_shared import (
+    LIST_FILES,
+    READ_FILE,
+    SEARCH_TEXT,
+    WEB_FETCH,
+    WEB_SEARCH,
+)
+from coding_trajectory.ingestion.models import Event, EventType, SessionGraph, StepToolItem, Vendor
 from coding_trajectory.metrics.context_stats._common import (
-    latest_step_usage,
     message_stats,
     model_context_window,
     percent,
@@ -48,7 +56,7 @@ def build_codex_context_stats(session_graph: SessionGraph) -> dict[str, Any]:
     messages = message_stats(session_graph)
 
     warnings = [
-        "Category token counts are estimated from Codex JSONL text; agent-work buckets are scaled to the latest context window residual, not total historical tool output.",
+        "Category token counts are estimated from Codex JSONL text; context files include prompt file links plus read/search/list/web tool outputs, and buckets are scaled to the latest context window residual.",
     ]
     if not categories:
         warnings.append("No Codex prompt blocks were found for context category breakdown.")
@@ -174,6 +182,11 @@ def _codex_context_categories(
     prompt_children = _category_children(
         [
             ("user_request", f"You (User Request): {_label_snippet(user_text)}", scaled["user_request"]),
+        ],
+        denominator=denominator,
+    )
+    context_children = _category_children(
+        [
             ("files", "Files", scaled["files"]),
         ],
         denominator=denominator,
@@ -203,6 +216,7 @@ def _codex_context_categories(
         [
             ("before_typing", "Before you type anything", sum(child.tokens for child in setup_children), setup_children),
             ("your_prompt", "Your prompt", sum(child.tokens for child in prompt_children), prompt_children),
+            ("context_files", "Context files", sum(child.tokens for child in context_children), context_children),
             ("agent_work", "Agent Works", sum(child.tokens for child in agent_children), agent_children),
         ],
         denominator=denominator,
@@ -236,11 +250,16 @@ def _codex_conversation_raw_tokens(
     tool_raw = Counter[str]()
     for session in session_graph.sessions:
         tool_names_by_id: dict[str, str] = {}
+        tool_inputs_by_id: dict[str, Any] = {}
         for event in session.events:
             if event.vendor_source != Vendor.CODEX_CLI:
                 continue
             if event.type == EventType.USER_PROMPT_SUBMITTED:
-                prompt_raw["user_request"] += _estimate_text_tokens(_as_str(event.payload.get("text")) or "")
+                user_tokens, file_tokens = _codex_user_prompt_tokens(
+                    _as_str(event.payload.get("text")) or ""
+                )
+                prompt_raw["user_request"] += user_tokens
+                prompt_raw["files"] += file_tokens
             elif event.type == EventType.LLM_RESPONSE:
                 agent_raw["agent_response"] += _estimate_text_tokens(_as_str(event.payload.get("text")) or "")
             elif event.type == EventType.TOOL_CALL_REQUESTED:
@@ -248,11 +267,63 @@ def _codex_conversation_raw_tokens(
                 tool_name = _as_str(event.payload.get("tool_name")) or "tool"
                 if call_id:
                     tool_names_by_id[call_id] = tool_name
+                    tool_inputs_by_id[call_id] = event.payload.get("input")
             elif event.type in {EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED}:
                 call_id = _as_str(event.payload.get("tool_call_id"))
                 tool_name = tool_names_by_id.get(call_id or "", "tool")
-                tool_raw[tool_name] += _estimate_text_tokens(_stringify_tool_output(event.payload.get("output")))
+                output_tokens = _estimate_text_tokens(_stringify_tool_output(event.payload.get("output")))
+                if _is_context_source_tool(tool_name, tool_inputs_by_id.get(call_id or "")):
+                    prompt_raw["files"] += output_tokens
+                else:
+                    tool_raw[tool_name] += output_tokens
     return prompt_raw, agent_raw, tool_raw
+
+
+_MARKDOWN_FILE_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+
+
+def _codex_user_prompt_tokens(text: str) -> tuple[int, int]:
+    file_spans: list[tuple[int, int]] = []
+    file_tokens = 0
+    for match in _MARKDOWN_FILE_LINK_RE.finditer(text):
+        target = match.group(1).strip()
+        if not _looks_like_file_reference(target):
+            continue
+        file_spans.append(match.span())
+        file_tokens += _estimate_text_tokens(match.group(0))
+
+    if not file_spans:
+        return _estimate_text_tokens(text), 0
+
+    prompt_parts: list[str] = []
+    cursor = 0
+    for start, end in file_spans:
+        prompt_parts.append(text[cursor:start])
+        cursor = end
+    prompt_parts.append(text[cursor:])
+    return _estimate_text_tokens("".join(prompt_parts).strip()), file_tokens
+
+
+def _looks_like_file_reference(target: str) -> bool:
+    if not target or "://" in target or target.startswith("#"):
+        return False
+    path = target.split("#", 1)[0].split("?", 1)[0]
+    if "/" in path:
+        return True
+    return "." in path.rsplit("/", 1)[-1]
+
+
+def _is_context_source_tool(tool_name: str, tool_input: Any) -> bool:
+    summary = summarize_tool_call(
+        StepToolItem(
+            tool_name=tool_name,
+            input=tool_input,
+        )
+    )
+    return bool(
+        summary
+        and summary.get("name") in {READ_FILE, SEARCH_TEXT, LIST_FILES, WEB_FETCH, WEB_SEARCH}
+    )
 
 
 def _category_children(
