@@ -268,8 +268,6 @@ def _codex_context_categories(
         ],
         lambda key: _COMMAND_FAMILY_LABELS[key.split(":", 1)[1]],
     )
-    context_children = context_children + command_context_children
-
     code_command_children = _leaves(
         "tool",
         [k for k in tool_raw if k.startswith(f"{RUN_COMMAND}:code_fix")],
@@ -321,16 +319,13 @@ def _codex_context_categories(
         _tool_label,
     )
 
-    tool_results_children = _category_children(
+    output_children = command_context_children + _category_children(
         [
-            _parent("context_gathered", "Context gathered", context_children),
-            _parent("code_changes", "Code changes", code_children),
             _parent("verification", "Verification", verification_children),
             _parent("repository_operations", "Repository operations", repository_children),
             _parent("dependency_environment", "Dependency / environment", dependency_children),
             _parent("execution_runtime", "Execution / app runtime", runtime_children),
             _parent("external_interaction", "External interaction", external_children),
-            _parent("coordination", "Coordination", coordination_children),
             _parent("command_other", "Other command output", command_other_leaves),
             _parent("tool_other", "Other / unclassified", other_children),
         ],
@@ -339,7 +334,16 @@ def _codex_context_categories(
     agent_children = _category_children(
         [
             _parent("agent_messages", "Agent messages", response_children),
-            _parent("tool_results", "Tool results", tool_results_children),
+            _parent("code_changes", "Code changes", code_children),
+            _parent("coordination", "Coordination", coordination_children),
+        ],
+        denominator=denominator,
+    )
+    work_children = _category_children(
+        [
+            _parent("files", "Files", context_children),
+            _parent("output", "Output", output_children),
+            _parent("agent", "Agent", agent_children),
         ],
         denominator=denominator,
     )
@@ -348,7 +352,7 @@ def _codex_context_categories(
         [
             _parent("starting_context", "Starting context", setup_children),
             _parent("user_input", "User input", prompt_children),
-            _parent("agent_work", "Agent work", agent_children),
+            _parent("agent_work", "Agent work", work_children),
         ],
         denominator=denominator,
     )

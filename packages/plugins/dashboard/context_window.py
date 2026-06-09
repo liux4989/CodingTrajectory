@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from typing import Any, Literal
 
@@ -23,6 +24,7 @@ CategoryKey = Literal[
     "you",
     "files",
     "output",
+    "agent",
     "assistant",
     "hooks",
     "unattributed",
@@ -116,7 +118,12 @@ def build_projection(session_id: str, *, turn_id: str | None = None) -> ContextW
     categories = _project_categories(stats, vendor)
     events = [
         *_category_events(categories),
-        *_trajectory_events(overview, usage, turn_id=turn_id),
+        *_trajectory_events(
+            overview,
+            usage,
+            turn_id=turn_id,
+            category_tokens=_category_tokens_by_source(categories),
+        ),
     ]
     warnings = [str(item) for item in stats.get("warnings") or []]
     warnings.extend(_projection_warnings(vendor, events))
@@ -238,13 +245,26 @@ def _category_key(source_key: str, vendor: str) -> CategoryKey:
         "memory": "memory",
         "prompt_user_initial_request": "you",
         "prompt_user_follow_up_requests": "you",
-        "agent_final_answer": "assistant",
-        "agent_progress_update": "assistant",
+        "agent_final_answer": "agent",
+        "agent_progress_update": "agent",
+        "agent_assistant_message": "agent",
         "context_readfile": "files",
         "context_searchtext": "files",
+        "context_listfiles": "files",
     }
     if source_key in mapping:
         return mapping[source_key]
+    if source_key.startswith(
+        (
+            "tool_editfile",
+            "tool_writefile",
+            "tool_todolist",
+            "tool_subagenttask",
+            "tool_sessionhandoff",
+            "tool_runcommand_code_fix",
+        )
+    ):
+        return "agent"
     if source_key.startswith(("context_", "tool_", "verification", "repository_", "command_")):
         return "output"
     if vendor in {"claude_code", "pi"} and source_key in {
@@ -254,6 +274,10 @@ def _category_key(source_key: str, vendor: str) -> CategoryKey:
     }:
         return "unattributed"
     return "unattributed"
+
+
+def _category_tokens_by_source(categories: list[ContextCategory]) -> dict[str, int]:
+    return {category.source_key: category.tokens.value for category in categories}
 
 
 def _category_events(categories: list[ContextCategory]) -> list[ContextEvent]:
@@ -283,11 +307,73 @@ def _category_events(categories: list[ContextCategory]) -> list[ContextEvent]:
     ]
 
 
+def _allocate_tool_event_tokens(
+    events: list[ContextEvent],
+    source_weights_by_event_id: dict[str, Counter[str]],
+    category_tokens: dict[str, int],
+) -> None:
+    event_indexes = {event.id: index for index, event in enumerate(events)}
+    events_by_source: defaultdict[str, dict[str, int]] = defaultdict(dict)
+    for event_id, source_weights in source_weights_by_event_id.items():
+        if event_id not in event_indexes:
+            continue
+        for source_key, weight in source_weights.items():
+            if weight > 0:
+                events_by_source[source_key][event_id] = weight
+
+    allocated_by_event: defaultdict[str, int] = defaultdict(int)
+    sources_by_event: defaultdict[str, list[str]] = defaultdict(list)
+    for source_key, event_weights in events_by_source.items():
+        budget = category_tokens.get(source_key, 0)
+        if budget <= 0:
+            continue
+        source_allocations = _weighted_integer_allocation(budget, event_weights)
+        for event_id, tokens in source_allocations.items():
+            if tokens <= 0:
+                continue
+            allocated_by_event[event_id] += tokens
+            sources_by_event[event_id].append(source_key)
+
+    for event_id, tokens in allocated_by_event.items():
+        event = events[event_indexes[event_id]]
+        if event.tokens is not None or tokens <= 0:
+            continue
+        sources = ", ".join(sorted(sources_by_event[event_id]))
+        event.tokens = TokenEvidence(
+            value=tokens,
+            confidence="estimated_tokens",
+            source=f"allocated from ct session stats categories: {sources}",
+        )
+        event.confidence = "estimated_tokens"
+
+
+def _weighted_integer_allocation(total: int, weights: dict[str, int]) -> dict[str, int]:
+    positive = {key: weight for key, weight in weights.items() if weight > 0}
+    weight_total = sum(positive.values())
+    if total <= 0 or weight_total <= 0:
+        return {key: 0 for key in weights}
+
+    allocations = {
+        key: int((weight * total) // weight_total)
+        for key, weight in positive.items()
+    }
+    remainder = total - sum(allocations.values())
+    fractional_order = sorted(
+        positive,
+        key=lambda key: ((positive[key] * total) / weight_total) % 1,
+        reverse=True,
+    )
+    for key in fractional_order[:remainder]:
+        allocations[key] += 1
+    return allocations
+
+
 def _trajectory_events(
     overview: dict[str, Any],
     usage: dict[str, Any],
     *,
     turn_id: str | None,
+    category_tokens: dict[str, int],
 ) -> list[ContextEvent]:
     usage_by_turn = {
         str(item.get("id")): item.get("usage") or {}
@@ -295,6 +381,7 @@ def _trajectory_events(
         if isinstance(item, dict) and item.get("id")
     }
     events: list[ContextEvent] = []
+    tool_source_weights: dict[str, Counter[str]] = {}
     for session in overview.get("sessions") or []:
         if not isinstance(session, dict):
             continue
@@ -303,8 +390,6 @@ def _trajectory_events(
             if not isinstance(turn, dict):
                 continue
             current_turn_id = str(turn.get("id") or "")
-            if turn_id and current_turn_id != turn_id:
-                continue
             request = turn.get("request") or {}
             request_text = _optional_text(request.get("text"))
             if request_text:
@@ -332,15 +417,23 @@ def _trajectory_events(
             for index, activity in enumerate(turn.get("activity") or []):
                 if not isinstance(activity, dict):
                     continue
-                events.append(
-                    _activity_event(
-                        activity,
-                        session_id=session_id,
-                        turn_id=current_turn_id,
-                        index=index,
-                        turn_usage=usage_by_turn.get(current_turn_id),
-                    )
+                event, source_weights = _activity_event(
+                    activity,
+                    session_id=session_id,
+                    turn_id=current_turn_id,
+                    index=index,
+                    turn_usage=usage_by_turn.get(current_turn_id),
                 )
+                events.append(event)
+                if source_weights:
+                    tool_source_weights[event.id] = source_weights
+    _allocate_tool_event_tokens(events, tool_source_weights, category_tokens)
+    if turn_id:
+        events = [
+            event
+            for event in events
+            if event.group == "before_first_prompt" or event.turn_id == turn_id
+        ]
     return events
 
 
@@ -351,24 +444,27 @@ def _activity_event(
     turn_id: str,
     index: int,
     turn_usage: dict[str, Any] | None,
-) -> ContextEvent:
+) -> tuple[ContextEvent, Counter[str]]:
     if activity.get("text"):
         text = str(activity["text"])
-        return ContextEvent(
-            id=f"turn:{turn_id}:activity:{index}",
-            group="turn",
-            turn_id=turn_id,
-            category="assistant",
-            label="Assistant message",
-            summary=text,
-            tokens=TokenEvidence(
-                value=_estimate_tokens(text),
-                confidence="estimated_tokens",
-                source="ct session overview:activity.text length estimate",
+        return (
+            ContextEvent(
+                id=f"turn:{turn_id}:activity:{index}",
+                group="turn",
+                turn_id=turn_id,
+                category="agent",
+                label="Assistant message",
+                summary=text,
+                tokens=TokenEvidence(
+                    value=_estimate_tokens(text),
+                    confidence="estimated_tokens",
+                    source="ct session overview:activity.text length estimate",
+                ),
+                source="ct session overview:activity.text",
+                confidence="exact_text",
+                detail_ref={"session_id": session_id, "turn_id": turn_id},
             ),
-            source="ct session overview:activity.text",
-            confidence="exact_text",
-            detail_ref={"session_id": session_id, "turn_id": turn_id},
+            Counter(),
         )
 
     tool = str(activity.get("tool") or "Tool activity")
@@ -376,17 +472,25 @@ def _activity_event(
     detail_ref = {"session_id": session_id, "turn_id": turn_id}
     if turn_usage:
         detail_ref["turn_usage_total"] = str(turn_usage.get("total") or 0)
-    return ContextEvent(
-        id=f"turn:{turn_id}:activity:{index}",
-        group="turn",
-        turn_id=turn_id,
-        category=_tool_category(tool),
-        label=tool,
-        summary=summary,
-        tokens=None,
-        source="ct session overview:activity summary",
-        confidence="structural",
-        detail_ref=detail_ref,
+    source_weights = _activity_source_weights(activity)
+    if source_weights:
+        detail_ref["stats_categories"] = ", ".join(
+            f"{key}:{weight}" for key, weight in sorted(source_weights.items())
+        )
+    return (
+        ContextEvent(
+            id=f"turn:{turn_id}:activity:{index}",
+            group="turn",
+            turn_id=turn_id,
+            category=_tool_category(tool),
+            label=tool,
+            summary=summary,
+            tokens=None,
+            source="ct session overview:activity summary",
+            confidence="structural",
+            detail_ref=detail_ref,
+        ),
+        source_weights,
     )
 
 
@@ -394,9 +498,99 @@ def _tool_category(tool: str) -> CategoryKey:
     normalized = tool.lower()
     if any(term in normalized for term in ("read", "search", "list", "find", "glob")):
         return "files"
+    if any(term in normalized for term in ("edit", "write", "todo", "subagent", "handoff")):
+        return "agent"
     if "hook" in normalized:
         return "hooks"
     return "output"
+
+
+def _activity_source_weights(activity: dict[str, Any]) -> Counter[str]:
+    tool = str(activity.get("tool") or "")
+    normalized = tool.lower()
+    count = activity.get("count")
+    fallback_weight = count if isinstance(count, int) and count > 0 else 1
+
+    if normalized == "readfile":
+        return Counter({"context_readfile": fallback_weight})
+    if normalized == "searchtext":
+        return Counter({"context_searchtext": fallback_weight})
+    if normalized == "listfiles":
+        return Counter({"context_listfiles": fallback_weight})
+    if normalized == "js":
+        return Counter({"tool_js": fallback_weight})
+    if normalized != "runcommand":
+        return Counter()
+
+    targets = activity.get("targets")
+    if not isinstance(targets, list) or not targets:
+        return Counter({"tool_runcommand_other_command": fallback_weight})
+    return Counter(_run_command_source_key(str(target)) for target in targets)
+
+
+def _run_command_source_key(command: str) -> str:
+    tokens = _command_tokens(command)
+    if not tokens:
+        return "tool_runcommand_other_command"
+    head = _command_head(tokens)
+    if head == "stdin":
+        return "tool_runcommand_other_command"
+    token_set = set(tokens)
+    if head == "ct":
+        return "tool_runcommand_cli_report"
+    if head in {"git", "gh", "hg", "svn"} or tokens[0] in {"git", "gh", "hg", "svn"}:
+        return "tool_runcommand_repo"
+    if token_set & _TEST_TOKENS or token_set & _BUILD_TOKENS:
+        return "tool_runcommand_build"
+    if token_set & _PACKAGE_MANAGERS and token_set & _DEPENDENCY_TOKENS:
+        return "tool_runcommand_dependency"
+    return f"tool_{_slug(f'RunCommand:other:{head}')}"
+
+
+def _command_tokens(command: str) -> list[str]:
+    try:
+        parts = shlex.split(command, posix=True)
+    except ValueError:
+        parts = command.split()
+    return [os.path.basename(part.lower()) for part in parts if part]
+
+
+def _command_head(tokens: list[str]) -> str:
+    index = 0
+    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
+        index += 1
+    if index < len(tokens) and tokens[index] in _COMMAND_RUNNERS:
+        index += 1
+        while index < len(tokens) and tokens[index] in _RUNNER_SUBWORDS:
+            index += 1
+    if index + 2 < len(tokens) and tokens[index] in {"python", "python3"} and tokens[index + 1] == "-m":
+        return tokens[index + 2]
+    return tokens[index] if index < len(tokens) else "command"
+
+
+def _slug(value: str) -> str:
+    return "".join(char if char.isalnum() else "_" for char in value.lower()).strip("_") or "command"
+
+
+_TEST_TOKENS: frozenset[str] = frozenset(
+    {"pytest", "jest", "vitest", "mocha", "rspec", "phpunit", "unittest", "tox", "ctest", "test"}
+)
+_BUILD_TOKENS: frozenset[str] = frozenset({
+    "tsc", "mypy", "ruff", "eslint", "flake8", "pylint", "black", "isort", "prettier",
+    "make", "cmake", "webpack", "rollup", "vite", "esbuild", "clippy",
+    "build", "compile", "lint", "typecheck", "check", "vet",
+})
+_PACKAGE_MANAGERS: frozenset[str] = frozenset({
+    "npm", "pnpm", "yarn", "bun", "pip", "pip3", "uv", "poetry", "pipenv",
+    "cargo", "gem", "bundle", "brew", "conda", "apt", "apt-get",
+})
+_DEPENDENCY_TOKENS: frozenset[str] = frozenset(
+    {"install", "add", "ci", "sync", "get", "lock", "update", "upgrade", "remove"}
+)
+_COMMAND_RUNNERS: frozenset[str] = frozenset(
+    {"uv", "poetry", "pdm", "pipenv", "rye", "hatch", "npx", "bunx", "pnpm", "yarn", "bun"}
+)
+_RUNNER_SUBWORDS: frozenset[str] = frozenset({"run", "exec", "dlx", "tool"})
 
 
 def _activity_summary(activity: dict[str, Any]) -> str:
@@ -416,7 +610,8 @@ def _activity_summary(activity: dict[str, Any]) -> str:
 def _projection_warnings(vendor: str, events: list[ContextEvent]) -> list[str]:
     warnings = [
         "Timeline user and assistant token deltas estimate only the visible overview text; "
-        "tool activity rows have no token delta because overview does not expose result text.",
+        "tool activity token deltas are allocated from aggregate stats categories because "
+        "overview does not expose per-row result text.",
         "Turn usage is cumulative model accounting and is retained as a detail reference, "
         "not presented as context added by one timeline event.",
     ]
