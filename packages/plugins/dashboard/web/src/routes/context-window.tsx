@@ -11,6 +11,8 @@ import {
   type TokenEvidence,
 } from "@/api";
 import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { StateBlock } from "@/components/state-block";
 import { cn } from "@/lib/utils";
 
@@ -99,6 +101,56 @@ function timelineSegmentLabel(segment: TimelineSegment) {
   return `${rowLabel}: ${categoryLabel(segment.category)}, ${segment.eventCount} row${segment.eventCount === 1 ? "" : "s"}${tokens}`;
 }
 
+function CapacityBar({
+  categories,
+  contextWindowTokens,
+  usedTokens,
+}: {
+  categories: ContextCategory[];
+  contextWindowTokens: number;
+  usedTokens: number;
+}) {
+  if (contextWindowTokens <= 0) return null;
+  return (
+    <Tooltip.Provider delayDuration={160} skipDelayDuration={120}>
+      <div
+        className="flex h-2.5 w-full overflow-hidden rounded-full border border-foreground/14 bg-foreground/7"
+        role="img"
+        aria-label={`Context window usage: ${formatTokens(usedTokens)} of ${formatTokens(contextWindowTokens)} tokens`}
+      >
+        {categories.map((cat) => {
+          const widthPct = (cat.tokens.value / contextWindowTokens) * 100;
+          if (widthPct < 0.1) return null;
+          const label = `${cat.label}: ${formatTokens(cat.tokens.value)} tokens${cat.percent != null ? ` (${cat.percent.toFixed(1)}%)` : ""}`;
+          return (
+            <Tooltip.Root key={cat.id}>
+              <Tooltip.Trigger asChild>
+                <span
+                  className="block min-w-[2px] border-r border-r-white/20 last:border-r-0"
+                  style={{
+                    width: `${widthPct}%`,
+                    background: categoryColors[cat.category] ?? categoryColors.unattributed,
+                  }}
+                />
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content
+                  className="z-[120] max-w-[min(20rem,calc(100vw-2rem))] rounded-md border border-foreground/12 bg-card px-3 py-2 text-[0.82rem] leading-[1.35] text-foreground shadow-[0_24px_70px_rgb(49_42_25/18%)]"
+                  side="bottom"
+                  sideOffset={6}
+                >
+                  {label}
+                  <Tooltip.Arrow className="fill-card" />
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+          );
+        })}
+      </div>
+    </Tooltip.Provider>
+  );
+}
+
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
   const query = useQuery({
@@ -160,24 +212,47 @@ export function ContextWindowRoute() {
 
   return (
     <div className="mx-auto grid max-w-[96rem] gap-5">
-      <header className="rounded-2xl border border-foreground/13 bg-card p-8 dark:border-[rgb(255_255_255/8%)]">
-        <Link to="/sessions" className="mb-4 inline-flex items-center gap-1.5 font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]">
-          <ArrowLeft size={16} /> Sessions
-        </Link>
-        <h2 className="m-0 font-display text-[clamp(2rem,4vw,3.5rem)] leading-[0.95] tracking-[-0.03em]">
-          Explore the context window
-        </h2>
-        <p className="mt-2 text-muted-foreground">
-          A session showing what enters context and what it costs
-        </p>
-        <p className="mt-3 font-mono text-[0.9rem] text-emerald-500">
-          ~{formatTokens(payload.used_tokens?.value)} tokens
-          {payload.context_window_tokens?.value
-            ? ` / ${formatTokens(payload.context_window_tokens.value)}`
-            : ""}
-          {payload.used_percent != null ? ` · ${payload.used_percent.toFixed(1)}%` : ""}
-        </p>
-      </header>
+      <Card className="gap-0 p-8">
+        <CardHeader className="px-0">
+          <Link to="/sessions" className="mb-4 inline-flex items-center gap-1.5 font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]">
+            <ArrowLeft size={16} /> Sessions
+          </Link>
+          <CardTitle className="font-display text-[clamp(2rem,4vw,3.5rem)] leading-[0.95] tracking-[-0.03em]">
+            Explore the context window
+          </CardTitle>
+          <CardDescription>
+            A session showing what enters context and what it costs
+          </CardDescription>
+          <CardAction>
+            <p className="m-0 font-mono text-[0.9rem] text-moss">
+              ~{formatTokens(payload.used_tokens?.value)} tokens
+              {payload.context_window_tokens?.value
+                ? ` / ${formatTokens(payload.context_window_tokens.value)}`
+                : ""}
+              {payload.used_percent != null ? ` · ${payload.used_percent.toFixed(1)}%` : ""}
+            </p>
+          </CardAction>
+        </CardHeader>
+      </Card>
+
+      <CapacityBar
+        categories={payload.categories}
+        contextWindowTokens={payload.context_window_tokens?.value ?? 0}
+        usedTokens={totalUsedTokens}
+      />
+
+      <ul className="m-0 flex flex-wrap gap-x-4 gap-y-1.5 list-none" role="list">
+        {payload.categories.map((category: ContextCategory) => (
+          <li key={category.id} className="inline-flex min-w-0 items-center gap-1.5 text-[0.82rem] text-muted-foreground">
+            <span className="inline-block h-[0.55rem] w-[0.55rem] rounded-[2px]" style={categoryDotStyle(category.category)} />
+            <span>{category.label}</span>
+          </li>
+        ))}
+        <li className="inline-flex items-center gap-1.5 text-[0.82rem] text-muted-foreground">
+          <Eye size={12} />
+          <span>= appears in your terminal</span>
+        </li>
+      </ul>
 
       <figure className="m-0 rounded-xl border border-foreground/13 bg-card p-4 dark:border-[rgb(255_255_255/8%)]">
         <figcaption className="flex items-center justify-between gap-4 font-display text-[0.9rem]">
@@ -238,18 +313,6 @@ export function ContextWindowRoute() {
             })}
           </ol>
         </Tooltip.Provider>
-        <ul className="m-0 flex flex-wrap gap-x-4 gap-y-1.5 px-0 py-0 list-none" role="list">
-          {payload.categories.map((category: ContextCategory) => (
-            <li key={category.id} className="inline-flex min-w-0 items-center gap-1.5 text-[0.82rem] text-muted-foreground">
-              <span className="inline-block h-[0.55rem] w-[0.55rem] rounded-[2px]" style={categoryDotStyle(category.category)} />
-              <span>{category.label}</span>
-            </li>
-          ))}
-          <li className="inline-flex items-center gap-1.5 text-[0.82rem] text-muted-foreground">
-            <Eye size={12} />
-            <span>= appears in your terminal</span>
-          </li>
-        </ul>
       </figure>
 
       <div className="grid grid-cols-[minmax(22rem,1.15fr)_minmax(20rem,0.85fr)] items-start gap-4 max-lg:grid-cols-1">
@@ -273,7 +336,7 @@ export function ContextWindowRoute() {
                         <li className="list-none">
                           <h4 className={cn(
                             "font-display text-[0.78rem] font-extrabold uppercase tracking-[0.1em]",
-                            event.group === "before_first_prompt" ? "text-emerald-500" : "text-muted-foreground",
+                            event.group === "before_first_prompt" ? "text-primary" : "text-muted-foreground",
                             index > 0 && "mt-4",
                           )}>
                             {groupLabel(event)}
@@ -312,9 +375,9 @@ export function ContextWindowRoute() {
                                 style={categoryDotStyle(event.category)}
                               />
                               <span className="inline-flex items-center gap-1.5">
-                                <small className="rounded border border-foreground/12 px-1.5 py-px font-mono text-[0.7rem] text-muted-foreground dark:border-[rgb(255_255_255/12%)]">
+                                <Badge variant="secondary" className="font-mono text-[0.7rem]">
                                   {event.confidence === "exact_usage" || event.confidence === "exact_text" ? "auto" : event.confidence.replaceAll("_", " ")}
-                                </small>
+                                </Badge>
                                 <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.88rem] text-muted-foreground">
                                   {event.source}
                                 </span>
@@ -326,7 +389,7 @@ export function ContextWindowRoute() {
                             {event.terminal_visible ? (
                               <Eye size={14} className="shrink-0 text-muted-foreground" />
                             ) : null}
-                            <span className="font-mono text-[0.9rem] font-bold text-emerald-400">
+                            <span className="font-mono text-[0.9rem] font-bold text-moss">
                               {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
                             </span>
                           </span>
