@@ -64,8 +64,13 @@ _TOOL_CONCEPT_LABELS: dict[str, str] = {
 _COMMAND_FAMILY_LABELS: dict[str, str] = {
     "tests": "Tests",
     "build": "Build / typecheck / lint",
-    "git": "Git / repo commands",
-    "package": "Package / dependency commands",
+    "cli_report": "CLI / report inspection",
+    "code_fix": "Formatters / fixers",
+    "dependency": "Package manager",
+    "diagnostic": "Runtime diagnostics",
+    "external": "External interaction",
+    "repo": "Git / repo commands",
+    "runtime": "App / service runtime",
     "other": "Other command output",
 }
 
@@ -255,22 +260,58 @@ def _codex_context_categories(
     )
 
     code_children = _leaves("tool", [k for k in tool_raw if k in _CODE_CHANGE_CONCEPTS], _TOOL_CONCEPT_LABELS.get)
-    command_family_children = _leaves(
+    command_context_children = _leaves(
         "tool",
         [
             k for k in tool_raw
-            if k.startswith(f"{RUN_COMMAND}:") and not k.startswith(f"{RUN_COMMAND}:other:")
+            if k.startswith(f"{RUN_COMMAND}:cli_report")
         ],
+        lambda key: _COMMAND_FAMILY_LABELS[key.split(":", 1)[1]],
+    )
+    context_children = context_children + command_context_children
+
+    code_command_children = _leaves(
+        "tool",
+        [k for k in tool_raw if k.startswith(f"{RUN_COMMAND}:code_fix")],
+        lambda key: _COMMAND_FAMILY_LABELS[key.split(":", 1)[1]],
+    )
+    code_children = code_children + code_command_children
+
+    verification_children = _leaves(
+        "tool",
+        [
+            k for k in tool_raw
+            if k.startswith(f"{RUN_COMMAND}:tests") or k.startswith(f"{RUN_COMMAND}:build")
+        ],
+        lambda key: _COMMAND_FAMILY_LABELS[key.split(":", 1)[1]],
+    )
+    repository_children = _leaves(
+        "tool",
+        [k for k in tool_raw if k.startswith(f"{RUN_COMMAND}:repo")],
+        lambda key: _COMMAND_FAMILY_LABELS[key.split(":", 1)[1]],
+    )
+    dependency_children = _leaves(
+        "tool",
+        [
+            k for k in tool_raw
+            if k.startswith(f"{RUN_COMMAND}:dependency") or k.startswith(f"{RUN_COMMAND}:diagnostic")
+        ],
+        lambda key: _COMMAND_FAMILY_LABELS[key.split(":", 1)[1]],
+    )
+    runtime_children = _leaves(
+        "tool",
+        [k for k in tool_raw if k.startswith(f"{RUN_COMMAND}:runtime")],
+        lambda key: _COMMAND_FAMILY_LABELS[key.split(":", 1)[1]],
+    )
+    external_children = _leaves(
+        "tool",
+        [k for k in tool_raw if k.startswith(f"{RUN_COMMAND}:external")],
         lambda key: _COMMAND_FAMILY_LABELS[key.split(":", 1)[1]],
     )
     command_other_leaves = _leaves(
         "tool",
         [k for k in tool_raw if k.startswith(f"{RUN_COMMAND}:other:")],
         lambda key: key.split(":", 2)[2] or "command",
-    )
-    command_children = command_family_children + _category_children(
-        [_parent("command_other", "Other command output", command_other_leaves)],
-        denominator=denominator,
     )
     coordination_children = _leaves("tool", [k for k in tool_raw if k in _COORDINATION_CONCEPTS], _TOOL_CONCEPT_LABELS.get)
     classified = _CODE_CHANGE_CONCEPTS | _COORDINATION_CONCEPTS
@@ -284,8 +325,13 @@ def _codex_context_categories(
         [
             _parent("context_gathered", "Context gathered", context_children),
             _parent("code_changes", "Code changes", code_children),
-            _parent("command_output", "Command output", command_children),
+            _parent("verification", "Verification", verification_children),
+            _parent("repository_operations", "Repository operations", repository_children),
+            _parent("dependency_environment", "Dependency / environment", dependency_children),
+            _parent("execution_runtime", "Execution / app runtime", runtime_children),
+            _parent("external_interaction", "External interaction", external_children),
             _parent("coordination", "Coordination", coordination_children),
+            _parent("command_other", "Other command output", command_other_leaves),
             _parent("tool_other", "Other / unclassified", other_children),
         ],
         denominator=denominator,
@@ -390,11 +436,27 @@ _PACKAGE_MANAGERS: frozenset[str] = frozenset({
     "npm", "pnpm", "yarn", "bun", "pip", "pip3", "uv", "poetry", "pipenv",
     "cargo", "gem", "bundle", "brew", "conda", "apt", "apt-get",
 })
-_INSTALL_TOKENS: frozenset[str] = frozenset({"install", "add", "ci", "sync", "get"})
+_DEPENDENCY_TOKENS: frozenset[str] = frozenset(
+    {"install", "add", "ci", "sync", "get", "lock", "update", "upgrade", "remove"}
+)
 _COMMAND_RUNNERS: frozenset[str] = frozenset(
     {"uv", "poetry", "pdm", "pipenv", "rye", "hatch", "npx", "bunx", "pnpm", "yarn", "bun"}
 )
 _RUNNER_SUBWORDS: frozenset[str] = frozenset({"run", "exec", "dlx", "tool"})
+_CLI_REPORT_HEADS: frozenset[str] = frozenset({"ct"})
+_CODE_FIX_TOKENS: frozenset[str] = frozenset({"fmt", "format", "fix", "fixer"})
+_DIAGNOSTIC_HEADS: frozenset[str] = frozenset(
+    {"pwd", "date", "which", "where", "whoami", "uname", "env", "printenv"}
+)
+_EXTERNAL_HEADS: frozenset[str] = frozenset(
+    {
+        "curl", "wget", "http", "https", "wrangler", "aws", "gcloud", "az", "fly",
+        "flyctl", "vercel", "netlify", "ssh", "scp", "rsync",
+    }
+)
+_RUNTIME_TOKENS: frozenset[str] = frozenset(
+    {"dev", "serve", "server", "start", "up", "runserver", "preview"}
+)
 
 
 def _command_head(tokens: list[str]) -> str:
@@ -419,14 +481,24 @@ def _command_bucket(tool_input: Any) -> tuple[str, str]:
         return "other", "command"
     head = _command_head(tokens)
     token_set = set(tokens)
+    if head in _CLI_REPORT_HEADS:
+        return "cli_report", head
     if head in {"git", "gh", "hg", "svn"} or tokens[0] in {"git", "gh", "hg", "svn"}:
-        return "git", head
+        return "repo", head
     if token_set & _TEST_TOKENS:
         return "tests", head
+    if token_set & _CODE_FIX_TOKENS:
+        return "code_fix", head
     if token_set & _BUILD_TOKENS:
         return "build", head
-    if token_set & _PACKAGE_MANAGERS and token_set & _INSTALL_TOKENS:
-        return "package", head
+    if token_set & _PACKAGE_MANAGERS and token_set & _DEPENDENCY_TOKENS:
+        return "dependency", head
+    if head in _DIAGNOSTIC_HEADS or "--version" in token_set or "-v" in token_set:
+        return "diagnostic", head
+    if head in _EXTERNAL_HEADS:
+        return "external", head
+    if token_set & _RUNTIME_TOKENS:
+        return "runtime", head
     return "other", head
 
 
