@@ -171,12 +171,15 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         "",
         f"Model: {model_name} ({format_tokens(context_tokens)} context)",
         "",
+        "```",
         f"{'Category':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Context':>8}",
     ]
 
     for category in context_window.get("categories") or []:
         if isinstance(category, dict):
             _render_context_category(lines, category)
+
+    lines.append("```")
 
     used_tokens = context_window.get("used_tokens") or usage.get("input_tokens")
     used_percent = context_window.get("used_percent")
@@ -191,21 +194,17 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     if failed_tool_calls:
         runtime_line += f" ({failed_tool_calls} failed)"
     runtime_line += f", {runtime.get('subagent_sessions') or 0} subagent sessions"
-    lines.extend(
-        [
-            "",
-            f"Used: {format_tokens(used_tokens)} tokens {format_percent(used_percent)} of context",
-            runtime_line,
-        ]
-    )
+    lines.append("")
+    lines.append(f"- Used: {format_tokens(used_tokens)} tokens {format_percent(used_percent)} of context")
+    lines.append(f"- {runtime_line}")
     if runtime.get("compactions"):
         lines[-1] += f", {runtime['compactions']} compactions"
     if tool_calls_total:
         success_rate = round(((tool_calls_total - failed_tool_calls) / tool_calls_total) * 100, 1)
-        lines.append(f"Tool Success Rate: {success_rate}%")
+        lines.append(f"- Tool Success Rate: {success_rate}%")
     if messages:
         lines.append(
-            "Messages: "
+            f"- Messages: "
             f"{messages.get('user') or 0} user, "
             f"{messages.get('assistant') or 0} assistant, "
             f"{messages.get('tool_outputs') or 0} tool outputs, "
@@ -219,16 +218,16 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         if quota.get("secondary_used_percent") is not None:
             quota_bits.append(f"secondary {quota['secondary_used_percent']:.1f}%")
         if quota_bits:
-            lines.append("Quota: " + ", ".join(quota_bits))
+            lines.append("- Quota: " + ", ".join(quota_bits))
     warnings = payload.get("warnings") or []
     if warnings:
         lines.append("")
-        lines.extend(f"Warning: {one_line(warning, limit=110)}" for warning in warnings)
+        lines.extend(f"> {one_line(warning, limit=110)}" for warning in warnings)
     return "\n".join(lines).rstrip()
 
 
 def _render_session_usage_text(payload: dict[str, Any]) -> str:
-    lines = ["# Session Usage", "", "Total"]
+    lines = ["# Session Usage", "", "```", "Total"]
     lines.append(f"  {render_usage_line(payload.get('total_usage') or {})}")
 
     turns = payload.get("turns") or []
@@ -241,10 +240,11 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
             category = str(activity.get("category") or "-")
             lines.append(f"    {category:<14} {render_usage_line(activity.get('usage') or {})}")
 
+    lines.append("```")
     warnings = payload.get("warnings") or []
     if warnings:
         lines.append("")
-        lines.extend(f"Warning: {one_line(warning, limit=110)}" for warning in warnings)
+        lines.extend(f"> {one_line(warning, limit=110)}" for warning in warnings)
     return "\n".join(lines).rstrip()
 
 

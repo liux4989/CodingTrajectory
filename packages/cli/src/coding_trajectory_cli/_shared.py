@@ -4,43 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import textwrap
 from typing import Any
 
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 
 OUTPUT_CHOICES = ("markdown", "json")
-MIN_WIDTH = 40
-DEFAULT_WIDTH = 80
-
-
-def terminal_width() -> int:
-    try:
-        return max(os.get_terminal_size().columns, MIN_WIDTH)
-    except (ValueError, OSError):
-        return DEFAULT_WIDTH
-
-
-def wrap_output(text: str, width: int | None = None) -> str:
-    width = width or terminal_width()
-    out: list[str] = []
-    for line in text.split("\n"):
-        if len(line) <= width:
-            out.append(line)
-        else:
-            indent = len(line) - len(line.lstrip())
-            prefix = " " * indent
-            out.extend(
-                textwrap.wrap(
-                    line,
-                    width=width,
-                    initial_indent=prefix,
-                    subsequent_indent=prefix + "  ",
-                )
-            )
-    return "\n".join(out)
 
 
 class GhFormatter(argparse.RawDescriptionHelpFormatter):
