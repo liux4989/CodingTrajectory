@@ -155,11 +155,7 @@ Create a plugin-local projection module that calls stable CT JSON commands and e
 
 This slice should start from `ct session stats` categories and `ct session overview` timeline data. For Codex, the current stats taxonomy is already detailed enough to produce a useful v0 context-window report. Warnings must clearly say when a provider's category breakdown is approximate.
 
-### Slice 2: Provider Evidence Adapter
-
-If the evidence pass finds source-labeled prompt blocks that are not exposed through CT APIs, add the minimal ingestion/service support needed to preserve them as projection data. Keep canonical models agent-agnostic; store provider-specific prompt/context source labels in vendor data or a projection layer.
-
-### Slice 3: Terminal Report
+### Slice 2: Terminal Report
 
 Add a compact terminal report that differs from `ct session overview` by focusing on context composition rather than hierarchy:
 
@@ -184,7 +180,7 @@ Keep the report short. Full event data belongs in `--output json`.
 
 `ct session overview` answers "what happened in the session tree?" It shows sessions, turns, compact activity labels, and hierarchy. The proposed context-window report answers "what is occupying the model context, when did it enter, and how much did it cost?" It should link back to overview/event-detail ids instead of replacing those commands.
 
-### Slice 4: Browser/Dashboard View
+### Slice 3: Browser/Dashboard View
 
 Add a browser-friendly view after the JSON contract stabilizes. Reuse the docs interaction pattern:
 
@@ -193,6 +189,10 @@ Add a browser-friendly view after the JSON contract stabilizes. Reuse the docs i
 - detail panel with source snippets, raw event ids, token fields, and confidence;
 - keyboard and click selection;
 - visible warnings for approximate attribution.
+
+### Deferred: Provider Evidence Adapter
+
+Do not build a provider evidence adapter in v0. The Codex evidence pass showed current CT APIs are enough for the first plugin projection. Add provider-specific ingestion or service support only after a future evidence pass finds a concrete missing field that blocks Claude Code, Pi, or mixed-provider support. If that becomes necessary, keep canonical models agent-agnostic and store provider-specific prompt/context labels in vendor data or a projection layer.
 
 ## Validation
 
