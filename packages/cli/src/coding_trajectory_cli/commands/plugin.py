@@ -87,9 +87,9 @@ def dispatch_plugin_argv(raw_args: list[str]) -> int | None:
 
 
 def _plugin_manifest_help(manifest: PluginManifest, plugin_args: list[str]) -> int | None:
-    if not plugin_args or plugin_args[-1] not in {"-h", "--help"}:
+    if plugin_args and plugin_args[-1] not in {"-h", "--help"}:
         return None
-    command_path = plugin_args[:-1]
+    command_path = plugin_args[:-1] if plugin_args else []
     children = _plugin_help_children(manifest.tools, command_path)
     if not children:
         return None
