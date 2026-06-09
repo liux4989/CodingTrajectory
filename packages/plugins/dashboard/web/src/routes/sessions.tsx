@@ -40,7 +40,7 @@ function SortableButton({ header, label }: { header: { column: { getIsSorted: ()
   const sorted = header.column.getIsSorted();
   return (
     <button
-      className="inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 font-extrabold uppercase tracking-[0.08em] text-foreground hover:text-primary"
+      className="inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 font-extrabold uppercase tracking-wide text-foreground hover:text-primary"
       onClick={() => header.column.toggleSorting()}
     >
       {label}
@@ -52,11 +52,11 @@ function SortableButton({ header, label }: { header: { column: { getIsSorted: ()
 const columns: ColumnDef<SessionItem>[] = [
   {
     id: "session",
-    header: () => <span className="font-extrabold uppercase tracking-[0.08em]">Session</span>,
+    header: () => <span className="font-extrabold uppercase tracking-wide">Session</span>,
     cell: ({ row }) => {
       const id = sessionId(row.original);
       return (
-        <span className="font-mono text-[0.88rem]">
+        <span className="font-mono text-body-sm">
           {id ? (
             <Link
               to="/sessions/$sessionId/context-window"
@@ -87,7 +87,7 @@ const columns: ColumnDef<SessionItem>[] = [
     accessorFn: (row) => row.updated_at ?? row.started_at ?? "",
     header: ({ column }) => <SortableButton header={{ column }} label="Updated" />,
     cell: ({ row }) => (
-      <span className="font-mono text-[0.88rem]" title={row.original.updated_at ?? row.original.started_at ?? ""}>
+      <span className="font-mono text-body-sm" title={row.original.updated_at ?? row.original.started_at ?? ""}>
         {relativeTime(row.original.updated_at ?? row.original.started_at)}
       </span>
     ),
@@ -126,9 +126,9 @@ export function SessionsRoute() {
       {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} /> : null}
       {sessions.data ? (
         <>
-          <div className="overflow-auto rounded-[1.2rem] border border-foreground/13 bg-card/78 dark:border-[rgb(255_255_255/8%)]">
+          <div className="overflow-auto rounded-[1.2rem] border border-foreground/13 bg-card/78 dark:border-border-subtle">
             <Table>
-              <TableHead className="sticky top-0 z-1 bg-[#eee0bd] font-display text-[0.8rem] uppercase tracking-[0.08em] dark:bg-[#2a2620]">
+              <TableHead className="sticky top-0 z-1 bg-table-head font-display text-caption uppercase tracking-wide">
                 {table.getHeaderGroups().map((headerGroup) => (
                   <TableRow key={headerGroup.id}>
                     {headerGroup.headers.map((header) => (
@@ -170,7 +170,7 @@ function TablePagination({ table }: { table: ReturnType<typeof useReactTable<Ses
       <Button variant="ghost" size="sm" disabled={!table.getCanPreviousPage()} onClick={() => table.previousPage()}>
         <ChevronLeft size={16} /> Prev
       </Button>
-      <span className="font-display text-[0.88rem] font-bold text-muted-foreground">
+      <span className="font-display text-body-sm font-bold text-muted-foreground">
         Page {page + 1} of {pageCount}
       </span>
       <Button variant="ghost" size="sm" disabled={!table.getCanNextPage()} onClick={() => table.nextPage()}>

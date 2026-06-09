@@ -25,7 +25,7 @@ function SortableButton({ header, label }: { header: { column: { getIsSorted: ()
   const sorted = header.column.getIsSorted();
   return (
     <button
-      className="inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 font-extrabold uppercase tracking-[0.08em] text-foreground hover:text-primary"
+      className="inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 font-extrabold uppercase tracking-wide text-foreground hover:text-primary"
       onClick={() => header.column.toggleSorting()}
     >
       {label}
@@ -49,7 +49,7 @@ const columns: ColumnDef<ProjectItem>[] = [
   {
     accessorKey: "path",
     header: ({ column }) => <SortableButton header={{ column }} label="Path" />,
-    cell: ({ getValue }) => <span className="font-mono text-[0.88rem]">{getValue<string | null>() ?? "-"}</span>,
+    cell: ({ getValue }) => <span className="font-mono text-body-sm">{getValue<string | null>() ?? "-"}</span>,
   },
 ];
 
@@ -85,9 +85,9 @@ export function ProjectsRoute() {
       {projects.isError ? <StateBlock title="Project scan failed" detail={projects.error.message} /> : null}
       {projects.data ? (
         <>
-          <div className="overflow-auto rounded-[1.2rem] border border-foreground/13 bg-card/78 dark:border-[rgb(255_255_255/8%)]">
+          <div className="overflow-auto rounded-[1.2rem] border border-foreground/13 bg-card/78 dark:border-border-subtle">
             <Table>
-              <TableHead className="sticky top-0 z-1 bg-[#eee0bd] font-display text-[0.8rem] uppercase tracking-[0.08em] dark:bg-[#2a2620]">
+              <TableHead className="sticky top-0 z-1 bg-table-head font-display text-caption uppercase tracking-wide">
                 {table.getHeaderGroups().map((headerGroup) => (
                   <TableRow key={headerGroup.id}>
                     {headerGroup.headers.map((header) => (
@@ -129,7 +129,7 @@ function TablePagination({ table }: { table: ReturnType<typeof useReactTable<Pro
       <Button variant="ghost" size="sm" disabled={!table.getCanPreviousPage()} onClick={() => table.previousPage()}>
         <ChevronLeft size={16} /> Prev
       </Button>
-      <span className="font-display text-[0.88rem] font-bold text-muted-foreground">
+      <span className="font-display text-body-sm font-bold text-muted-foreground">
         Page {page + 1} of {pageCount}
       </span>
       <Button variant="ghost" size="sm" disabled={!table.getCanNextPage()} onClick={() => table.nextPage()}>
