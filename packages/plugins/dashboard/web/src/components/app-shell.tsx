@@ -58,7 +58,7 @@ function Sidebar({ open, onClose, theme, onToggleTheme }: SidebarProps) {
         aria-label="Dashboard navigation"
       >
         <div className="flex items-center gap-3.5">
-          <div className="grid h-[3.25rem] w-[3.25rem] place-items-center rounded-[1.1rem] border border-foreground/18 bg-foreground text-background font-display text-sm font-extrabold tracking-wide shadow-[0_14px_32px_rgb(24_33_28/18%)]">
+          <div className="grid h-[3.25rem] w-[3.25rem] place-items-center rounded-[1.1rem] border border-foreground/18 bg-foreground text-background font-display text-sm font-extrabold tracking-wide shadow-lg">
             CT
           </div>
           <div>

@@ -85,7 +85,7 @@ export function ProjectsRoute() {
       {projects.isError ? <StateBlock title="Project scan failed" detail={projects.error.message} /> : null}
       {projects.data ? (
         <>
-          <div className="overflow-auto rounded-[1.2rem] border border-foreground/13 bg-card/78 dark:border-border-subtle">
+          <div className="overflow-auto rounded-2xl border border-foreground/13 bg-card/78 dark:border-border-subtle">
             <Table>
               <TableHead className="sticky top-0 z-1 bg-table-head font-display text-caption uppercase tracking-wide">
                 {table.getHeaderGroups().map((headerGroup) => (

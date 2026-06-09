@@ -162,7 +162,7 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
               </Button>
               {kind === "session" ? (
                 <div className="grid min-w-[8rem] gap-1">
-                  <span className="font-display text-[0.82rem] font-extrabold uppercase tracking-wide text-muted-foreground">Action</span>
+                  <span className="font-display text-caption font-extrabold uppercase tracking-wide text-muted-foreground">Action</span>
                   <Select value={sessionAction} onValueChange={(v) => setSessionAction(v as "trash" | "delete")}>
                     <SelectTrigger>
                       <SelectValue />
@@ -183,7 +183,7 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
                 <ShieldAlert size={15} /> {kind === "project" ? "Delete" : "Apply to"} {selectedCount}
               </Button>
             </div>
-            <div className="max-h-96 overflow-auto rounded-[1.2rem] border border-foreground/13 dark:border-border-subtle">
+            <div className="max-h-96 overflow-auto rounded-2xl border border-foreground/13 dark:border-border-subtle">
               <Table>
                 <TableHead className="sticky top-0 z-1 bg-table-head font-display text-caption uppercase tracking-wide">
                   {table.getHeaderGroups().map((headerGroup) => (
@@ -240,7 +240,7 @@ function TargetLabel({ target }: { target: CleanupTarget }) {
   return (
     <div className="grid gap-1">
       <strong>{target.project ?? target.vendor ?? "target"}</strong>
-      <span className="break-words font-mono text-[0.83rem] text-muted-foreground">{target.path}</span>
+      <span className="break-words font-mono text-caption text-muted-foreground">{target.path}</span>
     </div>
   );
 }
