@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
         print(_root_entry_text())
         return 0
     if raw_args[0] in {"-h", "--help"}:
-        parser.parse_args(["-h"])
+        print(parser.format_help())
         return 0
     if raw_args == ["--tui"]:
         return _run_dashboard_tui()
@@ -69,14 +69,37 @@ def _sessions(args: argparse.Namespace) -> int:
 def _build_root_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct plugin dashboard",
-        description="Project and session management dashboard.",
+        description=_root_entry_text(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--tui", action="store_true", help="Open the plugin-wide Textual dashboard.")
-    parser.add_argument("--web", action="store_true", help="Open the plugin web dashboard.")
-    sub = parser.add_subparsers(dest="action")
-    sub.add_parser("web", help="Run the dashboard web program.")
-    sub.add_parser("project", help="Project management commands.")
-    sub.add_parser("session", help="Session management commands.")
+    parser.add_argument("--tui", action="store_true", help="Quick inspection and cleanup (terminal).")
+    parser.add_argument("--web", action="store_true", help="Open the dashboard web program.")
+    sub = parser.add_subparsers(dest="action", metavar="<command>")
+    sub.add_parser("web", help="Rich dashboard with analytics (browser).")
+    project = sub.add_parser("project", help="List managed projects and project actions.")
+    project.add_argument("--agent-vendor", default=None)
+    project_cleanup = sub.add_parser(
+        "project cleanup",
+        help="Clean old project directories.",
+    )
+    project_cleanup.add_argument("--older-than", default="30d")
+    project_cleanup.add_argument("--path", default=None)
+    project_cleanup.add_argument("--dry-run", action="store_true")
+    project_cleanup.add_argument("--detail", action="store_true")
+    session = sub.add_parser("session", help="List sessions and session actions.")
+    session.add_argument("project_name", nargs="?")
+    session.add_argument("--since-days", type=int, default=30)
+    session.add_argument("--all-time", action="store_true")
+    session.add_argument("--agent-vendor", default=None)
+    session_cleanup = sub.add_parser(
+        "session cleanup",
+        help="Clean empty or low-value session logs.",
+    )
+    session_cleanup.add_argument("--agent-vendor", default=None)
+    session_cleanup.add_argument("--trash", action="store_true")
+    session_cleanup.add_argument("--delete", action="store_true")
+    session_cleanup.add_argument("--confirm", action="store_true")
+    session_cleanup.add_argument("--tui", action="store_true")
     return parser
 
 
