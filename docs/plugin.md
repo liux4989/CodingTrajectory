@@ -266,26 +266,25 @@ uses local policy about what is safe to delete.
 ```text
 ct plugin dashboard project [--agent-vendor VENDOR]
 ct plugin dashboard web [--host 127.0.0.1] [--port 8765] [--open]
-ct plugin dashboard project cleanup [list|trash|delete|tui] [--older-than 30d] [--path PATH] [--confirm] [--detail]
+ct plugin dashboard project cleanup [--dry-run] [--older-than 30d] [--path PATH] [--detail]
 ct plugin dashboard session [PROJECT] [--since-days N|--all-time] [--agent-vendor VENDOR]
 ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm] [--tui]
 ```
 
-Default behavior should be conservative:
+Project cleanup behavior:
 
-- Running project cleanup without an action lists matching candidates without
-  prompting or changing the filesystem.
-- `list` prints matching candidates, while `--detail` prints the exact JSON
-  payload.
-- `tui` opens the interactive project cleanup flow.
+- Running project cleanup without flags permanently deletes every matching
+  candidate.
+- `--dry-run` lists matching candidates without changing the filesystem.
+- `--detail` prints the exact JSON payload for either mode.
 - `dashboard project` reads candidates from the global `ct project list` result.
-- `delete` requires an explicit action and should not be implied by any
-  shorthand command.
-- `trash` and `delete` require `--confirm`.
-- Non-interactive actions operate on all matching candidates.
+- Project cleanup supports permanent deletion only; it does not expose trash or
+  terminal UI modes.
+- The web dashboard provides target selection and confirmation for interactive
+  project cleanup.
 
 The first command surface should remain this small. More complex cleanup flows
-should move into the dashboard-owned interactive TUI rather than adding many
+should move into the dashboard-owned web application rather than adding many
 one-off flags to the CLI.
 
 ### Project Cleanup Rules

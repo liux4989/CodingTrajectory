@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-Action = Literal["list", "interactive", "trash", "delete", "cancelled"]
+Action = Literal["dry-run", "interactive", "trash", "delete", "cancelled"]
 
 
 class CleanupTarget(BaseModel):
@@ -309,22 +309,12 @@ def preview_project_cleanup(args: argparse.Namespace) -> CleanupPreview:
 
 def handle_project(args: argparse.Namespace) -> dict[str, Any]:
     preview = preview_project_cleanup(args)
-    action = _resolve_action(args)
-    action, selected = _resolve_interactive_selection(
-        action,
-        preview.candidates,
-        use_tui=(
-            getattr(args, "cleanup_action", None) == "tui"
-            or getattr(args, "tui", False)
-        ),
-        skipped=preview.skipped,
-        target_kind=preview.target_kind,
-    )
+    action: Action = "dry-run" if getattr(args, "dry_run", False) else "delete"
     return apply_project_selection(
         args,
         preview,
         action,
-        [target for target in selected if isinstance(target, ProjectTarget)],
+        [target for target in preview.candidates if isinstance(target, ProjectTarget)],
     )
 
 
@@ -796,21 +786,14 @@ def _dedupe_skips(skipped: list[SkippedTarget]) -> list[SkippedTarget]:
 
 
 def _resolve_action(args: argparse.Namespace) -> Action:
-    cleanup_action = getattr(args, "cleanup_action", None)
-    if cleanup_action == "tui":
-        return "interactive"
-    if cleanup_action in {"list", "trash", "delete"}:
-        action: Action = cleanup_action
-    elif getattr(args, "delete", False):
-        action = "delete"
+    if getattr(args, "delete", False):
+        action: Action = "delete"
     elif getattr(args, "trash", False):
         action = "trash"
     else:
         return "interactive"
-    if action == "list":
-        return action
     if not getattr(args, "confirm", False):
-        raise ValueError(f"{action} requires --confirm")
+        raise ValueError(f"--{action} requires --confirm")
     return action
 
 
@@ -853,7 +836,9 @@ def _apply_action(
     config_entries: list[tuple[Path, str]] | None = None,
 ) -> tuple[str | None, list[dict[str, str]]]:
     config_entries = config_entries or []
-    if action in {"list", "interactive", "cancelled"} or (not paths and not config_entries):
+    if action in {"dry-run", "interactive", "cancelled"} or (
+        not paths and not config_entries
+    ):
         return None, []
     manifest = {
         "action": action,

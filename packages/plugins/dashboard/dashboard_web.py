@@ -383,7 +383,7 @@ def _preview_payload(preview: cleanup_mod.CleanupPreview) -> dict[str, Any]:
 
 
 def _apply_project_cleanup(body: dict[str, Any]) -> dict[str, Any]:
-    action = _cleanup_action(body)
+    action = _cleanup_action(body, allow_trash=False)
     selected_paths = _selected_paths(body)
     query = _body_query(body)
     preview = _project_cleanup_preview(query)
@@ -435,10 +435,17 @@ def _apply_session_cleanup(body: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _cleanup_action(body: dict[str, Any]) -> cleanup_mod.Action:
+def _cleanup_action(
+    body: dict[str, Any],
+    *,
+    allow_trash: bool = True,
+) -> cleanup_mod.Action:
     action = body.get("action")
-    if action not in {"trash", "delete"}:
-        raise ValueError("action must be trash or delete")
+    allowed = {"trash", "delete"} if allow_trash else {"delete"}
+    if action not in allowed:
+        raise ValueError(
+            "action must be trash or delete" if allow_trash else "action must be delete"
+        )
     return action
 
 

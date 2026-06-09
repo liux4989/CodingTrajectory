@@ -94,29 +94,14 @@ def _project_list_parser() -> argparse.ArgumentParser:
 def _project_cleanup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct plugin dashboard project cleanup",
-        description="Clean old project directories.",
-        epilog=(
-            "ACTIONS\n"
-            "  list     List matching cleanup candidates (default).\n"
-            "  trash    Move all matching candidates to the system trash.\n"
-            "  delete   Permanently delete all matching candidates.\n"
-            "  tui      Select candidates in the interactive cleanup UI."
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "cleanup_action",
-        nargs="?",
-        choices=("list", "trash", "delete", "tui"),
-        default="list",
-        metavar="{list,trash,delete,tui}",
+        description="Permanently delete old project directories.",
     )
     parser.add_argument("--older-than", default="30d")
     parser.add_argument("--path", default=None)
     parser.add_argument(
-        "--confirm",
+        "--dry-run",
         action="store_true",
-        help="Required for trash and delete actions.",
+        help="List matching cleanup candidates without deleting them.",
     )
     parser.add_argument(
         "--detail",
@@ -178,7 +163,7 @@ def _root_entry_text() -> str:
             "  ct plugin dashboard --tui          Quick inspection and cleanup (terminal)",
             "  ct plugin dashboard web [flags]    Rich dashboard with analytics (browser)",
             "  ct plugin dashboard project [--agent-vendor VENDOR]",
-            "  ct plugin dashboard project cleanup [list|trash|delete|tui] [flags]",
+            "  ct plugin dashboard project cleanup [--dry-run] [flags]",
             "  ct plugin dashboard session [PROJECT] [--since-days N|--all-time]",
             "  ct plugin dashboard session cleanup [--tui] [flags]",
             "",

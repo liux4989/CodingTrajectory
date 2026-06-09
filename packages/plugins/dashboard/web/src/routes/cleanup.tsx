@@ -16,7 +16,7 @@ import { ShieldAlert, RefreshCcw } from "lucide-react";
 export function CleanupRoute() {
   return (
     <div className="route-stack">
-      <RouteHeader eyebrow="Safety first" title="Preview cleanup candidates, choose targets, then explicitly trash or delete." />
+      <RouteHeader eyebrow="Safety first" title="Preview cleanup candidates, choose targets, then explicitly confirm the action." />
       <section className="split-grid">
         <CleanupPanel kind="project" title="Project Cleanup" description="Old or missing project paths plus stale provider metadata." />
         <CleanupPanel kind="session" title="Session Cleanup" description="Empty session logs that have no useful user-visible records." />
@@ -29,8 +29,9 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [selected, setSelected] = React.useState<Set<string>>(() => new Set());
-  const [action, setAction] = React.useState<"trash" | "delete">("trash");
+  const [sessionAction, setSessionAction] = React.useState<"trash" | "delete">("trash");
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const action = kind === "project" ? "delete" : sessionAction;
 
   const preview = useQuery({
     queryKey: ["cleanup", kind],
@@ -98,20 +99,22 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
               <Button variant="secondary" size="sm" onClick={() => void preview.refetch()}>
                 <RefreshCcw size={15} /> Refresh
               </Button>
-              <label className="select-field">
-                <span>Action</span>
-                <select value={action} onChange={(event) => setAction(event.target.value as "trash" | "delete")}>
-                  <option value="trash">Trash</option>
-                  <option value="delete">Delete</option>
-                </select>
-              </label>
+              {kind === "session" ? (
+                <label className="select-field">
+                  <span>Action</span>
+                  <select value={sessionAction} onChange={(event) => setSessionAction(event.target.value as "trash" | "delete")}>
+                    <option value="trash">Trash</option>
+                    <option value="delete">Delete</option>
+                  </select>
+                </label>
+              ) : null}
               <Button
                 variant={action === "delete" ? "destructive" : "default"}
                 size="sm"
                 disabled={!selected.size || apply.isPending}
                 onClick={() => setConfirmOpen(true)}
               >
-                <ShieldAlert size={15} /> Apply to {selected.size}
+                <ShieldAlert size={15} /> {kind === "project" ? "Delete" : "Apply to"} {selected.size}
               </Button>
             </div>
             <div className="table-shell compact-scroll">
