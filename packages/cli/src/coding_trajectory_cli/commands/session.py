@@ -20,6 +20,7 @@ from coding_trajectory_cli._shared import (
     one_line,
     params_from_json,
     render_usage_line,
+    render_usage_line_compact,
     short_id,
 )
 
@@ -39,7 +40,7 @@ FILTER SYNTAX
   Dot-paths supported: result.error=*
 """
 
-CONTEXT_CATEGORY_WIDTH = 56
+COMPACT_THRESHOLD = 90
 
 
 def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
@@ -77,36 +78,36 @@ def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
     return params
 
 
-def _overview_request_label(request: Any) -> str:
+def _overview_request_label(request: Any, *, width: int) -> str:
     if not isinstance(request, dict):
         return "-"
     content = request.get("content") or request.get("summary") or request.get("text")
-    return one_line(content, limit=88)
+    return one_line(content, limit=max(width - 30, 32))
 
 
-def _overview_activity_label(activity: dict[str, Any]) -> str:
+def _overview_activity_label(activity: dict[str, Any], *, width: int) -> str:
     if "tool" in activity:
         tool = str(activity.get("tool") or "tool")
         count = activity.get("count")
         suffix = f" x{count}" if count and count != 1 else ""
         for key in ("cmd", "path", "query", "url"):
             if activity.get(key):
-                return f"{tool}{suffix}: {one_line(activity[key], limit=72)}"
+                return f"{tool}{suffix}: {one_line(activity[key], limit=max(width - 36, 24))}"
         for key in ("paths", "queries", "urls", "targets"):
             values = activity.get(key)
             if isinstance(values, list) and values:
-                joined = ", ".join(one_line(item, limit=32) for item in values[:3])
+                joined = ", ".join(one_line(item, limit=max(width // 4, 16)) for item in values[:3])
                 more = f" +{len(values) - 3}" if len(values) > 3 else ""
                 return f"{tool}{suffix}: {joined}{more}"
         return f"{tool}{suffix}"
     if "teammate_summary" in activity:
         return "teammate summary"
     if "text" in activity:
-        return f"assistant: {one_line(activity.get('text'), limit=84)}"
-    return one_line(activity, limit=80)
+        return f"assistant: {one_line(activity.get('text'), limit=max(width - 32, 24))}"
+    return one_line(activity, limit=max(width - 28, 24))
 
 
-def _render_session_overview_text(payload: dict[str, Any]) -> str:
+def _render_session_overview_text(payload: dict[str, Any], width: int) -> str:
     sessions = payload.get("sessions") or []
     turn_count = sum(len(session.get("turns") or []) for session in sessions)
     lines = [
@@ -131,7 +132,7 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
         for turn in turns:
             lines.append(
                 f"  - turn {short_id(turn.get('turn_id'))}  "
-                f"{display_value(turn.get('status')) or '-'}  {_overview_request_label(turn.get('user_request'))}"
+                f"{display_value(turn.get('status')) or '-'}  {_overview_request_label(turn.get('user_request'), width=width)}"
             )
 
             activities = turn.get("activity") or []
@@ -139,14 +140,14 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
                 activities = [{"teammate_summary": turn.get("teammate_summary")}]
             for activity in activities:
                 if isinstance(activity, dict):
-                    lines.append(f"    - {_overview_activity_label(activity)}")
+                    lines.append(f"    - {_overview_activity_label(activity, width=width)}")
 
     return "\n".join(lines).rstrip()
 
 
-def _render_context_category(lines: list[str], category: dict[str, Any], *, indent: int = 0) -> None:
+def _render_context_category(lines: list[str], category: dict[str, Any], *, indent: int = 0, category_width: int) -> None:
     label = str(category.get("label") or category.get("key") or "-")
-    display_width = max(CONTEXT_CATEGORY_WIDTH - indent, 16)
+    display_width = max(category_width - indent, 16)
     label = one_line(label, limit=display_width)
     lines.append(
         f"{' ' * indent}{label:<{display_width}} {format_tokens(category.get('tokens')):>7} "
@@ -154,16 +155,17 @@ def _render_context_category(lines: list[str], category: dict[str, Any], *, inde
     )
     for child in category.get("children") or []:
         if isinstance(child, dict):
-            _render_context_category(lines, child, indent=indent + 2)
+            _render_context_category(lines, child, indent=indent + 2, category_width=category_width)
 
 
-def _render_session_stats_text(payload: dict[str, Any]) -> str:
+def _render_session_stats_text(payload: dict[str, Any], width: int) -> str:
     model = payload.get("model") or {}
     context_window = payload.get("context_window") or {}
     runtime = payload.get("runtime") or {}
     messages = payload.get("messages") or {}
     usage = payload.get("usage") or {}
 
+    category_width = max(width - 20, 24)
     model_name = model.get("name") or "-"
     context_tokens = model.get("context_window_tokens")
     lines = [
@@ -171,12 +173,12 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         "",
         f"Model: {model_name} ({format_tokens(context_tokens)} context)",
         "",
-        f"{'Category':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Context':>8}",
+        f"{'Category':<{category_width}} {'Tokens':>7} {'Context':>8}",
     ]
 
     for category in context_window.get("categories") or []:
         if isinstance(category, dict):
-            _render_context_category(lines, category)
+            _render_context_category(lines, category, category_width=category_width)
 
     used_tokens = context_window.get("used_tokens") or usage.get("input_tokens")
     used_percent = context_window.get("used_percent")
@@ -223,28 +225,30 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     warnings = payload.get("warnings") or []
     if warnings:
         lines.append("")
-        lines.extend(f"Warning: {one_line(warning, limit=110)}" for warning in warnings)
+        lines.extend(f"Warning: {one_line(warning, limit=max(width - 10, 40))}" for warning in warnings)
     return "\n".join(lines).rstrip()
 
 
-def _render_session_usage_text(payload: dict[str, Any]) -> str:
+def _render_session_usage_text(payload: dict[str, Any], width: int) -> str:
+    compact = width < COMPACT_THRESHOLD
+    usage_fn = render_usage_line_compact if compact else render_usage_line
     lines = ["# Session Usage", "", "Total"]
-    lines.append(f"  {render_usage_line(payload.get('total_usage') or {})}")
+    lines.append(f"  {usage_fn(payload.get('total_usage') or {})}")
 
     turns = payload.get("turns") or []
     if turns:
         lines.extend(["", "Turns"])
     for turn in turns:
         lines.append(f"  turn {short_id(turn.get('turn_id'))}")
-        lines.append(f"    {render_usage_line(turn.get('usage') or {})}")
+        lines.append(f"    {usage_fn(turn.get('usage') or {})}")
         for activity in turn.get("activity_usage") or []:
             category = str(activity.get("category") or "-")
-            lines.append(f"    {category:<14} {render_usage_line(activity.get('usage') or {})}")
+            lines.append(f"    {category:<14} {usage_fn(activity.get('usage') or {})}")
 
     warnings = payload.get("warnings") or []
     if warnings:
         lines.append("")
-        lines.extend(f"Warning: {one_line(warning, limit=110)}" for warning in warnings)
+        lines.extend(f"Warning: {one_line(warning, limit=max(width - 10, 40))}" for warning in warnings)
     return "\n".join(lines).rstrip()
 
 

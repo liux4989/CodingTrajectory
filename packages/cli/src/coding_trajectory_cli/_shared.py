@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from typing import Any
 
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 
 OUTPUT_CHOICES = ("markdown", "json")
+MIN_WIDTH = 40
+DEFAULT_WIDTH = 80
+
+
+def terminal_width() -> int:
+    try:
+        return max(os.get_terminal_size().columns, MIN_WIDTH)
+    except (ValueError, OSError):
+        return DEFAULT_WIDTH
 
 
 class GhFormatter(argparse.RawDescriptionHelpFormatter):
@@ -523,4 +533,15 @@ def render_usage_line(usage: dict[str, Any]) -> str:
         f"reasoning {format_tokens(usage.get('reasoning_output_tokens'))}  "
         f"total {format_tokens(usage.get('total_tokens'))}  "
         f"cost {format_cost(usage.get('cost_usd'))}"
+    )
+
+
+def render_usage_line_compact(usage: dict[str, Any]) -> str:
+    return (
+        f"in {format_tokens(usage.get('input_tokens'))}  "
+        f"cache {format_tokens(usage.get('cached_input_tokens'))}  "
+        f"out {format_tokens(usage.get('output_tokens'))}  "
+        f"reason {format_tokens(usage.get('reasoning_output_tokens'))}  "
+        f"total {format_tokens(usage.get('total_tokens'))}  "
+        f"{format_cost(usage.get('cost_usd'))}"
     )

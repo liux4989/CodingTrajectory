@@ -10,7 +10,7 @@ from typing import Any
 
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch, project_list_metadata, resolve_store
-from coding_trajectory_cli._shared import GhFormatter, add_output_flags, compact_payload, json_text, selected_output
+from coding_trajectory_cli._shared import GhFormatter, add_output_flags, compact_payload, json_text, selected_output, terminal_width
 from coding_trajectory_cli.commands import REGISTRARS, dispatch_plugin_argv
 
 EPILOG = """\
@@ -86,6 +86,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _render_payload(args: argparse.Namespace, payload: Any) -> str:
+    width = terminal_width()
+
     plugin_renderer = getattr(args, "_render_payload", None)
     if callable(plugin_renderer):
         return plugin_renderer(args, payload)
@@ -96,7 +98,7 @@ def _render_payload(args: argparse.Namespace, payload: Any) -> str:
 
     renderer = getattr(args, "_renderer", None)
     if callable(renderer):
-        return renderer(payload)
+        return renderer(payload, width)
 
     return json_text(compact_payload(method, payload)) if method else json_text(payload)
 
