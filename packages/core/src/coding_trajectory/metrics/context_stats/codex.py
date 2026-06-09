@@ -7,15 +7,18 @@ import re
 from typing import Any
 
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
-from coding_trajectory.analysis.tool_summary_shell import split_shell_stages
-from coding_trajectory.analysis.tool_summary_shell import shell_cmd
 from coding_trajectory.analysis.tool_summary_shared import (
+    EDIT_FILE,
     LIST_FILES,
     READ_FILE,
+    RUN_COMMAND,
     SEARCH_TEXT,
-    SHELL_TOOL_NAMES,
+    SESSION_HANDOFF,
+    SUBAGENT_TASK,
+    TODO_LIST,
     WEB_FETCH,
     WEB_SEARCH,
+    WRITE_FILE,
 )
 from coding_trajectory.ingestion.models import Event, EventType, SessionGraph, StepToolItem, Vendor
 from coding_trajectory.metrics.context_stats._common import (
@@ -47,6 +50,15 @@ _AGENT_RESPONSE_LABELS: dict[str, str] = {
     "final_answer": "Final answers",
     "progress_update": "Progress updates",
     "assistant_message": "Assistant messages",
+}
+
+_TOOL_CONCEPT_LABELS: dict[str, str] = {
+    EDIT_FILE: "Edits / patches",
+    WRITE_FILE: "Files written",
+    RUN_COMMAND: "Command output",
+    TODO_LIST: "Plans / todos",
+    SUBAGENT_TASK: "Subagent results",
+    SESSION_HANDOFF: "Handoffs",
 }
 
 
@@ -242,7 +254,11 @@ def _codex_context_categories(
     )
     tool_children = _category_children(
         [
-            (f"tool_{_slug(tool_name)}", _tool_label(tool_name), scaled[f"tool:{tool_name}"])
+            (
+                f"tool_{_slug(tool_name)}",
+                _TOOL_CONCEPT_LABELS.get(tool_name, _tool_label(tool_name)),
+                scaled[f"tool:{tool_name}"],
+            )
             for tool_name in sorted(tool_raw, key=lambda name: (-scaled[f"tool:{name}"], name))
         ],
         denominator=denominator,
@@ -332,14 +348,12 @@ def _codex_conversation_raw_tokens(
                 call_id = _as_str(event.payload.get("tool_call_id"))
                 tool_name = tool_names_by_id.get(call_id or "", "tool")
                 output_tokens = _estimate_text_tokens(_stringify_tool_output(event.payload.get("output")))
-                source = _context_source_tool(
-                    tool_name,
-                    tool_inputs_by_id.get(call_id or ""),
-                )
-                if source:
-                    prompt_raw[source] += output_tokens
+                summary = _context_tool_summary(tool_name, tool_inputs_by_id.get(call_id or ""))
+                concept = (_as_str(summary.get("name")) if summary else None) or tool_name
+                if concept in {READ_FILE, SEARCH_TEXT, LIST_FILES, WEB_FETCH, WEB_SEARCH}:
+                    prompt_raw[concept] += output_tokens
                 else:
-                    tool_raw[tool_name] += output_tokens
+                    tool_raw[concept] += output_tokens
     return prompt_raw, agent_raw, tool_raw
 
 
@@ -394,28 +408,8 @@ def _looks_like_file_reference(target: str) -> bool:
     return "." in path.rsplit("/", 1)[-1]
 
 
-def _context_source_tool(
-    tool_name: str,
-    tool_input: Any,
-) -> str | None:
-    summary = _context_tool_summary(tool_name, tool_input)
-    source = _as_str(summary.get("name")) if summary else None
-    if source not in {READ_FILE, SEARCH_TEXT, LIST_FILES, WEB_FETCH, WEB_SEARCH}:
-        return None
-    return source
-
-
 def _context_tool_summary(tool_name: str, tool_input: Any) -> dict[str, Any] | None:
-    if tool_name not in SHELL_TOOL_NAMES:
-        return summarize_tool_call(StepToolItem(tool_name=tool_name, input=tool_input))
-
-    cmd = shell_cmd(tool_input)
-    stages = [stage for stage in split_shell_stages(cmd) if stage.strip()]
-    if not stages:
-        return summarize_tool_call(StepToolItem(tool_name=tool_name, input=tool_input))
-    shell_input = dict(tool_input) if isinstance(tool_input, dict) else {}
-    shell_input["cmd"] = stages[0]
-    return summarize_tool_call(StepToolItem(tool_name=tool_name, input=shell_input))
+    return summarize_tool_call(StepToolItem(tool_name=tool_name, input=tool_input))
 
 
 def _category_children(

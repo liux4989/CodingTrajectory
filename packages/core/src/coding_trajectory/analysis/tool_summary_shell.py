@@ -8,6 +8,7 @@ import shlex
 from typing import Any
 
 from coding_trajectory.analysis.tool_summary_shared import (
+    EDIT_FILE,
     GREP_FLAG_VALUE_OPTS,
     INFORMATIVE_HEADS,
     LIST_FILES,
@@ -48,6 +49,8 @@ def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, st
         return SEARCH_TEXT, description, "shell:search"
     if head in {"ls", "eza", "exa", "tree", "find", "fd"}:
         return LIST_FILES, description, "shell:list"
+    if head in {"apply_patch", "applypatch"}:
+        return EDIT_FILE, description, "shell:edit"
 
     return RUN_COMMAND, description, "shell:command"
 

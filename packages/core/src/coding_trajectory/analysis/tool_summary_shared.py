@@ -65,6 +65,7 @@ INFORMATIVE_HEADS: frozenset[str] = frozenset({
     "cat", "bat", "head", "tail", "less", "more", "nl", "sed",
     "rg", "grep", "ag", "ack", "rga",
     "ls", "eza", "exa", "tree", "find", "fd",
+    "apply_patch", "applypatch",
 })
 
 GREP_FLAG_VALUE_OPTS: frozenset[str] = frozenset({
