@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections import Counter
+import os
 import re
 from typing import Any
 
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
+from coding_trajectory.analysis.tool_summary_shell import primary_stage, safe_split, shell_cmd
 from coding_trajectory.analysis.tool_summary_shared import (
     EDIT_FILE,
     LIST_FILES,
@@ -38,28 +40,42 @@ from coding_trajectory.metrics.models import (
 
 
 _CONTEXT_SOURCE_LABELS: dict[str, str] = {
-    "prompt_file_link": "Prompt file links",
-    READ_FILE: "Read files",
+    READ_FILE: "Files read",
     SEARCH_TEXT: "Search results",
     LIST_FILES: "File listings",
-    WEB_FETCH: "Web fetches",
-    WEB_SEARCH: "Web searches",
+    WEB_FETCH: "Web pages fetched",
+    WEB_SEARCH: "Web search results",
 }
 
 _AGENT_RESPONSE_LABELS: dict[str, str] = {
     "final_answer": "Final answers",
     "progress_update": "Progress updates",
-    "assistant_message": "Assistant messages",
+    "assistant_message": "Other assistant messages",
 }
 
 _TOOL_CONCEPT_LABELS: dict[str, str] = {
     EDIT_FILE: "Edits / patches",
     WRITE_FILE: "Files written",
-    RUN_COMMAND: "Command output",
     TODO_LIST: "Plans / todos",
     SUBAGENT_TASK: "Subagent results",
     SESSION_HANDOFF: "Handoffs",
 }
+
+_COMMAND_FAMILY_LABELS: dict[str, str] = {
+    "tests": "Tests",
+    "build": "Build / typecheck / lint",
+    "git": "Git / repo commands",
+    "package": "Package / dependency commands",
+    "other": "Other command output",
+}
+
+_CONTEXT_CONCEPTS: frozenset[str] = frozenset(
+    {READ_FILE, SEARCH_TEXT, LIST_FILES, WEB_FETCH, WEB_SEARCH}
+)
+_CODE_CHANGE_CONCEPTS: frozenset[str] = frozenset({EDIT_FILE, WRITE_FILE})
+_COORDINATION_CONCEPTS: frozenset[str] = frozenset(
+    {TODO_LIST, SUBAGENT_TASK, SESSION_HANDOFF}
+)
 
 
 def build_codex_context_stats(session_graph: SessionGraph) -> dict[str, Any]:
@@ -87,7 +103,7 @@ def build_codex_context_stats(session_graph: SessionGraph) -> dict[str, Any]:
     messages = message_stats(session_graph)
 
     warnings = [
-        "Category token counts are estimated from Codex JSONL text; context files include prompt file links plus read/search/list/web tool outputs, and buckets are scaled to the latest context window residual.",
+        "Category token counts are estimated from Codex JSONL text and classified by inferred intent; tool-result tokens come from outputs (so edits/patches can look small even for large changes), and buckets are scaled to the latest context window residual.",
     ]
     if not categories:
         warnings.append("No Codex prompt blocks were found for context category breakdown.")
@@ -190,13 +206,25 @@ def _codex_context_categories(
     prompt_raw, agent_raw, tool_raw = _codex_conversation_raw_tokens(session_graph)
     scaled = _scaled_context_tokens(
         {
-            **{f"prompt:{source}": tokens for source, tokens in prompt_raw.items() if source.startswith("user_")},
-            **{f"files:{source}": tokens for source, tokens in prompt_raw.items() if not source.startswith("user_")},
+            **{f"prompt:{source}": tokens for source, tokens in prompt_raw.items() if _is_user_input_source(source)},
+            **{f"context:{source}": tokens for source, tokens in prompt_raw.items() if not _is_user_input_source(source)},
             **{f"agent:{source}": tokens for source, tokens in agent_raw.items()},
             **{f"tool:{tool_name}": tokens for tool_name, tokens in tool_raw.items()},
         },
         target_total=residual_tokens,
     )
+
+    def _leaves(prefix: str, keys: list[str], label_fn: Any) -> list[ContextCategoryFlat]:
+        return _category_children(
+            [
+                (f"{prefix}_{_slug(key)}", label_fn(key), scaled[f"{prefix}:{key}"])
+                for key in sorted(keys, key=lambda name: (-scaled[f"{prefix}:{name}"], name))
+            ],
+            denominator=denominator,
+        )
+
+    def _parent(key: str, label: str, children: list[ContextCategoryFlat]) -> tuple[str, str, int, list[ContextCategoryFlat]]:
+        return key, label, sum(child.tokens for child in children), children
 
     setup_children = _category_children(
         [
@@ -204,89 +232,65 @@ def _codex_context_categories(
             ("developer_instructions", "Developer instructions", setup_raw["developer_instructions"]),
             ("agents_md", "AGENTS.md", setup_raw["agents_md"]),
             ("skills", "Skills", setup_raw["skills"]),
-            ("mcp", "MCP/tools", setup_raw["mcp"]),
+            ("mcp", "Tools / MCP", setup_raw["mcp"]),
             ("memory", "Memory", setup_raw["memory"]),
         ],
         denominator=denominator,
         keep_zero_keys={"base_system", "developer_instructions", "agents_md", "skills", "mcp", "memory"},
     )
-    prompt_children = _category_children(
-        [
-            (
-                f"prompt_{_slug(source)}",
-                _prompt_label(source),
-                scaled[f"prompt:{source}"],
-            )
-            for source in sorted(
-                (source for source in prompt_raw if source.startswith("user_")),
-                key=lambda name: (-scaled[f"prompt:{name}"], name),
-            )
-        ],
-        denominator=denominator,
+    prompt_children = _leaves(
+        "prompt",
+        [source for source in prompt_raw if _is_user_input_source(source)],
+        _prompt_label,
     )
-    context_children = _category_children(
-        [
-            (
-                f"files_{_slug(source)}",
-                _CONTEXT_SOURCE_LABELS.get(source, _tool_label(source)),
-                scaled[f"files:{source}"],
-            )
-            for source in sorted(
-                (source for source in prompt_raw if not source.startswith("user_")),
-                key=lambda name: (-scaled[f"files:{name}"], name),
-            )
-        ],
-        denominator=denominator,
+    context_children = _leaves(
+        "context",
+        [source for source in prompt_raw if not _is_user_input_source(source)],
+        lambda source: _CONTEXT_SOURCE_LABELS.get(source, _tool_label(source)),
     )
-    response_children = _category_children(
-        [
-            (
-                f"agent_{_slug(source)}",
-                _AGENT_RESPONSE_LABELS.get(source, _tool_label(source)),
-                scaled[f"agent:{source}"],
-            )
-            for source in sorted(
-                agent_raw,
-                key=lambda name: (-scaled[f"agent:{name}"], name),
-            )
-        ],
-        denominator=denominator,
+    response_children = _leaves(
+        "agent",
+        list(agent_raw),
+        lambda source: _AGENT_RESPONSE_LABELS.get(source, _tool_label(source)),
     )
-    tool_children = _category_children(
+
+    code_children = _leaves("tool", [k for k in tool_raw if k in _CODE_CHANGE_CONCEPTS], _TOOL_CONCEPT_LABELS.get)
+    command_children = _leaves(
+        "tool",
+        [k for k in tool_raw if k.startswith(f"{RUN_COMMAND}:")],
+        lambda key: _COMMAND_FAMILY_LABELS.get(key.split(":", 1)[1], "Other command output"),
+    )
+    coordination_children = _leaves("tool", [k for k in tool_raw if k in _COORDINATION_CONCEPTS], _TOOL_CONCEPT_LABELS.get)
+    classified = _CODE_CHANGE_CONCEPTS | _COORDINATION_CONCEPTS
+    other_children = _leaves(
+        "tool",
+        [k for k in tool_raw if k not in classified and not k.startswith(f"{RUN_COMMAND}:")],
+        _tool_label,
+    )
+
+    tool_results_children = _category_children(
         [
-            (
-                f"tool_{_slug(tool_name)}",
-                _TOOL_CONCEPT_LABELS.get(tool_name, _tool_label(tool_name)),
-                scaled[f"tool:{tool_name}"],
-            )
-            for tool_name in sorted(tool_raw, key=lambda name: (-scaled[f"tool:{name}"], name))
+            _parent("context_gathered", "Context gathered", context_children),
+            _parent("code_changes", "Code changes", code_children),
+            _parent("command_output", "Command output", command_children),
+            _parent("coordination", "Coordination", coordination_children),
+            _parent("tool_other", "Other / unclassified", other_children),
         ],
         denominator=denominator,
     )
     agent_children = _category_children(
         [
-            (
-                "agent_response",
-                "Output (Agent Response)",
-                sum(child.tokens for child in response_children),
-                response_children,
-            ),
-            (
-                "tool_breakdown",
-                "Tool breakdown",
-                sum(child.tokens for child in tool_children),
-                tool_children,
-            ),
+            _parent("agent_messages", "Agent messages", response_children),
+            _parent("tool_results", "Tool results", tool_results_children),
         ],
         denominator=denominator,
     )
 
     return _category_children(
         [
-            ("before_typing", "Before you type anything", sum(child.tokens for child in setup_children), setup_children),
-            ("your_prompt", "Your prompt", sum(child.tokens for child in prompt_children), prompt_children),
-            ("context_files", "Context files", sum(child.tokens for child in context_children), context_children),
-            ("agent_work", "Agent Works", sum(child.tokens for child in agent_children), agent_children),
+            _parent("starting_context", "Starting context", setup_children),
+            _parent("user_input", "User input", prompt_children),
+            _parent("agent_work", "Agent work", agent_children),
         ],
         denominator=denominator,
     )
@@ -348,21 +352,64 @@ def _codex_conversation_raw_tokens(
                 call_id = _as_str(event.payload.get("tool_call_id"))
                 tool_name = tool_names_by_id.get(call_id or "", "tool")
                 output_tokens = _estimate_text_tokens(_stringify_tool_output(event.payload.get("output")))
-                summary = _context_tool_summary(tool_name, tool_inputs_by_id.get(call_id or ""))
+                tool_input = tool_inputs_by_id.get(call_id or "")
+                summary = _context_tool_summary(tool_name, tool_input)
                 concept = (_as_str(summary.get("name")) if summary else None) or tool_name
-                if concept in {READ_FILE, SEARCH_TEXT, LIST_FILES, WEB_FETCH, WEB_SEARCH}:
+                if concept in _CONTEXT_CONCEPTS:
                     prompt_raw[concept] += output_tokens
+                elif concept == RUN_COMMAND:
+                    tool_raw[f"{RUN_COMMAND}:{_command_family(tool_input)}"] += output_tokens
                 else:
                     tool_raw[concept] += output_tokens
     return prompt_raw, agent_raw, tool_raw
 
 
+_TEST_TOKENS: frozenset[str] = frozenset(
+    {"pytest", "jest", "vitest", "mocha", "rspec", "phpunit", "unittest", "tox", "ctest", "test"}
+)
+_BUILD_TOKENS: frozenset[str] = frozenset({
+    "tsc", "mypy", "ruff", "eslint", "flake8", "pylint", "black", "isort", "prettier",
+    "make", "cmake", "webpack", "rollup", "vite", "esbuild", "clippy",
+    "build", "compile", "lint", "typecheck", "check", "vet",
+})
+_PACKAGE_MANAGERS: frozenset[str] = frozenset({
+    "npm", "pnpm", "yarn", "bun", "pip", "pip3", "uv", "poetry", "pipenv",
+    "cargo", "gem", "bundle", "brew", "conda", "apt", "apt-get",
+})
+_INSTALL_TOKENS: frozenset[str] = frozenset({"install", "add", "ci", "sync", "get"})
+
+
+def _command_family(tool_input: Any) -> str:
+    cmd = shell_cmd(tool_input)
+    if not cmd:
+        return "other"
+    tokens = [os.path.basename(token.lower()) for token in safe_split(primary_stage(cmd))]
+    if not tokens:
+        return "other"
+    if tokens[0] in {"git", "gh", "hg", "svn"}:
+        return "git"
+    token_set = set(tokens)
+    if token_set & _TEST_TOKENS:
+        return "tests"
+    if token_set & _BUILD_TOKENS:
+        return "build"
+    if token_set & _PACKAGE_MANAGERS and token_set & _INSTALL_TOKENS:
+        return "package"
+    return "other"
+
+
 def _prompt_label(source: str) -> str:
     if source == "user_initial_request":
-        return "Initial user request"
+        return "Initial request"
     if source == "user_follow_up_requests":
-        return "Follow-up user requests"
+        return "Follow-up requests"
+    if source == "prompt_file_link":
+        return "Referenced prompt files"
     return _tool_label(source)
+
+
+def _is_user_input_source(source: str) -> bool:
+    return source.startswith("user_") or source == "prompt_file_link"
 
 
 def _assistant_response_key(payload: dict[str, Any]) -> str:
