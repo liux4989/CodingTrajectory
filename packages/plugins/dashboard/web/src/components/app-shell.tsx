@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, Outlet } from "@tanstack/react-router";
-import { Activity, Boxes, FolderGit2, Moon, Sparkles, Sun, Trash2, Menu, X } from "lucide-react";
+import { Activity, FolderGit2, Moon, Sparkles, Sun, Menu, X } from "lucide-react";
 import { useTheme } from "../hooks/use-theme";
 
 export function AppShell() {
@@ -52,9 +52,6 @@ function Sidebar({ open, onClose, theme, onToggleTheme }: SidebarProps) {
           </Link>
           <Link to="/sessions" className="nav-link" activeProps={{ className: "nav-link is-active" }} onClick={onClose}>
             <Activity size={18} /> Sessions
-          </Link>
-          <Link to="/cleanup" className="nav-link" activeProps={{ className: "nav-link is-active" }} onClick={onClose}>
-            <Trash2 size={18} /> Cleanup
           </Link>
         </nav>
         <div className="sidebar-footer">

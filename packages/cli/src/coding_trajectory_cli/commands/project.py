@@ -40,9 +40,8 @@ def _project_sessions_params(args: argparse.Namespace) -> dict[str, Any]:
     return params
 
 
-def _render_project_list_markdown(payload: dict[str, Any], width: int) -> str:
+def _render_project_list_markdown(payload: dict[str, Any]) -> str:
     items = payload.get("items") or {}
-    path_width = max(width - 40, 20)
     lines = [
         "# Projects",
         "",
@@ -54,22 +53,17 @@ def _render_project_list_markdown(payload: dict[str, Any], width: int) -> str:
             continue
         vendors = ", ".join(item.get("vendors") or []) or "-"
         path = item.get("path") or "-"
-        if len(path) > path_width:
-            path = "..." + path[-(path_width - 3):]
         lines.append(f"| `{name}` | {vendors} | `{path}` |")
     return "\n".join(lines)
 
 
-def _render_project_sessions_markdown(payload: dict[str, Any], width: int) -> str:
+def _render_project_sessions_markdown(payload: dict[str, Any]) -> str:
     items = payload.get("items") or []
-    title_width = max(width - 30, 20)
     lines = ["# Sessions", ""]
     for item in items:
         if not isinstance(item, dict):
             continue
         title = item.get("title") or "-"
-        if len(title) > title_width:
-            title = title[:title_width - 1] + "\u2026"
         vendors = ", ".join(item.get("vendors") or []) or "-"
         lines.append(f"- `{short_id(item.get('root_session_id'))}` {title} [{vendors}]")
     if len(lines) == 2:

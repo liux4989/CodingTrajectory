@@ -1,6 +1,7 @@
 import * as React from "react";
+import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { fetchSessions, type SessionItem } from "../api";
+import { fetchSessions, fetchOverview, type SessionItem } from "../api";
 import { TableSkeleton } from "../components/ui/skeleton";
 import { RouteHeader } from "../components/route-header";
 import { Toolbar } from "../components/toolbar";
@@ -9,8 +10,10 @@ import { VendorBadges } from "../components/badges";
 import { SortableHeader, useSort } from "../components/sortable-header";
 import { Pagination } from "../components/pagination";
 import { RefreshButton } from "../components/refresh-button";
+import { Button } from "../components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { relativeTime } from "../lib/relative-time";
+import { Trash2 } from "lucide-react";
 
 const PAGE_SIZE = 20;
 
@@ -41,6 +44,7 @@ export function SessionsRoute() {
   const deferredFilter = React.useDeferredValue(filter);
   const [page, setPage] = React.useState(0);
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: fetchSessions });
+  const overview = useQuery({ queryKey: ["overview"], queryFn: fetchOverview });
   const getKey = React.useCallback(getSortValue, []);
 
   const filtered = React.useMemo(() => {
@@ -59,9 +63,27 @@ export function SessionsRoute() {
 
   React.useEffect(() => { setPage(0); }, [deferredFilter]);
 
+  const cleanupCount = overview.data?.cleanup.sessions.candidate_count;
+
   return (
     <div className="route-stack">
       <RouteHeader eyebrow="Session stream" title="Recent session entry points, kept compact for triage." action={<RefreshButton queries={["sessions"]} />} />
+      <section className="operations-bar">
+        <div className="operation-entry">
+          <div className="operation-info">
+            <Trash2 size={18} />
+            <div>
+              <p className="operation-name">Cleanup</p>
+              <p className="muted">
+                {cleanupCount != null ? `${cleanupCount} candidate(s) ready for review` : "Loading cleanup info\u2026"}
+              </p>
+            </div>
+          </div>
+          <Link to="/cleanup">
+            <Button size="sm" variant="secondary">Open</Button>
+          </Link>
+        </div>
+      </section>
       <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, project, or id" />
       {sessions.isPending ? <TableSkeleton rows={6} cols={4} /> : null}
       {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} /> : null}

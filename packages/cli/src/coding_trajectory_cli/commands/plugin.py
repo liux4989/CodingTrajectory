@@ -27,13 +27,10 @@ def _plugin_list_payload(plugins: list[LoadedPlugin]) -> dict[str, Any]:
     return plugin_payload(plugins)
 
 
-def _render_plugin_list_text(payload: dict[str, Any], width: int) -> str:
+def _render_plugin_list_text(payload: dict[str, Any]) -> str:
     plugins = payload.get("plugins") or []
     loaded = sum(1 for plugin in plugins if plugin.get("status") == "loaded")
     failed = len(plugins) - loaded
-    name_w = max(width // 4, 12)
-    ver_w = max(width // 8, 8)
-    cmd_w = max(width // 4, 12)
     lines = [
         f"Plugins: {loaded} available, {failed} failed",
         "",
@@ -43,7 +40,7 @@ def _render_plugin_list_text(payload: dict[str, Any], width: int) -> str:
         version = plugin.get("version") or "-"
         command = " ".join(plugin.get("run") or []) or "-"
         description = plugin.get("description") or ""
-        lines.append(f"{name:<{name_w}} {version:<{ver_w}} {command:<{cmd_w}} {description}".rstrip())
+        lines.append(f"{name:<24} {version:<10} {command:<24} {description}".rstrip())
         source = plugin.get("source")
         if source:
             lines.append(f"  source: {source}")

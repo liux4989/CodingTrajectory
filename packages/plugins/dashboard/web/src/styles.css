@@ -640,6 +640,53 @@ select:focus-visible {
   min-inline-size: 8rem;
 }
 
+.operations-bar {
+  max-inline-size: 44rem;
+}
+
+.operations-bar .operation-entry {
+  border-radius: 0.95rem;
+}
+
+.operations-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.operation-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgb(24 33 28 / 10%);
+  border-radius: 1rem;
+  background: rgb(255 249 234 / 50%);
+}
+
+[data-theme="dark"] .operation-entry {
+  background: rgb(34 32 25 / 50%);
+  border-color: rgb(255 255 255 / 8%);
+}
+
+.operation-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.operation-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1rem;
+}
+
+.operation-info .muted {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+}
+
 .reason-summary {
   display: grid;
   gap: 0.55rem;
