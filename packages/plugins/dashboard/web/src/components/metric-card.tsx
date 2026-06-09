@@ -1,6 +1,6 @@
 import * as React from "react";
-import { Card, CardContent } from "./ui/card";
-import { Sparkline } from "./sparkline";
+import { Card, CardContent } from "@/components/ui/card";
+import { Sparkline } from "@/components/sparkline";
 
 type MetricCardProps = {
   label: string;
@@ -12,15 +12,15 @@ type MetricCardProps = {
 
 export function MetricCard({ label, value, detail, sparklineEntries, ratio }: MetricCardProps) {
   return (
-    <Card className="metric-card">
-      <CardContent>
-        <p className="metric-label">{label}</p>
-        <p className="metric-value">{value.toLocaleString()}</p>
-        <p className="metric-detail">{detail}</p>
+    <Card className="metric-card grid gap-1 [&_[data-slot=card-content]]:grid [&_[data-slot=card-content]]:gap-1">
+      <CardContent className="grid gap-1">
+        <p className="m-0 text-muted-foreground">{label}</p>
+        <p className="m-0 font-display text-[clamp(2rem,4vw,3.8rem)] font-[850] leading-[0.95]">{value.toLocaleString()}</p>
+        <p className="m-0 text-muted-foreground">{detail}</p>
         {sparklineEntries?.length ? <Sparkline entries={sparklineEntries} /> : null}
         {ratio != null ? (
-          <div className="metric-bar-track" role="img" aria-label={`${Math.round(ratio * 100)}%`}>
-            <div className="metric-bar-fill" style={{ inlineSize: `${Math.round(ratio * 100)}%` }} />
+          <div className="h-1.5 overflow-hidden rounded-full bg-foreground/8" role="img" aria-label={`${Math.round(ratio * 100)}%`}>
+            <div className="h-full rounded-full bg-primary transition-[width] duration-400" style={{ width: `${Math.round(ratio * 100)}%` }} />
           </div>
         ) : null}
       </CardContent>

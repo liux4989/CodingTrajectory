@@ -1,4 +1,4 @@
-import { Card, CardContent } from "./ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 
 type StateBlockProps = {
   title: string;
@@ -7,10 +7,10 @@ type StateBlockProps = {
 
 export function StateBlock({ title, detail }: StateBlockProps) {
   return (
-    <Card className="state-block">
-      <CardContent>
-        <p className="state-title">{title}</p>
-        {detail ? <p className="state-detail">{detail}</p> : null}
+    <Card>
+      <CardContent className="grid gap-2">
+        <p className="m-0 font-display text-lg font-semibold">{title}</p>
+        {detail ? <p className="m-0 text-muted-foreground">{detail}</p> : null}
       </CardContent>
     </Card>
   );

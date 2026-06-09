@@ -2,14 +2,14 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
-import { AppShell } from "./components/app-shell";
-import { ToastProvider } from "./components/toast";
-import { OverviewRoute } from "./routes/overview";
-import { ProjectsRoute } from "./routes/projects";
-import { SessionsRoute } from "./routes/sessions";
-import { ContextWindowRoute } from "./routes/context-window";
-import { CleanupRoute } from "./routes/cleanup";
-import "./styles.css";
+import { AppShell } from "@/components/app-shell";
+import { Toaster } from "@/components/ui/sonner";
+import { OverviewRoute } from "@/routes/overview";
+import { ProjectsRoute } from "@/routes/projects";
+import { SessionsRoute } from "@/routes/sessions";
+import { ContextWindowRoute } from "@/routes/context-window";
+import { CleanupRoute } from "@/routes/cleanup";
+import "@/styles.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,9 +22,10 @@ const queryClient = new QueryClient({
 
 const rootRoute = createRootRoute({
   component: () => (
-    <ToastProvider>
+    <>
       <AppShell />
-    </ToastProvider>
+      <Toaster position="bottom-right" richColors />
+    </>
   ),
 });
 

@@ -9,9 +9,26 @@ import {
   type ContextCategory,
   type ContextEvent,
   type TokenEvidence,
-} from "../api";
-import { Button } from "../components/ui/button";
-import { StateBlock } from "../components/state-block";
+} from "@/api";
+import { Button } from "@/components/ui/button";
+import { StateBlock } from "@/components/state-block";
+import { cn } from "@/lib/utils";
+
+const categoryColors: Record<string, string> = {
+  system: "var(--color-category-system)",
+  project_instructions: "var(--color-category-project-instructions)",
+  memory: "var(--color-category-memory)",
+  skills: "var(--color-category-skills)",
+  mcp: "var(--color-category-mcp)",
+  rules: "var(--color-category-rules)",
+  you: "var(--color-category-you)",
+  files: "var(--color-category-files)",
+  output: "var(--color-category-output)",
+  agent: "var(--color-category-agent)",
+  assistant: "var(--color-category-agent)",
+  hooks: "var(--color-category-hooks)",
+  unattributed: "var(--color-category-unattributed)",
+};
 
 function formatTokens(value: number | null | undefined) {
   if (value == null) return "-";
@@ -83,6 +100,10 @@ function timelineSegmentLabel(segment: TimelineSegment) {
   return `${rowLabel}: ${categoryLabel(segment.category)}, ${segment.eventCount} row${segment.eventCount === 1 ? "" : "s"}${tokens}`;
 }
 
+function categoryDotStyle(category: string): React.CSSProperties {
+  return { background: categoryColors[category] ?? categoryColors.unattributed };
+}
+
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
   const query = useQuery({
@@ -143,21 +164,27 @@ export function ContextWindowRoute() {
   const visibleCategories = topCategories(payload.categories);
 
   return (
-    <div className="route-stack context-route">
-      <header className="context-header">
+    <div className="mx-auto grid max-w-[96rem] gap-5">
+      <header className="rounded-[2rem] border border-foreground/13 bg-[linear-gradient(135deg,rgb(255_249_234/95%),rgb(13_92_99/10%)),var(--paper-strong)] p-[clamp(1.2rem,4vw,3rem)] shadow-[0_24px_70px_rgb(49_42_25/18%)] dark:border-[rgb(255_255_255/8%)] dark:bg-[linear-gradient(135deg,rgb(34_32_25/95%),rgb(77_184_176/8%)),var(--paper-strong)] dark:shadow-[0_24px_70px_rgb(0_0_0/40%)]">
         <div>
-          <Link to="/sessions" className="back-link"><ArrowLeft size={16} /> Sessions</Link>
-          <p className="eyebrow">Context inspector</p>
-          <h2>{payload.model ?? "Unknown model"}</h2>
-          <p className="context-subtitle">
+          <Link to="/sessions" className="mb-5 inline-flex items-center gap-1.5 font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]">
+            <ArrowLeft size={16} /> Sessions
+          </Link>
+          <p className="mb-1 font-display text-[0.74rem] font-extrabold uppercase tracking-[0.14em] text-primary">
+            Context inspector
+          </p>
+          <h2 className="m-0 font-display text-[clamp(2.2rem,6vw,5.6rem)] leading-[0.9] tracking-[-0.05em]">
+            {payload.model ?? "Unknown model"}
+          </h2>
+          <p className="mt-4 text-muted-foreground break-all">
             <code>{payload.session_id}</code> · {payload.vendor} · {formatTokens(payload.used_tokens?.value)}
             {payload.used_percent != null ? ` (${payload.used_percent.toFixed(1)}%)` : ""} used
           </p>
         </div>
       </header>
 
-      <figure className="context-composition card">
-        <figcaption>
+      <figure className="m-0 rounded-[1.4rem] border border-foreground/13 bg-card p-4 dark:border-[rgb(255_255_255/8%)]">
+        <figcaption className="flex items-center justify-between gap-4 font-display">
           <span>Compact context timeline</span>
           <strong>
             {formatTokens(payload.used_tokens?.value)}
@@ -166,7 +193,7 @@ export function ContextWindowRoute() {
         </figcaption>
         <Tooltip.Provider delayDuration={160} skipDelayDuration={120}>
           <ol
-            className="context-timeline"
+            className="m-[0.75rem_0_0.8rem] flex h-[0.65rem] list-none gap-0 overflow-hidden rounded-full border border-foreground/14 bg-foreground/7 p-0"
             aria-label="Ordered context event timeline"
             onMouseLeave={() => setHoveredId(null)}
           >
@@ -176,13 +203,18 @@ export function ContextWindowRoute() {
                 && activeIndex <= segment.endIndex;
               const label = timelineSegmentLabel(segment);
               return (
-                <li key={segment.id} style={{ flexGrow: segment.eventCount }}>
+                <li key={segment.id} className="flex min-w-[2px] flex-1" style={{ flexGrow: segment.eventCount }}>
                   <Tooltip.Root>
                     <Tooltip.Trigger asChild>
                       <button
                         type="button"
-                        className={`context-timeline-step ${isActive ? "is-active" : ""}`}
-                        data-category={segment.category}
+                        className={cn(
+                          "relative h-[0.65rem] min-w-[2px] w-full cursor-pointer border-0 border-r border-r-white/28 p-0 opacity-72 last:border-r-0",
+                          "hover:z-1 hover:opacity-100 hover:outline-none hover:shadow-[inset_0_0_0_2px_rgb(255_255_255/86%),0_0_0_2px_var(--accent-teal)]",
+                          "focus-visible:z-1 focus-visible:opacity-100 focus-visible:outline-none focus-visible:shadow-[inset_0_0_0_2px_rgb(255_255_255/92%),0_0_0_3px_var(--accent-teal)]",
+                          isActive && "z-1 opacity-100 outline-none shadow-[inset_0_0_0_2px_rgb(255_255_255/86%),0_0_0_2px_var(--accent-teal)]",
+                        )}
+                        style={{ background: categoryColors[segment.category] ?? categoryColors.unattributed }}
                         aria-label={label}
                         aria-current={isActive ? "step" : undefined}
                         onPointerEnter={() => activateEvent(segment.firstEventId)}
@@ -195,9 +227,13 @@ export function ContextWindowRoute() {
                       </button>
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
-                      <Tooltip.Content className="timeline-tooltip" side="top" sideOffset={8}>
+                      <Tooltip.Content
+                        className="z-[120] max-w-[min(28rem,calc(100vw-2rem))] rounded-md border border-foreground/12 bg-card px-3 py-2 text-[0.82rem] leading-[1.35] text-foreground shadow-[0_24px_70px_rgb(49_42_25/18%)]"
+                        side="top"
+                        sideOffset={8}
+                      >
                         {label}
-                        <Tooltip.Arrow className="timeline-tooltip-arrow" />
+                        <Tooltip.Arrow className="fill-card" />
                       </Tooltip.Content>
                     </Tooltip.Portal>
                   </Tooltip.Root>
@@ -206,36 +242,39 @@ export function ContextWindowRoute() {
             })}
           </ol>
         </Tooltip.Provider>
-        <ul className="context-legend" role="list">
+        <ul className="m-0 flex flex-wrap gap-1.5 px-0 py-0 list-none" role="list">
           {visibleCategories.map((category) => (
-            <li key={category.id}>
-              <span className="category-swatch" data-category={category.category} />
+            <li key={category.id} className="inline-flex min-w-0 items-center gap-1.5 text-[0.9rem] text-muted-foreground">
+              <span className="inline-block h-[0.7rem] w-[0.7rem] rounded-full" style={categoryDotStyle(category.category)} />
               <span>{category.label}</span>
-              <strong>{formatTokens(category.tokens.value)}</strong>
+              <strong className="font-mono text-[0.86rem] text-foreground">{formatTokens(category.tokens.value)}</strong>
             </li>
           ))}
           {payload.categories.length > visibleCategories.length ? (
-            <li className="context-legend-more">
+            <li className="ml-auto inline-flex items-center gap-1.5 text-[0.9rem] text-muted-foreground">
               <span />
               <span>{payload.categories.length - visibleCategories.length} more</span>
-              <strong>{formatTokens(payload.context_window_tokens?.value)} window</strong>
+              <strong className="font-mono text-[0.86rem] text-foreground">{formatTokens(payload.context_window_tokens?.value)} window</strong>
             </li>
           ) : null}
         </ul>
       </figure>
 
-      <div className="context-inspector">
-        <section className="event-stream" aria-labelledby="event-stream-title">
-          <div className="event-stream-heading">
+      <div className="grid grid-cols-[minmax(22rem,1.15fr)_minmax(20rem,0.85fr)] items-start gap-4 max-lg:grid-cols-1">
+        <section className="min-w-0" aria-labelledby="event-stream-title">
+          <div className="mb-3 flex items-center justify-between gap-4 font-display">
             <div>
-              <p className="eyebrow">Trajectory</p>
-              <h3 id="event-stream-title">Context events</h3>
+              <p className="mb-1 font-display text-[0.74rem] font-extrabold uppercase tracking-[0.14em] text-primary">Trajectory</p>
+              <h3 id="event-stream-title" className="m-0 font-display text-[1.45rem]">Context events</h3>
             </div>
-            <span>{events.length} rows</span>
+            <span className="text-muted-foreground">{events.length} rows</span>
           </div>
-          <ScrollArea.Root className="event-scroll">
-            <ScrollArea.Viewport className="event-scroll-viewport" ref={scrollViewportRef}>
-              <ol className="event-list" onMouseLeave={() => setHoveredId(null)}>
+          <ScrollArea.Root className="relative min-h-[18rem] max-h-[min(42rem,calc(100vh-17rem))] overflow-hidden">
+            <ScrollArea.Viewport
+              className="max-h-[min(42rem,calc(100vh-17rem))] min-h-[18rem] pe-3 scroll-py-3"
+              ref={scrollViewportRef}
+            >
+              <ol className="m-0 grid list-none gap-0 p-0" onMouseLeave={() => setHoveredId(null)}>
                 {events.map((event, index) => {
                   const previous = events[index - 1];
                   const startsGroup = !previous || previous.group !== event.group || previous.turn_id !== event.turn_id;
@@ -243,14 +282,30 @@ export function ContextWindowRoute() {
                   return (
                     <li
                       key={event.id}
-                      className={`event-node ${startsGroup ? "starts-group" : ""}`}
+                      className={cn(
+                        "relative grid min-w-0 grid-cols-[1.35rem_minmax(0,1fr)]",
+                        "before:col-[1] before:row-[1/span_2] before:mx-auto before:w-px before:bg-foreground/16",
+                        "first:before:mt-[1.2rem] last:before:h-[1.6rem]",
+                        "dark:before:bg-[rgb(255_255_255/12%)]",
+                        startsGroup && index > 0 && "mt-2",
+                      )}
                       data-group={event.group}
                     >
-                      {startsGroup ? <h4>{groupLabel(event)}</h4> : null}
+                      {startsGroup ? (
+                        <h4 className="col-[2] mb-1.5 mt-4 font-display text-[0.78rem] font-bold uppercase tracking-[0.08em] text-muted-foreground">
+                          {groupLabel(event)}
+                        </h4>
+                      ) : null}
                       <button
                         ref={(node) => { eventRefs.current[index] = node; }}
                         type="button"
-                        className={`event-row ${isActive ? "is-active" : ""}`}
+                        className={cn(
+                          "relative col-[2] grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded-md border border-foreground/11 bg-card/42 px-3 py-2.5 text-start text-foreground cursor-pointer",
+                          "before:absolute before:top-4 before:-left-[0.68rem] before:h-px before:w-[0.68rem] before:bg-foreground/16",
+                          "dark:border-[rgb(255_255_255/8%)] dark:bg-card/62",
+                          "hover:border-primary hover:bg-primary/9",
+                          isActive && "border-primary bg-primary/9",
+                        )}
                         aria-pressed={event.id === selectedId}
                         onMouseEnter={() => setHoveredId(event.id)}
                         onFocus={() => setHoveredId(event.id)}
@@ -266,13 +321,20 @@ export function ContextWindowRoute() {
                           }
                         }}
                       >
-                        <span className="event-marker" data-category={event.category} />
-                        <span className="event-copy">
-                          <strong>{event.label}</strong>
-                          <span>{event.summary ?? event.source}</span>
-                          <small>{categoryLabel(event.category)}</small>
+                        <span
+                          className="absolute -left-[1.68rem] top-[0.7rem] z-1 h-[0.7rem] w-[0.7rem] rounded-full shadow-[0_0_0_3px_var(--paper)]"
+                          style={categoryDotStyle(event.category)}
+                        />
+                        <span className="grid min-w-0 gap-0.5">
+                          <strong className="font-display text-[0.96rem]">{event.label}</strong>
+                          <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.9rem] text-muted-foreground">
+                            {event.summary ?? event.source}
+                          </span>
+                          <small className="w-fit rounded-full border border-foreground/10 px-1.5 py-px font-mono text-[0.72rem] capitalize text-muted-foreground dark:border-[rgb(255_255_255/10%)]">
+                            {categoryLabel(event.category)}
+                          </small>
                         </span>
-                        <span className="event-tokens">
+                        <span className="font-mono text-[0.9rem] font-extrabold text-primary">
                           {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
                         </span>
                       </button>
@@ -281,19 +343,19 @@ export function ContextWindowRoute() {
                 })}
               </ol>
             </ScrollArea.Viewport>
-            <ScrollArea.Scrollbar className="event-scrollbar" orientation="vertical">
-              <ScrollArea.Thumb className="event-scrollbar-thumb" />
+            <ScrollArea.Scrollbar className="flex w-[0.6rem] touch-none select-none bg-foreground/5 p-px" orientation="vertical">
+              <ScrollArea.Thumb className="relative flex-1 rounded-full bg-foreground/28" />
             </ScrollArea.Scrollbar>
           </ScrollArea.Root>
         </section>
 
-        <aside className="event-detail card">
+        <aside className="sticky top-4 rounded-[1.4rem] border border-foreground/13 bg-card p-5 max-lg:static dark:border-[rgb(255_255_255/8%)]">
           {activeEvent ? (
             <>
-              <div className="event-detail-heading">
+              <div className="flex items-center justify-between gap-4 font-display">
                 <div>
-                  <p className="eyebrow">{categoryLabel(activeEvent.category)}</p>
-                  <h3>{activeEvent.label}</h3>
+                  <p className="mb-1 font-display text-[0.74rem] font-extrabold uppercase tracking-[0.14em] text-primary">{categoryLabel(activeEvent.category)}</p>
+                  <h3 className="m-0 font-display text-[1.45rem]">{activeEvent.label}</h3>
                 </div>
                 <Button
                   size="sm"
@@ -305,14 +367,29 @@ export function ContextWindowRoute() {
                   {pinnedId === activeEvent.id ? "Unpin" : "Pin"}
                 </Button>
               </div>
-              <p className="event-detail-summary">{activeEvent.summary ?? "No text preview is available."}</p>
-              <dl className="event-evidence">
-                <div><dt>Token impact</dt><dd>{evidenceLabel(activeEvent.tokens)}</dd></div>
-                <div><dt>Evidence source</dt><dd>{activeEvent.tokens?.source ?? activeEvent.source}</dd></div>
-                <div><dt>Event confidence</dt><dd>{activeEvent.confidence.replaceAll("_", " ")}</dd></div>
-                <div><dt>Terminal visibility</dt><dd>{activeEvent.terminal_visible ? "Visible" : "Hidden"}</dd></div>
+              <p className="mt-3 max-h-[18rem] overflow-auto whitespace-pre-wrap leading-relaxed">{activeEvent.summary ?? "No text preview is available."}</p>
+              <dl className="mt-4 grid gap-0">
+                <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
+                  <dt className="font-display font-extrabold capitalize text-muted-foreground">Token impact</dt>
+                  <dd className="m-0 break-words">{evidenceLabel(activeEvent.tokens)}</dd>
+                </div>
+                <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
+                  <dt className="font-display font-extrabold capitalize text-muted-foreground">Evidence source</dt>
+                  <dd className="m-0 break-words">{activeEvent.tokens?.source ?? activeEvent.source}</dd>
+                </div>
+                <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
+                  <dt className="font-display font-extrabold capitalize text-muted-foreground">Event confidence</dt>
+                  <dd className="m-0 break-words">{activeEvent.confidence.replaceAll("_", " ")}</dd>
+                </div>
+                <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
+                  <dt className="font-display font-extrabold capitalize text-muted-foreground">Terminal visibility</dt>
+                  <dd className="m-0 break-words">{activeEvent.terminal_visible ? "Visible" : "Hidden"}</dd>
+                </div>
                 {Object.entries(activeEvent.detail_ref).map(([key, value]) => (
-                  <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd><code>{value}</code></dd></div>
+                  <div key={key} className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
+                    <dt className="font-display font-extrabold capitalize text-muted-foreground">{key.replaceAll("_", " ")}</dt>
+                    <dd className="m-0 break-words"><code>{value}</code></dd>
+                  </div>
                 ))}
               </dl>
             </>

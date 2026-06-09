@@ -1,23 +1,47 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { applyCleanup, fetchCleanupPreview, type CleanupTarget } from "../api";
-import { RouteHeader } from "../components/route-header";
-import { StateBlock } from "../components/state-block";
-import { ReasonBadges, ReasonSummary } from "../components/badges";
-import { useToast } from "../components/toast";
-import { Badge } from "../components/ui/badge";
-import { Button } from "../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { ConfirmDialog } from "../components/ui/confirm-dialog";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { TableSkeleton } from "../components/ui/skeleton";
+import { toast } from "sonner";
+import {
+  useReactTable,
+  getCoreRowModel,
+  flexRender,
+  type ColumnDef,
+  type RowSelectionState,
+} from "@tanstack/react-table";
+import { applyCleanup, fetchCleanupPreview, type CleanupTarget } from "@/api";
+import { RouteHeader } from "@/components/route-header";
+import { StateBlock } from "@/components/state-block";
+import { ReasonBadges, ReasonSummary } from "@/components/badges";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TableSkeleton } from "@/components/ui/skeleton";
 import { ShieldAlert, RefreshCcw } from "lucide-react";
 
 export function CleanupRoute() {
   return (
-    <div className="route-stack">
+    <div className="mx-auto grid max-w-[96rem] gap-5">
       <RouteHeader eyebrow="Safety first" title="Preview cleanup candidates, choose targets, then explicitly confirm the action." />
-      <section className="split-grid">
+      <section className="grid grid-cols-2 gap-4 max-lg:grid-cols-1">
         <CleanupPanel kind="project" title="Project Cleanup" description="Old or missing project paths plus stale provider metadata." />
         <CleanupPanel kind="session" title="Session Cleanup" description="Empty session logs that have no useful user-visible records." />
       </section>
@@ -25,67 +49,104 @@ export function CleanupRoute() {
   );
 }
 
+function makeColumns(kind: "project" | "session"): ColumnDef<CleanupTarget>[] {
+  return [
+    {
+      id: "select",
+      header: ({ table }) => (
+        <Checkbox
+          checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
+          onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+          aria-label={`Select all ${kind} cleanup candidates`}
+        />
+      ),
+      cell: ({ row }) => (
+        <Checkbox
+          checked={row.getIsSelected()}
+          onCheckedChange={(value) => row.toggleSelected(!!value)}
+          aria-label={`Select ${row.original.path}`}
+        />
+      ),
+      enableSorting: false,
+      size: 40,
+    },
+    {
+      id: "target",
+      header: () => <span className="font-extrabold uppercase tracking-[0.08em]">Target</span>,
+      cell: ({ row }) => <TargetLabel target={row.original} />,
+    },
+    {
+      id: "reason",
+      header: () => <span className="font-extrabold uppercase tracking-[0.08em]">Reason</span>,
+      cell: ({ row }) => <ReasonBadges reasons={row.original.reason} />,
+    },
+  ];
+}
+
 function CleanupPanel({ kind, title, description }: { kind: "project" | "session"; title: string; description: string }) {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const [selected, setSelected] = React.useState<Set<string>>(() => new Set());
+  const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [sessionAction, setSessionAction] = React.useState<"trash" | "delete">("trash");
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const action = kind === "project" ? "delete" : sessionAction;
+  const columns = React.useMemo(() => makeColumns(kind), [kind]);
 
   const preview = useQuery({
     queryKey: ["cleanup", kind],
     queryFn: () => fetchCleanupPreview(kind),
   });
 
+  const candidates = preview.data?.candidates ?? [];
+
+  const table = useReactTable({
+    data: candidates,
+    columns,
+    state: { rowSelection },
+    onRowSelectionChange: setRowSelection,
+    getCoreRowModel: getCoreRowModel(),
+    getRowId: (row) => row.path,
+    enableRowSelection: true,
+  });
+
+  const selectedPaths = Object.keys(rowSelection).filter((key) => rowSelection[key]);
+  const selectedCount = selectedPaths.length;
+
+  React.useEffect(() => {
+    setRowSelection({});
+  }, [candidates.length]);
+
   const apply = useMutation({
     mutationFn: () =>
       applyCleanup(kind, {
         action,
-        paths: Array.from(selected),
+        paths: selectedPaths,
         filters: preview.data?.filters ?? {},
       }),
     onSuccess: (result) => {
-      setSelected(new Set());
+      setRowSelection({});
       setConfirmOpen(false);
-      toast(`Applied ${result.action} to ${result.summary.target_count} item(s).`, "success");
+      toast.success(`Applied ${result.action} to ${result.summary.target_count} item(s).`);
       void queryClient.invalidateQueries({ queryKey: ["cleanup", kind] });
       void queryClient.invalidateQueries({ queryKey: ["overview"] });
     },
     onError: (error: Error) => {
-      toast(`Cleanup failed: ${error.message}`, "error");
+      toast.error(`Cleanup failed: ${error.message}`);
     },
   });
-
-  const candidates = preview.data?.candidates ?? [];
-  const allSelected = candidates.length > 0 && selected.size === candidates.length;
-
-  function toggle(path: string) {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  }
-
-  function toggleAll() {
-    setSelected(allSelected ? new Set() : new Set(candidates.map((item) => item.path)));
-  }
 
   function handleConfirm() {
     apply.mutate();
   }
 
   return (
-    <Card className="cleanup-panel panel-surface">
+    <Card>
       <CardHeader>
-        <div className="panel-title-row">
+        <div className="flex items-center justify-between gap-3 max-[32rem]:flex-col max-[32rem]:items-stretch">
           <div>
-            <CardTitle>{title}</CardTitle>
+            <CardTitle className="font-display text-xl tracking-tight">{title}</CardTitle>
             <CardDescription>{description}</CardDescription>
           </div>
-          <Badge variant={preview.data?.summary.candidate_count ? "risk" : "quiet"}>
+          <Badge variant={preview.data?.summary.candidate_count ? "destructive" : "secondary"}>
             {preview.data?.summary.candidate_count ?? 0} candidates
           </Badge>
         </div>
@@ -95,56 +156,57 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
         {preview.isError ? <StateBlock title="Cleanup preview failed" detail={preview.error.message} /> : null}
         {preview.data ? (
           <>
-            <div className="cleanup-actions">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 max-[32rem]:flex-col max-[32rem]:items-stretch">
               <Button variant="secondary" size="sm" onClick={() => void preview.refetch()}>
                 <RefreshCcw size={15} /> Refresh
               </Button>
               {kind === "session" ? (
-                <label className="select-field">
-                  <span>Action</span>
-                  <select value={sessionAction} onChange={(event) => setSessionAction(event.target.value as "trash" | "delete")}>
-                    <option value="trash">Trash</option>
-                    <option value="delete">Delete</option>
-                  </select>
-                </label>
+                <div className="grid min-w-[8rem] gap-1">
+                  <span className="font-display text-[0.82rem] font-extrabold uppercase tracking-[0.08em] text-muted-foreground">Action</span>
+                  <Select value={sessionAction} onValueChange={(v) => setSessionAction(v as "trash" | "delete")}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="trash">Trash</SelectItem>
+                      <SelectItem value="delete">Delete</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               ) : null}
               <Button
                 variant={action === "delete" ? "destructive" : "default"}
                 size="sm"
-                disabled={!selected.size || apply.isPending}
+                disabled={!selectedCount || apply.isPending}
                 onClick={() => setConfirmOpen(true)}
               >
-                <ShieldAlert size={15} /> {kind === "project" ? "Delete" : "Apply to"} {selected.size}
+                <ShieldAlert size={15} /> {kind === "project" ? "Delete" : "Apply to"} {selectedCount}
               </Button>
             </div>
-            <div className="table-shell compact-scroll">
+            <div className="max-h-96 overflow-auto rounded-[1.2rem] border border-foreground/13 dark:border-[rgb(255_255_255/8%)]">
               <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableHeader>
-                      <input type="checkbox" aria-label={`Select all ${kind} cleanup candidates`} checked={allSelected} onChange={toggleAll} />
-                    </TableHeader>
-                    <TableHeader>Target</TableHeader>
-                    <TableHeader>Reason</TableHeader>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {candidates.map((candidate) => (
-                    <TableRow key={candidate.path}>
-                      <TableCell>
-                        <input type="checkbox" aria-label={`Select ${candidate.path}`} checked={selected.has(candidate.path)} onChange={() => toggle(candidate.path)} />
-                      </TableCell>
-                      <TableCell>
-                        <TargetLabel target={candidate} />
-                      </TableCell>
-                      <TableCell>
-                        <ReasonBadges reasons={candidate.reason} />
-                      </TableCell>
+                <TableHead className="sticky top-0 z-1 bg-[#eee0bd] font-display text-[0.8rem] uppercase tracking-[0.08em] dark:bg-[#2a2620]">
+                  {table.getHeaderGroups().map((headerGroup) => (
+                    <TableRow key={headerGroup.id}>
+                      {headerGroup.headers.map((header) => (
+                        <TableHeader key={header.id} className={header.id === "select" ? "w-10" : undefined}>
+                          {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                        </TableHeader>
+                      ))}
                     </TableRow>
                   ))}
-                  {!candidates.length ? (
+                </TableHead>
+                <TableBody>
+                  {table.getRowModel().rows.map((row) => (
+                    <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                  {!table.getRowModel().rows.length ? (
                     <TableRow>
-                      <TableCell colSpan={3}>No cleanup candidates.</TableCell>
+                      <TableCell colSpan={columns.length}>No cleanup candidates.</TableCell>
                     </TableRow>
                   ) : null}
                 </TableBody>
@@ -154,24 +216,31 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
           </>
         ) : null}
       </CardContent>
-      <ConfirmDialog
-        open={confirmOpen}
-        title={`Confirm ${action}`}
-        description={`This will ${action} ${selected.size} selected ${kind} item(s). ${action === "delete" ? "This action cannot be undone." : "Items will be moved to trash."}`}
-        confirmLabel={`${action === "delete" ? "Delete" : "Trash"} ${selected.size} item(s)`}
-        variant={action === "delete" ? "destructive" : "default"}
-        onConfirm={handleConfirm}
-        onCancel={() => setConfirmOpen(false)}
-      />
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm {action}</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will {action} {selectedCount} selected {kind} item(s). {action === "delete" ? "This action cannot be undone." : "Items will be moved to trash."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant={action === "delete" ? "destructive" : "default"} onClick={handleConfirm}>
+              {action === "delete" ? "Delete" : "Trash"} {selectedCount} item(s)
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
 
 function TargetLabel({ target }: { target: CleanupTarget }) {
   return (
-    <div className="target-label">
+    <div className="grid gap-1">
       <strong>{target.project ?? target.vendor ?? "target"}</strong>
-      <span>{target.path}</span>
+      <span className="break-words font-mono text-[0.83rem] text-muted-foreground">{target.path}</span>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { RefreshCcw } from "lucide-react";
-import { Button } from "./ui/button";
+import { Button } from "@/components/ui/button";
 
 export function RefreshButton({ queries }: { queries: string[] }) {
   const client = useQueryClient();
