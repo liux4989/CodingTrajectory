@@ -178,7 +178,14 @@ Turn 1
 
 Keep the report short. Full event data belongs in `--output json`.
 
-`ct session overview` answers "what happened in the session tree?" It shows sessions, turns, compact activity labels, and hierarchy. The proposed context-window report answers "what is occupying the model context, when did it enter, and how much did it cost?" It should link back to overview/event-detail ids instead of replacing those commands.
+`ct session overview` answers "what happened in the session tree?" It shows sessions, turns, compact activity labels, and hierarchy. The terminal context-window report answers "what is occupying the model context, when did it enter, and how much did it cost?" It should link back to overview/event-detail ids instead of replacing those commands.
+
+| Surface | Primary question | Shape | Intended use |
+| --- | --- | --- | --- |
+| `ct session overview` | What happened? | Session tree, turns, requests, compact activity labels, step ids. | Navigate the reconstructed trajectory and find relevant turns/steps. |
+| Terminal context-window report | What is in context? | Context categories, token deltas, grouped timeline rows, warnings, and event/detail references. | Quickly diagnose context pressure and identify which kinds of input/output dominate. |
+
+The terminal report should stay dense and scan-friendly. It should not try to show full source snippets, long tool outputs, hover previews, or all nested evidence. Those belong in JSON or the browser view.
 
 ### Slice 3: Browser/Dashboard View
 
@@ -189,6 +196,15 @@ Add a browser-friendly view after the JSON contract stabilizes. Reuse the docs i
 - detail panel with source snippets, raw event ids, token fields, and confidence;
 - keyboard and click selection;
 - visible warnings for approximate attribution.
+
+The browser view is not just a prettier terminal report. It is the interactive inspection surface:
+
+| Surface | Primary question | Shape | Intended use |
+| --- | --- | --- | --- |
+| Terminal context-window report | What should I notice first? | Fixed text report with top categories, compact event rows, and warnings. | Fast CLI diagnosis, CI/log sharing, and agent-readable summaries. |
+| Browser/dashboard context-window view | How do I inspect the evidence? | Visual context bar, selectable/pinnable events, detail panel, source snippets, and drilldowns. | Explore category composition, compare events, inspect evidence, and navigate without flooding stdout. |
+
+The browser view should consume the same JSON contract as the terminal report. Differences should be presentation and interaction, not separate analysis logic.
 
 ### Deferred: Provider Evidence Adapter
 
