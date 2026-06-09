@@ -75,7 +75,7 @@ For each session, capture:
 
 ## Evidence Pass
 
-Before implementation, run a one-day evidence pass:
+Before implementation, run an evidence pass:
 
 1. Use `ct project sessions` to find candidate sessions in this repo across supported providers.
 2. Use current CT JSON commands first, then inspect raw records only for missing prompt-block labels, environment metadata, hook records, tool-use records, and usage blocks.
@@ -90,6 +90,49 @@ Before implementation, run a one-day evidence pass:
 4. Decide which categories are supported in v0 and which must be marked approximate or unavailable.
 
 Current CT commands do provide the base information needed for the plugin: normalized trajectory, usage, stats, and event detail. The evidence pass is about completeness of category attribution, not about whether a plugin can be built. For example, if a provider only exposes aggregate cache buckets, row-level categories like `Environment info +280` must be approximate or unavailable for that provider.
+
+### Evidence Pass: 2026-06-09 Codex Sessions
+
+Initial validation used these two real Codex sessions from this repo:
+
+- `019eaa85-d49f-79a2-a68c-8ff699eb5292`
+- `019eaa7f-4408-75b1-b8d7-d6d37679d495`
+
+The current CT command surfaces were enough to build a v0 plugin projection for these sessions:
+
+| Need | CT command | Result |
+| --- | --- | --- |
+| Session tree and turn activity | `ct session overview --global-scope --output json SESSION_ID` | Works for both sessions; exposes vendor, cwd, turns, user requests, activity labels, and step ids. |
+| Context composition | `ct session stats --global-scope --output json SESSION_ID` | Works for both sessions; exposes model, context window, used tokens, runtime, messages, usage, quota, warnings, and nested context categories. |
+| Turn-level usage/cost | `ct session usage --global-scope --output json SESSION_ID` | Works for both sessions; separates `tool_steps` from `response_steps` with token and cost totals. |
+| Raw setup/context blocks | `ct session event-scan --global-scope SESSION_ID --type vendor.raw --filter raw_type=prompt_block --output json` | Works for both sessions; exposes source-labeled prompt blocks such as `base_instructions`, `permissions`, `collaboration_mode`, `skills_instructions`, `plugins_instructions`, developer blocks, and `agents_md`. |
+| Raw token snapshots | `ct session event-scan --global-scope SESSION_ID --type vendor.raw --filter raw_type=token_count --output json` | Works for both sessions; exposes model, last usage, cumulative usage, context window, and quota snapshots. |
+| Tool output evidence | `ct session event-scan --global-scope SESSION_ID --type tool.call.succeeded --output json` | Works for both sessions; exposes compact tool-result evidence with event ids, timestamps, tool call ids, exit codes, output lengths, and status. |
+
+Observed session stats:
+
+| Session | Provider | Turns | Tools | Latest context used | Main context-window signal |
+| --- | --- | ---: | ---: | ---: | --- |
+| `019eaa85-d49f-79a2-a68c-8ff699eb5292` | `codex_cli` | 6 | 43 | 86,679 tokens, 33.5% | `Tool results` are split into `Context gathered`, `Verification`, and `Repository operations`; `Context gathered` includes file reads, search results, and CLI/report inspection. |
+| `019eaa7f-4408-75b1-b8d7-d6d37679d495` | `codex_cli` | 1 | 37 | 75,608 tokens, 29.3% | `Tool results` are split into `Context gathered`, `Code changes`, `Verification`, `Repository operations`, and `Other command output`. |
+
+The newer `ct session stats` tool-output taxonomy directly helps this plugin. It gives the context-window view a useful first category tree without reading raw logs:
+
+- `Context gathered`: read/search/list/report material that usually explains why context grows.
+- `Code changes`: edits, writes, and formatter/fixer output.
+- `Verification`: test, lint, build, and typecheck output.
+- `Repository operations`: git and repository command output.
+- `Dependency / environment`: package manager and environment diagnostics when present.
+- `Execution / app runtime`: local app/server/runtime output when present.
+- `External interaction`: network/deploy/remote command output when present.
+- `Other command output` and `Other / unclassified`: retained fallbacks for commands or tools that should not be forced into the design taxonomy.
+
+Decision from this pass:
+
+- v0 can be built as a read-only plugin projection over current CT APIs for Codex sessions.
+- No raw event enrichment is needed for these two Codex sessions.
+- No near-term change is needed to expose internal category `confidence` or `source` fields in JSON.
+- Cross-provider validation is still open: these two sessions validate Codex only, not Claude Code, Pi, or mixed-provider session graphs.
 
 ## Implementation Slices
 
@@ -110,7 +153,7 @@ Create a plugin-local projection module that calls stable CT JSON commands and e
 }
 ```
 
-This slice may use existing cache buckets only. Warnings must clearly say when the category breakdown is approximate.
+This slice should start from `ct session stats` categories and `ct session overview` timeline data. For Codex, the current stats taxonomy is already detailed enough to produce a useful v0 context-window report. Warnings must clearly say when a provider's category breakdown is approximate.
 
 ### Slice 2: Provider Evidence Adapter
 
