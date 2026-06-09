@@ -272,10 +272,10 @@ def compact_usage(usage: dict[str, Any] | None, *, include_cost: bool = True) ->
         return None
     return drop_none(
         {
-            "in": usage.get("input_tokens"),
-            "cache": usage.get("cached_input_tokens"),
-            "out": usage.get("output_tokens"),
-            "reason": usage.get("reasoning_output_tokens"),
+            "input": usage.get("input_tokens"),
+            "cached": usage.get("cached_input_tokens"),
+            "output": usage.get("output_tokens"),
+            "reasoning": usage.get("reasoning_output_tokens"),
             "total": usage.get("total_tokens"),
             "cost": usage.get("cost_usd") if include_cost else None,
         }
@@ -289,7 +289,7 @@ def compact_request(request: Any) -> Any:
     return drop_none(
         {
             "text": text,
-            "src": request.get("source"),
+            "source": request.get("source"),
             "type": request.get("type") if request.get("type") not in {None, "message"} else None,
         }
     ) or None
@@ -301,7 +301,7 @@ def compact_activity(activity: Any) -> Any:
     if "tool" in activity:
         compact = {
             "tool": activity.get("tool"),
-            "n": activity.get("count"),
+            "count": activity.get("count"),
             "status": activity.get("status"),
         }
         for key in ("cmd", "path", "query", "url", "text"):
@@ -310,13 +310,13 @@ def compact_activity(activity: Any) -> Any:
         for key in ("paths", "queries", "urls", "targets"):
             if activity.get(key) is not None:
                 compact[key] = activity.get(key)
-        if compact.get("n") == 1:
-            compact.pop("n", None)
+        if compact.get("count") == 1:
+            compact.pop("count", None)
         return drop_none(compact)
     if "text" in activity:
         return {"text": activity.get("text")}
     if "teammate_summary" in activity:
-        return {"team": activity.get("teammate_summary")}
+        return {"teammate_summary": activity.get("teammate_summary")}
     return activity
 
 
@@ -339,11 +339,11 @@ def compact_context_category(category: Any) -> Any:
         return category
     return drop_none(
         {
-            "k": category.get("key"),
-            "l": category.get("label"),
-            "t": category.get("tokens"),
-            "p": category.get("percent"),
-            "c": [compact_context_category(child) for child in category.get("children") or []] or None,
+            "key": category.get("key"),
+            "label": category.get("label"),
+            "tokens": category.get("tokens"),
+            "pct": category.get("percent"),
+            "children": [compact_context_category(child) for child in category.get("children") or []] or None,
         }
     )
 
@@ -353,7 +353,9 @@ def compact_payload(method: str, payload: Any) -> Any:
         items = payload.get("items") or {}
         return {
             "items": {
-                name: drop_none({"p": item.get("path"), "v": item.get("vendors"), "sessions": item.get("sessions")})
+                name: drop_none(
+                    {"path": item.get("path"), "vendors": item.get("vendors"), "sessions": item.get("sessions")}
+                )
                 for name, item in items.items()
                 if isinstance(item, dict)
             }
@@ -366,7 +368,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                     {
                         "id": item.get("root_session_id"),
                         "title": item.get("title"),
-                        "v": item.get("vendors"),
+                        "vendors": item.get("vendors"),
                         "sessions": item.get("session_ids"),
                     }
                 )
@@ -382,8 +384,8 @@ def compact_payload(method: str, payload: Any) -> Any:
                 drop_none(
                     {
                         "id": session.get("session_id"),
-                        "rel": compact_relationship(session.get("relationship")),
-                        "v": session.get("vendor"),
+                        "relationship": compact_relationship(session.get("relationship")),
+                        "vendor": session.get("vendor"),
                         "status": session.get("status"),
                         "agent": session.get("agent_name"),
                         "cwd": session.get("cwd"),
@@ -392,9 +394,10 @@ def compact_payload(method: str, payload: Any) -> Any:
                                 {
                                     "id": turn.get("turn_id"),
                                     "status": turn.get("status"),
-                                    "req": compact_request(turn.get("user_request")),
-                                    "act": [compact_activity(activity) for activity in turn.get("activity") or []] or None,
-                                    "team": turn.get("teammate_summary"),
+                                    "request": compact_request(turn.get("user_request")),
+                                    "activity": [compact_activity(activity) for activity in turn.get("activity") or []]
+                                    or None,
+                                    "teammate_summary": turn.get("teammate_summary"),
                                     "steps": ((turn.get("refs") or {}).get("step_ids") if isinstance(turn.get("refs"), dict) else None),
                                 }
                             )
@@ -422,7 +425,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                             "session": turn.get("session_id"),
                             "usage": compact_usage(turn.get("usage")),
                             "cost": turn.get("cost_usd"),
-                            "act": [
+                            "activity": [
                                 drop_none(
                                     {
                                         "kind": item.get("category"),
@@ -439,7 +442,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                     for turn in payload.get("turns") or []
                     if isinstance(turn, dict)
                 ],
-                "warn": payload.get("warnings") or None,
+                "warnings": payload.get("warnings") or None,
             }
         )
 
@@ -452,32 +455,36 @@ def compact_payload(method: str, payload: Any) -> Any:
         return drop_none(
             {
                 "id": payload.get("root_session_id"),
-                "v": payload.get("vendor"),
-                "model": drop_none({"name": model.get("name"), "ctx": model.get("context_window_tokens")}) or None,
-                "ctx": drop_none(
+                "vendor": payload.get("vendor"),
+                "model": drop_none(
+                    {"name": model.get("name"), "context_window": model.get("context_window_tokens")}
+                )
+                or None,
+                "context": drop_none(
                     {
                         "used": ctx.get("used_tokens"),
                         "pct": ctx.get("used_percent"),
-                        "cats": [compact_context_category(item) for item in ctx.get("categories") or []] or None,
+                        "categories": [compact_context_category(item) for item in ctx.get("categories") or []]
+                        or None,
                     }
                 )
                 or None,
-                "rt": drop_none(
+                "runtime": drop_none(
                     {
                         "status": runtime.get("status"),
                         "start": runtime.get("started_at"),
                         "end": runtime.get("ended_at"),
-                        "dur_s": runtime.get("duration_seconds"),
+                        "duration_seconds": runtime.get("duration_seconds"),
                         "turns": runtime.get("turns"),
                         "steps": runtime.get("model_steps"),
                         "tools": runtime.get("tool_calls"),
-                        "ftools": runtime.get("failed_tool_calls") or None,
-                        "subs": runtime.get("subagent_sessions"),
+                        "failed_tools": runtime.get("failed_tool_calls") or None,
+                        "subagents": runtime.get("subagent_sessions"),
                         "compactions": runtime.get("compactions"),
                     }
                 )
                 or None,
-                "msg": drop_none(
+                "messages": drop_none(
                     {
                         "user": messages.get("user"),
                         "assistant": messages.get("assistant"),
@@ -498,7 +505,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                     }
                 )
                 or None,
-                "warn": payload.get("warnings") or None,
+                "warnings": payload.get("warnings") or None,
             }
         )
 
@@ -508,7 +515,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                 {
                     "id": item.get("step_id"),
                     "type": item.get("type"),
-                    "ops": item.get("operations"),
+                    "operations": item.get("operations"),
                     "shape": item.get("shape"),
                     "events": item.get("event_ids"),
                 }
@@ -522,9 +529,9 @@ def compact_payload(method: str, payload: Any) -> Any:
             {
                 "id": payload.get("event_id"),
                 "session": payload.get("session_id"),
-                "ts": payload.get("timestamp"),
+                "timestamp": payload.get("timestamp"),
                 "type": payload.get("type"),
-                "tool": payload.get("tool_call"),
+                "tool_call": payload.get("tool_call"),
                 "llm": payload.get("llm"),
                 "text": payload.get("text"),
             }
@@ -540,7 +547,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                         {
                             "id": item.get("event_id"),
                             "session": item.get("session_id"),
-                            "ts": item.get("timestamp"),
+                            "timestamp": item.get("timestamp"),
                             "payload": item.get("payload"),
                         }
                     )

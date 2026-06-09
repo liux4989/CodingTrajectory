@@ -42,18 +42,8 @@ def _session_title(session: Session) -> str | None:
         return extensions.codex.title
     if extensions and extensions.claude_code and extensions.claude_code.title:
         return extensions.claude_code.title
-    return None
-
-
-def _first_user_prompt_title(session: Session) -> str | None:
-    for event in session.events:
-        if event.type != EventType.USER_PROMPT_SUBMITTED:
-            continue
-        text = event.payload.get("text")
-        if not isinstance(text, str):
-            continue
-        title = " ".join(text.split())
-        return title or None
+    if extensions and extensions.pi and extensions.pi.title:
+        return extensions.pi.title
     return None
 
 
@@ -61,11 +51,11 @@ def _session_graph_title(session_graph: SessionGraph) -> str | None:
     by_id = {session.session_id: session for session in session_graph.sessions}
     root = by_id.get(session_graph.root_session_id)
     if root is not None:
-        title = _session_title(root) or _first_user_prompt_title(root)
+        title = _session_title(root)
         if title:
             return title
     for session in session_graph.sessions:
-        title = _session_title(session) or _first_user_prompt_title(session)
+        title = _session_title(session)
         if title:
             return title
     return None

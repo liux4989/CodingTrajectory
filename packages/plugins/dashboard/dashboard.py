@@ -42,8 +42,8 @@ def _projects(args: argparse.Namespace) -> int:
     items = payload.get("items") or {}
     print(f"Projects ({len(items)})")
     for name, meta in sorted(items.items()):
-        vendors = ", ".join(meta.get("v") or []) or "-"
-        print(f"  {name:<28} {vendors:<20} {meta.get('p') or '-'}")
+        vendors = ", ".join(meta.get("vendors") or []) or "-"
+        print(f"  {name:<28} {vendors:<20} {meta.get('path') or '-'}")
     return 0
 
 
@@ -58,7 +58,7 @@ def _sessions(args: argparse.Namespace) -> int:
     print(f"Sessions ({len(sessions)})")
     for item in sessions[:20]:
         root_id = str(item.get("id") or "-")
-        vendors = ", ".join(item.get("v") or []) or "-"
+        vendors = ", ".join(item.get("vendors") or []) or "-"
         title = _one_line(item.get("title") or "-", 88)
         print(f"  {root_id[:8]}  {vendors:<18} {title}")
     if len(sessions) > 20:

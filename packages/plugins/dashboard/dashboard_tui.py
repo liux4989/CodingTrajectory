@@ -454,8 +454,8 @@ class DashboardApp(App[None]):
         table = self._reset_table(["Project", "Vendors", "Path"])
         items = self._projects_payload.get("items") or {}
         for name, meta in sorted(items.items()):
-            vendors = ", ".join(meta.get("v") or []) or "-"
-            path = meta.get("p") or "-"
+            vendors = ", ".join(meta.get("vendors") or []) or "-"
+            path = meta.get("path") or "-"
             key = f"project:{name}"
             self._rows[key] = {"kind": "project", "name": name, "meta": meta}
             self._visible_row_keys.append(key)
@@ -467,7 +467,7 @@ class DashboardApp(App[None]):
         items = self._sessions_payload.get("items") or []
         for item in items:
             root_id = str(item.get("id") or "-")
-            vendors = ", ".join(item.get("v") or []) or "-"
+            vendors = ", ".join(item.get("vendors") or []) or "-"
             title = _one_line(item.get("title") or "-", 90)
             merged = str(len(item.get("sessions") or []))
             key = f"session:{root_id}"

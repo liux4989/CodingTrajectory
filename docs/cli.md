@@ -36,8 +36,11 @@ exact data:
 - Report commands default to `--output markdown`.
 - Detail and raw-query commands default to `--output json`.
 - Any command can switch format with `--output markdown|json`.
-- JSON mode is minified and uses a compact public schema on the exposed CLI
-  surface to reduce token cost.
+- JSON mode is minified and uses a token-efficient public schema. Property
+  names remain meaningful; short names are used only when they are established
+  and unambiguous in context, such as `id`, `cwd`, `url`, `cmd`, and `pct`.
+  Redundant suffixes may be omitted when the containing object supplies the
+  meaning, such as `usage.input` instead of `usage.input_tokens`.
 
 Automation can pass command params as a JSON object with `--params JSON` on
 commands that dispatch to the core query surface. Explicit CLI flags override

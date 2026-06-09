@@ -191,6 +191,8 @@ class PiAdapter(BaseAdapter):
                 content = message.get("content", [])
                 if _is_real_user_message(message):
                     text = _content_text(content)
+                    if text and not self._session_title:
+                        self._session_title = " ".join(text.split()) or None
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),

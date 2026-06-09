@@ -440,7 +440,7 @@ def _project_metadata_target(
     codex_config_paths: list[Path],
     metadata_paths: list[Path],
 ) -> tuple[ProjectTarget | None, list[SkippedTarget]]:
-    raw_path = item.get("p")
+    raw_path = item.get("path")
     project_path = (
         Path(raw_path).expanduser() if isinstance(raw_path, str) and raw_path else None
     )
@@ -490,7 +490,7 @@ def _project_metadata_target(
             reason=reasons or ["old_project"],
             last_activity_at=None,
             session_count=len(metadata_paths) if cleanup_paths else 0,
-            vendors=sorted(item.get("v") or []),
+            vendors=sorted(item.get("vendors") or []),
         ),
         [],
     )

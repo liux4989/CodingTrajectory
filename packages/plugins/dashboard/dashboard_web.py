@@ -242,8 +242,8 @@ def _project_detail_payload(query: dict[str, list[str]]) -> dict[str, Any]:
     )
     return {
         "name": project_name,
-        "path": meta.get("p"),
-        "vendors": meta.get("v") or [],
+        "path": meta.get("path"),
+        "vendors": meta.get("vendors") or [],
         "sessions": sessions.get("items") or [],
         "session_count": len(sessions.get("items") or []),
     }
@@ -268,7 +268,7 @@ def _session_timeline_payload(query: dict[str, list[str]]) -> dict[str, Any]:
             {
                 "id": item.get("id"),
                 "title": item.get("title"),
-                "v": item.get("v") or [],
+                "v": item.get("vendors") or [],
             }
         )
     timeline = [
@@ -283,7 +283,7 @@ def _vendor_payload(query: dict[str, list[str]]) -> dict[str, Any]:
     items = projects.get("items") or {}
     vendor_stats: dict[str, dict[str, Any]] = {}
     for name, meta in items.items():
-        for vendor in meta.get("v") or []:
+        for vendor in meta.get("vendors") or []:
             if vendor not in vendor_stats:
                 vendor_stats[vendor] = {"count": 0, "projects": []}
             vendor_stats[vendor]["count"] += 1
@@ -312,8 +312,8 @@ def _project_payload(query: dict[str, list[str]]) -> dict[str, Any]:
         "items": [
             {
                 "name": name,
-                "path": item.get("p"),
-                "vendors": item.get("v") or [],
+                "path": item.get("path"),
+                "vendors": item.get("vendors") or [],
             }
             for name, item in sorted(items.items())
         ]
