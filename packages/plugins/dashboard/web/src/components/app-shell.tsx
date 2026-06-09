@@ -62,7 +62,7 @@ function Sidebar({ open, onClose, theme, onToggleTheme }: SidebarProps) {
             CT
           </div>
           <div>
-            <p className="mb-0.5 font-display text-[0.74rem] font-extrabold uppercase tracking-[0.14em] text-primary">
+            <p className="mb-0.5 font-display text-eyebrow font-extrabold uppercase tracking-wider text-primary">
               Plugin Web Program
             </p>
             <h1 className="m-0 font-display text-[1.1rem] font-bold tracking-tight">CodingTrajectory</h1>
@@ -81,14 +81,14 @@ function Sidebar({ open, onClose, theme, onToggleTheme }: SidebarProps) {
         </nav>
         <div className="mt-auto grid gap-4">
           <button
-            className="flex cursor-pointer items-center gap-2.5 rounded-full border border-foreground/13 bg-transparent px-3.5 py-2.5 font-display text-[0.85rem] font-bold text-muted-foreground hover:border-primary/24 hover:bg-primary/8 hover:text-foreground"
+            className="flex cursor-pointer items-center gap-2.5 rounded-full border border-foreground/13 bg-transparent px-3.5 py-2.5 font-display text-body-sm font-bold text-muted-foreground hover:border-primary/24 hover:bg-primary/8 hover:text-foreground"
             onClick={onToggleTheme}
             aria-label="Toggle color theme"
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
           </button>
-          <p className="text-[0.95rem] leading-relaxed text-muted-foreground">
+          <p className="text-body leading-relaxed text-muted-foreground">
             Runs locally through <code>ct plugin dashboard web</code>. Destructive actions stay preview-first.
           </p>
         </div>

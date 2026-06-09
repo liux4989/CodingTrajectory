@@ -135,7 +135,7 @@ function CapacityBar({
               </Tooltip.Trigger>
               <Tooltip.Portal>
                 <Tooltip.Content
-                  className="z-[120] max-w-[min(20rem,calc(100vw-2rem))] rounded-md border border-foreground/12 bg-card px-3 py-2 text-[0.82rem] leading-[1.35] text-foreground shadow-[0_24px_70px_rgb(49_42_25/18%)]"
+                  className="z-[120] max-w-[min(20rem,calc(100vw-2rem))] rounded-md border border-foreground/12 bg-card px-3 py-2 text-caption leading-[1.35] text-foreground shadow-popover"
                   side="bottom"
                   sideOffset={6}
                 >
@@ -217,7 +217,7 @@ export function ContextWindowRoute() {
           <Link to="/sessions" className="mb-4 inline-flex items-center gap-1.5 font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]">
             <ArrowLeft size={16} /> Sessions
           </Link>
-          <CardTitle className="font-display text-[clamp(2rem,4vw,3.5rem)] leading-[0.95] tracking-[-0.03em]">
+          <CardTitle className="font-display text-display leading-tight tracking-tight">
             Explore the context window
           </CardTitle>
           <CardDescription>
@@ -243,18 +243,18 @@ export function ContextWindowRoute() {
 
       <ul className="m-0 flex flex-wrap gap-x-4 gap-y-1.5 list-none" role="list">
         {payload.categories.map((category: ContextCategory) => (
-          <li key={category.id} className="inline-flex min-w-0 items-center gap-1.5 text-[0.82rem] text-muted-foreground">
+          <li key={category.id} className="inline-flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
             <span className="inline-block h-[0.55rem] w-[0.55rem] rounded-[2px]" style={categoryDotStyle(category.category)} />
             <span>{category.label}</span>
           </li>
         ))}
-        <li className="inline-flex items-center gap-1.5 text-[0.82rem] text-muted-foreground">
+        <li className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
           <Eye size={12} />
           <span>= appears in your terminal</span>
         </li>
       </ul>
 
-      <figure className="m-0 rounded-xl border border-foreground/13 bg-card p-4 dark:border-[rgb(255_255_255/8%)]">
+      <figure className="m-0 rounded-xl border border-foreground/13 bg-card p-4 dark:border-border-subtle">
         <figcaption className="flex items-center justify-between gap-4 font-display text-[0.9rem]">
           <span>Context timeline</span>
           <strong className="font-mono">
@@ -299,7 +299,7 @@ export function ContextWindowRoute() {
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
                       <Tooltip.Content
-                        className="z-[120] max-w-[min(28rem,calc(100vw-2rem))] rounded-md border border-foreground/12 bg-card px-3 py-2 text-[0.82rem] leading-[1.35] text-foreground shadow-[0_24px_70px_rgb(49_42_25/18%)]"
+                        className="z-[120] max-w-[min(28rem,calc(100vw-2rem))] rounded-md border border-foreground/12 bg-card px-3 py-2 text-caption leading-[1.35] text-foreground shadow-popover"
                         side="top"
                         sideOffset={8}
                       >
@@ -335,7 +335,7 @@ export function ContextWindowRoute() {
                       {startsGroup ? (
                         <li className="list-none">
                           <h4 className={cn(
-                            "font-display text-[0.78rem] font-extrabold uppercase tracking-[0.1em]",
+                            "font-display text-eyebrow font-extrabold uppercase tracking-wide",
                             event.group === "before_first_prompt" ? "text-primary" : "text-muted-foreground",
                             index > 0 && "mt-4",
                           )}>
@@ -349,7 +349,7 @@ export function ContextWindowRoute() {
                           type="button"
                           className={cn(
                             "relative grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 overflow-hidden rounded-xl border border-foreground/11 bg-foreground/5 px-4 py-3 text-start text-foreground cursor-pointer",
-                            "dark:border-[rgb(255_255_255/8%)] dark:bg-[rgb(255_255_255/4%)]",
+                            "dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]",
                             "hover:border-primary/60 hover:bg-foreground/8",
                             isActive && "border-primary/60 bg-foreground/8",
                           )}
@@ -378,12 +378,12 @@ export function ContextWindowRoute() {
                                 <Badge variant="secondary" className="font-mono text-[0.7rem]">
                                   {event.confidence === "exact_usage" || event.confidence === "exact_text" ? "auto" : event.confidence.replaceAll("_", " ")}
                                 </Badge>
-                                <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.88rem] text-muted-foreground">
+                                <span className="overflow-hidden text-ellipsis whitespace-nowrap text-body-sm text-muted-foreground">
                                   {event.source}
                                 </span>
                               </span>
                             </span>
-                            <strong className="font-display text-[1rem]">{event.label}</strong>
+                            <strong className="font-display text-body">{event.label}</strong>
                           </span>
                           <span className="flex items-center gap-2">
                             {event.terminal_visible ? (
@@ -417,13 +417,13 @@ export function ContextWindowRoute() {
           </ScrollArea.Root>
         </section>
 
-        <aside className="sticky top-4 rounded-xl border border-foreground/13 bg-card p-5 max-lg:static dark:border-[rgb(255_255_255/8%)] dark:bg-[rgb(255_255_255/4%)]">
+        <aside className="sticky top-4 rounded-xl border border-foreground/13 bg-card p-5 max-lg:static dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]">
           {activeEvent ? (
             <>
               <div className="flex items-center justify-between gap-4 font-display">
                 <div>
-                  <p className="mb-1 font-display text-[0.74rem] font-extrabold uppercase tracking-[0.14em] text-primary">{categoryLabel(activeEvent.category)}</p>
-                  <h3 className="m-0 font-display text-[1.45rem]">{activeEvent.label}</h3>
+                  <p className="mb-1 font-display text-eyebrow font-extrabold uppercase tracking-wider text-primary">{categoryLabel(activeEvent.category)}</p>
+                  <h3 className="m-0 font-display text-heading">{activeEvent.label}</h3>
                 </div>
                 <Button
                   size="sm"
@@ -463,17 +463,17 @@ export function ContextWindowRoute() {
             </>
           ) : (
             <>
-              <h3 className="m-0 font-display text-[1.45rem]">Hover or click any event</h3>
+              <h3 className="m-0 font-display text-heading">Hover or click any event</h3>
               <p className="mt-1 text-muted-foreground">Hover to preview. Click to pin so you can scroll.</p>
-              <div className="mt-6 overflow-hidden rounded-xl border border-orange-500/30">
-                <div className="bg-orange-500/90 px-4 py-2 font-display text-[0.78rem] font-extrabold uppercase tracking-[0.1em] text-white">
+              <div className="mt-6 overflow-hidden rounded-xl border border-warning/30">
+                <div className="bg-warning px-4 py-2 font-display text-eyebrow font-extrabold uppercase tracking-wide text-white">
                   Key Takeaway
                 </div>
                 <div className="bg-foreground/5 px-4 py-4">
-                  <p className="m-0 font-display text-[1.05rem] font-bold leading-snug">
+                  <p className="m-0 font-display text-body font-bold leading-snug">
                     A lot loads before you type anything.
                   </p>
-                  <p className="m-0 mt-2 text-[0.92rem] leading-relaxed text-muted-foreground">
+                  <p className="m-0 mt-2 text-body-sm leading-relaxed text-muted-foreground">
                     CLAUDE.md, memory, skills, and MCP tools are all in context before your first prompt.
                   </p>
                 </div>

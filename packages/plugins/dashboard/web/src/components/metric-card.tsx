@@ -15,7 +15,7 @@ export function MetricCard({ label, value, detail, sparklineEntries, ratio }: Me
     <Card className="metric-card grid gap-1 [&_[data-slot=card-content]]:grid [&_[data-slot=card-content]]:gap-1">
       <CardContent className="grid gap-1">
         <p className="m-0 text-muted-foreground">{label}</p>
-        <p className="m-0 font-display text-[clamp(2rem,4vw,3.8rem)] font-[850] leading-[0.95]">{value.toLocaleString()}</p>
+        <p className="m-0 font-display text-metric font-extrabold leading-tight">{value.toLocaleString()}</p>
         <p className="m-0 text-muted-foreground">{detail}</p>
         {sparklineEntries?.length ? <Sparkline entries={sparklineEntries} /> : null}
         {ratio != null ? (
