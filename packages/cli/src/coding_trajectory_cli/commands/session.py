@@ -180,21 +180,29 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
 
     used_tokens = context_window.get("used_tokens") or usage.get("input_tokens")
     used_percent = context_window.get("used_percent")
+    tool_calls_total = runtime.get("tool_calls") or 0
+    failed_tool_calls = runtime.get("failed_tool_calls") or 0
+    runtime_line = (
+        f"Runtime: {format_duration(runtime.get('duration_seconds'))}, "
+        f"{runtime.get('turns') or 0} turns, "
+        f"{runtime.get('model_steps') or 0} model steps, "
+        f"{tool_calls_total} tool calls"
+    )
+    if failed_tool_calls:
+        runtime_line += f" ({failed_tool_calls} failed)"
+    runtime_line += f", {runtime.get('subagent_sessions') or 0} subagent sessions"
     lines.extend(
         [
             "",
             f"Used: {format_tokens(used_tokens)} tokens {format_percent(used_percent)} of context",
-            (
-                f"Runtime: {format_duration(runtime.get('duration_seconds'))}, "
-                f"{runtime.get('turns') or 0} turns, "
-                f"{runtime.get('model_steps') or 0} model steps, "
-                f"{runtime.get('tool_calls') or 0} tool calls, "
-                f"{runtime.get('subagent_sessions') or 0} subagent sessions"
-            ),
+            runtime_line,
         ]
     )
     if runtime.get("compactions"):
         lines[-1] += f", {runtime['compactions']} compactions"
+    if tool_calls_total:
+        success_rate = round(((tool_calls_total - failed_tool_calls) / tool_calls_total) * 100, 1)
+        lines.append(f"Tool Success Rate: {success_rate}%")
     if messages:
         lines.append(
             "Messages: "

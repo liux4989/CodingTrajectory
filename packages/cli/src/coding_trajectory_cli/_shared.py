@@ -373,6 +373,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "turns": runtime.get("turns"),
                         "steps": runtime.get("model_steps"),
                         "tools": runtime.get("tool_calls"),
+                        "ftools": runtime.get("failed_tool_calls") or None,
                         "subs": runtime.get("subagent_sessions"),
                         "compactions": runtime.get("compactions"),
                     }

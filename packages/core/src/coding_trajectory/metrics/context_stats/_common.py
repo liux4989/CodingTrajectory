@@ -34,6 +34,12 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         for event in session.events
         if event.type == EventType.TOOL_CALL_REQUESTED
     )
+    failed_tool_calls = sum(
+        1
+        for session in session_graph.sessions
+        for event in session.events
+        if event.type == EventType.TOOL_CALL_FAILED
+    )
     compactions = sum(
         1
         for session in session_graph.sessions
@@ -48,6 +54,7 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         turns=sum(len(session.turns) for session in session_graph.sessions),
         model_steps=sum(len(turn.steps) for session in session_graph.sessions for turn in session.turns),
         tool_calls=tool_calls,
+        failed_tool_calls=failed_tool_calls,
         subagent_sessions=sum(
             1 for session in session_graph.sessions if session.parent_session_id is not None
         ),

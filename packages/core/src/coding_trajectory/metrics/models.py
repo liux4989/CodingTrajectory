@@ -264,6 +264,7 @@ class RuntimeStatsFlat(BaseModel):
     turns: int = 0
     model_steps: int = 0
     tool_calls: int = 0
+    failed_tool_calls: int = 0
     subagent_sessions: int = 0
     compactions: int = 0
 
