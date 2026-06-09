@@ -29,8 +29,16 @@ function evidenceLabel(evidence: TokenEvidence | null) {
   return `${formatTokens(evidence.value)} tokens, ${evidence.confidence.replaceAll("_", " ")}`;
 }
 
-function categoryTotal(categories: ContextCategory[]) {
-  return categories.reduce((total, category) => total + category.tokens.value, 0);
+function topCategories(categories: ContextCategory[]) {
+  return [...categories]
+    .sort((left, right) => right.tokens.value - left.tokens.value)
+    .slice(0, 6);
+}
+
+function eventTimelineLabel(event: ContextEvent, index: number) {
+  const group = groupLabel(event);
+  const tokens = event.tokens ? `, ${formatTokens(event.tokens.value)} tokens` : "";
+  return `Step ${index + 1}: ${group}, ${event.label}${tokens}`;
 }
 
 export function ContextWindowRoute() {
@@ -52,6 +60,13 @@ export function ContextWindowRoute() {
   const activeId = pinnedId ?? hoveredId ?? selectedId ?? events[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
 
+  function activateEvent(id: string) {
+    setHoveredId(id);
+    setSelectedId(id);
+    const index = events.findIndex((event) => event.id === id);
+    eventRefs.current[index]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
   function moveFocus(index: number, direction: -1 | 1) {
     const next = Math.min(Math.max(index + direction, 0), events.length - 1);
     eventRefs.current[next]?.focus();
@@ -66,7 +81,7 @@ export function ContextWindowRoute() {
   }
 
   const payload = query.data;
-  const total = categoryTotal(payload.categories);
+  const visibleCategories = topCategories(payload.categories);
 
   return (
     <div className="route-stack context-route">
@@ -84,29 +99,54 @@ export function ContextWindowRoute() {
 
       <figure className="context-composition card">
         <figcaption>
-          <span>Observed context composition</span>
-          <strong>{formatTokens(payload.context_window_tokens?.value)} window</strong>
+          <span>Compact context timeline</span>
+          <strong>
+            {formatTokens(payload.used_tokens?.value)}
+            {payload.used_percent != null ? ` (${payload.used_percent.toFixed(1)}%)` : ""} used
+          </strong>
         </figcaption>
-        <div className="context-bar" aria-label="Context category composition">
-          {payload.categories.map((category) => (
-            <span
-              key={category.id}
-              className="context-bar-segment"
-              data-category={category.category}
-              style={{ inlineSize: `${total ? (category.tokens.value / total) * 100 : 0}%` }}
-              title={`${category.label}: ${formatTokens(category.tokens.value)} tokens`}
-            />
-          ))}
-        </div>
+        <ol
+          className="context-timeline"
+          aria-label="Ordered context event timeline"
+          onMouseLeave={() => setHoveredId(null)}
+        >
+          {events.map((event, index) => {
+            const isActive = event.id === activeId;
+            return (
+              <li key={event.id}>
+                <button
+                  type="button"
+                  className={`context-timeline-step ${isActive ? "is-active" : ""}`}
+                  data-category={event.category}
+                  aria-label={eventTimelineLabel(event, index)}
+                  aria-current={isActive ? "step" : undefined}
+                  title={eventTimelineLabel(event, index)}
+                  onMouseEnter={() => activateEvent(event.id)}
+                  onFocus={() => activateEvent(event.id)}
+                  onBlur={() => setHoveredId(null)}
+                  onClick={() => setSelectedId(event.id)}
+                >
+                  <span>{index + 1}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
         <ul className="context-legend" role="list">
-          {payload.categories.map((category) => (
+          {visibleCategories.map((category) => (
             <li key={category.id}>
               <span className="category-swatch" data-category={category.category} />
               <span>{category.label}</span>
               <strong>{formatTokens(category.tokens.value)}</strong>
-              <small>{category.tokens.confidence.replaceAll("_", " ")}</small>
             </li>
           ))}
+          {payload.categories.length > visibleCategories.length ? (
+            <li className="context-legend-more">
+              <span />
+              <span>{payload.categories.length - visibleCategories.length} more</span>
+              <strong>{formatTokens(payload.context_window_tokens?.value)} window</strong>
+            </li>
+          ) : null}
         </ul>
       </figure>
 
@@ -126,13 +166,17 @@ export function ContextWindowRoute() {
             </div>
             <span>{events.length} rows</span>
           </div>
-          <div className="event-list" onMouseLeave={() => setHoveredId(null)}>
+          <ol className="event-list" onMouseLeave={() => setHoveredId(null)}>
             {events.map((event, index) => {
               const previous = events[index - 1];
               const startsGroup = !previous || previous.group !== event.group || previous.turn_id !== event.turn_id;
               const isActive = event.id === activeId;
               return (
-                <React.Fragment key={event.id}>
+                <li
+                  key={event.id}
+                  className={`event-node ${startsGroup ? "starts-group" : ""}`}
+                  data-group={event.group}
+                >
                   {startsGroup ? <h4>{groupLabel(event)}</h4> : null}
                   <button
                     ref={(node) => { eventRefs.current[index] = node; }}
@@ -162,10 +206,10 @@ export function ContextWindowRoute() {
                       {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
                     </span>
                   </button>
-                </React.Fragment>
+                </li>
               );
             })}
-          </div>
+          </ol>
         </section>
 
         <aside className="event-detail card">
