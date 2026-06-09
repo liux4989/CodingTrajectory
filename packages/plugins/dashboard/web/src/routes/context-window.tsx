@@ -3,7 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as ScrollArea from "@radix-ui/react-scroll-area";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { ArrowLeft, Pin, PinOff } from "lucide-react";
+import { ArrowLeft, Eye, Pin, PinOff } from "lucide-react";
 import {
   fetchContextWindow,
   type ContextCategory,
@@ -38,9 +38,9 @@ function formatTokens(value: number | null | undefined) {
 }
 
 function groupLabel(event: ContextEvent) {
-  if (event.group === "before_first_prompt") return "Before first prompt";
-  if (event.group === "post_turn") return "After final turn";
-  return `Turn ${event.turn_id ?? "-"}`;
+  if (event.group === "before_first_prompt") return "BEFORE YOU TYPE ANYTHING";
+  if (event.group === "post_turn") return "AFTER FINAL TURN";
+  return `TURN ${event.turn_id ?? "-"}`;
 }
 
 function evidenceLabel(evidence: TokenEvidence | null) {
@@ -50,13 +50,12 @@ function evidenceLabel(evidence: TokenEvidence | null) {
 
 function categoryLabel(category: string) {
   if (category === "agent") return "Agent";
+  if (category === "project_instructions") return "CLAUDE.md";
   return category.replaceAll("_", " ");
 }
 
-function topCategories(categories: ContextCategory[]) {
-  return [...categories]
-    .sort((left, right) => right.tokens.value - left.tokens.value)
-    .slice(0, 6);
+function categoryDotStyle(category: string): React.CSSProperties {
+  return { background: categoryColors[category] ?? categoryColors.unattributed };
 }
 
 type TimelineSegment = {
@@ -100,10 +99,6 @@ function timelineSegmentLabel(segment: TimelineSegment) {
   return `${rowLabel}: ${categoryLabel(segment.category)}, ${segment.eventCount} row${segment.eventCount === 1 ? "" : "s"}${tokens}`;
 }
 
-function categoryDotStyle(category: string): React.CSSProperties {
-  return { background: categoryColors[category] ?? categoryColors.unattributed };
-}
-
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
   const query = useQuery({
@@ -125,6 +120,7 @@ export function ContextWindowRoute() {
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
   const activeIndex = events.findIndex((event) => event.id === activeId);
   const timelineSegments = React.useMemo(() => compactTimelineSegments(events), [events]);
+  const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
 
   function activateEvent(id: string) {
     setHoveredId(id);
@@ -161,39 +157,39 @@ export function ContextWindowRoute() {
   }
 
   const payload = query.data;
-  const visibleCategories = topCategories(payload.categories);
 
   return (
     <div className="mx-auto grid max-w-[96rem] gap-5">
-      <header className="rounded-[2rem] border border-foreground/13 bg-[linear-gradient(135deg,rgb(255_249_234/95%),rgb(13_92_99/10%)),var(--paper-strong)] p-[clamp(1.2rem,4vw,3rem)] shadow-[0_24px_70px_rgb(49_42_25/18%)] dark:border-[rgb(255_255_255/8%)] dark:bg-[linear-gradient(135deg,rgb(34_32_25/95%),rgb(77_184_176/8%)),var(--paper-strong)] dark:shadow-[0_24px_70px_rgb(0_0_0/40%)]">
-        <div>
-          <Link to="/sessions" className="mb-5 inline-flex items-center gap-1.5 font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]">
-            <ArrowLeft size={16} /> Sessions
-          </Link>
-          <p className="mb-1 font-display text-[0.74rem] font-extrabold uppercase tracking-[0.14em] text-primary">
-            Context inspector
-          </p>
-          <h2 className="m-0 font-display text-[clamp(2.2rem,6vw,5.6rem)] leading-[0.9] tracking-[-0.05em]">
-            {payload.model ?? "Unknown model"}
-          </h2>
-          <p className="mt-4 text-muted-foreground break-all">
-            <code>{payload.session_id}</code> · {payload.vendor} · {formatTokens(payload.used_tokens?.value)}
-            {payload.used_percent != null ? ` (${payload.used_percent.toFixed(1)}%)` : ""} used
-          </p>
-        </div>
+      <header className="rounded-2xl border border-foreground/13 bg-card p-8 dark:border-[rgb(255_255_255/8%)]">
+        <Link to="/sessions" className="mb-4 inline-flex items-center gap-1.5 font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]">
+          <ArrowLeft size={16} /> Sessions
+        </Link>
+        <h2 className="m-0 font-display text-[clamp(2rem,4vw,3.5rem)] leading-[0.95] tracking-[-0.03em]">
+          Explore the context window
+        </h2>
+        <p className="mt-2 text-muted-foreground">
+          A session showing what enters context and what it costs
+        </p>
+        <p className="mt-3 font-mono text-[0.9rem] text-emerald-500">
+          ~{formatTokens(payload.used_tokens?.value)} tokens
+          {payload.context_window_tokens?.value
+            ? ` / ${formatTokens(payload.context_window_tokens.value)}`
+            : ""}
+          {payload.used_percent != null ? ` · ${payload.used_percent.toFixed(1)}%` : ""}
+        </p>
       </header>
 
-      <figure className="m-0 rounded-[1.4rem] border border-foreground/13 bg-card p-4 dark:border-[rgb(255_255_255/8%)]">
-        <figcaption className="flex items-center justify-between gap-4 font-display">
-          <span>Compact context timeline</span>
-          <strong>
+      <figure className="m-0 rounded-xl border border-foreground/13 bg-card p-4 dark:border-[rgb(255_255_255/8%)]">
+        <figcaption className="flex items-center justify-between gap-4 font-display text-[0.9rem]">
+          <span>Context timeline</span>
+          <strong className="font-mono">
             {formatTokens(payload.used_tokens?.value)}
             {payload.used_percent != null ? ` (${payload.used_percent.toFixed(1)}%)` : ""} used
           </strong>
         </figcaption>
         <Tooltip.Provider delayDuration={160} skipDelayDuration={120}>
           <ol
-            className="m-[0.75rem_0_0.8rem] flex h-[0.65rem] list-none gap-0 overflow-hidden rounded-full border border-foreground/14 bg-foreground/7 p-0"
+            className="m-[0.75rem_0_0.8rem] flex h-[0.5rem] list-none gap-0 overflow-hidden rounded-full border border-foreground/14 bg-foreground/7 p-0"
             aria-label="Ordered context event timeline"
             onMouseLeave={() => setHoveredId(null)}
           >
@@ -209,7 +205,7 @@ export function ContextWindowRoute() {
                       <button
                         type="button"
                         className={cn(
-                          "relative h-[0.65rem] min-w-[2px] w-full cursor-pointer border-0 border-r border-r-white/28 p-0 opacity-72 last:border-r-0",
+                          "relative h-[0.5rem] min-w-[2px] w-full cursor-pointer border-0 border-r border-r-white/28 p-0 opacity-72 last:border-r-0",
                           "hover:z-1 hover:opacity-100 hover:outline-none hover:shadow-[inset_0_0_0_2px_rgb(255_255_255/86%),0_0_0_2px_var(--accent-teal)]",
                           "focus-visible:z-1 focus-visible:opacity-100 focus-visible:outline-none focus-visible:shadow-[inset_0_0_0_2px_rgb(255_255_255/92%),0_0_0_3px_var(--accent-teal)]",
                           isActive && "z-1 opacity-100 outline-none shadow-[inset_0_0_0_2px_rgb(255_255_255/86%),0_0_0_2px_var(--accent-teal)]",
@@ -242,103 +238,112 @@ export function ContextWindowRoute() {
             })}
           </ol>
         </Tooltip.Provider>
-        <ul className="m-0 flex flex-wrap gap-1.5 px-0 py-0 list-none" role="list">
-          {visibleCategories.map((category) => (
-            <li key={category.id} className="inline-flex min-w-0 items-center gap-1.5 text-[0.9rem] text-muted-foreground">
-              <span className="inline-block h-[0.7rem] w-[0.7rem] rounded-full" style={categoryDotStyle(category.category)} />
+        <ul className="m-0 flex flex-wrap gap-x-4 gap-y-1.5 px-0 py-0 list-none" role="list">
+          {payload.categories.map((category: ContextCategory) => (
+            <li key={category.id} className="inline-flex min-w-0 items-center gap-1.5 text-[0.82rem] text-muted-foreground">
+              <span className="inline-block h-[0.55rem] w-[0.55rem] rounded-[2px]" style={categoryDotStyle(category.category)} />
               <span>{category.label}</span>
-              <strong className="font-mono text-[0.86rem] text-foreground">{formatTokens(category.tokens.value)}</strong>
             </li>
           ))}
-          {payload.categories.length > visibleCategories.length ? (
-            <li className="ml-auto inline-flex items-center gap-1.5 text-[0.9rem] text-muted-foreground">
-              <span />
-              <span>{payload.categories.length - visibleCategories.length} more</span>
-              <strong className="font-mono text-[0.86rem] text-foreground">{formatTokens(payload.context_window_tokens?.value)} window</strong>
-            </li>
-          ) : null}
+          <li className="inline-flex items-center gap-1.5 text-[0.82rem] text-muted-foreground">
+            <Eye size={12} />
+            <span>= appears in your terminal</span>
+          </li>
         </ul>
       </figure>
 
       <div className="grid grid-cols-[minmax(22rem,1.15fr)_minmax(20rem,0.85fr)] items-start gap-4 max-lg:grid-cols-1">
         <section className="min-w-0" aria-labelledby="event-stream-title">
-          <div className="mb-3 flex items-center justify-between gap-4 font-display">
-            <div>
-              <p className="mb-1 font-display text-[0.74rem] font-extrabold uppercase tracking-[0.14em] text-primary">Trajectory</p>
-              <h3 id="event-stream-title" className="m-0 font-display text-[1.45rem]">Context events</h3>
-            </div>
-            <span className="text-muted-foreground">{events.length} rows</span>
-          </div>
-          <ScrollArea.Root className="relative min-h-[18rem] max-h-[min(42rem,calc(100vh-17rem))] overflow-hidden">
+          <ScrollArea.Root className="relative min-h-[18rem] max-h-[min(48rem,calc(100vh-14rem))] overflow-hidden">
             <ScrollArea.Viewport
-              className="max-h-[min(42rem,calc(100vh-17rem))] min-h-[18rem] pe-3 scroll-py-3"
+              className="max-h-[min(48rem,calc(100vh-14rem))] min-h-[18rem] pe-3 scroll-py-3"
               ref={scrollViewportRef}
             >
-              <ol className="m-0 grid list-none gap-0 p-0" onMouseLeave={() => setHoveredId(null)}>
+              <ol className="m-0 grid list-none gap-2 p-0" onMouseLeave={() => setHoveredId(null)}>
                 {events.map((event, index) => {
                   const previous = events[index - 1];
                   const startsGroup = !previous || previous.group !== event.group || previous.turn_id !== event.turn_id;
                   const isActive = event.id === activeId;
+                  const tokenPercent = totalUsedTokens > 0 && event.tokens
+                    ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
+                    : 0;
                   return (
-                    <li
-                      key={event.id}
-                      className={cn(
-                        "relative grid min-w-0 grid-cols-[1.35rem_minmax(0,1fr)]",
-                        "before:col-[1] before:row-[1/span_2] before:mx-auto before:w-px before:bg-foreground/16",
-                        "first:before:mt-[1.2rem] last:before:h-[1.6rem]",
-                        "dark:before:bg-[rgb(255_255_255/12%)]",
-                        startsGroup && index > 0 && "mt-2",
-                      )}
-                      data-group={event.group}
-                    >
+                    <React.Fragment key={event.id}>
                       {startsGroup ? (
-                        <h4 className="col-[2] mb-1.5 mt-4 font-display text-[0.78rem] font-bold uppercase tracking-[0.08em] text-muted-foreground">
-                          {groupLabel(event)}
-                        </h4>
+                        <li className="list-none">
+                          <h4 className={cn(
+                            "font-display text-[0.78rem] font-extrabold uppercase tracking-[0.1em]",
+                            event.group === "before_first_prompt" ? "text-emerald-500" : "text-muted-foreground",
+                            index > 0 && "mt-4",
+                          )}>
+                            {groupLabel(event)}
+                          </h4>
+                        </li>
                       ) : null}
-                      <button
-                        ref={(node) => { eventRefs.current[index] = node; }}
-                        type="button"
-                        className={cn(
-                          "relative col-[2] grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded-md border border-foreground/11 bg-card/42 px-3 py-2.5 text-start text-foreground cursor-pointer",
-                          "before:absolute before:top-4 before:-left-[0.68rem] before:h-px before:w-[0.68rem] before:bg-foreground/16",
-                          "dark:border-[rgb(255_255_255/8%)] dark:bg-card/62",
-                          "hover:border-primary hover:bg-primary/9",
-                          isActive && "border-primary bg-primary/9",
-                        )}
-                        aria-pressed={event.id === selectedId}
-                        onMouseEnter={() => setHoveredId(event.id)}
-                        onFocus={() => setHoveredId(event.id)}
-                        onBlur={() => setHoveredId(null)}
-                        onClick={() => setSelectedId(event.id)}
-                        onKeyDown={(eventKey) => {
-                          if (eventKey.key === "ArrowDown") {
-                            eventKey.preventDefault();
-                            moveFocus(index, 1);
-                          } else if (eventKey.key === "ArrowUp") {
-                            eventKey.preventDefault();
-                            moveFocus(index, -1);
-                          }
-                        }}
-                      >
-                        <span
-                          className="absolute -left-[1.68rem] top-[0.7rem] z-1 h-[0.7rem] w-[0.7rem] rounded-full shadow-[0_0_0_3px_var(--paper)]"
-                          style={categoryDotStyle(event.category)}
-                        />
-                        <span className="grid min-w-0 gap-0.5">
-                          <strong className="font-display text-[0.96rem]">{event.label}</strong>
-                          <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.9rem] text-muted-foreground">
-                            {event.summary ?? event.source}
+                      <li>
+                        <button
+                          ref={(node) => { eventRefs.current[index] = node; }}
+                          type="button"
+                          className={cn(
+                            "relative grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 overflow-hidden rounded-xl border border-foreground/11 bg-foreground/5 px-4 py-3 text-start text-foreground cursor-pointer",
+                            "dark:border-[rgb(255_255_255/8%)] dark:bg-[rgb(255_255_255/4%)]",
+                            "hover:border-primary/60 hover:bg-foreground/8",
+                            isActive && "border-primary/60 bg-foreground/8",
+                          )}
+                          aria-pressed={event.id === selectedId}
+                          onMouseEnter={() => setHoveredId(event.id)}
+                          onFocus={() => setHoveredId(event.id)}
+                          onBlur={() => setHoveredId(null)}
+                          onClick={() => setSelectedId(event.id)}
+                          onKeyDown={(eventKey) => {
+                            if (eventKey.key === "ArrowDown") {
+                              eventKey.preventDefault();
+                              moveFocus(index, 1);
+                            } else if (eventKey.key === "ArrowUp") {
+                              eventKey.preventDefault();
+                              moveFocus(index, -1);
+                            }
+                          }}
+                        >
+                          <span className="grid min-w-0 gap-1">
+                            <span className="flex items-center gap-2">
+                              <span
+                                className="inline-block h-[0.55rem] w-[0.55rem] shrink-0 rounded-[2px]"
+                                style={categoryDotStyle(event.category)}
+                              />
+                              <span className="inline-flex items-center gap-1.5">
+                                <small className="rounded border border-foreground/12 px-1.5 py-px font-mono text-[0.7rem] text-muted-foreground dark:border-[rgb(255_255_255/12%)]">
+                                  {event.confidence === "exact_usage" || event.confidence === "exact_text" ? "auto" : event.confidence.replaceAll("_", " ")}
+                                </small>
+                                <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.88rem] text-muted-foreground">
+                                  {event.source}
+                                </span>
+                              </span>
+                            </span>
+                            <strong className="font-display text-[1rem]">{event.label}</strong>
                           </span>
-                          <small className="w-fit rounded-full border border-foreground/10 px-1.5 py-px font-mono text-[0.72rem] capitalize text-muted-foreground dark:border-[rgb(255_255_255/10%)]">
-                            {categoryLabel(event.category)}
-                          </small>
-                        </span>
-                        <span className="font-mono text-[0.9rem] font-extrabold text-primary">
-                          {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
-                        </span>
-                      </button>
-                    </li>
+                          <span className="flex items-center gap-2">
+                            {event.terminal_visible ? (
+                              <Eye size={14} className="shrink-0 text-muted-foreground" />
+                            ) : null}
+                            <span className="font-mono text-[0.9rem] font-bold text-emerald-400">
+                              {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
+                            </span>
+                          </span>
+                          {tokenPercent > 0 ? (
+                            <span className="col-span-2 mt-2 block h-[3px] w-full overflow-hidden rounded-full bg-foreground/8">
+                              <span
+                                className="block h-full rounded-full"
+                                style={{
+                                  width: `${tokenPercent}%`,
+                                  background: categoryColors[event.category] ?? categoryColors.unattributed,
+                                }}
+                              />
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    </React.Fragment>
                   );
                 })}
               </ol>
@@ -349,7 +354,7 @@ export function ContextWindowRoute() {
           </ScrollArea.Root>
         </section>
 
-        <aside className="sticky top-4 rounded-[1.4rem] border border-foreground/13 bg-card p-5 max-lg:static dark:border-[rgb(255_255_255/8%)]">
+        <aside className="sticky top-4 rounded-xl border border-foreground/13 bg-card p-5 max-lg:static dark:border-[rgb(255_255_255/8%)] dark:bg-[rgb(255_255_255/4%)]">
           {activeEvent ? (
             <>
               <div className="flex items-center justify-between gap-4 font-display">
@@ -393,7 +398,25 @@ export function ContextWindowRoute() {
                 ))}
               </dl>
             </>
-          ) : <p>No event selected.</p>}
+          ) : (
+            <>
+              <h3 className="m-0 font-display text-[1.45rem]">Hover or click any event</h3>
+              <p className="mt-1 text-muted-foreground">Hover to preview. Click to pin so you can scroll.</p>
+              <div className="mt-6 overflow-hidden rounded-xl border border-orange-500/30">
+                <div className="bg-orange-500/90 px-4 py-2 font-display text-[0.78rem] font-extrabold uppercase tracking-[0.1em] text-white">
+                  Key Takeaway
+                </div>
+                <div className="bg-foreground/5 px-4 py-4">
+                  <p className="m-0 font-display text-[1.05rem] font-bold leading-snug">
+                    A lot loads before you type anything.
+                  </p>
+                  <p className="m-0 mt-2 text-[0.92rem] leading-relaxed text-muted-foreground">
+                    CLAUDE.md, memory, skills, and MCP tools are all in context before your first prompt.
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
         </aside>
       </div>
     </div>
