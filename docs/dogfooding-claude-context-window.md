@@ -7,7 +7,7 @@ Build and dogfood a CodingTrajectory plugin that explains any supported provider
 - a trajectory timeline: user turns, assistant steps, tool calls, file/output effects, hooks, and sub-sessions;
 - a context-window timeline: what entered context, when it entered, which category it belongs to, and the observed token impact.
 
-The product reference is the Claude Code docs context-window explorer: category legend at the top, a left event stream with token deltas, and a right detail panel that can preview or pin an event. The goal is not to copy the docs page or limit the feature to Claude Code. The goal is to use CT's unified session APIs first, then add provider-specific enrichment only where the unified model cannot yet answer context-window questions.
+The product reference is the Claude Code docs context-window explorer: category legend at the top, a left event stream with token deltas, and a right detail panel that can preview or pin an event. The goal is not to copy the docs page or limit the feature to Claude Code. The goal is to use CT's unified session APIs first. Provider-specific attribution belongs in CT core; the plugin should consume the normalized CT output instead of caring which provider stored which raw prompt details.
 
 ## Product Shape
 
@@ -26,9 +26,9 @@ The plugin should use the existing CT commands as its source of truth:
 - `ct session usage` for turn-level token and cost accounting;
 - `ct session step-detail`, `ct session event-detail`, and `ct session event-scan` for focused evidence lookups.
 
-The plugin is a projection over these APIs. It should not rediscover sessions or parse provider logs directly unless the current CT APIs are missing a specific evidence field.
+The plugin is a projection over these APIs. It should not rediscover sessions, parse provider logs directly, or own provider-specific evidence rules. If a provider needs richer attribution, that belongs in CT core so every command and dashboard route can reuse it.
 
-The browser/dashboard view should mirror the docs interaction model:
+The browser/dashboard view should be a new dashboard route for a selected session. From the dashboard sessions list, clicking a session should be able to route to a context-window page for that session. The page should mirror the docs interaction model:
 
 - context categories shown as a stable legend;
 - stacked window bar showing approximate category composition;
@@ -206,9 +206,9 @@ The browser view is not just a prettier terminal report. It is the interactive i
 
 The browser view should consume the same JSON contract as the terminal report. Differences should be presentation and interaction, not separate analysis logic.
 
-### Deferred: Provider Evidence Adapter
+### Deferred: Core Provider Attribution
 
-Do not build a provider evidence adapter in v0. The Codex evidence pass showed current CT APIs are enough for the first plugin projection. Add provider-specific ingestion or service support only after a future evidence pass finds a concrete missing field that blocks Claude Code, Pi, or mixed-provider support. If that becomes necessary, keep canonical models agent-agnostic and store provider-specific prompt/context labels in vendor data or a projection layer.
+Do not build a provider evidence adapter in the plugin. The Codex evidence pass showed current CT APIs are enough for the first plugin projection. If a future Claude Code, Pi, or mixed-provider evidence pass finds a concrete missing field, add provider-specific ingestion or service support in CT core. Keep canonical models agent-agnostic and expose the normalized result through the same CT APIs the plugin already consumes.
 
 ## Validation
 
@@ -232,11 +232,9 @@ For the browser view, run the local server and inspect it through the in-app Bro
 - Unsupported categories are explicit warnings, not silent omissions.
 - The default output is readable for humans; JSON is stable enough for agents and the dashboard.
 - Browser interaction supports hover/click preview and pinning a detail event.
-- No core model changes are made until the provider evidence pass proves they are needed.
+- Provider-specific attribution gaps are fixed in CT core, not in the plugin.
 
 ## Open Questions
 
-- Which providers persist source-labeled prompt blocks for project instructions, memory, skills, MCP tools, and environment info, and which only expose aggregate usage?
 - Can hook output be identified as context input, terminal output, or both?
 - Are cached-token buckets enough to explain context pressure, or do we need per-message token attribution from raw records?
-- Should this plugin be a new `context-window` plugin or a dashboard route backed by a plugin-local command?
