@@ -74,6 +74,8 @@ def _render_project_sessions_markdown(payload: dict[str, Any]) -> str:
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     project_parser = subparsers.add_parser(
         "project",
+        prog="ct project",
+        usage="ct project <command> [flags]",
         help="List projects or sessions within a project.",
         formatter_class=GhFormatter,
     )
@@ -81,6 +83,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     project_list = project_sub.add_parser(
         "list",
+        prog="ct project list",
         help="List all known projects.",
         formatter_class=GhFormatter,
     )
@@ -96,6 +99,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     project_sessions = project_sub.add_parser(
         "sessions",
+        prog="ct project sessions",
         help="List sessions for a given project.",
         formatter_class=GhFormatter,
     )

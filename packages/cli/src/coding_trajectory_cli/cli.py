@@ -21,19 +21,6 @@ from coding_trajectory_cli._shared import (
 from coding_trajectory_cli.commands import REGISTRARS, dispatch_plugin_argv
 
 EPILOG = """\
-PROJECT
-  ct project list                                  list all known projects
-  ct project sessions [PROJECT_NAME]               list sessions for a project
-
-SESSION
-  ct session overview [SESSION_ID]                 compact session hierarchy
-  ct session stats [SESSION_ID]                    compact context/token usage overview
-  ct session usage [SESSION_ID] [--turn TURN_ID]   turn-level token and cost accounting
-  ct session step-detail STEP_ID [...]             full detail for one or more steps
-  ct session event-scan [SESSION_ID] --type TYPE [--filter KEY=VALUE]
-                                                   query raw events by type
-  ct session event-detail EVENT_ID                 expand $truncated fields from step details
-
 NOTE
   Sessions are located automatically via cache; pass a SESSION_ID to use
   that coding session as the session tree entry point, or omit it to use the
@@ -80,7 +67,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct",
         description="Inspect coding sessions stored in JSONL log files.",
-        usage="ct <command> <subcommand> [flags]",
+        usage="ct [flags] <command> [args]",
         epilog=EPILOG,
         formatter_class=GhFormatter,
     )

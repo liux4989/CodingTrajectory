@@ -8,7 +8,7 @@ import sys
 from typing import Any
 
 from coding_trajectory_cli._shared import GhFormatter, add_base_output_flags
-from coding_trajectory_cli.plugins import LoadedPlugin, discover_plugins, plugin_payload, run_plugin
+from coding_trajectory_cli.plugins import LoadedPlugin, PluginManifest, PluginTool, discover_plugins, plugin_payload, run_plugin
 
 PLUGIN_EPILOG = """\
 PLUGIN COMMANDS
@@ -78,9 +78,78 @@ def dispatch_plugin_argv(raw_args: list[str]) -> int | None:
     plugins = discover_plugins()
     for plugin in plugins:
         if plugin.manifest and plugin.manifest.name == plugin_name:
+            help_exit = _plugin_manifest_help(plugin.manifest, plugin_args)
+            if help_exit is not None:
+                return help_exit
             return run_plugin(plugin.manifest, plugin.source, plugin_args)
     print(json.dumps({"error": {"message": f"Plugin not found: {plugin_name}"}}, indent=2), file=sys.stderr)
     return 2
+
+
+def _plugin_manifest_help(manifest: PluginManifest, plugin_args: list[str]) -> int | None:
+    if not plugin_args or plugin_args[-1] not in {"-h", "--help"}:
+        return None
+    command_path = plugin_args[:-1]
+    children = _plugin_help_children(manifest.tools, command_path)
+    if not children:
+        return None
+    print(_render_plugin_manifest_help(manifest, command_path, children))
+    return 0
+
+
+def _plugin_help_children(tools: list[PluginTool], command_path: list[str]) -> list[PluginTool]:
+    prefix_parts = command_path
+    children: list[PluginTool] = []
+    for tool in tools:
+        if tool.name == ".":
+            continue
+        parts = tool.name.split("/")
+        if parts[: len(prefix_parts)] != prefix_parts:
+            continue
+        if len(parts) == len(prefix_parts) + 1:
+            children.append(tool)
+    return children
+
+
+def _plugin_tool_summary(tools: list[PluginTool], command_path: list[str], default: str) -> str:
+    if not command_path:
+        return default
+    tool_name = "/".join(command_path)
+    for tool in tools:
+        if tool.name == tool_name:
+            return tool.summary
+    return default
+
+
+def _render_plugin_manifest_help(
+    manifest: PluginManifest,
+    command_path: list[str],
+    children: list[PluginTool],
+) -> str:
+    prog = " ".join(["ct", "plugin", manifest.name, *command_path])
+    description = _plugin_tool_summary(manifest.tools, command_path, manifest.description)
+    lines = [
+        f"usage: {prog} [-h] <command> ...",
+        "",
+        description,
+        "",
+        "Commands:",
+    ]
+    usage_rows = [
+        (f"{prog} {tool.name.split('/')[-1]}", tool.summary)
+        for tool in children
+    ]
+    usage_width = max(len(usage) for usage, _summary in usage_rows)
+    for usage, summary in usage_rows:
+        lines.append(f"  {usage:<{usage_width}}  {summary}")
+    lines.extend(
+        [
+            "",
+            "options:",
+            "  -h, --help  show this help message and exit",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _plugin_epilog(plugin: LoadedPlugin) -> str | None:
@@ -105,6 +174,8 @@ def _plugin_epilog(plugin: LoadedPlugin) -> str | None:
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     plugin_parser = subparsers.add_parser(
         "plugin",
+        prog="ct plugin",
+        usage="ct plugin <command> [flags]",
         help="Run plugin-provided ct commands.",
         epilog=PLUGIN_EPILOG,
         formatter_class=GhFormatter,
@@ -116,6 +187,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     plugin_list = plugin_sub.add_parser(
         "list",
+        prog="ct plugin list",
         help="List installed ct CLI plugins.",
         formatter_class=GhFormatter,
     )
@@ -132,10 +204,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
             continue
         plugin_command = plugin_sub.add_parser(
             manifest.name,
+            prog=f"ct plugin {manifest.name}",
             help=manifest.description,
             epilog=_plugin_epilog(plugin),
             formatter_class=GhFormatter,
         )
         plugin_command.add_argument("plugin_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
         plugin_command.set_defaults(_plugin_handler=_handle_plugin_exec, _plugin=plugin)
-

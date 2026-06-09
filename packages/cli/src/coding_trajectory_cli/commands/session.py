@@ -250,6 +250,8 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     session_parser = subparsers.add_parser(
         "session",
+        prog="ct session",
+        usage="ct session <command> [flags]",
         help="Analyze a session and its connected session tree.",
         formatter_class=GhFormatter,
     )
@@ -257,6 +259,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     session_overview = session_sub.add_parser(
         "overview",
+        prog="ct session overview",
         help="Show a compact session hierarchy.",
         formatter_class=GhFormatter,
     )
@@ -273,6 +276,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     session_stats = session_sub.add_parser(
         "stats",
+        prog="ct session stats",
         help="Show compact context/token usage composition.",
         formatter_class=GhFormatter,
     )
@@ -289,6 +293,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     session_usage = session_sub.add_parser(
         "usage",
+        prog="ct session usage",
         help="Show turn-level token and cost accounting.",
         formatter_class=GhFormatter,
     )
@@ -312,6 +317,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     session_step_detail = session_sub.add_parser(
         "step-detail",
+        prog="ct session step-detail",
         help="Show full detail for one or more steps.",
         formatter_class=GhFormatter,
     )
@@ -329,6 +335,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     session_event_detail = session_sub.add_parser(
         "event-detail",
+        prog="ct session event-detail",
         help="Expand the full content of a single event (resolves $truncated refs).",
         formatter_class=GhFormatter,
     )
@@ -346,6 +353,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     session_event_scan = session_sub.add_parser(
         "event-scan",
+        prog="ct session event-scan",
         help="Query events matching --type and optional --filter expressions.",
         epilog=EVENT_SCAN_EPILOG,
         formatter_class=GhFormatter,
