@@ -12,7 +12,6 @@ from coding_trajectory_cli._shared import (
     add_params_flag,
     params_from_json,
     positive_int,
-    short_id,
 )
 
 
@@ -65,7 +64,8 @@ def _render_project_sessions_markdown(payload: dict[str, Any]) -> str:
             continue
         title = item.get("title") or "-"
         vendors = ", ".join(item.get("vendors") or []) or "-"
-        lines.append(f"- `{short_id(item.get('root_session_id'))}` {title} [{vendors}]")
+        session_id = item.get("root_session_id") or "-"
+        lines.append(f"- `{session_id}` {title} [{vendors}]")
     if len(lines) == 2:
         lines.append("No sessions found.")
     return "\n".join(lines)
@@ -128,4 +128,3 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _default_output="markdown",
         _renderer=_render_project_sessions_markdown,
     )
-

@@ -20,7 +20,6 @@ from coding_trajectory_cli._shared import (
     one_line,
     params_from_json,
     render_usage_line,
-    short_id,
 )
 
 EVENT_SCAN_EPILOG = """\
@@ -110,7 +109,7 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
     sessions = payload.get("sessions") or []
     turn_count = sum(len(session.get("turns") or []) for session in sessions)
     lines = [
-        f"# Session `{short_id(payload.get('root_session_id'))}`",
+        f"# Session `{payload.get('root_session_id') or '-'}`",
         "",
         f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}, {turn_count} visible turn{'s' if turn_count != 1 else ''}",
         "",
@@ -119,7 +118,7 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
     for session in sessions:
         relationship = session.get("relationship") or {}
         role = relationship.get("role") or relationship.get("relationship") or "session"
-        header = f"- session `{short_id(session.get('session_id'))}`"
+        header = f"- session `{session.get('session_id') or '-'}`"
         header += f"  {role}, {session.get('vendor') or '-'}, {display_value(session.get('status')) or '-'}"
         if session.get("agent_name"):
             header += f", {session['agent_name']}"
@@ -130,7 +129,7 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
         turns = session.get("turns") or []
         for turn in turns:
             lines.append(
-                f"  - turn {short_id(turn.get('turn_id'))}  "
+                f"  - turn {turn.get('turn_id') or '-'}  "
                 f"{display_value(turn.get('status')) or '-'}  {_overview_request_label(turn.get('user_request'))}"
             )
 
@@ -234,7 +233,7 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
     if turns:
         lines.extend(["", "Turns"])
     for turn in turns:
-        lines.append(f"  turn {short_id(turn.get('turn_id'))}")
+        lines.append(f"  turn {turn.get('turn_id') or '-'}")
         lines.append(f"    {render_usage_line(turn.get('usage') or {})}")
         for activity in turn.get("activity_usage") or []:
             category = str(activity.get("category") or "-")
@@ -382,4 +381,3 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         },
         _default_output="json",
     )
-

@@ -10,6 +10,8 @@ from typing import Any
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 
 OUTPUT_CHOICES = ("markdown", "json")
+TERMINAL_LINE_LIMIT = 140
+UUID_PATTERN = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
 
 
 class GhFormatter(argparse.RawDescriptionHelpFormatter):
@@ -163,6 +165,102 @@ def json_text(payload: Any) -> str:
 
 def selected_output(args: argparse.Namespace) -> str:
     return getattr(args, "output_format", None) or getattr(args, "_default_output", "markdown")
+
+
+def _strip_inline_markdown(text: str) -> str:
+    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+    return re.sub(r"`([^`]*)`", r"\1", text)
+
+
+def _normalize_terminal_text(text: str) -> str:
+    text = _strip_inline_markdown(text)
+    return UUID_PATTERN.sub(lambda match: match.group(0)[:8], text)
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells)
+
+
+def _is_markdown_table_row(line: str) -> bool:
+    return line.strip().startswith("|") and line.strip().endswith("|") and "|" in line.strip()[1:-1]
+
+
+def _render_markdown_table(rows: list[str]) -> list[str]:
+    parsed_rows = [
+        [_normalize_terminal_text(cell.strip()) for cell in row.strip().strip("|").split("|")]
+        for row in rows
+        if not _is_markdown_table_separator(row)
+    ]
+    if not parsed_rows:
+        return []
+    column_count = max(len(row) for row in parsed_rows)
+    widths = [0] * column_count
+    for row in parsed_rows:
+        row.extend([""] * (column_count - len(row)))
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], len(cell))
+    return ["  ".join(cell.ljust(widths[index]) for index, cell in enumerate(row)).rstrip() for row in parsed_rows]
+
+
+def _trim_terminal_line(line: str, *, limit: int = TERMINAL_LINE_LIMIT) -> str:
+    if len(line) <= limit:
+        return line
+    bracket_suffix = re.fullmatch(r"(\s*-\s+\S+\s+)(.+?)(\s+\[[^\]]+\])", line)
+    if bracket_suffix:
+        prefix, text, suffix = bracket_suffix.groups()
+        text_limit = max(limit - len(prefix) - len(suffix), 16)
+        return f"{prefix}{truncate_text_preview(text, max_len=text_limit)}{suffix}"
+    label_value = re.fullmatch(r"(\s*[^:]{1,32}:\s+)(.+)", line)
+    if label_value:
+        prefix, text = label_value.groups()
+        text_limit = max(limit - len(prefix), 16)
+        return f"{prefix}{truncate_text_preview(text, max_len=text_limit)}"
+    return truncate_text_preview(line, max_len=limit)
+
+
+def render_markdown_for_terminal(markdown: str) -> str:
+    """Render the small Markdown subset emitted by the CLI as readable terminal text."""
+
+    lines = markdown.splitlines()
+    rendered: list[str] = []
+    index = 0
+    in_code_block = False
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            index += 1
+            continue
+
+        if in_code_block:
+            rendered.append(_normalize_terminal_text(line))
+            index += 1
+            continue
+
+        if _is_markdown_table_row(line) and index + 1 < len(lines) and _is_markdown_table_separator(lines[index + 1]):
+            table_rows = [line]
+            index += 2
+            while index < len(lines) and _is_markdown_table_row(lines[index]):
+                table_rows.append(lines[index])
+                index += 1
+            rendered.extend(_render_markdown_table(table_rows))
+            continue
+
+        heading = re.fullmatch(r"#{1,6}\s+(.+)", stripped)
+        if heading:
+            rendered.append(_trim_terminal_line(_normalize_terminal_text(heading.group(1))))
+        elif stripped.startswith(">"):
+            quote = stripped.lstrip(">").strip()
+            rendered.append(_trim_terminal_line(f"Warning: {_normalize_terminal_text(quote)}"))
+        else:
+            rendered.append(_trim_terminal_line(_normalize_terminal_text(line)))
+        index += 1
+
+    return "\n".join(rendered).rstrip()
 
 
 def drop_none(item: dict[str, Any]) -> dict[str, Any]:
@@ -453,11 +551,6 @@ def compact_payload(method: str, payload: Any) -> Any:
         )
 
     return payload
-
-
-def short_id(value: Any) -> str:
-    text = str(value or "")
-    return text[:8] if text else "-"
 
 
 def display_value(value: Any) -> str:

@@ -8,12 +8,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from rich.console import Console
-from rich.markdown import Markdown
-
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch, project_list_metadata, resolve_store
-from coding_trajectory_cli._shared import GhFormatter, add_output_flags, compact_payload, json_text, selected_output
+from coding_trajectory_cli._shared import (
+    GhFormatter,
+    add_output_flags,
+    compact_payload,
+    json_text,
+    render_markdown_for_terminal,
+    selected_output,
+)
 from coding_trajectory_cli.commands import REGISTRARS, dispatch_plugin_argv
 
 EPILOG = """\
@@ -132,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     if selected_output(args) == "json":
         print(output)
     else:
-        Console().print(Markdown(output))
+        print(render_markdown_for_terminal(output))
     return 0
 
 

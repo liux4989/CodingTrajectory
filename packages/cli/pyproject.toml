@@ -6,7 +6,6 @@ requires-python = ">=3.12"
 dependencies = [
     "coding-trajectory-core",
     "pydantic>=2.12.5",
-    "rich",
 ]
 
 [project.scripts]
