@@ -241,6 +241,35 @@ The most useful top-level metrics are:
   each plugin. Executable plugins should consume that field from documented
   `ct` output.
 
+## Dashboard Context Window
+
+The dashboard plugin's `session context-window` subcommand projects the existing
+session overview, stats, and usage JSON surfaces into one context-composition
+report:
+
+```text
+ct plugin dashboard session context-window SESSION_ID
+ct plugin dashboard session context-window SESSION_ID --turn TURN_ID
+ct plugin dashboard session context-window SESSION_ID --output json
+```
+
+The default report is compact text. JSON preserves token evidence as an object
+with `value`, `confidence`, and `source`, so dashboards and agents do not need
+to infer whether a number is exact or estimated.
+
+Provider behavior remains explicit:
+
+- Codex category totals use the semantic taxonomy from `ct session stats`.
+- Claude Code and Pi expose exact cache-bucket totals as `unattributed` because
+  their current stats APIs cannot split cached context into semantic categories.
+- User and assistant timeline deltas estimate visible overview text.
+- Tool timeline rows do not invent token deltas when result text is unavailable.
+
+The dashboard session list links to
+`/sessions/$sessionId/context-window`. That route consumes the plugin JSON
+through `/api/sessions/context-window` and adds the composition bar, event
+selection, hover preview, and pinned detail behavior.
+
 ## Dashboard Cleanup
 
 ### Goal

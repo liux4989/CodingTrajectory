@@ -102,7 +102,17 @@ export function SessionsRoute() {
               <TableBody>
                 {rows.map((row, index) => (
                   <TableRow key={`${sessionId(row) ?? index}-${row.updated_at ?? ""}`}>
-                    <TableCell className="mono-cell">{shortId(sessionId(row))}</TableCell>
+                    <TableCell className="mono-cell">
+                      {sessionId(row) ? (
+                        <Link
+                          to="/sessions/$sessionId/context-window"
+                          params={{ sessionId: sessionId(row)! }}
+                          className="session-detail-link"
+                        >
+                          {shortId(sessionId(row))}
+                        </Link>
+                      ) : "-"}
+                    </TableCell>
                     <TableCell><VendorBadges vendors={sessionVendors(row)} /></TableCell>
                     <TableCell>{row.title ?? "-"}</TableCell>
                     <TableCell className="path-cell" title={row.updated_at ?? row.started_at ?? ""}>{relativeTime(row.updated_at ?? row.started_at)}</TableCell>

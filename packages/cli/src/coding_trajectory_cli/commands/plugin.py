@@ -73,11 +73,7 @@ def dispatch_plugin_argv(raw_args: list[str]) -> int | None:
         return None
     plugin_name = raw_args[1]
     plugin_args = raw_args[2:]
-    if plugin_name in {"list", "-h", "--help"}:
-        return None
-    if not plugin_args:
-        return None
-    if all(item in {"-h", "--help"} for item in plugin_args):
+    if plugin_name == "list" or (not plugin_args and plugin_name in {"-h", "--help"}):
         return None
     plugins = discover_plugins()
     for plugin in plugins:

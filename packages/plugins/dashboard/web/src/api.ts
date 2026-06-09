@@ -24,6 +24,48 @@ export type SessionItem = {
   updated_at?: string | null;
 };
 
+export type TokenEvidence = {
+  value: number;
+  confidence: "exact_usage" | "exact_text" | "estimated_tokens" | "structural" | "unknown";
+  source: string;
+};
+
+export type ContextCategory = {
+  id: string;
+  category: string;
+  source_key: string;
+  label: string;
+  tokens: TokenEvidence;
+  percent: number | null;
+};
+
+export type ContextEvent = {
+  id: string;
+  group: "before_first_prompt" | "turn" | "post_turn";
+  turn_id: string | null;
+  category: string;
+  label: string;
+  summary: string | null;
+  tokens: TokenEvidence | null;
+  source: string;
+  confidence: TokenEvidence["confidence"];
+  detail_ref: Record<string, string>;
+  terminal_visible: boolean;
+};
+
+export type ContextWindowPayload = {
+  schema_version: 1;
+  session_id: string;
+  vendor: string;
+  model: string | null;
+  context_window_tokens: TokenEvidence | null;
+  used_tokens: TokenEvidence | null;
+  used_percent: number | null;
+  categories: ContextCategory[];
+  events: ContextEvent[];
+  warnings: string[];
+};
+
 export type CleanupSummary = {
   candidate_count: number;
   skipped_count: number;
@@ -77,6 +119,11 @@ export async function fetchProjects() {
 
 export async function fetchSessions() {
   return fetchJson<{ items: SessionItem[] }>("/api/sessions");
+}
+
+export async function fetchContextWindow(sessionId: string) {
+  const params = new URLSearchParams({ session_id: sessionId });
+  return fetchJson<ContextWindowPayload>(`/api/sessions/context-window?${params}`);
 }
 
 export async function fetchCleanupPreview(kind: "project" | "session") {

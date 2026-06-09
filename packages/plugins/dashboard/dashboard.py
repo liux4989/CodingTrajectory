@@ -10,6 +10,7 @@ import sys
 from typing import Any
 
 import cleanup as cleanup_mod
+import context_window as context_window_mod
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,9 +18,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_root_parser()
     if not raw_args:
         print(_root_entry_text())
-        return 0
-    if raw_args[0] in {"-h", "--help"}:
-        print(parser.format_help())
         return 0
     if raw_args == ["--tui"]:
         return _run_dashboard_tui()
@@ -32,38 +30,6 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_session_command(rest)
     parser.parse_args(raw_args)
     return 2
-
-
-def _projects(args: argparse.Namespace) -> int:
-    params: dict[str, Any] = {}
-    if args.agent_vendor:
-        params["agent_vendor"] = args.agent_vendor
-    payload = _ct_json(["project", "list", "--params", json.dumps(params), "--output", "json"])
-    items = payload.get("items") or {}
-    print(f"Projects ({len(items)})")
-    for name, meta in sorted(items.items()):
-        vendors = ", ".join(meta.get("vendors") or []) or "-"
-        print(f"  {name:<28} {vendors:<20} {meta.get('path') or '-'}")
-    return 0
-
-
-def _sessions(args: argparse.Namespace) -> int:
-    params: dict[str, Any] = {"since_days": None if args.all_time else args.since_days}
-    if args.project_name:
-        params["project_name"] = args.project_name
-    if args.agent_vendor:
-        params["agent_vendor"] = args.agent_vendor
-    payload = _ct_json(["project", "sessions", "--params", json.dumps(params), "--output", "json"])
-    sessions = payload.get("items") or []
-    print(f"Sessions ({len(sessions)})")
-    for item in sessions[:20]:
-        root_id = str(item.get("id") or "-")
-        vendors = ", ".join(item.get("vendors") or []) or "-"
-        title = _one_line(item.get("title") or "-", 88)
-        print(f"  {root_id[:8]}  {vendors:<18} {title}")
-    if len(sessions) > 20:
-        print(f"  ... {len(sessions) - 20} more")
-    return 0
 
 
 def _build_root_parser() -> argparse.ArgumentParser:
@@ -100,17 +66,27 @@ def _build_root_parser() -> argparse.ArgumentParser:
     session_cleanup.add_argument("--delete", action="store_true")
     session_cleanup.add_argument("--confirm", action="store_true")
     session_cleanup.add_argument("--tui", action="store_true")
+    session_context_window = sub.add_parser(
+        "session context-window",
+        help="Inspect session context composition and trajectory events.",
+    )
+    session_context_window.add_argument("session_id")
+    session_context_window.add_argument("--turn", dest="turn_id", default=None)
+    session_context_window.add_argument(
+        "--output",
+        choices=("markdown", "json"),
+        default="markdown",
+    )
     return parser
 
 
 def _project_list_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct plugin dashboard project",
-        description="Project management commands.",
+        description="Alias for `ct project list`.",
         epilog="SUBCOMMANDS\n  cleanup   Clean old project directories.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--agent-vendor", default=None)
     return parser
 
 
@@ -137,14 +113,14 @@ def _project_cleanup_parser() -> argparse.ArgumentParser:
 def _session_list_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct plugin dashboard session",
-        description="Session management commands.",
-        epilog="SUBCOMMANDS\n  cleanup   Clean empty or low-value session logs.",
+        description="Alias for `ct project sessions`.",
+        epilog=(
+            "SUBCOMMANDS\n"
+            "  cleanup          Clean empty or low-value session logs.\n"
+            "  context-window   Inspect context composition and trajectory events."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("project_name", nargs="?")
-    parser.add_argument("--since-days", type=int, default=30)
-    parser.add_argument("--all-time", action="store_true")
-    parser.add_argument("--agent-vendor", default=None)
     return parser
 
 
@@ -165,16 +141,16 @@ def _handle_project_command(args: list[str]) -> int:
     if args and args[0] == "cleanup":
         parsed = _project_cleanup_parser().parse_args(args[1:])
         return _project_cleanup(parsed)
-    parsed = _project_list_parser().parse_args(args)
-    return _projects(parsed)
+    return _ct_passthrough(["project", "list", *args])
 
 
 def _handle_session_command(args: list[str]) -> int:
     if args and args[0] == "cleanup":
         parsed = _session_cleanup_parser().parse_args(args[1:])
         return _session_cleanup(parsed)
-    parsed = _session_list_parser().parse_args(args)
-    return _sessions(parsed)
+    if args and args[0] == "context-window":
+        return context_window_mod.main(args[1:])
+    return _ct_passthrough(["project", "sessions", *args])
 
 
 def _root_entry_text() -> str:
@@ -185,13 +161,14 @@ def _root_entry_text() -> str:
             "Commands:",
             "  ct plugin dashboard --tui          Quick inspection and cleanup (terminal)",
             "  ct plugin dashboard web [flags]    Rich dashboard with analytics (browser)",
-            "  ct plugin dashboard project [--agent-vendor VENDOR]",
+            "  ct plugin dashboard project [ct project list flags]",
             "  ct plugin dashboard project cleanup [--dry-run] [flags]",
-            "  ct plugin dashboard session [PROJECT] [--since-days N|--all-time]",
+            "  ct plugin dashboard session [ct project sessions flags]",
             "  ct plugin dashboard session cleanup [--tui] [flags]",
+            "  ct plugin dashboard session context-window SESSION_ID [flags]",
             "",
             "TUI:  Simple interaction, browse projects/sessions, cleanup with keyboard.",
-            "Web:  Rich UI with charts, filters, vendor breakdown, session timeline.",
+            "Web:  Overview-first UI with explicit routes for browsing and cleanup.",
         ]
     )
 
@@ -231,9 +208,18 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
     return json.loads(completed.stdout)
 
 
-def _one_line(value: Any, limit: int) -> str:
-    text = " ".join(str(value or "").split())
-    return text if len(text) <= limit else text[: limit - 3] + "..."
+def _ct_passthrough(args: list[str]) -> int:
+    ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
+    if not ct:
+        print("error: ct executable not found; set CT_COMMAND to the ct command path", file=sys.stderr)
+        return 127
+    command = [*shlex.split(ct), *args]
+    try:
+        completed = subprocess.run(command, check=False)
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return completed.returncode
 
 
 def _project_payload() -> dict[str, Any]:

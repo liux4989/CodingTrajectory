@@ -29,6 +29,10 @@
     {
       "name": "session/cleanup",
       "summary": "Clean empty or low-value session logs."
+    },
+    {
+      "name": "session/context-window",
+      "summary": "Inspect session context composition and trajectory events."
     }
   ]
 }

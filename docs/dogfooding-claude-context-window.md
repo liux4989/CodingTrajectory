@@ -14,7 +14,7 @@ The product reference is the Claude Code docs context-window explorer: category 
 The first usable surface should be a plugin command, not a core command:
 
 ```text
-ct plugin context-window SESSION_ID [--turn TURN_ID] [--output markdown|json]
+ct plugin dashboard session context-window SESSION_ID [--turn TURN_ID] [--output markdown|json]
 ```
 
 Default output is compact and human-readable. JSON is the machine-readable escape hatch for dashboard/browser work.
@@ -217,8 +217,8 @@ Do not add unit tests for this task. Validate with real commands and dogfood art
 ```text
 uv run ct plugin list
 uv run ct session stats SESSION_ID --output json
-uv run ct plugin context-window SESSION_ID
-uv run ct plugin context-window SESSION_ID --output json
+uv run ct plugin dashboard session context-window SESSION_ID
+uv run ct plugin dashboard session context-window SESSION_ID --output json
 ```
 
 For the browser view, run the local server and inspect it through the in-app Browser at localhost. Verify at desktop and narrow widths that the event list and detail panel remain readable and no text overlaps.
@@ -238,3 +238,21 @@ For the browser view, run the local server and inspect it through the in-app Bro
 
 - Can hook output be identified as context input, terminal output, or both?
 - Are cached-token buckets enough to explain context pressure, or do we need per-message token attribution from raw records?
+
+## Implementation Status: 2026-06-09
+
+Implemented:
+
+- `ct plugin dashboard session context-window SESSION_ID [--turn TURN_ID] [--output markdown|json]`
+- Pydantic-validated plugin JSON with token `value`, `confidence`, and `source`
+- Codex semantic category projection from `ct session stats`
+- Claude Code and Pi cache buckets represented explicitly as `unattributed`
+- compact terminal composition and trajectory report
+- dashboard session links and `/sessions/$sessionId/context-window`
+- stacked composition bar, selectable event stream, hover preview, keyboard
+  movement, and pinned detail panel
+
+The implementation does not fabricate per-tool token deltas. Current overview
+JSON exposes compact tool activity but not result text or result-token counts,
+so those rows use `tokens: null` and emit a warning. User and assistant deltas
+are estimates of visible overview text and are labeled `estimated_tokens`.

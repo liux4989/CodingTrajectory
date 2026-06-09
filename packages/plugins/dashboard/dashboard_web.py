@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import cleanup as cleanup_mod
+import context_window as context_window_mod
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +49,16 @@ def main(argv: list[str] | None = None) -> int:
 
 def serve(config: DashboardWebConfig) -> int:
     handler = _handler_for(config.static_dir)
-    server = ThreadingHTTPServer((config.host, config.port), handler)
+    ThreadingHTTPServer.allow_reuse_address = True
+    try:
+        server = ThreadingHTTPServer((config.host, config.port), handler)
+    except OSError as exc:
+        print(
+            f"error: could not bind to {config.host}:{config.port} ({exc}); "
+            "stop the other process or use --port to pick a different port",
+            file=sys.stderr,
+        )
+        return 1
     url = f"http://{config.host}:{server.server_port}"
     print(f"Dashboard web running at {url}")
     if config.open_browser:
@@ -129,6 +139,8 @@ def _handler_for(static_dir: Path) -> type[BaseHTTPRequestHandler]:
                     payload = _session_payload(query)
                 elif path == "/api/sessions/timeline":
                     payload = _session_timeline_payload(query)
+                elif path == "/api/sessions/context-window":
+                    payload = _context_window_payload(query)
                 elif path == "/api/vendors":
                     payload = _vendor_payload(query)
                 elif path == "/api/cleanup/project/preview":
@@ -332,6 +344,17 @@ def _session_payload(query: dict[str, list[str]]) -> dict[str, Any]:
         params["agent_vendor"] = vendor
     payload = _ct_json(["project", "sessions", "--params", json.dumps(params), "--output", "json"])
     return {"items": payload.get("items") or []}
+
+
+def _context_window_payload(query: dict[str, list[str]]) -> dict[str, Any]:
+    session_id = _first(query, "session_id")
+    if not session_id:
+        raise ValueError("session_id is required")
+    turn_id = _first(query, "turn_id")
+    return context_window_mod.build_projection(
+        session_id,
+        turn_id=turn_id,
+    ).model_dump(mode="json")
 
 
 def _project_cleanup_preview(query: dict[str, list[str]]) -> cleanup_mod.CleanupPreview:

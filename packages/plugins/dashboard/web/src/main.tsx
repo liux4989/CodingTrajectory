@@ -7,6 +7,7 @@ import { ToastProvider } from "./components/toast";
 import { OverviewRoute } from "./routes/overview";
 import { ProjectsRoute } from "./routes/projects";
 import { SessionsRoute } from "./routes/sessions";
+import { ContextWindowRoute } from "./routes/context-window";
 import { CleanupRoute } from "./routes/cleanup";
 import "./styles.css";
 
@@ -45,6 +46,12 @@ const sessionsRoute = createRoute({
   component: SessionsRoute,
 });
 
+const contextWindowRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions/$sessionId/context-window",
+  component: ContextWindowRoute,
+});
+
 const cleanupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/cleanup",
@@ -52,7 +59,13 @@ const cleanupRoute = createRoute({
 });
 
 const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, projectsRoute, sessionsRoute, cleanupRoute]),
+  routeTree: rootRoute.addChildren([
+    indexRoute,
+    projectsRoute,
+    sessionsRoute,
+    contextWindowRoute,
+    cleanupRoute,
+  ]),
 });
 
 declare module "@tanstack/react-router" {
