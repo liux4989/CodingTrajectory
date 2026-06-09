@@ -43,6 +43,12 @@ _CONTEXT_SOURCE_LABELS: dict[str, str] = {
     WEB_SEARCH: "Web searches",
 }
 
+_AGENT_RESPONSE_LABELS: dict[str, str] = {
+    "final_answer": "Final answers",
+    "progress_update": "Progress updates",
+    "assistant_message": "Assistant messages",
+}
+
 
 def build_codex_context_stats(session_graph: SessionGraph) -> dict[str, Any]:
     latest_usage_event = _latest_codex_token_count_event(session_graph)
@@ -172,9 +178,9 @@ def _codex_context_categories(
     prompt_raw, agent_raw, tool_raw = _codex_conversation_raw_tokens(session_graph)
     scaled = _scaled_context_tokens(
         {
-            "user_request": prompt_raw["user_request"],
-            **{f"files:{source}": tokens for source, tokens in prompt_raw.items() if source != "user_request"},
-            "agent_response": agent_raw["agent_response"],
+            **{f"prompt:{source}": tokens for source, tokens in prompt_raw.items() if source.startswith("user_")},
+            **{f"files:{source}": tokens for source, tokens in prompt_raw.items() if not source.startswith("user_")},
+            **{f"agent:{source}": tokens for source, tokens in agent_raw.items()},
             **{f"tool:{tool_name}": tokens for tool_name, tokens in tool_raw.items()},
         },
         target_total=residual_tokens,
@@ -182,19 +188,27 @@ def _codex_context_categories(
 
     setup_children = _category_children(
         [
-            ("system", "System", setup_raw["system"]),
+            ("base_system", "Base instructions", setup_raw["base_system"]),
+            ("developer_instructions", "Developer instructions", setup_raw["developer_instructions"]),
             ("agents_md", "AGENTS.md", setup_raw["agents_md"]),
             ("skills", "Skills", setup_raw["skills"]),
             ("mcp", "MCP/tools", setup_raw["mcp"]),
             ("memory", "Memory", setup_raw["memory"]),
         ],
         denominator=denominator,
-        keep_zero_keys={"system", "agents_md", "skills", "mcp", "memory"},
+        keep_zero_keys={"base_system", "developer_instructions", "agents_md", "skills", "mcp", "memory"},
     )
-    user_text = _latest_user_request_text(session_graph)
     prompt_children = _category_children(
         [
-            ("user_request", f"You (User Request): {_label_snippet(user_text)}", scaled["user_request"]),
+            (
+                f"prompt_{_slug(source)}",
+                _prompt_label(source),
+                scaled[f"prompt:{source}"],
+            )
+            for source in sorted(
+                (source for source in prompt_raw if source.startswith("user_")),
+                key=lambda name: (-scaled[f"prompt:{name}"], name),
+            )
         ],
         denominator=denominator,
     )
@@ -206,8 +220,22 @@ def _codex_context_categories(
                 scaled[f"files:{source}"],
             )
             for source in sorted(
-                (source for source in prompt_raw if source != "user_request"),
+                (source for source in prompt_raw if not source.startswith("user_")),
                 key=lambda name: (-scaled[f"files:{name}"], name),
+            )
+        ],
+        denominator=denominator,
+    )
+    response_children = _category_children(
+        [
+            (
+                f"agent_{_slug(source)}",
+                _AGENT_RESPONSE_LABELS.get(source, _tool_label(source)),
+                scaled[f"agent:{source}"],
+            )
+            for source in sorted(
+                agent_raw,
+                key=lambda name: (-scaled[f"agent:{name}"], name),
             )
         ],
         denominator=denominator,
@@ -221,7 +249,12 @@ def _codex_context_categories(
     )
     agent_children = _category_children(
         [
-            ("agent_response", "Output (Agent Response)", scaled["agent_response"]),
+            (
+                "agent_response",
+                "Output (Agent Response)",
+                sum(child.tokens for child in response_children),
+                response_children,
+            ),
             (
                 "tool_breakdown",
                 "Tool breakdown",
@@ -245,10 +278,11 @@ def _codex_context_categories(
 
 def _codex_setup_key(payload: dict[str, Any]) -> str:
     block = _as_str(payload.get("prompt_block")) or ""
+    role = _as_str(payload.get("prompt_role")) or ""
     text = payload.get("text")
     haystack = f"{block}\n{text if isinstance(text, str) else ''}".lower()
     if block == "base_instructions":
-        return "system"
+        return "base_system"
     if "agents.md" in haystack:
         return "agents_md"
     if "skills_instructions" in block or "### available skills" in haystack:
@@ -259,7 +293,9 @@ def _codex_setup_key(payload: dict[str, Any]) -> str:
         return "memory"
     if "mcp" in haystack or "tools are grouped" in haystack:
         return "mcp"
-    return "system"
+    if role == "developer":
+        return "developer_instructions"
+    return "base_system"
 
 
 def _codex_conversation_raw_tokens(
@@ -268,6 +304,7 @@ def _codex_conversation_raw_tokens(
     prompt_raw = Counter[str]()
     agent_raw = Counter[str]()
     tool_raw = Counter[str]()
+    user_count = 0
     for session in session_graph.sessions:
         tool_names_by_id: dict[str, str] = {}
         tool_inputs_by_id: dict[str, Any] = {}
@@ -278,10 +315,13 @@ def _codex_conversation_raw_tokens(
                 user_tokens, file_tokens = _codex_user_prompt_tokens(
                     _as_str(event.payload.get("text")) or ""
                 )
-                prompt_raw["user_request"] += user_tokens
+                prompt_raw["user_initial_request" if user_count == 0 else "user_follow_up_requests"] += user_tokens
                 prompt_raw["prompt_file_link"] += file_tokens
+                user_count += 1
             elif event.type == EventType.LLM_RESPONSE:
-                agent_raw["agent_response"] += _estimate_text_tokens(_as_str(event.payload.get("text")) or "")
+                agent_raw[_assistant_response_key(event.payload)] += _estimate_text_tokens(
+                    _as_str(event.payload.get("text")) or ""
+                )
             elif event.type == EventType.TOOL_CALL_REQUESTED:
                 call_id = _as_str(event.payload.get("tool_call_id"))
                 tool_name = _as_str(event.payload.get("tool_name")) or "tool"
@@ -301,6 +341,23 @@ def _codex_conversation_raw_tokens(
                 else:
                     tool_raw[tool_name] += output_tokens
     return prompt_raw, agent_raw, tool_raw
+
+
+def _prompt_label(source: str) -> str:
+    if source == "user_initial_request":
+        return "Initial user request"
+    if source == "user_follow_up_requests":
+        return "Follow-up user requests"
+    return _tool_label(source)
+
+
+def _assistant_response_key(payload: dict[str, Any]) -> str:
+    phase = _as_str(payload.get("phase"))
+    if phase == "final_answer":
+        return "final_answer"
+    if phase:
+        return "progress_update"
+    return "assistant_message"
 
 
 _MARKDOWN_FILE_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
