@@ -343,7 +343,6 @@ def compact_context_category(category: Any) -> Any:
             "l": category.get("label"),
             "t": category.get("tokens"),
             "p": category.get("percent"),
-            "d": category.get("details") or None,
             "c": [compact_context_category(child) for child in category.get("children") or []] or None,
         }
     )

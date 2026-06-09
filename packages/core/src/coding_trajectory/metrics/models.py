@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_serializer
@@ -227,7 +227,6 @@ class ContextCategoryFlat(BaseModel):
         "estimated_tokens"
     )
     source: str | None = None
-    details: list[dict[str, Any]] = Field(default_factory=list)
     children: list["ContextCategoryFlat"] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
@@ -237,8 +236,6 @@ class ContextCategoryFlat(BaseModel):
         data.pop("source", None)
         if data.get("percent") is None:
             data.pop("percent", None)
-        if not data.get("details"):
-            data.pop("details", None)
         if not data.get("children"):
             data.pop("children", None)
         return data

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections import defaultdict
 import re
 from typing import Any
 
@@ -170,7 +169,7 @@ def _codex_context_categories(
     setup_tokens = min(sum(setup_raw.values()), used_tokens)
     residual_tokens = max(used_tokens - setup_tokens, 0)
 
-    prompt_raw, agent_raw, tool_raw, context_details = _codex_conversation_raw_tokens(session_graph)
+    prompt_raw, agent_raw, tool_raw = _codex_conversation_raw_tokens(session_graph)
     scaled = _scaled_context_tokens(
         {
             "user_request": prompt_raw["user_request"],
@@ -205,12 +204,6 @@ def _codex_context_categories(
                 f"files_{_slug(source)}",
                 _CONTEXT_SOURCE_LABELS.get(source, _tool_label(source)),
                 scaled[f"files:{source}"],
-                [],
-                _scaled_context_details(
-                    context_details.get(source, []),
-                    raw_total=prompt_raw[source],
-                    scaled_total=scaled[f"files:{source}"],
-                ),
             )
             for source in sorted(
                 (source for source in prompt_raw if source != "user_request"),
@@ -271,11 +264,10 @@ def _codex_setup_key(payload: dict[str, Any]) -> str:
 
 def _codex_conversation_raw_tokens(
     session_graph: SessionGraph,
-) -> tuple[Counter[str], Counter[str], Counter[str], dict[str, list[dict[str, Any]]]]:
+) -> tuple[Counter[str], Counter[str], Counter[str]]:
     prompt_raw = Counter[str]()
     agent_raw = Counter[str]()
     tool_raw = Counter[str]()
-    context_details: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for session in session_graph.sessions:
         tool_names_by_id: dict[str, str] = {}
         tool_inputs_by_id: dict[str, Any] = {}
@@ -283,14 +275,11 @@ def _codex_conversation_raw_tokens(
             if event.vendor_source != Vendor.CODEX_CLI:
                 continue
             if event.type == EventType.USER_PROMPT_SUBMITTED:
-                user_tokens, file_details = _codex_user_prompt_tokens(
+                user_tokens, file_tokens = _codex_user_prompt_tokens(
                     _as_str(event.payload.get("text")) or ""
                 )
                 prompt_raw["user_request"] += user_tokens
-                for detail in file_details:
-                    tokens = _as_int(detail.get("raw_tokens"))
-                    prompt_raw["prompt_file_link"] += tokens
-                    context_details["prompt_file_link"].append(detail)
+                prompt_raw["prompt_file_link"] += file_tokens
             elif event.type == EventType.LLM_RESPONSE:
                 agent_raw["agent_response"] += _estimate_text_tokens(_as_str(event.payload.get("text")) or "")
             elif event.type == EventType.TOOL_CALL_REQUESTED:
@@ -303,43 +292,32 @@ def _codex_conversation_raw_tokens(
                 call_id = _as_str(event.payload.get("tool_call_id"))
                 tool_name = tool_names_by_id.get(call_id or "", "tool")
                 output_tokens = _estimate_text_tokens(_stringify_tool_output(event.payload.get("output")))
-                source, detail = _context_source_tool_detail(
+                source = _context_source_tool(
                     tool_name,
                     tool_inputs_by_id.get(call_id or ""),
-                    output_tokens=output_tokens,
-                    call_id=call_id,
-                    failed=event.type == EventType.TOOL_CALL_FAILED,
                 )
                 if source:
                     prompt_raw[source] += output_tokens
-                    context_details[source].append(detail)
                 else:
                     tool_raw[tool_name] += output_tokens
-    return prompt_raw, agent_raw, tool_raw, dict(context_details)
+    return prompt_raw, agent_raw, tool_raw
 
 
 _MARKDOWN_FILE_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
 
-def _codex_user_prompt_tokens(text: str) -> tuple[int, list[dict[str, Any]]]:
+def _codex_user_prompt_tokens(text: str) -> tuple[int, int]:
     file_spans: list[tuple[int, int]] = []
-    details: list[dict[str, Any]] = []
+    file_tokens = 0
     for match in _MARKDOWN_FILE_LINK_RE.finditer(text):
         target = match.group(1).strip()
         if not _looks_like_file_reference(target):
             continue
         file_spans.append(match.span())
-        details.append(
-            {
-                "source": "prompt_file_link",
-                "label": match.group(0),
-                "target": target,
-                "raw_tokens": _estimate_text_tokens(match.group(0)),
-            }
-        )
+        file_tokens += _estimate_text_tokens(match.group(0))
 
     if not file_spans:
-        return _estimate_text_tokens(text), []
+        return _estimate_text_tokens(text), 0
 
     prompt_parts: list[str] = []
     cursor = 0
@@ -347,7 +325,7 @@ def _codex_user_prompt_tokens(text: str) -> tuple[int, list[dict[str, Any]]]:
         prompt_parts.append(text[cursor:start])
         cursor = end
     prompt_parts.append(text[cursor:])
-    return _estimate_text_tokens("".join(prompt_parts).strip()), details
+    return _estimate_text_tokens("".join(prompt_parts).strip()), file_tokens
 
 
 def _looks_like_file_reference(target: str) -> bool:
@@ -359,26 +337,15 @@ def _looks_like_file_reference(target: str) -> bool:
     return "." in path.rsplit("/", 1)[-1]
 
 
-def _context_source_tool_detail(
+def _context_source_tool(
     tool_name: str,
     tool_input: Any,
-    *,
-    output_tokens: int,
-    call_id: str | None,
-    failed: bool,
-) -> tuple[str | None, dict[str, Any]]:
+) -> str | None:
     summary = _context_tool_summary(tool_name, tool_input)
     source = _as_str(summary.get("name")) if summary else None
     if source not in {READ_FILE, SEARCH_TEXT, LIST_FILES, WEB_FETCH, WEB_SEARCH}:
-        return None, {}
-    return source, {
-        "source": source,
-        "label": summary.get("description") or tool_name,
-        "tool_name": tool_name,
-        "call_id": call_id,
-        "raw_tokens": output_tokens,
-        "failed": failed or None,
-    }
+        return None
+    return source
 
 
 def _context_tool_summary(tool_name: str, tool_input: Any) -> dict[str, Any] | None:
@@ -394,36 +361,10 @@ def _context_tool_summary(tool_name: str, tool_input: Any) -> dict[str, Any] | N
     return summarize_tool_call(StepToolItem(tool_name=tool_name, input=shell_input))
 
 
-def _scaled_context_details(
-    details: list[dict[str, Any]],
-    *,
-    raw_total: int,
-    scaled_total: int,
-) -> list[dict[str, Any]]:
-    if not details:
-        return []
-    scale = (scaled_total / raw_total) if raw_total > 0 else 0
-    result: list[dict[str, Any]] = []
-    for detail in details:
-        raw_tokens = _as_int(detail.get("raw_tokens"))
-        result.append(
-            {
-                key: value
-                for key, value in {
-                    **detail,
-                    "tokens": round(raw_tokens * scale),
-                }.items()
-                if value is not None
-            }
-        )
-    return result
-
-
 def _category_children(
     specs: list[
         tuple[str, str, int]
         | tuple[str, str, int, list[ContextCategoryFlat]]
-        | tuple[str, str, int, list[ContextCategoryFlat], list[dict[str, Any]]]
     ],
     *,
     denominator: int,
@@ -434,8 +375,7 @@ def _category_children(
     for spec in specs:
         key, label, tokens = spec[:3]
         children = spec[3] if len(spec) >= 4 else []
-        details = spec[4] if len(spec) == 5 else []
-        if tokens <= 0 and key not in keep_zero_keys and not children and not details:
+        if tokens <= 0 and key not in keep_zero_keys and not children:
             continue
         categories.append(
             ContextCategoryFlat(
@@ -444,7 +384,6 @@ def _category_children(
                 tokens=max(int(tokens), 0),
                 percent=percent(max(int(tokens), 0), denominator),
                 confidence="estimated_tokens",
-                details=details,
                 children=children,
             )
         )
