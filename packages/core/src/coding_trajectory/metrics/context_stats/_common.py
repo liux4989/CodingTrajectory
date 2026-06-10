@@ -54,6 +54,13 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         if observation.kind in {"turn_completed", "turn_aborted"}
         and observation.duration_ms is not None
     ]
+    wall_duration_seconds = round((ended - started).total_seconds()) if started and ended else None
+    execution_seconds = round(sum(observed_durations) / 1000) if observed_durations else None
+    wait_seconds = (
+        max(wall_duration_seconds - execution_seconds, 0)
+        if wall_duration_seconds is not None and execution_seconds is not None
+        else None
+    )
     first_token_durations = [
         observation.time_to_first_token_ms
         for observation in runtime_observations
@@ -64,7 +71,8 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         status=status,
         started_at=started,
         ended_at=ended,
-        duration_seconds=round((ended - started).total_seconds()) if started and ended else None,
+        execution_seconds=execution_seconds,
+        wait_seconds=wait_seconds,
         turns=sum(len(session.turns) for session in session_graph.sessions),
         items=sum(len(turn.items) for session in session_graph.sessions for turn in session.turns),
         tool_calls=tool_calls,
@@ -81,7 +89,6 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
             for observation in runtime_observations
             if observation.kind == "thread_rolled_back"
         ),
-        observed_turn_duration_ms=sum(observed_durations) if observed_durations else None,
         average_time_to_first_token_ms=(
             round(sum(first_token_durations) / len(first_token_durations))
             if first_token_durations

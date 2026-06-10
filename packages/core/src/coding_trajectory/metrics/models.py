@@ -245,7 +245,8 @@ class RuntimeStatsFlat(BaseModel):
     status: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
-    duration_seconds: int | None = None
+    execution_seconds: int | None = None
+    wait_seconds: int | None = None
     turns: int = 0
     items: int = 0
     tool_calls: int = 0
@@ -254,13 +255,12 @@ class RuntimeStatsFlat(BaseModel):
     compactions: int = 0
     interrupted_turns: int = 0
     rollbacks: int = 0
-    observed_turn_duration_ms: int | None = None
     average_time_to_first_token_ms: int | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
-        for key in ("status", "started_at", "ended_at", "duration_seconds"):
+        for key in ("status", "started_at", "ended_at", "execution_seconds", "wait_seconds"):
             if data.get(key) is None:
                 data.pop(key, None)
         return data

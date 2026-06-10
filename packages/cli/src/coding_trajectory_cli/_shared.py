@@ -456,7 +456,8 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "status": runtime.get("status"),
                         "start": runtime.get("started_at"),
                         "end": runtime.get("ended_at"),
-                        "duration_seconds": runtime.get("duration_seconds"),
+                        "execution_seconds": runtime.get("execution_seconds"),
+                        "wait_seconds": runtime.get("wait_seconds"),
                         "turns": runtime.get("turns"),
                         "items": runtime.get("items"),
                         "tools": runtime.get("tool_calls"),
@@ -465,7 +466,6 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "compactions": runtime.get("compactions"),
                         "interrupted_turns": runtime.get("interrupted_turns") or None,
                         "rollbacks": runtime.get("rollbacks") or None,
-                        "observed_turn_duration_ms": runtime.get("observed_turn_duration_ms"),
                         "average_ttft_ms": runtime.get("average_time_to_first_token_ms"),
                     }
                 )

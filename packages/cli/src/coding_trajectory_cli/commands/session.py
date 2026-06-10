@@ -176,7 +176,8 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     tool_calls_total = runtime.get("tool_calls") or 0
     failed_tool_calls = runtime.get("failed_tool_calls") or 0
     runtime_line = (
-        f"Runtime: {format_duration(runtime.get('duration_seconds'))}, "
+        f"Execution: {format_duration(runtime.get('execution_seconds'))}, "
+        f"wait {format_duration(runtime.get('wait_seconds'))}, "
         f"{runtime.get('turns') or 0} turns, "
         f"{runtime.get('items') or 0} items, "
         f"{tool_calls_total} tool calls"
