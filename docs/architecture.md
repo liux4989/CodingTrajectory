@@ -118,6 +118,7 @@ coding-trajectory/
 │   │       │   ├── tool_summary.py         # Tool usage aggregation
 │   │       │   ├── tool_summary_shell.py   # Shell-specific tool summary
 │   │       │   ├── tool_summary_shared.py  # Shared tool summary logic
+│   │       │   ├── tool_optimization.py    # Tool-specific output optimization profiles
 │   │       │   ├── activity_flow.py        # Temporal activity reconstruction
 │   │       │   ├── request_lineage.py      # User request → response tracing
 │   │       │   ├── teammate_summary.py     # Multi-agent team analysis
@@ -190,16 +191,6 @@ coding-trajectory/
 | Context window view | Context composition bar with event selection and hover preview |
 | Review plugin | LLM-judge session analysis via Codex app-server |
 | Dashboard cleanup | Project/session cleanup with dry-run, trash, and TUI workflow |
-
-### Not Yet Implemented
-
-| Feature | Relevant Components |
-|---|---|
-| Additional vendor adapters | New adapters in `ingestion/adapters/` |
-| Session export plugin | Planned `ct-export` tool for session data export |
-| Session replay | UI-oriented replay over canonical turn/item data |
-| Cross-vendor session linking | Sessions spanning multiple coding agents in one graph |
-| Real-time log tailing | Live ingestion of active session logs |
 
 ## Service API
 
