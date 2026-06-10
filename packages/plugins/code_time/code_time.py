@@ -7,6 +7,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
@@ -64,6 +67,11 @@ def build_report(
     project_filter: str | None,
     agent_vendor: str | None,
 ) -> dict[str, Any]:
+    cache_key = (window, project_filter, agent_vendor)
+    cached = _report_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     since_days = WINDOW_SINCE_DAYS[window]
     projects_payload = _ct_json(["project", "list", "--output", "json"])
     project_items = projects_payload.get("items") or {}
@@ -74,8 +82,9 @@ def build_report(
             if k == project_filter
         }
 
-    project_slices: list[dict[str, Any]] = []
-    for project_name in sorted(project_items):
+    project_names = sorted(project_items)
+
+    def _fetch_project_sessions(project_name: str) -> tuple[str, list[dict[str, Any]]]:
         params: dict[str, Any] = {"since_days": since_days, "project_name": project_name}
         if agent_vendor:
             params["agent_vendor"] = agent_vendor
@@ -83,39 +92,79 @@ def build_report(
             ["project", "sessions", "--global-scope", "--params", json.dumps(params), "--output", "json"]
         )
         if sessions_payload is None:
-            continue
-        sessions = sessions_payload.get("items") or []
-        if not sessions:
-            continue
+            return project_name, []
+        return project_name, sessions_payload.get("items") or []
 
-        session_slices: list[dict[str, Any]] = []
-        for session_item in sessions:
-            root_id = session_item.get("id") or session_item.get("root_session_id")
-            if not root_id:
+    def _fetch_session_data(root_id: str, session_item: dict[str, Any]) -> dict[str, Any] | None:
+        return _build_session_slice(root_id, session_item)
+
+    project_slices: list[dict[str, Any]] = []
+
+    with ThreadPoolExecutor(max_workers=min(8, len(project_names) or 1)) as pool:
+        project_futures = {
+            pool.submit(_fetch_project_sessions, name): name
+            for name in project_names
+        }
+
+        for future in as_completed(project_futures):
+            project_name, sessions = future.result()
+            if not sessions:
                 continue
-            slice_ = _build_session_slice(root_id, session_item)
-            if slice_:
-                session_slices.append(slice_)
 
-        if not session_slices:
-            continue
+            session_futures = {}
+            for session_item in sessions:
+                root_id = session_item.get("id") or session_item.get("root_session_id")
+                if not root_id:
+                    continue
+                session_futures[pool.submit(_fetch_session_data, root_id, session_item)] = root_id
 
-        project_slices.append(_aggregate_project(project_name, session_slices))
+            session_slices: list[dict[str, Any]] = []
+            for sf in as_completed(session_futures):
+                slice_ = sf.result()
+                if slice_:
+                    session_slices.append(slice_)
 
-    return {
+            if session_slices:
+                project_slices.append(_aggregate_project(project_name, session_slices))
+
+    report = {
         "window": window,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "totals": _aggregate_totals(project_slices),
         "projects": project_slices,
     }
 
+    _report_cache_set(cache_key, report)
+    return report
+
+
+_REPORT_CACHE: dict[tuple, tuple[float, dict[str, Any]]] = {}
+_REPORT_CACHE_LOCK = threading.Lock()
+_REPORT_CACHE_TTL = 30
+
+
+def _report_cache_get(key: tuple) -> dict[str, Any] | None:
+    with _REPORT_CACHE_LOCK:
+        entry = _REPORT_CACHE.get(key)
+        if entry and time.monotonic() - entry[0] < _REPORT_CACHE_TTL:
+            return entry[1]
+    return None
+
+
+def _report_cache_set(key: tuple, report: dict[str, Any]) -> None:
+    with _REPORT_CACHE_LOCK:
+        _REPORT_CACHE[key] = (time.monotonic(), report)
+
 
 def _build_session_slice(
     root_id: str,
     session_item: dict[str, Any],
 ) -> dict[str, Any] | None:
-    stats = _ct_json_safe(["session", "stats", root_id, "--global-scope", "--output", "json"])
-    usage = _ct_json_safe(["session", "usage", root_id, "--global-scope", "--output", "json"])
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        stats_future = pool.submit(_ct_json_safe, ["session", "stats", root_id, "--global-scope", "--output", "json"])
+        usage_future = pool.submit(_ct_json_safe, ["session", "usage", root_id, "--global-scope", "--output", "json"])
+        stats = stats_future.result()
+        usage = usage_future.result()
     if stats is None and usage is None:
         return None
 
