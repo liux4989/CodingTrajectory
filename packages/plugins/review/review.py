@@ -55,11 +55,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Search all known log files when resolving the session.",
     )
     session_parser.add_argument(
-        "--extra-billing",
-        action="store_true",
-        help="Pass through to ct session stats/usage cost estimation.",
-    )
-    session_parser.add_argument(
         "--format",
         choices=("text", "json"),
         default="text",
@@ -98,7 +93,6 @@ def main(argv: list[str] | None = None) -> int:
         payload = analyze_session(
             args.session_id,
             global_scope=args.global_scope,
-            extra_billing=args.extra_billing,
             judge=args.judge,
             app_server_cmd=args.app_server_cmd,
             model=args.model.strip() or None,
@@ -119,7 +113,6 @@ def analyze_session(
     session_id: str,
     *,
     global_scope: bool,
-    extra_billing: bool,
     judge: str,
     app_server_cmd: str,
     model: str | None,
@@ -127,13 +120,14 @@ def analyze_session(
     timeout: float,
 ) -> dict[str, Any]:
     overview = _ct_json(["session", "overview", session_id, "--output", "json"], global_scope=global_scope)
-    stats_args = ["session", "stats", session_id, "--output", "json"]
-    usage_args = ["session", "usage", session_id, "--output", "json"]
-    if extra_billing:
-        stats_args.append("--extra-billing")
-        usage_args.append("--extra-billing")
-    stats = _ct_json(stats_args, global_scope=global_scope)
-    usage = _ct_json(usage_args, global_scope=global_scope)
+    stats = _ct_json(
+        ["session", "stats", session_id, "--output", "json"],
+        global_scope=global_scope,
+    )
+    usage = _ct_json(
+        ["session", "usage", session_id, "--output", "json"],
+        global_scope=global_scope,
+    )
 
     metrics = _metrics(overview, stats)
     evidence = _evidence_packet(session_id, metrics, overview, stats, usage)

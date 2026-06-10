@@ -30,9 +30,9 @@
 ├───────────────────────────────────────┼──────────────────────────────────┤
 │  Analysis Layer          │  Metrics Layer                               │
 │  ┌───────────────────────┐│  ┌──────────────────────────────────────┐   │
-│  │ projections           ││  │ token usage, cost estimation         │   │
+│  │ projections           ││  │ token usage, reported cost           │   │
 │  │ event_scan            ││  │ context stats, quota tracking        │   │
-│  │ item_details          ││  │ tool usage, pricing rules            │   │
+│  │ item_details          ││  │ tool usage                            │   │
 │  │ session_graph_views   ││  │                                      │   │
 │  └───────────┬───────────┘│  └──────────────┬───────────────────────┘   │
 ├──────────────┼────────────┼─────────────────┼────────────────────────────┤
@@ -125,9 +125,8 @@ coding-trajectory/
 │   │       │   ├── concepts.py             # Shared analysis concepts
 │   │       │   └── projection_utils.py     # Shared projection helpers
 │   │       └── metrics/
-│   │           ├── analysis.py             # Token usage, cost, context stats builders
+│   │           ├── analysis.py             # Log-derived token, cost, and context builders
 │   │           ├── models.py               # Metric Pydantic models (flat + nested)
-│   │           ├── pricing.py              # Price rules per model, cost estimation
 │   │           └── context_stats/          # Context window category analysis
 │   ├── cli/                                # `ct` command-line interface
 │   │   └── src/coding_trajectory_cli/
@@ -147,6 +146,7 @@ coding-trajectory/
 │       │   ├── dashboard_tui.py            # Textual TUI
 │       │   ├── dashboard_web.py            # Python HTTP server for web dashboard
 │       │   ├── context_window.py           # Context composition projection
+│       │   ├── token_pricing.py             # models.dev pricing and model metadata
 │       │   ├── cleanup.py                  # Project/session cleanup logic
 │       │   ├── cleanup_tui.py              # Interactive cleanup TUI
 │       │   ├── ct-plugin.json              # Plugin manifest
@@ -181,13 +181,13 @@ coding-trajectory/
 | Index cache | Persistent path → session graph mapping at `~/.coding-trajectory/index.json` |
 | Document store | In-memory UUID-indexed store with cross-resource navigation |
 | Service dispatch | Method-based API (project.list, session.overview, session.usage, etc.) |
-| Token usage & cost | Per-turn, per-session token accounting with configurable price rules |
+| Token usage & cost | Per-turn, per-session token accounting from normalized session logs |
 | Context stats | Context window utilization, category breakdown, quota tracking |
 | Tool usage analysis | Tool invocation counts, output sizes, cost attribution |
 | CLI (`ct`) | Progressive-disclosure command surface with markdown + JSON output |
 | Plugin system | Manifest-based discovery, subprocess dispatch, no core imports |
 | Activity plugin | Cross-session timeline with project/account/time window filtering |
-| Dashboard plugin | TUI (Textual) + web (React) session visualization |
+| Dashboard plugin | TUI/web visualization plus models.dev pricing and model metadata enrichment |
 | Context window view | Context composition bar with event selection and hover preview |
 | Review plugin | LLM-judge session analysis via Codex app-server |
 | Dashboard cleanup | Project/session cleanup with dry-run, trash, and TUI workflow |
@@ -205,7 +205,7 @@ The service layer implements a method-dispatch contract consumed by the CLI and 
 | `project.logfile` | List session graphs from an explicit log file |
 | `session.overview` | Narrative overview: hierarchy, activity keys, turn summaries |
 | `session.stats` | Context window statistics and category breakdown |
-| `session.usage` | Token usage and cost breakdown by turn and activity |
+| `session.usage` | Token usage and log-reported cost breakdown by turn |
 | `session.tool_usage` | Tool invocation statistics |
 | `session.turn_usage` | Per-turn usage detail |
 | `item.details` | Enriched detail for one or more items |
@@ -273,7 +273,7 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct project sessions [PROJECT]` | List sessions for a project |
 | `uv run ct session overview [ID]` | Session hierarchy overview |
 | `uv run ct session stats [ID]` | Context window statistics |
-| `uv run ct session usage [ID]` | Token and cost breakdown |
+| `uv run ct session usage [ID]` | Token and log-reported cost breakdown |
 | `uv run ct session item-detail ITEM_ID` | Item detail (JSON) |
 | `uv run ct session event-detail EVENT_ID` | Event detail (JSON) |
 | `uv run ct session event-scan [ID] --type TYPE` | Filtered event search |

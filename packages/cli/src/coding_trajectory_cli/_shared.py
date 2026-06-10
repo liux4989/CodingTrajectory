@@ -96,15 +96,6 @@ def add_params_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_metrics_flags(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--extra-billing",
-        action="store_true",
-        default=None,
-        help="Mark cost estimates as outside-plan/API billing instead of plan-usage estimates.",
-    )
-
-
 def add_agent_vendor_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--agent-vendor",
@@ -274,6 +265,7 @@ def compact_usage(usage: dict[str, Any] | None, *, include_cost: bool = True) ->
         {
             "input": usage.get("input_tokens"),
             "cached": usage.get("cached_input_tokens"),
+            "cache_creation": usage.get("cache_creation_input_tokens"),
             "output": usage.get("output_tokens"),
             "reasoning": usage.get("reasoning_output_tokens"),
             "total": usage.get("total_tokens"),

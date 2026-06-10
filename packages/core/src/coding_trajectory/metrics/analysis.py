@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -15,14 +16,18 @@ from coding_trajectory.ingestion.models import (
     is_tool_shaped_item,
 )
 from coding_trajectory.metrics.models import (
+    AttributionPolicy,
     CostEstimate,
+    InvokeResponseTokens,
     MetricSource,
     QuotaSnapshot,
     QuotaWindow,
+    ReadAfterResult,
     SessionMetrics,
     SessionMetricsFlat,
     SessionUsageCompactFlat,
     ToolItemFlat,
+    ToolTokenAttribution,
     TokenUsage,
     TokenUsageObservation,
     SessionGraphMetrics,
@@ -32,9 +37,6 @@ from coding_trajectory.metrics.models import (
     TurnMetrics,
     TurnMetricsFlat,
 )
-from coding_trajectory.metrics.pricing import estimate_observation_cost
-
-
 def build_session_graph_metrics(
     session_graph: SessionGraph,
     *,
@@ -140,16 +142,20 @@ def build_session_graph_tool_usage(
     *,
     extra_billing: bool = False,
 ) -> dict[str, Any]:
-    """Return per-tool-item output size signals without per-item cost."""
+    """Return per-tool-item output size signals with visible-content token attribution."""
     full = _build_full_metrics(session_graph, extra_billing=extra_billing)
 
     tool_items: list[ToolItemFlat] = []
     for session in session_graph.sessions:
         for turn in session.turns:
-            for item in turn.items:
-                if not is_tool_shaped_item(item):
-                    continue
-                tool_items.append(_tool_item_flat(item, session_id=session.session_id, turn_id=turn.turn_id))
+            turn_observations = _turn_usage_observations(session, turn)
+            tool_items.extend(
+                _build_tool_items_for_turn(
+                    turn,
+                    session_id=session.session_id,
+                    turn_observations=turn_observations,
+                )
+            )
 
     return SessionGraphToolUsageFlat(
         root_session_id=full.root_session_id,
@@ -158,12 +164,235 @@ def build_session_graph_tool_usage(
         tool_output_chars=sum(item.output_chars for item in tool_items),
         tool_output_original_tokens=sum(item.output_original_tokens or 0 for item in tool_items),
         tool_items=tool_items,
+        attribution_policy=AttributionPolicy(),
         warnings=full.warnings,
     ).model_dump(mode="json")
 
 
+def _turn_usage_observations(
+    session: Session,
+    turn: Turn,
+) -> list[TokenUsageObservation]:
+    event_ids = set(turn.event_ids)
+    observations = [
+        obs
+        for obs in session.context_usage
+        if obs.source_event_id in event_ids
+    ]
+    token_observations: list[TokenUsageObservation] = []
+    for observation in observations:
+        usage = _token_usage_from_mapping(observation.usage)
+        if _is_zero_usage(usage):
+            continue
+        token_observations.append(
+            TokenUsageObservation(
+                scope_type="turn",
+                scope_id=turn.turn_id,
+                timestamp=observation.timestamp,
+                usage=usage,
+                provider=observation.provider or session.vendor.value,
+                model=observation.model,
+                source=MetricSource(
+                    vendor=session.vendor.value,
+                    source_type="session.context_usage",
+                    event_id=observation.source_event_id,
+                ),
+            )
+        )
+    token_observations.sort(key=lambda item: item.timestamp)
+    return token_observations
+
+
+def _build_tool_items_for_turn(
+    turn: Turn,
+    *,
+    session_id: UUID,
+    turn_observations: list[TokenUsageObservation],
+) -> list[ToolItemFlat]:
+    tool_entries = [item for item in turn.items if is_tool_shaped_item(item)]
+    if not tool_entries:
+        return []
+
+    tool_entries_sorted = sorted(tool_entries, key=lambda item: item.started_at)
+    groups: list[tuple[list[Any], TokenUsageObservation | None]] = []
+    current: list[Any] = []
+    current_signature: tuple[Any, Any] | None = None
+
+    for item in tool_entries_sorted:
+        signature = _item_observation_signature(item, turn_observations)
+        if current_signature is None:
+            current_signature = signature
+        if signature != current_signature:
+            groups.append((current, _group_observation(current, turn_observations)))
+            current = []
+            current_signature = signature
+        current.append(item)
+    if current:
+        groups.append((current, _group_observation(current, turn_observations)))
+
+    items: list[ToolItemFlat] = []
+    for group_items, invoke_obs in groups:
+        count = len(group_items)
+        for item in group_items:
+            base = _tool_item_flat(
+                item,
+                session_id=session_id,
+                turn_id=turn.turn_id,
+            )
+            base.token_attribution = _build_token_attribution(item)
+            base.invoke_response_tokens = _build_invoke_response_tokens(
+                invoke_obs, count=count
+            )
+            base.read_after_result = _build_read_after_result(
+                item, turn_observations=turn_observations
+            )
+            items.append(base)
+    return items
+
+
+def _item_observation_signature(
+    item: Any,
+    turn_observations: list[TokenUsageObservation],
+) -> tuple[Any, Any]:
+    anchor_start = item.started_at
+    anchor_end = item.completed_at or item.started_at
+    previous = _previous_observation_before(turn_observations, anchor_start)
+    next_obs = _next_observation_after(turn_observations, anchor_end)
+    return (
+        previous.source.event_id if previous is not None else None,
+        next_obs.source.event_id if next_obs is not None else None,
+    )
+
+
+def _previous_observation_before(
+    turn_observations: list[TokenUsageObservation],
+    anchor: datetime,
+) -> TokenUsageObservation | None:
+    for observation in reversed(turn_observations):
+        if observation.timestamp < anchor:
+            return observation
+    return None
+
+
+def _group_observation(
+    group_items: list[Any],
+    turn_observations: list[TokenUsageObservation],
+) -> TokenUsageObservation | None:
+    anchor = max(item.completed_at or item.started_at for item in group_items)
+    return _next_observation_after(turn_observations, anchor)
+
+
+def _next_observation_after(
+    turn_observations: list[TokenUsageObservation],
+    anchor: datetime,
+) -> TokenUsageObservation | None:
+    for observation in turn_observations:
+        if observation.timestamp > anchor:
+            return observation
+    return None
+
+
+def _build_token_attribution(item: Any) -> ToolTokenAttribution:
+    output_text = _tool_output_text(item)
+    output_original = _tool_original_token_count(output_text)
+    if output_original is not None:
+        output_tokens = output_original
+        confidence = "observed_tool_output_token_count"
+    elif output_text:
+        output_tokens = _estimate_tokens(output_text)
+        confidence = "visible_content_estimate"
+    else:
+        output_tokens = 0
+        confidence = "no_visible_content"
+
+    input_text = _tool_input_text(item)
+    input_tokens = _estimate_tokens(input_text) if input_text else 0
+
+    return ToolTokenAttribution(
+        tool_input_tokens=input_tokens,
+        tool_output_tokens=output_tokens,
+        content_confidence=confidence,
+    )
+
+
+def _build_invoke_response_tokens(
+    observation: TokenUsageObservation | None,
+    *,
+    count: int,
+) -> InvokeResponseTokens | None:
+    if observation is None:
+        return None
+    output = int(observation.usage.output_tokens)
+    reasoning = int(observation.usage.reasoning_output_tokens)
+    if count <= 0 or (output == 0 and reasoning == 0):
+        return None
+    if count == 1:
+        return InvokeResponseTokens(
+            output_tokens=output,
+            reasoning_output_tokens=reasoning,
+            attribution="single_tool_response",
+        )
+    shared_output = output // count
+    shared_reasoning = reasoning // count
+    if output - shared_output * count > 0:
+        shared_output += 1
+    if reasoning - shared_reasoning * count > 0:
+        shared_reasoning += 1
+    return InvokeResponseTokens(
+        output_tokens=shared_output,
+        reasoning_output_tokens=shared_reasoning,
+        attribution="shared_model_response",
+    )
+
+
+def _build_read_after_result(
+    item: Any,
+    *,
+    turn_observations: list[TokenUsageObservation],
+) -> ReadAfterResult:
+    anchor = item.completed_at or item.started_at
+    later = [obs for obs in turn_observations if obs.timestamp > anchor]
+    if later:
+        return ReadAfterResult(
+            included_in_turn_usage=True,
+            attribution="causal_next_model_request",
+        )
+    return ReadAfterResult(
+        included_in_turn_usage=False,
+        attribution="turn_completed_without_reuse",
+    )
+
+
+def _estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def _tool_output_text(item: Any) -> str:
+    output = getattr(item, "output", None)
+    return "" if output is None else str(output)
+
+
+def _tool_input_text(item: Any) -> str:
+    if item.kind == "command_execution":
+        value = getattr(item, "command", None)
+    else:
+        value = getattr(item, "input", None)
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        import json
+
+        try:
+            return json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
 def _tool_item_flat(item: Item, *, session_id: UUID, turn_id: UUID) -> ToolItemFlat:
-    output = "" if getattr(item, "output", None) is None else str(getattr(item, "output"))
+    output = _tool_output_text(item)
     return ToolItemFlat(
         item_id=item.item_id,
         session_id=session_id,
@@ -304,13 +533,13 @@ def _build_turn_metrics(
         observations=observations,
         extra_billing=extra_billing,
     )
-    cost_total = vendor_cost or CostEstimate(extra_billing=extra_billing)
+    cost_total = vendor_cost or (
+        _missing_reported_cost(observations, extra_billing=extra_billing)
+        if observations
+        else CostEstimate(extra_billing=extra_billing)
+    )
     for observation in observations:
         total = total.plus(observation.usage)
-        if vendor_cost is None:
-            cost_total = cost_total.plus(
-                estimate_observation_cost(observation, extra_billing=extra_billing)
-            )
 
     quota_snapshots: list[QuotaSnapshot] = []
     for observation in context_observations:
@@ -358,6 +587,20 @@ def _vendor_reported_cost(
         pricing_effective_date=turn.started_at.date().isoformat(),
         model=model,
         complete=True,
+    )
+
+
+def _missing_reported_cost(
+    observations: list[TokenUsageObservation],
+    *,
+    extra_billing: bool,
+) -> CostEstimate:
+    model = next((observation.model for observation in observations if observation.model), None)
+    return CostEstimate(
+        extra_billing=extra_billing,
+        model=model,
+        complete=False,
+        missing_reasons=["cost not reported in session log"],
     )
 
 

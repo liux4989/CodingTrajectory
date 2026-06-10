@@ -8,7 +8,6 @@ from typing import Any
 from coding_trajectory_cli._shared import (
     GhFormatter,
     add_base_output_flags,
-    add_metrics_flags,
     add_output_flags,
     add_params_flag,
     add_session_source,
@@ -54,10 +53,6 @@ def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
 
 def _session_stats_params(args: argparse.Namespace) -> dict[str, Any]:
     params = params_from_json(args)
-    if args.extra_billing is not None:
-        params["extra_billing"] = args.extra_billing
-    elif "extra_billing" not in params:
-        params["extra_billing"] = False
     if args.session_id:
         params["session_id"] = args.session_id
     return params
@@ -65,10 +60,6 @@ def _session_stats_params(args: argparse.Namespace) -> dict[str, Any]:
 
 def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
     params = params_from_json(args)
-    if args.extra_billing is not None:
-        params["extra_billing"] = args.extra_billing
-    elif "extra_billing" not in params:
-        params["extra_billing"] = False
     if args.session_id:
         params["session_id"] = args.session_id
     if args.turn_id:
@@ -297,7 +288,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     add_session_source(session_stats)
     add_output_flags(session_stats)
     add_params_flag(session_stats)
-    add_metrics_flags(session_stats)
     session_stats.set_defaults(
         _method="session.stats",
         _params=_session_stats_params,
@@ -308,7 +298,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_usage = session_sub.add_parser(
         "usage",
         prog="ct session usage",
-        help="Show turn-level token and cost accounting.",
+        help="Show turn-level token usage and log-reported cost.",
         formatter_class=GhFormatter,
     )
     add_session_source(session_usage)
@@ -321,7 +311,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     add_output_flags(session_usage)
     add_params_flag(session_usage)
-    add_metrics_flags(session_usage)
     session_usage.set_defaults(
         _method="session.usage",
         _params=_session_usage_params,

@@ -67,12 +67,14 @@ Structured View
    - when combined, `--drop-turns` is applied before `--turns`
    - activity renders as grouped human labels with truncated assistant response previews
    - use `--output json` when you need full item ids for drill-down
-4. `session stats [session_id] [--extra-billing] [--output markdown|json]` — inspect session stats with compact context/token sections
-5. `session usage [session_id] [--turn TURN_ID] [--extra-billing] [--output markdown|json]` — inspect turn-level activity token and cost accounting
+4. `session stats [session_id] [--output markdown|json]` — inspect session stats with compact context/token sections
+5. `session usage [session_id] [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and costs reported by session logs
 6. `session item-detail <item_id> [...]` — read the JSON evidence for one or more items
 
-`session usage` is intentionally turn-focused. It reports token buckets and cost
-grouped by turn without expanding paths, queries,
+`session usage` is intentionally turn-focused. It reports token buckets and any
+cost recorded by the source session log; core does not estimate missing prices
+from an external model catalog. External pricing enrichment belongs to the
+dashboard plugin. Results are grouped by turn without expanding paths, queries,
 commands, individual tool calls, derived efficiency, or explanatory semantics.
 Use `session overview`, `session item-detail`, `session event-detail`, or
 detail commands when you need hierarchy/navigation detail or causal drill-down.

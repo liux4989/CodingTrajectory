@@ -10,9 +10,6 @@ from coding_trajectory.metrics.models import (
     RuntimeStatsFlat,
     TokenUsage,
 )
-from coding_trajectory.metrics.pricing import get_model_context_window
-
-
 def root_session(session_graph: SessionGraph) -> Session:
     for session in session_graph.sessions:
         if session.session_id == session_graph.root_session_id:
@@ -137,11 +134,6 @@ def percent(value: int, denominator: int | None) -> float | None:
     if not denominator or denominator <= 0:
         return None
     return round((value / denominator) * 100, 1)
-
-
-def model_context_window(model: str | None, *, provider: str | None = None) -> int | None:
-    """Lookup a model's context window via the cached models.dev catalog."""
-    return get_model_context_window(model, provider=provider)
 
 
 def token_usage_from_mapping(value: dict[str, Any] | None) -> TokenUsage:

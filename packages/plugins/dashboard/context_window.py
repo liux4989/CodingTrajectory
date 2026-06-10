@@ -14,6 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+import token_pricing
+
 
 def _load_command_families() -> Any:
     here = os.path.dirname(os.path.abspath(__file__))
@@ -99,6 +101,15 @@ class ContextEvent(BaseModel):
     terminal_visible: bool = True
 
 
+class CostEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value_usd: float = Field(ge=0)
+    confidence: Literal["reported", "estimated"]
+    source: str
+    effective_date: str | None = None
+
+
 class ContextWindowProjection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -109,6 +120,7 @@ class ContextWindowProjection(BaseModel):
     context_window_tokens: TokenEvidence | None = None
     used_tokens: TokenEvidence | None = None
     used_percent: float | None = None
+    token_cost: CostEvidence | None = None
     categories: list[ContextCategory]
     events: list[ContextEvent]
     warnings: list[str]
@@ -164,21 +176,66 @@ def build_projection(session_id: str, *, turn_id: str | None = None) -> ContextW
 
     model = stats.get("model") or {}
     context = stats.get("context") or {}
+    model_name = _optional_text(model.get("name"))
+    reported_context_window = model.get("context_window") or model.get("context_window_tokens")
+    catalog_context_window = token_pricing.get_model_context_window(
+        model_name,
+        provider=vendor,
+    )
+    context_window = reported_context_window or catalog_context_window
+    used_tokens = _optional_int(context.get("used") or context.get("used_tokens"))
+    used_percent = _optional_float(context.get("pct") or context.get("used_percent"))
+    if used_percent is None and used_tokens is not None and context_window:
+        used_percent = round((used_tokens / context_window) * 100, 1)
+    usage_summary = usage.get("total_usage") or usage.get("usage") or {}
+    cost_not_reported = any(
+        "cost not reported in session log" in str(warning)
+        for warning in usage.get("warnings") or []
+    )
+    reported_cost = _optional_float(usage_summary.get("cost"))
+    estimated_cost = None
+    if reported_cost is None or cost_not_reported:
+        estimated_cost = token_pricing.estimate_cost(
+            usage_summary,
+            model=model_name,
+            provider=vendor,
+        )
     return ContextWindowProjection(
         session_id=str(stats.get("id") or session_id),
         vendor=vendor,
-        model=_optional_text(model.get("name")),
+        model=model_name,
         context_window_tokens=_token_evidence(
-            model.get("context_window"),
+            context_window,
             confidence="structural",
-            source="ct session stats:model.context_window",
+            source=(
+                "ct session stats:model.context_window"
+                if reported_context_window
+                else token_pricing.MODELS_DEV_SOURCE
+            ),
         ),
         used_tokens=_token_evidence(
-            context.get("used"),
+            used_tokens,
             confidence="exact_usage",
             source="ct session stats:context.used",
         ),
-        used_percent=_optional_float(context.get("pct")),
+        used_percent=used_percent,
+        token_cost=(
+            CostEvidence(
+                value_usd=reported_cost,
+                confidence="reported",
+                source="session log",
+            )
+            if reported_cost is not None and not cost_not_reported
+            else
+            CostEvidence(
+                value_usd=estimated_cost.amount_usd,
+                confidence="estimated",
+                source=estimated_cost.pricing_source,
+                effective_date=estimated_cost.pricing_effective_date,
+            )
+            if estimated_cost
+            else None
+        ),
         categories=categories,
         events=events,
         warnings=_dedupe(warnings),
@@ -199,6 +256,13 @@ def render_markdown(projection: ContextWindowProjection) -> str:
         f"Provider: {projection.vendor}",
         f"Model: {projection.model or '-'} ({context_label} context)",
         f"Used: {used_label}{percent_label}, {len(projection.events)} events",
+        (
+            f"Token cost: ${projection.token_cost.value_usd:.4f} "
+            f"({projection.token_cost.confidence}, {projection.token_cost.source}"
+            f"{', ' + projection.token_cost.effective_date if projection.token_cost.effective_date else ''})"
+            if projection.token_cost
+            else "Token cost: unavailable"
+        ),
         "",
         "Composition",
     ]
@@ -686,6 +750,12 @@ def _optional_text(value: Any) -> str | None:
 def _optional_float(value: Any) -> float | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
+    return None
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
     return None
 
 

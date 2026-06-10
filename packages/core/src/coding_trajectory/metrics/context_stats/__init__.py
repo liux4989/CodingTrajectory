@@ -5,7 +5,6 @@ from typing import Any
 from coding_trajectory.ingestion.models import ContextUsageObservation, SessionGraph
 from coding_trajectory.metrics.context_stats._common import (
     message_stats,
-    model_context_window,
     percent,
     runtime_stats,
     token_usage_from_mapping,
@@ -45,10 +44,7 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
             warnings=[f"No {vendor.value} context usage observation found; cannot compute context stats."],
         ).model_dump(mode="json")
 
-    provider = "openai" if observation.provider == "openai-codex" else observation.provider
-    context_window = observation.context_window_tokens or (
-        model_context_window(observation.model, provider=provider) or 0
-    )
+    context_window = observation.context_window_tokens or 0
     denominator = context_window or observation.used_input_tokens
     categories = [
         ContextCategoryFlat(

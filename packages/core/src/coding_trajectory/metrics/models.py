@@ -373,6 +373,48 @@ class UsageSpan(BaseModel):
     attribution: Literal["exact", "shared", "unknown"] = "shared"
 
 
+class ToolTokenAttribution(BaseModel):
+    tool_input_tokens: int = 0
+    tool_output_tokens: int = 0
+    content_confidence: Literal[
+        "observed_tool_output_token_count",
+        "visible_content_estimate",
+        "no_visible_content",
+    ] = "visible_content_estimate"
+    method: Literal["visible_content_estimate"] = "visible_content_estimate"
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        return data
+
+
+class InvokeResponseTokens(BaseModel):
+    output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    attribution: Literal[
+        "single_tool_response",
+        "shared_model_response",
+        "unknown",
+    ] = "unknown"
+
+
+class ReadAfterResult(BaseModel):
+    included_in_turn_usage: bool = False
+    attribution: Literal[
+        "causal_next_model_request",
+        "turn_completed_without_reuse",
+        "unknown",
+    ] = "unknown"
+
+
+class AttributionPolicy(BaseModel):
+    scope: Literal["tool_items"] = "tool_items"
+    cache: Literal["not_allocated_to_items"] = "not_allocated_to_items"
+    usage_authority: Literal["session.usage"] = "session.usage"
+    method: Literal["visible_content_plus_event_order"] = "visible_content_plus_event_order"
+
+
 class ToolItemFlat(BaseModel):
     item_id: UUID
     session_id: UUID
@@ -383,6 +425,9 @@ class ToolItemFlat(BaseModel):
     output_chars: int = 0
     output_original_tokens: int | None = None
     output_truncated: bool = False
+    token_attribution: ToolTokenAttribution | None = None
+    invoke_response_tokens: InvokeResponseTokens | None = None
+    read_after_result: ReadAfterResult | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -392,6 +437,9 @@ class ToolItemFlat(BaseModel):
                 data.pop(key, None)
         if data.get("output_truncated") is False:
             data.pop("output_truncated", None)
+        for key in ("token_attribution", "invoke_response_tokens", "read_after_result"):
+            if data.get(key) is None:
+                data.pop(key, None)
         return data
 
 
@@ -402,4 +450,5 @@ class SessionGraphToolUsageFlat(BaseModel):
     tool_output_chars: int = 0
     tool_output_original_tokens: int = 0
     tool_items: list[ToolItemFlat] = Field(default_factory=list)
+    attribution_policy: AttributionPolicy = Field(default_factory=AttributionPolicy)
     warnings: list[str] = Field(default_factory=list)

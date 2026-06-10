@@ -256,6 +256,10 @@ The default report is compact text. JSON preserves token evidence as an object
 with `value`, `confidence`, and `source`, so dashboards and agents do not need
 to infer whether a number is exact or estimated.
 
+The dashboard plugin also owns optional models.dev enrichment. It uses the
+catalog for model context limits and estimated token prices in this projection.
+Core metrics remain limited to values present in normalized session logs.
+
 Provider behavior remains explicit:
 
 - Codex category totals use the semantic taxonomy from `ct session stats`.
