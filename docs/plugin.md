@@ -270,6 +270,62 @@ The dashboard session list links to
 through `/api/sessions/context-window` and adds the composition bar, event
 selection, hover preview, and pinned detail behavior.
 
+## Review Plugin
+
+The `review` plugin uses a Codex app-server LLM judge to analyze one coding
+session for improvement opportunities:
+
+```text
+ct plugin review session SESSION_ID
+ct plugin review session SESSION_ID --global-scope
+ct plugin review session SESSION_ID --format json
+ct plugin review session SESSION_ID --model gpt-5.5 --effort low
+```
+
+This is a plugin concern because it combines existing session projections into
+an opinionated review report rather than adding new canonical ingestion data.
+The plugin consumes documented machine-readable outputs:
+
+- `ct session overview SESSION_ID --output json`
+- `ct session stats SESSION_ID --output json`
+- `ct session usage SESSION_ID --output json`
+
+The plugin first builds a deterministic evidence packet from those sources:
+metrics, compact tool activity, runtime stats, context composition, and usage
+accounting. Findings and recommendations are judged by the Codex app-server by
+default, using `CODEX_APP_SERVER_CMD` or `--app-server-cmd` to locate the
+server command. `--judge deterministic` is available only as a local fallback
+when the app-server is unavailable.
+
+The default text report includes LLM-judged findings and recommendations. JSON
+keeps the judge metadata, metrics, findings, and recommendations separate for
+downstream analysis.
+
+### Finding Scopes
+
+Findings should distinguish who can act on the recommendation:
+
+- `agent`: the coding agent can improve its workflow, such as batching related
+  reads or narrowing commands.
+- `environment`: the repo or project can provide better orientation, such as a
+  repo map, architecture notes, or validation command recipes.
+- `tooling`: the tools can reduce avoidable context pressure, such as compact
+  output modes, capped listings, or machine-readable summaries.
+
+### Evidence Model
+
+The LLM judge receives observed session metrics rather than a fixed list of
+expected problems. Initial evidence includes:
+
+- context-gathering tokens from files read, search results, and file listings;
+- tool-output tokens from the stats output bucket;
+- tool-step cost and input share from usage accounting;
+- broad survey activity from overview tool counts;
+- failed tool-call rate from runtime stats.
+
+Recommendations must reference the finding and metrics that triggered them so
+the report does not blame the agent for environment or tooling gaps.
+
 ## Dashboard Cleanup
 
 ### Goal
