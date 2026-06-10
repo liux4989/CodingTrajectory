@@ -14,6 +14,38 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+
+def _load_command_families() -> Any:
+    here = os.path.dirname(os.path.abspath(__file__))
+    cursor = here
+    core_src = None
+    for _ in range(8):
+        candidate = os.path.join(cursor, "core", "src")
+        if os.path.isdir(candidate):
+            core_src = candidate
+            break
+        parent = os.path.dirname(cursor)
+        if parent == cursor:
+            break
+        cursor = parent
+    if core_src is None:
+        raise ImportError(
+            "cannot locate core package; searched ancestors of " + here
+        )
+    if core_src not in sys.path:
+        sys.path.insert(0, core_src)
+    import coding_trajectory.metrics.context_stats.command_families as module
+    return module
+
+
+_command_families = _load_command_families()
+TEST_TOKENS: frozenset[str] = _command_families.TEST_TOKENS
+BUILD_TOKENS: frozenset[str] = _command_families.BUILD_TOKENS
+PACKAGE_MANAGERS: frozenset[str] = _command_families.PACKAGE_MANAGERS
+DEPENDENCY_TOKENS: frozenset[str] = _command_families.DEPENDENCY_TOKENS
+COMMAND_RUNNERS: frozenset[str] = _command_families.COMMAND_RUNNERS
+RUNNER_SUBWORDS: frozenset[str] = _command_families.RUNNER_SUBWORDS
+
 CategoryKey = Literal[
     "system",
     "project_instructions",
@@ -540,9 +572,9 @@ def _run_command_source_key(command: str) -> str:
         return "tool_runcommand_cli_report"
     if head in {"git", "gh", "hg", "svn"} or tokens[0] in {"git", "gh", "hg", "svn"}:
         return "tool_runcommand_repo"
-    if token_set & _TEST_TOKENS or token_set & _BUILD_TOKENS:
+    if token_set & TEST_TOKENS or token_set & BUILD_TOKENS:
         return "tool_runcommand_build"
-    if token_set & _PACKAGE_MANAGERS and token_set & _DEPENDENCY_TOKENS:
+    if token_set & PACKAGE_MANAGERS and token_set & DEPENDENCY_TOKENS:
         return "tool_runcommand_dependency"
     return f"tool_{_slug(f'RunCommand:other:{head}')}"
 
@@ -559,9 +591,9 @@ def _command_head(tokens: list[str]) -> str:
     index = 0
     while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
         index += 1
-    if index < len(tokens) and tokens[index] in _COMMAND_RUNNERS:
+    if index < len(tokens) and tokens[index] in COMMAND_RUNNERS:
         index += 1
-        while index < len(tokens) and tokens[index] in _RUNNER_SUBWORDS:
+        while index < len(tokens) and tokens[index] in RUNNER_SUBWORDS:
             index += 1
     if index + 2 < len(tokens) and tokens[index] in {"python", "python3"} and tokens[index + 1] == "-m":
         return tokens[index + 2]
@@ -570,27 +602,6 @@ def _command_head(tokens: list[str]) -> str:
 
 def _slug(value: str) -> str:
     return "".join(char if char.isalnum() else "_" for char in value.lower()).strip("_") or "command"
-
-
-_TEST_TOKENS: frozenset[str] = frozenset(
-    {"pytest", "jest", "vitest", "mocha", "rspec", "phpunit", "unittest", "tox", "ctest", "test"}
-)
-_BUILD_TOKENS: frozenset[str] = frozenset({
-    "tsc", "mypy", "ruff", "eslint", "flake8", "pylint", "black", "isort", "prettier",
-    "make", "cmake", "webpack", "rollup", "vite", "esbuild", "clippy",
-    "build", "compile", "lint", "typecheck", "check", "vet",
-})
-_PACKAGE_MANAGERS: frozenset[str] = frozenset({
-    "npm", "pnpm", "yarn", "bun", "pip", "pip3", "uv", "poetry", "pipenv",
-    "cargo", "gem", "bundle", "brew", "conda", "apt", "apt-get",
-})
-_DEPENDENCY_TOKENS: frozenset[str] = frozenset(
-    {"install", "add", "ci", "sync", "get", "lock", "update", "upgrade", "remove"}
-)
-_COMMAND_RUNNERS: frozenset[str] = frozenset(
-    {"uv", "poetry", "pdm", "pipenv", "rye", "hatch", "npx", "bunx", "pnpm", "yarn", "bun"}
-)
-_RUNNER_SUBWORDS: frozenset[str] = frozenset({"run", "exec", "dlx", "tool"})
 
 
 def _activity_summary(activity: dict[str, Any]) -> str:

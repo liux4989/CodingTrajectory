@@ -22,9 +22,17 @@ from coding_trajectory.analysis.tool_summary_shared import (
     WEB_SEARCH,
     WRITE_FILE,
 )
-from coding_trajectory.ingestion.models import EventType, SessionGraph, StepToolItem
+from coding_trajectory.ingestion.models import EventType, SessionGraph, ToolCallItem
 from coding_trajectory.metrics.context_stats._common import (
     percent,
+)
+from coding_trajectory.metrics.context_stats.command_families import (
+    BUILD_TOKENS,
+    COMMAND_RUNNERS,
+    DEPENDENCY_TOKENS,
+    PACKAGE_MANAGERS,
+    RUNNER_SUBWORDS,
+    TEST_TOKENS,
 )
 from coding_trajectory.metrics.models import ContextCategoryFlat
 
@@ -283,25 +291,6 @@ def _conversation_raw_tokens(
     return prompt_raw, agent_raw, tool_raw
 
 
-_TEST_TOKENS: frozenset[str] = frozenset(
-    {"pytest", "jest", "vitest", "mocha", "rspec", "phpunit", "unittest", "tox", "ctest", "test"}
-)
-_BUILD_TOKENS: frozenset[str] = frozenset({
-    "tsc", "mypy", "ruff", "eslint", "flake8", "pylint", "black", "isort", "prettier",
-    "make", "cmake", "webpack", "rollup", "vite", "esbuild", "clippy",
-    "build", "compile", "lint", "typecheck", "check", "vet",
-})
-_PACKAGE_MANAGERS: frozenset[str] = frozenset({
-    "npm", "pnpm", "yarn", "bun", "pip", "pip3", "uv", "poetry", "pipenv",
-    "cargo", "gem", "bundle", "brew", "conda", "apt", "apt-get",
-})
-_DEPENDENCY_TOKENS: frozenset[str] = frozenset(
-    {"install", "add", "ci", "sync", "get", "lock", "update", "upgrade", "remove"}
-)
-_COMMAND_RUNNERS: frozenset[str] = frozenset(
-    {"uv", "poetry", "pdm", "pipenv", "rye", "hatch", "npx", "bunx", "pnpm", "yarn", "bun"}
-)
-_RUNNER_SUBWORDS: frozenset[str] = frozenset({"run", "exec", "dlx", "tool"})
 _CLI_REPORT_HEADS: frozenset[str] = frozenset({"ct"})
 _CODE_FIX_TOKENS: frozenset[str] = frozenset({"fmt", "format", "fix", "fixer"})
 _DIAGNOSTIC_HEADS: frozenset[str] = frozenset(
@@ -322,9 +311,9 @@ def _command_head(tokens: list[str]) -> str:
     index = 0
     while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
         index += 1
-    if index < len(tokens) and tokens[index] in _COMMAND_RUNNERS:
+    if index < len(tokens) and tokens[index] in COMMAND_RUNNERS:
         index += 1
-        while index < len(tokens) and tokens[index] in _RUNNER_SUBWORDS:
+        while index < len(tokens) and tokens[index] in RUNNER_SUBWORDS:
             index += 1
     if index + 2 < len(tokens) and tokens[index] in {"python", "python3"} and tokens[index + 1] == "-m":
         return tokens[index + 2]
@@ -344,13 +333,13 @@ def _command_bucket(tool_input: Any) -> tuple[str, str]:
         return "cli_report", head
     if head in {"git", "gh", "hg", "svn"} or tokens[0] in {"git", "gh", "hg", "svn"}:
         return "repo", head
-    if token_set & _TEST_TOKENS:
+    if token_set & TEST_TOKENS:
         return "tests", head
     if token_set & _CODE_FIX_TOKENS:
         return "code_fix", head
-    if token_set & _BUILD_TOKENS:
+    if token_set & BUILD_TOKENS:
         return "build", head
-    if token_set & _PACKAGE_MANAGERS and token_set & _DEPENDENCY_TOKENS:
+    if token_set & PACKAGE_MANAGERS and token_set & DEPENDENCY_TOKENS:
         return "dependency", head
     if head in _DIAGNOSTIC_HEADS or "--version" in token_set or "-v" in token_set:
         return "diagnostic", head
@@ -419,7 +408,12 @@ def _looks_like_file_reference(target: str) -> bool:
 
 
 def _context_tool_summary(tool_name: str, tool_input: Any) -> dict[str, Any] | None:
-    return summarize_tool_call(StepToolItem(tool_name=tool_name, input=tool_input))
+    from datetime import datetime as _dt
+    from uuid import uuid4 as _uuid4
+    return summarize_tool_call(ToolCallItem(
+        session_id=_uuid4(), turn_id=_uuid4(), sequence=0, started_at=_dt.min,
+        tool_name=tool_name, input=tool_input,
+    ))
 
 
 def _category_children(
