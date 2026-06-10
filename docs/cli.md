@@ -25,8 +25,9 @@ Three goals:
   passed to `session ...` commands is the entry point into this connected
   hierarchy.
 - **Overview** — compact hierarchy and activity keys for finding where to drill in.
-- **Usage** — token and cost accounting. Usage is resource accounting, not
-  hierarchy disclosure or diagnosis.
+- **Usage** — token accounting, plus cost only when recorded by the source
+  session log. Usage is resource accounting, not hierarchy disclosure or
+  diagnosis.
 
 ## Output Formats
 
@@ -78,6 +79,11 @@ dashboard plugin. Results are grouped by turn without expanding paths, queries,
 commands, individual tool calls, derived efficiency, or explanatory semantics.
 Use `session overview`, `session item-detail`, `session event-detail`, or
 detail commands when you need hierarchy/navigation detail or causal drill-down.
+
+Item-level tool token attribution is available through the
+`session.tool_usage` service method. It is an estimated diagnostic surface, is
+cache-agnostic, and does not replace the observed totals from `session usage`.
+There is no dedicated core CLI command for this service method.
 
 
 Raw View

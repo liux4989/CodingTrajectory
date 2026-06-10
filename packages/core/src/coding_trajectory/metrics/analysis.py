@@ -33,10 +33,14 @@ from coding_trajectory.metrics.models import (
     SessionGraphMetrics,
     SessionGraphMetricsFlat,
     SessionGraphToolUsageFlat,
+    TurnRuntimeFlat,
     TurnUsageCompactFlat,
     TurnMetrics,
     TurnMetricsFlat,
 )
+from coding_trajectory.metrics.context_stats._common import runtime_stats
+
+
 def build_session_graph_metrics(
     session_graph: SessionGraph,
     *,
@@ -59,7 +63,7 @@ def build_session_graph_metrics(
                     completed_at=turn.completed_at,
                     model=model,
                     token_usage=turn.token_usage,
-                    cost=turn.cost_estimate.amount_usd,
+                    cost=_reported_cost_amount(turn.cost_estimate),
                     extra_billing=turn.cost_estimate.extra_billing,
                 )
             )
@@ -69,7 +73,7 @@ def build_session_graph_metrics(
                 vendor=session.vendor,
                 status=session.status,
                 token_usage=session.token_usage,
-                cost=session.cost_estimate.amount_usd,
+                cost=_reported_cost_amount(session.cost_estimate),
                 extra_billing=session.cost_estimate.extra_billing,
                 turns=turns_flat,
             )
@@ -78,7 +82,7 @@ def build_session_graph_metrics(
     return SessionGraphMetricsFlat(
         root_session_id=full.root_session_id,
         token_usage=full.token_usage,
-        cost=full.cost_estimate.amount_usd,
+        cost=_reported_cost_amount(full.cost_estimate),
         extra_billing=full.cost_estimate.extra_billing,
         sessions=sessions_flat,
         warnings=full.warnings,
@@ -107,34 +111,84 @@ def build_session_graph_usage(
     extra_billing: bool = False,
     turn_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return compact turn-level usage and cost accounting."""
+    """Return compact turn-level token usage and log-reported cost accounting."""
     full = _build_full_metrics(session_graph, extra_billing=extra_billing)
     multi_session = len(full.sessions) > 1
     turns: list[TurnUsageCompactFlat] = []
 
     for session in full.sessions:
-        for turn in session.turns:
+        for index, turn in enumerate(session.turns):
             if turn_id is not None and str(turn.turn_id) != turn_id:
                 continue
-            turns.append(_compact_turn_usage(turn, session_id=session.session_id if multi_session else None))
+            previous_turn = session.turns[index - 1] if index > 0 else None
+            turns.append(
+                _compact_turn_usage(
+                    turn,
+                    session_id=session.session_id if multi_session else None,
+                    execution_seconds=_turn_execution_seconds(turn),
+                    wait_before_seconds=_turn_wait_before_seconds(previous_turn, turn),
+                )
+            )
 
     return SessionUsageCompactFlat(
         session_id=full.root_session_id,
         extra_billing=full.cost_estimate.extra_billing,
+        runtime=runtime_stats(session_graph),
         turns=turns,
         total_usage=full.token_usage,
-        cost_usd=full.cost_estimate.amount_usd,
+        cost_usd=_reported_cost_amount(full.cost_estimate),
         warnings=full.warnings,
     ).model_dump(mode="json")
 
 
-def _compact_turn_usage(turn: TurnMetrics, *, session_id: UUID | None) -> TurnUsageCompactFlat:
+def _compact_turn_usage(
+    turn: TurnMetrics,
+    *,
+    session_id: UUID | None,
+    execution_seconds: int | None,
+    wait_before_seconds: int | None,
+) -> TurnUsageCompactFlat:
     return TurnUsageCompactFlat(
         turn_id=turn.turn_id,
         session_id=session_id,
+        runtime=_turn_runtime(
+            turn,
+            execution_seconds=execution_seconds,
+            wait_before_seconds=wait_before_seconds,
+        ),
         usage=turn.token_usage,
-        cost_usd=turn.cost_estimate.amount_usd,
+        cost_usd=_reported_cost_amount(turn.cost_estimate),
     )
+
+
+def _turn_runtime(
+    turn: TurnMetrics,
+    *,
+    execution_seconds: int | None,
+    wait_before_seconds: int | None,
+) -> TurnRuntimeFlat:
+    return TurnRuntimeFlat(
+        started_at=turn.started_at,
+        ended_at=turn.completed_at,
+        execution_seconds=execution_seconds,
+        wait_before_seconds=wait_before_seconds,
+    )
+
+
+def _turn_wait_before_seconds(previous_turn: TurnMetrics | None, turn: TurnMetrics) -> int | None:
+    if previous_turn is None or previous_turn.completed_at is None or turn.started_at is None:
+        return None
+    return max(round((turn.started_at - previous_turn.completed_at).total_seconds()), 0)
+
+
+def _turn_execution_seconds(turn: TurnMetrics) -> int | None:
+    if turn.started_at is None or turn.completed_at is None:
+        return None
+    return max(round((turn.completed_at - turn.started_at).total_seconds()), 0)
+
+
+def _reported_cost_amount(cost: CostEstimate) -> float | None:
+    return cost.amount_usd if cost.complete else None
 
 
 def build_session_graph_tool_usage(
@@ -244,7 +298,9 @@ def _build_tool_items_for_turn(
                 invoke_obs, count=count
             )
             base.read_after_result = _build_read_after_result(
-                item, turn_observations=turn_observations
+                item,
+                invoke_observation=invoke_obs,
+                turn_observations=turn_observations,
             )
             items.append(base)
     return items
@@ -255,9 +311,8 @@ def _item_observation_signature(
     turn_observations: list[TokenUsageObservation],
 ) -> tuple[Any, Any]:
     anchor_start = item.started_at
-    anchor_end = item.completed_at or item.started_at
     previous = _previous_observation_before(turn_observations, anchor_start)
-    next_obs = _next_observation_after(turn_observations, anchor_end)
+    next_obs = _next_observation_after(turn_observations, anchor_start)
     return (
         previous.source.event_id if previous is not None else None,
         next_obs.source.event_id if next_obs is not None else None,
@@ -278,7 +333,7 @@ def _group_observation(
     group_items: list[Any],
     turn_observations: list[TokenUsageObservation],
 ) -> TokenUsageObservation | None:
-    anchor = max(item.completed_at or item.started_at for item in group_items)
+    anchor = max(item.started_at for item in group_items)
     return _next_observation_after(turn_observations, anchor)
 
 
@@ -334,10 +389,6 @@ def _build_invoke_response_tokens(
         )
     shared_output = output // count
     shared_reasoning = reasoning // count
-    if output - shared_output * count > 0:
-        shared_output += 1
-    if reasoning - shared_reasoning * count > 0:
-        shared_reasoning += 1
     return InvokeResponseTokens(
         output_tokens=shared_output,
         reasoning_output_tokens=shared_reasoning,
@@ -348,9 +399,12 @@ def _build_invoke_response_tokens(
 def _build_read_after_result(
     item: Any,
     *,
+    invoke_observation: TokenUsageObservation | None,
     turn_observations: list[TokenUsageObservation],
 ) -> ReadAfterResult:
     anchor = item.completed_at or item.started_at
+    if invoke_observation is not None and invoke_observation.timestamp > anchor:
+        anchor = invoke_observation.timestamp
     later = [obs for obs in turn_observations if obs.timestamp > anchor]
     if later:
         return ReadAfterResult(

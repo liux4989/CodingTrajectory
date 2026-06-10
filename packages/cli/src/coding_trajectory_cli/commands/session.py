@@ -237,6 +237,12 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
 def _render_session_usage_text(payload: dict[str, Any]) -> str:
     lines = ["# Session Usage", "", "```", "Total"]
     lines.append(f"  {render_usage_line(payload.get('total_usage') or {})}")
+    runtime = payload.get("runtime") or {}
+    if runtime:
+        lines.append(
+            f"  execution {format_duration(runtime.get('execution_seconds'))}  "
+            f"wait {format_duration(runtime.get('wait_seconds'))}"
+        )
 
     turns = payload.get("turns") or []
     if turns:
@@ -244,6 +250,15 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
     for turn in turns:
         lines.append(f"  turn {turn.get('turn_id') or '-'}")
         lines.append(f"    {render_usage_line(turn.get('usage') or {})}")
+        runtime = turn.get("runtime") or {}
+        if runtime:
+            timing_parts = []
+            if runtime.get("execution_seconds") is not None:
+                timing_parts.append(f"execution {format_duration(runtime.get('execution_seconds'))}")
+            if runtime.get("wait_before_seconds") is not None:
+                timing_parts.append(f"wait before {format_duration(runtime.get('wait_before_seconds'))}")
+            if timing_parts:
+                lines.append("    " + "  ".join(timing_parts))
 
     lines.append("```")
     warnings = payload.get("warnings") or []

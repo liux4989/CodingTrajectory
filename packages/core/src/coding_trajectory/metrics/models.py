@@ -37,7 +37,7 @@ class TokenUsage(BaseModel):
         )
 
 
-def _usage_accounting_payload(usage: dict[str, int], *, cost_usd: float) -> dict[str, int | float]:
+def _usage_accounting_payload(usage: dict[str, int], *, cost_usd: float | None) -> dict[str, int | float]:
     total_tokens = int(usage.get("total_tokens") or 0)
     if total_tokens == 0:
         total_tokens = TokenUsage(
@@ -47,7 +47,10 @@ def _usage_accounting_payload(usage: dict[str, int], *, cost_usd: float) -> dict
             output_tokens=int(usage.get("output_tokens") or 0),
             reasoning_output_tokens=int(usage.get("reasoning_output_tokens") or 0),
         ).compute_total()
-    return {**usage, "total_tokens": total_tokens, "cost_usd": cost_usd}
+    payload = {**usage, "total_tokens": total_tokens}
+    if cost_usd is not None:
+        payload["cost_usd"] = cost_usd
+    return payload
 
 
 class MetricSource(BaseModel):
@@ -177,7 +180,7 @@ class TurnMetricsFlat(BaseModel):
     completed_at: datetime | None = None
     model: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost: float = 0.0
+    cost: float | None = None
     currency: Literal["USD"] = "USD"
     extra_billing: bool = False
 
@@ -187,7 +190,7 @@ class SessionMetricsFlat(BaseModel):
     vendor: str
     status: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost: float = 0.0
+    cost: float | None = None
     currency: Literal["USD"] = "USD"
     extra_billing: bool = False
     turns: list[TurnMetricsFlat] = Field(default_factory=list)
@@ -196,7 +199,7 @@ class SessionMetricsFlat(BaseModel):
 class SessionGraphMetricsFlat(BaseModel):
     root_session_id: UUID
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost: float = 0.0
+    cost: float | None = None
     currency: Literal["USD"] = "USD"
     extra_billing: bool = False
     sessions: list[SessionMetricsFlat] = Field(default_factory=list)
@@ -264,6 +267,18 @@ class RuntimeStatsFlat(BaseModel):
             if data.get(key) is None:
                 data.pop(key, None)
         return data
+
+
+class TurnRuntimeFlat(BaseModel):
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    execution_seconds: int | None = None
+    wait_before_seconds: int | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        return {key: value for key, value in data.items() if value is not None}
 
 
 class MessageStatsFlat(BaseModel):
@@ -335,14 +350,17 @@ class SessionContextStatsFlat(BaseModel):
 class TurnUsageCompactFlat(BaseModel):
     turn_id: UUID
     session_id: UUID | None = None
+    runtime: TurnRuntimeFlat | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
         if data.get("session_id") is None:
             data.pop("session_id", None)
+        if data.get("runtime") == {}:
+            data.pop("runtime", None)
         if data.get("usage"):
             data["usage"] = _usage_accounting_payload(data["usage"], cost_usd=self.cost_usd)
         data.pop("cost_usd", None)
@@ -352,9 +370,10 @@ class TurnUsageCompactFlat(BaseModel):
 class SessionUsageCompactFlat(BaseModel):
     session_id: UUID
     extra_billing: bool = False
+    runtime: RuntimeStatsFlat | None = None
     turns: list[TurnUsageCompactFlat] = Field(default_factory=list)
     total_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     warnings: list[str] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")

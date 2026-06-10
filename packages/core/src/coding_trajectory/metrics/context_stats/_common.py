@@ -48,18 +48,16 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         for session in session_graph.sessions
         for observation in session.runtime_observations
     ]
-    observed_durations = [
-        observation.duration_ms
-        for observation in runtime_observations
-        if observation.kind in {"turn_completed", "turn_aborted"}
-        and observation.duration_ms is not None
-    ]
-    wall_duration_seconds = round((ended - started).total_seconds()) if started and ended else None
-    execution_seconds = round(sum(observed_durations) / 1000) if observed_durations else None
-    wait_seconds = (
-        max(wall_duration_seconds - execution_seconds, 0)
-        if wall_duration_seconds is not None and execution_seconds is not None
-        else None
+    execution_seconds = sum(
+        value
+        for session in session_graph.sessions
+        for turn in session.turns
+        if (value := _turn_duration_seconds(turn)) is not None
+    )
+    wait_seconds = sum(
+        value
+        for session in session_graph.sessions
+        for value in _turn_wait_seconds(session)
     )
     first_token_durations = [
         observation.time_to_first_token_ms
@@ -162,3 +160,22 @@ def token_usage_from_mapping(value: dict[str, Any] | None) -> TokenUsage:
 
 def _as_int(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _turn_duration_seconds(turn: Any) -> int | None:
+    started_at = getattr(turn, "started_at", None)
+    ended_at = getattr(turn, "ended_at", None)
+    if started_at is None or ended_at is None:
+        return None
+    return max(round((ended_at - started_at).total_seconds()), 0)
+
+
+def _turn_wait_seconds(session: Session) -> list[int]:
+    values: list[int] = []
+    previous_ended_at = None
+    for turn in session.turns:
+        if previous_ended_at is not None and turn.started_at is not None:
+            values.append(max(round((turn.started_at - previous_ended_at).total_seconds()), 0))
+        if turn.ended_at is not None:
+            previous_ended_at = turn.ended_at
+    return values

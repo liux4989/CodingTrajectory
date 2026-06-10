@@ -1,8 +1,10 @@
 # Item Token Attribution Refactor
 
-Status: proposal
+Status: complete
 
 Date: 2026-06-10
+
+Completed: 2026-06-10
 
 ## Problem
 
@@ -52,7 +54,8 @@ reported or normalized:
 
 ### `session.usage`
 
-Purpose: compact session and turn-level token/cost accounting.
+Purpose: compact session and turn-level token accounting, plus cost only when
+the source session log reports it.
 
 Keep this surface unchanged. It should not expose item attribution because that
 would mix measured provider usage with estimated visible-content attribution.
@@ -249,17 +252,23 @@ attribution with labels such as:
 
 Avoid labels such as `real item cost` or `per-tool billing`.
 
-## Implementation Plan
+## Implementation Status
 
-1. Add token-only attribution models to `metrics.models`.
-2. Extend `build_session_graph_tool_usage()` to compute visible-content token
+Completed:
+
+1. Added token-only attribution models to `metrics.models`.
+2. Extended `build_session_graph_tool_usage()` with visible-content token
    estimates.
-3. Add event-order grouping for adjacent model-response usage observations.
-4. Add payload-level `attribution_policy` metadata.
-5. Update `docs/architecture.md`, `docs/cli.md`, and `docs/plugin.md` after the
-   schema is implemented.
-6. Validate against real Codex sessions that contain multiple tool calls in one
+3. Added event-order grouping for adjacent model-response usage observations.
+4. Added payload-level `attribution_policy` metadata.
+5. Updated `docs/architecture.md`, `docs/cli.md`, and `docs/plugin.md`.
+6. Validated against real Codex sessions containing multiple tool calls in one
    model response and tool outputs with `Original token count`.
+
+`read_after_result` requires a usage observation after both the tool result and
+the invoking response's usage observation. This prevents a late invocation
+usage event from being mistaken for evidence that the tool result was read by a
+subsequent model request.
 
 ## Validation Expectations
 
@@ -267,7 +276,8 @@ Use real sessions rather than synthetic-only fixtures.
 
 Expected behavior:
 
-1. `session.usage` and `session.turn_usage` remain unchanged.
+1. `session.usage` and `session.turn_usage` remain token-focused and do not
+   estimate missing prices in core.
 2. `session.stats` remains cache-aware.
 3. `session.tool_usage` includes token attribution only when evidence exists.
 4. Multi-tool responses are marked shared rather than duplicated as exact item

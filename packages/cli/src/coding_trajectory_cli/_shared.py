@@ -406,10 +406,21 @@ def compact_payload(method: str, payload: Any) -> Any:
         }
 
     if method == "session.usage" and isinstance(payload, dict):
+        runtime = payload.get("runtime") or {}
         return drop_none(
             {
                 "id": payload.get("session_id"),
                 "extra_billing": payload.get("extra_billing"),
+                "runtime": drop_none(
+                    {
+                        "status": runtime.get("status"),
+                        "start": runtime.get("started_at"),
+                        "end": runtime.get("ended_at"),
+                        "execution_seconds": runtime.get("execution_seconds"),
+                        "wait_seconds": runtime.get("wait_seconds"),
+                    }
+                )
+                or None,
                 "usage": compact_usage(payload.get("total_usage")),
                 "cost": payload.get("cost_usd"),
                 "turns": [
@@ -417,6 +428,15 @@ def compact_payload(method: str, payload: Any) -> Any:
                         {
                             "id": turn.get("turn_id"),
                             "session": turn.get("session_id"),
+                            "runtime": drop_none(
+                                {
+                                    "start": (turn.get("runtime") or {}).get("started_at"),
+                                    "end": (turn.get("runtime") or {}).get("ended_at"),
+                                    "execution_seconds": (turn.get("runtime") or {}).get("execution_seconds"),
+                                    "wait_before_seconds": (turn.get("runtime") or {}).get("wait_before_seconds"),
+                                }
+                            )
+                            or None,
                             "usage": compact_usage(turn.get("usage")),
                             "cost": turn.get("cost_usd"),
                         }
@@ -609,19 +629,23 @@ def format_duration(seconds: Any) -> str:
 
 
 def format_cost(value: Any) -> str:
+    if value is None:
+        return "-"
     try:
-        cost = float(value or 0)
+        cost = float(value)
     except (TypeError, ValueError):
-        return "$0.00"
+        return "-"
     return f"${cost:.4f}" if cost and cost < 0.01 else f"${cost:.2f}"
 
 
 def render_usage_line(usage: dict[str, Any]) -> str:
-    return (
-        f"input {format_tokens(usage.get('input_tokens'))}  "
-        f"cached {format_tokens(usage.get('cached_input_tokens'))}  "
-        f"output {format_tokens(usage.get('output_tokens'))}  "
-        f"reasoning {format_tokens(usage.get('reasoning_output_tokens'))}  "
-        f"total {format_tokens(usage.get('total_tokens'))}  "
-        f"cost {format_cost(usage.get('cost_usd'))}"
-    )
+    parts = [
+        f"input {format_tokens(usage.get('input_tokens'))}",
+        f"cached {format_tokens(usage.get('cached_input_tokens'))}",
+        f"output {format_tokens(usage.get('output_tokens'))}",
+        f"reasoning {format_tokens(usage.get('reasoning_output_tokens'))}",
+        f"total {format_tokens(usage.get('total_tokens'))}",
+    ]
+    if "cost_usd" in usage:
+        parts.append(f"cost {format_cost(usage.get('cost_usd'))}")
+    return "  ".join(parts)

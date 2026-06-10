@@ -2,7 +2,7 @@
 
 ## Overview
 
-**coding-trajectory** is a unified canonical model layer and CLI tooling for reconstructing, querying, and analyzing coding-agent session graphs. It normalizes raw vendor logs from multiple coding agents (Codex CLI, Claude Code, Pi) into a single agent-agnostic hierarchy, enabling cross-vendor analysis, cost accounting, and session replay.
+**coding-trajectory** is a unified canonical model layer and CLI tooling for reconstructing, querying, and analyzing coding-agent session graphs. It normalizes raw vendor logs from multiple coding agents (Codex CLI, Claude Code, Pi) into a single agent-agnostic hierarchy, enabling cross-vendor analysis, token accounting, and session replay.
 
 - **Author:** liuxinjia
 - **License:** Private
@@ -181,9 +181,9 @@ coding-trajectory/
 | Index cache | Persistent path → session graph mapping at `~/.coding-trajectory/index.json` |
 | Document store | In-memory UUID-indexed store with cross-resource navigation |
 | Service dispatch | Method-based API (project.list, session.overview, session.usage, etc.) |
-| Token usage & cost | Per-turn, per-session token accounting from normalized session logs |
+| Token usage | Per-turn, per-session token accounting from normalized session logs, plus log-reported cost when available |
 | Context stats | Context window utilization, category breakdown, quota tracking |
-| Tool usage analysis | Tool invocation counts, output sizes, cost attribution |
+| Tool usage analysis | Tool invocation counts, output sizes, token attribution |
 | CLI (`ct`) | Progressive-disclosure command surface with markdown + JSON output |
 | Plugin system | Manifest-based discovery, subprocess dispatch, no core imports |
 | Activity plugin | Cross-session timeline with project/account/time window filtering |
@@ -206,7 +206,7 @@ The service layer implements a method-dispatch contract consumed by the CLI and 
 | `session.overview` | Narrative overview: hierarchy, activity keys, turn summaries |
 | `session.stats` | Context window statistics and category breakdown |
 | `session.usage` | Token usage and log-reported cost breakdown by turn |
-| `session.tool_usage` | Tool invocation statistics |
+| `session.tool_usage` | Tool invocation statistics and estimated visible-content token attribution |
 | `session.turn_usage` | Per-turn usage detail |
 | `item.details` | Enriched detail for one or more items |
 | `event.detail` | Full JSON content of a single event |

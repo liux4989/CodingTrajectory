@@ -149,7 +149,8 @@ existing core session, overview, and usage data.
 - Review recent activity for the last `5h`, `today`, `72h`, or `7d`.
 - Break activity down by project.
 - Break activity down by user account so multiple coding agents can be compared.
-- Break activity down by session usage to understand token and cost shape.
+- Break activity down by session usage to understand token shape and
+  log-reported cost where available.
 
 ### Command Shape
 
@@ -259,6 +260,10 @@ to infer whether a number is exact or estimated.
 The dashboard plugin also owns optional models.dev enrichment. It uses the
 catalog for model context limits and estimated token prices in this projection.
 Core metrics remain limited to values present in normalized session logs.
+
+Plugin consumers may call `session.tool_usage` for estimated visible-content
+tool input/output attribution and event-order diagnostics. Those item estimates
+are cache-agnostic and must not replace observed session or turn usage totals.
 
 Provider behavior remains explicit:
 
