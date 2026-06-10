@@ -174,21 +174,37 @@ def _batch_fetch_session_data(
     if not session_ids:
         return []
 
-    ids_input = "\n".join(session_ids)
+    ids_input = "\n".join(session_ids) + "\n"
+    ct_parts = shlex.split(ct)
 
-    def _run_batch(subcmd_args: list[str]) -> list[dict[str, Any]]:
-        ct_q = shlex.quote(ct)
-        before = subcmd_args[0]
-        after = " ".join(shlex.quote(a) for a in subcmd_args[1:])
-        shell = f"printf '%s\\n' {shlex.quote(ids_input)} | xargs -P8 -I{{}} {ct_q} session {before} {{}} {after} | jq -s ."
-        try:
-            completed = subprocess.run(["bash", "-c", shell], check=False, text=True, capture_output=True, timeout=120)
-            return json.loads(completed.stdout) if completed.stdout.strip() else []
-        except (subprocess.TimeoutExpired, json.JSONDecodeError):
-            return []
+    def _start_batch(subcmd: str) -> subprocess.Popen:
+        cmd = ["xargs", "-P8", "-I{}"] + ct_parts + ["session", subcmd, "{}", "--global-scope", "--output", "json"]
+        return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-    stats_all = _run_batch(["stats", "--global-scope", "--output", "json"])
-    usage_all = _run_batch(["usage", "--global-scope", "--output", "json"])
+    p_stats = _start_batch("stats")
+    p_usage = _start_batch("usage")
+    p_stats.stdin.write(ids_input)
+    p_stats.stdin.close()
+    p_usage.stdin.write(ids_input)
+    p_usage.stdin.close()
+
+    def _parse_json_lines(stdout: str) -> list[dict[str, Any]]:
+        results = []
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                results.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return results
+
+    stats_out, _ = p_stats.communicate(timeout=120)
+    usage_out, _ = p_usage.communicate(timeout=120)
+
+    stats_all = _parse_json_lines(stats_out)
+    usage_all = _parse_json_lines(usage_out)
 
     usage_map: dict[str, dict[str, Any]] = {}
     for u in usage_all:
