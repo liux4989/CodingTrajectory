@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from coding_trajectory import debug
 from coding_trajectory.ingestion.models import ContextUsageObservation, SessionGraph
 from coding_trajectory.metrics.context_stats._common import (
     message_stats,
@@ -36,12 +37,19 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
     messages = message_stats(session_graph)
     observation = _latest_context_usage(session_graph)
     if observation is None:
+        no_obs_message = f"No {vendor.value} context usage observation found; cannot compute context stats."
+        debug.warn(
+            no_obs_message,
+            code="context.no_observation",
+            severity="warning",
+            vendor=vendor.value,
+        )
         return SessionContextStatsFlat(
             root_session_id=session_graph.root_session_id,
             vendor=vendor.value,
             runtime=runtime,
             messages=messages,
-            warnings=[f"No {vendor.value} context usage observation found; cannot compute context stats."],
+            warnings=[no_obs_message],
         ).model_dump(mode="json")
 
     context_window = observation.context_window_tokens or 0
@@ -64,17 +72,38 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
             observation.used_input_tokens,
             context_window,
         )
-        warnings.append(
+        message = (
             "Context categories are estimated from normalized context sources and canonical "
             "conversation events, then scaled to the latest context-window usage."
         )
+        warnings.append(message)
+        debug.warn(
+            message,
+            code="context.categories_inferred",
+            severity="info",
+            vendor=vendor.value,
+        )
     elif categories:
-        warnings.append(
+        message = (
             "Context categories use provider-reported cache and input token buckets normalized "
             "during ingestion."
         )
+        warnings.append(message)
+        debug.warn(
+            message,
+            code="context.categories_provider_reported",
+            severity="info",
+            vendor=vendor.value,
+        )
     else:
-        warnings.append("No normalized context category observations are available.")
+        message = "No normalized context category observations are available."
+        warnings.append(message)
+        debug.warn(
+            message,
+            code="context.no_categories",
+            severity="warning",
+            vendor=vendor.value,
+        )
 
     return SessionContextStatsFlat(
         root_session_id=session_graph.root_session_id,

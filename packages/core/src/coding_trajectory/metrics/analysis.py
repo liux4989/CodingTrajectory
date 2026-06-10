@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from coding_trajectory import debug
 from coding_trajectory.ingestion.models import (
     ContextUsageObservation,
     Item,
@@ -516,9 +517,24 @@ def _build_full_metrics(
         total = total.plus(metrics.token_usage)
         cost_total = cost_total.plus(metrics.cost_estimate)
         if not _session_has_usage(metrics):
-            warnings.append(f"no token usage metrics found for session {session.session_id}")
+            message = f"no token usage metrics found for session {session.session_id}"
+            warnings.append(message)
+            debug.warn(
+                message,
+                code="usage.no_token_metrics",
+                severity="warning",
+                session_id=str(session.session_id),
+                vendor=session.vendor.value if getattr(session.vendor, "value", None) else None,
+            )
         if not metrics.cost_estimate.complete:
-            warnings.extend(metrics.cost_estimate.missing_reasons)
+            for reason in metrics.cost_estimate.missing_reasons:
+                warnings.append(reason)
+                debug.warn(
+                    reason,
+                    code="cost.incomplete",
+                    severity="warning",
+                    session_id=str(session.session_id),
+                )
 
     return SessionGraphMetrics(
         root_session_id=session_graph.root_session_id,

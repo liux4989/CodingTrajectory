@@ -227,10 +227,6 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
             quota_bits.append(f"reached {quota['rate_limit_reached_type']}")
         if quota_bits:
             lines.append("- Quota: " + ", ".join(quota_bits))
-    warnings = payload.get("warnings") or []
-    if warnings:
-        lines.append("")
-        lines.extend(f"> {one_line(warning, limit=110)}" for warning in warnings)
     return "\n".join(lines).rstrip()
 
 
@@ -261,10 +257,6 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
                 lines.append("    " + "  ".join(timing_parts))
 
     lines.append("```")
-    warnings = payload.get("warnings") or []
-    if warnings:
-        lines.append("")
-        lines.extend(f"> {one_line(warning, limit=110)}" for warning in warnings)
     return "\n".join(lines).rstrip()
 
 
