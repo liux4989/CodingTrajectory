@@ -91,14 +91,65 @@ export function OverviewRoute() {
       </div>
 
       {isLoading && (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div
-              key={i}
-              className="h-24 animate-shimmer rounded-xl border border-border bg-card"
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div
+                key={i}
+                className="h-24 animate-shimmer rounded-xl border border-border bg-card"
+              />
+            ))}
+          </div>
+
+          <div className="mt-8 grid gap-6 lg:grid-cols-2">
+            <div className="animate-shimmer rounded-xl border border-border bg-card p-5">
+              <div className="mb-4 h-4 w-40 rounded bg-muted-foreground/10" />
+              <div className="flex h-52 items-end gap-1 px-2 pb-2">
+                {Array.from({ length: 24 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="flex-1 rounded-t bg-muted-foreground/10"
+                    style={{ height: `${20 + Math.sin(i * 0.5) * 40 + Math.random() * 30}%` }}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="animate-shimmer rounded-xl border border-border bg-card p-5">
+              <div className="mb-4 h-4 w-32 rounded bg-muted-foreground/10" />
+              <div className="space-y-1.5">
+                {Array.from({ length: 6 }).map((_, row) => (
+                  <div key={row} className="flex items-center gap-2">
+                    <div className="w-24 h-3 rounded bg-muted-foreground/10" />
+                    <div className="flex flex-1 gap-px">
+                      {Array.from({ length: 30 }).map((_, col) => (
+                        <div
+                          key={col}
+                          className="h-4 flex-1 rounded-[2px] bg-muted-foreground/10"
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-8 rounded-xl border border-border bg-card">
+            <div className="border-b border-border px-5 py-3">
+              <div className="h-4 w-20 rounded bg-muted-foreground/10 animate-shimmer" />
+            </div>
+            <div className="p-4 space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="flex gap-4 animate-shimmer">
+                  <div className="h-3 w-32 rounded bg-muted-foreground/10" />
+                  <div className="h-3 w-12 rounded bg-muted-foreground/10" />
+                  <div className="h-3 w-16 rounded bg-muted-foreground/10" />
+                  <div className="h-3 flex-1 rounded bg-muted-foreground/10" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
       )}
 
       {error && (
