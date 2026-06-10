@@ -12,14 +12,25 @@ from pydantic import BaseModel, Field, model_serializer
 class TokenUsage(BaseModel):
     input_tokens: int = 0
     cached_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_output_tokens: int = 0
     total_tokens: int = 0
+
+    def compute_total(self) -> int:
+        return (
+            self.input_tokens
+            + self.cached_input_tokens
+            + self.cache_creation_input_tokens
+            + self.output_tokens
+            + self.reasoning_output_tokens
+        )
 
     def plus(self, other: "TokenUsage") -> "TokenUsage":
         return TokenUsage(
             input_tokens=self.input_tokens + other.input_tokens,
             cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens + other.cache_creation_input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             reasoning_output_tokens=self.reasoning_output_tokens + other.reasoning_output_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
@@ -29,23 +40,25 @@ class TokenUsage(BaseModel):
 def _usage_accounting_payload(usage: dict[str, int], *, cost_usd: float) -> dict[str, int | float]:
     total_tokens = int(usage.get("total_tokens") or 0)
     if total_tokens == 0:
-        total_tokens = (
-            int(usage.get("input_tokens") or 0)
-            + int(usage.get("output_tokens") or 0)
-            + int(usage.get("reasoning_output_tokens") or 0)
-        )
+        total_tokens = TokenUsage(
+            input_tokens=int(usage.get("input_tokens") or 0),
+            cached_input_tokens=int(usage.get("cached_input_tokens") or 0),
+            cache_creation_input_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+            output_tokens=int(usage.get("output_tokens") or 0),
+            reasoning_output_tokens=int(usage.get("reasoning_output_tokens") or 0),
+        ).compute_total()
     return {**usage, "total_tokens": total_tokens, "cost_usd": cost_usd}
 
 
 class MetricSource(BaseModel):
     vendor: str
-    source_type: Literal["step.vendor_data", "event.payload", "session.context_usage"]
+    source_type: Literal["event.payload", "session.context_usage"]
     event_id: UUID | None = None
     confidence: Literal["exact", "derived", "estimated", "unknown"] = "exact"
 
 
 class TokenUsageObservation(BaseModel):
-    scope_type: Literal["step"]
+    scope_type: Literal["turn"]
     scope_id: UUID
     timestamp: datetime
     usage: TokenUsage
@@ -120,17 +133,6 @@ class QuotaSnapshot(BaseModel):
     rate_limit_reached_type: str | None = None
 
 
-class StepMetrics(BaseModel):
-    step_id: UUID
-    sequence: int
-    kind: str | None = None
-    token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
-    observations: list[TokenUsageObservation] = Field(default_factory=list)
-    tool_count: int = 0
-    tool_duration_ms: int | None = None
-
-
 class TurnMetrics(BaseModel):
     turn_id: UUID
     sequence: int
@@ -139,7 +141,7 @@ class TurnMetrics(BaseModel):
     completed_at: datetime | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
-    steps: list[StepMetrics] = Field(default_factory=list)
+    observations: list[TokenUsageObservation] = Field(default_factory=list)
     quota_snapshots: list[QuotaSnapshot] = Field(default_factory=list)
 
 
@@ -165,20 +167,6 @@ class SessionGraphMetrics(BaseModel):
 # Simplified flat output for ct session stats scopes
 # ---------------------------------------------------------------------------
 
-class StepMetricsFlat(BaseModel):
-    step_id: UUID
-    sequence: int
-    kind: str | None = None
-    token_usage: TokenUsage | None = None
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, handler):
-        data = handler(self)
-        if data.get("token_usage") is None:
-            data.pop("token_usage", None)
-        return data
-
-
 class TurnMetricsFlat(BaseModel):
     turn_id: UUID
     sequence: int
@@ -190,14 +178,6 @@ class TurnMetricsFlat(BaseModel):
     cost: float = 0.0
     currency: Literal["USD"] = "USD"
     extra_billing: bool = False
-    steps: list[StepMetricsFlat] | None = None
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, handler):
-        data = handler(self)
-        if data.get("steps") is None:
-            data.pop("steps", None)
-        return data
 
 
 class SessionMetricsFlat(BaseModel):
@@ -265,7 +245,7 @@ class RuntimeStatsFlat(BaseModel):
     ended_at: datetime | None = None
     duration_seconds: int | None = None
     turns: int = 0
-    model_steps: int = 0
+    items: int = 0
     tool_calls: int = 0
     failed_tool_calls: int = 0
     subagent_sessions: int = 0
@@ -350,26 +330,11 @@ class SessionContextStatsFlat(BaseModel):
         return data
 
 
-class ActivityUsageBreakdownFlat(BaseModel):
-    category: Literal["tool_steps", "response_steps", "mixed_steps", "other_steps"]
-    usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_usd: float = 0.0
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, handler):
-        data = handler(self)
-        if data.get("usage"):
-            data["usage"] = _usage_accounting_payload(data["usage"], cost_usd=self.cost_usd)
-        data.pop("cost_usd", None)
-        return data
-
-
 class TurnUsageCompactFlat(BaseModel):
     turn_id: UUID
     session_id: UUID | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
     cost_usd: float = 0.0
-    activity_usage: list[ActivityUsageBreakdownFlat] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -379,8 +344,6 @@ class TurnUsageCompactFlat(BaseModel):
         if data.get("usage"):
             data["usage"] = _usage_accounting_payload(data["usage"], cost_usd=self.cost_usd)
         data.pop("cost_usd", None)
-        if not data.get("activity_usage"):
-            data.pop("activity_usage", None)
         return data
 
 
@@ -401,14 +364,17 @@ class SessionUsageCompactFlat(BaseModel):
         return data
 
 
-class ToolCostSemantics(BaseModel):
-    observed_cost_scope: Literal["tool_step"] = "tool_step"
-    per_tool_cost: Literal["not_measured"] = "not_measured"
-    output_metrics: Literal["causal_signal_only"] = "causal_signal_only"
+class UsageSpan(BaseModel):
+    usage_observation_id: UUID
+    turn_id: UUID
+    related_item_ids: list[UUID] = Field(default_factory=list)
+    attribution: Literal["exact", "shared", "unknown"] = "shared"
 
 
-class ToolOutputUsageFlat(BaseModel):
-    tool_index: int
+class ToolItemFlat(BaseModel):
+    item_id: UUID
+    session_id: UUID
+    turn_id: UUID
     tool_name: str | None = None
     status: str | None = None
     input_summary: str | None = None
@@ -427,39 +393,11 @@ class ToolOutputUsageFlat(BaseModel):
         return data
 
 
-class ToolStepUsageFlat(BaseModel):
-    session_id: UUID
-    turn_id: UUID
-    turn_sequence: int
-    step_id: UUID
-    step_sequence: int
-    kind: str | None = None
-    observed_step_cost: float = 0.0
-    currency: Literal["USD"] = "USD"
-    token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    tool_count: int = 0
-    duration_ms: int | None = None
-    tool_output_chars: int = 0
-    tool_output_original_tokens: int = 0
-    tools: list[ToolOutputUsageFlat] = Field(default_factory=list)
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, handler):
-        data = handler(self)
-        if data.get("duration_ms") is None:
-            data.pop("duration_ms", None)
-        return data
-
-
 class SessionGraphToolUsageFlat(BaseModel):
     root_session_id: UUID
-    cost_semantics: ToolCostSemantics = Field(default_factory=ToolCostSemantics)
-    observed_tool_step_cost: float = 0.0
-    currency: Literal["USD"] = "USD"
-    extra_billing: bool = False
-    tool_step_count: int = 0
+    tool_item_count: int = 0
     tool_call_count: int = 0
     tool_output_chars: int = 0
     tool_output_original_tokens: int = 0
-    tool_steps: list[ToolStepUsageFlat] = Field(default_factory=list)
+    tool_items: list[ToolItemFlat] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

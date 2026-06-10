@@ -69,7 +69,7 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         ended_at=ended,
         duration_seconds=round((ended - started).total_seconds()) if started and ended else None,
         turns=sum(len(session.turns) for session in session_graph.sessions),
-        model_steps=sum(len(turn.steps) for session in session_graph.sessions for turn in session.turns),
+        items=sum(len(turn.items) for session in session_graph.sessions for turn in session.turns),
         tool_calls=tool_calls,
         failed_tool_calls=failed_tool_calls,
         subagent_sessions=sum(
@@ -150,6 +150,9 @@ def token_usage_from_mapping(value: dict[str, Any] | None) -> TokenUsage:
     return TokenUsage(
         input_tokens=_as_int(value.get("input_tokens") or value.get("inputTokens")),
         cached_input_tokens=_as_int(value.get("cached_input_tokens") or value.get("cachedInputTokens")),
+        cache_creation_input_tokens=_as_int(
+            value.get("cache_creation_input_tokens") or value.get("cacheCreationInputTokens")
+        ),
         output_tokens=_as_int(value.get("output_tokens") or value.get("outputTokens")),
         reasoning_output_tokens=_as_int(
             value.get("reasoning_output_tokens") or value.get("reasoningOutputTokens")
