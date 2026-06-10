@@ -25,6 +25,11 @@ _MODELS_DEV_CACHE_VERSION = 1
 _LIVE_RULES_LOCK = threading.Lock()
 _LIVE_RULES_CACHE: tuple[datetime, dict[str, "PriceRule"]] | None = None
 
+_THRESHOLD_OVERRIDES: dict[str, int] = {
+    "gpt-5.4": 272_000,
+    "gpt-5.5": 272_000,
+}
+
 
 @dataclass(frozen=True)
 class PriceRule:
@@ -39,27 +44,6 @@ class PriceRule:
     cached_input_per_mtok_above_threshold: float | None = None
     pricing_source: str = "builtin"
     pricing_effective_date: str = "2026-05-01"
-
-    def merged_with(self, other: "PriceRule") -> "PriceRule":
-        return PriceRule(
-            model=self.model,
-            input_per_mtok=other.input_per_mtok,
-            output_per_mtok=other.output_per_mtok,
-            cached_input_per_mtok=other.cached_input_per_mtok,
-            reasoning_output_per_mtok=other.reasoning_output_per_mtok,
-            threshold_tokens=other.threshold_tokens or self.threshold_tokens,
-            input_per_mtok_above_threshold=(
-                other.input_per_mtok_above_threshold or self.input_per_mtok_above_threshold
-            ),
-            output_per_mtok_above_threshold=(
-                other.output_per_mtok_above_threshold or self.output_per_mtok_above_threshold
-            ),
-            cached_input_per_mtok_above_threshold=(
-                other.cached_input_per_mtok_above_threshold or self.cached_input_per_mtok_above_threshold
-            ),
-            pricing_source=other.pricing_source,
-            pricing_effective_date=other.pricing_effective_date,
-        )
 
 
 class ModelsDevContextOver200KCost(BaseModel):
@@ -125,15 +109,7 @@ class ModelsDevCacheArtifact(BaseModel):
 
 
 def get_default_price_rules(*, now: datetime | None = None) -> dict[str, PriceRule]:
-    current = now or datetime.now(UTC)
-    live_rules = _load_live_price_rules(now=current)
-    if not live_rules:
-        return DEFAULT_PRICE_RULES
-
-    merged = dict(DEFAULT_PRICE_RULES)
-    for model, rule in live_rules.items():
-        merged[model] = merged[model].merged_with(rule) if model in merged else rule
-    return merged
+    return _load_live_price_rules(now=now or datetime.now(UTC))
 
 
 def get_model_context_window(
@@ -148,75 +124,19 @@ def get_model_context_window(
     artifact = _load_models_dev_cache(now=now or datetime.now(UTC))
     if artifact is None:
         return None
-    normalized_model = _normalize_model(model)
+    normalized_model = _normalize_model_name(model)
     normalized_provider = _normalize_provider(provider)
     for provider_key, prov in artifact.catalog.providers.items():
         prov_id = _normalize_provider(prov.id or provider_key)
         if normalized_provider and prov_id != normalized_provider:
             continue
         for map_key, dev_model in prov.models.items():
-            candidate = _normalize_model(dev_model.id or map_key)
+            candidate = _normalize_model_name(dev_model.id or map_key)
             if candidate != normalized_model:
                 continue
             if dev_model.limit and dev_model.limit.context:
                 return dev_model.limit.context
     return None
-
-
-_OPENAI_SOURCE = "https://developers.openai.com/api/docs/pricing"
-_ANTHROPIC_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing"
-
-
-DEFAULT_PRICE_RULES: dict[str, PriceRule] = {
-    "gpt-5": PriceRule("gpt-5", input_per_mtok=1.25, cached_input_per_mtok=0.125, output_per_mtok=10.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5-codex": PriceRule("gpt-5-codex", input_per_mtok=1.25, cached_input_per_mtok=0.125, output_per_mtok=10.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5-mini": PriceRule("gpt-5-mini", input_per_mtok=0.25, cached_input_per_mtok=0.025, output_per_mtok=2.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5-nano": PriceRule("gpt-5-nano", input_per_mtok=0.05, cached_input_per_mtok=0.005, output_per_mtok=0.40, pricing_source=_OPENAI_SOURCE),
-    "gpt-5-pro": PriceRule("gpt-5-pro", input_per_mtok=15.00, output_per_mtok=120.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.1": PriceRule("gpt-5.1", input_per_mtok=1.25, cached_input_per_mtok=0.125, output_per_mtok=10.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.1-codex": PriceRule("gpt-5.1-codex", input_per_mtok=1.25, cached_input_per_mtok=0.125, output_per_mtok=10.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.1-codex-max": PriceRule("gpt-5.1-codex-max", input_per_mtok=1.25, cached_input_per_mtok=0.125, output_per_mtok=10.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.1-codex-mini": PriceRule("gpt-5.1-codex-mini", input_per_mtok=0.25, cached_input_per_mtok=0.025, output_per_mtok=2.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.2": PriceRule("gpt-5.2", input_per_mtok=1.75, cached_input_per_mtok=0.175, output_per_mtok=14.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.2-codex": PriceRule("gpt-5.2-codex", input_per_mtok=1.75, cached_input_per_mtok=0.175, output_per_mtok=14.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.2-pro": PriceRule("gpt-5.2-pro", input_per_mtok=21.00, output_per_mtok=168.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.3-codex": PriceRule("gpt-5.3-codex", input_per_mtok=1.75, cached_input_per_mtok=0.175, output_per_mtok=14.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.3-codex-spark": PriceRule("gpt-5.3-codex-spark", input_per_mtok=0.00, cached_input_per_mtok=0.00, output_per_mtok=0.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.4": PriceRule(
-        "gpt-5.4",
-        input_per_mtok=2.50,
-        cached_input_per_mtok=0.25,
-        output_per_mtok=15.00,
-        threshold_tokens=272_000,
-        input_per_mtok_above_threshold=5.00,
-        cached_input_per_mtok_above_threshold=0.50,
-        output_per_mtok_above_threshold=22.50,
-        pricing_source=_OPENAI_SOURCE,
-    ),
-    "gpt-5.4-mini": PriceRule("gpt-5.4-mini", input_per_mtok=0.75, cached_input_per_mtok=0.075, output_per_mtok=4.50, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.4-nano": PriceRule("gpt-5.4-nano", input_per_mtok=0.20, cached_input_per_mtok=0.02, output_per_mtok=1.25, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.4-pro": PriceRule("gpt-5.4-pro", input_per_mtok=30.00, output_per_mtok=180.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.5-pro": PriceRule("gpt-5.5-pro", input_per_mtok=30.00, output_per_mtok=180.00, pricing_source=_OPENAI_SOURCE),
-    "gpt-5.5": PriceRule(
-        "gpt-5.5",
-        input_per_mtok=5.00,
-        cached_input_per_mtok=0.50,
-        output_per_mtok=30.00,
-        threshold_tokens=272_000,
-        input_per_mtok_above_threshold=10.00,
-        cached_input_per_mtok_above_threshold=1.00,
-        output_per_mtok_above_threshold=45.00,
-        pricing_source=_OPENAI_SOURCE,
-    ),
-    "claude-opus-4-7": PriceRule("claude-opus-4-7", input_per_mtok=5.00, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-opus-4-6": PriceRule("claude-opus-4-6", input_per_mtok=5.00, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-opus-4-5": PriceRule("claude-opus-4-5", input_per_mtok=5.00, output_per_mtok=25.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-opus-4-1": PriceRule("claude-opus-4-1", input_per_mtok=15.00, output_per_mtok=75.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-sonnet-4-6": PriceRule("claude-sonnet-4-6", input_per_mtok=3.00, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-sonnet-4-5": PriceRule("claude-sonnet-4-5", input_per_mtok=3.00, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-sonnet-4": PriceRule("claude-sonnet-4", input_per_mtok=3.00, output_per_mtok=15.00, pricing_source=_ANTHROPIC_SOURCE),
-    "claude-haiku-4-5": PriceRule("claude-haiku-4-5", input_per_mtok=1.00, output_per_mtok=5.00, pricing_source=_ANTHROPIC_SOURCE),
-}
 
 
 def estimate_observation_cost(
@@ -226,12 +146,18 @@ def estimate_observation_cost(
     price_rules: dict[str, PriceRule] | None = None,
 ) -> CostEstimate:
     rules = price_rules or get_default_price_rules()
-    model = _normalize_model(observation.model)
+    model = _normalize_model_name(observation.model)
     if model is None:
         return _missing(extra_billing=extra_billing, model=None, reason="missing model")
 
     rule = _lookup_price_rule(rules, provider=observation.provider, model=model)
     if rule is None:
+        if not rules:
+            return _missing(
+                extra_billing=extra_billing,
+                model=model,
+                reason=f"pricing unavailable for model {model} (models.dev catalog not cached)",
+            )
         return _missing(extra_billing=extra_billing, model=model, reason=f"no price rule for model {model}")
 
     usage = observation.usage
@@ -302,7 +228,7 @@ def _round_usd(value: float) -> float:
     return round(value, 8)
 
 
-def _normalize_model(model: str | None) -> str | None:
+def _normalize_model_name(model: str | None) -> str | None:
     if not model:
         return None
     normalized = model.strip().lower()
@@ -311,21 +237,15 @@ def _normalize_model(model: str | None) -> str | None:
     if normalized.startswith("anthropic."):
         normalized = normalized.removeprefix("anthropic.")
     if "." in normalized and "claude-" in normalized:
-        tail = normalized.rsplit(".", maxsplit=1)[-1]
-        if tail.startswith("claude-"):
-            normalized = tail
-    if normalized in DEFAULT_PRICE_RULES:
-        return normalized
+        idx = normalized.find("claude-")
+        if idx > 0:
+            normalized = normalized[idx:]
     compact_date = re.search(r"-\d{8}$", normalized)
     if compact_date is not None:
-        candidate = normalized[: compact_date.start()]
-        if candidate in DEFAULT_PRICE_RULES:
-            return candidate
+        normalized = normalized[: compact_date.start()]
     dashed_date = re.search(r"-\d{4}-\d{2}-\d{2}$", normalized)
     if dashed_date is not None:
-        candidate = normalized[: dashed_date.start()]
-        if candidate in DEFAULT_PRICE_RULES:
-            return candidate
+        normalized = normalized[: dashed_date.start()]
     return normalized
 
 
@@ -452,14 +372,13 @@ def _model_to_price_rule(
 ) -> PriceRule | None:
     if model.cost is None or model.cost.input is None or model.cost.output is None:
         return None
-    normalized_model = _normalize_model(model_id)
+    normalized_model = _normalize_model_name(model_id)
     if normalized_model is None:
         return None
     context_over_200k = model.cost.context_over_200k
     threshold_tokens = 200_000 if context_over_200k is not None else None
-    # CodexBar keeps Codex long-context thresholds at 272k for these models.
-    if normalized_model in {"gpt-5.4", "gpt-5.5"} and normalized_model in DEFAULT_PRICE_RULES:
-        threshold_tokens = DEFAULT_PRICE_RULES[normalized_model].threshold_tokens
+    if normalized_model in _THRESHOLD_OVERRIDES:
+        threshold_tokens = _THRESHOLD_OVERRIDES[normalized_model]
 
     return PriceRule(
         model=normalized_model,
