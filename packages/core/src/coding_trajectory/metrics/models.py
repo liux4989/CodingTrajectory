@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_serializer
@@ -38,6 +38,33 @@ class TokenUsage(BaseModel):
 
 
 def _usage_accounting_payload(usage: dict[str, int], *, cost_usd: float | None) -> dict[str, int | float]:
+    """Delegate to the dashboard-owned accounting helper when available."""
+    delegate = _load_usage_accounting_payload()
+    return delegate(usage, cost_usd=cost_usd)
+
+
+_USAGE_ACCOUNTING_CACHE: Any = None
+_USAGE_ACCOUNTING_RESOLVED = False
+
+
+def _load_usage_accounting_payload() -> Any:
+    global _USAGE_ACCOUNTING_CACHE, _USAGE_ACCOUNTING_RESOLVED
+    if _USAGE_ACCOUNTING_RESOLVED:
+        return _USAGE_ACCOUNTING_CACHE
+    try:
+        from importlib import import_module
+
+        accounting = import_module("accounting")
+        _USAGE_ACCOUNTING_CACHE = accounting.usage_accounting_payload
+    except ModuleNotFoundError:
+        _USAGE_ACCOUNTING_CACHE = _usage_accounting_payload_fallback
+    _USAGE_ACCOUNTING_RESOLVED = True
+    return _USAGE_ACCOUNTING_CACHE
+
+
+def _usage_accounting_payload_fallback(
+    usage: dict[str, int], *, cost_usd: float | None
+) -> dict[str, int | float]:
     total_tokens = int(usage.get("total_tokens") or 0)
     if total_tokens == 0:
         total_tokens = TokenUsage(

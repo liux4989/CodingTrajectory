@@ -68,7 +68,16 @@ class BaseAdapter(ABC):
         ...
 
 
-def infer_account_identity(raw: Any, *, vendor: Vendor, max_depth: int = 2) -> AccountIdentity | None:
+def infer_account_identity(
+    raw: Any, *, vendor: Vendor, max_depth: int = 2
+) -> AccountIdentity | None:
+    """Vendor-agnostic account identity extraction.
+
+    The dashboard plugin keeps a parallel copy of this logic in
+    ``packages/plugins/dashboard/account.py`` for dashboard-side consumers
+    that operate on raw vendor payloads without loading the ingestion
+    pipeline.
+    """
     if not isinstance(raw, dict) or max_depth < 0:
         return None
 

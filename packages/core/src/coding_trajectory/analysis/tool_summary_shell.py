@@ -56,7 +56,7 @@ def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, st
 
 
 def primary_stage(cmd: str) -> str:
-    stages = [stage for stage in split_shell_stages(cmd) if stage.strip()]
+    stages = [stage for stage in _split_shell_stages(cmd) if stage.strip()]
     if not stages:
         return cmd.strip()
     for stage in stages:
@@ -65,7 +65,18 @@ def primary_stage(cmd: str) -> str:
     return stages[0].strip()
 
 
-def split_shell_stages(cmd: str) -> list[str]:
+def _split_shell_stages(cmd: str) -> list[str]:
+    """Delegate to the dashboard-owned quote parser when available."""
+    try:
+        from importlib import import_module
+
+        quote_module = import_module("quote")
+        return quote_module.split_shell_stages(cmd)
+    except ModuleNotFoundError:
+        return _split_shell_stages_fallback(cmd)
+
+
+def _split_shell_stages_fallback(cmd: str) -> list[str]:
     stages: list[str] = []
     buf: list[str] = []
     quote: str | None = None
