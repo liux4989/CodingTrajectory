@@ -79,9 +79,11 @@ def build_report(
         params: dict[str, Any] = {"since_days": since_days, "project_name": project_name}
         if agent_vendor:
             params["agent_vendor"] = agent_vendor
-        sessions_payload = _ct_json(
-            ["project", "sessions", "--params", json.dumps(params), "--output", "json"]
+        sessions_payload = _ct_json_safe(
+            ["project", "sessions", "--global-scope", "--params", json.dumps(params), "--output", "json"]
         )
+        if sessions_payload is None:
+            continue
         sessions = sessions_payload.get("items") or []
         if not sessions:
             continue
