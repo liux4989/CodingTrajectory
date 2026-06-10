@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from coding_trajectory import debug as _debug
+from coding_trajectory import debug
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch, project_list_metadata, resolve_store
 from coding_trajectory_cli._shared import (
@@ -150,19 +150,26 @@ def _write_invocation(record: dict[str, Any]) -> None:
     if path is None:
         return
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=_json_default) + "\n"
+    except (TypeError, ValueError):
+        return
+    fd: int | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        try:
-            os.write(fd, line.encode("utf-8"))
-        finally:
-            os.close(fd)
+        os.write(fd, line.encode("utf-8"))
     except OSError:
         pass
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def main(argv: list[str] | None = None) -> int:
-    with _debug.debug_scope() as debug_ctx:
+    with debug.debug_scope() as debug_ctx:
         raw_args = list(sys.argv[1:] if argv is None else argv)
         plugin_exit = dispatch_plugin_argv(raw_args)
         if plugin_exit is not None:
@@ -221,12 +228,10 @@ def _cli_version() -> str | None:
         from importlib.metadata import PackageNotFoundError, version
     except ImportError:
         return None
-    for name in ("coding-trajectory", "coding-trajectory-core"):
-        try:
-            return version(name)
-        except PackageNotFoundError:
-            continue
-    return None
+    try:
+        return version("coding-trajectory")
+    except PackageNotFoundError:
+        return None
 
 
 if __name__ == "__main__":  # pragma: no cover

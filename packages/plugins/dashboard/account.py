@@ -1,20 +1,26 @@
 """Dashboard-owned account identity inference.
 
-The ``AccountIdentity`` model itself lives in core
-(``coding_trajectory.ingestion.models``) because the ``Session`` model
-references it. This module owns the *inference heuristics* that extract an
-account identity from raw vendor payloads, plus a convenience re-export of
-``AccountIdentity`` so dashboard callers can import everything from here.
+Defines ``AccountIdentity`` locally and provides inference heuristics that
+extract an account identity from raw vendor payloads. This module must not
+import from core: core depends on the plugins package, so any core→plugins
+import chain that also reached back into core would create a circular
+import at module load time.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from coding_trajectory.ingestion.models import AccountIdentity
+from pydantic import BaseModel
 
 
 __all__ = ["AccountIdentity", "infer_account_identity"]
+
+
+class AccountIdentity(BaseModel):
+    key: str
+    label: str | None = None
+    vendor: str | None = None
 
 
 _ACCOUNT_CANDIDATE_KEYS = (

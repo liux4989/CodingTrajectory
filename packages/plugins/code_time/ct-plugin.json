@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "name": "code-time",
+  "version": "0.1.0",
+  "requiresCt": ">=0.1.0",
+  "description": "Today's coding work overview: time, sessions, and cost across projects.",
+  "run": ["python3", "./code_time.py"],
+  "tools": [
+    {
+      "name": ".",
+      "summary": "Show today's coding time summary."
+    }
+  ]
+}

@@ -134,6 +134,20 @@ expected:
 When disabled, the CLI behaves exactly as it does today — no writes, no file
 creation, no side effects.
 
+## Known gaps
+
+The CLI has one early-exit path that bypasses the invocation log:
+
+- **Plugin argv dispatch.** `ct plugin list` and a small number of other
+  plugin subcommands are handled by `dispatch_plugin_argv` before the main
+  dispatch flow runs. When that path returns a non-`None` exit code, the
+  process exits without entering the block that writes the invocation
+  record. These invocations are therefore invisible in the log today.
+
+Closing this gap requires restructuring the plugin argv path to run inside
+the main dispatch block, which is a larger refactor than the rest of the
+mechanism. The gap is documented rather than silently papered over.
+
 ## Consumption
 
 The canonical CLI-side consumer of the invocation log is `ct doctor`

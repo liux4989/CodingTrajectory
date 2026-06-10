@@ -3,8 +3,16 @@
 The CLI creates one :class:`DebugContext` per invocation and installs it on a
 contextvar. Any layer (adapter, analysis, metrics, service) may call the
 module-level :func:`warn` to append a structured warning to the active
-context. When no context is active the call is a no-op, so library code can
-emit warnings unconditionally.
+context.
+
+Behavior outside an active :func:`debug_scope`:
+
+* :func:`warn` is a **silent no-op** — it does not raise, log, or accumulate.
+  Library code can therefore emit warnings unconditionally without knowing
+  whether the caller is the CLI.
+* Non-CLI consumers (dashboard plugin, tests, external scripts) that want to
+  observe warnings must open their own scope with ``with debug.debug_scope() as ctx:``
+  and read ``ctx.as_records()`` afterwards.
 """
 
 from __future__ import annotations

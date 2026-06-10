@@ -42,7 +42,6 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
             no_obs_message,
             code="context.no_observation",
             severity="warning",
-            vendor=vendor.value,
         )
         return SessionContextStatsFlat(
             root_session_id=session_graph.root_session_id,
@@ -81,7 +80,6 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
             message,
             code="context.categories_inferred",
             severity="info",
-            vendor=vendor.value,
         )
     elif categories:
         message = (
@@ -93,7 +91,6 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
             message,
             code="context.categories_provider_reported",
             severity="info",
-            vendor=vendor.value,
         )
     else:
         message = "No normalized context category observations are available."
@@ -102,7 +99,6 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
             message,
             code="context.no_categories",
             severity="warning",
-            vendor=vendor.value,
         )
 
     return SessionContextStatsFlat(

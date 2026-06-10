@@ -5,7 +5,11 @@ description = "Core models, ingestion, and query layer for coding agent session 
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.12.5",
+    "coding-trajectory-plugins",
 ]
+
+[tool.uv.sources]
+coding-trajectory-plugins = { workspace = true }
 
 [tool.uv]
 dev-dependencies = [
