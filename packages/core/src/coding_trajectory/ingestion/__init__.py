@@ -10,7 +10,6 @@ from coding_trajectory.ingestion.graph import (
     decorate_sessions,
 )
 from coding_trajectory.ingestion.models import (
-    AccountIdentity,
     AgentMessageItem,
     ClaudeCodeExtensions,
     CodexExtensions,
@@ -42,7 +41,6 @@ from coding_trajectory.ingestion.models import (
 
 __all__ = [
     # models
-    "AccountIdentity",
     "AgentMessageItem",
     "ClaudeCodeExtensions",
     "CodexExtensions",

@@ -92,12 +92,6 @@ class VendorExtensions(BaseModel):
     pi:          PiExtensions | None = None
 
 
-class AccountIdentity(BaseModel):
-    key:    str
-    label:  str | None = None
-    vendor: str | None = None
-
-
 # ---------------------------------------------------------------------------
 # Core canonical models
 # ---------------------------------------------------------------------------
@@ -273,7 +267,6 @@ class Session(BaseModel):
     session_id:        UUID = Field(default_factory=uuid4)
     vendor:            Vendor
     agent_name:        str | None = None
-    account:           AccountIdentity | None = None
     started_at:        datetime
     ended_at:          datetime | None = None
     parent_session_id: UUID | None = None

@@ -18,6 +18,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     short_command,
     short_path,
 )
+from coding_trajectory_plugins.dashboard.quote import split_shell_stages
 
 
 def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, str]:
@@ -56,72 +57,13 @@ def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, st
 
 
 def primary_stage(cmd: str) -> str:
-    stages = [stage for stage in _split_shell_stages(cmd) if stage.strip()]
+    stages = [stage for stage in split_shell_stages(cmd) if stage.strip()]
     if not stages:
         return cmd.strip()
     for stage in stages:
         if primary_command(stage) in INFORMATIVE_HEADS:
             return stage.strip()
     return stages[0].strip()
-
-
-def _split_shell_stages(cmd: str) -> list[str]:
-    """Delegate to the dashboard-owned quote parser when available."""
-    try:
-        from importlib import import_module
-
-        quote_module = import_module("quote")
-        return quote_module.split_shell_stages(cmd)
-    except ModuleNotFoundError:
-        return _split_shell_stages_fallback(cmd)
-
-
-def _split_shell_stages_fallback(cmd: str) -> list[str]:
-    stages: list[str] = []
-    buf: list[str] = []
-    quote: str | None = None
-    i = 0
-    while i < len(cmd):
-        ch = cmd[i]
-        if quote:
-            buf.append(ch)
-            if ch == "\\" and i + 1 < len(cmd):
-                buf.append(cmd[i + 1])
-                i += 2
-                continue
-            if ch == quote:
-                quote = None
-            i += 1
-            continue
-        if ch in ("'", '"'):
-            quote = ch
-            buf.append(ch)
-            i += 1
-            continue
-        if ch == "\\" and i + 1 < len(cmd):
-            buf.append(ch)
-            buf.append(cmd[i + 1])
-            i += 2
-            continue
-        if ch == "&" and i + 1 < len(cmd) and cmd[i + 1] == "&":
-            stages.append("".join(buf))
-            buf = []
-            i += 2
-            continue
-        if ch == "|" and i + 1 < len(cmd) and cmd[i + 1] == "|":
-            stages.append("".join(buf))
-            buf = []
-            i += 2
-            continue
-        if ch == "|" or ch == ";":
-            stages.append("".join(buf))
-            buf = []
-            i += 1
-            continue
-        buf.append(ch)
-        i += 1
-    stages.append("".join(buf))
-    return stages
 
 
 def shell_cmd(tool_input: Any) -> str:

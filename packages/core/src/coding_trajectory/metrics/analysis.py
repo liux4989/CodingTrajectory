@@ -40,6 +40,7 @@ from coding_trajectory.metrics.models import (
     TurnMetricsFlat,
 )
 from coding_trajectory.metrics.context_stats._common import runtime_stats
+from coding_trajectory_plugins.dashboard.accounting import reported_cost_amount as _reported_cost_amount
 
 
 def build_session_graph_metrics(
@@ -186,35 +187,6 @@ def _turn_execution_seconds(turn: TurnMetrics) -> int | None:
     if turn.started_at is None or turn.completed_at is None:
         return None
     return max(round((turn.completed_at - turn.started_at).total_seconds()), 0)
-
-
-def _reported_cost_amount(cost: CostEstimate) -> float | None:
-    """Delegate to the dashboard-owned accounting helper when available."""
-    delegate = _load_reported_cost_amount()
-    return delegate(cost)
-
-
-_REPORTED_COST_CACHE: Any = None
-_REPORTED_COST_RESOLVED = False
-
-
-def _load_reported_cost_amount() -> Any:
-    global _REPORTED_COST_CACHE, _REPORTED_COST_RESOLVED
-    if _REPORTED_COST_RESOLVED:
-        return _REPORTED_COST_CACHE
-    try:
-        from importlib import import_module
-
-        accounting = import_module("accounting")
-        _REPORTED_COST_CACHE = accounting.reported_cost_amount
-    except ModuleNotFoundError:
-        _REPORTED_COST_CACHE = _reported_cost_amount_fallback
-    _REPORTED_COST_RESOLVED = True
-    return _REPORTED_COST_CACHE
-
-
-def _reported_cost_amount_fallback(cost: CostEstimate) -> float | None:
-    return cost.amount_usd if cost.complete else None
 
 
 def build_session_graph_tool_usage(

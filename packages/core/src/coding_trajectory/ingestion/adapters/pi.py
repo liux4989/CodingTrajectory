@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from coding_trajectory.ingestion.adapters.base import BaseAdapter, infer_account_identity
+from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import (
     extract_exit_code,
     infer_tool_success,
@@ -107,14 +107,6 @@ def _parse_usage(message: dict) -> dict | None:
     }
 
 
-def _infer_pi_account(records: list[dict]) -> object:
-    for record in records[:8]:
-        account = infer_account_identity(record, vendor=Vendor.PI)
-        if account is not None:
-            return account
-    return None
-
-
 class PiAdapter(BaseAdapter):
     """Normalise Pi coding agent JSONL session files into canonical Session objects."""
 
@@ -181,7 +173,6 @@ class PiAdapter(BaseAdapter):
         return Session(
             session_id=session_id,
             vendor=self.vendor,
-            account=_infer_pi_account(records),
             started_at=started_at,
             ended_at=ended_at,
             events=events,

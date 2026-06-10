@@ -1,5 +1,4 @@
 from coding_trajectory.ingestion import (
-    AccountIdentity,
     AgentMessageItem,
     BaseAdapter,
     ClaudeCodeExtensions,
@@ -30,7 +29,6 @@ from coding_trajectory.query import DocumentStore
 
 __all__ = [
     "BaseAdapter",
-    "AccountIdentity",
     "AgentMessageItem",
     "ClaudeCodeAdapter",
     "ClaudeCodeExtensions",
