@@ -22,7 +22,10 @@ from coding_trajectory.ingestion.models import (
     VendorExtensions,
 )
 from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
-from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normalize_pi_usage
+from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
+    context_usage_observation,
+    normalize_pi_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +131,21 @@ class PiAdapter(BaseAdapter):
 
         started_at = min(record.timestamp for record in transcript)
         ended_at = max(record.timestamp for record in transcript)
+        context_usage = [
+            observation
+            for record in transcript
+            if (
+                observation := context_usage_observation(
+                    timestamp=record.timestamp,
+                    source="pi_usage_block",
+                    normalized=record.data.get("vendor_data", {}),
+                    source_event_id=record.record_id,
+                    provider=self._current_provider,
+                    category_source="pi_usage_block",
+                )
+            )
+            is not None
+        ]
 
         extensions = VendorExtensions(
             pi=PiExtensions(
@@ -148,6 +166,7 @@ class PiAdapter(BaseAdapter):
             ended_at=ended_at,
             events=events,
             turns=turns,
+            context_usage=context_usage,
             extensions=extensions,
             status=SessionStatus.COMPLETED,
         )

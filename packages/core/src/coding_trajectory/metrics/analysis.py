@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -11,9 +12,17 @@ from coding_trajectory.ingestion.indexes import (
     SessionGraphIndex,
     build_session_graph_index,
     events_for_step,
-    events_for_turn,
 )
-from coding_trajectory.ingestion.models import Event, EventType, Session, Step, SessionGraph, Turn, Vendor
+from coding_trajectory.ingestion.models import (
+    ContextUsageObservation,
+    Event,
+    EventType,
+    Session,
+    SessionGraph,
+    Step,
+    Turn,
+    Vendor,
+)
 from coding_trajectory.metrics.models import (
     ActivityUsageBreakdownFlat,
     CostEstimate,
@@ -469,8 +478,8 @@ def _build_turn_metrics(
         turn_total = turn_total.plus(metrics.token_usage)
         cost_total = cost_total.plus(metrics.cost_estimate)
 
-    for event in events_for_turn(index, turn):
-        quota = _quota_snapshot_from_event(event)
+    for observation in _context_usage_for_turn(session, turn):
+        quota = _quota_snapshot_from_context_usage(observation)
         if quota is not None:
             quota_snapshots.append(quota)
 
@@ -499,25 +508,25 @@ def _build_step_metrics(
     observations: list[TokenUsageObservation] = []
 
     events = events_for_step(index, step)
-
-    if not _step_has_usage_event(step, events):
-        vendor_observation = _usage_from_step_vendor_data(step)
-        if vendor_observation is not None:
-            observations.append(vendor_observation)
-
-    for event in events:
-        event_observation = _usage_from_event(
-            event,
+    context_observations = _context_usage_for_step(session, step)
+    for context_observation in context_observations:
+        usage_observation = _usage_from_context_observation(
+            context_observation,
             step=step,
             session=session,
             codex_state=codex_state,
         )
-        if event_observation is not None:
-            observations.append(event_observation)
+        if usage_observation is not None:
+            observations.append(usage_observation)
 
     observations.sort(key=lambda item: item.timestamp)
     total = TokenUsage()
-    vendor_cost = _vendor_reported_cost_from_step(step, observations=observations, extra_billing=extra_billing)
+    vendor_cost = _vendor_reported_cost(
+        step,
+        context_observations=context_observations,
+        observations=observations,
+        extra_billing=extra_billing,
+    )
     cost_total = vendor_cost or CostEstimate(extra_billing=extra_billing)
     for observation in observations:
         total = total.plus(observation.usage)
@@ -540,50 +549,21 @@ def _build_step_metrics(
     )
 
 
-def _usage_from_step_vendor_data(step: Step) -> TokenUsageObservation | None:
-    data = step.vendor_data or {}
-    normalized = data.get("metrics")
-    if not isinstance(normalized, dict):
-        return None
-
-    usage = normalized.get("usage")
-    if not isinstance(usage, dict):
-        return None
-
-    provider = _as_str(normalized.get("provider")) or step.vendor.value
-    model = _as_str(normalized.get("model")) or _as_str(usage.get("model"))
-    token_usage = _token_usage_from_mapping(usage)
-
-    if _is_zero_usage(token_usage):
-        return None
-
-    return TokenUsageObservation(
-        scope_type="step",
-        scope_id=step.step_id,
-        timestamp=step.timestamp,
-        usage=token_usage,
-        provider=provider,
-        model=model,
-        source=MetricSource(vendor=provider, source_type="step.vendor_data"),
-    )
-
-
-def _vendor_reported_cost_from_step(
+def _vendor_reported_cost(
     step: Step,
     *,
+    context_observations: list[ContextUsageObservation],
     observations: list[TokenUsageObservation],
     extra_billing: bool,
 ) -> CostEstimate | None:
-    data = step.vendor_data or {}
-    normalized = data.get("metrics")
-    if not isinstance(normalized, dict):
-        return None
-
-    usage = normalized.get("usage")
-    if not isinstance(usage, dict):
-        return None
-
-    amount = _as_float(usage.get("cost_usd"))
+    amount = next(
+        (
+            value
+            for observation in context_observations
+            if (value := _as_float(observation.usage.get("cost_usd"))) is not None
+        ),
+        None,
+    )
     if amount is None:
         return None
 
@@ -598,48 +578,43 @@ def _vendor_reported_cost_from_step(
     )
 
 
-def _usage_from_event(
-    event: Event,
+def _usage_from_context_observation(
+    observation: ContextUsageObservation,
     *,
     step: Step,
     session: Session,
     codex_state: _CodexUsageState,
 ) -> TokenUsageObservation | None:
-    if event.type != EventType.VENDOR_RAW:
-        return None
-    if event.vendor_source != Vendor.CODEX_CLI:
-        return None
-    if event.payload.get("raw_type") != "token_count":
-        return None
-
-    metrics = event.payload.get("metrics")
-    if not isinstance(metrics, dict):
-        return None
-
-    token_usage = _codex_delta_usage(metrics, codex_state)
+    token_usage = (
+        _cumulative_delta_usage(observation, codex_state)
+        if observation.cumulative_usage is not None or session.vendor == Vendor.CODEX_CLI
+        else _token_usage_from_mapping(observation.usage)
+    )
     if token_usage is None or _is_zero_usage(token_usage):
         return None
-    model = _as_str(metrics.get("model"))
+    provider = observation.provider or session.vendor.value
 
     return TokenUsageObservation(
         scope_type="step",
         scope_id=step.step_id,
-        timestamp=event.timestamp,
+        timestamp=observation.timestamp,
         usage=token_usage,
-        provider=session.vendor.value,
-        model=model,
+        provider=provider,
+        model=observation.model,
         source=MetricSource(
-            vendor=event.vendor_source.value,
-            source_type="event.payload",
-            event_id=event.event_id,
+            vendor=session.vendor.value,
+            source_type="session.context_usage",
+            event_id=observation.source_event_id,
         ),
     )
 
 
-def _codex_delta_usage(info: dict[str, Any], state: _CodexUsageState) -> TokenUsage | None:
-    total_raw = info.get("total_token_usage")
-    if isinstance(total_raw, dict):
-        raw_totals = _token_usage_from_mapping(total_raw)
+def _cumulative_delta_usage(
+    observation: ContextUsageObservation,
+    state: _CodexUsageState,
+) -> TokenUsage | None:
+    if observation.cumulative_usage is not None:
+        raw_totals = _token_usage_from_mapping(observation.cumulative_usage)
         total_key = _usage_key(raw_totals)
         if state.seen_totals is not None and total_key in state.seen_totals:
             return None
@@ -653,11 +628,7 @@ def _codex_delta_usage(info: dict[str, Any], state: _CodexUsageState) -> TokenUs
         state.remaining_inherited_totals = None
         return delta
 
-    last_raw = info.get("last_token_usage")
-    if not isinstance(last_raw, dict):
-        return None
-
-    raw_delta = _token_usage_from_mapping(last_raw)
+    raw_delta = _token_usage_from_mapping(observation.usage)
     delta = _subtract_usage(raw_delta, state.remaining_inherited_totals)
     state.remaining_inherited_totals = _subtract_usage(state.remaining_inherited_totals, raw_delta)
     previous_totals = state.previous_totals or TokenUsage()
@@ -677,40 +648,26 @@ def _inherited_codex_totals(
 
     state = _CodexUsageState(seen_totals=set())
     latest = TokenUsage()
-    for event in sorted(parent.events, key=lambda item: item.timestamp):
-        if event.timestamp > session.started_at:
+    for observation in sorted(parent.context_usage, key=lambda item: item.timestamp):
+        if observation.timestamp > session.started_at:
             break
-        if event.type != EventType.VENDOR_RAW:
-            continue
-        if event.vendor_source != Vendor.CODEX_CLI:
-            continue
-        if event.payload.get("raw_type") != "token_count":
-            continue
-        metrics = event.payload.get("metrics")
-        if not isinstance(metrics, dict):
-            continue
-        delta = _codex_delta_usage(metrics, state)
+        delta = _cumulative_delta_usage(observation, state)
         if delta is not None:
             latest = latest.plus(delta)
 
     return None if _is_zero_usage(latest) else latest
 
 
-def _quota_snapshot_from_event(event: Event) -> QuotaSnapshot | None:
-    if event.type != EventType.VENDOR_RAW:
-        return None
-    if event.vendor_source != Vendor.CODEX_CLI:
-        return None
-    if event.payload.get("raw_type") != "token_count":
-        return None
-
-    rate_limits = event.payload.get("quota")
-    if not isinstance(rate_limits, dict):
+def _quota_snapshot_from_context_usage(
+    observation: ContextUsageObservation,
+) -> QuotaSnapshot | None:
+    rate_limits = observation.quota
+    if not isinstance(rate_limits, dict) or observation.source_event_id is None:
         return None
 
     return QuotaSnapshot(
-        timestamp=event.timestamp,
-        source_event_id=event.event_id,
+        timestamp=observation.timestamp,
+        source_event_id=observation.source_event_id,
         limit_id=_as_str(rate_limits.get("limit_id")),
         plan_type=_as_str(rate_limits.get("plan_type")),
         primary=_quota_window(rate_limits.get("primary")),
@@ -741,6 +698,30 @@ def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
     )
 
 
+def _context_usage_for_step(
+    session: Session,
+    step: Step,
+) -> list[ContextUsageObservation]:
+    event_ids = set(step.event_ids)
+    return [
+        observation
+        for observation in session.context_usage
+        if observation.source_event_id in event_ids
+    ]
+
+
+def _context_usage_for_turn(
+    session: Session,
+    turn: Turn,
+) -> list[ContextUsageObservation]:
+    event_ids = set(turn.event_ids)
+    return [
+        observation
+        for observation in session.context_usage
+        if observation.source_event_id in event_ids
+    ]
+
+
 def _usage_key(usage: TokenUsage) -> tuple[int, int, int, int, int]:
     return (
         usage.input_tokens,
@@ -769,17 +750,6 @@ def _session_has_usage(metrics: SessionMetrics) -> bool:
 
 def _is_zero_usage(usage: TokenUsage) -> bool:
     return all(value == 0 for value in usage.model_dump().values())
-
-
-def _step_has_usage_event(step: Step, events: list[Event]) -> bool:
-    if step.vendor != Vendor.CODEX_CLI:
-        return False
-    return any(
-        event.type == EventType.VENDOR_RAW
-        and event.vendor_source == Vendor.CODEX_CLI
-        and event.payload.get("raw_type") == "token_count"
-        for event in events
-    )
 
 
 def _finalize_cost(cost: CostEstimate) -> CostEstimate:

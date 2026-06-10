@@ -102,6 +102,41 @@ class AccountIdentity(BaseModel):
 # Core canonical models
 # ---------------------------------------------------------------------------
 
+class ContextCategoryObservation(BaseModel):
+    key:        str
+    label:      str
+    tokens:     int
+    confidence: str
+    source:     str | None = None
+
+
+class ContextUsageObservation(BaseModel):
+    source_event_id:       UUID | None = None
+    timestamp:             datetime
+    source:                str
+    model:                 str | None = None
+    provider:              str | None = None
+    context_window_tokens: int | None = None
+    used_input_tokens:     int = 0
+    usage:                 dict[str, Any] = Field(default_factory=dict)
+    cumulative_usage:      dict[str, Any] | None = None
+    quota:                 dict[str, Any] | None = None
+    categories:            list[ContextCategoryObservation] = Field(default_factory=list)
+
+
+class ContextSourceObservation(BaseModel):
+    timestamp: datetime
+    key:       str
+    label:     str
+    text:      str
+    source:    str
+
+
+class RuntimeObservation(BaseModel):
+    timestamp: datetime
+    kind:      str
+
+
 class Event(BaseModel):
     event_id:      UUID = Field(default_factory=uuid4)
     session_id:    UUID
@@ -193,6 +228,9 @@ class Session(BaseModel):
     cwd:               str | None = None
     events:            list[Event] = Field(default_factory=list)
     turns:             list[Turn] = Field(default_factory=list)
+    context_usage:     list[ContextUsageObservation] = Field(default_factory=list)
+    context_sources:   list[ContextSourceObservation] = Field(default_factory=list)
+    runtime_observations: list[RuntimeObservation] = Field(default_factory=list)
     extensions:        VendorExtensions | None = None
     status:            SessionStatus = SessionStatus.COMPLETED
 

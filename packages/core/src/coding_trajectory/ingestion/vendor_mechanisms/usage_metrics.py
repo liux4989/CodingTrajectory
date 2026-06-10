@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from coding_trajectory.ingestion.common import compact_dict
+from coding_trajectory.ingestion.models import (
+    ContextCategoryObservation,
+    ContextUsageObservation,
+)
 
 
 class NormalizedUsageMetrics(BaseModel):
@@ -93,6 +99,65 @@ def normalize_pi_usage(*, provider: Any = None, model: Any, usage: Any) -> dict[
             "cost_usd": _pi_cost_usd(usage_map.get("cost")),
         },
         cumulative_input_tokens=input_tokens + cache_read + cache_write,
+    )
+
+
+def context_usage_observation(
+    *,
+    timestamp: datetime,
+    source: str,
+    normalized: dict[str, Any],
+    source_event_id: UUID | None = None,
+    provider: str | None = None,
+    category_source: str | None = None,
+) -> ContextUsageObservation | None:
+    metrics = normalized.get("metrics")
+    if not isinstance(metrics, dict):
+        return None
+
+    usage = metrics.get("usage")
+    if not isinstance(usage, dict):
+        usage = metrics.get("last_token_usage")
+    usage = usage if isinstance(usage, dict) else {}
+    used_input_tokens = _as_int_or_none(metrics.get("cumulative_input_tokens"))
+    if used_input_tokens is None:
+        used_input_tokens = _as_int_or_none(usage.get("input_tokens")) or 0
+
+    categories: list[ContextCategoryObservation] = []
+    if category_source is not None:
+        category_specs = (
+            ("cached_context", "Cached prefix (system + tools + prior turns)", "cached_input_tokens"),
+            ("new_cached_prefix", "Newly cached this turn", "cache_creation_input_tokens"),
+            ("messages", "Messages (uncached input)", "input_tokens"),
+        )
+        categories = [
+            ContextCategoryObservation(
+                key=key,
+                label=label,
+                tokens=tokens,
+                confidence="exact_usage",
+                source=category_source,
+            )
+            for key, label, usage_key in category_specs
+            if (tokens := _as_int_or_none(usage.get(usage_key)) or 0) > 0
+        ]
+
+    return ContextUsageObservation(
+        source_event_id=source_event_id,
+        timestamp=timestamp,
+        source=source,
+        model=_as_str(metrics.get("model")),
+        provider=_as_str(metrics.get("provider")) or provider,
+        context_window_tokens=_as_int_or_none(metrics.get("model_context_window")),
+        used_input_tokens=used_input_tokens,
+        usage=usage,
+        cumulative_usage=(
+            metrics.get("total_token_usage")
+            if isinstance(metrics.get("total_token_usage"), dict)
+            else None
+        ),
+        quota=normalized.get("quota") if isinstance(normalized.get("quota"), dict) else None,
+        categories=categories,
     )
 
 

@@ -18,6 +18,9 @@ from coding_trajectory.ingestion.common import (
     parse_iso_timestamp,
 )
 from coding_trajectory.ingestion.models import (
+    ContextSourceObservation,
+    ContextUsageObservation,
+    RuntimeObservation,
     Session,
     SessionStatus,
     TurnStatus,
@@ -31,7 +34,10 @@ from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
     extensions as codex_extensions,
     parent_session_id as codex_parent_session_id,
 )
-from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normalize_codex_token_count
+from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
+    context_usage_observation,
+    normalize_codex_token_count,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +197,52 @@ def _codex_user_prompt_block_name(text: str) -> str | None:
     return None
 
 
+_CONTEXT_SOURCE_LABELS = {
+    "base_system": "Base instructions",
+    "developer_instructions": "Developer instructions",
+    "agents_md": "AGENTS.md",
+    "skills": "Skills",
+    "mcp": "Tools / MCP",
+    "memory": "Memory",
+}
+
+
+def _codex_context_source_key(*, block: str, role: str, text: str) -> str:
+    haystack = f"{block}\n{text}".lower()
+    if block == "base_instructions":
+        return "base_system"
+    if "agents.md" in haystack:
+        return "agents_md"
+    if "skills_instructions" in block or "### available skills" in haystack:
+        return "skills"
+    if "plugins_instructions" in block or "### available plugins" in haystack:
+        return "mcp"
+    if "memory_summary" in haystack or "memory layout" in haystack or "## memory" in haystack:
+        return "memory"
+    if "mcp" in haystack or "tools are grouped" in haystack:
+        return "mcp"
+    if role == "developer":
+        return "developer_instructions"
+    return "base_system"
+
+
+def _context_source_observation(
+    *,
+    timestamp: Any,
+    block: str,
+    role: str,
+    text: str,
+) -> ContextSourceObservation:
+    key = _codex_context_source_key(block=block, role=role, text=text)
+    return ContextSourceObservation(
+        timestamp=timestamp,
+        key=key,
+        label=_CONTEXT_SOURCE_LABELS[key],
+        text=text,
+        source="codex_prompt_block",
+    )
+
+
 class CodexAdapter(BaseAdapter):
     """Ingest Codex CLI JSONL rollout files from ~/.codex/sessions/."""
 
@@ -201,6 +253,10 @@ class CodexAdapter(BaseAdapter):
         session_meta: dict[str, Any] = field(default_factory=dict)
         turn_context: dict[str, Any] = field(default_factory=dict)
         session_id: UUID = field(default_factory=uuid4)
+        context_window_tokens: int | None = None
+        context_usage: list[ContextUsageObservation] = field(default_factory=list)
+        context_sources: list[ContextSourceObservation] = field(default_factory=list)
+        runtime_observations: list[RuntimeObservation] = field(default_factory=list)
 
     def ingest_file(self, path: Path) -> Session:
         self._reset_ingest_state()
@@ -248,6 +304,9 @@ class CodexAdapter(BaseAdapter):
             parent_session_id=parent_session_id,
             events=events,
             turns=turns,
+            context_usage=state.context_usage,
+            context_sources=state.context_sources,
+            runtime_observations=state.runtime_observations,
             extensions=extensions,
             status=session_status,
         )
@@ -277,6 +336,14 @@ class CodexAdapter(BaseAdapter):
                 base_instructions = payload.get("base_instructions")
                 base_text = base_instructions.get("text") if isinstance(base_instructions, dict) else None
                 if ts is not None and isinstance(base_text, str) and base_text:
+                    state.context_sources.append(
+                        _context_source_observation(
+                            timestamp=ts,
+                            block="base_instructions",
+                            role="system",
+                            text=base_text,
+                        )
+                    )
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -350,26 +417,39 @@ class CodexAdapter(BaseAdapter):
                         info=info,
                         rate_limits=payload.get("rate_limits"),
                     )
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="runtime",
-                            kind="usage",
-                            data={
-                                "turn_id_raw": turn_id,
-                                "raw_type": "token_count",
-                                **normalized_metrics,
-                                "vendor_data": {
-                                    "metrics": normalized_metrics.get("metrics"),
-                                } if normalized_metrics.get("metrics") else {},
-                            },
-                            fidelity="synthetic",
-                        )
+                    usage_record = TranscriptRecord(
+                        sequence=len(transcript),
+                        timestamp=ts,
+                        vendor=Vendor.CODEX_CLI,
+                        role="runtime",
+                        kind="usage",
+                        data={
+                            "turn_id_raw": turn_id,
+                            "raw_type": "token_count",
+                            **normalized_metrics,
+                            "vendor_data": {
+                                "metrics": normalized_metrics.get("metrics"),
+                            } if normalized_metrics.get("metrics") else {},
+                        },
+                        fidelity="synthetic",
                     )
+                    observation = context_usage_observation(
+                        timestamp=ts,
+                        source="codex_token_count",
+                        normalized=normalized_metrics,
+                        source_event_id=usage_record.record_id,
+                        provider="openai",
+                    )
+                    if observation is not None:
+                        if observation.context_window_tokens is None:
+                            observation.context_window_tokens = state.context_window_tokens
+                        state.context_usage.append(observation)
+                    transcript.append(usage_record)
 
                 elif inner_type == "context_compacted":
+                    state.runtime_observations.append(
+                        RuntimeObservation(timestamp=ts, kind="context_compacted")
+                    )
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -386,6 +466,9 @@ class CodexAdapter(BaseAdapter):
                     )
 
                 elif inner_type == "task_started":
+                    context_window = payload.get("model_context_window")
+                    if isinstance(context_window, int) and not isinstance(context_window, bool):
+                        state.context_window_tokens = context_window
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -448,6 +531,9 @@ class CodexAdapter(BaseAdapter):
                     )
 
                 elif inner_type == "reasoning":
+                    state.runtime_observations.append(
+                        RuntimeObservation(timestamp=ts, kind="reasoning")
+                    )
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -471,6 +557,15 @@ class CodexAdapter(BaseAdapter):
                                 text = item.get("text")
                                 if not isinstance(text, str) or not text:
                                     continue
+                                block_name = _codex_prompt_block_name(text, index)
+                                state.context_sources.append(
+                                    _context_source_observation(
+                                        timestamp=ts,
+                                        block=block_name,
+                                        role=message_role,
+                                        text=text,
+                                    )
+                                )
                                 transcript.append(
                                     TranscriptRecord(
                                         sequence=len(transcript),
@@ -481,7 +576,7 @@ class CodexAdapter(BaseAdapter):
                                         data={
                                             "raw_type": "prompt_block",
                                             "prompt_role": message_role,
-                                            "prompt_block": _codex_prompt_block_name(text, index),
+                                            "prompt_block": block_name,
                                             "text": text,
                                         },
                                         fidelity="synthetic",
@@ -499,6 +594,14 @@ class CodexAdapter(BaseAdapter):
                                 block_name = _codex_user_prompt_block_name(text)
                                 if block_name is None:
                                     continue
+                                state.context_sources.append(
+                                    _context_source_observation(
+                                        timestamp=ts,
+                                        block=block_name,
+                                        role=message_role,
+                                        text=text,
+                                    )
+                                )
                                 transcript.append(
                                     TranscriptRecord(
                                         sequence=len(transcript),

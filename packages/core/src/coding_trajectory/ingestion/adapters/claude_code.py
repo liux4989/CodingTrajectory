@@ -6,7 +6,7 @@ import logging
 import json
 import re
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, infer_account_identity
 from coding_trajectory.ingestion.common import compact_dict, infer_tool_success, parse_timestamp
@@ -27,7 +27,10 @@ from coding_trajectory.ingestion.vendor_mechanisms.claude_team import (
     build_turn_team_state,
     high_value_teammate_request,
 )
-from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import normalize_claude_usage
+from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
+    context_usage_observation,
+    normalize_claude_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +219,21 @@ class ClaudeCodeAdapter(BaseAdapter):
             turn.team_state = build_turn_team_state(turn, team_input=team_input)
         started_at = min(record.timestamp for record in transcript)
         ended_at = max(record.timestamp for record in transcript)
+        context_usage = [
+            observation
+            for record in transcript
+            if (
+                observation := context_usage_observation(
+                    timestamp=record.timestamp,
+                    source="claude_usage_block",
+                    normalized=record.data.get("vendor_data", {}),
+                    source_event_id=record.record_id,
+                    provider="anthropic",
+                    category_source="claude_usage_block",
+                )
+            )
+            is not None
+        ]
 
         return Session(
             session_id=session_id,
@@ -227,6 +245,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             parent_session_id=parent_session_id,
             events=events,
             turns=turns,
+            context_usage=context_usage,
             extensions=extensions,
         )
 

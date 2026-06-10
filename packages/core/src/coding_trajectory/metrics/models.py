@@ -39,7 +39,7 @@ def _usage_accounting_payload(usage: dict[str, int], *, cost_usd: float) -> dict
 
 class MetricSource(BaseModel):
     vendor: str
-    source_type: Literal["step.vendor_data", "event.payload"]
+    source_type: Literal["step.vendor_data", "event.payload", "session.context_usage"]
     event_id: UUID | None = None
     confidence: Literal["exact", "derived", "estimated", "unknown"] = "exact"
 

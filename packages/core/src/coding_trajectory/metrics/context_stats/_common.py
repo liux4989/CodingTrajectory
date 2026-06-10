@@ -43,8 +43,8 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
     compactions = sum(
         1
         for session in session_graph.sessions
-        for event in session.events
-        if event.payload.get("raw_type") == "context_compacted"
+        for observation in session.runtime_observations
+        if observation.kind == "context_compacted"
     )
     return RuntimeStatsFlat(
         status=status,
@@ -79,9 +79,7 @@ def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:
         developer=sum(
             1
             for session in session_graph.sessions
-            for event in session.events
-            if event.payload.get("raw_type") == "prompt_block"
-            and event.payload.get("prompt_role") in {"developer", "system"}
+            for _source in session.context_sources
         ),
         tool_outputs=sum(
             1
@@ -92,14 +90,14 @@ def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:
         reasoning_items=sum(
             1
             for session in session_graph.sessions
-            for event in session.events
-            if event.payload.get("raw_type") == "reasoning"
+            for observation in session.runtime_observations
+            if observation.kind == "reasoning"
         ),
         compacted_contexts=sum(
             1
             for session in session_graph.sessions
-            for event in session.events
-            if event.payload.get("raw_type") == "context_compacted"
+            for observation in session.runtime_observations
+            if observation.kind == "context_compacted"
         ),
     )
 
@@ -108,26 +106,6 @@ def percent(value: int, denominator: int | None) -> float | None:
     if not denominator or denominator <= 0:
         return None
     return round((value / denominator) * 100, 1)
-
-
-def latest_step_usage(session_graph: SessionGraph) -> dict[str, Any] | None:
-    """Return the latest assistant step's normalized usage dict, if any."""
-    latest_ts = None
-    latest: dict[str, Any] | None = None
-    for session in session_graph.sessions:
-        for turn in session.turns:
-            for step in turn.steps:
-                data = step.vendor_data or {}
-                metrics = data.get("metrics")
-                if not isinstance(metrics, dict):
-                    continue
-                usage = metrics.get("usage")
-                if not isinstance(usage, dict):
-                    continue
-                if latest_ts is None or step.timestamp > latest_ts:
-                    latest_ts = step.timestamp
-                    latest = metrics
-    return latest
 
 
 def model_context_window(model: str | None, *, provider: str | None = None) -> int | None:

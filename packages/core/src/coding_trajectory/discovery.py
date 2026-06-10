@@ -888,5 +888,23 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
             )
         )
 
+    context_usage = [
+        observation.model_copy(
+            update={
+                "source_event_id": event_id_map.get(
+                    observation.source_event_id,
+                    observation.source_event_id,
+                )
+            }
+        )
+        for observation in session.context_usage
+    ]
     cwd = _extract_session_cwd(session, source)
-    return session.model_copy(update={"events": events, "turns": turns, "cwd": cwd})
+    return session.model_copy(
+        update={
+            "events": events,
+            "turns": turns,
+            "context_usage": context_usage,
+            "cwd": cwd,
+        }
+    )
