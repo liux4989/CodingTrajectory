@@ -1,26 +1,35 @@
-"""Dashboard-owned account identity inference.
+"""Dashboard-owned account identity resolution.
 
-Defines ``AccountIdentity`` locally and provides inference heuristics that
-extract an account identity from raw vendor payloads. This module must not
-import from core: core depends on the plugins package, so any core→plugins
-import chain that also reached back into core would create a circular
-import at module load time.
+Provides a real-API Codex resolver (``resolve_codex_account``) that uses
+the multicodex state store and the Codex ``app-server`` JSON-RPC, plus a
+payload heuristic (``infer_account_identity``) for vendors without a live
+API path.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from pydantic import BaseModel
 
 
-__all__ = ["AccountIdentity", "infer_account_identity"]
+__all__ = [
+    "AccountIdentity",
+    "infer_account_identity",
+    "resolve_codex_account",
+]
+
+
+logger = logging.getLogger(__name__)
 
 
 class AccountIdentity(BaseModel):
     key: str
     label: str | None = None
     vendor: str | None = None
+    plan_type: str | None = None
+    auth_mode: str | None = None
 
 
 _ACCOUNT_CANDIDATE_KEYS = (
@@ -48,12 +57,100 @@ def _as_vendor_string(vendor: Any) -> str:
     return value
 
 
+def resolve_codex_account(
+    *,
+    profile: str | None = None,
+    timeout: int = 20,
+) -> AccountIdentity | None:
+    """Resolve a Codex account via the multicodex state store + live RPC.
+
+    Reads ``~/.mxc/state.json``, refreshes the OAuth access token when it is
+    close to expiry, spawns ``codex app-server --stdio`` to issue
+    ``account/read``, and returns an ``AccountIdentity`` keyed by the
+    account's email address.
+
+    Falls back to decoding ``~/.codex/auth.json``'s ``id_token`` JWT when
+    multicodex isn't installed or no profile has usable tokens.
+    """
+    from coding_trajectory_plugins.dashboard import codex_auth, codex_rpc
+    from coding_trajectory_plugins.dashboard.codex_auth import (
+        load_mxc_state,
+        maybe_refresh_access_token,
+    )
+
+    state = load_mxc_state()
+    profiles = state.get("profiles", {}) or {}
+    active = state.get("active")
+    ordered = _ordered_profiles(profiles, active, profile)
+
+    for name in ordered:
+        entry = profiles.get(name)
+        profile_auth = entry.get("auth") if isinstance(entry, dict) else None
+        if not isinstance(profile_auth, dict):
+            continue
+        try:
+            profile_auth = maybe_refresh_access_token(name, profile_auth)
+            snapshot = codex_rpc.account_snapshot(
+                name, profile_auth, persist_runtime_auth=True
+            )
+        except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+            logger.debug("codex account/read failed for %s: %s", name, exc)
+            continue
+        info = codex_rpc.extract_account_info(snapshot, profile_auth)
+        if not info or "email" not in info:
+            continue
+        return AccountIdentity(
+            key=info["email"],
+            label=name,
+            vendor="codex_cli",
+            plan_type=info.get("planType"),
+            auth_mode=info.get("authMode"),
+        )
+
+    return _resolve_default_codex_auth()
+
+
+def _ordered_profiles(
+    profiles: dict, active: str | None, preferred: str | None
+) -> list[str]:
+    names = list(profiles.keys())
+    order: list[str] = []
+    if preferred and preferred in names:
+        order.append(preferred)
+    if active and active in names and active not in order:
+        order.append(active)
+    for name in sorted(names):
+        if name not in order:
+            order.append(name)
+    return order
+
+
+def _resolve_default_codex_auth() -> AccountIdentity | None:
+    """Fallback for users who run Codex without multicodex."""
+    from coding_trajectory_plugins.dashboard import codex_auth
+
+    profile_auth = codex_auth.load_default_codex_auth()
+    if not profile_auth:
+        return None
+    info = codex_auth.account_info_from_jwt(profile_auth)
+    if not info or "email" not in info:
+        return None
+    return AccountIdentity(
+        key=info["email"],
+        label="default",
+        vendor="codex_cli",
+        plan_type=info.get("planType"),
+        auth_mode=codex_auth.auth_mode_from_profile(profile_auth),
+    )
+
+
 def infer_account_identity(
     raw: Any, *, vendor: Any, max_depth: int = 2
 ) -> AccountIdentity | None:
-    """Extract an ``AccountIdentity`` from a vendor payload.
+    """Heuristic account extraction from a raw vendor payload dict.
 
-    ``vendor`` may be a core ``Vendor`` enum value or a plain string tag.
+    Use ``resolve_codex_account`` for Codex -- this helper exists for
+    vendors that don't expose a live account endpoint.
     """
     if not isinstance(raw, dict) or max_depth < 0:
         return None
