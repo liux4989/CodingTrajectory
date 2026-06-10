@@ -7,7 +7,7 @@ from typing import Any
 from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.indexes import SessionGraphIndex, build_session_graph_index, ordered_sessions
-from coding_trajectory.ingestion.models import Session, StepTextItem, SessionGraph, Turn
+from coding_trajectory.ingestion.models import AgentMessageItem, Session, SessionGraph, Turn
 
 from coding_trajectory.analysis.request_lineage import effective_user_request, extract_user_request, is_low_value_turn
 from coding_trajectory.analysis.teammate_summary import (
@@ -139,16 +139,15 @@ def _turn_narrative_node(
     index: SessionGraphIndex,
 ) -> dict[str, Any] | None:
     user_request = extract_user_request(index, turn, session=session)
-    if is_low_value_turn(turn.steps, user_request):
+    if is_low_value_turn(turn.items, user_request):
         return None
 
     assistant_responses: list[str] = []
-    step_ids: list[str] = []
-    for step in turn.steps:
-        step_ids.append(str(step.step_id))
-        for item in step.items:
-            if isinstance(item, StepTextItem) and item.text:
-                assistant_responses.append(item.text)
+    item_ids: list[str] = []
+    for item in turn.items:
+        item_ids.append(str(item.item_id))
+        if isinstance(item, AgentMessageItem) and item.text:
+            assistant_responses.append(item.text)
 
     return prune_nones({
         "turn_id": str(turn.turn_id),
@@ -156,7 +155,7 @@ def _turn_narrative_node(
         "user_request": user_request,
         "assistant_responses": assistant_responses or None,
         "refs": {
-            "step_ids": step_ids or None,
+            "item_ids": item_ids or None,
             "user_request_event_id": str(turn.user_request_event_id) if turn.user_request_event_id else None,
         },
     })
@@ -229,7 +228,7 @@ def _turn_nav_node(
     visible_user_request = user_request
     if isinstance(user_request, dict) and user_request.get("source") == "team_lead":
         visible_user_request = None
-    if is_low_value_turn(turn.steps, user_request):
+    if is_low_value_turn(turn.items, user_request):
         return None
     if is_teammate_turn(session, turn, user_request=user_request):
         return prune_nones({
@@ -246,8 +245,8 @@ def _turn_nav_node(
         "turn_id": str(turn.turn_id),
         "status": turn.status,
         "user_request": user_request,
-        "activity": build_overview_flows(turn.steps),
+        "activity": build_overview_flows(turn.items),
         "refs": {
-            "step_ids": [str(step.step_id) for step in turn.steps],
+            "item_ids": [str(item.item_id) for item in turn.items],
         },
     })

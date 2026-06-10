@@ -229,8 +229,7 @@ The most useful top-level metrics are:
 - active accounts
 - total tokens
 - total cost
-- usage split by `tool_steps`, `response_steps`, `mixed_steps`, and
-  `other_steps`
+- usage totals by turn and tool-item stats
 
 ### Boundary
 
@@ -319,7 +318,7 @@ expected problems. Initial evidence includes:
 
 - context-gathering tokens from files read, search results, and file listings;
 - tool-output tokens from the stats output bucket;
-- tool-step cost and input share from usage accounting;
+- turn-level usage and tool-item output signals from usage accounting;
 - broad survey activity from overview tool counts;
 - failed tool-call rate from runtime stats.
 

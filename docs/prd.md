@@ -9,7 +9,7 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 # Architecture
 
 # Core Layer Boundary
-- `Event`, `Step`, `Turn`, and `Session` are canonical normalized resources.
+- `Event`, `Item`, `Turn`, and `Session` are canonical normalized resources.
 - Canonical means agent-agnostic facts and stable references reconstructed from logs, not raw vendor JSONL and not UI-specific interpretation.
 - `SessionGraph` is a structural aggregate over canonical sessions. Its identity is the root session id, and it may derive graph structure such as membership, edges, and summary metadata.
 - Replay/UI-oriented interpretations such as sections, operations, roles, and workflow-specific labels should live in a projection or enrichment layer, not the core hierarchy.
@@ -18,7 +18,7 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - Each vendor adapter keeps vendor-specific parsing local, then emits a small transcript record stream: user message, assistant message, tool call, tool result, usage/runtime, and task completion.
 - Adapters deserialize only fields that contribute to hierarchy, transcript, tool reconstruction, usage, status, or session linkage.
 - Transcript records carry CT-owned normalized `data`; lossy or synthetic records are explicitly marked with transcript fidelity.
-- A shared transcript projector owns the `Session -> Turn -> Step -> Item` reconstruction rules, including turn starts, step flushes, tool-call/result pairing, and final-answer fallback behavior.
+- A shared transcript projector owns the `Session -> Turn -> Item` reconstruction rules, including turn starts, tool-call/result pairing, and final-answer fallback behavior.
 - Provider-specific payloads remain in transcript `data` and canonical `vendor_data` only when they are useful to CT; unused raw log properties are skipped instead of modeled.
 
 # Infrastructural layer

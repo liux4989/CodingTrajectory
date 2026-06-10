@@ -466,6 +466,7 @@ def _finalize_cost(cost: CostEstimate) -> CostEstimate:
                 update={
                     "input_usd": round(cost.breakdown.input_usd, 8),
                     "cached_input_usd": round(cost.breakdown.cached_input_usd, 8),
+                    "cache_creation_input_usd": round(cost.breakdown.cache_creation_input_usd, 8),
                     "output_usd": round(cost.breakdown.output_usd, 8),
                     "reasoning_output_usd": round(cost.breakdown.reasoning_output_usd, 8),
                 }

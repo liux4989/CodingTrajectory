@@ -82,7 +82,7 @@ def normalize_claude_usage(*, model: Any, usage: Any) -> dict[str, Any]:
     cache_creation = _as_int_or_none(usage_map.get("cache_creation_input_tokens")) or 0
     output_tokens = _as_int_or_none(usage_map.get("output_tokens")) or 0
     total = input_tokens + cache_read + cache_creation + output_tokens
-    return _normalized_step_usage(
+    return _normalized_usage_metrics(
         model=model,
         usage={
             "input_tokens": input_tokens,
@@ -101,7 +101,7 @@ def normalize_pi_usage(*, provider: Any = None, model: Any, usage: Any) -> dict[
     cache_read = _as_int_or_none(usage_map.get("cacheRead")) or 0
     cache_write = _as_int_or_none(usage_map.get("cacheWrite")) or 0
     output_tokens = _as_int_or_none(usage_map.get("output")) or 0
-    return _normalized_step_usage(
+    return _normalized_usage_metrics(
         model=model,
         provider=provider,
         usage={
@@ -194,7 +194,7 @@ def normalize_quota_snapshot(value: Any) -> dict[str, Any] | None:
     return dumped or None
 
 
-def _normalized_step_usage(
+def _normalized_usage_metrics(
     *,
     model: Any,
     usage: Any,

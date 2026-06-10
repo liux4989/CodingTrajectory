@@ -1,30 +1,31 @@
-"""Canonical concept registry — step types and vendor tool name mappings."""
+"""Canonical concept registry — item kinds and vendor tool name mappings."""
 
 from __future__ import annotations
 
 from enum import Enum
 
 
-class StepType(str, Enum):
+class ItemKind(str, Enum):
     ASSISTANT_RESPONSE = "assistant_response"
     PLAN_SUBAGENT       = "plan_subagent"
     TODO_LIST           = "todo_list"
     SESSION_HANDOFF     = "session_handoff"
     TOOL_CALL           = "tool_call"
+    FILE_CHANGE         = "file_change"
+    COMMAND_EXECUTION   = "command_execution"
+    REASONING           = "reasoning"
 
 
-# Maps tool_name -> StepType.
-# Only tools that carry semantic meaning beyond TOOL_CALL are listed.
-# TOOL_CALL is the implicit fallback for anything not in this map.
-TOOL_CONCEPT_MAP: dict[str, StepType] = {
+# Maps tool_name -> ItemKind for tool names that carry semantic meaning beyond
+# TOOL_CALL. The remaining tools fall back to TOOL_CALL.
+TOOL_CONCEPT_MAP: dict[str, ItemKind] = {
     # --- subagent spawning ---
-    "spawn_agent": StepType.PLAN_SUBAGENT,   # Codex
-    "Agent":       StepType.PLAN_SUBAGENT,   # Claude Code
-    "Task":        StepType.PLAN_SUBAGENT,   # Factory
+    "spawn_agent": ItemKind.PLAN_SUBAGENT,   # Codex
+    "Agent":       ItemKind.PLAN_SUBAGENT,   # Claude Code
+    "Task":        ItemKind.PLAN_SUBAGENT,   # Factory
 
     # --- todo list / planning ---
-    "update_plan": StepType.TODO_LIST,        # Codex
-    "TodoWrite":   StepType.TODO_LIST,        # Claude Code
-    "TodoRead":    StepType.TODO_LIST,        # Claude Code
-
+    "update_plan": ItemKind.TODO_LIST,        # Codex
+    "TodoWrite":   ItemKind.TODO_LIST,        # Claude Code
+    "TodoRead":    ItemKind.TODO_LIST,        # Claude Code
 }

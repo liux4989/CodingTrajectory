@@ -43,6 +43,27 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
 
+_CODEX_FILE_TOOL_NAMES: frozenset[str] = frozenset({
+    "Read", "Edit", "MultiEdit", "Write", "View",
+    "read_file", "read_many_files", "replace", "write_file",
+    "edit_file", "create_file", "apply_patch",
+})
+_CODEX_PLAN_TOOL_NAMES: frozenset[str] = frozenset({
+    "TodoWrite", "TodoRead", "update_plan",
+})
+
+
+def _codex_item_kind(*, tool_name: str | None, inner_type: str) -> str:
+    if inner_type == "local_shell_call":
+        return "command_execution"
+    if inner_type == "reasoning":
+        return "reasoning"
+    if tool_name in _CODEX_PLAN_TOOL_NAMES:
+        return "plan"
+    if tool_name in _CODEX_FILE_TOOL_NAMES:
+        return "file_change"
+    return "tool_call"
+
 
 def _parse_json_blob(raw: Any) -> Any:
     if not isinstance(raw, str):
@@ -599,6 +620,7 @@ class CodexAdapter(BaseAdapter):
                                 "tool_name": tool_name,
                                 "tool_call_id": payload.get("call_id"),
                                 "input": tool_input,
+                                "item_kind": _codex_item_kind(tool_name=tool_name, inner_type=inner_type),
                             },
                         )
                     )
@@ -623,6 +645,7 @@ class CodexAdapter(BaseAdapter):
                     )
 
                 elif inner_type == "custom_tool_call":
+                    tool_name = payload.get("name")
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -631,9 +654,10 @@ class CodexAdapter(BaseAdapter):
                             role="assistant",
                             kind="tool_call",
                             data={
-                                "tool_name": payload.get("name"),
+                                "tool_name": tool_name,
                                 "tool_call_id": payload.get("call_id"),
                                 "input": _parse_json_blob(payload.get("input")),
+                                "item_kind": _codex_item_kind(tool_name=tool_name, inner_type=inner_type),
                             },
                         )
                     )
@@ -670,6 +694,7 @@ class CodexAdapter(BaseAdapter):
                                 "tool_call_id": payload.get("call_id"),
                                 "input": payload.get("arguments"),
                                 "status": _tool_status(payload.get("status")).value,
+                                "item_kind": "tool_call",
                             },
                         )
                     )
@@ -707,6 +732,7 @@ class CodexAdapter(BaseAdapter):
                                     payload.get("status"),
                                     default=ToolStatus.COMPLETED,
                                 ).value,
+                                "item_kind": "tool_call",
                             },
                         )
                     )
@@ -723,7 +749,9 @@ class CodexAdapter(BaseAdapter):
                                 "tool_name": "local_shell",
                                 "tool_call_id": payload.get("call_id"),
                                 "input": payload.get("action"),
+                                "command": payload.get("action"),
                                 "status": _tool_status(payload.get("status")).value,
+                                "item_kind": "command_execution",
                             },
                         )
                     )
@@ -745,6 +773,7 @@ class CodexAdapter(BaseAdapter):
                                     payload.get("status"),
                                     default=ToolStatus.COMPLETED,
                                 ).value,
+                                "item_kind": "tool_call",
                             },
                         )
                     )
@@ -759,8 +788,13 @@ class CodexAdapter(BaseAdapter):
                             timestamp=ts,
                             vendor=Vendor.CODEX_CLI,
                             role="assistant",
-                            kind="runtime",
-                            data={"raw_type": "reasoning"},
+                            kind="tool_call",
+                            data={
+                                "tool_name": "reasoning",
+                                "tool_call_id": f"reasoning:{len(transcript)}",
+                                "text": payload.get("content") or payload.get("text"),
+                                "item_kind": "reasoning",
+                            },
                         )
                     )
                     continue
@@ -850,8 +884,6 @@ class CodexAdapter(BaseAdapter):
                                 data={
                                     "text": text,
                                     "phase": phase,
-                                    "flush_before": True,
-                                    "flush_after": True,
                                 },
                             )
                         )

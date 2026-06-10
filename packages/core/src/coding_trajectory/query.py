@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from coding_trajectory.ingestion.models import Event, Session, Step, SessionGraph, Turn
+from coding_trajectory.ingestion.models import Event, Item, Session, SessionGraph, Turn
 
 
 class QueryError(Exception):
@@ -33,7 +33,7 @@ class DocumentStore:
     sessions: dict[UUID, Session]
     turns: dict[UUID, Turn]
     events: dict[UUID, Event]
-    steps: dict[UUID, Step] = field(default_factory=dict)
+    items: dict[UUID, Item] = field(default_factory=dict)
 
     @classmethod
     def from_path(cls, path: str | Path) -> "DocumentStore":
@@ -55,7 +55,7 @@ class DocumentStore:
         sessions: dict[UUID, Session] = {}
         turns: dict[UUID, Turn] = {}
         events: dict[UUID, Event] = {}
-        steps: dict[UUID, Step] = {}
+        items: dict[UUID, Item] = {}
 
         for session_graph in session_graphs_list:
             session_graphs[session_graph.root_session_id] = session_graph
@@ -64,8 +64,8 @@ class DocumentStore:
                 sessions[session.session_id] = session
                 for turn in session.turns:
                     turns[turn.turn_id] = turn
-                    for step in turn.steps:
-                        steps[step.step_id] = step
+                    for item in turn.items:
+                        items[item.item_id] = item
                 for event in session.events:
                     events[event.event_id] = event
 
@@ -75,7 +75,7 @@ class DocumentStore:
             sessions=sessions,
             turns=turns,
             events=events,
-            steps=steps,
+            items=items,
         )
 
     @classmethod
@@ -88,7 +88,7 @@ class DocumentStore:
         sessions: dict[UUID, Session] = {}
         turns: dict[UUID, Turn] = {}
         events: dict[UUID, Event] = {}
-        steps: dict[UUID, Step] = {}
+        items: dict[UUID, Item] = {}
 
         def add_session_graph(session_graph: SessionGraph) -> None:
             session_graphs[session_graph.root_session_id] = session_graph
@@ -101,8 +101,8 @@ class DocumentStore:
             sessions[session.session_id] = session
             for turn in session.turns:
                 turns[turn.turn_id] = turn
-                for step in turn.steps:
-                    steps[step.step_id] = step
+                for item in turn.items:
+                    items[item.item_id] = item
             for event in session.events:
                 events[event.event_id] = event
 
@@ -122,14 +122,14 @@ class DocumentStore:
                     for item in raw.get("events", []):
                         event = Event.model_validate(item)
                         events[event.event_id] = event
-                    for item in raw.get("steps", []):
-                        step = Step.model_validate(item)
-                        steps[step.step_id] = step
+                    for item in raw.get("items", []):
+                        parsed_item = _parse_item(item)
+                        items[parsed_item.item_id] = parsed_item
                 elif "root_session_id" in raw:
                     add_session_graph(SessionGraph.model_validate(raw))
                 elif "session_id" in raw and "turns" in raw:
                     add_session(Session.model_validate(raw))
-                elif "turn_id" in raw and "steps" in raw:
+                elif "turn_id" in raw and "items" in raw:
                     turn = Turn.model_validate(raw)
                     turns[turn.turn_id] = turn
                 elif "event_id" in raw and "timestamp" in raw:
@@ -150,7 +150,7 @@ class DocumentStore:
             sessions=sessions,
             turns=turns,
             events=events,
-            steps=steps,
+            items=items,
         )
 
     def get_session_graph(self, resource_id: UUID) -> SessionGraph:
@@ -188,8 +188,13 @@ class DocumentStore:
         except KeyError as exc:
             raise ResourceNotFoundError(f"event not found: {resource_id}") from exc
 
-    def get_step(self, resource_id: UUID) -> Step:
+    def get_item(self, resource_id: UUID) -> Item:
         try:
-            return self.steps[resource_id]
+            return self.items[resource_id]
         except KeyError as exc:
-            raise ResourceNotFoundError(f"step not found: {resource_id}") from exc
+            raise ResourceNotFoundError(f"item not found: {resource_id}") from exc
+
+
+def _parse_item(raw: object) -> Item:
+    from pydantic import TypeAdapter
+    return TypeAdapter(Item).validate_python(raw)

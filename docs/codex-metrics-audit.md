@@ -54,7 +54,7 @@ CodingTrajectory now uses the Codex sources as follows:
 
 Per-tool token cost is not available in the Codex protocol. Token usage arrives
 after model responses, so the narrowest honest measured boundary remains the
-model step. Individual tool output size and duration are causal signals, not
+model generation. Individual tool output size and duration are causal signals, not
 independent billing records.
 
 ## Fixed In This Audit

@@ -187,7 +187,7 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     runtime_line = (
         f"Runtime: {format_duration(runtime.get('duration_seconds'))}, "
         f"{runtime.get('turns') or 0} turns, "
-        f"{runtime.get('model_steps') or 0} model steps, "
+        f"{runtime.get('items') or 0} items, "
         f"{tool_calls_total} tool calls"
     )
     if failed_tool_calls:
@@ -252,9 +252,6 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
     for turn in turns:
         lines.append(f"  turn {turn.get('turn_id') or '-'}")
         lines.append(f"    {render_usage_line(turn.get('usage') or {})}")
-        for activity in turn.get("activity_usage") or []:
-            category = str(activity.get("category") or "-")
-            lines.append(f"    {category:<14} {render_usage_line(activity.get('usage') or {})}")
 
     lines.append("```")
     warnings = payload.get("warnings") or []
@@ -332,20 +329,20 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _renderer=_render_session_usage_text,
     )
 
-    session_step_detail = session_sub.add_parser(
-        "step-detail",
-        prog="ct session step-detail",
-        help="Show full detail for one or more steps.",
+    session_item_detail = session_sub.add_parser(
+        "item-detail",
+        prog="ct session item-detail",
+        help="Show full detail for one or more items.",
         formatter_class=GhFormatter,
     )
-    session_step_detail.add_argument("resource_ids", metavar="STEP_ID", nargs="*")
-    add_base_output_flags(session_step_detail)
-    add_params_flag(session_step_detail)
-    session_step_detail.set_defaults(
-        _method="step.details",
+    session_item_detail.add_argument("resource_ids", metavar="ITEM_ID", nargs="*")
+    add_base_output_flags(session_item_detail)
+    add_params_flag(session_item_detail)
+    session_item_detail.set_defaults(
+        _method="item.details",
         _params=lambda args: {
             **params_from_json(args),
-            **({"step_ids": args.resource_ids} if args.resource_ids else {}),
+            **({"item_ids": args.resource_ids} if args.resource_ids else {}),
         },
         _default_output="json",
     )

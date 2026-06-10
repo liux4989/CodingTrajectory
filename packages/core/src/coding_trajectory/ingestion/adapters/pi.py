@@ -31,6 +31,26 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PI_SESSIONS_DIR = Path.home() / ".pi" / "agent" / "sessions"
 
+_PI_FILE_TOOL_NAMES: frozenset[str] = frozenset({
+    "readFile", "read_file", "read_many_files",
+    "writeFile", "write_file", "create_file",
+    "editFile", "edit_file", "replace", "apply_patch",
+    "Read", "Edit", "MultiEdit", "Write", "View",
+})
+_PI_PLAN_TOOL_NAMES: frozenset[str] = frozenset({
+    "TodoWrite", "TodoRead", "update_plan",
+})
+
+
+def _pi_item_kind(tool_name: str | None) -> str:
+    if tool_name == "bash":
+        return "command_execution"
+    if tool_name in _PI_PLAN_TOOL_NAMES:
+        return "plan"
+    if tool_name in _PI_FILE_TOOL_NAMES:
+        return "file_change"
+    return "tool_call"
+
 
 def _content_text(content: Any) -> str | None:
     if isinstance(content, str):
@@ -257,14 +277,14 @@ class PiAdapter(BaseAdapter):
                         data={
                             "text": text,
                             "vendor_data": {k: v for k, v in vendor_data.items() if v is not None},
-                            "flush_after": not tool_calls,
                         },
                     )
                 )
 
-                for index, tc in enumerate(tool_calls):
+                for tc in tool_calls:
                     tool_call_id = tc.get("id")
-                    if tc.get("name") == "bash" and isinstance(tool_call_id, str) and tool_call_id:
+                    tool_name = tc.get("name")
+                    if tool_name == "bash" and isinstance(tool_call_id, str) and tool_call_id:
                         self._pending_bash_tool_call_ids.append(tool_call_id)
                     transcript.append(
                         TranscriptRecord(
@@ -274,10 +294,10 @@ class PiAdapter(BaseAdapter):
                             role="assistant",
                             kind="tool_call",
                             data={
-                                "tool_name": tc.get("name"),
+                                "tool_name": tool_name,
                                 "tool_call_id": tool_call_id,
                                 "input": tc.get("arguments"),
-                                "flush_after": index == len(tool_calls) - 1,
+                                "item_kind": _pi_item_kind(tool_name),
                             },
                         )
                     )
@@ -314,7 +334,6 @@ class PiAdapter(BaseAdapter):
                             "output": output,
                             "exit_code": exit_code,
                             "status": status,
-                            "attach_to_previous_step": True,
                         },
                         fidelity="synthetic",
                     )
@@ -345,7 +364,6 @@ class PiAdapter(BaseAdapter):
                             "output": text_content,
                             "exit_code": exit_code,
                             "status": ToolStatus.FAILED.value if exit_code and exit_code != 0 else ToolStatus.COMPLETED.value,
-                            "attach_to_previous_step": True,
                         },
                         fidelity="synthetic",
                     )

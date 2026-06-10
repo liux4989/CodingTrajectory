@@ -70,6 +70,7 @@ class TokenUsageObservation(BaseModel):
 class CostBreakdown(BaseModel):
     input_usd: float = 0.0
     cached_input_usd: float = 0.0
+    cache_creation_input_usd: float = 0.0
     output_usd: float = 0.0
     reasoning_output_usd: float = 0.0
 
@@ -77,6 +78,7 @@ class CostBreakdown(BaseModel):
         return CostBreakdown(
             input_usd=self.input_usd + other.input_usd,
             cached_input_usd=self.cached_input_usd + other.cached_input_usd,
+            cache_creation_input_usd=self.cache_creation_input_usd + other.cache_creation_input_usd,
             output_usd=self.output_usd + other.output_usd,
             reasoning_output_usd=self.reasoning_output_usd + other.reasoning_output_usd,
         )

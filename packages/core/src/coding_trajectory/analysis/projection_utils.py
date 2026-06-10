@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 _MISSING = object()
-_STEP_DETAIL_TRUNCATE_LEN = 500
+_ITEM_DETAIL_TRUNCATE_LEN = 500
 _EVENT_SCAN_PAYLOAD_PREVIEW_LEN = 300
 _ELLIPSIS = "..."
 
@@ -24,7 +24,7 @@ def truncation_marker(length: int, event_ids: list) -> str:
     return f"[{length:,} chars → event.detail {ref}]"
 
 
-def truncate_with_ref(value: Any, event_ids: list, max_len: int = _STEP_DETAIL_TRUNCATE_LEN) -> Any:
+def truncate_with_ref(value: Any, event_ids: list, max_len: int = _ITEM_DETAIL_TRUNCATE_LEN) -> Any:
     if isinstance(value, str) and len(value) > max_len:
         return truncation_marker(len(value), event_ids)
     if isinstance(value, dict):

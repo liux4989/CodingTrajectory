@@ -7,35 +7,39 @@ from typing import Any
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.tool_optimization import tool_optimization_profile
 from coding_trajectory.ingestion.common import prune_nones
-from coding_trajectory.ingestion.models import Step, StepTextItem, StepToolItem
+from coding_trajectory.ingestion.models import AgentMessageItem, Item
 
 _OVERVIEW_TEXT_PREVIEW_LEN = 220
 
+_TOOL_SHAPED_KINDS: frozenset[str] = frozenset(
+    {"tool_call", "command_execution", "file_change", "plan"}
+)
 
-def build_flows(steps: list[Step]) -> list[dict[str, Any]]:
+
+def build_flows(items: list[Item]) -> list[dict[str, Any]]:
     from coding_trajectory.analysis.tool_summary import summarize_tool_call
 
     result: list[dict[str, Any]] = []
-    for step in steps:
-        for item in step.items:
-            if isinstance(item, StepToolItem):
-                summary = summarize_tool_call(item)
-                if summary is not None:
-                    result.append({"type": "tool_call", **summary})
-                continue
-            if isinstance(item, StepTextItem):
-                text = item.text.strip()
-                if text:
-                    result.append({"type": "assistant_response", "text": text})
+    for item in items:
+        if item.kind in _TOOL_SHAPED_KINDS:
+            summary = summarize_tool_call(item)
+            if summary is not None:
+                summary.setdefault("item_id", str(item.item_id))
+                result.append({"type": "tool_call", **summary})
+            continue
+        if isinstance(item, AgentMessageItem):
+            text = (item.text or "").strip()
+            if text:
+                result.append({"type": "assistant_response", "text": text, "item_id": str(item.item_id)})
     return _group_consecutive_tool_calls(result)
 
 
-def build_compact_flows(steps: list[Step]) -> list[dict[str, Any]]:
-    return [_compact_flow_item(item) for item in build_flows(steps)]
+def build_compact_flows(items: list[Item]) -> list[dict[str, Any]]:
+    return [_compact_flow_item(item) for item in build_flows(items)]
 
 
-def build_overview_flows(steps: list[Step]) -> list[dict[str, Any]]:
-    return _compact_overview_items(build_flows(steps))
+def build_overview_flows(items: list[Item]) -> list[dict[str, Any]]:
+    return _compact_overview_items(build_flows(items))
 
 
 def _compact_overview_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -83,6 +87,7 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
             "count": item.get("count"),
             profile.detail_list_key: item.get("descriptions"),
             profile.detail_counts_key or "": item.get("description_counts"),
+            "item_ids": item.get("item_ids"),
         })
 
     if item.get("type") == "tool_call":
@@ -94,6 +99,7 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
             "tool": item.get("name"),
             "status": item.get("status"),
             profile.detail_key: item.get("description"),
+            "item_ids": [item.get("item_id")] if isinstance(item.get("item_id"), str) else None,
         })
 
     return item
@@ -110,6 +116,7 @@ def _new_overview_tool_group(item: dict[str, Any]) -> dict[str, Any]:
         "status": item.get("status"),
         "count": int(item.get("count") or 1),
         profile.detail_list_key: descriptions or None,
+        "item_ids": [item["item_id"]] if isinstance(item.get("item_id"), str) else [],
     }
     return group
 
@@ -127,6 +134,11 @@ def _merge_overview_tool_group(group: dict[str, Any], item: dict[str, Any]) -> N
         group[detail_key] = existing
     descriptions = _tool_descriptions(item)
     existing.extend(description for description in descriptions if description not in existing)
+    item_ids = group.get("item_ids")
+    if isinstance(item_ids, list):
+        incoming = item.get("item_id")
+        if isinstance(incoming, str) and incoming not in item_ids:
+            item_ids.append(incoming)
 
 
 def _tool_descriptions(item: dict[str, Any]) -> list[str]:
@@ -199,6 +211,11 @@ def _project_tool_run(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for item in items
         if isinstance(item.get("description"), str) and item.get("description")
     ]
+    item_ids = [
+        item["item_id"]
+        for item in items
+        if isinstance(item.get("item_id"), str) and item.get("item_id")
+    ]
     description_counts = _description_counts(descriptions) if profile.dedupe_repeated_details else None
     if profile.dedupe_repeated_details:
         descriptions = list(dict.fromkeys(descriptions))
@@ -210,6 +227,7 @@ def _project_tool_run(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "count": len(items),
         "descriptions": descriptions or None,
         "description_counts": description_counts,
+        "item_ids": item_ids or None,
     })
     return [grouped]
 

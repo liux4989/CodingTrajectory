@@ -24,8 +24,8 @@ The log file to analyze is at: {log_file}
 Use this sequence to explore the log through enriched, post-processed structure:
 1. `ct project list`  → list all known projects; find the project and trajectory ID for the log above
 2. `ct project sessions <PROJECT_NAME>`  → list sessions for the project and choose a session ID
-3. `ct session overview <SESSION_ID>`  → session structure, step types, user requests — start here
-4. `ct session step-detail <STEP_ID> [<STEP_ID> ...]`  → full detail for one or more steps (returns JSON array)
+3. `ct session overview <SESSION_ID>`  → session structure, item types, user requests — start here
+4. `ct session item-detail <ITEM_ID> [<ITEM_ID> ...]`  → full detail for one or more items (returns JSON array)
 
 ## Raw View
 Only fall back to raw events when structured data is truncated or missing detail you need:
@@ -78,7 +78,7 @@ Include whichever of the following sections are relevant to the log (omit any th
 
     TaskType.ERROR_ROOT_CAUSE: """\
 The agent encountered one or more error-retry loops during this session. Analyze:
-- **Location**: Which step(s) contain the error loop? Identify by step ID or position.
+- **Location**: Which item(s) contain the error loop? Identify by item ID or position.
 - **Root cause**: What was the underlying cause of the failure (not just the error message)?
 - **Retry count**: How many times did the agent retry before resolving (or giving up)?
 - **Resolution**: What change finally resolved the error? Or did the agent give up / work around it?

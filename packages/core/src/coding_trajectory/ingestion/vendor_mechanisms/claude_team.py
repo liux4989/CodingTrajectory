@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.models import (
-    StepToolItem,
+    Item,
     TeamMemberState,
     TeamTaskState,
     TeamTurnState,
@@ -141,12 +141,11 @@ def _merge_record(target: dict[str, dict[str, object]], key: str, patch: dict[st
             existing[field] = value
 
 
-def _turn_tool_items(turn: Turn) -> list[StepToolItem]:
+def _turn_tool_items(turn: Turn) -> list[Item]:
     return [
         item
-        for step in turn.steps
-        for item in step.items
-        if isinstance(item, StepToolItem)
+        for item in turn.items
+        if item.kind in {"tool_call", "command_execution", "file_change", "plan"}
     ]
 
 
@@ -154,12 +153,13 @@ def _merge_tool_item(
     *,
     members: dict[str, dict[str, object]],
     tasks: dict[str, dict[str, object]],
-    item: StepToolItem,
+    item: Item,
 ) -> None:
-    tool_input = item.input if isinstance(item.input, dict) else {}
-    tool_output = item.output if isinstance(item.output, dict) else {}
+    tool_input = item.input if isinstance(item.input, dict) else {}  # type: ignore[attr-defined]
+    tool_output = item.output if isinstance(item.output, dict) else {}  # type: ignore[attr-defined]
+    tool_name = getattr(item, "tool_name", None)
 
-    if item.tool_name == "Agent":
+    if tool_name == "Agent":
         member_id = _first_str(tool_output, ("teammate_id", "agent_id", "name"))
         if member_id:
             _merge_record(
@@ -174,7 +174,7 @@ def _merge_tool_item(
             )
         return
 
-    if item.tool_name == "TaskCreate":
+    if tool_name == "TaskCreate":
         task_info = tool_output.get("task") if isinstance(tool_output.get("task"), dict) else {}
         task_id = task_info.get("id")
         if isinstance(task_id, (str, int)):
@@ -190,7 +190,7 @@ def _merge_tool_item(
             )
         return
 
-    if item.tool_name == "TaskUpdate":
+    if tool_name == "TaskUpdate":
         task_id = tool_input.get("taskId") or tool_output.get("taskId")
         if isinstance(task_id, (str, int)):
             task_id_str = str(task_id)

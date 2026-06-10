@@ -20,22 +20,25 @@ from coding_trajectory.analysis.tool_summary_shared import (
     first_str,
     short_path,
 )
-from coding_trajectory.ingestion.models import StepToolItem, ToolStatus
+from coding_trajectory.ingestion.models import Item, ToolStatus
 
 
-def summarize_tool_call(item: StepToolItem) -> dict[str, Any] | None:
-    tool_name = (item.tool_name or "").strip()
+def summarize_tool_call(item: Item) -> dict[str, Any] | None:
+    tool_name_raw = getattr(item, "tool_name", None)
+    tool_name = (tool_name_raw or "").strip() if isinstance(tool_name_raw, str) else ""
     if not tool_name:
         return None
 
-    concept, description, optimization_profile = _classify(tool_name, item.input)
+    tool_input = getattr(item, "input", None)
+    concept, description, optimization_profile = _classify(tool_name, tool_input)
 
     result: dict[str, Any] = {"name": concept}
     if optimization_profile:
         result["optimization_profile"] = optimization_profile
     if description:
         result["description"] = description
-    if item.status == ToolStatus.FAILED:
+    status = getattr(item, "status", None)
+    if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
         result["status"] = "failed"
     return result
 

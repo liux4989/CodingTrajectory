@@ -310,11 +310,13 @@ def compact_activity(activity: Any) -> Any:
         for key in ("paths", "queries", "urls", "targets"):
             if activity.get(key) is not None:
                 compact[key] = activity.get(key)
+        if activity.get("item_ids") is not None:
+            compact["item_ids"] = activity.get("item_ids")
         if compact.get("count") == 1:
             compact.pop("count", None)
         return drop_none(compact)
     if "text" in activity:
-        return {"text": activity.get("text")}
+        return drop_none({"text": activity.get("text"), "item_ids": activity.get("item_ids")})
     if "teammate_summary" in activity:
         return {"teammate_summary": activity.get("teammate_summary")}
     return activity
@@ -398,7 +400,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                                     "activity": [compact_activity(activity) for activity in turn.get("activity") or []]
                                     or None,
                                     "teammate_summary": turn.get("teammate_summary"),
-                                    "steps": ((turn.get("refs") or {}).get("step_ids") if isinstance(turn.get("refs"), dict) else None),
+                                    "items": ((turn.get("refs") or {}).get("item_ids") if isinstance(turn.get("refs"), dict) else None),
                                 }
                             )
                             for turn in session.get("turns") or []
@@ -425,18 +427,6 @@ def compact_payload(method: str, payload: Any) -> Any:
                             "session": turn.get("session_id"),
                             "usage": compact_usage(turn.get("usage")),
                             "cost": turn.get("cost_usd"),
-                            "activity": [
-                                drop_none(
-                                    {
-                                        "kind": item.get("category"),
-                                        "usage": compact_usage(item.get("usage")),
-                                        "cost": item.get("cost_usd"),
-                                    }
-                                )
-                                for item in turn.get("activity_usage") or []
-                                if isinstance(item, dict)
-                            ]
-                            or None,
                         }
                     )
                     for turn in payload.get("turns") or []
@@ -476,7 +466,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "end": runtime.get("ended_at"),
                         "duration_seconds": runtime.get("duration_seconds"),
                         "turns": runtime.get("turns"),
-                        "steps": runtime.get("model_steps"),
+                        "items": runtime.get("items"),
                         "tools": runtime.get("tool_calls"),
                         "failed_tools": runtime.get("failed_tool_calls") or None,
                         "subagents": runtime.get("subagent_sessions"),
@@ -527,11 +517,12 @@ def compact_payload(method: str, payload: Any) -> Any:
             }
         )
 
-    if method == "step.details" and isinstance(payload, list):
+    if method == "item.details" and isinstance(payload, list):
         return [
             drop_none(
                 {
-                    "id": item.get("step_id"),
+                    "id": item.get("item_id"),
+                    "kind": item.get("kind"),
                     "type": item.get("type"),
                     "operations": item.get("operations"),
                     "shape": item.get("shape"),

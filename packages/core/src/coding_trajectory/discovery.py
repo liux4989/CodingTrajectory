@@ -16,7 +16,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import normalize_project_key
-from coding_trajectory.ingestion.models import Event, Session, Step, SessionGraph, Turn, Vendor
+from coding_trajectory.ingestion.models import Event, Item, Session, SessionGraph, Turn, Vendor
 from coding_trajectory.query import DocumentError, DocumentStore
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 
@@ -816,7 +816,7 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
         event_id_map[event.event_id] = stable_event_id
         events.append(event.model_copy(update={"event_id": stable_event_id}))
 
-    # --- stabilize turn + step IDs ---
+    # --- stabilize turn + item IDs ---
     turn_id_map: dict[object, object] = {}
     turns: list[Turn] = []
     for t_index, turn in enumerate(session.turns):
@@ -837,39 +837,32 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
         )
         turn_id_map[turn.turn_id] = stable_turn_id
 
-        stable_steps: list[Step] = []
-        for s_index, step in enumerate(turn.steps):
-            stable_step_id = uuid5(
+        stable_items: list[Item] = []
+        for i_index, item in enumerate(turn.items):
+            stable_item_id = uuid5(
                 NAMESPACE_URL,
                 json.dumps(
                     {
                         "vendor": vendor.value,
                         "source": str(source),
                         "turn_index": t_index,
-                        "step_index": s_index,
-                        "sequence": step.sequence,
-                        "timestamp": step.timestamp.isoformat(),
+                        "item_index": i_index,
+                        "kind": item.kind,
+                        "sequence": item.sequence,
+                        "started_at": item.started_at.isoformat(),
+                        "tool_call_id": getattr(item, "tool_call_id", None),
                     },
                     sort_keys=True,
                     default=str,
                 ),
             )
-            stable_items = []
-            for item in step.items:
-                stable_items.append(
-                    item.model_copy(
-                        update={
-                            "event_ids": [event_id_map.get(eid, eid) for eid in getattr(item, "event_ids", [])],
-                        }
-                    )
-                )
-            stable_steps.append(
-                step.model_copy(
+            stable_items.append(
+                item.model_copy(
                     update={
-                        "step_id": stable_step_id,
+                        "item_id": stable_item_id,
+                        "session_id": session.session_id,
                         "turn_id": stable_turn_id,
-                        "items": stable_items,
-                        "event_ids": [event_id_map.get(eid, eid) for eid in step.event_ids],
+                        "event_ids": [event_id_map.get(eid, eid) for eid in item.event_ids],
                     }
                 )
             )
@@ -883,7 +876,7 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
                     "turn_id": stable_turn_id,
                     "user_request_event_id": stable_user_req_eid,
                     "event_ids": [event_id_map.get(eid, eid) for eid in turn.event_ids],
-                    "steps": stable_steps,
+                    "items": stable_items,
                 }
             )
         )

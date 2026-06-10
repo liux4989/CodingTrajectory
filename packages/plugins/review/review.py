@@ -135,7 +135,7 @@ def analyze_session(
     stats = _ct_json(stats_args, global_scope=global_scope)
     usage = _ct_json(usage_args, global_scope=global_scope)
 
-    metrics = _metrics(overview, stats, usage)
+    metrics = _metrics(overview, stats)
     evidence = _evidence_packet(session_id, metrics, overview, stats, usage)
     judge_result = _judge_findings(
         judge,
@@ -165,12 +165,11 @@ def analyze_session(
     }
 
 
-def _metrics(overview: dict[str, Any], stats: dict[str, Any], usage: dict[str, Any]) -> list[Metric]:
+def _metrics(overview: dict[str, Any], stats: dict[str, Any]) -> list[Metric]:
     categories = _category_index(stats)
     runtime = stats.get("runtime") or {}
     messages = stats.get("messages") or {}
     total_context = _num(_dig(stats, ["context", "used"])) or _num(_dig(stats, ["context_window", "used_tokens"]))
-    total_usage = usage.get("usage") or usage.get("total_usage") or {}
 
     context_gathering_tokens = sum(
         _category_tokens(categories, key)
@@ -178,8 +177,6 @@ def _metrics(overview: dict[str, Any], stats: dict[str, Any], usage: dict[str, A
     )
     tool_output_tokens = _category_tokens(categories, "output")
     agent_work_tokens = _category_tokens(categories, "agent_work")
-    tool_steps = _activity_usage(usage, "tool_steps")
-    response_steps = _activity_usage(usage, "response_steps")
     tool_calls = _num(runtime.get("tools") if "tools" in runtime else runtime.get("tool_calls"))
     failed_tools = _num(runtime.get("failed_tools") if "failed_tools" in runtime else runtime.get("failed_tool_calls"))
     search_count = _activity_count(overview, "SearchText")
@@ -222,20 +219,6 @@ def _metrics(overview: dict[str, Any], stats: dict[str, Any], usage: dict[str, A
             _pct(tool_output_tokens, agent_work_tokens),
             "pct",
             "Tool output tokens divided by agent work tokens.",
-        ),
-        Metric(
-            "tool_step_cost_pct",
-            "Tool-step cost share",
-            _pct(_num(tool_steps.get("cost")), _num(total_usage.get("cost"))),
-            "pct",
-            "Cost attributed to tool steps divided by total session cost.",
-        ),
-        Metric(
-            "tool_step_input_pct",
-            "Tool-step input share",
-            _pct(_num(tool_steps.get("input")), _num(total_usage.get("input"))),
-            "pct",
-            "Input tokens attributed to tool steps divided by total session input tokens.",
         ),
         Metric(
             "failed_tool_rate",
@@ -293,17 +276,17 @@ def _deterministic_findings(
             ["tool_output_tokens", "tool_output_context_pct", "tool_output_agent_work_pct"],
         ))
 
-    tool_cost_pct = by_key["tool_step_cost_pct"].value
-    tool_input_pct = by_key["tool_step_input_pct"].value
-    if tool_cost_pct >= 60 or tool_input_pct >= 60:
+    tool_output_pct = by_key["tool_output_context_pct"].value
+    tool_output_agent_pct = by_key["tool_output_agent_work_pct"].value
+    if tool_output_pct >= 12 or tool_output_agent_pct >= 45:
         findings.append(Finding(
-            "tool_step_dominance",
-            "high" if tool_cost_pct >= 75 or tool_input_pct >= 75 else "medium",
+            "tool_output_dominance",
+            "high" if tool_output_pct >= 18 or tool_output_agent_pct >= 60 else "medium",
             "agent",
-            "Tool-heavy turns dominated the session cost profile.",
-            f"Tool steps accounted for {tool_cost_pct:.1f}% of cost and {tool_input_pct:.1f}% of input tokens.",
+            "Tool output dominated the observed session context.",
+            f"Tool output accounted for {tool_output_pct:.1f}% of context and {tool_output_agent_pct:.1f}% of agent-work tokens.",
             "Batch related reads/searches, narrow commands before running them, and prefer existing structured ct outputs over repeated broad shell inspection.",
-            ["tool_step_cost_pct", "tool_step_input_pct"],
+            ["tool_output_context_pct", "tool_output_agent_work_pct"],
         ))
 
     search_calls = by_key["search_calls"].value
@@ -920,17 +903,6 @@ def _category_tokens(categories: dict[str, dict[str, Any]], key: str) -> float:
     if not category:
         return 0
     return _num(category.get("tokens"))
-
-
-def _activity_usage(usage: dict[str, Any], kind: str) -> dict[str, float]:
-    totals: dict[str, float] = {}
-    for turn in usage.get("turns") or []:
-        for activity in turn.get("activity") or turn.get("activity_usage") or []:
-            if activity.get("kind") != kind and activity.get("category") != kind:
-                continue
-            for usage_key, value in (activity.get("usage") or {}).items():
-                totals[usage_key] = totals.get(usage_key, 0) + _num(value)
-    return totals
 
 
 def _activity_count(overview: dict[str, Any], tool: str) -> float:

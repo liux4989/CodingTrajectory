@@ -115,8 +115,8 @@ def effective_user_request(
     return resolve_originating_human_request(index, session)
 
 
-def is_low_value_turn(steps: list, user_request: dict[str, str] | None) -> bool:
-    if not steps:
+def is_low_value_turn(items: list, user_request: dict[str, str] | None) -> bool:
+    if not items:
         return True
     if user_request and user_request.get("type") == "command":
         return user_request.get("content") in _LOW_VALUE_COMMANDS

@@ -95,8 +95,8 @@ function compactTimelineSegments(events: ContextEvent[]) {
 
 function timelineSegmentLabel(segment: TimelineSegment) {
   const rowLabel = segment.startIndex === segment.endIndex
-    ? `Step ${segment.startIndex + 1}`
-    : `Steps ${segment.startIndex + 1}-${segment.endIndex + 1}`;
+    ? `Segment ${segment.startIndex + 1}`
+    : `Segments ${segment.startIndex + 1}-${segment.endIndex + 1}`;
   const tokens = segment.tokens ? `, ${formatTokens(segment.tokens)} tokens` : "";
   return `${rowLabel}: ${categoryLabel(segment.category)}, ${segment.eventCount} row${segment.eventCount === 1 ? "" : "s"}${tokens}`;
 }

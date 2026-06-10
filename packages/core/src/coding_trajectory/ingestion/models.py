@@ -153,36 +153,82 @@ class Event(BaseModel):
     payload:       dict[str, Any] = Field(default_factory=dict)
 
 
-class StepTextItem(BaseModel):
-    kind:      Literal["text"] = "text"
-    text:      str
-    event_ids: list[UUID] = Field(default_factory=list)
+class ItemBase(BaseModel):
+    item_id:      UUID = Field(default_factory=uuid4)
+    session_id:   UUID
+    turn_id:      UUID
+    sequence:     int
+    started_at:   datetime
+    completed_at: datetime | None = None
+    status:       str | None = None
+    event_ids:    list[UUID] = Field(default_factory=list)
+    vendor_data:  dict[str, Any] = Field(default_factory=dict)
 
 
-class StepToolItem(BaseModel):
-    kind:         Literal["tool"] = "tool"
+class AgentMessageItem(ItemBase):
+    kind: Literal["agent_message"] = "agent_message"
+    text: str | None = None
+    role: Literal["assistant"] = "assistant"
+
+
+class ToolCallItem(ItemBase):
+    kind:         Literal["tool_call"] = "tool_call"
     tool_name:    str | None = None
     tool_call_id: str | None = None
     input:        Any = None
     output:       Any = None
-    status:       ToolStatus = ToolStatus.REQUESTED
-    event_ids:    list[UUID] = Field(default_factory=list)
 
 
-StepItem: TypeAlias = Annotated[StepTextItem | StepToolItem, Field(discriminator="kind")]
+class CommandExecutionItem(ItemBase):
+    kind:         Literal["command_execution"] = "command_execution"
+    tool_name:    str | None = None
+    tool_call_id: str | None = None
+    command:      Any = None
+    exit_code:    int | None = None
+    output:       Any = None
 
 
-class Step(BaseModel):
-    """One LLM call/response cycle within a Turn."""
-    step_id:     UUID = Field(default_factory=uuid4)
-    session_id:  UUID
-    turn_id:     UUID
-    sequence:    int
-    timestamp:   datetime
-    vendor:      Vendor
-    items:       list[StepItem] = Field(default_factory=list)
-    vendor_data: dict[str, Any] = Field(default_factory=dict)  # secondary vendor-specific metadata
-    event_ids:   list[UUID] = Field(default_factory=list)      # refs into Session.events
+class FileChangeItem(ItemBase):
+    kind:         Literal["file_change"] = "file_change"
+    tool_name:    str | None = None
+    tool_call_id: str | None = None
+    path:         str | None = None
+    operation:    str | None = None
+    input:        Any = None
+    output:       Any = None
+
+
+class ReasoningItem(ItemBase):
+    kind: Literal["reasoning"] = "reasoning"
+    text: str | None = None
+
+
+class PlanItem(ItemBase):
+    kind:         Literal["plan"] = "plan"
+    tool_name:    str | None = None
+    tool_call_id: str | None = None
+    input:        Any = None
+    output:       Any = None
+
+
+Item: TypeAlias = Annotated[
+    AgentMessageItem
+    | ToolCallItem
+    | CommandExecutionItem
+    | FileChangeItem
+    | ReasoningItem
+    | PlanItem,
+    Field(discriminator="kind"),
+]
+
+
+_TOOL_SHAPED_ITEM_KINDS: frozenset[str] = frozenset(
+    {"tool_call", "command_execution", "file_change", "plan"}
+)
+
+
+def is_tool_shaped_item(item: Item) -> bool:
+    return item.kind in _TOOL_SHAPED_ITEM_KINDS
 
 
 class TeamMemberState(BaseModel):
@@ -218,7 +264,7 @@ class Turn(BaseModel):
     ended_at:              datetime | None = None
     user_request_event_id: UUID | None = None    # ref into Session.events
     event_ids:             list[UUID] = Field(default_factory=list)
-    steps:                 list[Step] = Field(default_factory=list)
+    items:                 list[Item] = Field(default_factory=list)
     team_state:            TeamTurnState | None = None
     status:                TurnStatus = TurnStatus.COMPLETED
 
@@ -246,7 +292,7 @@ class SessionEdge(BaseModel):
     source_session_id:  UUID
     target_session_id:  UUID
     source_turn_id:     UUID | None = None
-    source_step_id:     UUID | None = None
+    source_item_id:     UUID | None = None
     source_event_id:    UUID | None = None
     provenance:         Literal["observed", "derived"] = "derived"
     confidence:         Literal["high", "medium", "low"] = "medium"

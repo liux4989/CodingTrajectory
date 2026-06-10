@@ -10,8 +10,8 @@ from uuid import UUID
 from coding_trajectory.ingestion.common import normalize_project_key as _normalize_project_key
 from coding_trajectory.ingestion.models import (
     EventType,
+    Item,
     Session,
-    Step,
     SessionGraph,
     SessionEdge,
     SessionGraphSummary,
@@ -136,7 +136,7 @@ def build_edges(sessions: list[Session]) -> list[SessionEdge]:
 class _EdgeOrigin:
     event_id: UUID
     turn_id: UUID | None
-    step_id: UUID | None
+    item_id: UUID | None
     tool_name: str | None
 
 
@@ -165,7 +165,7 @@ def _build_edge(parent: Session | None, child: Session) -> SessionEdge | None:
         source_session_id=parent.session_id,
         target_session_id=child.session_id,
         source_turn_id=origin.turn_id if origin else None,
-        source_step_id=origin.step_id if origin else None,
+        source_item_id=origin.item_id if origin else None,
         source_event_id=origin.event_id if origin else None,
         provenance="observed" if origin else "derived",
         confidence="high" if origin else "medium",
@@ -183,32 +183,29 @@ def _find_edge_origin(session: Session) -> _EdgeOrigin | None:
     if not tool_events:
         return None
 
-    step_index = _build_step_event_index(session)
+    item_index = _build_item_event_index(session)
     for event in reversed(tool_events):
-        turn, step = step_index.get(event.event_id, (None, None))
+        turn, item = item_index.get(event.event_id, (None, None))
         return _EdgeOrigin(
             event_id=event.event_id,
             turn_id=turn.turn_id if turn else None,
-            step_id=step.step_id if step else None,
+            item_id=item.item_id if item else None,
             tool_name=_event_tool_name(event),
         )
 
     return None
 
 
-def _build_step_event_index(session: Session) -> dict[UUID, tuple[Turn | None, Step | None]]:
-    index: dict[UUID, tuple[Turn | None, Step | None]] = {}
+def _build_item_event_index(session: Session) -> dict[UUID, tuple[Turn | None, Item | None]]:
+    index: dict[UUID, tuple[Turn | None, Item | None]] = {}
     for turn in session.turns:
         for event_id in turn.event_ids:
             index.setdefault(event_id, (turn, None))
         if turn.user_request_event_id is not None:
             index.setdefault(turn.user_request_event_id, (turn, None))
-        for step in turn.steps:
-            for event_id in step.event_ids:
-                index[event_id] = (turn, step)
-            for item in step.items:
-                for event_id in item.event_ids:
-                    index[event_id] = (turn, step)
+        for item in turn.items:
+            for event_id in item.event_ids:
+                index[event_id] = (turn, item)
     return index
 
 

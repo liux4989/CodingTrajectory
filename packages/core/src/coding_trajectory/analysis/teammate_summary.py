@@ -79,9 +79,9 @@ def merge_teammate_turn_nodes(current: dict[str, Any], incoming: dict[str, Any])
         [item for item in current_summary.get("tasks", []) if isinstance(item, dict)],
         [item for item in incoming_summary.get("tasks", []) if isinstance(item, dict)],
     )
-    merged_summary["step_ids"] = _merge_ordered_unique(
-        [item for item in current_summary.get("step_ids", []) if isinstance(item, str)],
-        [item for item in incoming_summary.get("step_ids", []) if isinstance(item, str)],
+    merged_summary["item_ids"] = _merge_ordered_unique(
+        [item for item in current_summary.get("item_ids", []) if isinstance(item, str)],
+        [item for item in incoming_summary.get("item_ids", []) if isinstance(item, str)],
     )
 
     merged = dict(current)
@@ -108,7 +108,7 @@ def build_teammate_summary(
             "lead_flow": _build_lead_flow(turn, user_request=user_request),
             "members": [],
             "tasks": [],
-            "step_ids": [str(step.step_id) for step in turn.steps],
+            "item_ids": [str(item.item_id) for item in turn.items],
         }
 
     members: list[dict[str, Any]] = []
@@ -128,7 +128,7 @@ def build_teammate_summary(
         "lead_flow": _build_lead_flow(turn, user_request=user_request),
         "members": members,
         "tasks": [_project_teammate_task(task.model_dump(mode="json")) for task in turn.team_state.tasks],
-        "step_ids": [str(step.step_id) for step in turn.steps],
+        "item_ids": [str(item.item_id) for item in turn.items],
     }
 
 
@@ -238,7 +238,7 @@ def _build_lead_flow(turn: Turn, *, user_request: dict[str, Any] | None) -> list
                     event["task_id"] = task_match.group(1)
             flow.append(event)
 
-    for item in build_flows(turn.steps):
+    for item in build_flows(turn.items):
         if item.get("type") == "tool_call":
             flow.append({"type": "lead_tool_call", **_public_tool_flow_item(item)})
         elif item.get("type") == "tool_call_group":

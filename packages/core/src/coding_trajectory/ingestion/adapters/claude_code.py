@@ -38,6 +38,21 @@ _DEFAULT_CLAUDE_DIR = Path.home() / ".claude" / "projects"
 _TEAMMATE_MESSAGE_RE = re.compile(r"<teammate-message(?P<attrs>[^>]*)>(?P<body>.*?)</teammate-message>", re.DOTALL)
 _TEAMMATE_ATTR_RE = re.compile(r'(\w+)="(.*?)"')
 
+_CLAUDE_FILE_TOOL_NAMES: frozenset[str] = frozenset({
+    "Read", "Edit", "MultiEdit", "Write", "View", "NotebookEdit",
+})
+_CLAUDE_PLAN_TOOL_NAMES: frozenset[str] = frozenset({
+    "TodoWrite", "TodoRead",
+})
+
+
+def _claude_item_kind(tool_name: str | None) -> str:
+    if tool_name in _CLAUDE_PLAN_TOOL_NAMES:
+        return "plan"
+    if tool_name in _CLAUDE_FILE_TOOL_NAMES:
+        return "file_change"
+    return "tool_call"
+
 
 def _parse_team_messages(raw: str | None) -> list[ClaudeTeamMessage]:
     if not raw:
@@ -264,7 +279,6 @@ class ClaudeCodeAdapter(BaseAdapter):
         """Extract only CT-useful transcript facts from Claude Code JSONL records."""
         transcript: list[TranscriptRecord] = []
         team_inputs: list[ClaudeTeamStateInput] = []
-        collecting_results = False  # True after first terminal assistant in current step
 
         for record in records:
             raw_type = record.get("type")
@@ -300,7 +314,6 @@ class ClaudeCodeAdapter(BaseAdapter):
                             },
                         )
                     )
-                    collecting_results = False
                 else:
                     for block in _tool_result_blocks(content):
                         tool_use_result = record.get("toolUseResult")
@@ -326,8 +339,6 @@ class ClaudeCodeAdapter(BaseAdapter):
                                 fidelity="synthetic",
                             )
                         )
-                    if _tool_result_blocks(content):
-                        collecting_results = True
 
             elif raw_type == "assistant":
                 message = record.get("message", {})
@@ -346,7 +357,6 @@ class ClaudeCodeAdapter(BaseAdapter):
                     }
                 )
 
-                emitted_step_anchor = False
                 if text or vendor_data or not tool_uses:
                     transcript.append(
                         TranscriptRecord(
@@ -359,16 +369,13 @@ class ClaudeCodeAdapter(BaseAdapter):
                                 **base,
                                 "text": text,
                                 "vendor_data": vendor_data,
-                                "flush_before": collecting_results,
-                                "flush_after": stop_reason is not None and not tool_uses,
                             },
                         )
                     )
-                    emitted_step_anchor = True
-                    collecting_results = False
 
-                for index, block in enumerate(tool_uses):
+                for block in tool_uses:
                     tool_id = block.get("id")
+                    tool_name = block.get("name")
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -378,15 +385,14 @@ class ClaudeCodeAdapter(BaseAdapter):
                             kind="tool_call",
                             data={
                                 **base,
-                                "tool_name": block.get("name"),
+                                "tool_name": tool_name,
                                 "tool_call_id": tool_id,
                                 "input": block.get("input"),
-                                "vendor_data": vendor_data if not emitted_step_anchor and index == 0 else {},
-                                "flush_before": collecting_results and not emitted_step_anchor and index == 0,
+                                "vendor_data": vendor_data,
+                                "item_kind": _claude_item_kind(tool_name),
                             },
                         )
                     )
-                    collecting_results = False
 
             elif raw_type == "system":
                 continue

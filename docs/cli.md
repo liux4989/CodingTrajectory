@@ -21,7 +21,7 @@ Three goals:
 ## Glossary
 
 - **Session hierarchy** — the structural shape of a run: sessions, child sessions,
-  turns, and steps. This is the progressive-disclosure surface. The session id
+  turns, and items. This is the progressive-disclosure surface. The session id
   passed to `session ...` commands is the entry point into this connected
   hierarchy.
 - **Overview** — compact hierarchy and activity keys for finding where to drill in.
@@ -66,15 +66,15 @@ Structured View
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
    - activity renders as grouped human labels with truncated assistant response previews
-   - use `--output json` when you need full step ids for drill-down
+   - use `--output json` when you need full item ids for drill-down
 4. `session stats [session_id] [--extra-billing] [--output markdown|json]` — inspect session stats with compact context/token sections
 5. `session usage [session_id] [--turn TURN_ID] [--extra-billing] [--output markdown|json]` — inspect turn-level activity token and cost accounting
-6. `session step-detail <step_id> [...]` — read the JSON evidence for one or more steps
+6. `session item-detail <item_id> [...]` — read the JSON evidence for one or more items
 
 `session usage` is intentionally turn-focused. It reports token buckets and cost
-grouped by turn and activity category without expanding paths, queries,
+grouped by turn without expanding paths, queries,
 commands, individual tool calls, derived efficiency, or explanatory semantics.
-Use `session overview`, `session step-detail`, `session event-detail`, or
+Use `session overview`, `session item-detail`, `session event-detail`, or
 detail commands when you need hierarchy/navigation detail or causal drill-down.
 
 

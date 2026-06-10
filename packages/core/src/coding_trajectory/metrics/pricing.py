@@ -37,11 +37,13 @@ class PriceRule:
     input_per_mtok: float
     output_per_mtok: float
     cached_input_per_mtok: float | None = None
+    cache_creation_input_per_mtok: float | None = None
     reasoning_output_per_mtok: float | None = None
     threshold_tokens: int | None = None
     input_per_mtok_above_threshold: float | None = None
     output_per_mtok_above_threshold: float | None = None
     cached_input_per_mtok_above_threshold: float | None = None
+    cache_creation_input_per_mtok_above_threshold: float | None = None
     pricing_source: str = "builtin"
     pricing_effective_date: str = "2026-05-01"
 
@@ -161,10 +163,11 @@ def estimate_observation_cost(
         return _missing(extra_billing=extra_billing, model=model, reason=f"no price rule for model {model}")
 
     usage = observation.usage
-    breakdown = _estimate_usage(usage, rule)
+    breakdown = _estimate_usage(usage, rule, provider=observation.provider)
     amount = (
         breakdown.input_usd
         + breakdown.cached_input_usd
+        + breakdown.cache_creation_input_usd
         + breakdown.output_usd
         + breakdown.reasoning_output_usd
     )
@@ -179,7 +182,7 @@ def estimate_observation_cost(
     )
 
 
-def _estimate_usage(usage: TokenUsage, rule: PriceRule) -> CostBreakdown:
+def _estimate_usage(usage: TokenUsage, rule: PriceRule, *, provider: str | None = None) -> CostBreakdown:
     uses_threshold_pricing = (
         rule.threshold_tokens is not None and usage.input_tokens > rule.threshold_tokens
     )
@@ -187,6 +190,11 @@ def _estimate_usage(usage: TokenUsage, rule: PriceRule) -> CostBreakdown:
         rule.cached_input_per_mtok_above_threshold
         if uses_threshold_pricing and rule.cached_input_per_mtok_above_threshold is not None
         else rule.cached_input_per_mtok
+    )
+    cache_creation_rate = (
+        rule.cache_creation_input_per_mtok_above_threshold
+        if uses_threshold_pricing and rule.cache_creation_input_per_mtok_above_threshold is not None
+        else rule.cache_creation_input_per_mtok
     )
     input_rate = (
         rule.input_per_mtok_above_threshold
@@ -200,13 +208,35 @@ def _estimate_usage(usage: TokenUsage, rule: PriceRule) -> CostBreakdown:
     )
     reasoning_output_rate = rule.reasoning_output_per_mtok
 
-    standard_input_tokens = max(usage.input_tokens - usage.cached_input_tokens, 0)
+    if _uses_net_input_convention(provider, rule.model):
+        standard_input_tokens = usage.input_tokens
+    else:
+        standard_input_tokens = max(
+            usage.input_tokens - usage.cached_input_tokens - usage.cache_creation_input_tokens, 0
+        )
+
     return CostBreakdown(
         input_usd=_price(standard_input_tokens, input_rate),
         cached_input_usd=_price(usage.cached_input_tokens, cached_input_rate),
+        cache_creation_input_usd=_price(usage.cache_creation_input_tokens, cache_creation_rate),
         output_usd=_price(usage.output_tokens, output_rate),
         reasoning_output_usd=_price(usage.reasoning_output_tokens, reasoning_output_rate),
     )
+
+
+def _uses_net_input_convention(provider: str | None, model: str | None) -> bool:
+    """Return True when input_tokens already excludes cached and cache-creation tokens.
+
+    Anthropic's API reports input_tokens as the non-cached portion. Other vendors
+    (e.g. Pi) report input_tokens as a gross total that includes cached reads and
+    cache-creation writes. When the provider is unknown, fall back to model name.
+    """
+    if provider:
+        normalized = provider.strip().lower()
+        return normalized in {"anthropic", "claude", "claude-code"}
+    if model:
+        return "claude" in model.lower()
+    return False
 
 
 def _missing(*, extra_billing: bool, model: str | None, reason: str) -> CostEstimate:
@@ -385,10 +415,12 @@ def _model_to_price_rule(
         input_per_mtok=model.cost.input,
         output_per_mtok=model.cost.output,
         cached_input_per_mtok=model.cost.cache_read,
+        cache_creation_input_per_mtok=model.cost.cache_write,
         threshold_tokens=threshold_tokens,
         input_per_mtok_above_threshold=context_over_200k.input if context_over_200k else None,
         output_per_mtok_above_threshold=context_over_200k.output if context_over_200k else None,
         cached_input_per_mtok_above_threshold=context_over_200k.cache_read if context_over_200k else None,
+        cache_creation_input_per_mtok_above_threshold=context_over_200k.cache_write if context_over_200k else None,
         pricing_source=_MODELS_DEV_SOURCE,
         pricing_effective_date=pricing_date,
     )

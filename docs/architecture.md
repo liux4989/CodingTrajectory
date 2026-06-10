@@ -16,7 +16,7 @@
 │  ┌─────────────┐ ┌──────────────┐    │  ┌──────────┐ ┌───────┐ ┌──────┐│
 │  │ project     │ │ session      │    │  │ activity │ │ dash  │ │review││
 │  │ list/sess.  │ │ over./stats/ │    │  │ timeline │ │web/tui│ │judge ││
-│  │             │ │ usage/step   │    │  │          │ │       │ │      ││
+│  │             │ │ usage/item   │    │  │          │ │       │ │      ││
 │  └──────┬──────┘ └──────┬───────┘    │  └─────┬────┘ └───┬───┘ └──┬───┘│
 └─────────┼───────────────┼────────────┼────────┼──────────┼────────┼────┘
           └───────────────┴────────────┴────────┴──────────┴────────┘
@@ -32,7 +32,7 @@
 │  ┌───────────────────────┐│  ┌──────────────────────────────────────┐   │
 │  │ projections           ││  │ token usage, cost estimation         │   │
 │  │ event_scan            ││  │ context stats, quota tracking        │   │
-│  │ step_details          ││  │ tool usage, pricing rules            │   │
+│  │ item_details          ││  │ tool usage, pricing rules            │   │
 │  │ session_graph_views   ││  │                                      │   │
 │  └───────────┬───────────┘│  └──────────────┬───────────────────────┘   │
 ├──────────────┼────────────┼─────────────────┼────────────────────────────┤
@@ -63,7 +63,7 @@
 ### Key Architectural Decisions
 
 - **Canonical core, vendor-local adapters**: Vendor-specific parsing never leaks into the core model. Adapters emit a shared transcript IR (`TranscriptRecord`), and a single `TranscriptProjector` state machine constructs the canonical hierarchy.
-- **Deterministic UUID5 IDs**: All event, turn, step, and session IDs are UUID5 derived from vendor, source path, index, and content. The same log file always produces the same IDs across runs, enabling stable references and caching.
+- **Deterministic UUID5 IDs**: All event, turn, item, and session IDs are UUID5 derived from vendor, source path, index, and content. The same log file always produces the same IDs across runs, enabling stable references and caching.
 - **Graph-native multi-agent**: Parent/child sessions, forks, sidechains, and handoffs are first-class `SessionEdge` relationships, not ad-hoc metadata. Connected components are assembled via union-find.
 - **No presentation in canonical fields**: UI concerns (sections, roles, workflow labels) live in projections, not the core model.
 - **Plugin isolation**: Plugins are separate executables discovered via JSON manifests. They do not import core packages; they consume documented CLI outputs.
@@ -93,10 +93,10 @@ coding-trajectory/
 │   │       ├── service.py                  # Method dispatch, serialization, index cache
 │   │       ├── query.py                    # DocumentStore: UUID-indexed canonical resource store
 │   │       ├── ingestion/
-│   │       │   ├── models.py               # Pydantic canonical models (Event, Step, Turn, Session, SessionGraph)
+│   │       │   ├── models.py               # Pydantic canonical models (Event, Item, Turn, Session, SessionGraph)
 │   │       │   ├── transcript.py           # TranscriptRecord IR + TranscriptProjector state machine
 │   │       │   ├── graph.py                # SessionGraph assembly, edge building, union-find components
-│   │       │   ├── step_items.py           # StepItem append/update helpers
+│   │       │   ├── items.py               # Item append/update helpers
 │   │       │   ├── common.py               # Shared utilities (normalize_project_key, prune_nones, etc.)
 │   │       │   ├── indexes.py              # Ingestion-time index structures
 │   │       │   └── adapters/
@@ -114,7 +114,7 @@ coding-trajectory/
 │   │       │   ├── projections.py          # Compatibility facade for analysis projections
 │   │       │   ├── session_graph_views.py  # Session graph overview + narrative
 │   │       │   ├── event_scan.py           # Filtered event search by type
-│   │       │   ├── step_details.py         # Enriched step information
+│   │       │   ├── item_details.py         # Enriched item information
 │   │       │   ├── tool_summary.py         # Tool usage aggregation
 │   │       │   ├── tool_summary_shell.py   # Shell-specific tool summary
 │   │       │   ├── tool_summary_shared.py  # Shared tool summary logic
@@ -135,7 +135,7 @@ coding-trajectory/
 │   │       ├── plugins.py                  # Plugin discovery + dispatch
 │   │       └── commands/
 │   │           ├── project.py              # `ct project list|sessions`
-│   │           ├── session.py              # `ct session overview|stats|usage|step-detail|event-*`
+│   │           ├── session.py              # `ct session overview|stats|usage|item-detail|event-*`
 │   │           └── plugin.py               # `ct plugin list|<name>`
 │   └── plugins/                            # Built-in executable plugins
 │       ├── activity/
@@ -172,15 +172,15 @@ coding-trajectory/
 | Feature | Description |
 |---|---|
 | Multi-vendor ingestion | Adapters for Codex CLI, Claude Code, and Pi JSONL logs |
-| Canonical normalization | Agent-agnostic Event/Step/Turn/Session/SessionGraph hierarchy |
-| Transcript projector | Shared state machine reconstructs Turn → Step → Item from vendor-neutral IR |
+| Canonical normalization | Agent-agnostic Event/Item/Turn/Session/SessionGraph hierarchy |
+| Transcript projector | Shared state machine reconstructs Turn → Item from vendor-neutral IR |
 | Session graph assembly | Union-find connected components, edge classification (spawned, forked, sidechain, handoff) |
-| Deterministic IDs | UUID5-based stable IDs for events, turns, steps across runs |
+| Deterministic IDs | UUID5-based stable IDs for events, turns, items across runs |
 | Auto-discovery | Project-scoped log detection from `~/.codex`, `~/.claude`, `~/.pi` |
 | Index cache | Persistent path → session graph mapping at `~/.coding-trajectory/index.json` |
 | Document store | In-memory UUID-indexed store with cross-resource navigation |
 | Service dispatch | Method-based API (project.list, session.overview, session.usage, etc.) |
-| Token usage & cost | Per-turn, per-step, per-session token accounting with configurable price rules |
+| Token usage & cost | Per-turn, per-session token accounting with configurable price rules |
 | Context stats | Context window utilization, category breakdown, quota tracking |
 | Tool usage analysis | Tool invocation counts, output sizes, cost attribution |
 | CLI (`ct`) | Progressive-disclosure command surface with markdown + JSON output |
@@ -197,7 +197,7 @@ coding-trajectory/
 |---|---|
 | Additional vendor adapters | New adapters in `ingestion/adapters/` |
 | Session export plugin | Planned `ct-export` tool for session data export |
-| Session replay | UI-oriented replay over canonical turn/step data |
+| Session replay | UI-oriented replay over canonical turn/item data |
 | Cross-vendor session linking | Sessions spanning multiple coding agents in one graph |
 | Real-time log tailing | Live ingestion of active session logs |
 
@@ -216,8 +216,8 @@ The service layer implements a method-dispatch contract consumed by the CLI and 
 | `session.stats` | Context window statistics and category breakdown |
 | `session.usage` | Token usage and cost breakdown by turn and activity |
 | `session.tool_usage` | Tool invocation statistics |
-| `session.turn_usage` | Per-turn usage detail with step-level breakdown |
-| `step.details` | Enriched detail for one or more steps |
+| `session.turn_usage` | Per-turn usage detail |
+| `item.details` | Enriched detail for one or more items |
 | `event.detail` | Full JSON content of a single event |
 | `event.scan` | Filtered event search by type with payload predicates |
 
@@ -257,7 +257,7 @@ Stale entries (deleted source files) are pruned on load. The cache is updated af
 | `sessions` | `dict[UUID, Session]` |
 | `turns` | `dict[UUID, Turn]` |
 | `events` | `dict[UUID, Event]` |
-| `steps` | `dict[UUID, Step]` |
+| `items` | `dict[UUID, Item]` |
 
 Supports O(1) lookups by UUID and cross-resource navigation (e.g., session → session graph, turn → session graph).
 
@@ -283,7 +283,7 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct session overview [ID]` | Session hierarchy overview |
 | `uv run ct session stats [ID]` | Context window statistics |
 | `uv run ct session usage [ID]` | Token and cost breakdown |
-| `uv run ct session step-detail STEP_ID` | Step detail (JSON) |
+| `uv run ct session item-detail ITEM_ID` | Item detail (JSON) |
 | `uv run ct session event-detail EVENT_ID` | Event detail (JSON) |
 | `uv run ct session event-scan [ID] --type TYPE` | Filtered event search |
 | `uv run ct plugin list` | List discovered plugins |

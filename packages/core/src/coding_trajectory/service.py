@@ -17,7 +17,7 @@ from coding_trajectory.discovery import (
     format_discovery_sources,
 )
 from coding_trajectory.ingestion.common import format_datetime, normalize_project_key, prune_nones
-from coding_trajectory.ingestion.models import Event, EventType, Session, Step, StepItem, SessionGraph, Turn
+from coding_trajectory.ingestion.models import Event, EventType, Session, Item, SessionGraph, Turn
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 
 
@@ -139,19 +139,19 @@ def serialize_turn_detail(turn: Turn) -> dict[str, Any]:
             "session_id": str(turn.session_id),
             "status": turn.status,
             "event_ids": [str(event_id) for event_id in turn.event_ids],
-            "step_ids": [str(step.step_id) for step in turn.steps],
+            "item_ids": [str(item.item_id) for item in turn.items],
         }
     )
 
 
-def serialize_step_detail(step: Step) -> dict[str, Any]:
+def serialize_item_detail(item: Item) -> dict[str, Any]:
     return prune_nones(
         {
-            "step_id": str(step.step_id),
-            "session_id": str(step.session_id),
-            "turn_id": str(step.turn_id),
-            "items": [serialize_step_item(item) for item in step.items],
-            "event_ids": [str(eid) for eid in step.event_ids],
+            "item_id": str(item.item_id),
+            "session_id": str(item.session_id),
+            "turn_id": str(item.turn_id),
+            "kind": item.kind,
+            **item.model_dump(mode="json", exclude={"item_id", "session_id", "turn_id", "kind"}),
         }
     )
 
@@ -169,9 +169,6 @@ def serialize_event_detail(event: Event) -> dict[str, Any]:
         }
     )
 
-
-def serialize_step_item(item: StepItem) -> dict[str, Any]:
-    return prune_nones(item.model_dump(mode="json"))
 
 
 def serialize_tool_call_detail(event: Event) -> dict[str, Any] | None:
@@ -227,7 +224,7 @@ def _normalize_user_id(raw_id: str) -> str:
     return str(_parse_user_id(raw_id))
 
 
-def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> SessionGraph | Session | Turn | Event | Step:
+def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> SessionGraph | Session | Turn | Event | Item:
     resource_id = _parse_user_id(raw_id)
 
     if resource == "session_graph":
@@ -238,8 +235,8 @@ def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> Sessio
         return store.get_turn(resource_id)
     if resource == "event":
         return store.get_event(resource_id)
-    if resource == "step":
-        return store.get_step(resource_id)
+    if resource == "item":
+        return store.get_item(resource_id)
 
     raise ValueError(f"unsupported resource: {resource}")
 
@@ -567,7 +564,7 @@ def dispatch(
 ) -> Any:
     from coding_trajectory.analysis.projections import (
         build_event_scan,
-        build_step_details,
+        build_item_details,
         build_session_graph_overview,
     )
     from coding_trajectory.metrics import (
@@ -650,7 +647,6 @@ def dispatch(
         result = build_session_graph_metrics(
             session_graph,
             extra_billing=extra_billing,
-            include_steps=True,
         )
         turn_id = str(params["turn_id"])
         turns = [
@@ -664,7 +660,6 @@ def dispatch(
                 "token_usage": turn["token_usage"],
                 "cost": turn["cost"],
                 "extra_billing": turn["extra_billing"],
-                "steps": turn.get("steps", []),
             }
             for session in result["sessions"]
             for turn in session["turns"]
@@ -706,17 +701,17 @@ def dispatch(
             ),
         )
 
-    if method == "step.details":
-        step_ids = params.get("step_ids")
-        if not step_ids:
-            raise ValueError("missing required param: step_ids")
-        if isinstance(step_ids, str):
-            step_ids = [step_ids]
+    if method == "item.details":
+        item_ids = params.get("item_ids")
+        if not item_ids:
+            raise ValueError("missing required param: item_ids")
+        if isinstance(item_ids, str):
+            item_ids = [item_ids]
         result: list[dict[str, Any]] = []
-        for step_id in step_ids:
-            step = resolve_resource(store, "step", step_id)
-            session_graph = store.get_session_graph_for_session(step.session_id)
-            result.append(_public_output_for_session_graph(session_graph, build_step_details(step, session_graph=session_graph)))
+        for item_id in item_ids:
+            item = resolve_resource(store, "item", item_id)
+            session_graph = store.get_session_graph_for_session(item.session_id)
+            result.append(_public_output_for_session_graph(session_graph, build_item_details(item, session_graph=session_graph)))
         return result
 
     if method == "event.detail":
