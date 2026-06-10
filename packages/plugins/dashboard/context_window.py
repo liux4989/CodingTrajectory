@@ -375,6 +375,9 @@ def _category_key(source_key: str) -> CategoryKey:
         "context_readfile": "files",
         "context_searchtext": "files",
         "context_listfiles": "files",
+        "context_webfetch": "files",
+        "context_websearch": "files",
+        "output": "output",
     }
     if source_key in mapping:
         return mapping[source_key]
@@ -385,13 +388,11 @@ def _category_key(source_key: str) -> CategoryKey:
             "tool_todolist",
             "tool_subagenttask",
             "tool_sessionhandoff",
-            "tool_runcommand_code_fix",
             "editfile",
             "writefile",
             "todolist",
             "subagenttask",
             "sessionhandoff",
-            "code_fix",
         )
     ):
         return "agent"

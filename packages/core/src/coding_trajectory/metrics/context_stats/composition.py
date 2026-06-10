@@ -16,7 +16,6 @@ from coding_trajectory.analysis.tool_summary_shared import (
     EDIT_FILE,
     LIST_FILES,
     READ_FILE,
-    RUN_COMMAND,
     SEARCH_TEXT,
     SESSION_HANDOFF,
     SUBAGENT_TASK,
@@ -62,18 +61,6 @@ _FILE_CONCEPT_LABELS = {
     LIST_FILES: "File listings",
     WEB_FETCH: "Web pages fetched",
     WEB_SEARCH: "Web search results",
-}
-_COMMAND_FAMILY_LABELS = {
-    "cli_report": "CLI / report inspection",
-    "tests": "Tests",
-    "build": "Build / typecheck / lint",
-    "code_fix": "Formatters / fixers",
-    "repository": "Repository operations",
-    "dependency": "Package management",
-    "diagnostic": "Runtime diagnostics",
-    "external": "External interaction",
-    "runtime": "Execution / app runtime",
-    "other": "Other command output",
 }
 _CONTEXT_CONCEPTS = frozenset(_FILE_CONCEPT_LABELS)
 _CODE_CHANGE_CONCEPTS = frozenset({EDIT_FILE, WRITE_FILE})
@@ -144,9 +131,8 @@ def _user_input(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
 
 def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCategoryFlat]]:
     files: dict[str, _Measure] = defaultdict(_Measure)
-    commands: dict[str, _Measure] = defaultdict(_Measure)
     agent: dict[str, _Measure] = defaultdict(_Measure)
-    other_tools = _Measure()
+    output = _Measure()
 
     for session in session_graph.sessions:
         for event in session.events:
@@ -173,7 +159,7 @@ def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
                     size = visible_text_size(text)
                     agent["reasoning"].add(tokens=size.tokens, chars=size.chars)
                     continue
-                _add_tool_item(item, files=files, commands=commands, agent=agent, other=other_tools)
+                _add_tool_item(item, files=files, agent=agent, output=output)
 
     file_children = [
         _category(
@@ -184,10 +170,6 @@ def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
         for concept in _FILE_CONCEPT_LABELS
         if files[concept].items
     ]
-    output_children = _command_children(commands)
-    if other_tools.items:
-        output_children.append(_category("tool_other", "Other tool output", other_tools))
-
     message_children = [
         _category(key, label, agent[key])
         for key, label in (
@@ -203,7 +185,6 @@ def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
         for key, label in (
             ("editfile", "Edits / patches"),
             ("writefile", "Files written"),
-            ("code_fix", "Formatters / fixers"),
         )
         if agent[key].items
     ]
@@ -230,7 +211,7 @@ def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
         category
         for category in (
             _parent("files", "Files", file_children),
-            _parent("output", "Output", output_children),
+            _category("output", "Output", output) if output.items else None,
             _parent("agent", "Agent", agent_children),
         )
         if category is not None
@@ -242,9 +223,8 @@ def _add_tool_item(
     item: Item,
     *,
     files: dict[str, _Measure],
-    commands: dict[str, _Measure],
     agent: dict[str, _Measure],
-    other: _Measure,
+    output: _Measure,
 ) -> None:
     if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
         return
@@ -255,11 +235,6 @@ def _add_tool_item(
 
     if concept in _CONTEXT_CONCEPTS:
         files[concept].add(tokens=output_size.tokens, chars=output_size.chars)
-        return
-    if concept == RUN_COMMAND:
-        family = str(summary.get("command_family") or "other")
-        target = agent["code_fix"] if family == "code_fix" else commands[family]
-        target.add(tokens=output_size.tokens, chars=output_size.chars)
         return
     if concept in _CODE_CHANGE_CONCEPTS:
         key = concept.lower()
@@ -275,40 +250,7 @@ def _add_tool_item(
             chars=input_size.chars + output_size.chars,
         )
         return
-    other.add(tokens=output_size.tokens, chars=output_size.chars)
-
-
-def _command_children(commands: dict[str, _Measure]) -> list[ContextCategoryFlat]:
-    verification = [
-        _category(f"tool_runcommand_{key}", _COMMAND_FAMILY_LABELS[key], commands[key])
-        for key in ("tests", "build")
-        if commands[key].items
-    ]
-    dependency = [
-        _category(f"tool_runcommand_{key}", _COMMAND_FAMILY_LABELS[key], commands[key])
-        for key in ("dependency", "diagnostic")
-        if commands[key].items
-    ]
-    children = [
-        _category("tool_runcommand_cli_report", _COMMAND_FAMILY_LABELS["cli_report"], commands["cli_report"])
-        if commands["cli_report"].items
-        else None,
-        _parent("verification", "Verification", verification),
-        _category("repository_operations", _COMMAND_FAMILY_LABELS["repository"], commands["repository"])
-        if commands["repository"].items
-        else None,
-        _parent("dependency_environment", "Dependency / environment", dependency),
-        _category("execution_runtime", _COMMAND_FAMILY_LABELS["runtime"], commands["runtime"])
-        if commands["runtime"].items
-        else None,
-        _category("external_interaction", _COMMAND_FAMILY_LABELS["external"], commands["external"])
-        if commands["external"].items
-        else None,
-        _category("command_other", _COMMAND_FAMILY_LABELS["other"], commands["other"])
-        if commands["other"].items
-        else None,
-    ]
-    return [child for child in children if child is not None]
+    output.add(tokens=output_size.tokens, chars=output_size.chars)
 
 
 def _parent(

@@ -271,8 +271,9 @@ Provider behavior remains explicit:
   the provider-reported active context total.
 - Exact provider cache/input buckets are exposed separately as
   `provider_usage_buckets`.
-- Shell reads, searches, and command families reuse core item-analysis
-  semantics instead of a dashboard-local command classifier.
+- Shell reads, searches, and listings reuse core item-analysis semantics.
+  Commands and uncommon tools fall back to the common `Output` category; deeper
+  command interpretation belongs in session overview analysis.
 - User and assistant timeline deltas estimate visible overview text.
 - Tool timeline rows do not invent token deltas when result text is unavailable.
 
