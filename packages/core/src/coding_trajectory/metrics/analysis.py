@@ -3,28 +3,18 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from coding_trajectory.ingestion.indexes import (
-    SessionGraphIndex,
-    build_session_graph_index,
-    events_for_step,
-)
 from coding_trajectory.ingestion.models import (
     ContextUsageObservation,
-    Event,
-    EventType,
+    Item,
     Session,
     SessionGraph,
-    Step,
     Turn,
-    Vendor,
+    is_tool_shaped_item,
 )
 from coding_trajectory.metrics.models import (
-    ActivityUsageBreakdownFlat,
     CostEstimate,
     MetricSource,
     QuotaSnapshot,
@@ -32,10 +22,7 @@ from coding_trajectory.metrics.models import (
     SessionMetrics,
     SessionMetricsFlat,
     SessionUsageCompactFlat,
-    StepMetrics,
-    StepMetricsFlat,
-    ToolOutputUsageFlat,
-    ToolStepUsageFlat,
+    ToolItemFlat,
     TokenUsage,
     TokenUsageObservation,
     SessionGraphMetrics,
@@ -48,20 +35,12 @@ from coding_trajectory.metrics.models import (
 from coding_trajectory.metrics.pricing import estimate_observation_cost
 
 
-@dataclass
-class _CodexUsageState:
-    previous_totals: TokenUsage | None = None
-    remaining_inherited_totals: TokenUsage | None = None
-    seen_totals: set[tuple[int, int, int, int, int]] | None = None
-
-
 def build_session_graph_metrics(
     session_graph: SessionGraph,
     *,
     extra_billing: bool = False,
-    include_steps: bool = False,
 ) -> dict[str, Any]:
-    """Return a flat usage summary: sessions → turns, optionally with step deltas."""
+    """Return a flat usage summary: sessions -> turns."""
     full = _build_full_metrics(session_graph, extra_billing=extra_billing)
     sessions_flat: list[SessionMetricsFlat] = []
 
@@ -80,7 +59,6 @@ def build_session_graph_metrics(
                     token_usage=turn.token_usage,
                     cost=turn.cost_estimate.amount_usd,
                     extra_billing=turn.cost_estimate.extra_billing,
-                    steps=_turn_step_deltas(turn) if include_steps else None,
                 )
             )
         sessions_flat.append(
@@ -154,53 +132,7 @@ def _compact_turn_usage(turn: TurnMetrics, *, session_id: UUID | None) -> TurnUs
         session_id=session_id,
         usage=turn.token_usage,
         cost_usd=turn.cost_estimate.amount_usd,
-        activity_usage=_turn_activity_breakdown(turn),
     )
-
-
-def _turn_activity_breakdown(turn: TurnMetrics) -> list[ActivityUsageBreakdownFlat]:
-    totals: dict[str, dict[str, Any]] = {
-        "tool_steps": {"step_count": 0, "usage": TokenUsage(), "cost_usd": 0.0},
-        "response_steps": {"step_count": 0, "usage": TokenUsage(), "cost_usd": 0.0},
-        "mixed_steps": {"step_count": 0, "usage": TokenUsage(), "cost_usd": 0.0},
-        "other_steps": {"step_count": 0, "usage": TokenUsage(), "cost_usd": 0.0},
-    }
-    for step in turn.steps:
-        key = _activity_breakdown_kind(step)
-        totals[key]["step_count"] += 1
-        totals[key]["usage"] = totals[key]["usage"].plus(step.token_usage)
-        totals[key]["cost_usd"] += step.cost_estimate.amount_usd
-    return [
-        ActivityUsageBreakdownFlat(
-            category=key,
-            usage=value["usage"],
-            cost_usd=round(float(value["cost_usd"]), 8),
-        )
-        for key, value in totals.items()
-        if value["step_count"] > 0
-    ]
-
-
-def _activity_breakdown_kind(step: StepMetrics) -> str:
-    if step.kind == "mixed":
-        return "mixed_steps"
-    if step.tool_count > 0:
-        return "tool_steps"
-    if step.kind == "response":
-        return "response_steps"
-    return "other_steps"
-
-
-def _turn_step_deltas(turn: TurnMetrics) -> list[StepMetricsFlat]:
-    return [
-        StepMetricsFlat(
-            step_id=step.step_id,
-            sequence=step.sequence,
-            kind=step.kind,
-            token_usage=None if _is_zero_usage(step.token_usage) else step.token_usage,
-        )
-        for step in turn.steps
-    ]
 
 
 def build_session_graph_tool_usage(
@@ -208,82 +140,41 @@ def build_session_graph_tool_usage(
     *,
     extra_billing: bool = False,
 ) -> dict[str, Any]:
-    """Return tool-step cost boundaries and per-tool output size signals.
-
-    Cost is observed/estimated at the step boundary. Individual tool entries only
-    expose output-size signals because shell commands do not have independent
-    billing records.
-    """
+    """Return per-tool-item output size signals without per-item cost."""
     full = _build_full_metrics(session_graph, extra_billing=extra_billing)
-    raw_steps = {
-        step.step_id: step
-        for session in session_graph.sessions
-        for turn in session.turns
-        for step in turn.steps
-    }
 
-    tool_steps: list[ToolStepUsageFlat] = []
-    for session in full.sessions:
+    tool_items: list[ToolItemFlat] = []
+    for session in session_graph.sessions:
         for turn in session.turns:
-            for step in turn.steps:
-                if step.tool_count == 0:
+            for item in turn.items:
+                if not is_tool_shaped_item(item):
                     continue
-
-                raw_step = raw_steps.get(step.step_id)
-                tools = _tool_output_usage(raw_step) if raw_step is not None else []
-                tool_output_chars = sum(item.output_chars for item in tools)
-                tool_output_original_tokens = sum(item.output_original_tokens or 0 for item in tools)
-                tool_steps.append(
-                    ToolStepUsageFlat(
-                        session_id=session.session_id,
-                        turn_id=turn.turn_id,
-                        turn_sequence=turn.sequence,
-                        step_id=step.step_id,
-                        step_sequence=step.sequence,
-                        kind=step.kind,
-                        observed_step_cost=step.cost_estimate.amount_usd,
-                        token_usage=step.token_usage,
-                        tool_count=step.tool_count,
-                        duration_ms=step.tool_duration_ms,
-                        tool_output_chars=tool_output_chars,
-                        tool_output_original_tokens=tool_output_original_tokens,
-                        tools=tools,
-                    )
-                )
+                tool_items.append(_tool_item_flat(item, session_id=session.session_id, turn_id=turn.turn_id))
 
     return SessionGraphToolUsageFlat(
         root_session_id=full.root_session_id,
-        observed_tool_step_cost=round(sum(step.observed_step_cost for step in tool_steps), 8),
-        extra_billing=full.cost_estimate.extra_billing,
-        tool_step_count=len(tool_steps),
-        tool_call_count=sum(step.tool_count for step in tool_steps),
-        tool_output_chars=sum(step.tool_output_chars for step in tool_steps),
-        tool_output_original_tokens=sum(step.tool_output_original_tokens for step in tool_steps),
-        tool_steps=tool_steps,
+        tool_item_count=len(tool_items),
+        tool_call_count=len(tool_items),
+        tool_output_chars=sum(item.output_chars for item in tool_items),
+        tool_output_original_tokens=sum(item.output_original_tokens or 0 for item in tool_items),
+        tool_items=tool_items,
         warnings=full.warnings,
     ).model_dump(mode="json")
 
 
-def _tool_output_usage(step: Step) -> list[ToolOutputUsageFlat]:
-    result: list[ToolOutputUsageFlat] = []
-    tool_index = 0
-    for item in step.items:
-        if item.kind != "tool":
-            continue
-        output = "" if item.output is None else str(item.output)
-        result.append(
-            ToolOutputUsageFlat(
-                tool_index=tool_index,
-                tool_name=item.tool_name,
-                status=item.status.value if item.status is not None else None,
-                input_summary=_tool_input_summary(item.input),
-                output_chars=len(output),
-                output_original_tokens=_tool_original_token_count(output),
-                output_truncated=_tool_output_is_truncated(output),
-            )
-        )
-        tool_index += 1
-    return result
+def _tool_item_flat(item: Item, *, session_id: UUID, turn_id: UUID) -> ToolItemFlat:
+    output = "" if getattr(item, "output", None) is None else str(getattr(item, "output"))
+    return ToolItemFlat(
+        item_id=item.item_id,
+        session_id=session_id,
+        turn_id=turn_id,
+        tool_name=getattr(item, "tool_name", None),
+        status=getattr(item, "status", None),
+        input_summary=_tool_input_summary(getattr(item, "input", None) if item.kind != "command_execution" else getattr(item, "command", None)),
+        output_chars=len(output),
+        output_original_tokens=_tool_original_token_count(output),
+        output_truncated=_tool_output_is_truncated(output),
+    )
 
 
 def _tool_input_summary(value: Any) -> str | None:
@@ -316,63 +207,10 @@ def _tool_output_is_truncated(output: str) -> bool:
 
 
 def _turn_model(turn: TurnMetrics) -> str | None:
-    for step in turn.steps:
-        model = _step_model(step)
-        if model:
-            return model
-    return None
-
-
-def _step_model(step: StepMetrics) -> str | None:
-    for obs in step.observations:
+    for obs in turn.observations:
         if obs.model:
             return obs.model
     return None
-
-
-def _step_kind(step: Step, *, has_usage: bool = False) -> str:
-    has_tool = any(item.kind == "tool" for item in step.items)
-    has_text = any(item.kind == "text" for item in step.items)
-    if has_tool and has_text:
-        return "mixed"
-    if has_tool:
-        return "tool"
-    if has_text or has_usage:
-        return "response"
-    return "empty"
-
-
-def _step_tool_metrics(step: Step, events: list[Event]) -> tuple[int, int | None]:
-    tool_count = sum(1 for item in step.items if item.kind == "tool")
-    pending: dict[str, datetime] = {}
-    durations_ms: list[int] = []
-
-    for event in sorted(events, key=lambda item: item.timestamp):
-        if event.type not in {
-            EventType.TOOL_CALL_REQUESTED,
-            EventType.TOOL_CALL_SUCCEEDED,
-            EventType.TOOL_CALL_FAILED,
-        }:
-            continue
-
-        key = _tool_event_key(event)
-        if event.type == EventType.TOOL_CALL_REQUESTED:
-            pending[key] = event.timestamp
-            continue
-
-        started_at = pending.pop(key, None)
-        if started_at is None:
-            continue
-        duration_ms = int(max((event.timestamp - started_at).total_seconds(), 0) * 1000)
-        durations_ms.append(duration_ms)
-
-    return tool_count, sum(durations_ms) if durations_ms else None
-
-
-def _tool_event_key(event: Event) -> str:
-    payload = event.payload or {}
-    value = payload.get("tool_call_id") or payload.get("tool_name")
-    return str(value) if value else "__default__"
 
 
 def _build_full_metrics(
@@ -381,8 +219,6 @@ def _build_full_metrics(
     extra_billing: bool = False,
 ) -> SessionGraphMetrics:
     """Return full token/quota metrics projected onto the session_graph hierarchy."""
-    index = build_session_graph_index(session_graph)
-    sessions_by_id = {session.session_id: session for session in session_graph.sessions}
     session_metrics: list[SessionMetrics] = []
     total = TokenUsage()
     cost_total = CostEstimate(extra_billing=extra_billing)
@@ -391,8 +227,6 @@ def _build_full_metrics(
     for session in session_graph.sessions:
         metrics = _build_session_metrics(
             session,
-            index=index,
-            sessions_by_id=sessions_by_id,
             extra_billing=extra_billing,
         )
         session_metrics.append(metrics)
@@ -415,14 +249,8 @@ def _build_full_metrics(
 def _build_session_metrics(
     session: Session,
     *,
-    index: SessionGraphIndex,
-    sessions_by_id: dict[UUID, Session],
     extra_billing: bool,
 ) -> SessionMetrics:
-    codex_state = _CodexUsageState(
-        remaining_inherited_totals=_inherited_codex_totals(session, sessions_by_id),
-        seen_totals=set(),
-    )
     turn_metrics: list[TurnMetrics] = []
     session_total = TokenUsage()
     cost_total = CostEstimate(extra_billing=extra_billing)
@@ -432,8 +260,6 @@ def _build_session_metrics(
         metrics = _build_turn_metrics(
             session,
             turn,
-            index=index,
-            codex_state=codex_state,
             extra_billing=extra_billing,
         )
         turn_metrics.append(metrics)
@@ -457,64 +283,15 @@ def _build_turn_metrics(
     session: Session,
     turn: Turn,
     *,
-    index: SessionGraphIndex,
-    codex_state: _CodexUsageState,
     extra_billing: bool,
 ) -> TurnMetrics:
-    step_metrics: list[StepMetrics] = []
-    turn_total = TokenUsage()
-    cost_total = CostEstimate(extra_billing=extra_billing)
-    quota_snapshots: list[QuotaSnapshot] = []
-
-    for step in turn.steps:
-        metrics = _build_step_metrics(
-            session,
-            step,
-            index=index,
-            codex_state=codex_state,
-            extra_billing=extra_billing,
-        )
-        step_metrics.append(metrics)
-        turn_total = turn_total.plus(metrics.token_usage)
-        cost_total = cost_total.plus(metrics.cost_estimate)
-
-    for observation in _context_usage_for_turn(session, turn):
-        quota = _quota_snapshot_from_context_usage(observation)
-        if quota is not None:
-            quota_snapshots.append(quota)
-
-    quota_snapshots.sort(key=lambda item: item.timestamp)
-    return TurnMetrics(
-        turn_id=turn.turn_id,
-        sequence=turn.sequence,
-        status=turn.status.value,
-        started_at=turn.started_at,
-        completed_at=turn.ended_at,
-        token_usage=turn_total,
-        cost_estimate=_finalize_cost(cost_total),
-        steps=step_metrics,
-        quota_snapshots=quota_snapshots,
-    )
-
-
-def _build_step_metrics(
-    session: Session,
-    step: Step,
-    *,
-    index: SessionGraphIndex,
-    codex_state: _CodexUsageState,
-    extra_billing: bool,
-) -> StepMetrics:
+    context_observations = _context_usage_for_turn(session, turn)
     observations: list[TokenUsageObservation] = []
-
-    events = events_for_step(index, step)
-    context_observations = _context_usage_for_step(session, step)
     for context_observation in context_observations:
         usage_observation = _usage_from_context_observation(
             context_observation,
-            step=step,
+            turn=turn,
             session=session,
-            codex_state=codex_state,
         )
         if usage_observation is not None:
             observations.append(usage_observation)
@@ -522,7 +299,7 @@ def _build_step_metrics(
     observations.sort(key=lambda item: item.timestamp)
     total = TokenUsage()
     vendor_cost = _vendor_reported_cost(
-        step,
+        turn,
         context_observations=context_observations,
         observations=observations,
         extra_billing=extra_billing,
@@ -535,22 +312,28 @@ def _build_step_metrics(
                 estimate_observation_cost(observation, extra_billing=extra_billing)
             )
 
-    tool_count, tool_duration_ms = _step_tool_metrics(step, events)
+    quota_snapshots: list[QuotaSnapshot] = []
+    for observation in context_observations:
+        quota = _quota_snapshot_from_context_usage(observation)
+        if quota is not None:
+            quota_snapshots.append(quota)
+    quota_snapshots.sort(key=lambda item: item.timestamp)
 
-    return StepMetrics(
-        step_id=step.step_id,
-        sequence=step.sequence,
-        kind=_step_kind(step, has_usage=bool(observations)),
+    return TurnMetrics(
+        turn_id=turn.turn_id,
+        sequence=turn.sequence,
+        status=turn.status.value,
+        started_at=turn.started_at,
+        completed_at=turn.ended_at,
         token_usage=total,
         cost_estimate=_finalize_cost(cost_total),
         observations=observations,
-        tool_count=tool_count,
-        tool_duration_ms=tool_duration_ms,
+        quota_snapshots=quota_snapshots,
     )
 
 
 def _vendor_reported_cost(
-    step: Step,
+    turn: Turn,
     *,
     context_observations: list[ContextUsageObservation],
     observations: list[TokenUsageObservation],
@@ -572,7 +355,7 @@ def _vendor_reported_cost(
         amount_usd=amount,
         extra_billing=extra_billing,
         pricing_source="vendor_reported",
-        pricing_effective_date=step.timestamp.date().isoformat(),
+        pricing_effective_date=turn.started_at.date().isoformat(),
         model=model,
         complete=True,
     )
@@ -581,22 +364,17 @@ def _vendor_reported_cost(
 def _usage_from_context_observation(
     observation: ContextUsageObservation,
     *,
-    step: Step,
+    turn: Turn,
     session: Session,
-    codex_state: _CodexUsageState,
 ) -> TokenUsageObservation | None:
-    token_usage = (
-        _cumulative_delta_usage(observation, codex_state)
-        if observation.cumulative_usage is not None or session.vendor == Vendor.CODEX_CLI
-        else _token_usage_from_mapping(observation.usage)
-    )
+    token_usage = _token_usage_from_mapping(observation.usage)
     if token_usage is None or _is_zero_usage(token_usage):
         return None
     provider = observation.provider or session.vendor.value
 
     return TokenUsageObservation(
-        scope_type="step",
-        scope_id=step.step_id,
+        scope_type="turn",
+        scope_id=turn.turn_id,
         timestamp=observation.timestamp,
         usage=token_usage,
         provider=provider,
@@ -607,55 +385,6 @@ def _usage_from_context_observation(
             event_id=observation.source_event_id,
         ),
     )
-
-
-def _cumulative_delta_usage(
-    observation: ContextUsageObservation,
-    state: _CodexUsageState,
-) -> TokenUsage | None:
-    if observation.cumulative_usage is not None:
-        raw_totals = _token_usage_from_mapping(observation.cumulative_usage)
-        total_key = _usage_key(raw_totals)
-        if state.seen_totals is not None and total_key in state.seen_totals:
-            return None
-        if state.seen_totals is not None:
-            state.seen_totals.add(total_key)
-
-        current_totals = _subtract_usage(raw_totals, state.remaining_inherited_totals)
-        previous_totals = state.previous_totals or TokenUsage()
-        delta = _subtract_usage(current_totals, previous_totals)
-        state.previous_totals = current_totals
-        state.remaining_inherited_totals = None
-        return delta
-
-    raw_delta = _token_usage_from_mapping(observation.usage)
-    delta = _subtract_usage(raw_delta, state.remaining_inherited_totals)
-    state.remaining_inherited_totals = _subtract_usage(state.remaining_inherited_totals, raw_delta)
-    previous_totals = state.previous_totals or TokenUsage()
-    state.previous_totals = previous_totals.plus(delta)
-    return delta
-
-
-def _inherited_codex_totals(
-    session: Session,
-    sessions_by_id: dict[UUID, Session],
-) -> TokenUsage | None:
-    if session.vendor != Vendor.CODEX_CLI or session.parent_session_id is None:
-        return None
-    parent = sessions_by_id.get(session.parent_session_id)
-    if parent is None or parent.vendor != Vendor.CODEX_CLI:
-        return None
-
-    state = _CodexUsageState(seen_totals=set())
-    latest = TokenUsage()
-    for observation in sorted(parent.context_usage, key=lambda item: item.timestamp):
-        if observation.timestamp > session.started_at:
-            break
-        delta = _cumulative_delta_usage(observation, state)
-        if delta is not None:
-            latest = latest.plus(delta)
-
-    return None if _is_zero_usage(latest) else latest
 
 
 def _quota_snapshot_from_context_usage(
@@ -705,18 +434,6 @@ def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
     )
 
 
-def _context_usage_for_step(
-    session: Session,
-    step: Step,
-) -> list[ContextUsageObservation]:
-    event_ids = set(step.event_ids)
-    return [
-        observation
-        for observation in session.context_usage
-        if observation.source_event_id in event_ids
-    ]
-
-
 def _context_usage_for_turn(
     session: Session,
     turn: Turn,
@@ -727,28 +444,6 @@ def _context_usage_for_turn(
         for observation in session.context_usage
         if observation.source_event_id in event_ids
     ]
-
-
-def _usage_key(usage: TokenUsage) -> tuple[int, int, int, int, int]:
-    return (
-        usage.input_tokens,
-        usage.cached_input_tokens,
-        usage.output_tokens,
-        usage.reasoning_output_tokens,
-        usage.total_tokens,
-    )
-
-
-def _subtract_usage(left: TokenUsage | None, right: TokenUsage | None) -> TokenUsage:
-    left = left or TokenUsage()
-    right = right or TokenUsage()
-    return TokenUsage(
-        input_tokens=max(left.input_tokens - right.input_tokens, 0),
-        cached_input_tokens=max(left.cached_input_tokens - right.cached_input_tokens, 0),
-        output_tokens=max(left.output_tokens - right.output_tokens, 0),
-        reasoning_output_tokens=max(left.reasoning_output_tokens - right.reasoning_output_tokens, 0),
-        total_tokens=max(left.total_tokens - right.total_tokens, 0),
-    )
 
 
 def _session_has_usage(metrics: SessionMetrics) -> bool:
