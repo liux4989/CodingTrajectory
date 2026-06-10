@@ -198,6 +198,15 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     lines.append(f"- {runtime_line}")
     if runtime.get("compactions"):
         lines[-1] += f", {runtime['compactions']} compactions"
+    if runtime.get("interrupted_turns"):
+        lines[-1] += f", {runtime['interrupted_turns']} interrupted"
+    if runtime.get("rollbacks"):
+        lines[-1] += f", {runtime['rollbacks']} rolled back"
+    if runtime.get("average_time_to_first_token_ms") is not None:
+        lines.append(
+            f"- Average time to first token: "
+            f"{runtime['average_time_to_first_token_ms'] / 1000:.2f}s"
+        )
     if tool_calls_total:
         success_rate = round(((tool_calls_total - failed_tool_calls) / tool_calls_total) * 100, 1)
         lines.append(f"- Tool Success Rate: {success_rate}%")
@@ -212,10 +221,18 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     quota = payload.get("quota") or {}
     if quota:
         quota_bits = [f"plan {quota.get('plan_type')}"] if quota.get("plan_type") else []
+        if quota.get("limit_name") or quota.get("limit_id"):
+            quota_bits.append(f"limit {quota.get('limit_name') or quota.get('limit_id')}")
         if quota.get("primary_used_percent") is not None:
             quota_bits.append(f"primary {quota['primary_used_percent']:.1f}%")
         if quota.get("secondary_used_percent") is not None:
             quota_bits.append(f"secondary {quota['secondary_used_percent']:.1f}%")
+        if quota.get("credits_balance") is not None:
+            quota_bits.append(f"credits {quota['credits_balance']}")
+        elif quota.get("credits_unlimited"):
+            quota_bits.append("credits unlimited")
+        if quota.get("rate_limit_reached_type"):
+            quota_bits.append(f"reached {quota['rate_limit_reached_type']}")
         if quota_bits:
             lines.append("- Quota: " + ", ".join(quota_bits))
     warnings = payload.get("warnings") or []

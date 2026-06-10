@@ -111,9 +111,12 @@ class QuotaSnapshot(BaseModel):
     timestamp: datetime
     source_event_id: UUID
     limit_id: str | None = None
+    limit_name: str | None = None
     plan_type: str | None = None
     primary: QuotaWindow | None = None
     secondary: QuotaWindow | None = None
+    credits: dict[str, bool | str | None] | None = None
+    individual_limit: dict[str, str | int | None] | None = None
     rate_limit_reached_type: str | None = None
 
 
@@ -267,6 +270,10 @@ class RuntimeStatsFlat(BaseModel):
     failed_tool_calls: int = 0
     subagent_sessions: int = 0
     compactions: int = 0
+    interrupted_turns: int = 0
+    rollbacks: int = 0
+    observed_turn_duration_ms: int | None = None
+    average_time_to_first_token_ms: int | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -301,10 +308,22 @@ class ContextModelStatsFlat(BaseModel):
 
 
 class QuotaStatsFlat(BaseModel):
+    limit_id: str | None = None
+    limit_name: str | None = None
     plan_type: str | None = None
     primary_used_percent: float | None = None
+    primary_window_minutes: int | None = None
+    primary_resets_at: int | None = None
     secondary_used_percent: float | None = None
-    resets_at: int | None = None
+    secondary_window_minutes: int | None = None
+    secondary_resets_at: int | None = None
+    credits_has_credits: bool | None = None
+    credits_unlimited: bool | None = None
+    credits_balance: str | None = None
+    individual_limit: str | None = None
+    individual_used: str | None = None
+    individual_remaining_percent: int | None = None
+    rate_limit_reached_type: str | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):

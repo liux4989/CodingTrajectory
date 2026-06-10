@@ -669,9 +669,16 @@ def _quota_snapshot_from_context_usage(
         timestamp=observation.timestamp,
         source_event_id=observation.source_event_id,
         limit_id=_as_str(rate_limits.get("limit_id")),
+        limit_name=_as_str(rate_limits.get("limit_name")),
         plan_type=_as_str(rate_limits.get("plan_type")),
         primary=_quota_window(rate_limits.get("primary")),
         secondary=_quota_window(rate_limits.get("secondary")),
+        credits=rate_limits.get("credits") if isinstance(rate_limits.get("credits"), dict) else None,
+        individual_limit=(
+            rate_limits.get("individual_limit")
+            if isinstance(rate_limits.get("individual_limit"), dict)
+            else None
+        ),
         rate_limit_reached_type=_as_str(rate_limits.get("rate_limit_reached_type")),
     )
 

@@ -46,6 +46,23 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         for observation in session.runtime_observations
         if observation.kind == "context_compacted"
     )
+    runtime_observations = [
+        observation
+        for session in session_graph.sessions
+        for observation in session.runtime_observations
+    ]
+    observed_durations = [
+        observation.duration_ms
+        for observation in runtime_observations
+        if observation.kind in {"turn_completed", "turn_aborted"}
+        and observation.duration_ms is not None
+    ]
+    first_token_durations = [
+        observation.time_to_first_token_ms
+        for observation in runtime_observations
+        if observation.kind == "turn_completed"
+        and observation.time_to_first_token_ms is not None
+    ]
     return RuntimeStatsFlat(
         status=status,
         started_at=started,
@@ -59,6 +76,20 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
             1 for session in session_graph.sessions if session.parent_session_id is not None
         ),
         compactions=compactions,
+        interrupted_turns=sum(
+            1 for observation in runtime_observations if observation.kind == "turn_aborted"
+        ),
+        rollbacks=sum(
+            observation.num_turns or 0
+            for observation in runtime_observations
+            if observation.kind == "thread_rolled_back"
+        ),
+        observed_turn_duration_ms=sum(observed_durations) if observed_durations else None,
+        average_time_to_first_token_ms=(
+            round(sum(first_token_durations) / len(first_token_durations))
+            if first_token_durations
+            else None
+        ),
     )
 
 

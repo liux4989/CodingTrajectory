@@ -116,11 +116,29 @@ def _quota_stats(observation: ContextUsageObservation) -> QuotaStatsFlat | None:
         return None
     primary = quota.get("primary") if isinstance(quota.get("primary"), dict) else {}
     secondary = quota.get("secondary") if isinstance(quota.get("secondary"), dict) else {}
+    credits = quota.get("credits") if isinstance(quota.get("credits"), dict) else {}
+    individual = (
+        quota.get("individual_limit")
+        if isinstance(quota.get("individual_limit"), dict)
+        else {}
+    )
     return QuotaStatsFlat(
+        limit_id=_as_str(quota.get("limit_id")),
+        limit_name=_as_str(quota.get("limit_name")),
         plan_type=_as_str(quota.get("plan_type")),
         primary_used_percent=_as_float(primary.get("used_percent")),
+        primary_window_minutes=_as_int(primary.get("window_minutes")),
+        primary_resets_at=_as_int(primary.get("resets_at")),
         secondary_used_percent=_as_float(secondary.get("used_percent")),
-        resets_at=_as_int(primary.get("resets_at")),
+        secondary_window_minutes=_as_int(secondary.get("window_minutes")),
+        secondary_resets_at=_as_int(secondary.get("resets_at")),
+        credits_has_credits=_as_bool(credits.get("has_credits")),
+        credits_unlimited=_as_bool(credits.get("unlimited")),
+        credits_balance=_as_str(credits.get("balance")),
+        individual_limit=_as_str(individual.get("limit")),
+        individual_used=_as_str(individual.get("used")),
+        individual_remaining_percent=_as_int(individual.get("remaining_percent")),
+        rate_limit_reached_type=_as_str(quota.get("rate_limit_reached_type")),
     )
 
 
@@ -136,6 +154,10 @@ def _as_float(value: Any) -> float | None:
 
 def _as_int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _as_bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
 
 
 __all__ = [

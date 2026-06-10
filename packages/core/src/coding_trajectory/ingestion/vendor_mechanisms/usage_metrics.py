@@ -30,11 +30,26 @@ class NormalizedQuotaWindow(BaseModel):
     resets_at: int | None = None
 
 
+class NormalizedCreditsSnapshot(BaseModel):
+    has_credits: bool | None = None
+    unlimited: bool | None = None
+    balance: str | None = None
+
+
+class NormalizedSpendControlLimit(BaseModel):
+    limit: str | None = None
+    used: str | None = None
+    remaining_percent: int | None = None
+
+
 class NormalizedQuotaSnapshot(BaseModel):
     limit_id: str | None = None
+    limit_name: str | None = None
     plan_type: str | None = None
     primary: NormalizedQuotaWindow | None = None
     secondary: NormalizedQuotaWindow | None = None
+    credits: NormalizedCreditsSnapshot | None = None
+    individual_limit: NormalizedSpendControlLimit | None = None
     rate_limit_reached_type: str | None = None
 
 
@@ -167,9 +182,12 @@ def normalize_quota_snapshot(value: Any) -> dict[str, Any] | None:
         return None
     snapshot = NormalizedQuotaSnapshot(
         limit_id=_as_str(value.get("limit_id")),
+        limit_name=_as_str(value.get("limit_name")),
         plan_type=_as_str(value.get("plan_type")),
         primary=_quota_window(value.get("primary")),
         secondary=_quota_window(value.get("secondary")),
+        credits=_credits_snapshot(value.get("credits")),
+        individual_limit=_spend_control_limit(value.get("individual_limit")),
         rate_limit_reached_type=_as_str(value.get("rate_limit_reached_type")),
     )
     dumped = snapshot.model_dump(exclude_none=True)
@@ -206,6 +224,26 @@ def _quota_window(value: Any) -> NormalizedQuotaWindow | None:
     )
 
 
+def _credits_snapshot(value: Any) -> NormalizedCreditsSnapshot | None:
+    if not isinstance(value, dict):
+        return None
+    return NormalizedCreditsSnapshot(
+        has_credits=_as_bool_or_none(value.get("has_credits")),
+        unlimited=_as_bool_or_none(value.get("unlimited")),
+        balance=_as_str(value.get("balance")),
+    )
+
+
+def _spend_control_limit(value: Any) -> NormalizedSpendControlLimit | None:
+    if not isinstance(value, dict):
+        return None
+    return NormalizedSpendControlLimit(
+        limit=_as_str(value.get("limit")),
+        used=_as_str(value.get("used")),
+        remaining_percent=_as_int_or_none(value.get("remaining_percent")),
+    )
+
+
 def _dict_or_none(value: Any) -> dict[str, Any] | None:
     return value if isinstance(value, dict) and value else None
 
@@ -222,6 +260,10 @@ def _as_float_or_none(value: Any) -> float | None:
     if isinstance(value, (float, int)) and not isinstance(value, bool):
         return float(value)
     return None
+
+
+def _as_bool_or_none(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
 
 
 def _pi_cost_usd(value: Any) -> float | None:

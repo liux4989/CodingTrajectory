@@ -53,6 +53,26 @@ def _parse_json_blob(raw: Any) -> Any:
         return raw
 
 
+def _tool_status(value: Any, *, default: ToolStatus = ToolStatus.REQUESTED) -> ToolStatus:
+    if value == "completed":
+        return ToolStatus.COMPLETED
+    if value in {"failed", "declined"}:
+        return ToolStatus.FAILED
+    if value == "in_progress":
+        return ToolStatus.IN_PROGRESS
+    return default
+
+
+def _tool_result_status(payload: dict[str, Any], output: Any) -> ToolStatus:
+    if isinstance(payload.get("success"), bool):
+        return ToolStatus.COMPLETED if payload["success"] else ToolStatus.FAILED
+    status = _tool_status(payload.get("status"), default=ToolStatus.COMPLETED)
+    if status != ToolStatus.COMPLETED:
+        return status
+    success = infer_tool_success(output)
+    return ToolStatus.FAILED if success is False else ToolStatus.COMPLETED
+
+
 def _extract_message_text(payload: dict[str, Any]) -> str | None:
     message = payload.get("message")
     return message if isinstance(message, str) and message else None
@@ -257,6 +277,7 @@ class CodexAdapter(BaseAdapter):
         context_usage: list[ContextUsageObservation] = field(default_factory=list)
         context_sources: list[ContextSourceObservation] = field(default_factory=list)
         runtime_observations: list[RuntimeObservation] = field(default_factory=list)
+        projected_turn_ids: set[str] = field(default_factory=set)
 
     def ingest_file(self, path: Path) -> Session:
         self._reset_ingest_state()
@@ -374,6 +395,12 @@ class CodexAdapter(BaseAdapter):
                 turn_id = payload.get("turn_id") or state.turn_context.get("turn_id")
 
                 if inner_type == "user_message":
+                    turn_id_text = _as_non_empty_str(turn_id)
+                    starts_turn = (
+                        turn_id_text is None or turn_id_text not in state.projected_turn_ids
+                    )
+                    if turn_id_text is not None:
+                        state.projected_turn_ids.add(turn_id_text)
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -385,6 +412,7 @@ class CodexAdapter(BaseAdapter):
                                 "turn_id_raw": turn_id,
                                 "text": _extract_message_text(payload),
                                 "previous_turn_status": TurnStatus.INTERRUPTED.value,
+                                "starts_turn": starts_turn,
                             },
                         )
                     )
@@ -393,6 +421,23 @@ class CodexAdapter(BaseAdapter):
                     continue
 
                 elif inner_type == "task_complete":
+                    state.runtime_observations.append(
+                        RuntimeObservation(
+                            timestamp=ts,
+                            kind="turn_completed",
+                            turn_id_raw=_as_non_empty_str(payload.get("turn_id")),
+                            duration_ms=(
+                                payload.get("duration_ms")
+                                if isinstance(payload.get("duration_ms"), int)
+                                else None
+                            ),
+                            time_to_first_token_ms=(
+                                payload.get("time_to_first_token_ms")
+                                if isinstance(payload.get("time_to_first_token_ms"), int)
+                                else None
+                            ),
+                        )
+                    )
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -465,10 +510,61 @@ class CodexAdapter(BaseAdapter):
                         )
                     )
 
+                elif inner_type == "turn_aborted":
+                    state.runtime_observations.append(
+                        RuntimeObservation(
+                            timestamp=ts,
+                            kind="turn_aborted",
+                            turn_id_raw=_as_non_empty_str(payload.get("turn_id")) or turn_id,
+                            duration_ms=(
+                                payload.get("duration_ms")
+                                if isinstance(payload.get("duration_ms"), int)
+                                else None
+                            ),
+                            reason=_as_non_empty_str(payload.get("reason")),
+                        )
+                    )
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CODEX_CLI,
+                            role="runtime",
+                            kind="task_complete",
+                            data={
+                                "turn_id_raw": payload.get("turn_id") or turn_id,
+                                "raw_type": "turn_aborted",
+                                "status": TurnStatus.INTERRUPTED.value,
+                            },
+                            fidelity="synthetic",
+                        )
+                    )
+
+                elif inner_type == "thread_rolled_back":
+                    state.runtime_observations.append(
+                        RuntimeObservation(
+                            timestamp=ts,
+                            kind="thread_rolled_back",
+                            num_turns=(
+                                payload.get("num_turns")
+                                if isinstance(payload.get("num_turns"), int)
+                                else None
+                            ),
+                        )
+                    )
+
                 elif inner_type == "task_started":
                     context_window = payload.get("model_context_window")
                     if isinstance(context_window, int) and not isinstance(context_window, bool):
                         state.context_window_tokens = context_window
+                    state.runtime_observations.append(
+                        RuntimeObservation(
+                            timestamp=ts,
+                            kind="turn_started",
+                            turn_id_raw=_as_non_empty_str(payload.get("turn_id")) or turn_id,
+                            trace_id=_as_non_empty_str(payload.get("trace_id")),
+                        )
+                    )
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -510,10 +606,6 @@ class CodexAdapter(BaseAdapter):
                 elif inner_type == "function_call_output":
                     raw_output = payload.get("output")
                     output = _parse_json_blob(raw_output)
-                    success = infer_tool_success(raw_output)
-                    status = (
-                        ToolStatus.FAILED.value if success is False else ToolStatus.COMPLETED.value
-                    )
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -525,7 +617,134 @@ class CodexAdapter(BaseAdapter):
                                 "tool_call_id": payload.get("call_id"),
                                 "exit_code": extract_exit_code(raw_output),
                                 "output": output,
-                                "status": status,
+                                "status": _tool_result_status(payload, raw_output).value,
+                            },
+                        )
+                    )
+
+                elif inner_type == "custom_tool_call":
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CODEX_CLI,
+                            role="assistant",
+                            kind="tool_call",
+                            data={
+                                "tool_name": payload.get("name"),
+                                "tool_call_id": payload.get("call_id"),
+                                "input": _parse_json_blob(payload.get("input")),
+                            },
+                        )
+                    )
+
+                elif inner_type == "custom_tool_call_output":
+                    raw_output = payload.get("output")
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CODEX_CLI,
+                            role="tool",
+                            kind="tool_result",
+                            data={
+                                "tool_name": payload.get("name"),
+                                "tool_call_id": payload.get("call_id"),
+                                "exit_code": extract_exit_code(raw_output),
+                                "output": _parse_json_blob(raw_output),
+                                "status": _tool_result_status(payload, raw_output).value,
+                            },
+                        )
+                    )
+
+                elif inner_type == "tool_search_call":
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CODEX_CLI,
+                            role="assistant",
+                            kind="tool_call",
+                            data={
+                                "tool_name": "tool_search",
+                                "tool_call_id": payload.get("call_id"),
+                                "input": payload.get("arguments"),
+                                "status": _tool_status(payload.get("status")).value,
+                            },
+                        )
+                    )
+
+                elif inner_type == "tool_search_output":
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CODEX_CLI,
+                            role="tool",
+                            kind="tool_result",
+                            data={
+                                "tool_name": "tool_search",
+                                "tool_call_id": payload.get("call_id"),
+                                "output": payload.get("tools"),
+                                "status": _tool_result_status(payload, payload.get("tools")).value,
+                            },
+                        )
+                    )
+
+                elif inner_type == "web_search_call":
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CODEX_CLI,
+                            role="assistant",
+                            kind="tool_call",
+                            data={
+                                "tool_name": "web_search",
+                                "tool_call_id": f"web_search:{len(transcript)}",
+                                "input": payload.get("action"),
+                                "status": _tool_status(
+                                    payload.get("status"),
+                                    default=ToolStatus.COMPLETED,
+                                ).value,
+                            },
+                        )
+                    )
+
+                elif inner_type == "local_shell_call":
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CODEX_CLI,
+                            role="assistant",
+                            kind="tool_call",
+                            data={
+                                "tool_name": "local_shell",
+                                "tool_call_id": payload.get("call_id"),
+                                "input": payload.get("action"),
+                                "status": _tool_status(payload.get("status")).value,
+                            },
+                        )
+                    )
+
+                elif inner_type == "image_generation_call":
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CODEX_CLI,
+                            role="assistant",
+                            kind="tool_call",
+                            data={
+                                "tool_name": "image_generation",
+                                "tool_call_id": payload.get("id"),
+                                "input": {"revised_prompt": payload.get("revised_prompt")},
+                                "output": payload.get("result"),
+                                "status": _tool_status(
+                                    payload.get("status"),
+                                    default=ToolStatus.COMPLETED,
+                                ).value,
                             },
                         )
                     )

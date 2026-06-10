@@ -481,6 +481,10 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "failed_tools": runtime.get("failed_tool_calls") or None,
                         "subagents": runtime.get("subagent_sessions"),
                         "compactions": runtime.get("compactions"),
+                        "interrupted_turns": runtime.get("interrupted_turns") or None,
+                        "rollbacks": runtime.get("rollbacks") or None,
+                        "observed_turn_duration_ms": runtime.get("observed_turn_duration_ms"),
+                        "average_ttft_ms": runtime.get("average_time_to_first_token_ms"),
                     }
                 )
                 or None,
@@ -499,9 +503,23 @@ def compact_payload(method: str, payload: Any) -> Any:
                 "quota": drop_none(
                     {
                         "plan": quota.get("plan_type"),
+                        "limit_id": quota.get("limit_id"),
+                        "limit_name": quota.get("limit_name"),
                         "primary_pct": quota.get("primary_used_percent"),
+                        "primary_window_minutes": quota.get("primary_window_minutes"),
+                        "primary_reset_at": quota.get("primary_resets_at"),
                         "secondary_pct": quota.get("secondary_used_percent"),
-                        "reset_at": quota.get("resets_at"),
+                        "secondary_window_minutes": quota.get("secondary_window_minutes"),
+                        "secondary_reset_at": quota.get("secondary_resets_at"),
+                        "has_credits": quota.get("credits_has_credits"),
+                        "credits_unlimited": quota.get("credits_unlimited"),
+                        "credits_balance": quota.get("credits_balance"),
+                        "individual_limit": quota.get("individual_limit"),
+                        "individual_used": quota.get("individual_used"),
+                        "individual_remaining_pct": quota.get(
+                            "individual_remaining_percent"
+                        ),
+                        "reached": quota.get("rate_limit_reached_type"),
                     }
                 )
                 or None,

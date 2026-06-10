@@ -133,8 +133,14 @@ class ContextSourceObservation(BaseModel):
 
 
 class RuntimeObservation(BaseModel):
-    timestamp: datetime
-    kind:      str
+    timestamp:                 datetime
+    kind:                      str
+    turn_id_raw:               str | None = None
+    trace_id:                  str | None = None
+    duration_ms:               int | None = None
+    time_to_first_token_ms:    int | None = None
+    reason:                    str | None = None
+    num_turns:                 int | None = None
 
 
 class Event(BaseModel):

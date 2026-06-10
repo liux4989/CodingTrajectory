@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 
-_EXIT_CODE_RE = re.compile(r"Process exited with code (?P<code>-?\d+)")
+_EXIT_CODE_RE = re.compile(
+    r"(?:Process exited with code|Exit code:)\s*(?P<code>-?\d+)",
+    re.IGNORECASE,
+)
 _JSON_EXIT_CODE_RE = re.compile(r'"exit_code"\s*:\s*(?P<code>-?\d+)')
 
 
