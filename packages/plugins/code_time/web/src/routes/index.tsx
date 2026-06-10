@@ -3,6 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchToday, type CodeTimeReport } from "@/api";
 import { StatCard } from "@/components/stat-card";
 import { ProjectTable } from "@/components/project-table";
+import { DailyDistributionChart } from "@/components/daily-distribution-chart";
+import { ProjectTrendChart } from "@/components/project-trend-chart";
+import {
+  generateSampleHourlyDensity,
+  generateSampleProjectTrend,
+} from "@/lib/sample-data";
 
 function formatDuration(seconds: number): string {
   if (!seconds) return "-";
@@ -143,6 +149,21 @@ export function OverviewRoute() {
               label="Tool Calls"
               value={String(totals.tool_calls)}
               className="animate-rise-in [animation-delay:300ms]"
+            />
+          </div>
+
+          <div className="mt-8 grid gap-6 lg:grid-cols-2">
+            <DailyDistributionChart
+              data={
+                data.hourly_density ??
+                generateSampleHourlyDensity(data.projects)
+              }
+            />
+            <ProjectTrendChart
+              data={
+                data.project_trend ??
+                generateSampleProjectTrend(data.projects)
+              }
             />
           </div>
 

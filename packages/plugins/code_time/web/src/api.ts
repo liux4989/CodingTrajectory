@@ -42,11 +42,29 @@ export type Totals = {
   cost_usd: number | null;
 };
 
+export type HourlyDensity = {
+  hour: number;
+  density: number;
+  by_project: Record<string, number>;
+};
+
+export type ProjectDayTrend = {
+  date: string;
+  seconds: number;
+};
+
+export type ProjectTrend = {
+  project_name: string;
+  days: ProjectDayTrend[];
+};
+
 export type CodeTimeReport = {
   window: string;
   generated_at: string;
   totals: Totals;
   projects: ProjectSlice[];
+  hourly_density?: HourlyDensity[];
+  project_trend?: ProjectTrend[];
 };
 
 const BASE = "";
