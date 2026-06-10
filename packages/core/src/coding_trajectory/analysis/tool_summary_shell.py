@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from typing import Any
+from typing import Any, Literal
 
 from coding_trajectory.analysis.tool_summary_shared import (
     EDIT_FILE,
@@ -19,6 +19,53 @@ from coding_trajectory.analysis.tool_summary_shared import (
     short_path,
 )
 from coding_trajectory_plugins.dashboard.quote import split_shell_stages
+
+
+CommandFamily = Literal[
+    "cli_report",
+    "tests",
+    "build",
+    "code_fix",
+    "repository",
+    "dependency",
+    "diagnostic",
+    "external",
+    "runtime",
+    "other",
+]
+
+_TEST_TOKENS = frozenset({
+    "pytest", "jest", "vitest", "mocha", "rspec", "phpunit",
+    "unittest", "tox", "ctest", "test", "deno",
+})
+_BUILD_TOKENS = frozenset({
+    "tsc", "mypy", "ruff", "eslint", "flake8", "pylint", "black", "isort", "prettier",
+    "make", "cmake", "webpack", "rollup", "vite", "esbuild", "clippy",
+    "build", "compile", "lint", "typecheck", "check", "vet",
+})
+_PACKAGE_MANAGERS = frozenset({
+    "npm", "pnpm", "yarn", "bun", "pip", "pip3", "uv", "poetry", "pipenv",
+    "cargo", "gem", "bundle", "brew", "conda", "apt", "apt-get",
+})
+_DEPENDENCY_TOKENS = frozenset({
+    "install", "add", "ci", "sync", "get", "lock", "update", "upgrade", "remove",
+})
+_COMMAND_RUNNERS = frozenset({
+    "uv", "poetry", "pdm", "pipenv", "rye", "hatch",
+    "npx", "bunx", "pnpm", "yarn", "bun", "deno",
+})
+_RUNNER_SUBWORDS = frozenset({"run", "exec", "dlx", "tool", "task"})
+_CODE_FIX_TOKENS = frozenset({"fmt", "format", "fix", "fixer"})
+_DIAGNOSTIC_HEADS = frozenset(
+    {"pwd", "date", "which", "where", "whoami", "uname", "env", "printenv"}
+)
+_EXTERNAL_HEADS = frozenset({
+    "curl", "wget", "http", "https", "wrangler", "aws", "gcloud", "az", "fly",
+    "flyctl", "vercel", "netlify", "ssh", "scp", "rsync",
+})
+_RUNTIME_TOKENS = frozenset(
+    {"dev", "serve", "server", "start", "up", "runserver", "preview"}
+)
 
 
 def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, str]:
@@ -56,6 +103,52 @@ def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, st
     return RUN_COMMAND, description, "shell:command"
 
 
+def classify_command_family(tool_input: Any) -> tuple[CommandFamily, str]:
+    cmd = shell_cmd(tool_input)
+    if not cmd and isinstance(tool_input, str):
+        cmd = tool_input
+    if not cmd:
+        return "other", "command"
+    tokens = [os.path.basename(token.lower()) for token in safe_split(primary_stage(cmd))]
+    if not tokens:
+        return "other", "command"
+
+    head = command_head(tokens)
+    token_set = set(tokens)
+    if head == "ct":
+        return "cli_report", head
+    if head in {"git", "gh", "hg", "svn"} or tokens[0] in {"git", "gh", "hg", "svn"}:
+        return "repository", head
+    if token_set & _TEST_TOKENS:
+        return "tests", head
+    if token_set & _CODE_FIX_TOKENS:
+        return "code_fix", head
+    if token_set & _BUILD_TOKENS:
+        return "build", head
+    if token_set & _PACKAGE_MANAGERS and token_set & _DEPENDENCY_TOKENS:
+        return "dependency", head
+    if head in _DIAGNOSTIC_HEADS or "--version" in token_set or "-v" in token_set:
+        return "diagnostic", head
+    if head in _EXTERNAL_HEADS:
+        return "external", head
+    if token_set & _RUNTIME_TOKENS:
+        return "runtime", head
+    return "other", head
+
+
+def command_head(tokens: list[str]) -> str:
+    index = 0
+    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
+        index += 1
+    if index < len(tokens) and tokens[index] in _COMMAND_RUNNERS:
+        index += 1
+        while index < len(tokens) and tokens[index] in _RUNNER_SUBWORDS:
+            index += 1
+    if index + 2 < len(tokens) and tokens[index] in {"python", "python3"} and tokens[index + 1] == "-m":
+        return tokens[index + 2]
+    return tokens[index] if index < len(tokens) else "command"
+
+
 def primary_stage(cmd: str) -> str:
     stages = [stage for stage in split_shell_stages(cmd) if stage.strip()]
     if not stages:
@@ -67,6 +160,8 @@ def primary_stage(cmd: str) -> str:
 
 
 def shell_cmd(tool_input: Any) -> str:
+    if isinstance(tool_input, str):
+        return tool_input.strip()
     if not isinstance(tool_input, dict):
         return ""
     for key in ("cmd", "command", "shell"):

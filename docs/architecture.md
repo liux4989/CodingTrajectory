@@ -204,7 +204,7 @@ The service layer implements a method-dispatch contract consumed by the CLI and 
 | `project.sessions` | List session graphs for a project |
 | `project.logfile` | List session graphs from an explicit log file |
 | `session.overview` | Narrative overview: hierarchy, activity keys, turn summaries |
-| `session.stats` | Context window statistics and category breakdown |
+| `session.stats` | Provider context usage plus observed structural composition and runtime statistics |
 | `session.usage` | Token usage and log-reported cost breakdown by turn |
 | `session.tool_usage` | Tool invocation statistics and estimated visible-content token attribution |
 | `session.turn_usage` | Per-turn usage detail |

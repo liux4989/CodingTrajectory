@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from coding_trajectory.analysis.tool_summary_shell import classify_shell
+from coding_trajectory.analysis.tool_summary_shell import (
+    classify_command_family,
+    classify_shell,
+)
 from coding_trajectory.analysis.tool_summary_shared import (
     EDIT_FILE,
     LIST_FILES,
@@ -27,9 +30,15 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
     tool_name_raw = getattr(item, "tool_name", None)
     tool_name = (tool_name_raw or "").strip() if isinstance(tool_name_raw, str) else ""
     if not tool_name:
+        tool_name = {
+            "command_execution": "exec_command",
+            "file_change": "apply_patch",
+            "plan": "update_plan",
+        }.get(item.kind, "")
+    if not tool_name:
         return None
 
-    tool_input = getattr(item, "input", None)
+    tool_input = item.command if item.kind == "command_execution" else getattr(item, "input", None)
     concept, description, optimization_profile = _classify(tool_name, tool_input)
 
     result: dict[str, Any] = {"name": concept}
@@ -37,6 +46,10 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         result["optimization_profile"] = optimization_profile
     if description:
         result["description"] = description
+    if concept == "RunCommand":
+        family, command = classify_command_family(tool_input)
+        result["command_family"] = family
+        result["command"] = command
     status = getattr(item, "status", None)
     if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
         result["status"] = "failed"

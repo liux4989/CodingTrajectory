@@ -219,9 +219,10 @@ The `session.tool_usage` payload should include a note or metadata block:
 
 ### Dashboard
 
-The context-window dashboard should keep using turn/session stats for the main
-composition and capacity view. Tool attribution can become an optional drill-down
-for tool rows. Label it as estimated visible contribution.
+The context-window dashboard should keep provider capacity/usage separate from
+observed semantic composition. Context composition and tool attribution share
+the same visible-content sizing logic; tool attribution can remain an optional
+drill-down for tool rows.
 
 Do not replace existing turn totals with item sums.
 

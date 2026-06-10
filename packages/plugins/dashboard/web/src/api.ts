@@ -62,6 +62,7 @@ export type ContextWindowPayload = {
   used_tokens: TokenEvidence | null;
   used_percent: number | null;
   categories: ContextCategory[];
+  provider_usage_buckets: ContextCategory[];
   events: ContextEvent[];
   warnings: string[];
 };

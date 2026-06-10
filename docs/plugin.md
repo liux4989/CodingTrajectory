@@ -267,9 +267,12 @@ are cache-agnostic and must not replace observed session or turn usage totals.
 
 Provider behavior remains explicit:
 
-- Codex category totals use the semantic taxonomy from `ct session stats`.
-- Claude Code and Pi expose exact cache-bucket totals as `unattributed` because
-  their current stats APIs cannot split cached context into semantic categories.
+- Semantic categories measure observed canonical content and are not scaled to
+  the provider-reported active context total.
+- Exact provider cache/input buckets are exposed separately as
+  `provider_usage_buckets`.
+- Shell reads, searches, and command families reuse core item-analysis
+  semantics instead of a dashboard-local command classifier.
 - User and assistant timeline deltas estimate visible overview text.
 - Tool timeline rows do not invent token deltas when result text is unavailable.
 

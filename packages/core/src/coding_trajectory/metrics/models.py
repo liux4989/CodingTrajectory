@@ -195,6 +195,8 @@ class ContextCategoryFlat(BaseModel):
     key: str
     label: str
     tokens: int = 0
+    observed_chars: int | None = None
+    items: int | None = None
     percent: float | None = None
     confidence: Literal["exact_usage", "exact_text", "estimated_tokens", "text_chars", "structural"] = (
         "estimated_tokens"
@@ -205,8 +207,10 @@ class ContextCategoryFlat(BaseModel):
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
-        data.pop("confidence", None)
-        data.pop("source", None)
+        if data.get("observed_chars") is None:
+            data.pop("observed_chars", None)
+        if data.get("items") is None:
+            data.pop("items", None)
         if data.get("percent") is None:
             data.pop("percent", None)
         if not data.get("children"):
@@ -318,6 +322,7 @@ class SessionContextStatsFlat(BaseModel):
     vendor: str
     model: ContextModelStatsFlat = Field(default_factory=ContextModelStatsFlat)
     context_window: ContextWindowStatsFlat = Field(default_factory=ContextWindowStatsFlat)
+    provider_usage_buckets: list[ContextCategoryFlat] = Field(default_factory=list)
     runtime: RuntimeStatsFlat = Field(default_factory=RuntimeStatsFlat)
     messages: MessageStatsFlat = Field(default_factory=MessageStatsFlat)
     usage: TokenUsage = Field(default_factory=TokenUsage)

@@ -102,34 +102,46 @@ function timelineSegmentLabel(segment: TimelineSegment) {
 }
 
 function CapacityBar({
-  categories,
   contextWindowTokens,
   usedTokens,
 }: {
-  categories: ContextCategory[];
   contextWindowTokens: number;
   usedTokens: number;
 }) {
   if (contextWindowTokens <= 0) return null;
+  const widthPct = Math.min((usedTokens / contextWindowTokens) * 100, 100);
+  return (
+    <div
+      className="flex h-2.5 w-full overflow-hidden rounded-full border border-foreground/14 bg-foreground/7"
+      role="img"
+      aria-label={`Context window usage: ${formatTokens(usedTokens)} of ${formatTokens(contextWindowTokens)} tokens`}
+    >
+      <span className="block bg-primary" style={{ width: `${widthPct}%` }} />
+    </div>
+  );
+}
+
+function CompositionBar({ categories }: { categories: ContextCategory[] }) {
+  const total = categories.reduce((sum, category) => sum + category.tokens.value, 0);
+  if (total <= 0) return null;
   return (
     <Tooltip.Provider delayDuration={160} skipDelayDuration={120}>
       <div
         className="flex h-2.5 w-full overflow-hidden rounded-full border border-foreground/14 bg-foreground/7"
         role="img"
-        aria-label={`Context window usage: ${formatTokens(usedTokens)} of ${formatTokens(contextWindowTokens)} tokens`}
+        aria-label={`Observed composition: ${formatTokens(total)} visible-content tokens`}
       >
-        {categories.map((cat) => {
-          const widthPct = (cat.tokens.value / contextWindowTokens) * 100;
+        {categories.map((category) => {
+          const widthPct = (category.tokens.value / total) * 100;
           if (widthPct < 0.1) return null;
-          const label = `${cat.label}: ${formatTokens(cat.tokens.value)} tokens${cat.percent != null ? ` (${cat.percent.toFixed(1)}%)` : ""}`;
           return (
-            <Tooltip.Root key={cat.id}>
+            <Tooltip.Root key={category.id}>
               <Tooltip.Trigger asChild>
                 <span
                   className="block min-w-[2px] border-r border-r-white/20 last:border-r-0"
                   style={{
                     width: `${widthPct}%`,
-                    background: categoryColors[cat.category] ?? categoryColors.unattributed,
+                    background: categoryColors[category.category] ?? categoryColors.unattributed,
                   }}
                 />
               </Tooltip.Trigger>
@@ -139,7 +151,7 @@ function CapacityBar({
                   side="bottom"
                   sideOffset={6}
                 >
-                  {label}
+                  {category.label}: {formatTokens(category.tokens.value)} estimated visible tokens
                   <Tooltip.Arrow className="fill-card" />
                 </Tooltip.Content>
               </Tooltip.Portal>
@@ -236,10 +248,10 @@ export function ContextWindowRoute() {
       </Card>
 
       <CapacityBar
-        categories={payload.categories}
         contextWindowTokens={payload.context_window_tokens?.value ?? 0}
         usedTokens={totalUsedTokens}
       />
+      <CompositionBar categories={payload.categories} />
 
       <ul className="m-0 flex flex-wrap gap-x-4 gap-y-1.5 list-none" role="list">
         {payload.categories.map((category: ContextCategory) => (
@@ -253,6 +265,23 @@ export function ContextWindowRoute() {
           <span>= appears in your terminal</span>
         </li>
       </ul>
+
+      {payload.provider_usage_buckets.length > 0 ? (
+        <Card className="gap-3 p-5">
+          <CardHeader className="px-0">
+            <CardTitle className="text-base">Provider usage buckets</CardTitle>
+            <CardDescription>Exact accounting reported by the provider, kept separate from semantic composition.</CardDescription>
+          </CardHeader>
+          <ul className="m-0 grid gap-2 p-0" role="list">
+            {payload.provider_usage_buckets.map((bucket) => (
+              <li key={bucket.id} className="flex items-center justify-between gap-4 text-caption">
+                <span>{bucket.label}</span>
+                <strong className="font-mono">{formatTokens(bucket.tokens.value)}</strong>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
 
       <figure className="m-0 rounded-xl border border-foreground/13 bg-card p-4 dark:border-border-subtle">
         <figcaption className="flex items-center justify-between gap-4 font-display text-[0.9rem]">

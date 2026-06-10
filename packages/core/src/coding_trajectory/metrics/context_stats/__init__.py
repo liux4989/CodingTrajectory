@@ -10,8 +10,8 @@ from coding_trajectory.metrics.context_stats._common import (
     runtime_stats,
     token_usage_from_mapping,
 )
-from coding_trajectory.metrics.context_stats.inferred_categories import (
-    build_inferred_context_categories,
+from coding_trajectory.metrics.context_stats.composition import (
+    build_context_composition,
 )
 from coding_trajectory.metrics.models import (
     ContextCategoryFlat,
@@ -35,9 +35,12 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
     vendor = next(iter(vendors))
     runtime = runtime_stats(session_graph)
     messages = message_stats(session_graph)
+    categories = build_context_composition(session_graph)
     observation = _latest_context_usage(session_graph)
     if observation is None:
-        no_obs_message = f"No {vendor.value} context usage observation found; cannot compute context stats."
+        no_obs_message = (
+            f"No {vendor.value} context usage observation found; provider context usage is unavailable."
+        )
         debug.warn(
             no_obs_message,
             code="context.no_observation",
@@ -46,59 +49,39 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
         return SessionContextStatsFlat(
             root_session_id=session_graph.root_session_id,
             vendor=vendor.value,
+            context_window=ContextWindowStatsFlat(categories=categories),
             runtime=runtime,
             messages=messages,
             warnings=[no_obs_message],
         ).model_dump(mode="json")
 
     context_window = observation.context_window_tokens or 0
-    denominator = context_window or observation.used_input_tokens
-    categories = [
+    provider_usage_buckets = [
         ContextCategoryFlat(
             key=category.key,
             label=category.label,
             tokens=category.tokens,
-            percent=percent(category.tokens, denominator),
+            percent=percent(category.tokens, observation.used_input_tokens),
             confidence=category.confidence,
             source=category.source,
         )
         for category in observation.categories
     ]
-    warnings: list[str] = []
-    if not categories and any(session.context_sources for session in session_graph.sessions):
-        categories = build_inferred_context_categories(
-            session_graph,
-            observation.used_input_tokens,
-            context_window,
+    warnings = [
+        (
+            "Context composition measures observed canonical content and is not scaled to the "
+            "provider-reported active context window."
         )
+    ]
+    if provider_usage_buckets:
         message = (
-            "Context categories are estimated from normalized context sources and canonical "
-            "conversation events, then scaled to the latest context-window usage."
+            "Provider usage buckets are reported separately from semantic context composition."
         )
         warnings.append(message)
         debug.warn(
             message,
-            code="context.categories_inferred",
+            code="context.provider_usage_buckets",
             severity="info",
-        )
-    elif categories:
-        message = (
-            "Context categories use provider-reported cache and input token buckets normalized "
-            "during ingestion."
-        )
-        warnings.append(message)
-        debug.warn(
-            message,
-            code="context.categories_provider_reported",
-            severity="info",
-        )
-    else:
-        message = "No normalized context category observations are available."
-        warnings.append(message)
-        debug.warn(
-            message,
-            code="context.no_categories",
-            severity="warning",
         )
 
     return SessionContextStatsFlat(
@@ -114,6 +97,7 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
             source=observation.source,
             categories=categories,
         ),
+        provider_usage_buckets=provider_usage_buckets,
         runtime=runtime,
         messages=messages,
         usage=token_usage_from_mapping(observation.usage),

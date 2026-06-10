@@ -162,7 +162,7 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         f"Model: {model_name} ({format_tokens(context_tokens)} context)",
         "",
         "```",
-        f"{'Category':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Context':>8}",
+        f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Share':>8}",
     ]
 
     for category in context_window.get("categories") or []:
@@ -170,6 +170,15 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
             _render_context_category(lines, category)
 
     lines.append("```")
+
+    provider_buckets = payload.get("provider_usage_buckets") or []
+    if provider_buckets:
+        lines.extend(["", "Provider usage buckets", "```"])
+        lines.append(f"{'Bucket':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Context':>8}")
+        for category in provider_buckets:
+            if isinstance(category, dict):
+                _render_context_category(lines, category)
+        lines.append("```")
 
     used_tokens = context_window.get("used_tokens") or usage.get("input_tokens")
     used_percent = context_window.get("used_percent")

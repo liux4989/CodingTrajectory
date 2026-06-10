@@ -163,7 +163,10 @@ def _metrics(overview: dict[str, Any], stats: dict[str, Any]) -> list[Metric]:
     categories = _category_index(stats)
     runtime = stats.get("runtime") or {}
     messages = stats.get("messages") or {}
-    total_context = _num(_dig(stats, ["context", "used"])) or _num(_dig(stats, ["context_window", "used_tokens"]))
+    total_observed = sum(
+        _category_tokens(categories, key)
+        for key in ("starting_context", "user_input", "agent_work")
+    )
 
     context_gathering_tokens = sum(
         _category_tokens(categories, key)
@@ -187,11 +190,11 @@ def _metrics(overview: dict[str, Any], stats: dict[str, Any]) -> list[Metric]:
             "Sum of Files read, Search results, and File listings in session stats.",
         ),
         Metric(
-            "context_gathering_context_pct",
-            "Context gathering share",
-            _pct(context_gathering_tokens, total_context),
+            "context_gathering_observed_pct",
+            "Context gathering observed share",
+            _pct(context_gathering_tokens, total_observed),
             "pct",
-            "Context gathering tokens divided by current context used.",
+            "Context gathering visible-content estimate divided by observed composition.",
         ),
         Metric(
             "tool_output_tokens",
@@ -201,11 +204,11 @@ def _metrics(overview: dict[str, Any], stats: dict[str, Any]) -> list[Metric]:
             "Output bucket in session stats.",
         ),
         Metric(
-            "tool_output_context_pct",
-            "Tool output share",
-            _pct(tool_output_tokens, total_context),
+            "tool_output_observed_pct",
+            "Tool output observed share",
+            _pct(tool_output_tokens, total_observed),
             "pct",
-            "Tool output tokens divided by current context used.",
+            "Tool output visible-content estimate divided by observed composition.",
         ),
         Metric(
             "tool_output_agent_work_pct",
@@ -244,43 +247,43 @@ def _deterministic_findings(
     by_key = {metric.key: metric for metric in metrics}
     findings: list[Finding] = []
 
-    context_pct = by_key["context_gathering_context_pct"].value
+    context_pct = by_key["context_gathering_observed_pct"].value
     context_tokens = by_key["context_gathering_tokens"].value
     if context_pct >= 12 or context_tokens >= 25000:
         findings.append(Finding(
             "high_context_gathering_load",
             "high" if context_pct >= 18 or context_tokens >= 40000 else "medium",
             "environment",
-            "Context gathering consumed a large part of the session window.",
-            f"Context gathering used {_tokens(context_tokens)} ({context_pct:.1f}% of current context).",
+            "Context gathering consumed a large share of observed session content.",
+            f"Context gathering used {_tokens(context_tokens)} ({context_pct:.1f}% of observed composition).",
             "Add or update repo maps, architecture notes, command recipes, and task-specific entrypoint docs so agents can start from known landmarks instead of surveying broad code areas.",
-            ["context_gathering_tokens", "context_gathering_context_pct"],
+            ["context_gathering_tokens", "context_gathering_observed_pct"],
         ))
 
-    tool_output_pct = by_key["tool_output_context_pct"].value
+    tool_output_pct = by_key["tool_output_observed_pct"].value
     tool_output_agent_pct = by_key["tool_output_agent_work_pct"].value
     if tool_output_pct >= 6 or tool_output_agent_pct >= 25:
         findings.append(Finding(
             "tool_output_pressure",
             "high" if tool_output_pct >= 10 or tool_output_agent_pct >= 40 else "medium",
             "tooling",
-            "Tool outputs took a material share of the working context.",
-            f"Tool output used {_tokens(by_key['tool_output_tokens'].value)} ({tool_output_pct:.1f}% of context, {tool_output_agent_pct:.1f}% of agent-work tokens).",
+            "Tool outputs took a material share of observed session content.",
+            f"Tool output used {_tokens(by_key['tool_output_tokens'].value)} ({tool_output_pct:.1f}% of observed composition, {tool_output_agent_pct:.1f}% of agent-work tokens).",
             "Prefer compact machine-readable modes for inspection tools, cap default listings, and add summary/detail flags so agents do not have to ingest human-oriented reports by default.",
-            ["tool_output_tokens", "tool_output_context_pct", "tool_output_agent_work_pct"],
+            ["tool_output_tokens", "tool_output_observed_pct", "tool_output_agent_work_pct"],
         ))
 
-    tool_output_pct = by_key["tool_output_context_pct"].value
+    tool_output_pct = by_key["tool_output_observed_pct"].value
     tool_output_agent_pct = by_key["tool_output_agent_work_pct"].value
     if tool_output_pct >= 12 or tool_output_agent_pct >= 45:
         findings.append(Finding(
             "tool_output_dominance",
             "high" if tool_output_pct >= 18 or tool_output_agent_pct >= 60 else "medium",
             "agent",
-            "Tool output dominated the observed session context.",
-            f"Tool output accounted for {tool_output_pct:.1f}% of context and {tool_output_agent_pct:.1f}% of agent-work tokens.",
+            "Tool output dominated the observed session composition.",
+            f"Tool output accounted for {tool_output_pct:.1f}% of observed composition and {tool_output_agent_pct:.1f}% of agent-work tokens.",
             "Batch related reads/searches, narrow commands before running them, and prefer existing structured ct outputs over repeated broad shell inspection.",
-            ["tool_output_context_pct", "tool_output_agent_work_pct"],
+            ["tool_output_observed_pct", "tool_output_agent_work_pct"],
         ))
 
     search_calls = by_key["search_calls"].value

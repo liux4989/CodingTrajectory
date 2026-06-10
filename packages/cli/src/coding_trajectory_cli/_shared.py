@@ -337,6 +337,10 @@ def compact_context_category(category: Any) -> Any:
             "label": category.get("label"),
             "tokens": category.get("tokens"),
             "pct": category.get("percent"),
+            "chars": category.get("observed_chars"),
+            "items": category.get("items"),
+            "confidence": category.get("confidence"),
+            "source": category.get("source"),
             "children": [compact_context_category(child) for child in category.get("children") or []] or None,
         }
     )
@@ -470,6 +474,11 @@ def compact_payload(method: str, payload: Any) -> Any:
                         or None,
                     }
                 )
+                or None,
+                "provider_usage_buckets": [
+                    compact_context_category(item)
+                    for item in payload.get("provider_usage_buckets") or []
+                ]
                 or None,
                 "runtime": drop_none(
                     {

@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from coding_trajectory.analysis.content_size import (
+    item_input_size,
+    item_output_size,
+    item_output_text,
+    output_is_truncated,
+    reported_token_count,
+)
 from coding_trajectory import debug
 from coding_trajectory.ingestion.models import (
     ContextUsageObservation,
@@ -346,24 +352,17 @@ def _next_observation_after(
 
 
 def _build_token_attribution(item: Any) -> ToolTokenAttribution:
-    output_text = _tool_output_text(item)
-    output_original = _tool_original_token_count(output_text)
-    if output_original is not None:
-        output_tokens = output_original
-        confidence = "observed_tool_output_token_count"
-    elif output_text:
-        output_tokens = _estimate_tokens(output_text)
-        confidence = "visible_content_estimate"
-    else:
-        output_tokens = 0
-        confidence = "no_visible_content"
-
-    input_text = _tool_input_text(item)
-    input_tokens = _estimate_tokens(input_text) if input_text else 0
+    output_size = item_output_size(item)
+    input_size = item_input_size(item)
+    confidence = (
+        "observed_tool_output_token_count"
+        if output_size.confidence == "observed_token_count"
+        else output_size.confidence
+    )
 
     return ToolTokenAttribution(
-        tool_input_tokens=input_tokens,
-        tool_output_tokens=output_tokens,
+        tool_input_tokens=input_size.tokens,
+        tool_output_tokens=output_size.tokens,
         content_confidence=confidence,
     )
 
@@ -415,36 +414,8 @@ def _build_read_after_result(
     )
 
 
-def _estimate_tokens(text: str) -> int:
-    if not text:
-        return 0
-    return max(1, (len(text) + 3) // 4)
-
-
-def _tool_output_text(item: Any) -> str:
-    output = getattr(item, "output", None)
-    return "" if output is None else str(output)
-
-
-def _tool_input_text(item: Any) -> str:
-    if item.kind == "command_execution":
-        value = getattr(item, "command", None)
-    else:
-        value = getattr(item, "input", None)
-    if value is None:
-        return ""
-    if isinstance(value, dict):
-        import json
-
-        try:
-            return json.dumps(value, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):
-            return str(value)
-    return str(value)
-
-
 def _tool_item_flat(item: Item, *, session_id: UUID, turn_id: UUID) -> ToolItemFlat:
-    output = _tool_output_text(item)
+    output = item_output_text(item)
     return ToolItemFlat(
         item_id=item.item_id,
         session_id=session_id,
@@ -453,8 +424,8 @@ def _tool_item_flat(item: Item, *, session_id: UUID, turn_id: UUID) -> ToolItemF
         status=getattr(item, "status", None),
         input_summary=_tool_input_summary(getattr(item, "input", None) if item.kind != "command_execution" else getattr(item, "command", None)),
         output_chars=len(output),
-        output_original_tokens=_tool_original_token_count(output),
-        output_truncated=_tool_output_is_truncated(output),
+        output_original_tokens=reported_token_count(output),
+        output_truncated=output_is_truncated(output),
     )
 
 
@@ -474,17 +445,6 @@ def _compact_text(value: str, *, limit: int = 240) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
-
-
-def _tool_original_token_count(output: str) -> int | None:
-    match = re.search(r"Original token count: (\d+)", output)
-    if match is None:
-        return None
-    return int(match.group(1))
-
-
-def _tool_output_is_truncated(output: str) -> bool:
-    return "chars → event.detail" in output or "tokens truncated" in output
 
 
 def _turn_model(turn: TurnMetrics) -> str | None:
