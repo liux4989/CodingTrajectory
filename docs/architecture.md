@@ -219,12 +219,18 @@ The application layer implements versioned Pydantic method contracts consumed
 by the CLI. Plugins consume the corresponding CLI JSON output rather than
 importing the application layer.
 
+`ServiceRuntime` is the shared in-process executor behind ordinary CLI commands,
+`ct api call`, and `ct api batch`. It owns contract validation, index persistence,
+and compatible store reuse for the lifetime of one invocation. Batch remains an
+explicit collection of independent calls; shell pipelines and tools such as
+`jq` handle external result composition.
+
 ### Methods
 
 | Method | Purpose |
 |---|---|
 | `project.list` | List all discovered projects with vendors and paths |
-| `project.sessions` | List session graphs for a project |
+| `project.sessions` | List session graphs, optionally including bulk runtime and usage summaries |
 | `project.logfile` | List session graphs from an explicit log file |
 | `session.overview` | Narrative overview: hierarchy, activity keys, turn summaries |
 | `session.stats` | Provider usage plus common observed composition buckets and runtime statistics |

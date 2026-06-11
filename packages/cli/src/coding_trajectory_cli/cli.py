@@ -14,7 +14,7 @@ from typing import Any
 from coding_trajectory import debug
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
-from coding_trajectory.service import IndexCache, dispatch, project_list_metadata, resolve_store
+from coding_trajectory.runtime import ServiceRuntime
 from coding_trajectory_cli._shared import (
     GhFormatter,
     add_output_flags,
@@ -36,41 +36,14 @@ _TELEMETRY_DISABLED = {"0", "false", "no", "off"}
 
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
-    current_dir = Path.cwd()
-
     method: str = args._method
-    contract = service_contract(method)
-    params: dict[str, Any] = contract.validate_request(args._params(args))
-
+    params: dict[str, Any] = args._params(args)
     effective_global_scope = True if method == "project.list" else args.global_scope
-    if method == "project.list":
-        return contract.validate_response(
-            project_list_metadata(
-                params,
-                global_scope=effective_global_scope,
-                current_dir=current_dir,
-            )
-        )
-
-    cache = IndexCache.load()
-    store, discovery_note = resolve_store(
-        params,
-        log_file=None,
+    with ServiceRuntime(
         global_scope=effective_global_scope,
-        current_dir=current_dir,
-        cache=cache,
-    )
-    result = dispatch(
-        method,
-        params,
-        store=store,
-        global_scope=effective_global_scope,
-        current_dir=current_dir,
-        discovery_note=discovery_note,
-        cache=cache,
-    )
-    cache.save()
-    return result
+        current_dir=Path.cwd(),
+    ) as runtime:
+        return runtime.call(method, params)
 
 
 def _build_parser() -> argparse.ArgumentParser:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
@@ -29,6 +29,7 @@ class ProjectSessionsRequest(ContractModel):
     since_days: int | None = Field(default=None, ge=1)
     modified_since: Any | None = None
     agent_vendor: str | None = None
+    include: list[Literal["runtime", "usage"]] = Field(default_factory=list)
 
 
 class ProjectLogfileRequest(ContractModel):
@@ -86,9 +87,13 @@ class ProjectListResponse(ContractModel):
 
 class SessionGraphSummary(ContractModel):
     root_session_id: str
+    project: str | None = None
     title: str | None = None
     vendors: list[str] = Field(default_factory=list)
     session_ids: list[str] = Field(default_factory=list)
+    runtime: dict[str, Any] | None = None
+    usage: dict[str, Any] | None = None
+    warnings: list[str] | None = None
 
 
 class ProjectSessionsResponse(ContractModel):
@@ -151,9 +156,13 @@ class SessionItemsResponse(RootModel[list[dict[str, Any]]]):
 
 class PublicSessionGraphSummary(ContractModel):
     id: str
+    project: str | None = None
     title: str | None = None
     vendors: list[str] = Field(default_factory=list)
     sessions: list[str] = Field(default_factory=list)
+    runtime: dict[str, Any] | None = None
+    usage: dict[str, Any] | None = None
+    warnings: list[str] | None = None
 
 
 class PublicProjectSessionsResponse(ContractModel):

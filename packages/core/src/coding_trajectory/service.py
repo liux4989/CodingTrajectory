@@ -648,13 +648,28 @@ def _handle_project_sessions(
         project_name=params.get("project_name"),
         agent_vendor=params.get("agent_vendor"),
     )
+    include = set(params.get("include") or [])
+    items: list[dict[str, Any]] = []
+    for graph in session_graphs:
+        item = {
+            **serialize_session_graph_detail(graph),
+            "project": graph.project_identifier,
+        }
+        if "usage" in include:
+            from coding_trajectory.metrics import build_session_graph_usage
+
+            usage = build_session_graph_usage(graph)
+            item["usage"] = usage.get("total_usage") or {}
+            item["warnings"] = usage.get("warnings") or []
+            if "runtime" in include:
+                item["runtime"] = usage.get("runtime") or {}
+        elif "runtime" in include:
+            from coding_trajectory.metrics import build_session_graph_runtime
+
+            item["runtime"] = build_session_graph_runtime(graph)
+        items.append(_public_output_for_session_graph(graph, item))
     return {
-        "items": [
-            _public_output_for_session_graph(
-                graph, serialize_session_graph_detail(graph)
-            )
-            for graph in session_graphs
-        ]
+        "items": items
     }
 
 

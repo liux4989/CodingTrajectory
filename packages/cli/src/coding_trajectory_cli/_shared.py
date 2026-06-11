@@ -365,9 +365,13 @@ def compact_payload(method: str, payload: Any) -> Any:
                 drop_none(
                     {
                         "id": item.get("root_session_id"),
+                        "project": item.get("project"),
                         "title": item.get("title"),
                         "vendors": item.get("vendors"),
                         "sessions": item.get("session_ids"),
+                        "runtime": item.get("runtime"),
+                        "usage": item.get("usage"),
+                        "warnings": item.get("warnings") or None,
                     }
                 )
                 for item in payload.get("items") or []

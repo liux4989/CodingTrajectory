@@ -54,14 +54,47 @@ class DashboardDataService:
         self._cache = TtlCache(cache_ttl_seconds)
 
     def overview(self) -> dict[str, Any]:
-        projects = self.projects({})
-        session_data = self.session_data(
-            {"since_days": ["30"], "include": ["metadata,runtime,usage"]}
+        return self._cache.get_or_set(("overview",), self._overview_uncached)
+
+    def _overview_uncached(self) -> dict[str, Any]:
+        payload = _ct_json(
+            [
+                "api",
+                "batch",
+                "--global-scope",
+                "--requests",
+                json.dumps(
+                    [
+                        {"id": "projects", "method": "project.list", "params": {}},
+                        {
+                            "id": "sessions",
+                            "method": "project.sessions",
+                            "params": {
+                                "since_days": 30,
+                                "include": ["runtime", "usage"],
+                            },
+                        },
+                    ]
+                ),
+            ]
         )
-        project_items = projects.get("items", [])
-        session_items = session_data.get("items") or []
+        responses = {
+            str(item.get("id")): item
+            for item in payload.get("items") or []
+            if isinstance(item, dict)
+        }
+        projects = _batch_result(responses, "projects")
+        sessions = _batch_result(responses, "sessions")
+        project_items = projects.get("items") or {}
+        if not isinstance(project_items, dict):
+            raise RuntimeError("project.list returned invalid items")
+        session_items = [
+            _dashboard_session_item(item)
+            for item in sessions.get("items") or []
+            if isinstance(item, dict)
+        ]
         vendor_counts: dict[str, int] = {}
-        for item in project_items:
+        for item in project_items.values():
             for vendor in item.get("vendors") or []:
                 vendor_counts[vendor] = vendor_counts.get(vendor, 0) + 1
         activity = _overview_activity(session_items)
@@ -75,7 +108,7 @@ class DashboardDataService:
                 "top_projects": activity["top_projects"],
                 "top_sessions": activity["top_sessions"],
                 "warnings": activity["warnings"],
-                "errors": session_data.get("errors") or [],
+                "errors": [],
             },
         }
 
@@ -250,61 +283,36 @@ class DashboardDataService:
 
     def _session_data_uncached(self, params: dict[str, Any]) -> dict[str, Any]:
         include = set(params.get("include") or ["metadata", "runtime", "usage"])
-        session_items = _session_metadata_items(params)
-        by_id: dict[str, dict[str, Any]] = {
-            str(item["id"]): item for item in session_items if item.get("id")
+        request: dict[str, Any] = {
+            "since_days": params.get("since_days"),
+            "include": sorted(include & {"runtime", "usage"}),
         }
-        requests: list[dict[str, Any]] = []
-        if "runtime" in include or "usage" in include:
-            requests.extend(
-                {
-                    "id": f"{root_id}:usage",
-                    "method": "session.usage",
-                    "params": {"session_id": root_id},
-                }
-                for root_id in by_id
-            )
-        if "stats" in include:
-            requests.extend(
-                {
-                    "id": f"{root_id}:stats",
-                    "method": "session.stats",
-                    "params": {"session_id": root_id},
-                }
-                for root_id in by_id
-            )
-
-        errors: list[dict[str, Any]] = []
-        if requests:
-            payload = _ct_json(
-                ["api", "batch", "--global-scope", "--requests", json.dumps(requests)]
-            )
-            for response in payload.get("items") or []:
-                request_id = str(response.get("id") or "")
-                root_id, _, kind = request_id.rpartition(":")
-                if not response.get("ok"):
-                    errors.append(
-                        {
-                            "id": root_id or request_id,
-                            "message": ((response.get("error") or {}).get("message") or "request failed"),
-                        }
-                    )
-                    continue
-                item = by_id.get(root_id)
-                if item is None:
-                    continue
-                result = response.get("result") or {}
-                if kind == "usage":
-                    usage = result.get("total_usage") or result.get("usage") or {}
-                    if result.get("cost_usd") is not None:
-                        usage = {**usage, "cost_usd": result.get("cost_usd")}
-                    item["usage"] = usage
-                    item["runtime"] = result.get("runtime") or {}
-                    item["warnings"] = result.get("warnings") or []
-                elif kind == "stats":
-                    item["stats"] = result
-
-        return {"items": list(by_id.values()), "errors": errors}
+        if params.get("project_name"):
+            request["project_name"] = params["project_name"]
+        if params.get("agent_vendor"):
+            request["agent_vendor"] = params["agent_vendor"]
+        payload = _ct_json(
+            [
+                "api",
+                "call",
+                "project.sessions",
+                "--global-scope",
+                "--params",
+                json.dumps(request),
+            ]
+        )
+        if not payload.get("ok"):
+            error = payload.get("error") or {}
+            return {"items": [], "errors": [{"message": error.get("message") or "request failed"}]}
+        result = payload.get("result") or {}
+        return {
+            "items": [
+                _dashboard_session_item(item)
+                for item in result.get("items") or []
+                if isinstance(item, dict)
+            ],
+            "errors": [],
+        }
 
 
 def _session_query_params(query: dict[str, list[str]]) -> dict[str, Any]:
@@ -335,68 +343,6 @@ def _session_data_query_params(query: dict[str, list[str]]) -> dict[str, Any]:
     if include:
         params["include"] = [item.strip() for item in include.split(",") if item.strip()]
     return params
-
-
-def _session_metadata_items(params: dict[str, Any]) -> list[dict[str, Any]]:
-    project_name = params.get("project_name")
-    agent_vendor = params.get("agent_vendor")
-    if project_name:
-        return _session_metadata_for_project(str(project_name), params)
-
-    project_params: dict[str, Any] = {}
-    if agent_vendor:
-        project_params["agent_vendor"] = agent_vendor
-    projects_payload = _ct_json(
-        ["project", "list", "--params", json.dumps(project_params), "--output", "json"]
-    )
-    items: list[dict[str, Any]] = []
-    for name in sorted((projects_payload.get("items") or {}).keys()):
-        if not name:
-            continue
-        items.extend(_session_metadata_for_project(str(name), params))
-    return items
-
-
-def _session_metadata_for_project(
-    project_name: str, params: dict[str, Any]
-) -> list[dict[str, Any]]:
-    request: dict[str, Any] = {
-        "project_name": project_name,
-        "since_days": params.get("since_days"),
-    }
-    if params.get("agent_vendor"):
-        request["agent_vendor"] = params["agent_vendor"]
-    try:
-        payload = _ct_json(
-            [
-                "project",
-                "sessions",
-                "--global-scope",
-                "--params",
-                json.dumps(request),
-                "--output",
-                "json",
-            ]
-        )
-    except RuntimeError as exc:
-        if "no matching coding-agent logs found" in str(exc):
-            return []
-        raise
-    result: list[dict[str, Any]] = []
-    for session in payload.get("items") or []:
-        root_id = session.get("id") or session.get("root_session_id")
-        if not root_id:
-            continue
-        result.append(
-            {
-                "id": root_id,
-                "project": project_name,
-                "title": session.get("title"),
-                "vendors": session.get("vendors") or [],
-                "sessions": session.get("sessions") or session.get("session_ids") or [],
-            }
-        )
-    return result
 
 
 def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -483,6 +429,32 @@ def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
         "top_projects": top_projects,
         "top_sessions": top_sessions,
         "warnings": warnings,
+    }
+
+
+def _batch_result(responses: dict[str, dict[str, Any]], request_id: str) -> dict[str, Any]:
+    response = responses.get(request_id)
+    if response is None:
+        raise RuntimeError(f"ct api batch omitted response: {request_id}")
+    if not response.get("ok"):
+        error = response.get("error") or {}
+        raise RuntimeError(str(error.get("message") or f"ct api request failed: {request_id}"))
+    result = response.get("result") or {}
+    if not isinstance(result, dict):
+        raise RuntimeError(f"ct api request returned invalid result: {request_id}")
+    return result
+
+
+def _dashboard_session_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("root_session_id") or item.get("id"),
+        "project": item.get("project"),
+        "title": item.get("title"),
+        "vendors": item.get("vendors") or [],
+        "sessions": item.get("session_ids") or item.get("sessions") or [],
+        "runtime": item.get("runtime") or {},
+        "usage": item.get("usage") or {},
+        "warnings": item.get("warnings") or [],
     }
 
 

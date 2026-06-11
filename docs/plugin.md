@@ -159,6 +159,17 @@ structured service API instead of composing human command output:
 ```text
 ct api call session.usage --params '{"session_id":"abc123"}'
 ct api batch --requests '[{"id":"usage-1","method":"session.usage","params":{"session_id":"abc123"}}]'
+ct api call project.sessions --global-scope --params '{"since_days":30,"include":["runtime","usage"]}'
+```
+
+Use `call` for one cohesive query and `batch` for independent queries that
+should share one runtime invocation. Keep dependent orchestration in the
+plugin. Standard JSON tools remain useful outside the API boundary:
+
+```text
+ct api call project.sessions --global-scope \
+  --params '{"since_days":30,"include":["runtime","usage"]}' |
+  jq '.result.items | group_by(.project)'
 ```
 
 Every service method exposes its versioned request and response contract

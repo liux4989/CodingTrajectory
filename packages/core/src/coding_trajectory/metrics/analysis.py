@@ -149,6 +149,11 @@ def build_session_graph_usage(
     ).model_dump(mode="json")
 
 
+def build_session_graph_runtime(session_graph: SessionGraph) -> dict[str, Any]:
+    """Return canonical runtime summary fields for one session graph."""
+    return runtime_stats(session_graph).model_dump(mode="json")
+
+
 def _compact_turn_usage(
     turn: TurnMetrics,
     *,

@@ -8,14 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from coding_trajectory.contracts import command_schema, service_contract
-from coding_trajectory.query import DocumentError, ResourceNotFoundError
-from coding_trajectory.service import (
-    IndexCache,
-    dispatch,
-    project_list_metadata,
-    resolve_store,
-)
+from coding_trajectory.contracts import command_schema
+from coding_trajectory.runtime import ServiceRuntime
 from coding_trajectory_cli._shared import GhFormatter, add_params_flag
 
 
@@ -47,125 +41,15 @@ def _read_batch_requests(args: argparse.Namespace) -> list[dict[str, Any]]:
     return parsed
 
 
-def _entrypoint_ids(requests: list[dict[str, Any]]) -> list[str]:
-    ids: list[str] = []
-    for request in requests:
-        params = request.get("params") or {}
-        if not isinstance(params, dict):
-            continue
-        for key in ("session_id", "root_session_id", "turn_id"):
-            value = params.get(key)
-            if isinstance(value, str) and value:
-                ids.append(value)
-        session_ids = params.get("session_ids")
-        if isinstance(session_ids, list):
-            ids.extend(
-                value for value in session_ids if isinstance(value, str) and value
-            )
-    return list(dict.fromkeys(ids))
-
-
-class _ApiRuntime:
-    def __init__(self, *, global_scope: bool, current_dir: Path) -> None:
-        self.global_scope = global_scope
-        self.current_dir = current_dir
-        self.cache = IndexCache.load()
-        self._shared_store: tuple[Any, str] | None = None
-
-    def prepare_batch(self, requests: list[dict[str, Any]]) -> None:
-        ids = _entrypoint_ids(requests)
-        if not ids:
-            return
-        self._shared_store = resolve_store(
-            {"session_ids": ids},
-            log_file=None,
-            global_scope=True,
-            current_dir=self.current_dir,
-            cache=self.cache,
-        )
-
-    def finish(self) -> None:
-        self.cache.save()
-
-    def execute(self, request: dict[str, Any]) -> dict[str, Any]:
-        request_id = request.get("id")
-        method = request.get("method")
-        params = request.get("params") or {}
-        if not isinstance(method, str) or not method:
-            return _error_item(request_id, method, "method is required")
-        if not isinstance(params, dict):
-            return _error_item(request_id, method, "params must be an object")
-
-        try:
-            contract = service_contract(method)
-            validated_params = contract.validate_request(params)
-            if method == "project.list":
-                result = contract.validate_response(
-                    project_list_metadata(
-                        validated_params,
-                        global_scope=True,
-                        current_dir=self.current_dir,
-                    )
-                )
-            else:
-                store, discovery_note = self._store_for(validated_params)
-                result = dispatch(
-                    method,
-                    validated_params,
-                    store=store,
-                    global_scope=self.global_scope,
-                    current_dir=self.current_dir,
-                    discovery_note=discovery_note,
-                    cache=self.cache,
-                )
-        except (KeyError, ValueError, ResourceNotFoundError, DocumentError) as exc:
-            return _error_item(request_id, method, str(exc))
-        return {
-            "id": request_id,
-            "method": method,
-            "ok": True,
-            "result": result,
-        }
-
-    def _store_for(self, params: dict[str, Any]) -> tuple[Any, str]:
-        if self._shared_store is not None and _entrypoint_ids(
-            [{"params": params}]
-        ):
-            return self._shared_store
-        return resolve_store(
-            params,
-            log_file=None,
-            global_scope=self.global_scope,
-            current_dir=self.current_dir,
-            cache=self.cache,
-        )
-
-
-def _error_item(request_id: Any, method: Any, message: str) -> dict[str, Any]:
-    return {
-        "id": request_id,
-        "method": method,
-        "ok": False,
-        "error": {"message": message},
-    }
-
-
 def _handle_api_call(args: argparse.Namespace) -> dict[str, Any]:
-    runtime = _ApiRuntime(global_scope=args.global_scope, current_dir=Path.cwd())
-    try:
+    with ServiceRuntime(global_scope=args.global_scope, current_dir=Path.cwd()) as runtime:
         return runtime.execute(_request_from_args(args))
-    finally:
-        runtime.finish()
 
 
 def _handle_api_batch(args: argparse.Namespace) -> dict[str, Any]:
     requests = _read_batch_requests(args)
-    runtime = _ApiRuntime(global_scope=args.global_scope, current_dir=Path.cwd())
-    try:
-        runtime.prepare_batch(requests)
-        return {"items": [runtime.execute(request) for request in requests]}
-    finally:
-        runtime.finish()
+    with ServiceRuntime(global_scope=args.global_scope, current_dir=Path.cwd()) as runtime:
+        return runtime.batch(requests)
 
 
 def _handle_api_schema(args: argparse.Namespace) -> dict[str, Any]:
