@@ -345,19 +345,21 @@ def _check_stale_state() -> list[dict[str, Any]]:
             return []
 
         stale = []
-        for key, value in data.items():
-            # Check if this is a path-based entry
-            if isinstance(value, dict):
-                path_str = value.get("path") or key
+        for graph_name, graph in data.items():
+            if not isinstance(graph, dict):
+                continue
+            for key, value in graph.items():
+                path_str = value if isinstance(value, str) and "/" in value else key
                 if path_str and not path_str.startswith("http"):
                     path = Path(path_str)
                     if not path.exists():
                         stale.append({
+                            "graph": graph_name,
                             "key": key,
                             "path": path_str,
                         })
 
-        return stale[:20]  # Limit to 20 examples
+        return stale
     except Exception:
         return []
 
@@ -460,10 +462,9 @@ def _render_markdown(
         lines.append("## Stale State")
         lines.append("")
         lines.append(f"Found {len(stale)} stale index entries:")
-        for entry in stale[:10]:  # Limit to 10
-            lines.append(f"- {entry['key']}: {entry['path']}")
-        if len(stale) > 10:
-            lines.append(f"- ... and {len(stale) - 10} more")
+        for entry in stale:
+            graph = entry.get("graph", "unknown")
+            lines.append(f"- [{graph}] {entry['key']}: {entry['path']}")
         lines.append("")
 
     return "\n".join(lines).rstrip()
