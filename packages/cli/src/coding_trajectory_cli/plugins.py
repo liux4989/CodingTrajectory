@@ -340,6 +340,10 @@ def _resolve_run(run: list[str], source: Path) -> list[str] | None:
     if os.sep in command or (os.altsep and os.altsep in command):
         resolved = (source.parent / command_path).resolve(strict=False)
         return [str(resolved), *run[1:]] if resolved.exists() else None
+    for executable in (Path(sys.executable), Path(sys.executable).resolve()):
+        tool_script = executable.parent / command
+        if tool_script.exists():
+            return [str(tool_script), *run[1:]]
     resolved_command = shutil.which(command)
     return [resolved_command, *run[1:]] if resolved_command else None
 
