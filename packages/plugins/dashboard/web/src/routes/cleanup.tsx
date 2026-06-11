@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import {
   useReactTable,
   getCoreRowModel,
-  flexRender,
   type ColumnDef,
   type RowSelectionState,
 } from "@tanstack/react-table";
@@ -33,8 +32,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TableSkeleton } from "@/components/ui/skeleton";
+import { DataTable } from "@/components/data-table";
 import { ShieldAlert, RefreshCcw } from "lucide-react";
 
 export function CleanupRoute() {
@@ -183,35 +182,12 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
                 <ShieldAlert size={15} /> {kind === "project" ? "Delete" : "Apply to"} {selectedCount}
               </Button>
             </div>
-            <div className="max-h-96 overflow-auto rounded-2xl border border-foreground/13 dark:border-border-subtle">
-              <Table>
-                <TableHead className="sticky top-0 z-1 bg-table-head font-display text-caption uppercase tracking-wide">
-                  {table.getHeaderGroups().map((headerGroup) => (
-                    <TableRow key={headerGroup.id}>
-                      {headerGroup.headers.map((header) => (
-                        <TableHeader key={header.id} className={header.id === "select" ? "w-10" : undefined}>
-                          {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                        </TableHeader>
-                      ))}
-                    </TableRow>
-                  ))}
-                </TableHead>
-                <TableBody>
-                  {table.getRowModel().rows.map((row) => (
-                    <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
-                      {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
-                  {!table.getRowModel().rows.length ? (
-                    <TableRow>
-                      <TableCell colSpan={columns.length}>No cleanup candidates.</TableCell>
-                    </TableRow>
-                  ) : null}
-                </TableBody>
-              </Table>
-            </div>
+            <DataTable
+              table={table}
+              columnCount={columns.length}
+              emptyMessage="No cleanup candidates."
+              className="max-h-96 bg-transparent"
+            />
             <ReasonSummary title="Skipped reasons" reasons={preview.data.summary.skipped_reasons} />
           </>
         ) : null}

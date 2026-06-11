@@ -1,10 +1,6 @@
 export type OverviewPayload = {
   projects: { count: number; vendors: Record<string, number> };
   sessions: { count: number };
-  cleanup: {
-    projects: CleanupSummary;
-    sessions: CleanupSummary;
-  };
 };
 
 export type ProjectItem = {

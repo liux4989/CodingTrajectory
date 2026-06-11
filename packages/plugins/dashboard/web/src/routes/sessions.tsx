@@ -7,11 +7,9 @@ import {
   getSortedRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
-  flexRender,
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { fetchSessions, type SessionItem } from "@/api";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
@@ -19,8 +17,7 @@ import { Toolbar } from "@/components/toolbar";
 import { StateBlock } from "@/components/state-block";
 import { VendorBadges } from "@/components/badges";
 import { RefreshButton } from "@/components/refresh-button";
-import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DataTable, SortableHeader, TablePagination } from "@/components/data-table";
 import { relativeTime } from "@/lib/relative-time";
 
 function sessionId(item: SessionItem) {
@@ -34,19 +31,6 @@ function sessionVendors(item: SessionItem) {
 function shortId(value: string | null | undefined) {
   if (!value) return "-";
   return value.length > 12 ? value.slice(0, 12) : value;
-}
-
-function SortableButton({ header, label }: { header: { column: { getIsSorted: () => false | "asc" | "desc"; toggleSorting: () => void } }; label: string }) {
-  const sorted = header.column.getIsSorted();
-  return (
-    <button
-      className="inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 font-extrabold uppercase tracking-wide text-foreground hover:text-primary"
-      onClick={() => header.column.toggleSorting()}
-    >
-      {label}
-      {sorted === "asc" ? <ArrowUp size={14} /> : sorted === "desc" ? <ArrowDown size={14} /> : <ArrowUpDown size={14} />}
-    </button>
-  );
 }
 
 const columns: ColumnDef<SessionItem>[] = [
@@ -74,18 +58,18 @@ const columns: ColumnDef<SessionItem>[] = [
   {
     id: "vendors",
     accessorFn: (row) => sessionVendors(row).join(", "),
-    header: ({ column }) => <SortableButton header={{ column }} label="Vendors" />,
+    header: ({ column }) => <SortableHeader column={column} label="Vendors" />,
     cell: ({ row }) => <VendorBadges vendors={sessionVendors(row.original)} />,
   },
   {
     accessorKey: "title",
-    header: ({ column }) => <SortableButton header={{ column }} label="Title" />,
+    header: ({ column }) => <SortableHeader column={column} label="Title" />,
     cell: ({ getValue }) => getValue<string | null>() ?? "-",
   },
   {
     id: "updated",
     accessorFn: (row) => row.updated_at ?? row.started_at ?? "",
-    header: ({ column }) => <SortableButton header={{ column }} label="Updated" />,
+    header: ({ column }) => <SortableHeader column={column} label="Updated" />,
     cell: ({ row }) => (
       <span className="font-mono text-body-sm" title={row.original.updated_at ?? row.original.started_at ?? ""}>
         {relativeTime(row.original.updated_at ?? row.original.started_at)}
@@ -126,56 +110,10 @@ export function SessionsRoute() {
       {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} /> : null}
       {sessions.data ? (
         <>
-          <div className="overflow-auto rounded-2xl border border-foreground/13 bg-card/78 dark:border-border-subtle">
-            <Table>
-              <TableHead className="sticky top-0 z-1 bg-table-head font-display text-caption uppercase tracking-wide">
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <TableRow key={headerGroup.id}>
-                    {headerGroup.headers.map((header) => (
-                      <TableHeader key={header.id}>
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                      </TableHeader>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableHead>
-              <TableBody>
-                {table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-                {!table.getRowModel().rows.length ? (
-                  <TableRow><TableCell colSpan={columns.length}>No sessions match the current filter.</TableCell></TableRow>
-                ) : null}
-              </TableBody>
-            </Table>
-          </div>
+          <DataTable table={table} columnCount={columns.length} emptyMessage="No sessions match the current filter." />
           <TablePagination table={table} />
         </>
       ) : null}
-    </div>
-  );
-}
-
-function TablePagination({ table }: { table: ReturnType<typeof useReactTable<SessionItem>> }) {
-  const pageCount = table.getPageCount();
-  if (pageCount <= 1) return null;
-  const page = table.getState().pagination.pageIndex;
-
-  return (
-    <div className="flex items-center justify-center gap-4 py-2">
-      <Button variant="ghost" size="sm" disabled={!table.getCanPreviousPage()} onClick={() => table.previousPage()}>
-        <ChevronLeft size={16} /> Prev
-      </Button>
-      <span className="font-display text-body-sm font-bold text-muted-foreground">
-        Page {page + 1} of {pageCount}
-      </span>
-      <Button variant="ghost" size="sm" disabled={!table.getCanNextPage()} onClick={() => table.nextPage()}>
-        Next <ChevronRight size={16} />
-      </Button>
     </div>
   );
 }

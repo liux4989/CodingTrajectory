@@ -3,13 +3,23 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
+import { StateBlock } from "@/components/state-block";
 import { Toaster } from "@/components/ui/sonner";
-import { OverviewRoute } from "@/routes/overview";
-import { ProjectsRoute } from "@/routes/projects";
-import { SessionsRoute } from "@/routes/sessions";
-import { ContextWindowRoute } from "@/routes/context-window";
-import { CleanupRoute } from "@/routes/cleanup";
 import "@/styles.css";
+
+const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
+const ProjectsRoute = React.lazy(() => import("@/routes/projects").then((mod) => ({ default: mod.ProjectsRoute })));
+const SessionsRoute = React.lazy(() => import("@/routes/sessions").then((mod) => ({ default: mod.SessionsRoute })));
+const ContextWindowRoute = React.lazy(() => import("@/routes/context-window").then((mod) => ({ default: mod.ContextWindowRoute })));
+const CleanupRoute = React.lazy(() => import("@/routes/cleanup").then((mod) => ({ default: mod.CleanupRoute })));
+
+function RouteBoundary({ children }: { children: React.ReactNode }) {
+  return (
+    <React.Suspense fallback={<StateBlock title="Loading view" detail="Preparing the dashboard route." />}>
+      {children}
+    </React.Suspense>
+  );
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,31 +42,31 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: OverviewRoute,
+  component: () => <RouteBoundary><OverviewRoute /></RouteBoundary>,
 });
 
 const projectsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/projects",
-  component: ProjectsRoute,
+  component: () => <RouteBoundary><ProjectsRoute /></RouteBoundary>,
 });
 
 const sessionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions",
-  component: SessionsRoute,
+  component: () => <RouteBoundary><SessionsRoute /></RouteBoundary>,
 });
 
 const contextWindowRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId/context-window",
-  component: ContextWindowRoute,
+  component: () => <RouteBoundary><ContextWindowRoute /></RouteBoundary>,
 });
 
 const cleanupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/cleanup",
-  component: CleanupRoute,
+  component: () => <RouteBoundary><CleanupRoute /></RouteBoundary>,
 });
 
 const router = createRouter({
