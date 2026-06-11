@@ -429,6 +429,51 @@ def _pi_session_project_metadata(
     return items
 
 
+def _encode_claude_project_path(project_path: Path) -> str:
+    """Encode an absolute path into Claude Code's directory naming format.
+
+    Replaces '/' with '-' and prepends '-' for the leading slash.
+    Example: /Users/foo/bar -> -Users-foo-bar
+    """
+    absolute = str(project_path.resolve())
+    return "-" + absolute.lstrip("/").replace("/", "-")
+
+
+def _encode_pi_project_path(project_path: Path) -> str:
+    """Encode an absolute path into Pi's directory naming format.
+
+    Same encoding as Claude Code: replace '/' with '-', prepend '-'.
+    """
+    absolute = str(project_path.resolve())
+    return "-" + absolute.lstrip("/").replace("/", "-")
+
+
+def _ancestor_dirs_up_to_project_marker(start: Path) -> list[Path]:
+    """Return start and its ancestors up to (and including) the first project marker.
+
+    Stops at home directory or filesystem root.
+    """
+    home = Path.home()
+    ancestors: list[Path] = []
+    current = start.resolve()
+
+    while True:
+        ancestors.append(current)
+
+        # Stop if we found a project marker at this level
+        has_marker = any((current / marker).exists() for marker in _PROJECT_MARKERS)
+        if has_marker:
+            break
+
+        # Stop at home or root
+        if current == home or current == current.parent:
+            break
+
+        current = current.parent
+
+    return ancestors
+
+
 def _decode_claude_encoded_path(encoded: str) -> str | None:
     """Decode a Claude Code encoded CWD path.
 
@@ -502,6 +547,24 @@ def _candidate_files(
         return _all_files(base_dir, pattern, modified_since=modified_since)
     if not base_dir.is_dir():
         return []
+
+    # Direct directory lookup for Claude Code and Pi
+    if vendor == Vendor.CLAUDE_CODE:
+        return _claude_candidate_files_direct(
+            base_dir, pattern, current_dir=current_dir, modified_since=modified_since
+        )
+
+    if vendor == Vendor.PI:
+        return _pi_candidate_files_direct(
+            base_dir, pattern, current_dir=current_dir, modified_since=modified_since
+        )
+
+    if vendor == Vendor.CODEX_CLI:
+        # Pre-filter: check if current_dir is tracked in config.toml
+        if not _codex_tracks_project(current_dir):
+            return []
+
+    # Fallback: scan and filter (for unknown vendors or when direct lookup fails)
     paths = _all_files(base_dir, pattern, modified_since=modified_since)
     return [
         path
@@ -514,6 +577,99 @@ def _candidate_files(
             scoped_project_key=scoped_project_key,
         )
     ]
+
+
+def _claude_candidate_files_direct(
+    base_dir: Path,
+    pattern: str,
+    *,
+    current_dir: Path,
+    modified_since: datetime | None,
+) -> list[Path]:
+    """Direct lookup for Claude Code: encode CWD and check specific directory."""
+    for ancestor in _ancestor_dirs_up_to_project_marker(current_dir):
+        encoded = _encode_claude_project_path(ancestor)
+        target_dir = base_dir / encoded
+        if target_dir.is_dir():
+            files = _all_files(target_dir, pattern, modified_since=modified_since)
+            if files:
+                return files
+    return []
+
+
+def _pi_candidate_files_direct(
+    base_dir: Path,
+    pattern: str,
+    *,
+    current_dir: Path,
+    modified_since: datetime | None,
+) -> list[Path]:
+    """Direct lookup for Pi: encode CWD and check specific directory."""
+    session_root, custom_session_dir = _pi_session_root()
+    # Use actual session root (may be custom), not the default base_dir
+    scan_root = session_root
+
+    if custom_session_dir:
+        # Custom session dir: all files are flat, need to parse each to check CWD
+        paths = _all_files(scan_root, pattern, modified_since=modified_since)
+        return [
+            path for path in paths
+            if _pi_session_cwd_matches(path, current_dir)
+        ]
+
+    # Default structure: sessions are under <base>/<encoded-project>/
+    for ancestor in _ancestor_dirs_up_to_project_marker(current_dir):
+        encoded = _encode_pi_project_path(ancestor)
+        target_dir = scan_root / encoded
+        if target_dir.is_dir():
+            files = _all_files(target_dir, pattern, modified_since=modified_since)
+            if files:
+                return files
+    return []
+
+
+def _pi_session_cwd_matches(path: Path, current_dir: Path) -> bool:
+    """Check if a Pi session file's CWD matches current_dir or its ancestors."""
+    project_path = _pi_project_path_from_session_header(path)
+    if project_path is None:
+        return False
+    try:
+        resolved = project_path.resolve()
+    except OSError:
+        resolved = project_path
+    current_resolved = current_dir.resolve()
+    return resolved == current_resolved or resolved in current_resolved.parents
+
+
+def _codex_tracks_project(current_dir: Path) -> bool:
+    """Check if Codex config.toml tracks current_dir or any of its ancestors."""
+    config_path = _codex_home() / "config.toml"
+    if not config_path.is_file():
+        return False
+    try:
+        with config_path.open("rb") as handle:
+            config = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+
+    projects = config.get("projects")
+    if not isinstance(projects, dict):
+        return False
+
+    current_resolved = current_dir.resolve()
+    ancestors = {current_resolved, *current_resolved.parents}
+
+    for raw_path in projects:
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+        try:
+            project_path = Path(raw_path).expanduser().resolve()
+        except OSError:
+            continue
+        if project_path in ancestors:
+            return True
+
+    return False
 
 
 def _is_recent_enough(path: Path, modified_since: datetime | None) -> bool:
