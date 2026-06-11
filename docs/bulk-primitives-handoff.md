@@ -261,3 +261,69 @@ uv run python -m py_compile packages/core/src/coding_trajectory/contracts.py pac
 ```
 
 Do not add unit tests for this repo task.
+
+## Review Findings After Initial Implementation
+
+These findings were observed after commit
+`3ca7810 Implement bulk primitive session queries and migrate code-time plugin`.
+They should be handled before treating the bulk primitive work as complete.
+
+1. `session.data` does not use targeted cache loading for explicit
+   `session_ids`.
+
+   `code_time.py` now calls `ct session data` with only `session_ids` and
+   `include`. In `service.py`, `resolve_store()` still targets the cache only
+   through `_session_graph_entrypoint_id(params)`, which does not inspect
+   `session_ids`. The result can be a broad global discovery for each bulk
+   chunk, preserving correctness but undermining the main performance goal.
+
+   Suggested fix: teach store resolution to derive targeted cached paths from
+   all requested `session_ids`, or add a dedicated bulk targeted resolver used
+   by `session.data`.
+
+2. Malformed explicit ids can abort `session.data` instead of returning partial
+   errors.
+
+   Reproduction:
+
+   ```bash
+   uv run ct session data --global-scope --output json --params '{"session_ids":["does-not-exist"],"include":["metadata","runtime","usage"]}'
+   ```
+
+   Current behavior is a CLI error like `badly formed hexadecimal UUID string`.
+   Expected bulk behavior is a successful response with `items: []` and an
+   `errors` entry for the bad id.
+
+   Suggested fix: normalize explicit ids inside a guarded helper, and collect
+   malformed ids into the bulk `errors` array before matching.
+
+3. `ct session items` does not accept `--global-scope`.
+
+   Reproduction:
+
+   ```bash
+   uv run ct session items --global-scope --output json --params '{"session_id":"<id>","types":["tool_call"]}'
+   ```
+
+   Current behavior is an argparse error because the new `items` command uses
+   `add_base_output_flags()`. This is inconsistent with `session data` and
+   `session events`, and limits the command as a replacement for scoped item
+   queries.
+
+   Suggested fix: use `add_output_flags(session_items)` unless there is a clear
+   reason item queries must stay local-only.
+
+4. `packages/plugins/code_time/web/package-lock.json` has uncommitted drift that
+   is inconsistent with `package.json`.
+
+   The lockfile removes entries for dependencies that are still declared in
+   `package.json`, including `2` and `recharts`. Regenerate it with the matching
+   package manager command or revert the lockfile before committing.
+
+5. Local plugin verification may require registering built-ins first.
+
+   In one review run, `uv run ct plugin code-time ...` failed with
+   `Plugin not found: code-time` because the local plugin registry was empty.
+   Running `uv run ct plugin register-builtins` restored the expected route.
+   This is local state, not necessarily a code bug, but the verification steps
+   should mention it when running on a fresh profile.
