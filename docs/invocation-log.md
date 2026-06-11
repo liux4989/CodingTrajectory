@@ -32,12 +32,17 @@ the tool.
 | Path | `~/.coding-trajectory/invocations.jsonl` |
 | Format | Newline-delimited JSON, one record per invocation |
 | Scope | Global — collects invocations from every working directory |
-| Write mode | Append-only, line-buffered |
-| Rotation | Size-based pruning on load (drop records older than N days or beyond M MB) |
+| Write mode | Append-only writes coordinated by a sibling lock file |
+| Rotation | On every logged invocation: drop unreadable lines, drop records older than 30 days, then drop oldest retained records until the file plus the incoming record fits within 10 MiB |
 
 A single global path is important: the value of the log is that the same owner
 runs `ct` from many projects and folders, and the log collapses that activity
 into one queryable surface.
+
+The writer keeps append safety as the default posture: it acquires a sibling
+lock file, rewrites the log only when pruning is required, then appends the
+new record with `O_APPEND`. Rotation is therefore coordinated across `ct`
+processes without making `doctor` a mutating command.
 
 ## Record schema
 
@@ -122,14 +127,25 @@ Individual commands and service methods call `debug.warn` when they observe a
 degraded condition. They do not know the log exists and do not write to it
 directly.
 
-## Opt-out
+## Telemetry configuration precedence
 
 The log is local to the owner's machine, but an explicit opt-out is still
 expected:
 
-- Environment variable: `CT_TELEMETRY=0` disables writes.
-- Configuration file: `~/.coding-trajectory/config.toml` may contain
-  `telemetry.enabled = false`.
+- `CT_TELEMETRY` is authoritative when it is set to a non-empty value.
+- Otherwise `~/.coding-trajectory/config.toml` may set `telemetry.enabled`.
+- Otherwise telemetry is enabled by default.
+
+Examples:
+
+- `CT_TELEMETRY=0` disables writes even if `config.toml` enables telemetry.
+- `CT_TELEMETRY=1` enables writes even if `config.toml` disables telemetry.
+- `telemetry.enabled = false` disables writes only when `CT_TELEMETRY` is unset
+  or empty.
+
+If `config.toml` is malformed or the `telemetry.enabled` value is invalid, the
+writer falls back to the default-enabled behavior and records the config error
+state for `ct doctor` to report explicitly.
 
 When disabled, the CLI behaves exactly as it does today — no writes, no file
 creation, no side effects.

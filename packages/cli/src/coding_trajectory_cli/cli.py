@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -24,6 +23,7 @@ from coding_trajectory_cli._shared import (
     selected_output,
 )
 from coding_trajectory_cli.commands import REGISTRARS, dispatch_plugin_argv
+from coding_trajectory_cli.telemetry import InvocationRecord, write_invocation_record
 
 EPILOG = """\
 NOTE
@@ -31,9 +31,6 @@ NOTE
   that coding session as the session tree entry point, or omit it to use the
   most-recent session in the current working directory.
 """
-
-_TELEMETRY_DISABLED = {"0", "false", "no", "off"}
-
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     method: str = args._method
@@ -110,45 +107,12 @@ def _payload_vendor(payload: Any) -> str | None:
     if isinstance(vendor, str):
         return vendor
     return None
-
-
-def _invocation_log_path() -> Path | None:
-    if os.environ.get("CT_TELEMETRY", "").strip().lower() in _TELEMETRY_DISABLED:
-        return None
-    return Path.home() / ".coding-trajectory" / "invocations.jsonl"
-
-
 def _json_default(value: Any) -> Any:
     if isinstance(value, _dt.datetime):
         if value.tzinfo is None:
             value = value.replace(tzinfo=_dt.timezone.utc)
         return value.isoformat()
     return str(value)
-
-
-def _write_invocation(record: dict[str, Any]) -> None:
-    path = _invocation_log_path()
-    if path is None:
-        return
-    try:
-        line = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=_json_default) + "\n"
-    except (TypeError, ValueError):
-        return
-    fd: int | None = None
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        os.write(fd, line.encode("utf-8"))
-    except OSError:
-        pass
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-
-
 def main(argv: list[str] | None = None) -> int:
     with debug.debug_scope() as debug_ctx:
         raw_args = list(sys.argv[1:] if argv is None else argv)
@@ -180,8 +144,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"error": {"message": error_message}}, indent=2), file=sys.stderr)
             return 1
         finally:
-            _write_invocation(
-                {
+            write_invocation_record(
+                InvocationRecord.model_validate(
+                    {
                     "ts": _dt.datetime.now(_dt.timezone.utc),
                     "ct_version": _cli_version(),
                     "cwd": str(Path.cwd()),
@@ -193,7 +158,8 @@ def main(argv: list[str] | None = None) -> int:
                     "error": error_message,
                     "ms": round((time.monotonic() - start) * 1000),
                     "warnings": debug_ctx.as_records(),
-                }
+                    }
+                )
             )
 
         output = _render_payload(args, payload)

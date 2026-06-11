@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-import tomllib
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from coding_trajectory_cli._shared import GhFormatter
+from coding_trajectory_cli.telemetry import invocation_log_path, read_invocation_records, resolve_telemetry_decision
 
 
 def _parse_duration(value: str) -> timedelta:
@@ -26,30 +25,7 @@ def _parse_duration(value: str) -> timedelta:
 
 def _read_invocation_log(path: Path, since: timedelta) -> list[dict[str, Any]]:
     """Read and filter invocation log records."""
-    if not path.exists():
-        return []
-
-    cutoff = datetime.now(timezone.utc) - since
-    records = []
-
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-                ts_str = record.get("ts")
-                if ts_str:
-                    ts = datetime.fromisoformat(ts_str)
-                    if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
-                    if ts >= cutoff:
-                        records.append(record)
-            except (json.JSONDecodeError, ValueError):
-                continue
-
-    return records
+    return read_invocation_records(path, since)
 
 
 def _check_python_version() -> tuple[str, str]:
@@ -64,7 +40,7 @@ def _check_python_version() -> tuple[str, str]:
 def _get_cli_version() -> tuple[str, str]:
     """Get CLI version."""
     try:
-        from importlib.metadata import PackageNotFoundError, version
+        from importlib.metadata import version
         return "ok", version("coding-trajectory")
     except Exception:
         return "warn", "unknown"
@@ -89,24 +65,14 @@ def _check_config_files() -> tuple[str, str]:
 
 def _check_telemetry() -> tuple[str, str]:
     """Check telemetry settings."""
-    env_val = os.environ.get("CT_TELEMETRY", "").strip().lower()
-    if env_val in {"0", "false", "no", "off"}:
-        return "warn", "disabled via CT_TELEMETRY"
-
-    config_toml = Path.home() / ".coding-trajectory" / "config.toml"
-    if config_toml.exists():
-        try:
-            with open(config_toml, "rb") as f:
-                config = tomllib.load(f)
-            telemetry_config = config.get("telemetry", {})
-            if isinstance(telemetry_config, dict):
-                enabled = telemetry_config.get("enabled", True)
-                if not enabled:
-                    return "warn", "disabled in config.toml"
-        except Exception:
-            pass
-
-    return "ok", "enabled"
+    decision = resolve_telemetry_decision()
+    detail = decision.detail
+    if decision.config_issue is not None:
+        detail = f"{detail}; invalid config.toml: {decision.config_issue.message}"
+        return "warn", detail
+    if not decision.enabled:
+        return "warn", detail
+    return "ok", detail
 
 
 def _check_index_cache() -> tuple[str, str]:
@@ -291,9 +257,11 @@ def _aggregate_latency_trends(records: list[dict[str, Any]], since: timedelta) -
 
     # Determine bucket size based on time window
     if since.days > 30:
-        bucket_fmt = lambda dt: dt.strftime("%Y-W%U")  # Weekly
+        def bucket_fmt(dt: datetime) -> str:
+            return dt.strftime("%Y-W%U")
     else:
-        bucket_fmt = lambda dt: dt.strftime("%Y-%m-%d")  # Daily
+        def bucket_fmt(dt: datetime) -> str:
+            return dt.strftime("%Y-%m-%d")
 
     # Group by bucket and command
     buckets: dict[str, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
@@ -500,7 +468,7 @@ def _doctor_handler(args: argparse.Namespace) -> int:
     since = _parse_duration(args.since)
 
     # Read invocation log
-    log_path = Path.home() / ".coding-trajectory" / "invocations.jsonl"
+    log_path = invocation_log_path()
     try:
         records = _read_invocation_log(log_path, since)
     except Exception as e:
