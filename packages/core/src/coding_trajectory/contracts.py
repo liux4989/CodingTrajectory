@@ -65,6 +65,34 @@ class EventDetailRequest(ContractModel):
     event_id: str
 
 
+class SessionDataRequest(ContractModel):
+    session_id: str | None = None
+    session_ids: list[str] | None = None
+    project_name: str | None = None
+    since_days: int | None = Field(default=None, ge=1)
+    modified_since: Any | None = None
+    agent_vendor: str | None = None
+    include: list[str] = Field(default_factory=lambda: ["metadata", "runtime", "usage"])
+    extra_billing: bool = False
+
+
+class SessionEventsRequest(ContractModel):
+    session_id: str | None = None
+    root_session_id: str | None = None
+    turn_id: str | None = None
+    event_ids: list[str] | None = None
+    type: str | None = None
+    filters: list[str] = Field(default_factory=list)
+    limit: int | None = Field(default=None, ge=1)
+
+
+class SessionItemsRequest(ContractModel):
+    item_ids: list[str] | None = None
+    session_id: str | None = None
+    root_session_id: str | None = None
+    types: list[str] | None = None
+
+
 class EventScanRequest(SessionEntryRequest):
     type: str
     filters: list[str] = Field(default_factory=list)
@@ -137,6 +165,44 @@ class EventDetailResponse(ContractModel):
     tool_call: dict[str, Any] | None = None
     llm: dict[str, Any] | None = None
     text: dict[str, Any] | None = None
+
+
+class SessionDataItemResponse(ContractModel):
+    id: str
+    project: str | None = None
+    title: str | None = None
+    vendors: list[str] = Field(default_factory=list)
+    sessions: list[str] = Field(default_factory=list)
+    runtime: dict[str, Any] | None = None
+    usage: dict[str, Any] | None = None
+    stats: dict[str, Any] | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SessionDataError(ContractModel):
+    id: str
+    message: str
+
+
+class SessionDataResponse(ContractModel):
+    items: list[SessionDataItemResponse] = Field(default_factory=list)
+    errors: list[SessionDataError] = Field(default_factory=list)
+
+
+class SessionEventsResponse(ContractModel):
+    root_session_id: str | None = None
+    type: str | None = None
+    matches: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PublicSessionEventsResponse(ContractModel):
+    id: str | None = None
+    type: str | None = None
+    matches: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SessionItemsResponse(RootModel[list[dict[str, Any]]]):
+    pass
 
 
 class EventScanResponse(ContractModel):
@@ -306,6 +372,27 @@ SERVICE_CONTRACTS = {
             EventScanRequest,
             EventScanResponse,
             PublicEventScanResponse,
+        ),
+        ServiceContract(
+            "session.data",
+            1,
+            SessionDataRequest,
+            SessionDataResponse,
+            SessionDataResponse,
+        ),
+        ServiceContract(
+            "session.events",
+            1,
+            SessionEventsRequest,
+            SessionEventsResponse,
+            PublicSessionEventsResponse,
+        ),
+        ServiceContract(
+            "session.items",
+            1,
+            SessionItemsRequest,
+            SessionItemsResponse,
+            SessionItemsResponse,
         ),
     )
 }

@@ -830,6 +830,230 @@ def _handle_event_scan(
     )
 
 
+def _session_graph_metadata(graph: SessionGraph) -> dict[str, Any]:
+    vendors = sorted({s.vendor.value for s in graph.sessions if s.vendor})
+    return {
+        "id": str(graph.root_session_id),
+        "project": graph.project_identifier,
+        "title": _session_graph_title(graph),
+        "vendors": vendors,
+        "sessions": [str(s.session_id) for s in graph.sessions],
+    }
+
+
+def _session_graph_runtime(graph: SessionGraph) -> dict[str, Any]:
+    from coding_trajectory.metrics import build_session_graph_context_stats
+    stats = build_session_graph_context_stats(graph)
+    return stats.get("runtime") or {}
+
+
+def _session_graph_usage(graph: SessionGraph, *, extra_billing: bool = False) -> dict[str, Any]:
+    from coding_trajectory.metrics import build_session_graph_usage
+    usage_result = build_session_graph_usage(graph, extra_billing=extra_billing)
+    return {
+        "usage": usage_result.get("total_usage") or {},
+        "cost": usage_result.get("cost_usd"),
+        "runtime": usage_result.get("runtime") or {},
+    }
+
+
+def _session_graph_stats(graph: SessionGraph) -> dict[str, Any]:
+    from coding_trajectory.metrics import build_session_graph_context_stats
+    stats = build_session_graph_context_stats(graph)
+    return {
+        "model": stats.get("model") or {},
+        "context_window": stats.get("context_window") or {},
+        "messages": stats.get("messages") or {},
+        "quota": stats.get("quota") or {},
+        "provider_usage_buckets": stats.get("provider_usage_buckets") or [],
+    }
+
+
+def _handle_session_data(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    include = set(params.get("include") or ["metadata", "runtime", "usage"])
+    extra_billing = bool(params.get("extra_billing"))
+
+    graphs: list[SessionGraph] = []
+    seen_roots: set[str] = set()
+
+    session_ids = params.get("session_ids") or []
+    single_id = params.get("session_id")
+    if single_id:
+        session_ids = [single_id, *session_ids]
+
+    if session_ids:
+        for raw_id in session_ids:
+            try:
+                graph = _resolve_session_graph(context.store, raw_id)
+                root_key = str(graph.root_session_id)
+                if root_key not in seen_roots:
+                    seen_roots.add(root_key)
+                    graphs.append(graph)
+            except (ResourceNotFoundError, ValueError):
+                pass
+
+    if not session_ids:
+        collection_graphs = resolve_collection(
+            context.store,
+            "session_graph",
+            global_scope=context.global_scope,
+            current_dir=context.current_dir,
+            project_name=params.get("project_name"),
+            agent_vendor=params.get("agent_vendor"),
+        )
+        for graph in collection_graphs:
+            root_key = str(graph.root_session_id)
+            if root_key not in seen_roots:
+                seen_roots.add(root_key)
+                graphs.append(graph)
+
+    for graph in graphs:
+        _cache_session_graph(context, graph)
+
+    items: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    for graph in graphs:
+        try:
+            item: dict[str, Any] = _session_graph_metadata(graph)
+            if "runtime" in include:
+                item["runtime"] = _session_graph_runtime(graph)
+            if "usage" in include:
+                usage_data = _session_graph_usage(graph, extra_billing=extra_billing)
+                item["usage"] = usage_data.get("usage") or {}
+                if usage_data.get("cost") is not None:
+                    item["usage"]["cost_usd"] = usage_data["cost"]
+            if "stats" in include:
+                item["stats"] = _session_graph_stats(graph)
+            item = _public_output_for_session_graph(graph, item)
+            items.append(item)
+        except Exception as exc:
+            errors.append({
+                "id": str(graph.root_session_id),
+                "message": str(exc),
+            })
+
+    for raw_id in session_ids:
+        normalized = _normalize_user_id(raw_id)
+        matched = any(
+            str(g.root_session_id) == normalized
+            or any(str(s.session_id) == normalized for s in g.sessions)
+            for g in graphs
+        )
+        if not matched and not any(e["id"] == raw_id for e in errors):
+            errors.append({"id": raw_id, "message": "resource not found"})
+
+    return {"items": items, "errors": errors}
+
+
+def _handle_session_events(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    from coding_trajectory.analysis.projections import build_event_scan
+
+    event_ids = params.get("event_ids")
+    if event_ids:
+        matches: list[dict[str, Any]] = []
+        root_session_id: str | None = None
+        for eid in event_ids:
+            try:
+                event = resolve_resource(context.store, "event", eid)
+                session_graph = context.store.get_session_graph_for_session(event.session_id)
+                if root_session_id is None:
+                    root_session_id = str(session_graph.root_session_id)
+                detail = _public_output_for_session_graph(
+                    session_graph, serialize_event_detail(event)
+                )
+                matches.append(detail)
+            except (ResourceNotFoundError, ValueError):
+                continue
+        return {
+            "root_session_id": root_session_id,
+            "type": params.get("type"),
+            "matches": matches,
+        }
+
+    entrypoint_id = (
+        params.get("session_id")
+        or params.get("root_session_id")
+        or params.get("turn_id")
+    )
+    session_graph = _resolve_session_graph(context.store, entrypoint_id)
+    _cache_session_graph(context, session_graph)
+
+    event_type = params.get("type")
+    if not event_type:
+        all_events: list[dict[str, Any]] = []
+        for session in session_graph.sessions:
+            for event in session.events:
+                detail = serialize_event_detail(event)
+                all_events.append(
+                    _public_output_for_session_graph(session_graph, detail)
+                )
+        limit = params.get("limit")
+        if limit:
+            all_events = all_events[:limit]
+        return {
+            "root_session_id": str(session_graph.root_session_id),
+            "type": None,
+            "matches": all_events,
+        }
+
+    result = build_event_scan(
+        session_graph,
+        event_type=event_type,
+        filters=params.get("filters") or [],
+    )
+    limit = params.get("limit")
+    if limit:
+        result["matches"] = result["matches"][:limit]
+    return _public_output_for_session_graph(session_graph, result)
+
+
+def _handle_session_items(
+    params: dict[str, Any], context: ServiceContext
+) -> list[dict[str, Any]]:
+    from coding_trajectory.analysis.projections import build_item_details
+
+    item_ids = params.get("item_ids")
+    if item_ids:
+        result: list[dict[str, Any]] = []
+        for item_id in item_ids:
+            try:
+                item = resolve_resource(context.store, "item", item_id)
+                session_graph = context.store.get_session_graph_for_session(item.session_id)
+                result.append(
+                    _public_output_for_session_graph(
+                        session_graph,
+                        build_item_details(item, session_graph=session_graph),
+                    )
+                )
+            except (ResourceNotFoundError, ValueError):
+                continue
+        return result
+
+    entrypoint_id = params.get("session_id") or params.get("root_session_id")
+    session_graph = _resolve_session_graph(context.store, entrypoint_id)
+    _cache_session_graph(context, session_graph)
+
+    types_filter = set(params["types"]) if params.get("types") else None
+    result = []
+    for session in session_graph.sessions:
+        for turn in session.turns:
+            for item in turn.items:
+                if types_filter and item.kind not in types_filter:
+                    continue
+                result.append(
+                    _public_output_for_session_graph(
+                        session_graph,
+                        build_item_details(item, session_graph=session_graph),
+                    )
+                )
+    return result
+
+
 SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "project.list": _handle_project_list,
     "project.sessions": _handle_project_sessions,
@@ -839,6 +1063,9 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "session.turn_usage": _handle_session_turn_usage,
     "session.usage": _handle_session_usage,
     "session.tool_usage": _handle_session_tool_usage,
+    "session.data": _handle_session_data,
+    "session.events": _handle_session_events,
+    "session.items": _handle_session_items,
     "item.details": _handle_item_details,
     "event.detail": _handle_event_detail,
     "event.scan": _handle_event_scan,

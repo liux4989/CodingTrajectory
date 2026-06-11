@@ -8,9 +8,7 @@
   "requiresMethods": {
     "project.list": 1,
     "project.sessions": 1,
-    "session.overview": 1,
-    "session.stats": 1,
-    "session.usage": 1
+    "session.data": 1
   },
   "tools": [
     {

@@ -432,3 +432,74 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         },
         _default_output="json",
     )
+
+    session_data = session_sub.add_parser(
+        "data",
+        prog="ct session data",
+        help="Bulk read reusable session facts for many sessions.",
+        formatter_class=GhFormatter,
+    )
+    add_output_flags(session_data)
+    add_params_flag(session_data)
+    add_schema_flag(session_data)
+    session_data.set_defaults(
+        _method="session.data",
+        _params=lambda args: params_from_json(args),
+        _default_output="json",
+    )
+
+    session_events = session_sub.add_parser(
+        "events",
+        prog="ct session events",
+        help="Query events by session scope or explicit event IDs.",
+        epilog=EVENT_SCAN_EPILOG,
+        formatter_class=GhFormatter,
+    )
+    add_session_source(session_events)
+    add_output_flags(session_events)
+    add_params_flag(session_events)
+    add_schema_flag(session_events)
+    session_events.add_argument(
+        "--type",
+        dest="event_type",
+        required=False,
+        metavar="TYPE",
+        help="Event type to match.",
+    )
+    session_events.add_argument(
+        "--filter",
+        dest="filters",
+        action="append",
+        metavar="KEY=VALUE",
+        default=None,
+        help="Filter on event payload fields. Repeatable.",
+    )
+    session_events.set_defaults(
+        _method="session.events",
+        _params=lambda args: {
+            **params_from_json(args),
+            **({"session_id": args.session_id} if args.session_id else {}),
+            **({"type": args.event_type} if args.event_type else {}),
+            **({"filters": args.filters} if args.filters is not None else {}),
+        },
+        _default_output="json",
+    )
+
+    session_items = session_sub.add_parser(
+        "items",
+        prog="ct session items",
+        help="Query items by explicit IDs or session scope.",
+        formatter_class=GhFormatter,
+    )
+    session_items.add_argument("resource_ids", metavar="ITEM_ID", nargs="*")
+    add_base_output_flags(session_items)
+    add_params_flag(session_items)
+    add_schema_flag(session_items)
+    session_items.set_defaults(
+        _method="session.items",
+        _params=lambda args: {
+            **params_from_json(args),
+            **({"item_ids": args.resource_ids} if args.resource_ids else {}),
+        },
+        _default_output="json",
+    )

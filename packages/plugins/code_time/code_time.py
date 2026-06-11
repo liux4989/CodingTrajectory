@@ -109,11 +109,9 @@ def build_report(
                     all_session_ids.append(root_id)
                     session_meta[root_id] = session
 
-    session_data_map = {
-        data["root_session_id"]: data
-        for data in _batch_fetch_session_data(ct, all_session_ids)
-        if data.get("root_session_id")
-    }
+    session_data_map = _fetch_session_data_bulk(
+        ct, all_session_ids, since_days, agent_vendor, project_filter
+    )
 
     project_slices: list[dict[str, Any]] = []
     for project_name, sessions in sorted(project_sessions.items()):
@@ -160,55 +158,53 @@ def _empty_tokens() -> dict[str, int]:
     }
 
 
-def _batch_fetch_session_data(
+def _fetch_session_data_bulk(
     ct: str,
     session_ids: list[str],
-) -> list[dict[str, Any]]:
+    since_days: int,
+    agent_vendor: str | None,
+    project_filter: str | None,
+) -> dict[str, dict[str, Any]]:
     if not session_ids:
-        return []
+        return {}
 
-    unique_session_ids = list(dict.fromkeys(session_ids))
-    workers = min(8, len(unique_session_ids))
+    unique_ids = list(dict.fromkeys(session_ids))
+    chunk_size = 50
+    result_map: dict[str, dict[str, Any]] = {}
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(_fetch_session_data, ct, session_id): session_id
-            for session_id in unique_session_ids
+    for offset in range(0, len(unique_ids), chunk_size):
+        chunk = unique_ids[offset : offset + chunk_size]
+        params: dict[str, Any] = {
+            "session_ids": chunk,
+            "include": ["metadata", "runtime", "usage"],
         }
-        return [future.result() for future in as_completed(futures)]
+        payload = _ct_json_with_command(
+            ct,
+            [
+                "session", "data",
+                "--global-scope",
+                "--output", "json",
+                "--params", json.dumps(params),
+            ],
+        )
+        for item in payload.get("items") or []:
+            root_id = item.get("id")
+            if not root_id:
+                continue
+            runtime = item.get("runtime") or {}
+            usage = item.get("usage") or {}
+            result_map[root_id] = {
+                "root_session_id": root_id,
+                "vendor": (item.get("vendors") or ["unknown"])[0],
+                "execution_seconds": runtime.get("execution_seconds") or 0,
+                "wait_seconds": runtime.get("wait_seconds") or 0,
+                "turns": runtime.get("turns") or 0,
+                "tool_calls": runtime.get("tool_calls") or 0,
+                "tokens": _extract_tokens(usage),
+                "cost_usd": usage.get("cost_usd"),
+            }
 
-
-def _fetch_session_data(ct: str, session_id: str) -> dict[str, Any]:
-    stats = _ct_json_with_command(
-        ct,
-        ["session", "stats", session_id, "--global-scope", "--output", "json"],
-    )
-    usage = _ct_json_with_command(
-        ct,
-        ["session", "usage", session_id, "--global-scope", "--output", "json"],
-    )
-
-    stats_runtime = stats.get("runtime") or {}
-    usage_runtime = usage.get("runtime") or {}
-    usage_tokens = usage.get("usage") or {}
-
-    cost_usd = usage.get("cost")
-    if cost_usd is None and usage:
-        for turn in usage.get("turns") or []:
-            tc = turn.get("cost")
-            if tc is not None:
-                cost_usd = (cost_usd or 0) + tc
-
-    return {
-        "root_session_id": stats.get("id") or session_id,
-        "vendor": stats.get("vendor", "unknown"),
-        "execution_seconds": stats_runtime.get("execution_seconds") or usage_runtime.get("execution_seconds") or 0,
-        "wait_seconds": stats_runtime.get("wait_seconds") or usage_runtime.get("wait_seconds") or 0,
-        "turns": stats_runtime.get("turns") or 0,
-        "tool_calls": stats_runtime.get("tools") or 0,
-        "tokens": _extract_tokens(usage_tokens),
-        "cost_usd": cost_usd,
-    }
+    return result_map
 
 
 _REPORT_CACHE: dict[tuple, tuple[float, dict[str, Any]]] = {}
@@ -231,12 +227,12 @@ def _report_cache_set(key: tuple, report: dict[str, Any]) -> None:
 
 def _extract_tokens(usage: dict[str, Any]) -> dict[str, int]:
     return {
-        "input_tokens": usage.get("input") or 0,
-        "cached_input_tokens": usage.get("cached") or 0,
-        "cache_creation_input_tokens": usage.get("cache_creation") or 0,
-        "output_tokens": usage.get("output") or 0,
-        "reasoning_output_tokens": usage.get("reasoning") or 0,
-        "total_tokens": usage.get("total") or 0,
+        "input_tokens": usage.get("input_tokens") or usage.get("input") or 0,
+        "cached_input_tokens": usage.get("cached_input_tokens") or usage.get("cached") or 0,
+        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens") or usage.get("cache_creation") or 0,
+        "output_tokens": usage.get("output_tokens") or usage.get("output") or 0,
+        "reasoning_output_tokens": usage.get("reasoning_output_tokens") or usage.get("reasoning") or 0,
+        "total_tokens": usage.get("total_tokens") or usage.get("total") or 0,
     }
 
 
