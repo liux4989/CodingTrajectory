@@ -7,7 +7,6 @@ from typing import Any
 
 from coding_trajectory_cli._shared import (
     GhFormatter,
-    add_base_output_flags,
     add_output_flags,
     add_params_flag,
     add_schema_flag,
@@ -355,84 +354,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _renderer=_render_session_usage_text,
     )
 
-    session_item_detail = session_sub.add_parser(
-        "item-detail",
-        prog="ct session item-detail",
-        help="Show full detail for one or more items.",
-        formatter_class=GhFormatter,
-    )
-    session_item_detail.add_argument("resource_ids", metavar="ITEM_ID", nargs="*")
-    add_base_output_flags(session_item_detail)
-    add_params_flag(session_item_detail)
-    add_schema_flag(session_item_detail)
-    session_item_detail.set_defaults(
-        _method="item.details",
-        _params=lambda args: {
-            **params_from_json(args),
-            **({"item_ids": args.resource_ids} if args.resource_ids else {}),
-        },
-        _default_output="json",
-    )
-
-    session_event_detail = session_sub.add_parser(
-        "event-detail",
-        prog="ct session event-detail",
-        help="Expand the full content of a single event (resolves $truncated refs).",
-        formatter_class=GhFormatter,
-    )
-    session_event_detail.add_argument("resource_id", metavar="EVENT_ID", nargs="?")
-    add_base_output_flags(session_event_detail)
-    add_params_flag(session_event_detail)
-    add_schema_flag(session_event_detail)
-    session_event_detail.set_defaults(
-        _method="event.detail",
-        _params=lambda args: {
-            **params_from_json(args),
-            **({"event_id": args.resource_id} if args.resource_id else {}),
-        },
-        _default_output="json",
-    )
-
-    session_event_scan = session_sub.add_parser(
-        "event-scan",
-        prog="ct session event-scan",
-        help="Query events matching --type and optional --filter expressions.",
-        epilog=EVENT_SCAN_EPILOG,
-        formatter_class=GhFormatter,
-    )
-    add_session_source(session_event_scan)
-    add_output_flags(session_event_scan)
-    add_params_flag(session_event_scan)
-    add_schema_flag(session_event_scan)
-    session_event_scan.add_argument(
-        "--type",
-        dest="event_type",
-        required=False,
-        metavar="TYPE",
-        help="Event type to match (e.g. tool.call.succeeded, llm.response).",
-    )
-    session_event_scan.add_argument(
-        "--filter",
-        dest="filters",
-        action="append",
-        metavar="KEY=VALUE",
-        default=None,
-        help=(
-            "Filter on event payload fields. Repeatable. "
-            "VALUE=* means field must exist; VALUE=! means field must be absent."
-        ),
-    )
-    session_event_scan.set_defaults(
-        _method="event.scan",
-        _params=lambda args: {
-            **params_from_json(args),
-            **({"type": args.event_type} if args.event_type else {}),
-            **({"filters": args.filters} if args.filters is not None else {}),
-            **({"session_id": args.session_id} if args.session_id else {}),
-        },
-        _default_output="json",
-    )
-
     session_data = session_sub.add_parser(
         "data",
         prog="ct session data",
@@ -492,7 +413,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         formatter_class=GhFormatter,
     )
     session_items.add_argument("resource_ids", metavar="ITEM_ID", nargs="*")
-    add_base_output_flags(session_items)
+    add_output_flags(session_items)
     add_params_flag(session_items)
     add_schema_flag(session_items)
     session_items.set_defaults(

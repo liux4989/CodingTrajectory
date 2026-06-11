@@ -57,14 +57,6 @@ class SessionToolUsageRequest(SessionEntryRequest):
     extra_billing: bool = False
 
 
-class ItemDetailsRequest(ContractModel):
-    item_ids: list[str]
-
-
-class EventDetailRequest(ContractModel):
-    event_id: str
-
-
 class SessionDataRequest(ContractModel):
     session_id: str | None = None
     session_ids: list[str] | None = None
@@ -91,11 +83,6 @@ class SessionItemsRequest(ContractModel):
     session_id: str | None = None
     root_session_id: str | None = None
     types: list[str] | None = None
-
-
-class EventScanRequest(SessionEntryRequest):
-    type: str
-    filters: list[str] = Field(default_factory=list)
 
 
 class ProjectSummary(ContractModel):
@@ -157,16 +144,6 @@ class SessionToolUsageResponse(ContractModel):
     root_session_id: str
 
 
-class EventDetailResponse(ContractModel):
-    event_id: str
-    session_id: str
-    timestamp: str
-    type: str
-    tool_call: dict[str, Any] | None = None
-    llm: dict[str, Any] | None = None
-    text: dict[str, Any] | None = None
-
-
 class SessionDataItemResponse(ContractModel):
     id: str
     project: str | None = None
@@ -202,16 +179,6 @@ class PublicSessionEventsResponse(ContractModel):
 
 
 class SessionItemsResponse(RootModel[list[dict[str, Any]]]):
-    pass
-
-
-class EventScanResponse(ContractModel):
-    root_session_id: str | None = None
-    type: str
-    matches: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class ItemDetailsResponse(RootModel[list[dict[str, Any]]]):
     pass
 
 
@@ -252,22 +219,6 @@ class PublicSessionUsageResponse(ContractModel):
     cost: float | None = None
     turns: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] | None = None
-
-
-class PublicEventDetailResponse(ContractModel):
-    id: str
-    session: str
-    timestamp: str
-    type: str
-    tool_call: dict[str, Any] | None = None
-    llm: dict[str, Any] | None = None
-    text: dict[str, Any] | None = None
-
-
-class PublicEventScanResponse(ContractModel):
-    id: str
-    type: str
-    matches: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -351,27 +302,6 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "session.tool_usage", 1, SessionToolUsageRequest, SessionToolUsageResponse
-        ),
-        ServiceContract(
-            "item.details",
-            1,
-            ItemDetailsRequest,
-            ItemDetailsResponse,
-            ItemDetailsResponse,
-        ),
-        ServiceContract(
-            "event.detail",
-            1,
-            EventDetailRequest,
-            EventDetailResponse,
-            PublicEventDetailResponse,
-        ),
-        ServiceContract(
-            "event.scan",
-            1,
-            EventScanRequest,
-            EventScanResponse,
-            PublicEventScanResponse,
         ),
         ServiceContract(
             "session.data",

@@ -25,12 +25,12 @@ Use this sequence to explore the log through enriched, post-processed structure:
 1. `ct project list`  → list all known projects; find the project and trajectory ID for the log above
 2. `ct project sessions <PROJECT_NAME>`  → list sessions for the project and choose a session ID
 3. `ct session overview <SESSION_ID>`  → session structure, item types, user requests — start here
-4. `ct session item-detail <ITEM_ID> [<ITEM_ID> ...]`  → full detail for one or more items (returns JSON array)
+4. `ct session items <ITEM_ID> [<ITEM_ID> ...]`  → full detail for one or more items (returns JSON array)
 
 ## Raw View
 Only fall back to raw events when structured data is truncated or missing detail you need:
-1. `ct session event-scan <SESSION_ID> --type TYPE [--filter KEY=VALUE ...]`
-2. `ct session event-detail <EVENT_ID>`
+1. `ct session events <SESSION_ID> --type TYPE [--filter KEY=VALUE ...]`
+2. `ct session events --params '{{"event_ids": ["<EVENT_ID>"]}}'`
 
 """,
 

@@ -21,7 +21,7 @@ def truncate_text_preview(value: Any, *, max_len: int) -> str:
 
 def truncation_marker(length: int, event_ids: list) -> str:
     ref = " | ".join(str(eid) for eid in event_ids)
-    return f"[{length:,} chars → event.detail {ref}]"
+    return f"[{length:,} chars → session.events {ref}]"
 
 
 def truncate_with_ref(value: Any, event_ids: list, max_len: int = _ITEM_DETAIL_TRUNCATE_LEN) -> Any:

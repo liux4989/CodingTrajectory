@@ -546,55 +546,6 @@ def compact_payload(method: str, payload: Any) -> Any:
             }
         )
 
-    if method == "item.details" and isinstance(payload, list):
-        return [
-            drop_none(
-                {
-                    "id": item.get("item_id"),
-                    "kind": item.get("kind"),
-                    "type": item.get("type"),
-                    "operations": item.get("operations"),
-                    "shape": item.get("shape"),
-                    "events": item.get("event_ids"),
-                }
-            )
-            for item in payload
-            if isinstance(item, dict)
-        ]
-
-    if method == "event.detail" and isinstance(payload, dict):
-        return drop_none(
-            {
-                "id": payload.get("event_id"),
-                "session": payload.get("session_id"),
-                "timestamp": payload.get("timestamp"),
-                "type": payload.get("type"),
-                "tool_call": payload.get("tool_call"),
-                "llm": payload.get("llm"),
-                "text": payload.get("text"),
-            }
-        )
-
-    if method == "event.scan" and isinstance(payload, dict):
-        return drop_none(
-            {
-                "id": payload.get("root_session_id"),
-                "type": payload.get("type"),
-                "matches": [
-                    drop_none(
-                        {
-                            "id": item.get("event_id"),
-                            "session": item.get("session_id"),
-                            "timestamp": item.get("timestamp"),
-                            "payload": item.get("payload"),
-                        }
-                    )
-                    for item in payload.get("matches") or []
-                    if isinstance(item, dict)
-                ],
-            }
-        )
-
     if method == "session.data" and isinstance(payload, dict):
         return payload
 

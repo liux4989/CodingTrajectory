@@ -428,6 +428,8 @@ def _build_store_full(
 
 def _build_store_targeted(paths: list[str], cache: IndexCache) -> tuple[DocumentStore, str]:
     """Targeted discovery — ingest only the files mapped to a session_graph."""
+    if not paths:
+        return DocumentStore.from_session_graphs([]), "(no targeted paths)"
     expanded_paths = _expand_targeted_paths([Path(p) for p in paths])
     discovery = discover_store_from_files(expanded_paths)
     _update_path_index(cache, discovery.sources)
@@ -480,6 +482,12 @@ def resolve_store(
         if cached_paths:
             return _build_store_targeted(cached_paths, cache)
 
+    bulk_ids = params.get("session_ids")
+    if bulk_ids:
+        bulk_paths = _resolve_bulk_cached_paths(bulk_ids, cache)
+        if bulk_paths is not None:
+            return _build_store_targeted(bulk_paths, cache)
+
     return _build_store_full(
         global_scope=global_scope,
         current_dir=current_dir,
@@ -489,6 +497,35 @@ def resolve_store(
         modified_since=params.get("modified_since"),
         agent_vendor=params.get("agent_vendor"),
     )
+
+
+def _resolve_bulk_cached_paths(raw_ids: list[str], cache: IndexCache) -> list[str] | None:
+    """Collect targeted cached paths for a list of session IDs.
+
+    Returns ``None`` when the cache path index is empty, signalling that
+    the caller should fall back to full discovery. Otherwise returns the
+    union of cached paths for every valid, indexed id. Malformed ids are
+    skipped (the handler records them as errors in its own post-pass).
+    Uncached-but-valid ids contribute no paths; the caller then builds a
+    targeted store over an empty path set so the handler emits
+    ``resource not found`` for those ids instead of silently falling back
+    to global discovery.
+    """
+    if not cache.path_to_session_graph:
+        return None
+    paths: list[str] = []
+    seen_roots: set[str] = set()
+    for raw_id in raw_ids:
+        try:
+            normalized = _normalize_user_id(raw_id)
+        except ValueError:
+            continue
+        root_id = cache.session_to_session_graph.get(normalized, normalized)
+        if root_id in seen_roots:
+            continue
+        seen_roots.add(root_id)
+        paths.extend(cache.paths_for_session_graph(root_id))
+    return paths
 
 
 TEMPORARY_PROJECT_KEY = "(temporary)"
@@ -784,52 +821,6 @@ def _handle_session_tool_usage(
     )
 
 
-def _handle_item_details(
-    params: dict[str, Any], context: ServiceContext
-) -> list[dict[str, Any]]:
-    from coding_trajectory.analysis.projections import build_item_details
-
-    result: list[dict[str, Any]] = []
-    for item_id in params["item_ids"]:
-        item = resolve_resource(context.store, "item", item_id)
-        session_graph = context.store.get_session_graph_for_session(item.session_id)
-        result.append(
-            _public_output_for_session_graph(
-                session_graph,
-                build_item_details(item, session_graph=session_graph),
-            )
-        )
-    return result
-
-
-def _handle_event_detail(
-    params: dict[str, Any], context: ServiceContext
-) -> dict[str, Any]:
-    event = resolve_resource(context.store, "event", params["event_id"])
-    session_graph = context.store.get_session_graph_for_session(event.session_id)
-    return _public_output_for_session_graph(
-        session_graph, serialize_event_detail(event)
-    )
-
-
-def _handle_event_scan(
-    params: dict[str, Any], context: ServiceContext
-) -> dict[str, Any]:
-    from coding_trajectory.analysis.projections import build_event_scan
-
-    session_graph = _resolve_session_graph(
-        context.store, _session_graph_entrypoint_id(params)
-    )
-    return _public_output_for_session_graph(
-        session_graph,
-        build_event_scan(
-            session_graph,
-            event_type=params["type"],
-            filters=params.get("filters") or [],
-        ),
-    )
-
-
 def _session_graph_metadata(graph: SessionGraph) -> dict[str, Any]:
     vendors = sorted({s.vendor.value for s in graph.sessions if s.vendor})
     return {
@@ -936,7 +927,12 @@ def _handle_session_data(
             })
 
     for raw_id in session_ids:
-        normalized = _normalize_user_id(raw_id)
+        try:
+            normalized = _normalize_user_id(raw_id)
+        except ValueError:
+            if not any(e["id"] == raw_id for e in errors):
+                errors.append({"id": raw_id, "message": "malformed id"})
+            continue
         matched = any(
             str(g.root_session_id) == normalized
             or any(str(s.session_id) == normalized for s in g.sessions)
@@ -1066,7 +1062,4 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "session.data": _handle_session_data,
     "session.events": _handle_session_events,
     "session.items": _handle_session_items,
-    "item.details": _handle_item_details,
-    "event.detail": _handle_event_detail,
-    "event.scan": _handle_event_scan,
 }

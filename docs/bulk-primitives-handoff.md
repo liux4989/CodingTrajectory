@@ -277,9 +277,18 @@ They should be handled before treating the bulk primitive work as complete.
    `session_ids`. The result can be a broad global discovery for each bulk
    chunk, preserving correctness but undermining the main performance goal.
 
-   Suggested fix: teach store resolution to derive targeted cached paths from
-   all requested `session_ids`, or add a dedicated bulk targeted resolver used
-   by `session.data`.
+   Resolved in two passes. First, `resolve_store()` gained a bulk branch that
+   calls `_resolve_bulk_cached_paths(bulk_ids, cache)` and routes the result
+   through `_build_store_targeted`. Second, the resolver was tightened so
+   that (a) a malformed id does not abort resolution, (b) a valid-but-uncached
+   id contributes no paths instead of forcing a fall-back to full discovery,
+   (c) `None` is returned only when the cache path index itself is empty, and
+   (d) `_build_store_targeted([])` now short-circuits to an empty
+   `DocumentStore` so discovery no longer raises "no valid log files found
+   for paths: []" on an empty targeted set. With the fix, a bulk request
+   whose ids are all malformed or uncached returns a well-formed partial
+   response with `items: []` and per-id `errors` entries instead of a CLI
+   error.
 
 2. Malformed explicit ids can abort `session.data` instead of returning partial
    errors.

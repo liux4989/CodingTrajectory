@@ -227,12 +227,12 @@ def _report_cache_set(key: tuple, report: dict[str, Any]) -> None:
 
 def _extract_tokens(usage: dict[str, Any]) -> dict[str, int]:
     return {
-        "input_tokens": usage.get("input_tokens") or usage.get("input") or 0,
-        "cached_input_tokens": usage.get("cached_input_tokens") or usage.get("cached") or 0,
-        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens") or usage.get("cache_creation") or 0,
-        "output_tokens": usage.get("output_tokens") or usage.get("output") or 0,
-        "reasoning_output_tokens": usage.get("reasoning_output_tokens") or usage.get("reasoning") or 0,
-        "total_tokens": usage.get("total_tokens") or usage.get("total") or 0,
+        "input_tokens": usage.get("input_tokens") or 0,
+        "cached_input_tokens": usage.get("cached_input_tokens") or 0,
+        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens") or 0,
+        "output_tokens": usage.get("output_tokens") or 0,
+        "reasoning_output_tokens": usage.get("reasoning_output_tokens") or 0,
+        "total_tokens": usage.get("total_tokens") or 0,
     }
 
 

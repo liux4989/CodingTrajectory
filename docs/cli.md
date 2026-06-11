@@ -74,14 +74,14 @@ Structured View
    - use `--output json` when you need full item ids for drill-down
 4. `session stats [session_id] [--output markdown|json]` — inspect session stats with compact context/token sections
 5. `session usage [session_id] [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and costs reported by session logs
-6. `session item-detail <item_id> [...]` — read the JSON evidence for one or more items
+6. `session items <item_id> [...]` — read the JSON evidence for one or more items
 
 `session usage` is intentionally turn-focused. It reports token buckets and any
 cost recorded by the source session log; core does not estimate missing prices
 from an external model catalog. External pricing enrichment belongs to the
 dashboard plugin. Results are grouped by turn without expanding paths, queries,
 commands, individual tool calls, derived efficiency, or explanatory semantics.
-Use `session overview`, `session item-detail`, `session event-detail`, or
+Use `session overview`, `session items`, `session events`, or
 detail commands when you need hierarchy/navigation detail or causal drill-down.
 
 Item-level tool token attribution is available through the
@@ -91,8 +91,8 @@ There is no dedicated core CLI command for this service method.
 
 
 Raw View
-1. `session event-detail <event_id>` — resolve the full JSON content of an event
-2. `session event-scan [session_id] --type TYPE [--filter KEY=VALUE]` — query raw JSON events by type, optionally narrowed by payload predicates
+1. `session events --params '{"event_ids": [...]}'` — resolve the full JSON content of one or more events
+2. `session events [session_id] --type TYPE [--filter KEY=VALUE]` — query raw JSON events by type, optionally narrowed by payload predicates
    - repeat `--filter` to combine predicates
    - `key=value` requires an exact payload-field match
    - `key=*` requires a payload field to exist

@@ -144,7 +144,7 @@ coding-trajectory/
 │   │       ├── plugins.py                  # Plugin registry + dispatch
 │   │       └── commands/
 │   │           ├── project.py              # `ct project list|sessions`
-│   │           ├── session.py              # `ct session overview|stats|usage|item-detail|event-*`
+│   │           ├── session.py              # `ct session overview|stats|usage|items|events`
 │   │           └── plugin.py               # `ct plugin list|<name>`
 │   └── plugins/                            # Built-in executable plugins
 │       ├── activity/                       # `ct-plugin-activity`
@@ -229,9 +229,8 @@ importing the application layer.
 | `session.usage` | Token usage and log-reported cost breakdown by turn |
 | `session.tool_usage` | Tool invocation statistics and estimated visible-content token attribution |
 | `session.turn_usage` | Per-turn usage detail |
-| `item.details` | Enriched detail for one or more items |
-| `event.detail` | Full JSON content of a single event |
-| `event.scan` | Filtered event search by type with payload predicates |
+| `session.items` | Enriched detail for one or more items |
+| `session.events` | Event query: full JSON content by event IDs or filtered search by type with payload predicates |
 
 ### Store Resolution
 
@@ -322,9 +321,9 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct session overview [ID]` | Session hierarchy overview |
 | `uv run ct session stats [ID]` | Context window statistics |
 | `uv run ct session usage [ID]` | Token and log-reported cost breakdown |
-| `uv run ct session item-detail ITEM_ID` | Item detail (JSON) |
-| `uv run ct session event-detail EVENT_ID` | Event detail (JSON) |
-| `uv run ct session event-scan [ID] --type TYPE` | Filtered event search |
+| `uv run ct session items ITEM_ID` | Item detail (JSON) |
+| `uv run ct session events --params '{"event_ids": [...]}'` | Event detail (JSON) |
+| `uv run ct session events [ID] --type TYPE` | Filtered event search |
 | `uv run ct plugin list` | List registered plugins |
 | `uv run ct plugin activity` | Activity timeline |
 | `uv run ct plugin dashboard web` | Start web dashboard |

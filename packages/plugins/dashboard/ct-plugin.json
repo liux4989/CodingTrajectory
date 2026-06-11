@@ -11,8 +11,8 @@
     "session.overview": 1,
     "session.stats": 1,
     "session.usage": 1,
-    "item.details": 1,
-    "event.detail": 1
+    "session.items": 1,
+    "session.events": 1
   },
   "tools": [
     {
