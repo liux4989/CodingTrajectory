@@ -8,6 +8,7 @@ import sys
 from typing import Any
 
 from coding_trajectory_cli._shared import GhFormatter, add_base_output_flags
+from coding_trajectory_cli.outcome import CommandOutcome, EarlyDispatchOutcome, status_error
 from coding_trajectory_cli.plugins import (
     LoadedPlugin,
     PluginManifest,
@@ -107,19 +108,25 @@ def _render_plugin_mutation_text(payload: dict[str, Any]) -> str:
     return f"{payload.get('name')}: {payload.get('status')} ({payload.get('source')})"
 
 
-def _handle_plugin_exec(args: argparse.Namespace) -> int:
+def _handle_plugin_exec(args: argparse.Namespace) -> CommandOutcome:
     plugin = getattr(args, "_plugin", None)
     if not isinstance(plugin, LoadedPlugin) or plugin.manifest is None:
         print(
             json.dumps({"error": {"message": "Plugin is not available"}}, indent=2),
             file=sys.stderr,
         )
-        return 1
+        return CommandOutcome.failed(exit_code=1, error="Plugin is not available")
     plugin_args = getattr(args, "plugin_args", None) or []
-    return run_plugin(plugin.manifest, plugin.source, plugin_args)
+    exit_code = run_plugin(plugin.manifest, plugin.source, plugin_args)
+    if exit_code == 0:
+        return CommandOutcome.completed(exit_code=0)
+    return CommandOutcome.failed(
+        exit_code=exit_code,
+        error=status_error(f"plugin.{plugin.manifest.name}", exit_code),
+    )
 
 
-def dispatch_plugin_argv(raw_args: list[str]) -> int | None:
+def dispatch_plugin_argv(raw_args: list[str]) -> EarlyDispatchOutcome | None:
     if len(raw_args) < 2 or raw_args[0] != "plugin":
         return None
     plugin_name = raw_args[1]
@@ -133,15 +140,33 @@ def dispatch_plugin_argv(raw_args: list[str]) -> int | None:
         if plugin.manifest and plugin.manifest.name == plugin_name:
             help_exit = _plugin_manifest_help(plugin.manifest, plugin_args)
             if help_exit is not None:
-                return help_exit
-            return run_plugin(plugin.manifest, plugin.source, plugin_args)
+                return EarlyDispatchOutcome(
+                    command=f"plugin.{plugin_name}",
+                    outcome=CommandOutcome.completed(exit_code=help_exit),
+                )
+            exit_code = run_plugin(plugin.manifest, plugin.source, plugin_args)
+            outcome = (
+                CommandOutcome.completed(exit_code=0)
+                if exit_code == 0
+                else CommandOutcome.failed(
+                    exit_code=exit_code,
+                    error=status_error(f"plugin.{plugin_name}", exit_code),
+                )
+            )
+            return EarlyDispatchOutcome(command=f"plugin.{plugin_name}", outcome=outcome)
     print(
         json.dumps(
             {"error": {"message": f"Plugin not found: {plugin_name}"}}, indent=2
         ),
         file=sys.stderr,
     )
-    return 2
+    return EarlyDispatchOutcome(
+        command=f"plugin.{plugin_name}",
+        outcome=CommandOutcome.failed(
+            exit_code=2,
+            error=f"Plugin not found: {plugin_name}",
+        ),
+    )
 
 
 def _plugin_manifest_help(

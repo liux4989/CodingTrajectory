@@ -23,7 +23,8 @@ from coding_trajectory_cli._shared import (
     selected_output,
 )
 from coding_trajectory_cli.commands import REGISTRARS, dispatch_plugin_argv
-from coding_trajectory_cli.telemetry import InvocationRecord, write_invocation_record
+from coding_trajectory_cli.outcome import command_path, normalize_handler_result
+from coding_trajectory_cli.telemetry import write_invocation_record
 
 EPILOG = """\
 NOTE
@@ -31,6 +32,7 @@ NOTE
   that coding session as the session tree entry point, or omit it to use the
   most-recent session in the current working directory.
 """
+
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     method: str = args._method
@@ -79,17 +81,6 @@ def _render_payload(args: argparse.Namespace, payload: Any) -> str:
     return json_text(compact_payload(method, payload)) if method else json_text(payload)
 
 
-def _command_path(args: argparse.Namespace) -> str:
-    command = getattr(args, "command", None) or ""
-    action = getattr(args, "action", None)
-    if action:
-        return f"{command}.{action}"
-    plugin_name = getattr(args, "_plugin_name", None)
-    if plugin_name:
-        return f"plugin.{plugin_name}"
-    return command or "unknown"
-
-
 def _payload_session_id(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
@@ -107,67 +98,108 @@ def _payload_vendor(payload: Any) -> str | None:
     if isinstance(vendor, str):
         return vendor
     return None
-def _json_default(value: Any) -> Any:
-    if isinstance(value, _dt.datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=_dt.timezone.utc)
-        return value.isoformat()
-    return str(value)
+
+
+def _record_invocation(
+    *,
+    command: str,
+    method: str | None,
+    payload: Any,
+    exit_code: int,
+    ok: bool,
+    error: str | None,
+    started_at: float,
+    warnings: list[dict[str, Any]],
+) -> None:
+    write_invocation_record(
+        {
+            "ts": _dt.datetime.now(_dt.timezone.utc),
+            "ct_version": _cli_version(),
+            "cwd": str(Path.cwd()),
+            "cmd": command,
+            "method": method,
+            "session_id": _payload_session_id(payload),
+            "vendor": _payload_vendor(payload),
+            "exit_code": exit_code,
+            "ok": ok,
+            "error": error,
+            "ms": round((time.monotonic() - started_at) * 1000),
+            "warnings": warnings,
+        }
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     with debug.debug_scope() as debug_ctx:
         raw_args = list(sys.argv[1:] if argv is None else argv)
-        plugin_exit = dispatch_plugin_argv(raw_args)
-        if plugin_exit is not None:
-            return plugin_exit
+        start = time.monotonic()
+        plugin_dispatch = dispatch_plugin_argv(raw_args)
+        if plugin_dispatch is not None:
+            outcome = plugin_dispatch.outcome
+            payload = outcome.payload if outcome.has_payload else None
+            _record_invocation(
+                command=plugin_dispatch.command,
+                method=None,
+                payload=payload,
+                exit_code=outcome.exit_code,
+                ok=outcome.ok,
+                error=outcome.error,
+                started_at=start,
+                warnings=debug_ctx.as_records(),
+            )
+            return outcome.exit_code
 
         parser = _build_parser()
         args = parser.parse_args(raw_args)
-
-        start = time.monotonic()
+        command_name = command_path(args)
+        method = getattr(args, "_method", None)
+        exit_code = 0
         ok = True
         error_message: str | None = None
         payload: Any = None
 
         try:
             plugin_handler = getattr(args, "_plugin_handler", None)
-            payload = plugin_handler(args) if callable(plugin_handler) else _dispatch(args)
-            if isinstance(payload, int):
-                return payload
+            result = plugin_handler(args) if callable(plugin_handler) else _dispatch(args)
+            outcome = normalize_handler_result(args, result)
+            exit_code = outcome.exit_code
+            ok = outcome.ok
+            error_message = outcome.error
+            if outcome.has_payload:
+                payload = outcome.payload
         except (ResourceNotFoundError, DocumentError) as exc:
+            exit_code = 1
             ok = False
             error_message = str(exc)
             print(json.dumps({"error": {"message": error_message}}, indent=2), file=sys.stderr)
-            return 1
+            return exit_code
         except Exception as exc:  # pragma: no cover - defensive CLI fallback
+            exit_code = 1
             ok = False
             error_message = str(exc)
             print(json.dumps({"error": {"message": error_message}}, indent=2), file=sys.stderr)
-            return 1
+            return exit_code
         finally:
-            write_invocation_record(
-                InvocationRecord.model_validate(
-                    {
-                    "ts": _dt.datetime.now(_dt.timezone.utc),
-                    "ct_version": _cli_version(),
-                    "cwd": str(Path.cwd()),
-                    "cmd": _command_path(args),
-                    "method": getattr(args, "_method", None),
-                    "session_id": _payload_session_id(payload),
-                    "vendor": _payload_vendor(payload),
-                    "ok": ok,
-                    "error": error_message,
-                    "ms": round((time.monotonic() - start) * 1000),
-                    "warnings": debug_ctx.as_records(),
-                    }
-                )
+            _record_invocation(
+                command=command_name,
+                method=method,
+                payload=payload,
+                exit_code=exit_code,
+                ok=ok,
+                error=error_message,
+                started_at=start,
+                warnings=debug_ctx.as_records(),
             )
+
+        if payload is None:
+            return exit_code
 
         output = _render_payload(args, payload)
         if selected_output(args) == "json":
             print(output)
         else:
             print(render_markdown_for_terminal(output))
-        return 0
+        return exit_code
 
 
 def _cli_version() -> str | None:

@@ -58,6 +58,7 @@ after it fails). Fields:
 | `method` | string | Service method dispatched to, e.g. `session.stats` |
 | `session_id` | string or null | Root session ID resolved for the invocation |
 | `vendor` | string or null | Agent vendor when a single vendor applies |
+| `exit_code` | integer | Process exit status returned to the shell |
 | `ok` | boolean | `true` if the invocation completed without error |
 | `error` | string or null | Short error class or message when `ok` is `false` |
 | `ms` | integer | Wall-clock duration of the invocation, in milliseconds |
@@ -71,6 +72,12 @@ Each entry in `warnings` is a structured record:
 | `code` | string or null | Stable grouping identifier |
 | `severity` | string | `info`, `warning`, or `error` |
 | `context` | object | Arbitrary structured data from the emission site |
+
+`exit_code` and `ok` are intentionally separate. Commands such as `ct doctor`
+use non-zero exit codes to signal diagnostic status without meaning the
+invocation itself failed. Those runs are recorded with `ok=true` and the
+diagnostic `exit_code`, while unreadable state or handler failures set
+`ok=false`.
 
 The record is deliberately narrow. It does not contain command arguments,
 command output, session content, or user identity. Those belong in richer
@@ -149,20 +156,6 @@ state for `ct doctor` to report explicitly.
 
 When disabled, the CLI behaves exactly as it does today — no writes, no file
 creation, no side effects.
-
-## Known gaps
-
-The CLI has one early-exit path that bypasses the invocation log:
-
-- **Plugin argv dispatch.** `ct plugin list` and a small number of other
-  plugin subcommands are handled by `dispatch_plugin_argv` before the main
-  dispatch flow runs. When that path returns a non-`None` exit code, the
-  process exits without entering the block that writes the invocation
-  record. These invocations are therefore invisible in the log today.
-
-Closing this gap requires restructuring the plugin argv path to run inside
-the main dispatch block, which is a larger refactor than the rest of the
-mechanism. The gap is documented rather than silently papered over.
 
 ## Consumption
 

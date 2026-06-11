@@ -141,3 +141,7 @@ consumer.
 
 Non-zero exits make `doctor` usable in CI or cron as a health gate, even
 though the primary consumer is the interactive owner.
+
+In the invocation log, exits `1` and `2` are still recorded as completed
+diagnostic runs (`ok=true`) with their non-zero `exit_code`. Exit `3` is
+recorded as a failed invocation.
