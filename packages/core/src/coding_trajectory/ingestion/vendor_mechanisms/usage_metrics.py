@@ -111,7 +111,6 @@ def normalize_pi_usage(*, provider: Any = None, model: Any, usage: Any) -> dict[
             "output_tokens": output_tokens,
             "total_tokens": _as_int_or_none(usage_map.get("totalTokens"))
             or (input_tokens + cache_read + cache_write + output_tokens),
-            "cost_usd": _pi_cost_usd(usage_map.get("cost")),
         },
         cumulative_input_tokens=input_tokens + cache_read + cache_write,
     )
@@ -264,10 +263,3 @@ def _as_float_or_none(value: Any) -> float | None:
 
 def _as_bool_or_none(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
-
-
-def _pi_cost_usd(value: Any) -> float | None:
-    if isinstance(value, dict):
-        total = value.get("total")
-        return _as_float_or_none(total)
-    return _as_float_or_none(value)

@@ -488,15 +488,6 @@ def _build_full_metrics(
                 session_id=str(session.session_id),
                 vendor=session.vendor.value if getattr(session.vendor, "value", None) else None,
             )
-        if not metrics.cost_estimate.complete:
-            for reason in metrics.cost_estimate.missing_reasons:
-                warnings.append(reason)
-                debug.warn(
-                    reason,
-                    code="cost.incomplete",
-                    severity="warning",
-                    session_id=str(session.session_id),
-                )
 
     return SessionGraphMetrics(
         root_session_id=session_graph.root_session_id,
@@ -559,17 +550,7 @@ def _build_turn_metrics(
 
     observations.sort(key=lambda item: item.timestamp)
     total = TokenUsage()
-    vendor_cost = _vendor_reported_cost(
-        turn,
-        context_observations=context_observations,
-        observations=observations,
-        extra_billing=extra_billing,
-    )
-    cost_total = vendor_cost or (
-        _missing_reported_cost(observations, extra_billing=extra_billing)
-        if observations
-        else CostEstimate(extra_billing=extra_billing)
-    )
+    cost_total = CostEstimate(extra_billing=extra_billing)
     for observation in observations:
         total = total.plus(observation.usage)
 
@@ -590,49 +571,6 @@ def _build_turn_metrics(
         cost_estimate=_finalize_cost(cost_total),
         observations=observations,
         quota_snapshots=quota_snapshots,
-    )
-
-
-def _vendor_reported_cost(
-    turn: Turn,
-    *,
-    context_observations: list[ContextUsageObservation],
-    observations: list[TokenUsageObservation],
-    extra_billing: bool,
-) -> CostEstimate | None:
-    amount = next(
-        (
-            value
-            for observation in context_observations
-            if (value := _as_float(observation.usage.get("cost_usd"))) is not None
-        ),
-        None,
-    )
-    if amount is None:
-        return None
-
-    model = next((observation.model for observation in observations if observation.model), None)
-    return CostEstimate(
-        amount_usd=amount,
-        extra_billing=extra_billing,
-        pricing_source="vendor_reported",
-        pricing_effective_date=turn.started_at.date().isoformat(),
-        model=model,
-        complete=True,
-    )
-
-
-def _missing_reported_cost(
-    observations: list[TokenUsageObservation],
-    *,
-    extra_billing: bool,
-) -> CostEstimate:
-    model = next((observation.model for observation in observations if observation.model), None)
-    return CostEstimate(
-        extra_billing=extra_billing,
-        model=model,
-        complete=False,
-        missing_reasons=["cost not reported in session log"],
     )
 
 

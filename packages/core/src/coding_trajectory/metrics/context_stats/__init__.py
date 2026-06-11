@@ -74,14 +74,8 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
         )
     ]
     if provider_usage_buckets:
-        message = (
+        warnings.append(
             "Provider usage buckets are reported separately from semantic context composition."
-        )
-        warnings.append(message)
-        debug.warn(
-            message,
-            code="context.provider_usage_buckets",
-            severity="info",
         )
 
     return SessionContextStatsFlat(
