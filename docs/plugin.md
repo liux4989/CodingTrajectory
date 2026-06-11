@@ -50,6 +50,20 @@ Repository development can register all local built-ins with:
 ct plugin register-builtins
 ```
 
+For local user-level publishing, use the repo-owned publish command instead of
+manually reinstalling uv tools:
+
+```text
+uv run ct plugin publish-local
+```
+
+`publish-local` rebuilds the global `coding-trajectory` uv tool from the
+current checkout, installs every package under `packages/plugins` into that
+tool environment, replaces built-in manifest registrations, and prunes stale
+built-in registrations that still point inside this checkout's
+`packages/plugins` directory. It does not remove unrelated third-party plugin
+registrations.
+
 ## Minimal Manifest
 
 ```json
@@ -165,6 +179,11 @@ First-party plugins are independent packages:
 Each executable prints its packaged manifest path with `--manifest`. Plugin
 packages own their dependencies and assets and do not import
 `coding_trajectory` or `coding_trajectory_cli`.
+
+During repository development, `ct plugin publish-local` is the canonical way to
+refresh the global `ct` command and its first-party plugin executables together.
+Run it through the checkout (`uv run ct plugin publish-local`) when the global
+tool may not yet have the command.
 
 ## Activity Plugin
 

@@ -34,5 +34,6 @@ artifacts = ["web/dist"]
 "dashboard_tui.py" = "ct_plugin_dashboard/dashboard_tui.py"
 "dashboard_web.py" = "ct_plugin_dashboard/dashboard_web.py"
 "token_pricing.py" = "ct_plugin_dashboard/token_pricing.py"
+"web_services.py" = "ct_plugin_dashboard/web_services.py"
 "ct-plugin.json" = "ct_plugin_dashboard/ct-plugin.json"
 "web/dist" = "ct_plugin_dashboard/web/dist"

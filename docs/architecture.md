@@ -325,6 +325,7 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct session events --params '{"event_ids": [...]}'` | Event detail (JSON) |
 | `uv run ct session events [ID] --type TYPE` | Filtered event search |
 | `uv run ct plugin list` | List registered plugins |
+| `uv run ct plugin publish-local` | Refresh the global uv tool install and built-in plugin registrations |
 | `uv run ct plugin activity` | Activity timeline |
 | `uv run ct plugin dashboard web` | Start web dashboard |
 | `uv run ct plugin review session ID` | LLM-judge session review |
