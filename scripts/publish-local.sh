@@ -60,7 +60,7 @@ while IFS= read -r -d '' pyproject; do
 done < <(find packages/plugins -mindepth 2 -maxdepth 2 -name pyproject.toml -print0 | sort -z)
 
 install_cmd=(
-  uv tool install --force
+  uv tool install --force --reinstall
   --editable "$repo/packages/cli"
   --with-editable "$repo/packages/core"
   "${plugin_args[@]}"
