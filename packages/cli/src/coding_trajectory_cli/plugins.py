@@ -21,7 +21,6 @@ from coding_trajectory.contracts import SERVICE_CONTRACTS
 PLUGIN_REGISTRY_ENV = "CT_PLUGIN_REGISTRY"
 RESERVED_PLUGIN_NAMES = {
     "list",
-    "publish-local",
     "register",
     "register-builtins",
     "unregister",
