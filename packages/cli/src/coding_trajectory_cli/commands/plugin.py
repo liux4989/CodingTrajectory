@@ -12,9 +12,9 @@ from coding_trajectory_cli.plugins import (
     LoadedPlugin,
     PluginManifest,
     PluginTool,
-    builtin_plugin_manifests,
-    discover_plugins,
+    load_registered_plugins,
     plugin_payload,
+    repo_builtin_plugin_manifests,
     register_plugin,
     run_plugin,
     unregister_plugin,
@@ -92,7 +92,7 @@ def _handle_plugin_unregister(args: argparse.Namespace) -> dict[str, Any]:
 
 def _handle_plugin_register_builtins(args: argparse.Namespace) -> dict[str, Any]:
     registered: list[dict[str, Any]] = []
-    for manifest_path in builtin_plugin_manifests():
+    for manifest_path in repo_builtin_plugin_manifests():
         plugin = register_plugin(manifest_path, replace=args.replace)
         registered.append({"name": plugin.name, "source": str(plugin.source)})
     return {"status": "registered", "plugins": registered}
@@ -128,7 +128,7 @@ def dispatch_plugin_argv(raw_args: list[str]) -> int | None:
         not plugin_args and plugin_name in {"-h", "--help"}
     ):
         return None
-    plugins = discover_plugins()
+    plugins = load_registered_plugins()
     for plugin in plugins:
         if plugin.manifest and plugin.manifest.name == plugin_name:
             help_exit = _plugin_manifest_help(plugin.manifest, plugin_args)
@@ -250,12 +250,12 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     plugin_sub = plugin_parser.add_subparsers(dest="plugin_action", required=True)
 
     global PLUGIN_STATE
-    PLUGIN_STATE = discover_plugins()
+    PLUGIN_STATE = load_registered_plugins()
 
     plugin_list = plugin_sub.add_parser(
         "list",
         prog="ct plugin list",
-        help="List installed ct CLI plugins.",
+        help="List registered ct CLI plugins.",
         formatter_class=GhFormatter,
     )
     add_base_output_flags(plugin_list)
@@ -301,7 +301,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     plugin_register_builtins = plugin_sub.add_parser(
         "register-builtins",
         prog="ct plugin register-builtins",
-        help="Register all built-in manifests in this repository or installation.",
+        help="Register all built-in manifests in this repository.",
         formatter_class=GhFormatter,
     )
     plugin_register_builtins.add_argument(

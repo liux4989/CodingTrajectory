@@ -9,7 +9,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError, distributions, version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Literal
 
@@ -130,7 +130,7 @@ def plugin_registry_path() -> Path:
     return config_home / "coding-trajectory" / "plugins.json"
 
 
-def discover_plugins(*, current_dir: Path | None = None) -> list[LoadedPlugin]:
+def load_registered_plugins(*, current_dir: Path | None = None) -> list[LoadedPlugin]:
     """Load only explicitly registered plugin manifests."""
     del current_dir
     loaded: list[LoadedPlugin] = []
@@ -245,15 +245,12 @@ def save_plugin_registry(registry: PluginRegistry) -> None:
     temporary.replace(path)
 
 
-def builtin_plugin_manifests() -> list[Path]:
-    manifests: dict[str, Path] = {}
+def repo_builtin_plugin_manifests() -> list[Path]:
+    manifests: list[Path] = []
     builtin_dir = _repo_builtin_plugin_dir()
     if builtin_dir is not None:
-        for manifest in builtin_dir.glob("*/ct-plugin.json"):
-            manifests[str(manifest.resolve())] = manifest
-    for manifest in _installed_builtin_plugin_manifests():
-        manifests[str(manifest.resolve())] = manifest
-    return sorted(manifests.values())
+        manifests.extend(builtin_dir.glob("*/ct-plugin.json"))
+    return sorted(manifests)
 
 
 def run_plugin(manifest: PluginManifest, source: Path, plugin_args: list[str]) -> int:
@@ -307,21 +304,6 @@ def plugin_payload(plugins: list[LoadedPlugin]) -> dict[str, Any]:
 def _repo_builtin_plugin_dir() -> Path | None:
     candidate = Path(__file__).resolve().parents[4] / "packages" / "plugins"
     return candidate if candidate.is_dir() else None
-
-
-def _installed_builtin_plugin_manifests() -> list[Path]:
-    manifests: list[Path] = []
-    for dist in distributions():
-        name = dist.metadata.get("Name", "")
-        if not name.startswith("ct-plugin-"):
-            continue
-        for file in dist.files or []:
-            if Path(str(file)).name != "ct-plugin.json":
-                continue
-            manifest = Path(dist.locate_file(file))
-            if manifest.is_file():
-                manifests.append(manifest)
-    return manifests
 
 
 def _manifest_compatibility_error(manifest: PluginManifest, source: Path) -> str | None:
