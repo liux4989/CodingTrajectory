@@ -4,9 +4,23 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
+from uuid import UUID
 
 from coding_trajectory.ingestion.models import Session, Vendor
+
+
+@dataclass(frozen=True, slots=True)
+class SessionHeader:
+    """Lightweight session metadata extracted without full transcript projection."""
+
+    session_id: UUID
+    vendor: Vendor
+    parent_session_id: UUID | None = None
+    title: str | None = None
+    cwd: str | None = None
 
 
 class BaseAdapter(ABC):
@@ -16,8 +30,7 @@ class BaseAdapter(ABC):
     def _reset_ingest_state(self) -> None:
         pass
 
-    def _load_records(self, path: Path) -> list[dict]:
-        records: list[dict] = []
+    def _iter_records(self, path: Path) -> Iterator[dict]:
         with path.open(encoding="utf-8") as fh:
             for raw_line in fh:
                 raw_line = raw_line.strip()
@@ -28,8 +41,10 @@ class BaseAdapter(ABC):
                 except json.JSONDecodeError:
                     continue
                 if isinstance(obj, dict):
-                    records.append(obj)
-        return records
+                    yield obj
+
+    def _load_records(self, path: Path) -> list[dict]:
+        return list(self._iter_records(path))
 
     def ingest_file(self, path: Path) -> Session:
         self._reset_ingest_state()
@@ -47,4 +62,9 @@ class BaseAdapter(ABC):
 
     @abstractmethod
     def _build_session(self, source: Path, records: list[dict]) -> Session:
+        ...
+
+    @abstractmethod
+    def scan_header(self, source: Path) -> SessionHeader | None:
+        """Extract lightweight session metadata without projecting the transcript."""
         ...

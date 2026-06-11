@@ -12,6 +12,7 @@ from coding_trajectory.service import (
     IndexCache,
     dispatch,
     project_list_metadata,
+    project_sessions_metadata,
     resolve_store,
 )
 
@@ -102,6 +103,15 @@ class ServiceRuntime:
                 project_list_metadata(
                     validated_params,
                     global_scope=True,
+                    current_dir=self.current_dir,
+                )
+            )
+
+        if method == "project.sessions" and not validated_params.get("include"):
+            return contract.validate_response(
+                project_sessions_metadata(
+                    validated_params,
+                    global_scope=self.global_scope,
                     current_dir=self.current_dir,
                 )
             )

@@ -14,7 +14,7 @@ from typing import cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
-from coding_trajectory.ingestion.adapters.base import BaseAdapter
+from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import Event, Item, Session, SessionGraph, Turn, Vendor
 from coding_trajectory.query import DocumentError, DocumentStore
@@ -170,6 +170,128 @@ def discover_store(
     ]
 
     return DiscoveryResult(store=DocumentStore.from_session_graphs(session_graphs), sources=sources)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionMetadataGroup:
+    project_identifier: str
+    root_session_id: UUID
+    session_ids: list[UUID]
+    vendors: list[str]
+    title: str | None = None
+
+
+def discover_session_metadata(
+    *,
+    current_dir: Path,
+    global_scope: bool = False,
+    project_name: str | None = None,
+    since_days: int | None = None,
+    modified_since: datetime | None = None,
+    agent_vendor: str | None = None,
+) -> list[SessionMetadataGroup]:
+    """List session-graph metadata via header-only scans (no transcript projection)."""
+    current_dir = current_dir.resolve()
+    scoped_project = project_name or (None if global_scope else current_dir.name)
+    scoped_project_key = normalize_project_key(scoped_project) if scoped_project else None
+    modified_since = _modified_since(since_days, modified_since=modified_since)
+
+    headers_by_project: dict[str, list[tuple[SessionHeader, Vendor, Path]]] = {}
+    for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(agent_vendor):
+        for path in _candidate_files(
+            vendor,
+            base_dir,
+            pattern,
+            current_dir=current_dir,
+            scoped_project=scoped_project,
+            scoped_project_key=scoped_project_key,
+            modified_since=modified_since,
+        ):
+            adapter = adapter_cls()
+            try:
+                header = adapter.scan_header(path)
+            except Exception:
+                continue
+            if header is None:
+                continue
+
+            project_identifier = _session_project_identifier(vendor, path, header, fallback=scoped_project)
+            if project_identifier is None:
+                if scoped_project is None:
+                    project_identifier = f"unknown-{vendor.value}"
+                else:
+                    continue
+
+            key = normalize_project_key(project_identifier)
+            if not key:
+                continue
+            if scoped_project_key and key != scoped_project_key:
+                continue
+
+            headers_by_project.setdefault(project_identifier, []).append((header, vendor, path))
+
+    groups: list[SessionMetadataGroup] = []
+    for project_identifier, entries in sorted(headers_by_project.items()):
+        groups.extend(_group_session_headers(project_identifier, entries))
+    return sorted(groups, key=lambda group: (group.project_identifier, str(group.root_session_id)))
+
+
+def _session_project_identifier(
+    vendor: Vendor, source: Path, header: SessionHeader, *, fallback: str | None
+) -> str | None:
+    if vendor == Vendor.CLAUDE_CODE:
+        project_path = _claude_project_path_from_source(source)
+        if project_path is not None and project_path.name:
+            return project_path.name
+    if header.cwd:
+        name = Path(header.cwd).name
+        if name:
+            return name
+    return fallback
+
+
+def _group_session_headers(
+    project_identifier: str, entries: list[tuple[SessionHeader, Vendor, Path]]
+) -> list[SessionMetadataGroup]:
+    key = normalize_project_key(project_identifier)
+    header_by_id = {header.session_id: header for header, _vendor, _path in entries}
+    parent: dict[UUID, UUID] = {sid: sid for sid in header_by_id}
+
+    def find(node: UUID) -> UUID:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    def union(a: UUID, b: UUID) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for header in header_by_id.values():
+        if header.parent_session_id is not None and header.parent_session_id in header_by_id:
+            union(header.session_id, header.parent_session_id)
+
+    components: dict[UUID, list[SessionHeader]] = {}
+    for header in header_by_id.values():
+        components.setdefault(find(header.session_id), []).append(header)
+
+    groups: list[SessionMetadataGroup] = []
+    for component in components.values():
+        ordered = sorted(component, key=lambda h: str(h.session_id))
+        root = next((h for h in ordered if h.parent_session_id is None), ordered[0])
+        title = root.title or next((h.title for h in ordered if h.title), None)
+        vendors = sorted({h.vendor.value for h in ordered})
+        groups.append(
+            SessionMetadataGroup(
+                project_identifier=key,
+                root_session_id=root.session_id,
+                session_ids=[h.session_id for h in ordered],
+                vendors=vendors,
+                title=title,
+            )
+        )
+    return groups
 
 
 def discover_project_metadata(

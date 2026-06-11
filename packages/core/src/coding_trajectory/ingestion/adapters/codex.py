@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from coding_trajectory.ingestion.adapters.base import BaseAdapter
+from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.common import (
     extract_exit_code,
     infer_tool_success,
@@ -42,6 +42,7 @@ from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
+_CODEX_FALLBACK_TITLE_MAX_LEN = 96
 
 _CODEX_FILE_TOOL_NAMES: frozenset[str] = frozenset({
     "Read", "Edit", "MultiEdit", "Write", "View",
@@ -166,6 +167,16 @@ def _codex_session_title(session_id: UUID, meta: dict[str, Any], index_path: Pat
     except OSError:
         return None
     return None
+
+
+def _codex_fallback_title(value: Any) -> str | None:
+    text = _as_non_empty_str(value)
+    if text is None:
+        return None
+    text = " ".join(text.split())
+    if len(text) <= _CODEX_FALLBACK_TITLE_MAX_LEN:
+        return text
+    return f"{text[:_CODEX_FALLBACK_TITLE_MAX_LEN - 3].rstrip()}..."
 
 
 def _codex_multi_agent_input(meta: dict[str, Any], ctx: dict[str, Any], *, session_id: UUID) -> CodexMultiAgentInput:
@@ -306,6 +317,46 @@ class CodexAdapter(BaseAdapter):
         state = self._ParseState()
         transcript = self._build_transcript(records, state)
         return self._build_session(path, transcript, state)
+
+    def scan_header(self, source: Path) -> SessionHeader | None:
+        header: SessionHeader | None = None
+        for record in self._iter_records(source):
+            outer_type = record.get("type")
+            if outer_type == "session_meta" and header is None:
+                meta = record.get("payload") or {}
+                if not isinstance(meta, dict):
+                    return None
+                try:
+                    session_id = UUID(meta.get("id"))
+                except (ValueError, TypeError):
+                    return None
+                mechanism = _codex_multi_agent_input(meta, {}, session_id=session_id)
+                header = SessionHeader(
+                    session_id=session_id,
+                    vendor=Vendor.CODEX_CLI,
+                    parent_session_id=codex_parent_session_id(mechanism),
+                    title=mechanism.title,
+                    cwd=mechanism.cwd,
+                )
+                if header.title:
+                    return header
+                continue
+
+            if header is None or outer_type != "event_msg":
+                continue
+            payload = record.get("payload") or {}
+            if not isinstance(payload, dict) or payload.get("type") != "user_message":
+                continue
+            title = _codex_fallback_title(_extract_message_text(payload))
+            if title is not None:
+                return SessionHeader(
+                    session_id=header.session_id,
+                    vendor=header.vendor,
+                    parent_session_id=header.parent_session_id,
+                    title=title,
+                    cwd=header.cwd,
+                )
+        return header
 
     def _build_session(
         self,

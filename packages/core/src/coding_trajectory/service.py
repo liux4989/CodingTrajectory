@@ -12,6 +12,7 @@ from uuid import UUID
 from coding_trajectory.discovery import (
     DiscoverySource,
     discover_project_metadata,
+    discover_session_metadata,
     discover_store,
     discover_store_from_file,
     discover_store_from_files,
@@ -585,6 +586,40 @@ def project_list_metadata(
             ),
         }
 
+    return {"items": items}
+
+
+def project_sessions_metadata(
+    params: dict[str, Any],
+    *,
+    global_scope: bool,
+    current_dir: Path,
+) -> dict[str, Any]:
+    """List project sessions via header-only scans, skipping transcript projection.
+
+    Used when no per-session usage/runtime is requested; those require a full
+    store and fall back to the regular dispatch path.
+    """
+    groups = discover_session_metadata(
+        current_dir=current_dir,
+        global_scope=global_scope,
+        project_name=params.get("project_name"),
+        since_days=params.get("since_days"),
+        modified_since=params.get("modified_since"),
+        agent_vendor=params.get("agent_vendor"),
+    )
+    items = [
+        prune_nones(
+            {
+                "root_session_id": str(group.root_session_id),
+                "title": group.title,
+                "vendors": group.vendors or None,
+                "session_ids": [str(session_id) for session_id in group.session_ids],
+                "project": group.project_identifier,
+            }
+        )
+        for group in groups
+    ]
     return {"items": items}
 
 

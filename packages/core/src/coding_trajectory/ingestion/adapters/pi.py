@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from coding_trajectory.ingestion.adapters.base import BaseAdapter
+from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.common import (
     extract_exit_code,
     infer_tool_success,
@@ -127,6 +127,47 @@ class PiAdapter(BaseAdapter):
         self._current_cwd = None
         self._session_title = None
         self._pending_bash_tool_call_ids = []
+
+    _TITLE_LOOKAHEAD = 50
+
+    def scan_header(self, source: Path) -> SessionHeader | None:
+        session_id: UUID | None = None
+        cwd: str | None = None
+        title: str | None = None
+        since_session = 0
+        for record in self._iter_records(source):
+            entry_type = record.get("type")
+            if entry_type == "session" and session_id is None:
+                raw_id = record.get("id")
+                if isinstance(raw_id, str):
+                    try:
+                        session_id = UUID(raw_id)
+                    except ValueError:
+                        session_id = uuid5(NAMESPACE_URL, f"pi:{source}:{raw_id}")
+                cwd = record.get("cwd") or cwd
+            elif entry_type == "session_info" and title is None:
+                title = record.get("name") or title
+            elif entry_type == "message" and title is None:
+                message = record.get("message")
+                if isinstance(message, dict) and message.get("role") == "user" and _is_real_user_message(message):
+                    text = _content_text(message.get("content", []))
+                    if text:
+                        title = " ".join(text.split()) or None
+            if session_id is not None and title is not None:
+                break
+            if session_id is not None:
+                since_session += 1
+                if since_session >= self._TITLE_LOOKAHEAD:
+                    break
+        if session_id is None:
+            session_id = uuid5(NAMESPACE_URL, f"pi:{source}")
+        return SessionHeader(
+            session_id=session_id,
+            vendor=Vendor.PI,
+            parent_session_id=None,
+            title=title,
+            cwd=cwd,
+        )
 
     def _build_session(self, source: Path, records: list[dict]) -> Session:
         transcript = self._build_transcript(records)
