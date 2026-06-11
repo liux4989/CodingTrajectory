@@ -8,7 +8,7 @@
   "requiresMethods": {
     "project.list": 1,
     "project.sessions": 1,
-    "session.data": 1
+    "session.usage": 1
   },
   "tools": [
     {

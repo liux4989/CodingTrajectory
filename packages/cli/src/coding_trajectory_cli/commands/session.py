@@ -354,21 +354,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _renderer=_render_session_usage_text,
     )
 
-    session_data = session_sub.add_parser(
-        "data",
-        prog="ct session data",
-        help="Bulk read reusable session facts for many sessions.",
-        formatter_class=GhFormatter,
-    )
-    add_output_flags(session_data)
-    add_params_flag(session_data)
-    add_schema_flag(session_data)
-    session_data.set_defaults(
-        _method="session.data",
-        _params=lambda args: params_from_json(args),
-        _default_output="json",
-    )
-
     session_events = session_sub.add_parser(
         "events",
         prog="ct session events",

@@ -57,17 +57,6 @@ class SessionToolUsageRequest(SessionEntryRequest):
     extra_billing: bool = False
 
 
-class SessionDataRequest(ContractModel):
-    session_id: str | None = None
-    session_ids: list[str] | None = None
-    project_name: str | None = None
-    since_days: int | None = Field(default=None, ge=1)
-    modified_since: Any | None = None
-    agent_vendor: str | None = None
-    include: list[str] = Field(default_factory=lambda: ["metadata", "runtime", "usage"])
-    extra_billing: bool = False
-
-
 class SessionEventsRequest(ContractModel):
     session_id: str | None = None
     root_session_id: str | None = None
@@ -142,28 +131,6 @@ class SessionTurnUsageResponse(ContractModel):
 
 class SessionToolUsageResponse(ContractModel):
     root_session_id: str
-
-
-class SessionDataItemResponse(ContractModel):
-    id: str
-    project: str | None = None
-    title: str | None = None
-    vendors: list[str] = Field(default_factory=list)
-    sessions: list[str] = Field(default_factory=list)
-    runtime: dict[str, Any] | None = None
-    usage: dict[str, Any] | None = None
-    stats: dict[str, Any] | None = None
-    warnings: list[str] = Field(default_factory=list)
-
-
-class SessionDataError(ContractModel):
-    id: str
-    message: str
-
-
-class SessionDataResponse(ContractModel):
-    items: list[SessionDataItemResponse] = Field(default_factory=list)
-    errors: list[SessionDataError] = Field(default_factory=list)
 
 
 class SessionEventsResponse(ContractModel):
@@ -302,13 +269,6 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "session.tool_usage", 1, SessionToolUsageRequest, SessionToolUsageResponse
-        ),
-        ServiceContract(
-            "session.data",
-            1,
-            SessionDataRequest,
-            SessionDataResponse,
-            SessionDataResponse,
         ),
         ServiceContract(
             "session.events",

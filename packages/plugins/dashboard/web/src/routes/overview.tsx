@@ -170,7 +170,7 @@ export function OverviewRoute() {
         <Card className="min-w-0 border-warning/40">
           <CardHeader>
             <CardTitle className="font-display text-xl tracking-tight">Warnings and Errors</CardTitle>
-            <CardDescription>Issues reported by the session data bulk read.</CardDescription>
+            <CardDescription>Issues reported while collecting session metrics.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
             {data.sessions.errors.map((error, index) => (

@@ -66,15 +66,17 @@
 - **Deterministic UUID5 IDs**: All event, turn, item, and session IDs are UUID5 derived from vendor, source path, index, and content. The same log file always produces the same IDs across runs, enabling stable references and caching.
 - **Graph-native multi-agent**: Parent/child sessions, forks, sidechains, and handoffs are first-class `SessionEdge` relationships, not ad-hoc metadata. Connected components are assembled via union-find.
 - **No presentation in canonical fields**: UI concerns (sections, roles, workflow labels) live in projections, not the core model.
-- **Plugin isolation**: Plugins are separate executables registered via JSON manifests. They do not import core packages; they consume documented CLI outputs.
+- **Plugin isolation**: Plugins are separate executables registered via JSON manifests. They do not import core packages; they consume documented CLI outputs or the structured `ct api` service surface.
 - **Explicit plugin lifecycle**: The CLI owns a versioned user registry.
   Plugins actively register and unregister manifests; core has no plugin
   knowledge.
 - **One-way dependencies**: CLI depends on core. Plugins depend on documented
-  `ct --output json` contracts. Core never depends on plugin packages.
+  `ct --output json` contracts or `ct api` request/response contracts. Core
+  never depends on plugin packages.
 - **Typed service methods**: Each method has a versioned Pydantic request and
   response model plus a named handler. `ct ... --schema` returns that contract
-  without loading session data.
+  without loading sessions; `ct api` exposes the same methods for plugin and
+  automation callers.
 
 ## Tech Stack
 

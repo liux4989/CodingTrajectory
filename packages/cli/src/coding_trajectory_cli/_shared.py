@@ -546,9 +546,6 @@ def compact_payload(method: str, payload: Any) -> Any:
             }
         )
 
-    if method == "session.data" and isinstance(payload, dict):
-        return payload
-
     if method == "session.events" and isinstance(payload, dict):
         return drop_none(
             {

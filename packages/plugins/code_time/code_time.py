@@ -109,9 +109,7 @@ def build_report(
                     all_session_ids.append(root_id)
                     session_meta[root_id] = session
 
-    session_data_map = _fetch_session_data_bulk(
-        ct, all_session_ids, since_days, agent_vendor, project_filter
-    )
+    session_data_map = _fetch_session_data_bulk(ct, all_session_ids)
 
     project_slices: list[dict[str, Any]] = []
     for project_name, sessions in sorted(project_sessions.items()):
@@ -161,9 +159,6 @@ def _empty_tokens() -> dict[str, int]:
 def _fetch_session_data_bulk(
     ct: str,
     session_ids: list[str],
-    since_days: int,
-    agent_vendor: str | None,
-    project_filter: str | None,
 ) -> dict[str, dict[str, Any]]:
     if not session_ids:
         return {}
@@ -174,28 +169,36 @@ def _fetch_session_data_bulk(
 
     for offset in range(0, len(unique_ids), chunk_size):
         chunk = unique_ids[offset : offset + chunk_size]
-        params: dict[str, Any] = {
-            "session_ids": chunk,
-            "include": ["metadata", "runtime", "usage"],
-        }
+        requests = [
+            {
+                "id": root_id,
+                "method": "session.usage",
+                "params": {"session_id": root_id},
+            }
+            for root_id in chunk
+        ]
         payload = _ct_json_with_command(
             ct,
             [
-                "session", "data",
+                "api", "batch",
                 "--global-scope",
-                "--output", "json",
-                "--params", json.dumps(params),
+                "--requests", json.dumps(requests),
             ],
         )
         for item in payload.get("items") or []:
+            if not item.get("ok"):
+                continue
             root_id = item.get("id")
             if not root_id:
                 continue
-            runtime = item.get("runtime") or {}
-            usage = item.get("usage") or {}
+            result = item.get("result") or {}
+            runtime = result.get("runtime") or {}
+            usage = result.get("total_usage") or result.get("usage") or {}
+            if result.get("cost_usd") is not None:
+                usage = {**usage, "cost_usd": result.get("cost_usd")}
             result_map[root_id] = {
                 "root_session_id": root_id,
-                "vendor": (item.get("vendors") or ["unknown"])[0],
+                "vendor": "unknown",
                 "execution_seconds": runtime.get("execution_seconds") or 0,
                 "wait_seconds": runtime.get("wait_seconds") or 0,
                 "turns": runtime.get("turns") or 0,

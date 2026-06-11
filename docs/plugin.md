@@ -72,7 +72,7 @@ registrations.
   "name": "export",
   "version": "0.1.0",
   "requiresCt": ">=0.1.0",
-  "description": "Export ct session data.",
+  "description": "Export ct session reports.",
   "run": ["ct-export"],
   "requiresMethods": {
     "session.overview": 1
@@ -147,12 +147,20 @@ Dispatches as:
 ct-export session abc123 --format json
 ```
 
-Plugins that need first-party data should call stable CLI surfaces, preferably
-with machine-readable output:
+Plugins that need first-party one-shot reports should call stable CLI surfaces,
+preferably with machine-readable output:
 
 ```text
 ct session overview abc123 --output json
 ct project list --output json
+```
+
+Plugins that need cross-session or multi-method automation should use the
+structured service API instead of composing human command output:
+
+```text
+ct api call session.usage --params '{"session_id":"abc123"}'
+ct api batch --requests '[{"id":"usage-1","method":"session.usage","params":{"session_id":"abc123"}}]'
 ```
 
 Every core data command exposes its versioned request and response contract
@@ -160,6 +168,7 @@ without performing discovery or ingestion:
 
 ```text
 ct session overview --schema
+ct api schema session.usage
 ct project list --schema
 ```
 

@@ -821,129 +821,6 @@ def _handle_session_tool_usage(
     )
 
 
-def _session_graph_metadata(graph: SessionGraph) -> dict[str, Any]:
-    vendors = sorted({s.vendor.value for s in graph.sessions if s.vendor})
-    return {
-        "id": str(graph.root_session_id),
-        "project": graph.project_identifier,
-        "title": _session_graph_title(graph),
-        "vendors": vendors,
-        "sessions": [str(s.session_id) for s in graph.sessions],
-    }
-
-
-def _session_graph_runtime(graph: SessionGraph) -> dict[str, Any]:
-    from coding_trajectory.metrics import build_session_graph_context_stats
-    stats = build_session_graph_context_stats(graph)
-    return stats.get("runtime") or {}
-
-
-def _session_graph_usage(graph: SessionGraph, *, extra_billing: bool = False) -> dict[str, Any]:
-    from coding_trajectory.metrics import build_session_graph_usage
-    usage_result = build_session_graph_usage(graph, extra_billing=extra_billing)
-    return {
-        "usage": usage_result.get("total_usage") or {},
-        "cost": usage_result.get("cost_usd"),
-        "runtime": usage_result.get("runtime") or {},
-    }
-
-
-def _session_graph_stats(graph: SessionGraph) -> dict[str, Any]:
-    from coding_trajectory.metrics import build_session_graph_context_stats
-    stats = build_session_graph_context_stats(graph)
-    return {
-        "model": stats.get("model") or {},
-        "context_window": stats.get("context_window") or {},
-        "messages": stats.get("messages") or {},
-        "quota": stats.get("quota") or {},
-        "provider_usage_buckets": stats.get("provider_usage_buckets") or [],
-    }
-
-
-def _handle_session_data(
-    params: dict[str, Any], context: ServiceContext
-) -> dict[str, Any]:
-    include = set(params.get("include") or ["metadata", "runtime", "usage"])
-    extra_billing = bool(params.get("extra_billing"))
-
-    graphs: list[SessionGraph] = []
-    seen_roots: set[str] = set()
-
-    session_ids = params.get("session_ids") or []
-    single_id = params.get("session_id")
-    if single_id:
-        session_ids = [single_id, *session_ids]
-
-    if session_ids:
-        for raw_id in session_ids:
-            try:
-                graph = _resolve_session_graph(context.store, raw_id)
-                root_key = str(graph.root_session_id)
-                if root_key not in seen_roots:
-                    seen_roots.add(root_key)
-                    graphs.append(graph)
-            except (ResourceNotFoundError, ValueError):
-                pass
-
-    if not session_ids:
-        collection_graphs = resolve_collection(
-            context.store,
-            "session_graph",
-            global_scope=context.global_scope,
-            current_dir=context.current_dir,
-            project_name=params.get("project_name"),
-            agent_vendor=params.get("agent_vendor"),
-        )
-        for graph in collection_graphs:
-            root_key = str(graph.root_session_id)
-            if root_key not in seen_roots:
-                seen_roots.add(root_key)
-                graphs.append(graph)
-
-    for graph in graphs:
-        _cache_session_graph(context, graph)
-
-    items: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-
-    for graph in graphs:
-        try:
-            item: dict[str, Any] = _session_graph_metadata(graph)
-            if "runtime" in include:
-                item["runtime"] = _session_graph_runtime(graph)
-            if "usage" in include:
-                usage_data = _session_graph_usage(graph, extra_billing=extra_billing)
-                item["usage"] = usage_data.get("usage") or {}
-                if usage_data.get("cost") is not None:
-                    item["usage"]["cost_usd"] = usage_data["cost"]
-            if "stats" in include:
-                item["stats"] = _session_graph_stats(graph)
-            item = _public_output_for_session_graph(graph, item)
-            items.append(item)
-        except Exception as exc:
-            errors.append({
-                "id": str(graph.root_session_id),
-                "message": str(exc),
-            })
-
-    for raw_id in session_ids:
-        try:
-            normalized = _normalize_user_id(raw_id)
-        except ValueError:
-            if not any(e["id"] == raw_id for e in errors):
-                errors.append({"id": raw_id, "message": "malformed id"})
-            continue
-        matched = any(
-            str(g.root_session_id) == normalized
-            or any(str(s.session_id) == normalized for s in g.sessions)
-            for g in graphs
-        )
-        if not matched and not any(e["id"] == raw_id for e in errors):
-            errors.append({"id": raw_id, "message": "resource not found"})
-
-    return {"items": items, "errors": errors}
-
-
 def _handle_session_events(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
@@ -1059,7 +936,6 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "session.turn_usage": _handle_session_turn_usage,
     "session.usage": _handle_session_usage,
     "session.tool_usage": _handle_session_tool_usage,
-    "session.data": _handle_session_data,
     "session.events": _handle_session_events,
     "session.items": _handle_session_items,
 }
