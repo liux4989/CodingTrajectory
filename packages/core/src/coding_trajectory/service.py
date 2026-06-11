@@ -218,8 +218,10 @@ def serialize_text_detail(event: Event) -> dict[str, Any] | None:
 
 
 def _parse_user_id(raw_id: str) -> UUID:
-    """Parse a user-provided ID."""
-    return UUID(raw_id)
+    try:
+        return UUID(raw_id)
+    except ValueError as exc:
+        raise ValueError(f"invalid id: {raw_id!r} is not a valid UUID") from exc
 
 
 def _normalize_user_id(raw_id: str) -> str:
