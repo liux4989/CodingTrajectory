@@ -1,6 +1,48 @@
 export type OverviewPayload = {
   projects: { count: number; vendors: Record<string, number> };
-  sessions: { count: number };
+  sessions: {
+    count: number;
+    window_days: number;
+    runtime: {
+      execution_seconds: number;
+      wait_seconds: number;
+      turns: number;
+      tool_calls: number;
+      failed_tool_calls: number;
+    };
+    usage: {
+      total_tokens: number;
+      cost_usd: number;
+      known_cost_count: number;
+      missing_cost_count: number;
+    };
+    top_projects: Array<{
+      project: string;
+      count: number;
+      vendors: Record<string, number>;
+      execution_seconds: number;
+      total_tokens: number;
+      cost_usd: number;
+      known_cost_count: number;
+    }>;
+    top_sessions: Array<{
+      id?: string | null;
+      title?: string | null;
+      project?: string | null;
+      vendor: string;
+      vendors: string[];
+      started_at?: string | null;
+      execution_seconds: number;
+      wait_seconds: number;
+      turns: number;
+      tool_calls: number;
+      failed_tool_calls: number;
+      total_tokens: number;
+      cost_usd: number;
+    }>;
+    warnings: Array<{ session_id?: string | null; project: string; message: string }>;
+    errors: unknown[];
+  };
 };
 
 export type ProjectItem = {

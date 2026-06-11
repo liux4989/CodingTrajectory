@@ -55,15 +55,28 @@ class DashboardDataService:
 
     def overview(self) -> dict[str, Any]:
         projects = self.projects({})
-        sessions = self.sessions({})
+        session_data = self.session_data(
+            {"since_days": ["30"], "include": ["metadata,runtime,usage"]}
+        )
         project_items = projects.get("items", [])
+        session_items = session_data.get("items") or []
         vendor_counts: dict[str, int] = {}
         for item in project_items:
             for vendor in item.get("vendors") or []:
                 vendor_counts[vendor] = vendor_counts.get(vendor, 0) + 1
+        activity = _overview_activity(session_items)
         return {
             "projects": {"count": len(project_items), "vendors": vendor_counts},
-            "sessions": {"count": len(sessions.get("items", []))},
+            "sessions": {
+                "count": len(session_items),
+                "window_days": 30,
+                "runtime": activity["runtime"],
+                "usage": activity["usage"],
+                "top_projects": activity["top_projects"],
+                "top_sessions": activity["top_sessions"],
+                "warnings": activity["warnings"],
+                "errors": session_data.get("errors") or [],
+            },
         }
 
     def projects(self, query: dict[str, list[str]]) -> dict[str, Any]:
@@ -96,6 +109,13 @@ class DashboardDataService:
         return self._cache.get_or_set(
             ("sessions", json.dumps(params, sort_keys=True)),
             lambda: self._sessions_uncached(params),
+        )
+
+    def session_data(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        params = _session_data_query_params(query)
+        return self._cache.get_or_set(
+            ("session_data", json.dumps(params, sort_keys=True)),
+            lambda: self._session_data_uncached(params),
         )
 
     def session_timeline(self, query: dict[str, list[str]]) -> dict[str, Any]:
@@ -228,6 +248,20 @@ class DashboardDataService:
         payload = _ct_json(["project", "sessions", "--params", json.dumps(params), "--output", "json"])
         return {"items": payload.get("items") or []}
 
+    def _session_data_uncached(self, params: dict[str, Any]) -> dict[str, Any]:
+        payload = _ct_json(
+            [
+                "session",
+                "data",
+                "--global-scope",
+                "--params",
+                json.dumps(params),
+                "--output",
+                "json",
+            ]
+        )
+        return {"items": payload.get("items") or [], "errors": payload.get("errors") or []}
+
 
 def _session_query_params(query: dict[str, list[str]]) -> dict[str, Any]:
     params: dict[str, Any] = {
@@ -240,6 +274,133 @@ def _session_query_params(query: dict[str, list[str]]) -> dict[str, Any]:
     if vendor:
         params["agent_vendor"] = vendor
     return params
+
+
+def _session_data_query_params(query: dict[str, list[str]]) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "since_days": _int(query, "since_days", 30),
+        "include": ["metadata", "runtime", "usage"],
+    }
+    include = _first(query, "include")
+    if include:
+        params["include"] = [item.strip() for item in include.split(",") if item.strip()]
+    return params
+
+
+def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
+    runtime_totals = {
+        "execution_seconds": 0,
+        "wait_seconds": 0,
+        "turns": 0,
+        "tool_calls": 0,
+        "failed_tool_calls": 0,
+    }
+    usage_totals = {"total_tokens": 0, "cost_usd": 0.0, "known_cost_count": 0, "missing_cost_count": 0}
+    project_stats: dict[str, dict[str, Any]] = {}
+    warnings: list[dict[str, Any]] = []
+
+    for item in items:
+        runtime = item.get("runtime") or {}
+        usage = item.get("usage") or {}
+        for key in runtime_totals:
+            runtime_totals[key] += _number(runtime.get(key))
+        usage_totals["total_tokens"] += int(_number(usage.get("total_tokens")))
+        if isinstance(usage, dict) and isinstance(usage.get("cost_usd"), int | float):
+            usage_totals["cost_usd"] += float(usage["cost_usd"])
+            usage_totals["known_cost_count"] += 1
+        else:
+            usage_totals["missing_cost_count"] += 1
+
+        project = str(item.get("project") or "unknown")
+        stats = project_stats.setdefault(
+            project,
+            {
+                "project": project,
+                "count": 0,
+                "vendors": {},
+                "execution_seconds": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+                "known_cost_count": 0,
+            },
+        )
+        stats["count"] += 1
+        stats["execution_seconds"] += _number(runtime.get("execution_seconds"))
+        stats["total_tokens"] += int(_number(usage.get("total_tokens")))
+        if isinstance(usage, dict) and isinstance(usage.get("cost_usd"), int | float):
+            stats["cost_usd"] += float(usage["cost_usd"])
+            stats["known_cost_count"] += 1
+        for vendor in item.get("vendors") or []:
+            vendor_key = str(vendor)
+            stats["vendors"][vendor_key] = stats["vendors"].get(vendor_key, 0) + 1
+
+        item_warnings = item.get("warnings") or []
+        for warning in item_warnings:
+            warnings.append(
+                {
+                    "session_id": item.get("id"),
+                    "project": project,
+                    "message": str(warning),
+                }
+            )
+
+    top_projects = sorted(
+        (
+            {
+                **stats,
+                "vendors": dict(sorted(stats["vendors"].items())),
+            }
+            for stats in project_stats.values()
+        ),
+        key=lambda stats: (-stats["count"], stats["project"]),
+    )[:8]
+
+    top_sessions = sorted(
+        (
+            _overview_session(item)
+            for item in items
+            if isinstance((item.get("usage") or {}).get("cost_usd"), int | float)
+        ),
+        key=lambda item: item["cost_usd"],
+        reverse=True,
+    )[:8]
+
+    return {
+        "runtime": runtime_totals,
+        "usage": usage_totals,
+        "top_projects": top_projects,
+        "top_sessions": top_sessions,
+        "warnings": warnings,
+    }
+
+
+def _overview_session(item: dict[str, Any]) -> dict[str, Any]:
+    runtime = item.get("runtime") or {}
+    usage = item.get("usage") or {}
+    vendors = item.get("vendors") or []
+    return {
+        "id": item.get("id"),
+        "title": item.get("title"),
+        "project": item.get("project"),
+        "vendor": str(vendors[0]) if vendors else "unknown",
+        "vendors": vendors,
+        "started_at": runtime.get("started_at"),
+        "execution_seconds": int(_number(runtime.get("execution_seconds"))),
+        "wait_seconds": int(_number(runtime.get("wait_seconds"))),
+        "turns": int(_number(runtime.get("turns"))),
+        "tool_calls": int(_number(runtime.get("tool_calls"))),
+        "failed_tool_calls": int(_number(runtime.get("failed_tool_calls"))),
+        "total_tokens": int(_number(usage.get("total_tokens"))),
+        "cost_usd": float(usage["cost_usd"]),
+    }
+
+
+def _number(value: Any) -> int | float:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int | float):
+        return value
+    return 0
 
 
 def _project_cleanup_preview(query: dict[str, list[str]]) -> cleanup_mod.CleanupPreview:
