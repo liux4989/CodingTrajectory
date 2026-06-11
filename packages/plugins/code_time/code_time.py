@@ -77,16 +77,7 @@ def build_report(
     if not ct:
         raise SystemExit("ct executable not found; set CT_COMMAND to the ct command path")
 
-    projects_payload = _ct_json(["project", "list", "--output", "json"])
-    project_items = projects_payload.get("items") or {}
-
-    if project_filter:
-        project_items = {
-            k: v for k, v in project_items.items()
-            if k == project_filter
-        }
-
-    project_names = sorted(project_items)
+    project_names = [project_filter] if project_filter else sorted((_ct_json(["project", "list", "--output", "json"]).get("items") or {}))
 
     project_sessions: dict[str, list[dict[str, Any]]] = {}
     all_session_ids: list[str] = []
@@ -102,39 +93,37 @@ def build_report(
         return name, (payload or {}).get("items") or []
 
     with ThreadPoolExecutor(max_workers=min(8, len(project_names) or 1)) as pool:
-        futures = {pool.submit(_fetch_sessions_for_project, n): n for n in project_names}
-        for f in as_completed(futures):
-            name, sessions = f.result()
-            if sessions:
-                project_sessions[name] = sessions
-                for s in sessions:
-                    root_id = s.get("id") or s.get("root_session_id")
-                    if root_id:
-                        all_session_ids.append(root_id)
-                        session_meta[root_id] = s
+        futures = {pool.submit(_fetch_sessions_for_project, name): name for name in project_names}
+        for future in as_completed(futures):
+            name, sessions = future.result()
+            if not sessions:
+                continue
+            project_sessions[name] = sessions
+            for session in sessions:
+                root_id = session.get("id") or session.get("root_session_id")
+                if root_id and root_id not in session_meta:
+                    all_session_ids.append(root_id)
+                    session_meta[root_id] = session
 
-    session_data_list = _batch_fetch_session_data(ct, all_session_ids)
+    session_data_map = {
+        data["root_session_id"]: data
+        for data in _batch_fetch_session_data(ct, all_session_ids)
+        if data.get("root_session_id")
+    }
 
     project_slices: list[dict[str, Any]] = []
-    for project_name in sorted(project_sessions):
-        sessions = project_sessions[project_name]
-        session_ids_in_project = []
-        for s in sessions:
-            rid = s.get("id") or s.get("root_session_id")
-            if rid:
-                session_ids_in_project.append(rid)
-
-        data_map = {d["root_session_id"]: d for d in session_data_list}
+    for project_name, sessions in sorted(project_sessions.items()):
         session_slices: list[dict[str, Any]] = []
-        for rid in session_ids_in_project:
-            data = data_map.get(rid)
+        for session in sessions:
+            root_id = session.get("id") or session.get("root_session_id")
+            data = session_data_map.get(root_id)
             if not data:
                 continue
-            meta = session_meta.get(rid, {})
+            meta = session_meta.get(root_id, {})
             vendors = meta.get("vendors") or []
             vendor = vendors[0] if vendors else data.get("vendor", "unknown")
             session_slices.append({
-                "root_session_id": rid,
+                "root_session_id": root_id,
                 "title": meta.get("title"),
                 "vendor": vendor,
                 "execution_seconds": data.get("execution_seconds", 0),
@@ -174,73 +163,48 @@ def _batch_fetch_session_data(
     if not session_ids:
         return []
 
-    ids_input = "\n".join(session_ids) + "\n"
-    ct_parts = shlex.split(ct)
+    unique_session_ids = list(dict.fromkeys(session_ids))
+    workers = min(8, len(unique_session_ids))
 
-    def _start_batch(subcmd: str) -> subprocess.Popen:
-        cmd = ["xargs", "-P8", "-I{}"] + ct_parts + ["session", subcmd, "{}", "--global-scope", "--output", "json"]
-        return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_fetch_session_data, ct, session_id): session_id
+            for session_id in unique_session_ids
+        }
+        return [future.result() for future in as_completed(futures)]
 
-    p_stats = _start_batch("stats")
-    p_usage = _start_batch("usage")
-    p_stats.stdin.write(ids_input)
-    p_stats.stdin.close()
-    p_usage.stdin.write(ids_input)
-    p_usage.stdin.close()
 
-    def _parse_json_lines(stdout: str) -> list[dict[str, Any]]:
-        results = []
-        for line in stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                results.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        return results
+def _fetch_session_data(ct: str, session_id: str) -> dict[str, Any]:
+    stats = _ct_json_with_command(
+        ct,
+        ["session", "stats", session_id, "--global-scope", "--output", "json"],
+    )
+    usage = _ct_json_with_command(
+        ct,
+        ["session", "usage", session_id, "--global-scope", "--output", "json"],
+    )
 
-    stats_out, _ = p_stats.communicate(timeout=120)
-    usage_out, _ = p_usage.communicate(timeout=120)
+    stats_runtime = stats.get("runtime") or {}
+    usage_runtime = usage.get("runtime") or {}
+    usage_tokens = usage.get("usage") or {}
 
-    stats_all = _parse_json_lines(stats_out)
-    usage_all = _parse_json_lines(usage_out)
+    cost_usd = usage.get("cost")
+    if cost_usd is None and usage:
+        for turn in usage.get("turns") or []:
+            tc = turn.get("cost")
+            if tc is not None:
+                cost_usd = (cost_usd or 0) + tc
 
-    usage_map: dict[str, dict[str, Any]] = {}
-    for u in usage_all:
-        uid = u.get("id")
-        if uid:
-            usage_map[uid] = u
-
-    results: list[dict[str, Any]] = []
-    for stats in stats_all:
-        sid = stats.get("id")
-        if not sid:
-            continue
-        usage = usage_map.get(sid, {})
-
-        stats_runtime = stats.get("runtime") or {}
-        usage_runtime = usage.get("runtime") or {}
-        usage_tokens = usage.get("usage") or {}
-
-        cost_usd = usage.get("cost")
-        if cost_usd is None and usage:
-            for turn in usage.get("turns") or []:
-                tc = turn.get("cost")
-                if tc is not None:
-                    cost_usd = (cost_usd or 0) + tc
-
-        results.append({
-            "root_session_id": sid,
-            "vendor": stats.get("vendor", "unknown"),
-            "execution_seconds": stats_runtime.get("execution_seconds") or usage_runtime.get("execution_seconds") or 0,
-            "wait_seconds": stats_runtime.get("wait_seconds") or usage_runtime.get("wait_seconds") or 0,
-            "turns": stats_runtime.get("turns") or 0,
-            "tool_calls": stats_runtime.get("tools") or 0,
-            "tokens": _extract_tokens(usage_tokens),
-            "cost_usd": cost_usd,
-        })
-    return results
+    return {
+        "root_session_id": stats.get("id") or session_id,
+        "vendor": stats.get("vendor", "unknown"),
+        "execution_seconds": stats_runtime.get("execution_seconds") or usage_runtime.get("execution_seconds") or 0,
+        "wait_seconds": stats_runtime.get("wait_seconds") or usage_runtime.get("wait_seconds") or 0,
+        "turns": stats_runtime.get("turns") or 0,
+        "tool_calls": stats_runtime.get("tools") or 0,
+        "tokens": _extract_tokens(usage_tokens),
+        "cost_usd": cost_usd,
+    }
 
 
 _REPORT_CACHE: dict[tuple, tuple[float, dict[str, Any]]] = {}
@@ -458,6 +422,10 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
     ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
     if not ct:
         raise SystemExit("ct executable not found; set CT_COMMAND to the ct command path")
+    return _ct_json_with_command(ct, args)
+
+
+def _ct_json_with_command(ct: str, args: list[str]) -> dict[str, Any]:
     command = [*shlex.split(ct), *args]
     try:
         completed = subprocess.run(command, check=False, text=True, capture_output=True, timeout=60)
