@@ -33,7 +33,7 @@ the tool.
 | Format | Newline-delimited JSON, one record per invocation |
 | Scope | Global — collects invocations from every working directory |
 | Write mode | Append-only writes coordinated by a sibling lock file |
-| Rotation | On every logged invocation: drop unreadable lines, drop records older than 30 days, then drop oldest retained records until the file plus the incoming record fits within 10 MiB |
+| Rotation | On every logged invocation: drop records older than 30 days, then drop oldest retained records until the file plus the incoming record fits within 10 MiB |
 
 A single global path is important: the value of the log is that the same owner
 runs `ct` from many projects and folders, and the log collapses that activity
@@ -43,6 +43,12 @@ The writer keeps append safety as the default posture: it acquires a sibling
 lock file, rewrites the log only when pruning is required, then appends the
 new record with `O_APPEND`. Rotation is therefore coordinated across `ct`
 processes without making `doctor` a mutating command.
+
+Corrupt records are never removed by the writer. If a malformed line is
+present, the writer preserves the file byte-for-byte and appends only when the
+result remains within 10 MiB. Otherwise it skips the new telemetry record so
+`ct doctor` can continue to report the original corruption. A single incoming
+record larger than 10 MiB is also skipped.
 
 ## Record schema
 
@@ -152,7 +158,7 @@ Examples:
 
 If `config.toml` is malformed or the `telemetry.enabled` value is invalid, the
 writer falls back to the default-enabled behavior and records the config error
-state for `ct doctor` to report explicitly.
+state for `ct doctor` to report as an environment failure.
 
 When disabled, the CLI behaves exactly as it does today — no writes, no file
 creation, no side effects.

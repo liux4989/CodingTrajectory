@@ -94,8 +94,6 @@ def status_error(command: str, exit_code: int) -> str:
 
 
 def _legacy_status_outcome(command: str, exit_code: int) -> CommandOutcome:
-    if command == "doctor" and exit_code in {0, 1, 2}:
-        return CommandOutcome.completed(exit_code=exit_code)
     if exit_code == 0:
         return CommandOutcome.completed(exit_code=exit_code)
     return CommandOutcome.failed(

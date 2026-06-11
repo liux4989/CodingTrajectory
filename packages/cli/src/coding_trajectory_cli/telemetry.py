@@ -8,10 +8,19 @@ import os
 import tempfile
 import tomllib
 from collections.abc import Mapping
+from datetime import timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    ValidationError,
+    field_validator,
+)
 
 TELEMETRY_ENV_VAR = "CT_TELEMETRY"
 TELEMETRY_DISABLED_VALUES = {"0", "false", "no", "off"}
@@ -47,7 +56,7 @@ class TelemetrySection(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    enabled: bool | None = None
+    enabled: StrictBool | None = None
 
 
 class TelemetryFileConfig(BaseModel):
@@ -65,8 +74,15 @@ class InvocationWarningRecord(BaseModel):
 
     message: str
     code: str | None = None
-    severity: str = "warning"
+    severity: Literal["info", "warning", "error"] = "warning"
     context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("message")
+    @classmethod
+    def _validate_message(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("message must be a non-empty string")
+        return value
 
 
 class InvocationRecord(BaseModel):
@@ -81,10 +97,32 @@ class InvocationRecord(BaseModel):
     method: str | None = None
     session_id: str | None = None
     vendor: str | None = None
-    ok: bool
+    exit_code: StrictInt = Field(default=0, ge=0)
+    ok: StrictBool
     error: str | None = None
-    ms: int = Field(ge=0)
+    ms: StrictInt = Field(ge=0)
     warnings: list[InvocationWarningRecord] = Field(default_factory=list)
+
+    @field_validator("ts")
+    @classmethod
+    def _validate_timestamp(cls, value: _dt.datetime) -> _dt.datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamp must include a timezone offset")
+        return value.astimezone(timezone.utc)
+
+    @field_validator("ts", mode="before")
+    @classmethod
+    def _validate_timestamp_input(cls, value: Any) -> Any:
+        if not isinstance(value, (str, _dt.datetime)):
+            raise TypeError("timestamp must be an ISO-8601 string")
+        return value
+
+    @field_validator("cwd", "cmd")
+    @classmethod
+    def _validate_non_empty_string(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must be a non-empty string")
+        return value
 
 
 def telemetry_config_path(home: Path | None = None) -> Path:
@@ -206,42 +244,25 @@ def write_invocation_record(
         return
 
     path = invocation_log_path(home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    lock_path = path.with_name(f"{path.name}{INVOCATION_LOG_LOCK_SUFFIX}")
-    with lock_path.open("a+b") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            line = invocation.model_dump_json() + "\n"
-            _rotate_log_locked(path=path, incoming_line=line, now=invocation.ts)
-            _append_line_locked(path, line)
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-
-def read_invocation_records(path: Path, since: _dt.timedelta) -> list[dict[str, Any]]:
-    """Read valid invocation records inside the requested window."""
-
-    if not path.exists():
-        return []
-
-    cutoff = _dt.datetime.now(_dt.timezone.utc) - since
-    records: list[dict[str, Any]] = []
-
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_name(f"{path.name}{INVOCATION_LOG_LOCK_SUFFIX}")
+        with lock_path.open("a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
-                record = InvocationRecord.model_validate_json(line)
-            except ValidationError:
-                continue
-            timestamp = _coerce_utc(record.ts)
-            if timestamp >= cutoff:
-                records.append(record.model_dump(mode="json"))
-
-    return records
+                line = invocation.model_dump_json() + "\n"
+                if len(line.encode("utf-8")) > INVOCATION_MAX_BYTES:
+                    return
+                if _prepare_log_for_append_locked(
+                    path=path,
+                    incoming_line=line,
+                    now=invocation.ts,
+                ):
+                    _append_line_locked(path, line)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except (OSError, UnicodeError):
+        return
 
 
 def _coerce_utc(value: _dt.datetime) -> _dt.datetime:
@@ -265,9 +286,16 @@ def _append_line_locked(path: Path, line: str) -> None:
                 pass
 
 
-def _rotate_log_locked(*, path: Path, incoming_line: str, now: _dt.datetime) -> None:
+def _prepare_log_for_append_locked(
+    *,
+    path: Path,
+    incoming_line: str,
+    now: _dt.datetime,
+) -> bool:
+    """Prepare a valid log for append without deleting corruption evidence."""
+
     if not path.exists():
-        return
+        return True
 
     cutoff = _coerce_utc(now) - _dt.timedelta(days=INVOCATION_MAX_AGE_DAYS)
     incoming_size = len(incoming_line.encode("utf-8"))
@@ -275,6 +303,7 @@ def _rotate_log_locked(*, path: Path, incoming_line: str, now: _dt.datetime) -> 
     retained_sizes: list[int] = []
     total_size = 0
     rewrite_needed = False
+    corrupt = False
 
     with path.open("r", encoding="utf-8") as handle:
         for raw_line in handle:
@@ -285,7 +314,7 @@ def _rotate_log_locked(*, path: Path, incoming_line: str, now: _dt.datetime) -> 
             try:
                 record = InvocationRecord.model_validate_json(line)
             except ValidationError:
-                rewrite_needed = True
+                corrupt = True
                 continue
             if _coerce_utc(record.ts) < cutoff:
                 rewrite_needed = True
@@ -296,13 +325,16 @@ def _rotate_log_locked(*, path: Path, incoming_line: str, now: _dt.datetime) -> 
             retained_sizes.append(line_size)
             total_size += line_size
 
+    if corrupt:
+        return path.stat().st_size + incoming_size <= INVOCATION_MAX_BYTES
+
     while retained and total_size + incoming_size > INVOCATION_MAX_BYTES:
         rewrite_needed = True
         total_size -= retained_sizes.pop(0)
         retained.pop(0)
 
     if not rewrite_needed:
-        return
+        return True
 
     fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=path.parent)
     try:
@@ -319,4 +351,5 @@ def _rotate_log_locked(*, path: Path, incoming_line: str, now: _dt.datetime) -> 
             os.unlink(tmp_name)
         except OSError:
             pass
-
+        return False
+    return True
