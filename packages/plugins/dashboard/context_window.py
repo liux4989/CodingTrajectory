@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
 import shlex
@@ -9,36 +8,24 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-import token_pricing
+try:
+    from . import token_pricing
+except ImportError:
+    import token_pricing
 
 
-def _load_core_module(name: str) -> Any:
-    here = os.path.dirname(os.path.abspath(__file__))
-    cursor = here
-    core_src = None
-    for _ in range(8):
-        candidate = os.path.join(cursor, "core", "src")
-        if os.path.isdir(candidate):
-            core_src = candidate
-            break
-        parent = os.path.dirname(cursor)
-        if parent == cursor:
-            break
-        cursor = parent
-    if core_src is None:
-        raise ImportError(
-            "cannot locate core package; searched ancestors of " + here
-        )
-    if core_src not in sys.path:
-        sys.path.insert(0, core_src)
-    return importlib.import_module(name)
+@dataclass(frozen=True)
+class _VisibleTextSize:
+    tokens: int
 
 
-_content_size = _load_core_module("coding_trajectory.analysis.content_size")
+def _visible_text_size(text: str) -> _VisibleTextSize:
+    return _VisibleTextSize(tokens=max(1, (len(text) + 3) // 4) if text else 0)
 
 CategoryKey = Literal[
     "system",
@@ -459,7 +446,7 @@ def _trajectory_events(
                         label="User prompt",
                         summary=request_text,
                         tokens=TokenEvidence(
-                            value=_content_size.visible_text_size(request_text).tokens,
+                            value=_visible_text_size(request_text).tokens,
                             confidence="estimated_tokens",
                             source="ct session overview:request.text length estimate",
                         ),
@@ -509,7 +496,7 @@ def _activity_event(
             label="Assistant message",
             summary=text,
             tokens=TokenEvidence(
-                value=_content_size.visible_text_size(text).tokens,
+                value=_visible_text_size(text).tokens,
                 confidence="estimated_tokens",
                 source="ct session overview:activity.text length estimate",
             ),

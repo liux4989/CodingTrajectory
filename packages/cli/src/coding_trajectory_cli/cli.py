@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from coding_trajectory import debug
+from coding_trajectory.contracts import command_schema, service_contract
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch, project_list_metadata, resolve_store
 from coding_trajectory_cli._shared import (
@@ -38,14 +39,17 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     current_dir = Path.cwd()
 
     method: str = args._method
-    params: dict[str, Any] = args._params(args)
+    contract = service_contract(method)
+    params: dict[str, Any] = contract.validate_request(args._params(args))
 
     effective_global_scope = True if method == "project.list" else args.global_scope
     if method == "project.list":
-        return project_list_metadata(
-            params,
-            global_scope=effective_global_scope,
-            current_dir=current_dir,
+        return contract.validate_response(
+            project_list_metadata(
+                params,
+                global_scope=effective_global_scope,
+                current_dir=current_dir,
+            )
         )
 
     cache = IndexCache.load()
@@ -92,7 +96,11 @@ def _render_payload(args: argparse.Namespace, payload: Any) -> str:
 
     method = getattr(args, "_method", None)
     if selected_output(args) == "json":
-        return json_text(compact_payload(method, payload)) if method else json_text(payload)
+        if method:
+            compact = compact_payload(method, payload)
+            compact = service_contract(method).validate_public_response(compact)
+            return json_text(compact)
+        return json_text(payload)
 
     renderer = getattr(args, "_renderer", None)
     if callable(renderer):
@@ -177,6 +185,13 @@ def main(argv: list[str] | None = None) -> int:
 
         parser = _build_parser()
         args = parser.parse_args(raw_args)
+
+        if getattr(args, "schema", False):
+            method = getattr(args, "_method", None)
+            if method is None:
+                parser.error("--schema is only available for core data commands")
+            print(json_text(command_schema(method, command=f"ct {_command_path(args).replace('.', ' ')}")))
+            return 0
 
         start = time.monotonic()
         ok = True

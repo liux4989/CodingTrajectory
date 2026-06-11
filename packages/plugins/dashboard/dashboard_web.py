@@ -16,8 +16,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-import cleanup as cleanup_mod
-import context_window as context_window_mod
+try:
+    from . import cleanup as cleanup_mod
+    from . import context_window as context_window_mod
+except ImportError:
+    import cleanup as cleanup_mod
+    import context_window as context_window_mod
 
 
 @dataclass(frozen=True, slots=True)

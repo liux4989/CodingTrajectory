@@ -7,10 +7,15 @@ import shlex
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args == ["--manifest"]:
+        print(Path(__file__).with_name("ct-plugin.json"))
+        return 0
     parser = argparse.ArgumentParser(
         prog="ct plugin activity",
         description="Inspect recent activity across sessions.",
@@ -24,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project", default=None, help="Filter to one project name.")
     parser.add_argument("--account", default=None, help="Accepted for compatibility; currently shown as a filter only.")
     parser.add_argument("--agent-vendor", default=None, help="Filter by agent vendor.")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_args)
 
     since_days = {"5h": 1, "today": 1, "72h": 3, "7d": 7}[args.window]
     params: dict[str, Any] = {"since_days": since_days}
@@ -37,22 +42,6 @@ def main(argv: list[str] | None = None) -> int:
     sessions = payload.get("items") or []
     projects = sorted({item.get("title") or item.get("project") or args.project or "unknown" for item in sessions})
     vendors = sorted({vendor for item in sessions for vendor in item.get("vendors") or []})
-    result = {
-        "command": "activity",
-        "window": args.window,
-        "filters": {
-            "project": args.project,
-            "account": args.account,
-            "agent_vendor": args.agent_vendor,
-        },
-        "totals": {
-            "session_count": len(sessions),
-            "project_count": len(projects),
-            "vendor_count": len(vendors),
-        },
-        "vendors": vendors,
-        "sessions": sessions,
-    }
     print(f"Activity ({args.window})")
     print(f"Sessions {len(sessions)}  Projects {len(projects)}  Vendors {len(vendors)}")
     if args.account:

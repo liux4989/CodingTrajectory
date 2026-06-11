@@ -7,7 +7,8 @@ from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_serializer
-from coding_trajectory_plugins.dashboard.accounting import usage_accounting_payload as _usage_accounting_payload
+
+from coding_trajectory.metrics.accounting import usage_accounting_payload as _usage_accounting_payload
 
 
 class TokenUsage(BaseModel):

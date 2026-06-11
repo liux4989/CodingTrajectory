@@ -10,6 +10,7 @@ from coding_trajectory_cli._shared import (
     add_base_output_flags,
     add_output_flags,
     add_params_flag,
+    add_schema_flag,
     add_session_source,
     add_turn_window_flags,
     display_value,
@@ -134,7 +135,9 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _render_context_category(lines: list[str], category: dict[str, Any], *, indent: int = 0) -> None:
+def _render_context_category(
+    lines: list[str], category: dict[str, Any], *, indent: int = 0
+) -> None:
     label = str(category.get("label") or category.get("key") or "-")
     display_width = max(CONTEXT_CATEGORY_WIDTH - indent, 16)
     label = one_line(label, limit=display_width)
@@ -174,7 +177,9 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     provider_buckets = payload.get("provider_usage_buckets") or []
     if provider_buckets:
         lines.extend(["", "Provider usage buckets", "```"])
-        lines.append(f"{'Bucket':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Context':>8}")
+        lines.append(
+            f"{'Bucket':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Context':>8}"
+        )
         for category in provider_buckets:
             if isinstance(category, dict):
                 _render_context_category(lines, category)
@@ -195,7 +200,9 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         runtime_line += f" ({failed_tool_calls} failed)"
     runtime_line += f", {runtime.get('subagent_sessions') or 0} subagent sessions"
     lines.append("")
-    lines.append(f"- Used: {format_tokens(used_tokens)} tokens {format_percent(used_percent)} of context")
+    lines.append(
+        f"- Used: {format_tokens(used_tokens)} tokens {format_percent(used_percent)} of context"
+    )
     lines.append(f"- {runtime_line}")
     if runtime.get("compactions"):
         lines[-1] += f", {runtime['compactions']} compactions"
@@ -209,7 +216,9 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
             f"{runtime['average_time_to_first_token_ms'] / 1000:.2f}s"
         )
     if tool_calls_total:
-        success_rate = round(((tool_calls_total - failed_tool_calls) / tool_calls_total) * 100, 1)
+        success_rate = round(
+            ((tool_calls_total - failed_tool_calls) / tool_calls_total) * 100, 1
+        )
         lines.append(f"- Tool Success Rate: {success_rate}%")
     if messages:
         lines.append(
@@ -221,9 +230,13 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         )
     quota = payload.get("quota") or {}
     if quota:
-        quota_bits = [f"plan {quota.get('plan_type')}"] if quota.get("plan_type") else []
+        quota_bits = (
+            [f"plan {quota.get('plan_type')}"] if quota.get("plan_type") else []
+        )
         if quota.get("limit_name") or quota.get("limit_id"):
-            quota_bits.append(f"limit {quota.get('limit_name') or quota.get('limit_id')}")
+            quota_bits.append(
+                f"limit {quota.get('limit_name') or quota.get('limit_id')}"
+            )
         if quota.get("primary_used_percent") is not None:
             quota_bits.append(f"primary {quota['primary_used_percent']:.1f}%")
         if quota.get("secondary_used_percent") is not None:
@@ -259,9 +272,13 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
         if runtime:
             timing_parts = []
             if runtime.get("execution_seconds") is not None:
-                timing_parts.append(f"execution {format_duration(runtime.get('execution_seconds'))}")
+                timing_parts.append(
+                    f"execution {format_duration(runtime.get('execution_seconds'))}"
+                )
             if runtime.get("wait_before_seconds") is not None:
-                timing_parts.append(f"wait before {format_duration(runtime.get('wait_before_seconds'))}")
+                timing_parts.append(
+                    f"wait before {format_duration(runtime.get('wait_before_seconds'))}"
+                )
             if timing_parts:
                 lines.append("    " + "  ".join(timing_parts))
 
@@ -289,6 +306,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     add_turn_window_flags(session_overview, view_name="projection")
     add_output_flags(session_overview)
     add_params_flag(session_overview)
+    add_schema_flag(session_overview)
     session_overview.set_defaults(
         _method="session.overview",
         _params=_session_turn_window_params,
@@ -305,6 +323,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     add_session_source(session_stats)
     add_output_flags(session_stats)
     add_params_flag(session_stats)
+    add_schema_flag(session_stats)
     session_stats.set_defaults(
         _method="session.stats",
         _params=_session_stats_params,
@@ -328,6 +347,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     add_output_flags(session_usage)
     add_params_flag(session_usage)
+    add_schema_flag(session_usage)
     session_usage.set_defaults(
         _method="session.usage",
         _params=_session_usage_params,
@@ -344,6 +364,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_item_detail.add_argument("resource_ids", metavar="ITEM_ID", nargs="*")
     add_base_output_flags(session_item_detail)
     add_params_flag(session_item_detail)
+    add_schema_flag(session_item_detail)
     session_item_detail.set_defaults(
         _method="item.details",
         _params=lambda args: {
@@ -362,6 +383,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_event_detail.add_argument("resource_id", metavar="EVENT_ID", nargs="?")
     add_base_output_flags(session_event_detail)
     add_params_flag(session_event_detail)
+    add_schema_flag(session_event_detail)
     session_event_detail.set_defaults(
         _method="event.detail",
         _params=lambda args: {
@@ -381,6 +403,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     add_session_source(session_event_scan)
     add_output_flags(session_event_scan)
     add_params_flag(session_event_scan)
+    add_schema_flag(session_event_scan)
     session_event_scan.add_argument(
         "--type",
         dest="event_type",

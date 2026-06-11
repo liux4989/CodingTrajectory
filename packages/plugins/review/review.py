@@ -37,6 +37,10 @@ class Finding:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args == ["--manifest"]:
+        print(Path(__file__).with_name("ct-plugin.json"))
+        return 0
     parser = argparse.ArgumentParser(
         prog="ct plugin review",
         description="Review coding sessions for improvement opportunities.",
@@ -87,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
         default=float(os.environ.get("CT_REVIEW_JUDGE_TIMEOUT", "180")),
         help="Seconds to wait for the app-server judge.",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_args)
 
     if args.command == "session":
         payload = analyze_session(

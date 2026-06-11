@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from coding_trajectory.discovery import (
     discover_store_from_files,
     format_discovery_sources,
 )
+from coding_trajectory.contracts import service_contract
 from coding_trajectory.ingestion.common import format_datetime, normalize_project_key, prune_nones
 from coding_trajectory.ingestion.models import Event, EventType, Session, Item, SessionGraph, Turn
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
@@ -552,6 +554,18 @@ def project_list_metadata(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class ServiceContext:
+    store: DocumentStore
+    global_scope: bool
+    current_dir: Path
+    discovery_note: str
+    cache: IndexCache
+
+
+ServiceHandler = Callable[[dict[str, Any], ServiceContext], Any]
+
+
 def dispatch(
     method: str,
     params: dict[str, Any],
@@ -562,175 +576,270 @@ def dispatch(
     discovery_note: str,
     cache: IndexCache,
 ) -> Any:
-    from coding_trajectory.analysis.projections import (
-        build_event_scan,
-        build_item_details,
-        build_session_graph_overview,
+    contract = service_contract(method)
+    params = contract.validate_request(params)
+    context = ServiceContext(
+        store=store,
+        global_scope=global_scope,
+        current_dir=current_dir,
+        discovery_note=discovery_note,
+        cache=cache,
     )
-    from coding_trajectory.metrics import (
-        build_session_graph_context_stats,
-        build_session_graph_metrics,
-        build_session_graph_tool_usage,
-        build_session_graph_usage,
+    try:
+        handler = SERVICE_HANDLERS[method]
+    except KeyError as exc:
+        raise KeyError(f"no service handler registered for {method}") from exc
+    result = handler(params, context)
+    return contract.validate_response(result)
+
+
+def _cache_session_graph(context: ServiceContext, session_graph: SessionGraph) -> None:
+    for session in session_graph.sessions:
+        context.cache.session_to_session_graph[str(session.session_id)] = str(
+            session_graph.root_session_id
+        )
+
+
+def _handle_project_sessions(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    session_graphs = resolve_collection(
+        context.store,
+        "session_graph",
+        global_scope=context.global_scope,
+        current_dir=context.current_dir,
+        project_name=params.get("project_name"),
+        agent_vendor=params.get("agent_vendor"),
     )
-
-    if method == "project.sessions":
-        session_graphs = resolve_collection(
-            store,
-            "session_graph",
-            global_scope=global_scope,
-            current_dir=current_dir,
-            project_name=params.get("project_name"),
-            agent_vendor=params.get("agent_vendor"),
-        )
-        return {"items": [_public_output_for_session_graph(t, serialize_session_graph_detail(t)) for t in session_graphs]}
-
-    if method == "project.list":
-        session_graphs = resolve_collection(
-            store,
-            "session_graph",
-            global_scope=global_scope,
-            current_dir=current_dir,
-            agent_vendor=params.get("agent_vendor"),
-        )
-        projects: dict[str, dict] = {}
-        for t in session_graphs:
-            if not t.project_identifier:
-                continue
-            key = t.project_identifier
-            if key.startswith("unknown-"):
-                continue
-            if key not in projects:
-                projects[key] = {"vendors": set(), "path": None}
-            for s in t.sessions:
-                if s.vendor:
-                    projects[key]["vendors"].add(s.vendor.value)
-                if projects[key]["path"] is None and s.cwd:
-                    projects[key]["path"] = s.cwd
-        return {
-            "items": {
-                k: {"path": v["path"], "vendors": sorted(v["vendors"])}
-                for k, v in sorted(projects.items())
-            },
-        }
-
-    if method == "project.logfile":
-        session_graphs = list(store.session_graphs.values())
-        if not session_graphs:
-            raise ValueError("no session_graphs found in log file")
-        return {"items": [_public_output_for_session_graph(t, serialize_session_graph_detail(t)) for t in session_graphs]}
-
-    if method == "session.overview":
-        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        result = build_session_graph_overview(
-            session_graph,
-            num_turns=_optional_positive_int(params, "num_turns"),
-            drop_turns=_optional_positive_int(params, "drop_turns"),
-        )
-        for session in session_graph.sessions:
-            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return _public_output_for_session_graph(session_graph, result)
-
-    if method == "session.stats":
-        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        for session in session_graph.sessions:
-            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return _public_output_for_session_graph(session_graph, build_session_graph_context_stats(session_graph))
-
-    if method == "session.turn_usage":
-        if not params.get("turn_id"):
-            raise ValueError("missing required param: turn_id")
-        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        extra_billing = bool(params.get("extra_billing"))
-        for session in session_graph.sessions:
-            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        result = build_session_graph_metrics(
-            session_graph,
-            extra_billing=extra_billing,
-        )
-        turn_id = str(params["turn_id"])
-        turns = [
-            {
-                "session_id": session["session_id"],
-                "vendor": session["vendor"],
-                "session_status": session.get("status"),
-                "turn_id": turn["turn_id"],
-                "sequence": turn["sequence"],
-                "status": turn.get("status"),
-                "token_usage": turn["token_usage"],
-                "cost": turn["cost"],
-                "extra_billing": turn["extra_billing"],
-            }
-            for session in result["sessions"]
-            for turn in session["turns"]
-            if str(turn["turn_id"]) == turn_id
+    return {
+        "items": [
+            _public_output_for_session_graph(
+                graph, serialize_session_graph_detail(graph)
+            )
+            for graph in session_graphs
         ]
-        return _public_output_for_session_graph(session_graph, {
+    }
+
+
+def _handle_project_list(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    session_graphs = resolve_collection(
+        context.store,
+        "session_graph",
+        global_scope=context.global_scope,
+        current_dir=context.current_dir,
+        agent_vendor=params.get("agent_vendor"),
+    )
+    projects: dict[str, dict[str, Any]] = {}
+    for graph in session_graphs:
+        if not graph.project_identifier or graph.project_identifier.startswith(
+            "unknown-"
+        ):
+            continue
+        project = projects.setdefault(
+            graph.project_identifier,
+            {"vendors": set(), "path": None},
+        )
+        for session in graph.sessions:
+            if session.vendor:
+                project["vendors"].add(session.vendor.value)
+            if project["path"] is None and session.cwd:
+                project["path"] = session.cwd
+    return {
+        "items": {
+            name: {"path": value["path"], "vendors": sorted(value["vendors"])}
+            for name, value in sorted(projects.items())
+        }
+    }
+
+
+def _handle_project_logfile(
+    _params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    session_graphs = list(context.store.session_graphs.values())
+    if not session_graphs:
+        raise ValueError("no session_graphs found in log file")
+    return {
+        "items": [
+            _public_output_for_session_graph(
+                graph, serialize_session_graph_detail(graph)
+            )
+            for graph in session_graphs
+        ]
+    }
+
+
+def _handle_session_overview(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    from coding_trajectory.analysis.projections import build_session_graph_overview
+
+    session_graph = _resolve_session_graph(
+        context.store, _session_graph_entrypoint_id(params)
+    )
+    result = build_session_graph_overview(
+        session_graph,
+        num_turns=_optional_positive_int(params, "num_turns"),
+        drop_turns=_optional_positive_int(params, "drop_turns"),
+    )
+    _cache_session_graph(context, session_graph)
+    return _public_output_for_session_graph(session_graph, result)
+
+
+def _handle_session_stats(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    from coding_trajectory.metrics import build_session_graph_context_stats
+
+    session_graph = _resolve_session_graph(
+        context.store, _session_graph_entrypoint_id(params)
+    )
+    _cache_session_graph(context, session_graph)
+    return _public_output_for_session_graph(
+        session_graph,
+        build_session_graph_context_stats(session_graph),
+    )
+
+
+def _handle_session_turn_usage(
+    params: dict[str, Any],
+    context: ServiceContext,
+) -> dict[str, Any]:
+    from coding_trajectory.metrics import build_session_graph_metrics
+
+    session_graph = _resolve_session_graph(
+        context.store, _session_graph_entrypoint_id(params)
+    )
+    _cache_session_graph(context, session_graph)
+    result = build_session_graph_metrics(
+        session_graph,
+        extra_billing=bool(params.get("extra_billing")),
+    )
+    turn_id = str(params["turn_id"])
+    turns = [
+        {
+            "session_id": session["session_id"],
+            "vendor": session["vendor"],
+            "session_status": session.get("status"),
+            "turn_id": turn["turn_id"],
+            "sequence": turn["sequence"],
+            "status": turn.get("status"),
+            "token_usage": turn["token_usage"],
+            "cost": turn["cost"],
+            "extra_billing": turn["extra_billing"],
+        }
+        for session in result["sessions"]
+        for turn in session["turns"]
+        if str(turn["turn_id"]) == turn_id
+    ]
+    return _public_output_for_session_graph(
+        session_graph,
+        {
             "root_session_id": result["root_session_id"],
             "token_usage": result["token_usage"],
             "cost": result["cost"],
             "extra_billing": result["extra_billing"],
             "turns": turns,
             "warnings": result.get("warnings") or [],
-        })
+        },
+    )
 
-    if method == "session.usage":
-        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        extra_billing = bool(params.get("extra_billing"))
-        for session in session_graph.sessions:
-            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return _public_output_for_session_graph(
+
+def _handle_session_usage(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    from coding_trajectory.metrics import build_session_graph_usage
+
+    session_graph = _resolve_session_graph(
+        context.store, _session_graph_entrypoint_id(params)
+    )
+    _cache_session_graph(context, session_graph)
+    return _public_output_for_session_graph(
+        session_graph,
+        build_session_graph_usage(
             session_graph,
-            build_session_graph_usage(
+            extra_billing=bool(params.get("extra_billing")),
+            turn_id=params.get("turn_id"),
+        ),
+    )
+
+
+def _handle_session_tool_usage(
+    params: dict[str, Any],
+    context: ServiceContext,
+) -> dict[str, Any]:
+    from coding_trajectory.metrics import build_session_graph_tool_usage
+
+    session_graph = _resolve_session_graph(
+        context.store, _session_graph_entrypoint_id(params)
+    )
+    _cache_session_graph(context, session_graph)
+    return _public_output_for_session_graph(
+        session_graph,
+        build_session_graph_tool_usage(
+            session_graph,
+            extra_billing=bool(params.get("extra_billing")),
+        ),
+    )
+
+
+def _handle_item_details(
+    params: dict[str, Any], context: ServiceContext
+) -> list[dict[str, Any]]:
+    from coding_trajectory.analysis.projections import build_item_details
+
+    result: list[dict[str, Any]] = []
+    for item_id in params["item_ids"]:
+        item = resolve_resource(context.store, "item", item_id)
+        session_graph = context.store.get_session_graph_for_session(item.session_id)
+        result.append(
+            _public_output_for_session_graph(
                 session_graph,
-                extra_billing=extra_billing,
-                turn_id=params.get("turn_id"),
-            ),
+                build_item_details(item, session_graph=session_graph),
+            )
         )
+    return result
 
-    if method == "session.tool_usage":
-        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        extra_billing = bool(params.get("extra_billing"))
-        for session in session_graph.sessions:
-            cache.session_to_session_graph[str(session.session_id)] = str(session_graph.root_session_id)
-        return _public_output_for_session_graph(
+
+def _handle_event_detail(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    event = resolve_resource(context.store, "event", params["event_id"])
+    session_graph = context.store.get_session_graph_for_session(event.session_id)
+    return _public_output_for_session_graph(
+        session_graph, serialize_event_detail(event)
+    )
+
+
+def _handle_event_scan(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    from coding_trajectory.analysis.projections import build_event_scan
+
+    session_graph = _resolve_session_graph(
+        context.store, _session_graph_entrypoint_id(params)
+    )
+    return _public_output_for_session_graph(
+        session_graph,
+        build_event_scan(
             session_graph,
-            build_session_graph_tool_usage(
-                session_graph,
-                extra_billing=extra_billing,
-            ),
-        )
+            event_type=params["type"],
+            filters=params.get("filters") or [],
+        ),
+    )
 
-    if method == "item.details":
-        item_ids = params.get("item_ids")
-        if not item_ids:
-            raise ValueError("missing required param: item_ids")
-        if isinstance(item_ids, str):
-            item_ids = [item_ids]
-        result: list[dict[str, Any]] = []
-        for item_id in item_ids:
-            item = resolve_resource(store, "item", item_id)
-            session_graph = store.get_session_graph_for_session(item.session_id)
-            result.append(_public_output_for_session_graph(session_graph, build_item_details(item, session_graph=session_graph)))
-        return result
 
-    if method == "event.detail":
-        event_id = params.get("event_id")
-        if not event_id:
-            raise ValueError("missing required param: event_id")
-        event = resolve_resource(store, "event", event_id)
-        session_graph = store.get_session_graph_for_session(event.session_id)
-        return _public_output_for_session_graph(session_graph, serialize_event_detail(event))
-
-    if method == "event.scan":
-        session_graph = _resolve_session_graph(store, _session_graph_entrypoint_id(params))
-        event_type = params.get("type")
-        if not event_type:
-            raise ValueError("missing required param: type")
-        filters: list[str] = params.get("filters") or []
-        return _public_output_for_session_graph(
-            session_graph,
-            build_event_scan(session_graph, event_type=event_type, filters=filters),
-        )
-
-    raise KeyError(method)
+SERVICE_HANDLERS: dict[str, ServiceHandler] = {
+    "project.list": _handle_project_list,
+    "project.sessions": _handle_project_sessions,
+    "project.logfile": _handle_project_logfile,
+    "session.overview": _handle_session_overview,
+    "session.stats": _handle_session_stats,
+    "session.turn_usage": _handle_session_turn_usage,
+    "session.usage": _handle_session_usage,
+    "session.tool_usage": _handle_session_tool_usage,
+    "item.details": _handle_item_details,
+    "event.detail": _handle_event_detail,
+    "event.scan": _handle_event_scan,
+}

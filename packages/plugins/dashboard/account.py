@@ -72,11 +72,12 @@ def resolve_codex_account(
     Falls back to decoding ``~/.codex/auth.json``'s ``id_token`` JWT when
     multicodex isn't installed or no profile has usable tokens.
     """
-    from coding_trajectory_plugins.dashboard import codex_auth, codex_rpc
-    from coding_trajectory_plugins.dashboard.codex_auth import (
-        load_mxc_state,
-        maybe_refresh_access_token,
-    )
+    try:
+        from . import codex_rpc
+        from .codex_auth import load_mxc_state, maybe_refresh_access_token
+    except ImportError:
+        import codex_rpc
+        from codex_auth import load_mxc_state, maybe_refresh_access_token
 
     state = load_mxc_state()
     profiles = state.get("profiles", {}) or {}
@@ -127,7 +128,10 @@ def _ordered_profiles(
 
 def _resolve_default_codex_auth() -> AccountIdentity | None:
     """Fallback for users who run Codex without multicodex."""
-    from coding_trajectory_plugins.dashboard import codex_auth
+    try:
+        from . import codex_auth
+    except ImportError:
+        import codex_auth
 
     profile_auth = codex_auth.load_default_codex_auth()
     if not profile_auth:

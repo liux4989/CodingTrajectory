@@ -7,14 +7,22 @@ import shlex
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
-import cleanup as cleanup_mod
-import context_window as context_window_mod
+try:
+    from . import cleanup as cleanup_mod
+    from . import context_window as context_window_mod
+except ImportError:
+    import cleanup as cleanup_mod
+    import context_window as context_window_mod
 
 
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args == ["--manifest"]:
+        print(Path(__file__).with_name("ct-plugin.json"))
+        return 0
     parser = _build_root_parser()
     if not raw_args:
         print(_root_entry_text())
@@ -297,10 +305,13 @@ def _run_dashboard_tui() -> int:
 
 def _run_dashboard_web(args: list[str]) -> int:
     try:
-        from dashboard_web import main as web_main
+        from .dashboard_web import main as web_main
     except ImportError as exc:
-        print(f"error: dashboard web entrypoint could not be loaded: {exc}", file=sys.stderr)
-        return 2
+        try:
+            from dashboard_web import main as web_main
+        except ImportError:
+            print(f"error: dashboard web entrypoint could not be loaded: {exc}", file=sys.stderr)
+            return 2
     return web_main(args)
 
 

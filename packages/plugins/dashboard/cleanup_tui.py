@@ -10,7 +10,10 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Footer, Header, Label, Static
 
-from cleanup import AnyTarget, SkippedTarget
+try:
+    from .cleanup import AnyTarget, SkippedTarget
+except ImportError:
+    from cleanup import AnyTarget, SkippedTarget
 
 
 class CandidateRow(Static):

@@ -17,7 +17,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from coding_trajectory_plugins.dashboard import codex_auth
+try:
+    from . import codex_auth
+except ImportError:
+    import codex_auth
 
 
 APP_SERVER_TIMEOUT_SECONDS = 20

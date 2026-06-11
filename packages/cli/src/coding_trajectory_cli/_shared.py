@@ -96,6 +96,14 @@ def add_params_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_schema_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--schema",
+        action="store_true",
+        help="Print the versioned request and response JSON Schema without running the command.",
+    )
+
+
 def add_agent_vendor_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--agent-vendor",

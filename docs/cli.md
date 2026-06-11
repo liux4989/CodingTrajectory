@@ -28,6 +28,9 @@ Three goals:
 - **Usage** — token accounting, plus cost only when recorded by the source
   session log. Usage is resource accounting, not hierarchy disclosure or
   diagnosis.
+- **Schema** — every core data command accepts `--schema`, which prints its
+  versioned Pydantic request and response JSON Schema without discovering or
+  ingesting sessions.
 
 ## Output Formats
 
@@ -36,6 +39,7 @@ exact data:
 
 - Report commands default to `--output markdown`.
 - Detail and raw-query commands default to `--output json`.
+- `--schema` exits before discovery, ingestion, or cache mutation.
 - Any command can switch format with `--output markdown|json`.
 - JSON mode is minified and uses a token-efficient public schema. Property
   names remain meaningful; short names are used only when they are established

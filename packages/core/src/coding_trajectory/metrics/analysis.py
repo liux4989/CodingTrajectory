@@ -46,7 +46,7 @@ from coding_trajectory.metrics.models import (
     TurnMetricsFlat,
 )
 from coding_trajectory.metrics.context_stats._common import runtime_stats
-from coding_trajectory_plugins.dashboard.accounting import reported_cost_amount as _reported_cost_amount
+from coding_trajectory.metrics.accounting import reported_cost_amount as _reported_cost_amount
 
 
 def build_session_graph_metrics(

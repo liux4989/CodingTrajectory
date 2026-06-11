@@ -3,10 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
-import os
-import shlex
-import shutil
-import subprocess
 import sys
 import webbrowser
 from dataclasses import dataclass

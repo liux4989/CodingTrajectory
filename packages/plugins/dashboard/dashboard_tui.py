@@ -5,8 +5,12 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Callable
 
-import cleanup as cleanup_mod
-from cleanup import CleanupPreview, ProjectTarget, SessionTarget
+try:
+    from . import cleanup as cleanup_mod
+    from .cleanup import CleanupPreview, ProjectTarget, SessionTarget
+except ImportError:
+    import cleanup as cleanup_mod
+    from cleanup import CleanupPreview, ProjectTarget, SessionTarget
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding

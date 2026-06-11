@@ -4,7 +4,14 @@
   "version": "0.1.0",
   "requiresCt": ">=0.1.0",
   "description": "Today's coding work overview: time, sessions, and cost across projects.",
-  "run": ["python3", "./code_time.py"],
+  "run": ["ct-code-time"],
+  "requiresMethods": {
+    "project.list": 1,
+    "project.sessions": 1,
+    "session.overview": 1,
+    "session.stats": 1,
+    "session.usage": 1
+  },
   "tools": [
     {
       "name": ".",

@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "requiresCt": ">=0.1.0",
   "description": "Inspect recent activity across sessions.",
-  "run": ["python3", "./activity.py"],
+  "run": ["ct-activity"],
+  "requiresMethods": {
+    "project.sessions": 1
+  },
   "tools": [
     {
       "name": ".",

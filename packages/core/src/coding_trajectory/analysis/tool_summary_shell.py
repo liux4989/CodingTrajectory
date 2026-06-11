@@ -18,7 +18,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     short_command,
     short_path,
 )
-from coding_trajectory_plugins.dashboard.quote import split_shell_stages
+from coding_trajectory.analysis.shell_parser import split_shell_stages
 
 
 CommandFamily = Literal[

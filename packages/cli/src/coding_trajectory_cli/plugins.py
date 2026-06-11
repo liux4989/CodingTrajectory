@@ -1,4 +1,4 @@
-"""Manifest-based CLI plugin discovery and executable dispatch."""
+"""Explicit CLI plugin registration and executable dispatch."""
 
 from __future__ import annotations
 
@@ -7,15 +7,19 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import UTC, datetime
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Literal
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-PLUGIN_MANIFEST_SCHEMA_VERSION = 1
-PLUGIN_MANIFEST_ENV = "CT_PLUGIN_MANIFEST_PATH"
-RESERVED_PLUGIN_NAMES = {"list"}
+from coding_trajectory.contracts import SERVICE_CONTRACTS
+
+PLUGIN_REGISTRY_ENV = "CT_PLUGIN_REGISTRY"
+RESERVED_PLUGIN_NAMES = {"list", "register", "register-builtins", "unregister"}
 
 
 class PluginTool(BaseModel):
@@ -46,6 +50,9 @@ class PluginManifest(BaseModel):
     description: str = Field(min_length=1)
     run: list[str] = Field(min_length=1)
     requires_ct: str | None = Field(default=None, alias="requiresCt")
+    requires_methods: dict[str, int] = Field(
+        default_factory=dict, alias="requiresMethods"
+    )
     tools: list[PluginTool] = Field(default_factory=list)
 
     @field_validator("name")
@@ -77,6 +84,20 @@ class PluginManifest(BaseModel):
         return argv
 
 
+class PluginRegistryEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manifest: str
+    registered_at: datetime
+
+
+class PluginRegistry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    plugins: dict[str, PluginRegistryEntry] = Field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class LoadedPlugin:
     """Discovery status for one manifest-backed plugin."""
@@ -84,6 +105,8 @@ class LoadedPlugin:
     source: Path
     manifest: PluginManifest | None = None
     error: str | None = None
+    registered_name: str | None = None
+    registered_at: datetime | None = None
 
     @property
     def loaded(self) -> bool:
@@ -91,42 +114,137 @@ class LoadedPlugin:
 
     @property
     def name(self) -> str | None:
-        return self.manifest.name if self.manifest else None
+        return self.manifest.name if self.manifest else self.registered_name
 
 
-def plugin_manifest_dirs(*, current_dir: Path | None = None) -> list[Path]:
-    """Return manifest directories in lookup order."""
-    cwd = current_dir or Path.cwd()
-    dirs: list[Path] = []
-    env_value = os.environ.get(PLUGIN_MANIFEST_ENV)
-    if env_value:
-        dirs.extend(Path(item).expanduser() for item in env_value.split(os.pathsep) if item)
-    builtin_dir = _repo_builtin_plugin_dir()
-    if builtin_dir is not None:
-        dirs.append(builtin_dir)
-    dirs.extend([
-        cwd / "packages" / "plugins",
-        cwd / ".ct" / "plugins",
-        Path.home() / ".ct" / "plugins",
-    ])
-    return _dedupe_paths(dirs)
+def plugin_registry_path() -> Path:
+    override = os.environ.get(PLUGIN_REGISTRY_ENV)
+    if override:
+        return Path(override).expanduser()
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return config_home / "coding-trajectory" / "plugins.json"
 
 
 def discover_plugins(*, current_dir: Path | None = None) -> list[LoadedPlugin]:
-    """Read all plugin manifests from known manifest directories."""
+    """Load only explicitly registered plugin manifests."""
+    del current_dir
     loaded: list[LoadedPlugin] = []
-    for manifest_path in _manifest_paths(plugin_manifest_dirs(current_dir=current_dir)):
+    registry = load_plugin_registry()
+    for registered_name, entry in sorted(registry.plugins.items()):
+        manifest_path = Path(entry.manifest)
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest = PluginManifest.model_validate(payload)
         except (OSError, json.JSONDecodeError, ValidationError) as exc:
-            loaded.append(LoadedPlugin(source=manifest_path, error=str(exc)))
+            loaded.append(
+                LoadedPlugin(
+                    source=manifest_path,
+                    error=str(exc),
+                    registered_name=registered_name,
+                    registered_at=entry.registered_at,
+                )
+            )
             continue
-        if manifest.name in RESERVED_PLUGIN_NAMES:
-            loaded.append(LoadedPlugin(source=manifest_path, error=f"reserved plugin name: {manifest.name}"))
+        error = _manifest_compatibility_error(manifest, manifest_path)
+        if manifest.name != registered_name:
+            error = (
+                f"registered name {registered_name!r} does not match manifest name "
+                f"{manifest.name!r}"
+            )
+        if error:
+            loaded.append(
+                LoadedPlugin(
+                    source=manifest_path,
+                    manifest=manifest,
+                    error=error,
+                    registered_name=registered_name,
+                    registered_at=entry.registered_at,
+                )
+            )
             continue
-        loaded.append(LoadedPlugin(source=manifest_path, manifest=manifest))
-    return _dedupe_plugins(loaded)
+        loaded.append(
+            LoadedPlugin(
+                source=manifest_path,
+                manifest=manifest,
+                registered_name=registered_name,
+                registered_at=entry.registered_at,
+            )
+        )
+    return loaded
+
+
+def load_plugin_registry() -> PluginRegistry:
+    path = plugin_registry_path()
+    if not path.exists():
+        return PluginRegistry()
+    try:
+        return PluginRegistry.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValidationError) as exc:
+        raise ValueError(f"invalid plugin registry {path}: {exc}") from exc
+
+
+def register_plugin(
+    manifest_path: str | Path, *, replace: bool = False
+) -> LoadedPlugin:
+    source = Path(manifest_path).expanduser().resolve()
+    try:
+        manifest = PluginManifest.model_validate_json(
+            source.read_text(encoding="utf-8")
+        )
+    except FileNotFoundError as exc:
+        raise ValueError(f"plugin manifest not found: {source}") from exc
+    except (OSError, ValidationError) as exc:
+        raise ValueError(f"invalid plugin manifest {source}: {exc}") from exc
+
+    error = _manifest_compatibility_error(manifest, source)
+    if error:
+        raise ValueError(error)
+
+    registry = load_plugin_registry()
+    if manifest.name in registry.plugins and not replace:
+        raise ValueError(
+            f"plugin already registered: {manifest.name}; pass --replace to update it"
+        )
+    registered_at = datetime.now(UTC)
+    registry.plugins[manifest.name] = PluginRegistryEntry(
+        manifest=str(source),
+        registered_at=registered_at,
+    )
+    save_plugin_registry(registry)
+    return LoadedPlugin(
+        source=source,
+        manifest=manifest,
+        registered_name=manifest.name,
+        registered_at=registered_at,
+    )
+
+
+def unregister_plugin(name: str) -> PluginRegistryEntry:
+    registry = load_plugin_registry()
+    try:
+        removed = registry.plugins.pop(name)
+    except KeyError as exc:
+        raise ValueError(f"plugin is not registered: {name}") from exc
+    save_plugin_registry(registry)
+    return removed
+
+
+def save_plugin_registry(registry: PluginRegistry) -> None:
+    path = plugin_registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    temporary.write_text(
+        registry.model_dump_json(indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def builtin_plugin_manifests() -> list[Path]:
+    builtin_dir = _repo_builtin_plugin_dir()
+    if builtin_dir is None:
+        return []
+    return sorted(builtin_dir.glob("*/ct-plugin.json"))
 
 
 def run_plugin(manifest: PluginManifest, source: Path, plugin_args: list[str]) -> int:
@@ -159,11 +277,16 @@ def plugin_payload(plugins: list[LoadedPlugin]) -> dict[str, Any]:
                 "description": item.manifest.description if item.manifest else None,
                 "run": item.manifest.run if item.manifest else [],
                 "requires_ct": item.manifest.requires_ct if item.manifest else None,
-                "tools": [
-                    tool.model_dump()
-                    for tool in item.manifest.tools
-                ] if item.manifest else [],
+                "requires_methods": item.manifest.requires_methods
+                if item.manifest
+                else {},
+                "tools": [tool.model_dump() for tool in item.manifest.tools]
+                if item.manifest
+                else [],
                 "source": str(item.source),
+                "registered_at": item.registered_at.isoformat()
+                if item.registered_at
+                else None,
                 "status": "loaded" if item.loaded else "failed",
                 "error": item.error,
             }
@@ -172,45 +295,40 @@ def plugin_payload(plugins: list[LoadedPlugin]) -> dict[str, Any]:
     }
 
 
-def _manifest_paths(dirs: list[Path]) -> list[Path]:
-    paths: list[Path] = []
-    for manifest_dir in dirs:
-        if not manifest_dir.is_dir():
-            continue
-        paths.extend(sorted(manifest_dir.glob("*.json")))
-        paths.extend(sorted(manifest_dir.glob("*/ct-plugin.json")))
-    return _dedupe_paths(paths)
-
-
 def _repo_builtin_plugin_dir() -> Path | None:
     candidate = Path(__file__).resolve().parents[4] / "packages" / "plugins"
     return candidate if candidate.is_dir() else None
 
 
-def _dedupe_paths(paths: list[Path]) -> list[Path]:
-    seen: set[Path] = set()
-    unique: list[Path] = []
-    for path in paths:
-        key = path.expanduser().resolve(strict=False)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(path)
-    return unique
-
-
-def _dedupe_plugins(plugins: list[LoadedPlugin]) -> list[LoadedPlugin]:
-    seen: set[str] = set()
-    unique: list[LoadedPlugin] = []
-    for item in plugins:
-        name = item.name
-        if name is not None:
-            if name in seen:
-                unique.append(LoadedPlugin(source=item.source, error=f"duplicate plugin name: {name}"))
-                continue
-            seen.add(name)
-        unique.append(item)
-    return unique
+def _manifest_compatibility_error(manifest: PluginManifest, source: Path) -> str | None:
+    if manifest.name in RESERVED_PLUGIN_NAMES:
+        return f"reserved plugin name: {manifest.name}"
+    if _resolve_run(manifest.run, source) is None:
+        return f"plugin command not found: {manifest.run[0]}"
+    if manifest.requires_ct:
+        try:
+            requirement = SpecifierSet(manifest.requires_ct)
+        except InvalidSpecifier:
+            return f"invalid requiresCt specifier: {manifest.requires_ct}"
+        try:
+            current_version = version("coding-trajectory")
+        except PackageNotFoundError:
+            current_version = "0.0.0"
+        if current_version not in requirement:
+            return (
+                f"incompatible ct version: requires {manifest.requires_ct}, "
+                f"found {current_version}"
+            )
+    for method, required_version in manifest.requires_methods.items():
+        contract = SERVICE_CONTRACTS.get(method)
+        if contract is None:
+            return f"required ct method is unavailable: {method}"
+        if contract.version < required_version:
+            return (
+                f"required ct method version is unavailable: {method} "
+                f"needs {required_version}, found {contract.version}"
+            )
+    return None
 
 
 def _resolve_run(run: list[str], source: Path) -> list[str] | None:

@@ -4,7 +4,16 @@
   "version": "0.1.0",
   "requiresCt": ">=0.1.0",
   "description": "Project and session management dashboard.",
-  "run": ["uv", "run", "python", "./dashboard.py"],
+  "run": ["ct-dashboard"],
+  "requiresMethods": {
+    "project.list": 1,
+    "project.sessions": 1,
+    "session.overview": 1,
+    "session.stats": 1,
+    "session.usage": 1,
+    "item.details": 1,
+    "event.detail": 1
+  },
   "tools": [
     {
       "name": ".",

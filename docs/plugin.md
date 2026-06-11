@@ -19,29 +19,36 @@ The public namespace for these commands is `ct plugin ...`.
 This keeps the core query surface stable while allowing package-specific command
 packs to ship independently.
 
-## Discovery
+## Registration
 
-Plugins are discovered from manifest files, not Python entry points.
+Plugin availability is explicit. Installing a package does not silently add a
+command to `ct`; the plugin must register its manifest:
 
-Supported manifest locations:
+```text
+ct plugin register "$(ct-export --manifest)"
+ct plugin unregister export
+ct plugin list
+```
 
-- directories listed in `CT_PLUGIN_MANIFEST_PATH`, separated by the platform
-  path separator;
-- repository built-in plugin manifests under `packages/plugins/*/ct-plugin.json`
-  beside this repo, when available from the installed source path;
-- project-level manifests under `.ct/plugins/`;
-- user-level manifests under `~/.ct/plugins/`.
+The CLI stores registrations in
+`$XDG_CONFIG_HOME/coding-trajectory/plugins.json`, or
+`~/.config/coding-trajectory/plugins.json` when `XDG_CONFIG_HOME` is unset.
+`CT_PLUGIN_REGISTRY` may override the registry path for isolated development or
+automation.
 
-Each manifest describes one public plugin namespace. The CLI validates manifests
-before exposing commands.
+Registration resolves the manifest to an absolute path, validates the manifest
+and executable, checks `requiresCt` and `requiresMethods`, rejects duplicate
+names unless `--replace` is supplied, and writes the registry atomically.
 
-Built-in plugins for this repository live under `packages/plugins/<name>/` with their
-manifest and executable together. They use the same manifest and subprocess
-contract as third-party plugins.
+Unregistration removes only CLI routing state. It does not uninstall or delete
+plugin files. Normal execution reads only the registry; implicit manifest
+directory scanning is not supported.
 
-Built-in inspection command:
+Repository development can register all local built-ins with:
 
-- `ct plugin list` shows discovered manifests and validation failures.
+```text
+ct plugin register-builtins
+```
 
 ## Minimal Manifest
 
@@ -53,6 +60,9 @@ Built-in inspection command:
   "requiresCt": ">=0.1.0",
   "description": "Export ct session data.",
   "run": ["ct-export"],
+  "requiresMethods": {
+    "session.overview": 1
+  },
   "tools": [
     {
       "name": "session",
@@ -80,6 +90,7 @@ Required fields:
 Optional fields:
 
 - `requiresCt`: version requirement for the installed `ct` command.
+- `requiresMethods`: required service methods and minimum contract versions.
 - `tools`: tool descriptors for manifest-rendered help.
 
 Tool descriptors are optional and intentionally small:
@@ -130,7 +141,30 @@ ct session overview abc123 --output json
 ct project list --output json
 ```
 
+Every core data command exposes its versioned request and response contract
+without performing discovery or ingestion:
+
+```text
+ct session overview --schema
+ct project list --schema
+```
+
+Schemas are generated from the Pydantic models used for runtime validation.
+
 There is no compatibility layer for the old in-process Python plugin API.
+
+## Distribution
+
+First-party plugins are independent packages:
+
+- `ct-plugin-activity` installs `ct-activity`;
+- `ct-plugin-code-time` installs `ct-code-time`;
+- `ct-plugin-dashboard` installs `ct-dashboard`;
+- `ct-plugin-review` installs `ct-review`.
+
+Each executable prints its packaged manifest path with `--manifest`. Plugin
+packages own their dependencies and assets and do not import
+`coding_trajectory` or `coding_trajectory_cli`.
 
 ## Activity Plugin
 

@@ -4,7 +4,12 @@
   "version": "0.1.0",
   "requiresCt": ">=0.1.0",
   "description": "Use an LLM judge to review one coding session for improvement opportunities.",
-  "run": ["python3", "./review.py"],
+  "run": ["ct-review"],
+  "requiresMethods": {
+    "session.overview": 1,
+    "session.stats": 1,
+    "session.usage": 1
+  },
   "tools": [
     {
       "name": "session",
