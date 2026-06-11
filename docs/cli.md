@@ -28,9 +28,8 @@ Three goals:
 - **Usage** — token accounting, plus cost only when recorded by the source
   session log. Usage is resource accounting, not hierarchy disclosure or
   diagnosis.
-- **Schema** — every core data command accepts `--schema`, which prints its
-  versioned Pydantic request and response JSON Schema without discovering or
-  ingesting sessions.
+- **Schema** — `ct api schema METHOD` prints a versioned Pydantic request and
+  response JSON Schema without discovering or ingesting sessions.
 
 ## Output Formats
 
@@ -39,7 +38,7 @@ exact data:
 
 - Report commands default to `--output markdown`.
 - Detail and raw-query commands default to `--output json`.
-- `--schema` exits before discovery, ingestion, or cache mutation.
+- `ct api schema METHOD` exits before discovery, ingestion, or cache mutation.
 - Any command can switch format with `--output markdown|json`.
 - JSON mode is minified and uses a token-efficient public schema. Property
   names remain meaningful; short names are used only when they are established
@@ -50,6 +49,9 @@ exact data:
 Automation can pass command params as a JSON object with `--params JSON` on
 commands that dispatch to the core query surface. Explicit CLI flags override
 matching keys from `--params`.
+
+Automation that needs service metadata should use `ct api schema METHOD`, for
+example `ct api schema session.usage`.
 
 `session stats` and `session usage` default to markdown reports and switch to
 compact JSON with `--output json`.

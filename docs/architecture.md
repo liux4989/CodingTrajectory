@@ -25,7 +25,7 @@
 │  Application Contract                 │                                  │
 │  ┌────────────────────────────────────┴─────────────────────────────┐   │
 │  │ versioned Pydantic requests/responses + registered handlers       │   │
-│  │ CLI flags and --schema adapt the same contract registry           │   │
+│  │ CLI flags and ct api schema adapt the same contract registry      │   │
 │  └────────────────────────────────────┬─────────────────────────────┘   │
 ├───────────────────────────────────────┼──────────────────────────────────┤
 │  Analysis Layer          │  Metrics Layer                               │
@@ -74,9 +74,9 @@
   `ct --output json` contracts or `ct api` request/response contracts. Core
   never depends on plugin packages.
 - **Typed service methods**: Each method has a versioned Pydantic request and
-  response model plus a named handler. `ct ... --schema` returns that contract
-  without loading sessions; `ct api` exposes the same methods for plugin and
-  automation callers.
+  response model plus a named handler. `ct api schema METHOD` returns that
+  contract without loading sessions; `ct api` exposes the same methods for
+  plugin and automation callers.
 
 ## Tech Stack
 
@@ -206,7 +206,7 @@ coding-trajectory/
 | Tool usage analysis | Tool invocation counts, output sizes, token attribution |
 | CLI (`ct`) | Progressive-disclosure command surface with markdown + JSON output |
 | Plugin system | Explicit manifest registration, subprocess dispatch, no core imports |
-| Command schema | Cheap per-command `--schema` request/response introspection |
+| Command schema | Cheap `ct api schema METHOD` request/response introspection |
 | Activity plugin | Cross-session timeline with project/account/time window filtering |
 | Dashboard plugin | TUI/web visualization plus models.dev pricing and model metadata enrichment |
 | Context window view | Context composition bar with event selection and hover preview |
@@ -245,8 +245,8 @@ importing the application layer.
 - Report commands default to `--output markdown` for human reading.
 - Detail and raw-query commands default to `--output json` for scripting.
 - JSON mode is minified with a token-efficient public schema.
-- `--schema` prints the full request and response JSON Schema and exits before
-  discovery, ingestion, or cache mutation.
+- `ct api schema METHOD` prints the full request and response JSON Schema and
+  exits before discovery, ingestion, or cache mutation.
 
 ## Plugin Lifecycle
 
@@ -327,7 +327,6 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct session events --params '{"event_ids": [...]}'` | Event detail (JSON) |
 | `uv run ct session events [ID] --type TYPE` | Filtered event search |
 | `uv run ct plugin list` | List registered plugins |
-| `uv run ct plugin publish-local` | Refresh the global uv tool install and built-in plugin registrations |
 | `uv run ct plugin activity` | Activity timeline |
 | `uv run ct plugin dashboard web` | Start web dashboard |
 | `uv run ct plugin review session ID` | LLM-judge session review |

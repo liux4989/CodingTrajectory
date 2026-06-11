@@ -50,19 +50,17 @@ Repository development can register all local built-ins with:
 ct plugin register-builtins
 ```
 
-For local user-level publishing, use the repo-owned publish command instead of
-manually reinstalling uv tools:
+For local user-level publishing, use the repo-owned script instead of manually
+reinstalling uv tools:
 
 ```text
-uv run ct plugin publish-local
+scripts/publish-local.sh
 ```
 
-`publish-local` rebuilds the global `coding-trajectory` uv tool from the
-current checkout, installs every package under `packages/plugins` into that
-tool environment, replaces built-in manifest registrations, and prunes stale
-built-in registrations that still point inside this checkout's
-`packages/plugins` directory. It does not remove unrelated third-party plugin
-registrations.
+The script rebuilds the global `coding-trajectory` uv tool from the current
+checkout, installs every package under `packages/plugins` into that tool
+environment, and replaces built-in manifest registrations. Pass `--check` to
+run the packaged plugin smoke check before publishing.
 
 ## Minimal Manifest
 
@@ -163,13 +161,12 @@ ct api call session.usage --params '{"session_id":"abc123"}'
 ct api batch --requests '[{"id":"usage-1","method":"session.usage","params":{"session_id":"abc123"}}]'
 ```
 
-Every core data command exposes its versioned request and response contract
+Every service method exposes its versioned request and response contract
 without performing discovery or ingestion:
 
 ```text
-ct session overview --schema
 ct api schema session.usage
-ct project list --schema
+ct api schema project.list
 ```
 
 Schemas are generated from the Pydantic models used for runtime validation.
@@ -189,10 +186,9 @@ Each executable prints its packaged manifest path with `--manifest`. Plugin
 packages own their dependencies and assets and do not import
 `coding_trajectory` or `coding_trajectory_cli`.
 
-During repository development, `ct plugin publish-local` is the canonical way to
-refresh the global `ct` command and its first-party plugin executables together.
-Run it through the checkout (`uv run ct plugin publish-local`) when the global
-tool may not yet have the command.
+During repository development, `scripts/publish-local.sh` is the canonical way
+to refresh the global `ct` command and its first-party plugin executables
+together.
 
 ## Activity Plugin
 

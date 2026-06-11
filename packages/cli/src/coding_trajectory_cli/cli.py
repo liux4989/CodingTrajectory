@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from coding_trajectory import debug
-from coding_trajectory.contracts import command_schema, service_contract
+from coding_trajectory.contracts import service_contract
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch, project_list_metadata, resolve_store
 from coding_trajectory_cli._shared import (
@@ -185,13 +185,6 @@ def main(argv: list[str] | None = None) -> int:
 
         parser = _build_parser()
         args = parser.parse_args(raw_args)
-
-        if getattr(args, "schema", False):
-            method = getattr(args, "_method", None)
-            if method is None:
-                parser.error("--schema is only available for core data commands")
-            print(json_text(command_schema(method, command=f"ct {_command_path(args).replace('.', ' ')}")))
-            return 0
 
         start = time.monotonic()
         ok = True

@@ -9,7 +9,6 @@ from coding_trajectory_cli._shared import (
     GhFormatter,
     add_output_flags,
     add_params_flag,
-    add_schema_flag,
     add_session_source,
     add_turn_window_flags,
     display_value,
@@ -305,7 +304,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     add_turn_window_flags(session_overview, view_name="projection")
     add_output_flags(session_overview)
     add_params_flag(session_overview)
-    add_schema_flag(session_overview)
     session_overview.set_defaults(
         _method="session.overview",
         _params=_session_turn_window_params,
@@ -322,7 +320,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     add_session_source(session_stats)
     add_output_flags(session_stats)
     add_params_flag(session_stats)
-    add_schema_flag(session_stats)
     session_stats.set_defaults(
         _method="session.stats",
         _params=_session_stats_params,
@@ -346,7 +343,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     add_output_flags(session_usage)
     add_params_flag(session_usage)
-    add_schema_flag(session_usage)
     session_usage.set_defaults(
         _method="session.usage",
         _params=_session_usage_params,
@@ -364,7 +360,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     add_session_source(session_events)
     add_output_flags(session_events)
     add_params_flag(session_events)
-    add_schema_flag(session_events)
     session_events.add_argument(
         "--type",
         dest="event_type",
@@ -400,7 +395,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_items.add_argument("resource_ids", metavar="ITEM_ID", nargs="*")
     add_output_flags(session_items)
     add_params_flag(session_items)
-    add_schema_flag(session_items)
     session_items.set_defaults(
         _method="session.items",
         _params=lambda args: {
