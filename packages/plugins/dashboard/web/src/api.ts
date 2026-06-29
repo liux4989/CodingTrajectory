@@ -76,6 +76,13 @@ export type TokenEvidence = {
   source: string;
 };
 
+export type CostEvidence = {
+  value_usd: number;
+  confidence: "reported" | "estimated";
+  source: string;
+  effective_date: string | null;
+};
+
 export type ContextCategory = {
   id: string;
   category: string;
@@ -107,6 +114,7 @@ export type ContextWindowPayload = {
   context_window_tokens: TokenEvidence | null;
   used_tokens: TokenEvidence | null;
   used_percent: number | null;
+  token_cost: CostEvidence | null;
   categories: ContextCategory[];
   provider_usage_buckets: ContextCategory[];
   events: ContextEvent[];

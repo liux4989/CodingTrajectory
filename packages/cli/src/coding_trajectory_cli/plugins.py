@@ -44,6 +44,7 @@ PLUGIN_COMMANDS: dict[str, PluginCommand] = {
             "session.overview": 1,
             "session.stats": 1,
             "session.usage": 1,
+            "session.tool_usage": 1,
             "session.items": 1,
             "session.events": 1,
         },

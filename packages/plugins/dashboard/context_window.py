@@ -130,6 +130,11 @@ def build_projection(session_id: str, *, turn_id: str | None = None) -> ContextW
     stats = _ct_json(["session", "stats", "--global-scope", "--output", "json", session_id])
     overview = _ct_json(["session", "overview", "--global-scope", "--output", "json", session_id])
     usage = _ct_json(["session", "usage", "--global-scope", "--output", "json", session_id])
+    tool_usage = _ct_api_result(
+        "session.tool_usage",
+        {"session_id": session_id},
+        global_scope=True,
+    )
 
     vendor = str(stats.get("vendor") or _overview_vendor(overview) or "unknown")
     categories = _project_categories(stats)
@@ -139,6 +144,7 @@ def build_projection(session_id: str, *, turn_id: str | None = None) -> ContextW
         *_trajectory_events(
             overview,
             usage,
+            tool_usage,
             turn_id=turn_id,
         ),
     ]
@@ -418,6 +424,7 @@ def _category_events(categories: list[ContextCategory]) -> list[ContextEvent]:
 def _trajectory_events(
     overview: dict[str, Any],
     usage: dict[str, Any],
+    tool_usage: dict[str, Any],
     *,
     turn_id: str | None,
 ) -> list[ContextEvent]:
@@ -426,6 +433,7 @@ def _trajectory_events(
         for item in usage.get("turns") or []
         if isinstance(item, dict) and item.get("id")
     }
+    tool_events_by_turn = _tool_events_by_turn(tool_usage)
     events: list[ContextEvent] = []
     for session in overview.get("sessions") or []:
         if not isinstance(session, dict):
@@ -435,6 +443,7 @@ def _trajectory_events(
             if not isinstance(turn, dict):
                 continue
             current_turn_id = str(turn.get("id") or "")
+            raw_tool_events = list(tool_events_by_turn.get(current_turn_id) or [])
             request = turn.get("request") or {}
             request_text = _optional_text(request.get("text"))
             if request_text:
@@ -462,6 +471,14 @@ def _trajectory_events(
             for index, activity in enumerate(turn.get("activity") or []):
                 if not isinstance(activity, dict):
                     continue
+                if not activity.get("text") and raw_tool_events:
+                    count = activity.get("count")
+                    take = count if isinstance(count, int) and count > 0 else 1
+                    for _ in range(take):
+                        if not raw_tool_events:
+                            break
+                        events.extend(raw_tool_events.pop(0))
+                    continue
                 event = _activity_event(
                     activity,
                     session_id=session_id,
@@ -470,6 +487,8 @@ def _trajectory_events(
                     turn_usage=usage_by_turn.get(current_turn_id),
                 )
                 events.append(event)
+            while raw_tool_events:
+                events.extend(raw_tool_events.pop(0))
     if turn_id:
         events = [
             event
@@ -477,6 +496,90 @@ def _trajectory_events(
             if event.group == "before_first_prompt" or event.turn_id == turn_id
         ]
     return events
+
+
+def _tool_events_by_turn(tool_usage: dict[str, Any]) -> dict[str, list[list[ContextEvent]]]:
+    by_turn: dict[str, list[list[ContextEvent]]] = {}
+    for index, item in enumerate(tool_usage.get("tool_items") or []):
+        if not isinstance(item, dict):
+            continue
+        turn_id = _optional_text(item.get("turn_id"))
+        if turn_id is None:
+            continue
+        by_turn.setdefault(turn_id, []).append(_tool_item_events(item, index=index))
+    return by_turn
+
+
+def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]:
+    item_id = str(item.get("item_id") or f"tool_item_{index}")
+    tool = str(item.get("tool_name") or "Tool")
+    attribution = item.get("token_attribution") if isinstance(item.get("token_attribution"), dict) else {}
+    input_tokens = _optional_int(attribution.get("tool_input_tokens")) or 0
+    output_tokens = _optional_int(attribution.get("tool_output_tokens")) or 0
+    output_chars = _optional_int(item.get("output_chars")) or 0
+    output_original_tokens = _optional_int(item.get("output_original_tokens"))
+    detail_ref = {
+        "item_id": item_id,
+        "session_id": str(item.get("session_id") or ""),
+        "turn_id": str(item.get("turn_id") or ""),
+        "tool_name": tool,
+    }
+    status = _optional_text(item.get("status"))
+    if status:
+        detail_ref["status"] = status
+
+    input_summary = _optional_text(item.get("input_summary")) or f"{tool} input"
+    output_bits = [f"{output_chars} output chars"]
+    if output_original_tokens is not None:
+        output_bits.append(f"{output_original_tokens} observed output tokens")
+    if item.get("output_truncated"):
+        output_bits.append("output truncated")
+
+    output_confidence = _tool_output_confidence(attribution.get("content_confidence"))
+    return [
+        ContextEvent(
+            id=f"tool:{item_id}:input",
+            group="turn",
+            turn_id=detail_ref["turn_id"],
+            category="agent",
+            label=f"{tool} input",
+            summary=input_summary,
+            tokens=TokenEvidence(
+                value=input_tokens,
+                confidence="estimated_tokens",
+                source="ct session.tool_usage:tool_input_tokens",
+            ),
+            source="ct session.tool_usage:tool_items",
+            confidence="estimated_tokens",
+            detail_ref={**detail_ref, "tool_event": "input"},
+            terminal_visible=True,
+        ),
+        ContextEvent(
+            id=f"tool:{item_id}:output",
+            group="turn",
+            turn_id=detail_ref["turn_id"],
+            category=_tool_category(tool),
+            label=f"{tool} output",
+            summary=", ".join(output_bits),
+            tokens=TokenEvidence(
+                value=output_tokens,
+                confidence=output_confidence,
+                source="ct session.tool_usage:tool_output_tokens",
+            ),
+            source="ct session.tool_usage:tool_items",
+            confidence=output_confidence,
+            detail_ref={**detail_ref, "tool_event": "output"},
+            terminal_visible=True,
+        ),
+    ]
+
+
+def _tool_output_confidence(value: Any) -> Confidence:
+    if value == "observed_tool_output_token_count":
+        return "exact_usage"
+    if value == "no_visible_content":
+        return "structural"
+    return "estimated_tokens"
 
 
 def _activity_event(
@@ -549,12 +652,24 @@ def _activity_summary(activity: dict[str, Any]) -> str:
 
 
 def _projection_warnings(events: list[ContextEvent]) -> list[str]:
+    has_tool_token_events = any(
+        event.id.startswith("tool:") and event.tokens is not None
+        for event in events
+    )
     warnings = [
-        "Timeline user and assistant token deltas estimate only the visible overview text; "
-        "tool activity remains structural because overview does not expose per-item result text.",
         "Turn usage is cumulative model accounting and is retained as a detail reference, "
         "not presented as context added by one timeline event.",
     ]
+    if has_tool_token_events:
+        warnings.append(
+            "Tool input/output rows use raw session.tool_usage item evidence; USD cost remains a "
+            "session-level derived estimate."
+        )
+    else:
+        warnings.append(
+            "Timeline user and assistant token deltas estimate only the visible overview text; "
+            "tool activity remains structural because overview does not expose per-item result text."
+        )
     if not any(event.tokens for event in events):
         warnings.append("No event-level token evidence is available for this session.")
     return warnings
@@ -586,6 +701,26 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise SystemExit(f"ct command returned a non-object payload: {' '.join(command)}")
     return payload
+
+
+def _ct_api_result(method: str, params: dict[str, Any], *, global_scope: bool = False) -> dict[str, Any]:
+    args = [
+        "api",
+        "call",
+        method,
+        "--params",
+        json.dumps(params),
+    ]
+    if global_scope:
+        args.insert(3, "--global-scope")
+    payload = _ct_json(args)
+    if not payload.get("ok"):
+        error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+        raise SystemExit(str(error.get("message") or f"ct api call failed: {method}"))
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise SystemExit(f"ct api call returned a non-object result: {method}")
+    return result
 
 
 def _token_evidence(
