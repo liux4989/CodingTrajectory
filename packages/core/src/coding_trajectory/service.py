@@ -803,7 +803,6 @@ def _handle_session_turn_usage(
     _cache_session_graph(context, session_graph)
     result = build_session_graph_metrics(
         session_graph,
-        extra_billing=bool(params.get("extra_billing")),
     )
     turn_id = str(params["turn_id"])
     turns = [
@@ -815,8 +814,6 @@ def _handle_session_turn_usage(
             "sequence": turn["sequence"],
             "status": turn.get("status"),
             "token_usage": turn["token_usage"],
-            "cost": turn["cost"],
-            "extra_billing": turn["extra_billing"],
         }
         for session in result["sessions"]
         for turn in session["turns"]
@@ -827,8 +824,6 @@ def _handle_session_turn_usage(
         {
             "root_session_id": result["root_session_id"],
             "token_usage": result["token_usage"],
-            "cost": result["cost"],
-            "extra_billing": result["extra_billing"],
             "turns": turns,
             "warnings": result.get("warnings") or [],
         },
@@ -848,7 +843,6 @@ def _handle_session_usage(
         session_graph,
         build_session_graph_usage(
             session_graph,
-            extra_billing=bool(params.get("extra_billing")),
             turn_id=params.get("turn_id"),
         ),
     )
@@ -868,7 +862,6 @@ def _handle_session_tool_usage(
         session_graph,
         build_session_graph_tool_usage(
             session_graph,
-            extra_billing=bool(params.get("extra_billing")),
         ),
     )
 

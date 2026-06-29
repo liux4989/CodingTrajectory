@@ -56,55 +56,6 @@ class TokenUsageObservation(BaseModel):
     source: MetricSource
 
 
-class CostBreakdown(BaseModel):
-    input_usd: float = 0.0
-    cached_input_usd: float = 0.0
-    cache_creation_input_usd: float = 0.0
-    output_usd: float = 0.0
-    reasoning_output_usd: float = 0.0
-
-    def plus(self, other: "CostBreakdown") -> "CostBreakdown":
-        return CostBreakdown(
-            input_usd=self.input_usd + other.input_usd,
-            cached_input_usd=self.cached_input_usd + other.cached_input_usd,
-            cache_creation_input_usd=self.cache_creation_input_usd + other.cache_creation_input_usd,
-            output_usd=self.output_usd + other.output_usd,
-            reasoning_output_usd=self.reasoning_output_usd + other.reasoning_output_usd,
-        )
-
-
-class CostEstimate(BaseModel):
-    amount_usd: float = 0.0
-    currency: Literal["USD"] = "USD"
-    extra_billing: bool = False
-    pricing_source: str | None = None
-    pricing_effective_date: str | None = None
-    model: str | None = None
-    complete: bool = True
-    missing_reasons: list[str] = Field(default_factory=list)
-    breakdown: CostBreakdown = Field(default_factory=CostBreakdown)
-
-    def plus(self, other: "CostEstimate") -> "CostEstimate":
-        return CostEstimate(
-            amount_usd=self.amount_usd + other.amount_usd,
-            extra_billing=self.extra_billing or other.extra_billing,
-            pricing_source=self.pricing_source or other.pricing_source,
-            pricing_effective_date=self.pricing_effective_date or other.pricing_effective_date,
-            model=_merge_optional_equal(self.model, other.model),
-            complete=self.complete and other.complete,
-            missing_reasons=[*self.missing_reasons, *other.missing_reasons],
-            breakdown=self.breakdown.plus(other.breakdown),
-        )
-
-
-def _merge_optional_equal(left: str | None, right: str | None) -> str | None:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return left if left == right else None
-
-
 class QuotaWindow(BaseModel):
     used_percent: float | None = None
     window_minutes: int | None = None
@@ -131,7 +82,6 @@ class TurnMetrics(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
     observations: list[TokenUsageObservation] = Field(default_factory=list)
     quota_snapshots: list[QuotaSnapshot] = Field(default_factory=list)
 
@@ -141,7 +91,6 @@ class SessionMetrics(BaseModel):
     vendor: str
     status: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
     turns: list[TurnMetrics] = Field(default_factory=list)
     quota_snapshot: QuotaSnapshot | None = None
 
@@ -149,7 +98,6 @@ class SessionMetrics(BaseModel):
 class SessionGraphMetrics(BaseModel):
     root_session_id: UUID
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
     sessions: list[SessionMetrics] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -166,9 +114,6 @@ class TurnMetricsFlat(BaseModel):
     completed_at: datetime | None = None
     model: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost: float | None = None
-    currency: Literal["USD"] = "USD"
-    extra_billing: bool = False
 
 
 class SessionMetricsFlat(BaseModel):
@@ -176,18 +121,12 @@ class SessionMetricsFlat(BaseModel):
     vendor: str
     status: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost: float | None = None
-    currency: Literal["USD"] = "USD"
-    extra_billing: bool = False
     turns: list[TurnMetricsFlat] = Field(default_factory=list)
 
 
 class SessionGraphMetricsFlat(BaseModel):
     root_session_id: UUID
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost: float | None = None
-    currency: Literal["USD"] = "USD"
-    extra_billing: bool = False
     sessions: list[SessionMetricsFlat] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -343,7 +282,6 @@ class TurnUsageCompactFlat(BaseModel):
     session_id: UUID | None = None
     runtime: TurnRuntimeFlat | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_usd: float | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -353,26 +291,22 @@ class TurnUsageCompactFlat(BaseModel):
         if data.get("runtime") == {}:
             data.pop("runtime", None)
         if data.get("usage"):
-            data["usage"] = _usage_accounting_payload(data["usage"], cost_usd=self.cost_usd)
-        data.pop("cost_usd", None)
+            data["usage"] = _usage_accounting_payload(data["usage"])
         return data
 
 
 class SessionUsageCompactFlat(BaseModel):
     session_id: UUID
-    extra_billing: bool = False
     runtime: RuntimeStatsFlat | None = None
     turns: list[TurnUsageCompactFlat] = Field(default_factory=list)
     total_usage: TokenUsage = Field(default_factory=TokenUsage)
-    cost_usd: float | None = None
     warnings: list[str] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
         if data.get("total_usage"):
-            data["total_usage"] = _usage_accounting_payload(data["total_usage"], cost_usd=self.cost_usd)
-        data.pop("cost_usd", None)
+            data["total_usage"] = _usage_accounting_payload(data["total_usage"])
         return data
 
 

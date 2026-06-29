@@ -47,15 +47,14 @@ class SessionStatsRequest(SessionEntryRequest):
 
 class SessionTurnUsageRequest(SessionEntryRequest):
     turn_id: str
-    extra_billing: bool = False
 
 
 class SessionUsageRequest(SessionEntryRequest):
-    extra_billing: bool = False
+    pass
 
 
 class SessionToolUsageRequest(SessionEntryRequest):
-    extra_billing: bool = False
+    pass
 
 
 class SessionEventsRequest(ContractModel):
@@ -119,7 +118,6 @@ class SessionStatsResponse(ContractModel):
 class SessionUsageResponse(ContractModel):
     session_id: str
     total_usage: dict[str, Any]
-    extra_billing: bool = False
     runtime: dict[str, Any] = Field(default_factory=dict)
     turns: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
@@ -128,8 +126,6 @@ class SessionUsageResponse(ContractModel):
 class SessionTurnUsageResponse(ContractModel):
     root_session_id: str
     token_usage: dict[str, Any]
-    cost: float | None = None
-    extra_billing: bool = False
     turns: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -189,10 +185,8 @@ class PublicSessionStatsResponse(ContractModel):
 
 class PublicSessionUsageResponse(ContractModel):
     id: str
-    extra_billing: bool = False
     runtime: dict[str, Any] | None = None
     usage: dict[str, Any]
-    cost: float | None = None
     turns: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] | None = None
 

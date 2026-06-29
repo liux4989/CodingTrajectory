@@ -24,7 +24,6 @@ from coding_trajectory.ingestion.models import (
 )
 from coding_trajectory.metrics.models import (
     AttributionPolicy,
-    CostEstimate,
     InvokeResponseTokens,
     MetricSource,
     QuotaSnapshot,
@@ -46,16 +45,13 @@ from coding_trajectory.metrics.models import (
     TurnMetricsFlat,
 )
 from coding_trajectory.metrics.context_stats._common import runtime_stats
-from coding_trajectory.metrics.accounting import reported_cost_amount as _reported_cost_amount
 
 
 def build_session_graph_metrics(
     session_graph: SessionGraph,
-    *,
-    extra_billing: bool = False,
 ) -> dict[str, Any]:
     """Return a flat usage summary: sessions -> turns."""
-    full = _build_full_metrics(session_graph, extra_billing=extra_billing)
+    full = _build_full_metrics(session_graph)
     sessions_flat: list[SessionMetricsFlat] = []
 
     for session in full.sessions:
@@ -71,8 +67,6 @@ def build_session_graph_metrics(
                     completed_at=turn.completed_at,
                     model=model,
                     token_usage=turn.token_usage,
-                    cost=_reported_cost_amount(turn.cost_estimate),
-                    extra_billing=turn.cost_estimate.extra_billing,
                 )
             )
         sessions_flat.append(
@@ -81,8 +75,6 @@ def build_session_graph_metrics(
                 vendor=session.vendor,
                 status=session.status,
                 token_usage=session.token_usage,
-                cost=_reported_cost_amount(session.cost_estimate),
-                extra_billing=session.cost_estimate.extra_billing,
                 turns=turns_flat,
             )
         )
@@ -90,8 +82,6 @@ def build_session_graph_metrics(
     return SessionGraphMetricsFlat(
         root_session_id=full.root_session_id,
         token_usage=full.token_usage,
-        cost=_reported_cost_amount(full.cost_estimate),
-        extra_billing=full.cost_estimate.extra_billing,
         sessions=sessions_flat,
         warnings=full.warnings,
     ).model_dump(mode="json")
@@ -99,11 +89,9 @@ def build_session_graph_metrics(
 
 def build_session_graph_full_metrics(
     session_graph: SessionGraph,
-    *,
-    extra_billing: bool = False,
 ) -> SessionGraphMetrics:
     """Return full metrics for callers that need multiple derived views."""
-    return _build_full_metrics(session_graph, extra_billing=extra_billing)
+    return _build_full_metrics(session_graph)
 
 
 def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, Any]:
@@ -116,11 +104,10 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
 def build_session_graph_usage(
     session_graph: SessionGraph,
     *,
-    extra_billing: bool = False,
     turn_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return compact turn-level token usage and log-reported cost accounting."""
-    full = _build_full_metrics(session_graph, extra_billing=extra_billing)
+    """Return compact turn-level token usage accounting."""
+    full = _build_full_metrics(session_graph)
     multi_session = len(full.sessions) > 1
     turns: list[TurnUsageCompactFlat] = []
 
@@ -140,11 +127,9 @@ def build_session_graph_usage(
 
     return SessionUsageCompactFlat(
         session_id=full.root_session_id,
-        extra_billing=full.cost_estimate.extra_billing,
         runtime=runtime_stats(session_graph),
         turns=turns,
         total_usage=full.token_usage,
-        cost_usd=_reported_cost_amount(full.cost_estimate),
         warnings=full.warnings,
     ).model_dump(mode="json")
 
@@ -170,7 +155,6 @@ def _compact_turn_usage(
             wait_before_seconds=wait_before_seconds,
         ),
         usage=turn.token_usage,
-        cost_usd=_reported_cost_amount(turn.cost_estimate),
     )
 
 
@@ -202,11 +186,9 @@ def _turn_execution_seconds(turn: TurnMetrics) -> int | None:
 
 def build_session_graph_tool_usage(
     session_graph: SessionGraph,
-    *,
-    extra_billing: bool = False,
 ) -> dict[str, Any]:
     """Return per-tool-item output size signals with visible-content token attribution."""
-    full = _build_full_metrics(session_graph, extra_billing=extra_billing)
+    full = _build_full_metrics(session_graph)
 
     tool_items: list[ToolItemFlat] = []
     for session in session_graph.sessions:
@@ -461,23 +443,16 @@ def _turn_model(turn: TurnMetrics) -> str | None:
 
 def _build_full_metrics(
     session_graph: SessionGraph,
-    *,
-    extra_billing: bool = False,
 ) -> SessionGraphMetrics:
     """Return full token/quota metrics projected onto the session_graph hierarchy."""
     session_metrics: list[SessionMetrics] = []
     total = TokenUsage()
-    cost_total = CostEstimate(extra_billing=extra_billing)
     warnings: list[str] = []
 
     for session in session_graph.sessions:
-        metrics = _build_session_metrics(
-            session,
-            extra_billing=extra_billing,
-        )
+        metrics = _build_session_metrics(session)
         session_metrics.append(metrics)
         total = total.plus(metrics.token_usage)
-        cost_total = cost_total.plus(metrics.cost_estimate)
         if not _session_has_usage(metrics):
             message = f"no token usage metrics found for session {session.session_id}"
             warnings.append(message)
@@ -492,7 +467,6 @@ def _build_full_metrics(
     return SessionGraphMetrics(
         root_session_id=session_graph.root_session_id,
         token_usage=total,
-        cost_estimate=_finalize_cost(cost_total),
         sessions=session_metrics,
         warnings=_unique(warnings),
     )
@@ -500,23 +474,15 @@ def _build_full_metrics(
 
 def _build_session_metrics(
     session: Session,
-    *,
-    extra_billing: bool,
 ) -> SessionMetrics:
     turn_metrics: list[TurnMetrics] = []
     session_total = TokenUsage()
-    cost_total = CostEstimate(extra_billing=extra_billing)
     latest_quota: QuotaSnapshot | None = None
 
     for turn in session.turns:
-        metrics = _build_turn_metrics(
-            session,
-            turn,
-            extra_billing=extra_billing,
-        )
+        metrics = _build_turn_metrics(session, turn)
         turn_metrics.append(metrics)
         session_total = session_total.plus(metrics.token_usage)
-        cost_total = cost_total.plus(metrics.cost_estimate)
         if metrics.quota_snapshots:
             latest_quota = metrics.quota_snapshots[-1]
 
@@ -525,7 +491,6 @@ def _build_session_metrics(
         vendor=session.vendor.value,
         status=session.status.value,
         token_usage=session_total,
-        cost_estimate=_finalize_cost(cost_total),
         turns=turn_metrics,
         quota_snapshot=latest_quota,
     )
@@ -534,8 +499,6 @@ def _build_session_metrics(
 def _build_turn_metrics(
     session: Session,
     turn: Turn,
-    *,
-    extra_billing: bool,
 ) -> TurnMetrics:
     context_observations = _context_usage_for_turn(session, turn)
     observations: list[TokenUsageObservation] = []
@@ -550,7 +513,6 @@ def _build_turn_metrics(
 
     observations.sort(key=lambda item: item.timestamp)
     total = TokenUsage()
-    cost_total = CostEstimate(extra_billing=extra_billing)
     for observation in observations:
         total = total.plus(observation.usage)
 
@@ -568,7 +530,6 @@ def _build_turn_metrics(
         started_at=turn.started_at,
         completed_at=turn.ended_at,
         token_usage=total,
-        cost_estimate=_finalize_cost(cost_total),
         observations=observations,
         quota_snapshots=quota_snapshots,
     )
@@ -668,24 +629,6 @@ def _session_has_usage(metrics: SessionMetrics) -> bool:
 
 def _is_zero_usage(usage: TokenUsage) -> bool:
     return all(value == 0 for value in usage.model_dump().values())
-
-
-def _finalize_cost(cost: CostEstimate) -> CostEstimate:
-    return cost.model_copy(
-        update={
-            "amount_usd": round(cost.amount_usd, 8),
-            "missing_reasons": _unique(cost.missing_reasons),
-            "breakdown": cost.breakdown.model_copy(
-                update={
-                    "input_usd": round(cost.breakdown.input_usd, 8),
-                    "cached_input_usd": round(cost.breakdown.cached_input_usd, 8),
-                    "cache_creation_input_usd": round(cost.breakdown.cache_creation_input_usd, 8),
-                    "output_usd": round(cost.breakdown.output_usd, 8),
-                    "reasoning_output_usd": round(cost.breakdown.reasoning_output_usd, 8),
-                }
-            ),
-        }
-    )
 
 
 def _unique(values: list[str]) -> list[str]:
