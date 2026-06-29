@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useParams, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   useReactTable,
@@ -66,11 +66,12 @@ const columns: ColumnDef<SessionItem>[] = [
 
 export function ProjectDetailRoute() {
   const { projectName } = useParams({ from: "/projects/$projectName" });
+  const { sinceDays } = useSearch({ from: "/projects/$projectName" });
   const [filter, setFilter] = React.useState("");
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const detail = useQuery({
-    queryKey: ["project", projectName],
-    queryFn: () => fetchProjectDetail(projectName),
+    queryKey: ["project", projectName, sinceDays],
+    queryFn: () => fetchProjectDetail(projectName, sinceDays),
   });
   const data = detail.data?.sessions ?? [];
 
@@ -113,6 +114,7 @@ export function ProjectDetailRoute() {
         ) : null}
         <span className="text-body-sm text-muted-foreground">
           {detail.data?.session_count ?? 0} session(s)
+          {sinceDays != null ? ` from the last ${sinceDays} day${sinceDays === 1 ? "" : "s"}` : ""}
         </span>
       </div>
       <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, or id" />

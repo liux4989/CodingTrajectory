@@ -82,6 +82,7 @@ export function OverviewRoute() {
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <ProjectLink
                           name={project.project}
+                          sinceDays={data.sessions.window_days}
                           className="truncate font-display text-base font-extrabold"
                         />
                         <Badge>{project.count} sessions</Badge>
@@ -153,7 +154,7 @@ export function OverviewRoute() {
                     </TableCell>
                     <TableCell>
                       {session.project ? (
-                        <ProjectLink name={session.project} />
+                        <ProjectLink name={session.project} sinceDays={data.sessions.window_days} />
                       ) : (
                         "unknown"
                       )}

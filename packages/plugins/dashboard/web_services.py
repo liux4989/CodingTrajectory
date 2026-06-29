@@ -125,7 +125,10 @@ class DashboardDataService:
         meta = items.get(project_name)
         if not meta:
             raise ValueError(f"project not found: {project_name}")
-        sessions_params: dict[str, Any] = {"project_name": project_name, "since_days": None}
+        since_days_raw = _first(query, "since_days")
+        sessions_params: dict[str, Any] = {"project_name": project_name}
+        if since_days_raw is not None:
+            sessions_params["since_days"] = int(since_days_raw)
         sessions = _ct_json(
             ["project", "sessions", "--params", json.dumps(sessions_params), "--output", "json"]
         )
@@ -133,6 +136,7 @@ class DashboardDataService:
             "name": project_name,
             "path": meta.get("path"),
             "vendors": meta.get("vendors") or [],
+            "since_days": sessions_params.get("since_days"),
             "sessions": sessions.get("items") or [],
             "session_count": len(sessions.get("items") or []),
         }

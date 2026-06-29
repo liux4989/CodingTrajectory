@@ -48,6 +48,12 @@ const indexRoute = createRoute({
 const projectDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/projects/$projectName",
+  validateSearch: (search: Record<string, unknown>): { sinceDays: number | undefined } => ({
+    sinceDays:
+      search.sinceDays != null && !Number.isNaN(Number(search.sinceDays))
+        ? Number(search.sinceDays)
+        : undefined,
+  }),
   component: () => <RouteBoundary><ProjectDetailRoute /></RouteBoundary>,
 });
 

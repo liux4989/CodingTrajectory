@@ -54,6 +54,7 @@ export type ProjectDetail = {
   name: string;
   path: string | null;
   vendors: string[];
+  since_days: number | null;
   sessions: SessionItem[];
   session_count: number;
 };
@@ -163,8 +164,9 @@ export async function fetchProjects() {
   return fetchJson<{ items: ProjectItem[] }>("/api/projects");
 }
 
-export async function fetchProjectDetail(projectName: string) {
+export async function fetchProjectDetail(projectName: string, sinceDays?: number) {
   const params = new URLSearchParams({ project_name: projectName });
+  if (sinceDays != null) params.set("since_days", String(sinceDays));
   return fetchJson<ProjectDetail>(`/api/projects/detail?${params}`);
 }
 
