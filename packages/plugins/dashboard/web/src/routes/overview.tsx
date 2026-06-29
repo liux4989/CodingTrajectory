@@ -2,6 +2,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchOverview } from "@/api";
 import { ProjectLink } from "@/components/project-link";
+import { SessionLink, shortSessionId } from "@/components/session-link";
 import { MetricSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
 import { MetricCard } from "@/components/metric-card";
@@ -148,9 +149,17 @@ export function OverviewRoute() {
               <TableBody>
                 {data.sessions.top_sessions.map((session) => (
                   <TableRow key={session.id ?? `${session.project}-${session.title}`}>
-                    <TableCell className="min-w-[18rem] max-w-[32rem]">
-                      <p className="m-0 line-clamp-2 font-medium">{session.title || session.id || "Untitled session"}</p>
-                      <p className="m-0 mt-1 text-caption text-muted-foreground">{formatWhen(session.started_at)}</p>
+                    <TableCell className="max-w-[26rem] align-top">
+                      <div className="line-clamp-2 whitespace-normal break-words font-medium">
+                        {session.id ? (
+                          <SessionLink sessionId={session.id}>
+                            {session.title || shortSessionId(session.id)}
+                          </SessionLink>
+                        ) : (
+                          session.title || "Untitled session"
+                        )}
+                      </div>
+                      <p className="m-0 mt-1 text-caption text-muted-foreground whitespace-nowrap">{formatWhen(session.started_at)}</p>
                     </TableCell>
                     <TableCell>
                       {session.project ? (
