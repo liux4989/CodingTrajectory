@@ -13,13 +13,11 @@
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  CLI (`ct`)                          │  Plugins                         │
-│  ┌─────────────┐ ┌──────────────┐    │  ┌──────────┐ ┌───────┐ ┌──────┐│
-│  │ project     │ │ session      │    │  │ activity │ │ dash  │ │review││
-│  │ list/sess.  │ │ over./stats/ │    │  │ timeline │ │web/tui│ │judge ││
-│  │             │ │ usage/item   │    │  │          │ │       │ │      ││
-│  └──────┬──────┘ └──────┬───────┘    │  └─────┬────┘ └───┬───┘ └──┬───┘│
-└─────────┼───────────────┼────────────┼────────┼──────────┼────────┼────┘
-          └───────────────┴────────────┴────────┴──────────┴────────┘
+│  ┌─────────────┐ ┌──────────────┐    │  ┌──────┐ ┌───────┐             │
+│  │ project     │ │ session      │    │  │ dash │ │ code- │             │
+│  │ list/sess.  │ │ over./stats/ │    │  │board │ │ time  │             │
+│  │             │ │ usage/item   │    │  └───┬──┘ └───┬───┘             │
+└─────────┼───────────────┼────────────┼──────┼──────────┼───────────────┘
                                         │
 ┌───────────────────────────────────────┼──────────────────────────────────┐
 │  Application Contract                 │                                  │
@@ -85,9 +83,7 @@
 | Build system | Hatchling | Per-package wheel builds |
 | Package manager | uv workspace | Core, CLI, independent plugins, benchmarks |
 | Linting | Ruff | Formatter + linter |
-| TUI framework | Textual | Dashboard terminal UI |
 | Web dashboard | React + TanStack | Served by Python HTTP server |
-| LLM judge | Codex app-server | Review plugin uses JSON-RPC over stdin/stdout |
 
 ## Project Structure
 
@@ -147,9 +143,6 @@ coding-trajectory/
 │   │           ├── session.py              # `ct session overview|stats|usage|items|events`
 │   │           └── plugin.py               # `ct plugin list|<name>`
 │   └── plugins/                            # Built-in executable plugins
-│       ├── activity/                       # `activity` plugin
-│       │   ├── pyproject.toml
-│       │   ├── activity.py                 # Cross-session activity timeline
 │       ├── code_time/                      # `code-time` plugin
 │       │   ├── pyproject.toml
 │       │   ├── code_time.py
@@ -162,9 +155,6 @@ coding-trajectory/
 │       │   ├── token_pricing.py             # models.dev pricing and model metadata
 │       │   ├── cleanup.py                  # Project/session cleanup logic
 │       │   └── web/dist/                   # Built React frontend
-│       └── review/                         # `review` plugin
-│           ├── pyproject.toml
-│           ├── review.py                   # LLM-judge session review
 ├── benchmarks/                             # Performance benchmarks
 │   ├── src/
 │   └── results/
@@ -199,11 +189,9 @@ coding-trajectory/
 | CLI (`ct`) | Progressive-disclosure command surface with markdown + JSON output |
 | Plugin system | Source-dispatched plugins via built-in command table, no core imports |
 | Command schema | Cheap `ct api schema METHOD` request/response introspection |
-| Activity plugin | Cross-session timeline with project/account/time window filtering |
-| Dashboard plugin | TUI/web visualization plus models.dev pricing and model metadata enrichment |
+| Dashboard plugin | Web visualization plus models.dev pricing and model metadata enrichment |
 | Context window view | Context composition bar with event selection and hover preview |
-| Review plugin | LLM-judge session analysis via Codex app-server |
-| Dashboard cleanup | Project/session cleanup with dry-run, trash, and TUI workflow |
+| Dashboard cleanup | Project/session cleanup with dry-run, trash, and interactive workflow |
 
 ## Service API
 
@@ -322,10 +310,9 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct session items ITEM_ID` | Item detail (JSON) |
 | `uv run ct session events --params '{"event_ids": [...]}'` | Event detail (JSON) |
 | `uv run ct session events [ID] --type TYPE` | Filtered event search |
-| `uv run ct plugin list` | List registered plugins |
-| `uv run ct plugin activity` | Activity timeline |
+| `uv run ct plugin list` | List available plugins |
 | `uv run ct plugin dashboard web` | Start web dashboard |
-| `uv run ct plugin review session ID` | LLM-judge session review |
+| `uv run ct plugin code-time` | Today's coding time summary |
 
 ### Testing
 

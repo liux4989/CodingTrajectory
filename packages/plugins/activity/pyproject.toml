@@ -1,5 +1,0 @@
-[project]
-name = "ct-plugin-activity"
-version = "0.1.0"
-description = "Recent coding activity plugin for CodingTrajectory"
-requires-python = ">=3.12"

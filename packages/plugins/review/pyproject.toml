@@ -1,5 +1,0 @@
-[project]
-name = "ct-plugin-review"
-version = "0.1.0"
-description = "LLM-judge session review plugin for CodingTrajectory"
-requires-python = ">=3.12"

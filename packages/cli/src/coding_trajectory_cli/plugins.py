@@ -60,14 +60,6 @@ PLUGIN_COMMANDS: dict[str, PluginCommand] = {
             ),
         ],
     ),
-    "activity": PluginCommand(
-        name="activity",
-        description="Inspect recent activity across sessions.",
-        dir="packages/plugins/activity",
-        entry="activity.py",
-        requires_methods={"project.sessions": 1},
-        tools=[PluginTool(".", "Show recent project/session activity.")],
-    ),
     "code-time": PluginCommand(
         name="code-time",
         description="Today's coding work overview: time, sessions, and cost across projects.",
@@ -79,23 +71,6 @@ PLUGIN_COMMANDS: dict[str, PluginCommand] = {
             "session.usage": 1,
         },
         tools=[PluginTool(".", "Show today's coding time summary.")],
-    ),
-    "review": PluginCommand(
-        name="review",
-        description="Use an LLM judge to review one coding session for improvement opportunities.",
-        dir="packages/plugins/review",
-        entry="review.py",
-        requires_methods={
-            "session.overview": 1,
-            "session.stats": 1,
-            "session.usage": 1,
-        },
-        tools=[
-            PluginTool(
-                "session",
-                "LLM-judge one session and recommend agent, repo, or tooling improvements.",
-            )
-        ],
     ),
 }
 
