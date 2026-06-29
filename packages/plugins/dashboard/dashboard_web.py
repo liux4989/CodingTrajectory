@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import shutil
+import subprocess
 import sys
 import webbrowser
 from dataclasses import dataclass
@@ -29,6 +31,19 @@ class DashboardWebConfig:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.build and args.static_dir is None:
+        web_dir = _web_dir()
+        if web_dir.is_dir():
+            rc = _build_web_assets(web_dir)
+            if rc != 0:
+                return rc
+        elif not _static_dir(args.static_dir).is_dir():
+            print(
+                "error: dashboard web source not found; expected "
+                "packages/plugins/dashboard/web",
+                file=sys.stderr,
+            )
+            return 2
     config = DashboardWebConfig(
         host=args.host,
         port=args.port,
@@ -78,6 +93,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--open", action="store_true", help="Open the dashboard in a browser.")
+    parser.add_argument(
+        "--no-build",
+        dest="build",
+        action="store_false",
+        default=True,
+        help="Skip running `npm run build` before serving; serve the existing assets.",
+    )
     parser.add_argument("--static-dir", default=None, help=argparse.SUPPRESS)
     return parser
 
@@ -85,7 +107,25 @@ def _build_parser() -> argparse.ArgumentParser:
 def _static_dir(raw: str | None) -> Path:
     if raw:
         return Path(raw).expanduser().resolve()
-    return Path(__file__).resolve().parent / "web" / "dist"
+    return _web_dir() / "dist"
+
+
+def _web_dir() -> Path:
+    return Path(__file__).resolve().parent / "web"
+
+
+def _build_web_assets(web_dir: Path) -> int:
+    npm = shutil.which("npm")
+    if not npm:
+        print("warning: npm not found; serving existing web assets.", file=sys.stderr)
+        return 0
+    if not (web_dir / "node_modules").is_dir():
+        print("Installing dashboard web dependencies (npm install)...", file=sys.stderr)
+        install = subprocess.run([npm, "install"], cwd=web_dir)
+        if install.returncode != 0:
+            return install.returncode
+    print("Building dashboard web assets (npm run build)...", file=sys.stderr)
+    return subprocess.run([npm, "run", "build"], cwd=web_dir).returncode
 
 
 def _handler_for(static_dir: Path, service: DashboardDataService) -> type[BaseHTTPRequestHandler]:
