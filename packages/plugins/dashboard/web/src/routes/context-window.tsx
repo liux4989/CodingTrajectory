@@ -19,11 +19,13 @@ import { cn } from "@/lib/utils";
 const categoryColors: Record<string, string> = {
   starting_context: "var(--color-category-starting-context)",
   user_input: "var(--color-category-user-input)",
-  agent_work: "var(--color-category-agent-work)",
+  files: "var(--color-category-files)",
+  output: "var(--color-category-output)",
+  agent: "var(--color-category-agent)",
   unattributed: "var(--color-category-unattributed)",
 };
 
-const CATEGORY_ORDER = ["starting_context", "user_input", "agent_work", "unattributed"];
+const CATEGORY_ORDER = ["starting_context", "user_input", "files", "output", "agent", "unattributed"];
 
 function aggregateCategories(categories: ContextCategory[]) {
   const totals = new Map<string, number>();
@@ -56,7 +58,9 @@ function evidenceLabel(evidence: TokenEvidence | null) {
 function categoryLabel(category: string) {
   if (category === "starting_context") return "Starting context";
   if (category === "user_input") return "User input";
-  if (category === "agent_work") return "Agent work";
+  if (category === "files") return "Files";
+  if (category === "output") return "Output";
+  if (category === "agent") return "Agent";
   return category.replaceAll("_", " ");
 }
 

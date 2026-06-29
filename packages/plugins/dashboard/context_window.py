@@ -30,7 +30,9 @@ def _visible_text_size(text: str) -> _VisibleTextSize:
 CategoryKey = Literal[
     "starting_context",
     "user_input",
-    "agent_work",
+    "files",
+    "output",
+    "agent",
     "unattributed",
 ]
 Confidence = Literal["exact_usage", "exact_text", "estimated_tokens", "structural", "unknown"]
@@ -345,6 +347,24 @@ _STARTING_CONTEXT_KEYS = {
     "memory",
 }
 _USER_INPUT_KEYS = {"user_initial_request", "user_follow_up_requests"}
+_AGENT_FILES_KEYS = {
+    "context_readfile",
+    "context_searchtext",
+    "context_listfiles",
+    "context_webfetch",
+    "context_websearch",
+}
+_AGENT_AGENT_KEYS = {
+    "final_answer",
+    "progress_update",
+    "assistant_message",
+    "reasoning",
+    "editfile",
+    "writefile",
+    "todolist",
+    "subagenttask",
+    "sessionhandoff",
+}
 
 
 def _category_key(source_key: str) -> CategoryKey:
@@ -352,7 +372,29 @@ def _category_key(source_key: str) -> CategoryKey:
         return "starting_context"
     if source_key in _USER_INPUT_KEYS:
         return "user_input"
-    return "agent_work"
+    if source_key in _AGENT_FILES_KEYS:
+        return "files"
+    if source_key == "output":
+        return "output"
+    if (
+        source_key in _AGENT_AGENT_KEYS
+        or source_key.startswith(
+            (
+                "tool_editfile",
+                "tool_writefile",
+                "tool_todolist",
+                "tool_subagenttask",
+                "tool_sessionhandoff",
+                "editfile",
+                "writefile",
+                "todolist",
+                "subagenttask",
+                "sessionhandoff",
+            )
+        )
+    ):
+        return "agent"
+    return "unattributed"
 
 
 def _category_events(categories: list[ContextCategory]) -> list[ContextEvent]:
@@ -451,7 +493,7 @@ def _activity_event(
             id=f"turn:{turn_id}:activity:{index}",
             group="turn",
             turn_id=turn_id,
-            category="agent_work",
+            category="agent",
             label="Assistant message",
             summary=text,
             tokens=TokenEvidence(
@@ -473,7 +515,7 @@ def _activity_event(
         id=f"turn:{turn_id}:activity:{index}",
         group="turn",
         turn_id=turn_id,
-        category="agent_work",
+        category=_tool_category(tool),
         label=tool,
         summary=summary,
         tokens=None,
@@ -481,6 +523,15 @@ def _activity_event(
         confidence="structural",
         detail_ref=detail_ref,
     )
+
+
+def _tool_category(tool: str) -> CategoryKey:
+    normalized = tool.lower()
+    if any(term in normalized for term in ("read", "search", "list", "find", "glob")):
+        return "files"
+    if any(term in normalized for term in ("edit", "write", "todo", "subagent", "handoff")):
+        return "agent"
+    return "output"
 
 
 def _activity_summary(activity: dict[str, Any]) -> str:

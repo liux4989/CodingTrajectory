@@ -40,7 +40,9 @@
 
   --color-category-starting-context: var(--category-starting-context);
   --color-category-user-input: var(--category-user-input);
-  --color-category-agent-work: var(--category-agent-work);
+  --color-category-files: var(--category-files);
+  --color-category-output: var(--category-output);
+  --color-category-agent: var(--category-agent);
   --color-category-unattributed: var(--category-unattributed);
 
   --color-warning: var(--warning);
@@ -120,7 +122,9 @@
 
     --category-starting-context: #6d28d9;
     --category-user-input: #0f766e;
-    --category-agent-work: #c2410c;
+    --category-files: #4d7c0f;
+    --category-output: #c2410c;
+    --category-agent: #334155;
     --category-unattributed: #57534e;
 
     --warning: #92400e;
@@ -167,7 +171,9 @@
 
     --category-starting-context: #8b5cf6;
     --category-user-input: #0d9488;
-    --category-agent-work: #ea580c;
+    --category-files: #65a30d;
+    --category-output: #ea580c;
+    --category-agent: #475569;
     --category-unattributed: #78716c;
 
     --warning: #d97706;
@@ -215,7 +221,9 @@
 
       --category-starting-context: #8b5cf6;
       --category-user-input: #0d9488;
-      --category-agent-work: #ea580c;
+      --category-files: #65a30d;
+      --category-output: #ea580c;
+      --category-agent: #475569;
       --category-unattributed: #78716c;
 
       --warning: #d97706;
