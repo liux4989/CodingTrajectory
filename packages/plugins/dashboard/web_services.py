@@ -223,7 +223,6 @@ class DashboardDataService:
                 trash=action == "trash",
                 delete=action == "delete",
                 confirm=True,
-                tui=False,
                 detail=True,
             ),
             preview,
@@ -250,7 +249,6 @@ class DashboardDataService:
                 trash=action == "trash",
                 delete=action == "delete",
                 confirm=True,
-                tui=False,
                 detail=True,
             ),
             preview,
@@ -495,7 +493,6 @@ def _project_cleanup_preview(query: dict[str, list[str]]) -> cleanup_mod.Cleanup
             trash=False,
             delete=False,
             confirm=False,
-            tui=False,
             detail=False,
         )
     )
@@ -508,7 +505,6 @@ def _session_cleanup_preview(query: dict[str, list[str]]) -> cleanup_mod.Cleanup
             trash=False,
             delete=False,
             confirm=False,
-            tui=False,
             detail=False,
         )
     )

@@ -161,12 +161,10 @@ coding-trajectory/
 │       ├── dashboard/                      # `ct-plugin-dashboard`
 │       │   ├── pyproject.toml
 │       │   ├── dashboard.py                # Dashboard CLI entry point
-│       │   ├── dashboard_tui.py            # Textual TUI
 │       │   ├── dashboard_web.py            # Python HTTP server for web dashboard
 │       │   ├── context_window.py           # Context composition projection
 │       │   ├── token_pricing.py             # models.dev pricing and model metadata
 │       │   ├── cleanup.py                  # Project/session cleanup logic
-│       │   ├── cleanup_tui.py              # Interactive cleanup TUI
 │       │   ├── ct-plugin.json              # Plugin manifest
 │       │   └── web/dist/                   # Built React frontend
 │       └── review/                         # `ct-plugin-review`

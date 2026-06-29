@@ -434,7 +434,7 @@ ct plugin dashboard project [--agent-vendor VENDOR]
 ct plugin dashboard web [--host 127.0.0.1] [--port 8765] [--open]
 ct plugin dashboard project cleanup [--dry-run] [--older-than 30d] [--path PATH] [--detail]
 ct plugin dashboard session [PROJECT] [--since-days N|--all-time] [--agent-vendor VENDOR]
-ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm] [--tui]
+ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm]
 ```
 
 Project cleanup behavior:
@@ -494,10 +494,10 @@ Recommended exclusions:
 - sessions that contain failed, interrupted, or in-progress status;
 - sessions with a local keep marker in companion metadata.
 
-### TUI Workflow
+### Interactive Workflow
 
-The full cleanup workflow should be exposed through an interactive dashboard TUI
-instead of a large flag surface. The TUI can guide the user through discovery,
+The full cleanup workflow should be exposed through an interactive CLI flow
+instead of a large flag surface. The interactive flow can guide the user through discovery,
 review, selection, and execution while keeping the simple CLI useful for
 automation.
 
@@ -513,7 +513,7 @@ The dashboard also provides a plugin-local web program:
   selected paths and action names before the backend calls the existing
   plugin-local cleanup functions.
 
-Expected TUI flow:
+Expected interactive flow:
 
 - scan old project candidates and empty session candidates;
 - show grouped candidates with paths, ages, sizes, and skip reasons;
@@ -572,7 +572,7 @@ Default text output should stay compact:
 - action mode: dry run, trash, archive, or delete;
 - path to the cleanup manifest for non-dry-run actions.
 
-Default text output stays compact; use the TUI or underlying core `ct ... --output json`
+Default text output stays compact; use `--detail` or underlying core `ct ... --output json`
 commands when you need the full candidate list and skip reasons.
 
 ### Boundary

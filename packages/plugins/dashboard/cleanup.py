@@ -389,7 +389,6 @@ def handle_session(args: argparse.Namespace) -> dict[str, Any]:
     action, selected = _resolve_interactive_selection(
         action,
         preview.candidates,
-        use_tui=getattr(args, "tui", False),
         skipped=preview.skipped,
         target_kind=preview.target_kind,
     )
@@ -801,20 +800,11 @@ def _resolve_interactive_selection(
     action: Action,
     candidates: list[ProjectTarget | SessionTarget],
     *,
-    use_tui: bool,
     skipped: list[SkippedTarget],
     target_kind: str,
 ) -> tuple[Action, list[ProjectTarget | SessionTarget]]:
     if action != "interactive":
         return action, list(candidates)
-    if use_tui:
-        try:
-            from cleanup_tui import run_tui
-        except ImportError as exc:
-            raise ValueError(
-                "--tui requires the optional 'textual' dependency in the plugin environment"
-            ) from exc
-        return run_tui(list(candidates), skipped, target_kind)
     return _run_cli_interactive(list(candidates), skipped, target_kind)
 
 

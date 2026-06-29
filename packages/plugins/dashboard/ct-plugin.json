@@ -20,10 +20,6 @@
       "summary": "Show dashboard entry information."
     },
     {
-      "name": "--tui",
-      "summary": "Quick inspection and cleanup (terminal)."
-    },
-    {
       "name": "web",
       "summary": "Run the dashboard web program."
     },

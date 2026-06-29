@@ -5,7 +5,6 @@ description = "Project and session dashboard plugin for CodingTrajectory"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.12.5",
-    "textual>=0.85.2",
 ]
 
 [project.scripts]
@@ -26,12 +25,10 @@ artifacts = ["web/dist"]
 [tool.hatch.build.targets.wheel.force-include]
 "account.py" = "ct_plugin_dashboard/account.py"
 "cleanup.py" = "ct_plugin_dashboard/cleanup.py"
-"cleanup_tui.py" = "ct_plugin_dashboard/cleanup_tui.py"
 "codex_auth.py" = "ct_plugin_dashboard/codex_auth.py"
 "codex_rpc.py" = "ct_plugin_dashboard/codex_rpc.py"
 "context_window.py" = "ct_plugin_dashboard/context_window.py"
 "dashboard.py" = "ct_plugin_dashboard/dashboard.py"
-"dashboard_tui.py" = "ct_plugin_dashboard/dashboard_tui.py"
 "dashboard_web.py" = "ct_plugin_dashboard/dashboard_web.py"
 "token_pricing.py" = "ct_plugin_dashboard/token_pricing.py"
 "web_services.py" = "ct_plugin_dashboard/web_services.py"
