@@ -125,8 +125,8 @@ export function OverviewRoute() {
 
       <Card className="min-w-0">
         <CardHeader>
-          <CardTitle className="font-display text-xl tracking-tight">Top Known-Cost Sessions</CardTitle>
-          <CardDescription>Only sessions with a reported cost are ranked here.</CardDescription>
+          <CardTitle className="font-display text-xl tracking-tight">Top Token-Cost Sessions</CardTitle>
+          <CardDescription>Sessions ranked by token usage.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="overflow-auto rounded-lg border border-border-subtle">
@@ -138,7 +138,6 @@ export function OverviewRoute() {
                   <TableHeader>Vendor</TableHeader>
                   <TableHeader className="text-right">Runtime</TableHeader>
                   <TableHeader className="text-right">Tokens</TableHeader>
-                  <TableHeader className="text-right">Cost</TableHeader>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -152,12 +151,11 @@ export function OverviewRoute() {
                     <TableCell>{session.vendor}</TableCell>
                     <TableCell className="text-right">{formatDuration(session.execution_seconds)}</TableCell>
                     <TableCell className="text-right">{compactNumber(session.total_tokens)}</TableCell>
-                    <TableCell className="text-right">{formatCost(session.cost_usd)}</TableCell>
                   </TableRow>
                 ))}
                 {!data.sessions.top_sessions.length ? (
                   <TableRow>
-                    <TableCell colSpan={6}>No sessions with known cost in this window.</TableCell>
+                    <TableCell colSpan={5}>No sessions with token usage in this window.</TableCell>
                   </TableRow>
                 ) : null}
               </TableBody>

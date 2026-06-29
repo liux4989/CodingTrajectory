@@ -415,9 +415,9 @@ def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
         (
             _overview_session(item)
             for item in items
-            if isinstance((item.get("usage") or {}).get("cost_usd"), int | float)
+            if int(_number((item.get("usage") or {}).get("total_tokens"))) > 0
         ),
-        key=lambda item: item["cost_usd"],
+        key=lambda item: item["total_tokens"],
         reverse=True,
     )[:8]
 
@@ -473,7 +473,6 @@ def _overview_session(item: dict[str, Any]) -> dict[str, Any]:
         "tool_calls": int(_number(runtime.get("tool_calls"))),
         "failed_tool_calls": int(_number(runtime.get("failed_tool_calls"))),
         "total_tokens": int(_number(usage.get("total_tokens"))),
-        "cost_usd": float(usage["cost_usd"]),
     }
 
 

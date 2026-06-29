@@ -38,7 +38,6 @@ export type OverviewPayload = {
       tool_calls: number;
       failed_tool_calls: number;
       total_tokens: number;
-      cost_usd: number;
     }>;
     warnings: Array<{ session_id?: string | null; project: string; message: string }>;
     errors: unknown[];
