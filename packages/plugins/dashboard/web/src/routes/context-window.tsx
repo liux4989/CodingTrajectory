@@ -139,8 +139,8 @@ export function ContextWindowRoute() {
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [hoveredId, setHoveredId] = React.useState<string | null>(null);
   const [pinnedId, setPinnedId] = React.useState<string | null>(null);
+  const [hoveredCategory, setHoveredCategory] = React.useState<string | null>(null);
   const eventRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
-  const scrollViewportRef = React.useRef<HTMLDivElement | null>(null);
   const events = query.data?.events ?? [];
 
   React.useEffect(() => {
@@ -149,30 +149,8 @@ export function ContextWindowRoute() {
 
   const activeId = pinnedId ?? hoveredId ?? selectedId ?? events[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
-  const activeIndex = events.findIndex((event) => event.id === activeId);
   const timelineSegments = React.useMemo(() => compactTimelineSegments(events), [events]);
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
-
-  function activateEvent(id: string) {
-    setHoveredId(id);
-    setSelectedId(id);
-    const index = events.findIndex((event) => event.id === id);
-    const eventNode = eventRefs.current[index];
-    const scrollNode = scrollViewportRef.current;
-    if (eventNode && scrollNode) {
-      const eventRect = eventNode.getBoundingClientRect();
-      const scrollRect = scrollNode.getBoundingClientRect();
-      scrollNode.scrollTo({
-        top:
-          scrollNode.scrollTop +
-          eventRect.top -
-          scrollRect.top -
-          scrollNode.clientHeight / 2 +
-          eventRect.height / 2,
-        behavior: "smooth",
-      });
-    }
-  }
 
   function moveFocus(index: number, direction: -1 | 1) {
     const next = Math.min(Math.max(index + direction, 0), events.length - 1);
@@ -223,20 +201,6 @@ export function ContextWindowRoute() {
         usedTokens={totalUsedTokens}
       />
 
-      <ul className="m-0 flex flex-wrap gap-x-4 gap-y-1.5 list-none" role="list">
-        {aggregateCategories(payload.categories).map(({ category, tokens }) => (
-          <li key={category} className="inline-flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
-            <span className="inline-block h-[0.55rem] w-[0.55rem] rounded-[2px]" style={categoryDotStyle(category)} />
-            <span>{categoryLabel(category)}</span>
-            <span className="font-mono">{formatTokens(tokens)}</span>
-          </li>
-        ))}
-        <li className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
-          <Eye size={12} />
-          <span>= appears in your terminal</span>
-        </li>
-      </ul>
-
       {payload.provider_usage_buckets.length > 0 ? (
         <Card className="gap-3 p-5">
           <CardHeader className="px-0">
@@ -266,12 +230,9 @@ export function ContextWindowRoute() {
           <ol
             className="m-[0.75rem_0_0.8rem] flex h-[0.5rem] list-none gap-0 overflow-hidden rounded-full border border-foreground/14 bg-foreground/7 p-0"
             aria-label="Ordered context event timeline"
-            onMouseLeave={() => setHoveredId(null)}
           >
             {timelineSegments.map((segment) => {
-              const isActive = activeEvent?.category === segment.category
-                && activeIndex >= segment.startIndex
-                && activeIndex <= segment.endIndex;
+              const isActive = hoveredCategory === segment.category;
               const label = timelineSegmentLabel(segment);
               return (
                 <li key={segment.id} className="flex min-w-[2px] flex-1" style={{ flexGrow: segment.eventCount }}>
@@ -288,11 +249,7 @@ export function ContextWindowRoute() {
                         style={{ background: categoryColors[segment.category] ?? categoryColors.unattributed }}
                         aria-label={label}
                         aria-current={isActive ? "step" : undefined}
-                        onPointerEnter={() => activateEvent(segment.firstEventId)}
-                        onMouseEnter={() => activateEvent(segment.firstEventId)}
-                        onFocus={() => activateEvent(segment.firstEventId)}
-                        onBlur={() => setHoveredId(null)}
-                        onClick={() => activateEvent(segment.firstEventId)}
+                        onClick={() => setSelectedId(segment.firstEventId)}
                       >
                         <span className="sr-only">{label}</span>
                       </button>
@@ -313,6 +270,30 @@ export function ContextWindowRoute() {
             })}
           </ol>
         </Tooltip.Provider>
+        <ul className="m-0 mt-1 flex flex-wrap gap-x-4 gap-y-1.5 list-none" role="list">
+          {aggregateCategories(payload.categories).map(({ category, tokens }) => (
+            <li
+              key={category}
+              tabIndex={0}
+              onMouseEnter={() => setHoveredCategory(category)}
+              onMouseLeave={() => setHoveredCategory(null)}
+              onFocus={() => setHoveredCategory(category)}
+              onBlur={() => setHoveredCategory(null)}
+              className={cn(
+                "inline-flex min-w-0 cursor-default items-center gap-1.5 text-caption text-muted-foreground transition-colors",
+                hoveredCategory === category ? "text-foreground" : "hover:text-foreground",
+              )}
+            >
+              <span className="inline-block h-[0.55rem] w-[0.55rem] rounded-[2px]" style={categoryDotStyle(category)} />
+              <span>{categoryLabel(category)}</span>
+              <span className="font-mono">{formatTokens(tokens)}</span>
+            </li>
+          ))}
+          <li className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
+            <Eye size={12} />
+            <span>= appears in your terminal</span>
+          </li>
+        </ul>
       </figure>
 
       <div className="grid grid-cols-[minmax(22rem,1.15fr)_minmax(20rem,0.85fr)] items-start gap-4 max-lg:grid-cols-1">
@@ -320,13 +301,13 @@ export function ContextWindowRoute() {
           <ScrollArea.Root className="relative min-h-[18rem] max-h-[min(48rem,calc(100vh-14rem))] overflow-hidden">
             <ScrollArea.Viewport
               className="max-h-[min(48rem,calc(100vh-14rem))] min-h-[18rem] pe-3 scroll-py-3"
-              ref={scrollViewportRef}
             >
               <ol className="m-0 grid list-none gap-2 p-0" onMouseLeave={() => setHoveredId(null)}>
                 {events.map((event, index) => {
                   const previous = events[index - 1];
                   const startsGroup = !previous || previous.group !== event.group || previous.turn_id !== event.turn_id;
                   const isActive = event.id === activeId;
+                  const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
                   const tokenPercent = totalUsedTokens > 0 && event.tokens
                     ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
                     : 0;
@@ -351,7 +332,7 @@ export function ContextWindowRoute() {
                             "relative grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 overflow-hidden rounded-xl border border-foreground/11 bg-foreground/5 px-4 py-3 text-start text-foreground cursor-pointer",
                             "dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]",
                             "hover:border-primary/60 hover:bg-foreground/8",
-                            isActive && "border-primary/60 bg-foreground/8",
+                            (isActive || isCategoryHighlight) && "border-primary/60 bg-foreground/8",
                           )}
                           aria-pressed={event.id === selectedId}
                           onMouseEnter={() => setHoveredId(event.id)}
