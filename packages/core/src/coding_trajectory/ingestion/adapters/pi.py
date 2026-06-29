@@ -97,16 +97,13 @@ def _parse_usage(message: dict) -> dict | None:
     usage = message.get("usage")
     if not isinstance(usage, dict):
         return None
-    parsed = {
+    return {
         "input": usage.get("input"),
         "output": usage.get("output"),
         "cacheRead": usage.get("cacheRead"),
         "cacheWrite": usage.get("cacheWrite"),
         "totalTokens": usage.get("totalTokens"),
     }
-    if not any(value for value in parsed.values() if value is not None):
-        return None
-    return parsed
 
 
 class PiAdapter(BaseAdapter):

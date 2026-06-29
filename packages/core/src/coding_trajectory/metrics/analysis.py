@@ -453,7 +453,7 @@ def _build_full_metrics(
         metrics = _build_session_metrics(session)
         session_metrics.append(metrics)
         total = total.plus(metrics.token_usage)
-        if not _session_has_usage(metrics):
+        if not _session_has_usage(metrics) and session.context_usage:
             message = f"no token usage metrics found for session {session.session_id}"
             warnings.append(message)
             debug.warn(

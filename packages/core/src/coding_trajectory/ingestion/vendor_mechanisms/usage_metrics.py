@@ -156,6 +156,9 @@ def context_usage_observation(
             if (tokens := _as_int_or_none(usage.get(usage_key)) or 0) > 0
         ]
 
+    if used_input_tokens == 0 and _is_zero_usage(usage):
+        return None
+
     return ContextUsageObservation(
         source_event_id=source_event_id,
         timestamp=timestamp,
@@ -172,6 +175,13 @@ def context_usage_observation(
         ),
         quota=normalized.get("quota") if isinstance(normalized.get("quota"), dict) else None,
         categories=categories,
+    )
+
+
+def _is_zero_usage(usage: dict[str, Any]) -> bool:
+    return not any(
+        _as_int_or_none(value)
+        for value in usage.values()
     )
 
 
