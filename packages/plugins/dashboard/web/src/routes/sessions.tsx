@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   useReactTable,
@@ -18,6 +17,7 @@ import { StateBlock } from "@/components/state-block";
 import { VendorBadges } from "@/components/badges";
 import { RefreshButton } from "@/components/refresh-button";
 import { DataTable, SortableHeader, TablePagination } from "@/components/data-table";
+import { SessionLink } from "@/components/session-link";
 import { relativeTime } from "@/lib/relative-time";
 
 function sessionId(item: SessionItem) {
@@ -28,31 +28,15 @@ function sessionVendors(item: SessionItem) {
   return item.vendors ?? item.v ?? [];
 }
 
-function shortId(value: string | null | undefined) {
-  if (!value) return "-";
-  return value.length > 12 ? value.slice(0, 12) : value;
-}
-
 const columns: ColumnDef<SessionItem>[] = [
   {
     id: "session",
     header: () => <span className="font-extrabold uppercase tracking-wide">Session</span>,
-    cell: ({ row }) => {
-      const id = sessionId(row.original);
-      return (
-        <span className="font-mono text-body-sm">
-          {id ? (
-            <Link
-              to="/sessions/$sessionId/context-window"
-              params={{ sessionId: id }}
-              className="font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]"
-            >
-              {shortId(id)}
-            </Link>
-          ) : "-"}
-        </span>
-      );
-    },
+    cell: ({ row }) => (
+      <span className="font-mono text-body-sm">
+        <SessionLink sessionId={sessionId(row.original)} />
+      </span>
+    ),
     enableSorting: false,
   },
   {

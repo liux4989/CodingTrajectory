@@ -38,9 +38,6 @@ class Finding:
 
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
-    if raw_args == ["--manifest"]:
-        print(Path(__file__).with_name("ct-plugin.json"))
-        return 0
     parser = argparse.ArgumentParser(
         prog="ct plugin review",
         description="Review coding sessions for improvement opportunities.",

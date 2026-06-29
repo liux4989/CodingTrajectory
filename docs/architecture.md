@@ -66,10 +66,8 @@
 - **Deterministic UUID5 IDs**: All event, turn, item, and session IDs are UUID5 derived from vendor, source path, index, and content. The same log file always produces the same IDs across runs, enabling stable references and caching.
 - **Graph-native multi-agent**: Parent/child sessions, forks, sidechains, and handoffs are first-class `SessionEdge` relationships, not ad-hoc metadata. Connected components are assembled via union-find.
 - **No presentation in canonical fields**: UI concerns (sections, roles, workflow labels) live in projections, not the core model.
-- **Plugin isolation**: Plugins are separate executables registered via JSON manifests. They do not import core packages; they consume documented CLI outputs or the structured `ct api` service surface.
-- **Explicit plugin lifecycle**: The CLI owns a versioned user registry.
-  Plugins actively register and unregister manifests; core has no plugin
-  knowledge.
+- **Plugin isolation**: Plugins are separate scripts dispatched from source via a built-in command table. They do not import core packages; they consume documented CLI outputs or the structured `ct api` service surface.
+- **Source-dispatched plugins**: The CLI maps each plugin name to its source directory and entry script. No registration, manifest files, or separate installation step is required.
 - **One-way dependencies**: CLI depends on core. Plugins depend on documented
   `ct --output json` contracts or `ct api` request/response contracts. Core
   never depends on plugin packages.
@@ -149,28 +147,24 @@ coding-trajectory/
 │   │           ├── session.py              # `ct session overview|stats|usage|items|events`
 │   │           └── plugin.py               # `ct plugin list|<name>`
 │   └── plugins/                            # Built-in executable plugins
-│       ├── activity/                       # `ct-plugin-activity`
+│       ├── activity/                       # `activity` plugin
 │       │   ├── pyproject.toml
 │       │   ├── activity.py                 # Cross-session activity timeline
-│       │   └── ct-plugin.json              # Plugin manifest
-│       ├── code_time/                      # `ct-plugin-code-time`
+│       ├── code_time/                      # `code-time` plugin
 │       │   ├── pyproject.toml
 │       │   ├── code_time.py
 │       │   ├── code_time_web.py
-│       │   └── ct-plugin.json
-│       ├── dashboard/                      # `ct-plugin-dashboard`
+│       ├── dashboard/                      # `dashboard` plugin
 │       │   ├── pyproject.toml
 │       │   ├── dashboard.py                # Dashboard CLI entry point
 │       │   ├── dashboard_web.py            # Python HTTP server for web dashboard
 │       │   ├── context_window.py           # Context composition projection
 │       │   ├── token_pricing.py             # models.dev pricing and model metadata
 │       │   ├── cleanup.py                  # Project/session cleanup logic
-│       │   ├── ct-plugin.json              # Plugin manifest
 │       │   └── web/dist/                   # Built React frontend
-│       └── review/                         # `ct-plugin-review`
+│       └── review/                         # `review` plugin
 │           ├── pyproject.toml
 │           ├── review.py                   # LLM-judge session review
-│           └── ct-plugin.json
 ├── benchmarks/                             # Performance benchmarks
 │   ├── src/
 │   └── results/
@@ -203,7 +197,7 @@ coding-trajectory/
 | Context stats | Context window utilization, category breakdown, quota tracking |
 | Tool usage analysis | Tool invocation counts, output sizes, token attribution |
 | CLI (`ct`) | Progressive-disclosure command surface with markdown + JSON output |
-| Plugin system | Explicit manifest registration, subprocess dispatch, no core imports |
+| Plugin system | Source-dispatched plugins via built-in command table, no core imports |
 | Command schema | Cheap `ct api schema METHOD` request/response introspection |
 | Activity plugin | Cross-session timeline with project/account/time window filtering |
 | Dashboard plugin | TUI/web visualization plus models.dev pricing and model metadata enrichment |
@@ -254,19 +248,17 @@ explicit collection of independent calls; shell pipelines and tools such as
 
 ## Plugin Lifecycle
 
-Plugin routing is CLI-owned:
+Plugin routing is CLI-owned. `ct` holds a built-in command table that maps
+each plugin name to its source directory and entry script:
 
 ```text
-ct plugin register MANIFEST
-ct plugin unregister NAME
 ct plugin list
 ct plugin NAME ...
 ```
 
-The registry is stored under the user configuration directory. Registration
-validates the manifest, executable, `ct` requirement, and required method
-contract versions. Each first-party plugin is an independent distribution with
-its own executable, manifest, dependencies, and assets.
+No registration, manifest files, or separate installation step is required.
+Plugins are dispatched from source via `python <entry>.py <args>` with the
+working directory set to the plugin's source directory.
 
 Dependency rules:
 

@@ -1,98 +1,37 @@
-import * as React from "react";
-import { Link, Outlet } from "@tanstack/react-router";
-import { Activity, FolderGit2, Moon, Sparkles, Sun, Menu, X } from "lucide-react";
+import { Outlet } from "@tanstack/react-router";
+import { Moon, Sun } from "lucide-react";
 import { useTheme } from "@/hooks/use-theme";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 export function AppShell() {
   const { theme, toggle } = useTheme();
-  const [sidebarOpen, setSidebarOpen] = React.useState(false);
 
   return (
-    <main className="grid min-h-dvh grid-cols-1 max-lg:grid-cols-1 lg:grid-cols-[minmax(16rem,19rem)_minmax(0,1fr)]">
-      <Button
-        variant="outline"
-        size="icon"
-        className="fixed top-4 left-4 z-[100] lg:hidden"
-        onClick={() => setSidebarOpen((open) => !open)}
-        aria-label={sidebarOpen ? "Close navigation" : "Open navigation"}
-      >
-        {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
-      </Button>
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} theme={theme} onToggleTheme={toggle} />
-      <section className="min-w-0 p-[clamp(1rem,2vw,2rem)] max-lg:pt-16">
+    <main className="grid min-h-dvh grid-cols-1">
+      <header className="sticky top-0 z-[90] flex items-center justify-between gap-4 border-b border-sidebar-border bg-[linear-gradient(135deg,rgb(255_249_234/94%),rgb(215_200_164/34%)),var(--paper-strong)] px-[clamp(1rem,2vw,2rem)] py-3 backdrop-blur-[18px] dark:border-border-subtle dark:bg-[linear-gradient(135deg,rgb(34_32_25/94%),rgb(58_54_44/34%)),var(--paper-strong)]">
+        <div className="flex items-center gap-3">
+          <div className="grid h-[2.5rem] w-[2.5rem] place-items-center rounded-[0.9rem] border border-foreground/18 bg-foreground text-background font-display text-xs font-extrabold tracking-wide shadow-lg">
+            CT
+          </div>
+          <div className="leading-tight">
+            <p className="m-0 font-display text-eyebrow font-extrabold uppercase tracking-wider text-primary">
+              Plugin Web Program
+            </p>
+            <h1 className="m-0 font-display text-[1rem] font-bold tracking-tight">CodingTrajectory</h1>
+          </div>
+        </div>
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={toggle}
+          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+        </Button>
+      </header>
+      <section className="min-w-0 p-[clamp(1rem,2vw,2rem)]">
         <Outlet />
       </section>
     </main>
-  );
-}
-
-type SidebarProps = {
-  open: boolean;
-  onClose: () => void;
-  theme: string;
-  onToggleTheme: () => void;
-};
-
-const navLinkClass = cn(
-  "flex min-h-[2.9rem] items-center gap-3 rounded-full border border-transparent px-3.5 font-display font-semibold text-foreground no-underline",
-  "hover:border-primary/24 hover:bg-primary/11 hover:text-primary",
-  "[&.is-active]:border-primary/24 [&.is-active]:bg-primary/11 [&.is-active]:text-primary",
-);
-
-function Sidebar({ open, onClose, theme, onToggleTheme }: SidebarProps) {
-  return (
-    <>
-      {open ? (
-        <div className="fixed inset-0 z-[80] bg-black/30 lg:hidden" onClick={onClose} />
-      ) : null}
-      <aside
-        className={cn(
-          "flex flex-col gap-8 border-r border-sidebar-border p-5 backdrop-blur-[18px]",
-          "fixed top-0 z-[90] h-dvh w-[min(80vw,20rem)] -translate-x-full transition-transform duration-300",
-          "bg-gradient-to-b from-[rgb(255_249_234/86%)] to-[rgb(245_231_197/78%)] dark:from-[rgb(34_32_25/92%)] dark:to-[rgb(26_24_20/95%)]",
-          "lg:sticky lg:h-dvh lg:w-auto lg:translate-x-0",
-          open && "translate-x-0",
-        )}
-        aria-label="Dashboard navigation"
-      >
-        <div className="flex items-center gap-3.5">
-          <div className="grid h-[3.25rem] w-[3.25rem] place-items-center rounded-[1.1rem] border border-foreground/18 bg-foreground text-background font-display text-sm font-extrabold tracking-wide shadow-lg">
-            CT
-          </div>
-          <div>
-            <p className="mb-0.5 font-display text-eyebrow font-extrabold uppercase tracking-wider text-primary">
-              Plugin Web Program
-            </p>
-            <h1 className="m-0 font-display text-[1.1rem] font-bold tracking-tight">CodingTrajectory</h1>
-          </div>
-        </div>
-        <nav className="grid gap-2">
-          <Link to="/" className={navLinkClass} activeProps={{ className: "is-active" }} onClick={onClose}>
-            <Sparkles size={18} /> Overview
-          </Link>
-          <Link to="/projects" className={navLinkClass} activeProps={{ className: "is-active" }} onClick={onClose}>
-            <FolderGit2 size={18} /> Projects
-          </Link>
-          <Link to="/sessions" className={navLinkClass} activeProps={{ className: "is-active" }} onClick={onClose}>
-            <Activity size={18} /> Sessions
-          </Link>
-        </nav>
-        <div className="mt-auto grid gap-4">
-          <button
-            className="flex cursor-pointer items-center gap-2.5 rounded-full border border-foreground/13 bg-transparent px-3.5 py-2.5 font-display text-body-sm font-bold text-muted-foreground hover:border-primary/24 hover:bg-primary/8 hover:text-foreground"
-            onClick={onToggleTheme}
-            aria-label="Toggle color theme"
-          >
-            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-            <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
-          </button>
-          <p className="text-body leading-relaxed text-muted-foreground">
-            Runs locally through <code>ct plugin dashboard web</code>. Destructive actions stay preview-first.
-          </p>
-        </div>
-      </aside>
-    </>
   );
 }

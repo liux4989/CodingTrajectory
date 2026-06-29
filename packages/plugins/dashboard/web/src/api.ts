@@ -50,6 +50,14 @@ export type ProjectItem = {
   vendors: string[];
 };
 
+export type ProjectDetail = {
+  name: string;
+  path: string | null;
+  vendors: string[];
+  sessions: SessionItem[];
+  session_count: number;
+};
+
 export type SessionItem = {
   id?: string | null;
   root_session_id?: string | null;
@@ -153,6 +161,11 @@ export async function fetchOverview() {
 
 export async function fetchProjects() {
   return fetchJson<{ items: ProjectItem[] }>("/api/projects");
+}
+
+export async function fetchProjectDetail(projectName: string) {
+  const params = new URLSearchParams({ project_name: projectName });
+  return fetchJson<ProjectDetail>(`/api/projects/detail?${params}`);
 }
 
 export async function fetchSessions() {

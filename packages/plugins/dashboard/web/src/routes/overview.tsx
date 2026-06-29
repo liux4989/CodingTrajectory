@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchOverview } from "@/api";
+import { ProjectLink } from "@/components/project-link";
 import { MetricSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
 import { MetricCard } from "@/components/metric-card";
@@ -36,7 +37,7 @@ export function OverviewRoute() {
     <div className="mx-auto grid w-full min-w-0 max-w-[96rem] gap-5 overflow-hidden">
       <RouteHeader
         eyebrow="Usage activity"
-        title="Recent project and session activity from the last 30 days."
+        title="Recent project and session activity from today."
         action={<RefreshButton queries={["overview"]} />}
       />
       <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
@@ -49,7 +50,7 @@ export function OverviewRoute() {
         <MetricCard
           label="Sessions"
           value={data.sessions.count}
-          detail={`${runtime.turns.toLocaleString()} turns in ${data.sessions.window_days} days`}
+          detail={`${runtime.turns.toLocaleString()} turns in ${data.sessions.window_days} day${data.sessions.window_days === 1 ? "" : "s"}`}
         />
         <MetricCard
           label="Runtime"
@@ -79,7 +80,10 @@ export function OverviewRoute() {
                   >
                     <div className="min-w-0">
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
-                        <p className="m-0 truncate font-display text-base font-extrabold">{project.project}</p>
+                        <ProjectLink
+                          name={project.project}
+                          className="truncate font-display text-base font-extrabold"
+                        />
                         <Badge>{project.count} sessions</Badge>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-2">
@@ -147,7 +151,13 @@ export function OverviewRoute() {
                       <p className="m-0 line-clamp-2 font-medium">{session.title || session.id || "Untitled session"}</p>
                       <p className="m-0 mt-1 text-caption text-muted-foreground">{formatWhen(session.started_at)}</p>
                     </TableCell>
-                    <TableCell>{session.project || "unknown"}</TableCell>
+                    <TableCell>
+                      {session.project ? (
+                        <ProjectLink name={session.project} />
+                      ) : (
+                        "unknown"
+                      )}
+                    </TableCell>
                     <TableCell>{session.vendor}</TableCell>
                     <TableCell className="text-right">{formatDuration(session.execution_seconds)}</TableCell>
                     <TableCell className="text-right">{compactNumber(session.total_tokens)}</TableCell>

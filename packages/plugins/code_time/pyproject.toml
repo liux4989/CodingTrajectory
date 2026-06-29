@@ -3,25 +3,3 @@ name = "ct-plugin-code-time"
 version = "0.1.0"
 description = "Coding-time reporting plugin for CodingTrajectory"
 requires-python = ">=3.12"
-
-[project.scripts]
-ct-code-time = "ct_plugin_code_time.code_time:main"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.sdist]
-include = [
-    "code_time.py",
-    "code_time_web.py",
-    "ct-plugin.json",
-    "web/dist",
-]
-artifacts = ["web/dist"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"code_time.py" = "ct_plugin_code_time/code_time.py"
-"code_time_web.py" = "ct_plugin_code_time/code_time_web.py"
-"ct-plugin.json" = "ct_plugin_code_time/ct-plugin.json"
-"web/dist" = "ct_plugin_code_time/web/dist"

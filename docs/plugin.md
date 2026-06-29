@@ -19,91 +19,42 @@ The public namespace for these commands is `ct plugin ...`.
 This keeps the core query surface stable while allowing package-specific command
 packs to ship independently.
 
-## Registration
+## Dispatch
 
-Plugin availability is explicit. Installing a package does not silently add a
-command to `ct`; the plugin must register its manifest:
-
-```text
-ct plugin register "$(ct-export --manifest)"
-ct plugin unregister export
-ct plugin list
-```
-
-The CLI stores registrations in
-`$XDG_CONFIG_HOME/coding-trajectory/plugins.json`, or
-`~/.config/coding-trajectory/plugins.json` when `XDG_CONFIG_HOME` is unset.
-`CT_PLUGIN_REGISTRY` may override the registry path for isolated development or
-automation.
-
-Registration resolves the manifest to an absolute path, validates the manifest
-and executable, checks `requiresCt` and `requiresMethods`, rejects duplicate
-names unless `--replace` is supplied, and writes the registry atomically.
-
-Unregistration removes only CLI routing state. It does not uninstall or delete
-plugin files. Normal execution reads only the registry; implicit manifest
-directory scanning is not supported.
-
-Repository development can register all local built-ins with:
+Plugins are dispatched from source. `ct` owns a command table that maps each
+plugin name to its source directory and entry script:
 
 ```text
-ct plugin register-builtins
+ct plugin NAME ...
 ```
 
-For local user-level publishing, use the repo-owned script instead of manually
-reinstalling uv tools:
+resolves `NAME` to the built-in command table and runs the plugin's entry
+script via `python <entry>.py <args>` with the working directory set to the
+plugin's source directory. No registration, manifest files, or separate
+installation step is required.
+
+`ct plugin list` shows all available plugins and their entry points.
+
+For local user-level publishing (installing `ct` as a global uv tool):
 
 ```text
 scripts/publish-local.sh
 ```
 
 The script rebuilds the global `coding-trajectory` uv tool from the current
-checkout, installs every package under `packages/plugins` into that tool
-environment, and replaces built-in manifest registrations. Pass `--check` to
-run the packaged plugin smoke check before publishing.
+checkout. Plugins are dispatched from source and do not require installation.
 
-## Minimal Manifest
+## Command Table
 
-```json
-{
-  "schemaVersion": 1,
-  "name": "export",
-  "version": "0.1.0",
-  "requiresCt": ">=0.1.0",
-  "description": "Export ct session reports.",
-  "run": ["ct-export"],
-  "requiresMethods": {
-    "session.overview": 1
-  },
-  "tools": [
-    {
-      "name": "session",
-      "summary": "Export one session."
-    },
-    {
-      "name": "cleanup/cache",
-      "summary": "Delete cached export files."
-    }
-  ]
-}
-```
+Each built-in plugin is defined by a `PluginCommand` entry in
+`packages/cli/src/coding_trajectory_cli/plugins.py`:
 
-Required fields:
-
-- `schemaVersion`: currently `1`.
 - `name`: the namespace mounted under `ct plugin NAME`.
-- `version`: plugin version.
 - `description`: one-line help text for `ct plugin list` and `ct plugin --help`.
-- `run`: argv list used to start the plugin process. The plugin owns the
-  executor, so Python plugins can use `["python3", "./plugin.py"]` and TS/web
-  plugins can use `["pnpm", "start"]`, `["node", "./dist/server.js"]`, or a
-  local server launcher.
-
-Optional fields:
-
-- `requiresCt`: version requirement for the installed `ct` command.
-- `requiresMethods`: required service methods and minimum contract versions.
-- `tools`: tool descriptors for manifest-rendered help.
+- `dir`: plugin source directory relative to the workspace root.
+- `entry`: entry script relative to the plugin directory.
+- `requires_methods`: required service methods and minimum contract versions.
+- `tools`: tool descriptors for help rendering.
 
 Tool descriptors are optional and intentionally small:
 
@@ -112,37 +63,35 @@ Tool descriptors are optional and intentionally small:
   sub-level tools in one flat list.
 - `summary`: one-line help text.
 
-The manifest is not an argparse schema. The plugin process owns its own flags,
-validation, help text, runtime, local server lifecycle, and output.
+The command table is not an argparse schema. The plugin process owns its own
+flags, validation, help text, runtime, local server lifecycle, and output.
 
 ## Executable Dispatch
 
-`ct plugin NAME ...` resolves `NAME` to a validated manifest and starts the
-manifest `run` argv as a subprocess.
+`ct plugin NAME ...` resolves `NAME` to the built-in command table and runs the
+plugin's entry script as a subprocess.
 
 Dispatch rules:
 
 - The plugin process receives the remaining command-line arguments unchanged.
-- `ct` does not infer Python, Node, TS, or server behavior. The manifest `run`
-  field is the executor contract.
-- The subprocess working directory is the caller's current directory.
+- The subprocess working directory is the plugin's source directory.
 - The subprocess inherits stdin, stdout, stderr, and the relevant `CT_*`
   environment.
 - The subprocess exit status is the plugin exit status.
-- `ct plugin NAME -h` is rendered by `ct` from the manifest.
+- `ct plugin NAME -h` is rendered by `ct` from the command table.
 - Nested help such as `ct plugin NAME subcommand -h` is passed through to the
   plugin executable.
 
 Example:
 
 ```text
-ct plugin export session abc123 --format json
+ct plugin dashboard session abc123
 ```
 
 Dispatches as:
 
 ```text
-ct-export session abc123 --format json
+cd packages/plugins/dashboard && python dashboard.py session abc123
 ```
 
 Plugins that need first-party one-shot reports should call stable CLI surfaces,
@@ -186,20 +135,22 @@ There is no compatibility layer for the old in-process Python plugin API.
 
 ## Distribution
 
-First-party plugins are independent packages:
+First-party plugins live under `packages/plugins/` as workspace members.
+They are dispatched from source by `ct plugin NAME ...` and do not require
+separate installation, manifest registration, or wheel packaging.
 
-- `ct-plugin-activity` installs `ct-activity`;
-- `ct-plugin-code-time` installs `ct-code-time`;
-- `ct-plugin-dashboard` installs `ct-dashboard`;
-- `ct-plugin-review` installs `ct-review`.
+Plugin packages own their dependencies and do not import `coding_trajectory`
+or `coding_trajectory_cli`.
 
-Each executable prints its packaged manifest path with `--manifest`. Plugin
-packages own their dependencies and assets and do not import
-`coding_trajectory` or `coding_trajectory_cli`.
+For local user-level publishing (installing `ct` as a global uv tool):
 
-During repository development, `scripts/publish-local.sh` is the canonical way
-to refresh the global `ct` command and its first-party plugin executables
-together.
+```text
+scripts/publish-local.sh
+```
+
+The script rebuilds the global `coding-trajectory` uv tool from the current
+checkout. Plugins are dispatched from source and are not installed into the
+tool environment.
 
 ## Activity Plugin
 

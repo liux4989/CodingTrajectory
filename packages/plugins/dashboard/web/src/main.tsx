@@ -8,7 +8,7 @@ import { Toaster } from "@/components/ui/sonner";
 import "@/styles.css";
 
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
-const ProjectsRoute = React.lazy(() => import("@/routes/projects").then((mod) => ({ default: mod.ProjectsRoute })));
+const ProjectDetailRoute = React.lazy(() => import("@/routes/projects").then((mod) => ({ default: mod.ProjectDetailRoute })));
 const SessionsRoute = React.lazy(() => import("@/routes/sessions").then((mod) => ({ default: mod.SessionsRoute })));
 const ContextWindowRoute = React.lazy(() => import("@/routes/context-window").then((mod) => ({ default: mod.ContextWindowRoute })));
 const CleanupRoute = React.lazy(() => import("@/routes/cleanup").then((mod) => ({ default: mod.CleanupRoute })));
@@ -45,10 +45,10 @@ const indexRoute = createRoute({
   component: () => <RouteBoundary><OverviewRoute /></RouteBoundary>,
 });
 
-const projectsRoute = createRoute({
+const projectDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/projects",
-  component: () => <RouteBoundary><ProjectsRoute /></RouteBoundary>,
+  path: "/projects/$projectName",
+  component: () => <RouteBoundary><ProjectDetailRoute /></RouteBoundary>,
 });
 
 const sessionsRoute = createRoute({
@@ -72,7 +72,7 @@ const cleanupRoute = createRoute({
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
-    projectsRoute,
+    projectDetailRoute,
     sessionsRoute,
     contextWindowRoute,
     cleanupRoute,

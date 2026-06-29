@@ -70,7 +70,7 @@ class DashboardDataService:
                             "id": "sessions",
                             "method": "project.sessions",
                             "params": {
-                                "since_days": 30,
+                                "since_days": 1,
                                 "include": ["runtime", "usage"],
                             },
                         },
@@ -102,7 +102,7 @@ class DashboardDataService:
             "projects": {"count": len(project_items), "vendors": vendor_counts},
             "sessions": {
                 "count": len(session_items),
-                "window_days": 30,
+                "window_days": 1,
                 "runtime": activity["runtime"],
                 "usage": activity["usage"],
                 "top_projects": activity["top_projects"],

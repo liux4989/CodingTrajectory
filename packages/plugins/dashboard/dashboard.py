@@ -6,7 +6,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-from pathlib import Path
 
 try:
     from . import cleanup as cleanup_mod
@@ -18,9 +17,6 @@ except ImportError:
 
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
-    if raw_args == ["--manifest"]:
-        print(Path(__file__).with_name("ct-plugin.json"))
-        return 0
     parser = _build_root_parser()
     if not raw_args:
         print(_root_entry_text())

@@ -11,7 +11,6 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 WINDOW_SINCE_DAYS = {
@@ -24,9 +23,6 @@ WINDOW_SINCE_DAYS = {
 
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
-    if raw_args == ["--manifest"]:
-        print(Path(__file__).with_name("ct-plugin.json"))
-        return 0
     if raw_args and raw_args[0] in {"web", "--web"}:
         return _run_web(raw_args[1:])
 

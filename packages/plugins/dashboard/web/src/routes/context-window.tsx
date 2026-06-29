@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link, useParams } from "@tanstack/react-router";
+import { useParams, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as ScrollArea from "@radix-ui/react-scroll-area";
 import * as Tooltip from "@radix-ui/react-tooltip";
@@ -165,6 +165,7 @@ function CompositionBar({ categories }: { categories: ContextCategory[] }) {
 
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
+  const router = useRouter();
   const query = useQuery({
     queryKey: ["context-window", sessionId],
     queryFn: () => fetchContextWindow(sessionId),
@@ -226,9 +227,13 @@ export function ContextWindowRoute() {
     <div className="mx-auto grid max-w-[96rem] gap-5">
       <Card className="gap-0 p-8">
         <CardHeader className="px-0">
-          <Link to="/sessions" className="mb-4 inline-flex items-center gap-1.5 font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]">
-            <ArrowLeft size={16} /> Sessions
-          </Link>
+          <button
+            type="button"
+            onClick={() => router.history.back()}
+            className="mb-4 inline-flex cursor-pointer items-center gap-1.5 font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]"
+          >
+            <ArrowLeft size={16} /> Back
+          </button>
           <CardTitle className="font-display text-display leading-tight tracking-tight">
             Explore the context window
           </CardTitle>

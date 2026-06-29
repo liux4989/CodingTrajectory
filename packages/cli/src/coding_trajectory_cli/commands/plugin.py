@@ -1,4 +1,4 @@
-"""Plugin command registration and dispatch helpers."""
+"""Plugin command dispatch helpers."""
 
 from __future__ import annotations
 
@@ -10,40 +10,24 @@ from typing import Any
 from coding_trajectory_cli._shared import GhFormatter, add_base_output_flags
 from coding_trajectory_cli.outcome import CommandOutcome, EarlyDispatchOutcome, status_error
 from coding_trajectory_cli.plugins import (
-    LoadedPlugin,
-    PluginManifest,
+    PLUGIN_COMMANDS,
+    PluginCommand,
     PluginTool,
-    load_registered_plugins,
+    plugin_names,
     plugin_payload,
-    repo_builtin_plugin_manifests,
-    register_plugin,
     run_plugin,
-    unregister_plugin,
 )
 
 PLUGIN_EPILOG = """\
 PLUGIN COMMANDS
-  ct plugin list                                 list registered ct CLI plugins
-  ct plugin register MANIFEST                    register one plugin manifest
-  ct plugin unregister NAME                      remove one plugin registration
-  ct plugin register-builtins                    register repository built-ins
-
-NOTE
-  Plugin registration is explicit. Registering or unregistering a plugin
-  changes CLI routing only; it does not install or delete plugin files.
+  ct plugin list                                 list available ct CLI plugins
+  ct plugin NAME ...                             run one plugin command
 """
-
-PLUGIN_STATE: list[LoadedPlugin] = []
-PLUGIN_LIFECYCLE_COMMANDS = {"list", "register", "register-builtins", "unregister"}
-
-
-def _plugin_list_payload(plugins: list[LoadedPlugin]) -> dict[str, Any]:
-    return plugin_payload(plugins)
 
 
 def _render_plugin_list_text(payload: dict[str, Any]) -> str:
     plugins = payload.get("plugins") or []
-    loaded = sum(1 for plugin in plugins if plugin.get("status") == "loaded")
+    loaded = sum(1 for p in plugins if p.get("status") == "loaded" and not p.get("error"))
     failed = len(plugins) - loaded
     lines = [
         f"Plugins: {loaded} available, {failed} failed",
@@ -51,78 +35,37 @@ def _render_plugin_list_text(payload: dict[str, Any]) -> str:
     ]
     for plugin in plugins:
         name = plugin.get("name") or "-"
-        version = plugin.get("version") or "-"
-        command = " ".join(plugin.get("run") or []) or "-"
         description = plugin.get("description") or ""
-        lines.append(f"{name:<24} {version:<10} {command:<24} {description}".rstrip())
-        source = plugin.get("source")
-        if source:
-            lines.append(f"  source: {source}")
-        requires_ct = plugin.get("requires_ct")
-        if requires_ct:
-            lines.append(f"  requires ct: {requires_ct}")
+        entry = plugin.get("entry") or "-"
+        lines.append(f"{name:<16} {description}".rstrip())
+        lines.append(f"  entry: {entry}")
         error = plugin.get("error")
         if error:
             lines.append(f"  error: {error}")
     if not plugins:
-        lines.append("No plugin manifests found.")
+        lines.append("No plugins found.")
     return "\n".join(lines).rstrip()
 
 
 def _handle_plugin_list(_args: argparse.Namespace) -> dict[str, Any]:
-    return _plugin_list_payload(PLUGIN_STATE)
-
-
-def _handle_plugin_register(args: argparse.Namespace) -> dict[str, Any]:
-    plugin = register_plugin(args.manifest, replace=args.replace)
-    return {
-        "name": plugin.name,
-        "source": str(plugin.source),
-        "status": "registered",
-    }
-
-
-def _handle_plugin_unregister(args: argparse.Namespace) -> dict[str, Any]:
-    removed = unregister_plugin(args.name)
-    return {
-        "name": args.name,
-        "source": removed.manifest,
-        "status": "unregistered",
-    }
-
-
-def _handle_plugin_register_builtins(args: argparse.Namespace) -> dict[str, Any]:
-    registered: list[dict[str, Any]] = []
-    for manifest_path in repo_builtin_plugin_manifests():
-        plugin = register_plugin(manifest_path, replace=args.replace)
-        registered.append({"name": plugin.name, "source": str(plugin.source)})
-    return {"status": "registered", "plugins": registered}
-
-
-def _render_plugin_mutation_text(payload: dict[str, Any]) -> str:
-    plugins = payload.get("plugins")
-    if isinstance(plugins, list):
-        lines = [f"Registered {len(plugins)} built-in plugins"]
-        lines.extend(f"- {item['name']}: {item['source']}" for item in plugins)
-        return "\n".join(lines)
-    return f"{payload.get('name')}: {payload.get('status')} ({payload.get('source')})"
+    return plugin_payload()
 
 
 def _handle_plugin_exec(args: argparse.Namespace) -> CommandOutcome:
-    plugin = getattr(args, "_plugin", None)
-    if not isinstance(plugin, LoadedPlugin) or plugin.manifest is None:
+    plugin_name = getattr(args, "_plugin_name", None)
+    if plugin_name is None or plugin_name not in PLUGIN_COMMANDS:
         print(
             json.dumps({"error": {"message": "Plugin is not available"}}, indent=2),
             file=sys.stderr,
         )
         return CommandOutcome.failed(exit_code=1, error="Plugin is not available")
     plugin_args = getattr(args, "plugin_args", None) or []
-    exit_code = run_plugin(plugin.manifest, plugin.source, plugin_args)
+    exit_code = run_plugin(plugin_name, plugin_args)
     if exit_code == 0:
         return CommandOutcome.completed(exit_code=0)
     return CommandOutcome.failed(
         exit_code=exit_code,
-        error=status_error(f"plugin.{plugin.manifest.name}", exit_code),
+        error=status_error(f"plugin.{plugin_name}", exit_code),
     )
 
 
@@ -131,69 +74,63 @@ def dispatch_plugin_argv(raw_args: list[str]) -> EarlyDispatchOutcome | None:
         return None
     plugin_name = raw_args[1]
     plugin_args = raw_args[2:]
-    if plugin_name in PLUGIN_LIFECYCLE_COMMANDS or (
-        not plugin_args and plugin_name in {"-h", "--help"}
-    ):
+    if plugin_name in {"list", "-h", "--help"}:
         return None
-    plugins = load_registered_plugins()
-    for plugin in plugins:
-        if plugin.manifest and plugin.manifest.name == plugin_name:
-            help_exit = _plugin_manifest_help(plugin.manifest, plugin_args)
-            if help_exit is not None:
-                return EarlyDispatchOutcome(
-                    command=f"plugin.{plugin_name}",
-                    outcome=CommandOutcome.completed(exit_code=help_exit),
-                )
-            exit_code = run_plugin(plugin.manifest, plugin.source, plugin_args)
-            outcome = (
-                CommandOutcome.completed(exit_code=0)
-                if exit_code == 0
-                else CommandOutcome.failed(
-                    exit_code=exit_code,
-                    error=status_error(f"plugin.{plugin_name}", exit_code),
-                )
-            )
-            return EarlyDispatchOutcome(command=f"plugin.{plugin_name}", outcome=outcome)
-    print(
-        json.dumps(
-            {"error": {"message": f"Plugin not found: {plugin_name}"}}, indent=2
-        ),
-        file=sys.stderr,
+    if plugin_name not in PLUGIN_COMMANDS:
+        print(
+            json.dumps(
+                {"error": {"message": f"Plugin not found: {plugin_name}"}}, indent=2
+            ),
+            file=sys.stderr,
+        )
+        return EarlyDispatchOutcome(
+            command=f"plugin.{plugin_name}",
+            outcome=CommandOutcome.failed(
+                exit_code=2,
+                error=f"Plugin not found: {plugin_name}",
+            ),
+        )
+    command = PLUGIN_COMMANDS[plugin_name]
+    help_exit = _plugin_help(command, plugin_args)
+    if help_exit is not None:
+        return EarlyDispatchOutcome(
+            command=f"plugin.{plugin_name}",
+            outcome=CommandOutcome.completed(exit_code=help_exit),
+        )
+    exit_code = run_plugin(plugin_name, plugin_args)
+    outcome = (
+        CommandOutcome.completed(exit_code=0)
+        if exit_code == 0
+        else CommandOutcome.failed(
+            exit_code=exit_code,
+            error=status_error(f"plugin.{plugin_name}", exit_code),
+        )
     )
-    return EarlyDispatchOutcome(
-        command=f"plugin.{plugin_name}",
-        outcome=CommandOutcome.failed(
-            exit_code=2,
-            error=f"Plugin not found: {plugin_name}",
-        ),
-    )
+    return EarlyDispatchOutcome(command=f"plugin.{plugin_name}", outcome=outcome)
 
 
-def _plugin_manifest_help(
-    manifest: PluginManifest, plugin_args: list[str]
-) -> int | None:
+def _plugin_help(command: PluginCommand, plugin_args: list[str]) -> int | None:
     if plugin_args and plugin_args[-1] not in {"-h", "--help"}:
         return None
     command_path = plugin_args[:-1] if plugin_args else []
-    children = _plugin_help_children(manifest.tools, command_path)
+    children = _plugin_help_children(command.tools, command_path)
     if not children:
         return None
-    print(_render_plugin_manifest_help(manifest, command_path, children))
+    print(_render_plugin_help(command, command_path, children))
     return 0
 
 
 def _plugin_help_children(
     tools: list[PluginTool], command_path: list[str]
 ) -> list[PluginTool]:
-    prefix_parts = command_path
     children: list[PluginTool] = []
     for tool in tools:
         if tool.name == ".":
             continue
         parts = tool.name.split("/")
-        if parts[: len(prefix_parts)] != prefix_parts:
+        if parts[: len(command_path)] != command_path:
             continue
-        if len(parts) == len(prefix_parts) + 1:
+        if len(parts) == len(command_path) + 1:
             children.append(tool)
     return children
 
@@ -210,15 +147,13 @@ def _plugin_tool_summary(
     return default
 
 
-def _render_plugin_manifest_help(
-    manifest: PluginManifest,
+def _render_plugin_help(
+    command: PluginCommand,
     command_path: list[str],
     children: list[PluginTool],
 ) -> str:
-    prog = " ".join(["ct", "plugin", manifest.name, *command_path])
-    description = _plugin_tool_summary(
-        manifest.tools, command_path, manifest.description
-    )
+    prog = " ".join(["ct", "plugin", command.name, *command_path])
+    description = _plugin_tool_summary(command.tools, command_path, command.description)
     lines = [
         f"usage: {prog} [-h] <command> ...",
         "",
@@ -242,24 +177,15 @@ def _render_plugin_manifest_help(
     return "\n".join(lines)
 
 
-def _plugin_epilog(plugin: LoadedPlugin) -> str | None:
-    manifest = plugin.manifest
-    if manifest is None:
-        return None
+def _plugin_epilog(command: PluginCommand) -> str | None:
     lines: list[str] = []
-    if manifest.tools:
+    if command.tools:
         lines.append("PLUGIN COMMANDS")
-        for tool in manifest.tools:
+        for tool in command.tools:
             if "/" in tool.name:
                 continue
-            usage = (
-                manifest.name if tool.name == "." else f"{manifest.name} {tool.name}"
-            )
+            usage = command.name if tool.name == "." else f"{command.name} {tool.name}"
             lines.append(f"  ct plugin {usage:<32} {tool.summary}")
-    if manifest.requires_ct:
-        if lines:
-            lines.append("")
-        lines.append(f"REQUIRES CT\n  {manifest.requires_ct}")
     return "\n".join(lines) if lines else None
 
 
@@ -274,13 +200,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     plugin_sub = plugin_parser.add_subparsers(dest="plugin_action", required=True)
 
-    global PLUGIN_STATE
-    PLUGIN_STATE = load_registered_plugins()
-
     plugin_list = plugin_sub.add_parser(
         "list",
         prog="ct plugin list",
-        help="List registered ct CLI plugins.",
+        help="List available ct CLI plugins.",
         formatter_class=GhFormatter,
     )
     add_base_output_flags(plugin_list)
@@ -290,69 +213,18 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _default_output="markdown",
     )
 
-    plugin_register = plugin_sub.add_parser(
-        "register",
-        prog="ct plugin register",
-        help="Register one plugin manifest.",
-        formatter_class=GhFormatter,
-    )
-    plugin_register.add_argument("manifest", metavar="MANIFEST")
-    plugin_register.add_argument(
-        "--replace",
-        action="store_true",
-        help="Replace an existing registration with the same plugin name.",
-    )
-    add_base_output_flags(plugin_register)
-    plugin_register.set_defaults(
-        _plugin_handler=_handle_plugin_register,
-        _renderer=_render_plugin_mutation_text,
-        _default_output="markdown",
-    )
-
-    plugin_unregister = plugin_sub.add_parser(
-        "unregister",
-        prog="ct plugin unregister",
-        help="Remove a plugin registration without deleting its files.",
-        formatter_class=GhFormatter,
-    )
-    plugin_unregister.add_argument("name", metavar="NAME")
-    add_base_output_flags(plugin_unregister)
-    plugin_unregister.set_defaults(
-        _plugin_handler=_handle_plugin_unregister,
-        _renderer=_render_plugin_mutation_text,
-        _default_output="markdown",
-    )
-
-    plugin_register_builtins = plugin_sub.add_parser(
-        "register-builtins",
-        prog="ct plugin register-builtins",
-        help="Register all built-in manifests in this repository.",
-        formatter_class=GhFormatter,
-    )
-    plugin_register_builtins.add_argument(
-        "--replace",
-        action="store_true",
-        help="Replace existing registrations.",
-    )
-    add_base_output_flags(plugin_register_builtins)
-    plugin_register_builtins.set_defaults(
-        _plugin_handler=_handle_plugin_register_builtins,
-        _renderer=_render_plugin_mutation_text,
-        _default_output="markdown",
-    )
-
-    for plugin in PLUGIN_STATE:
-        manifest = plugin.manifest
-        if manifest is None or manifest.name == "list":
-            continue
+    for name in plugin_names():
+        command = PLUGIN_COMMANDS[name]
         plugin_command = plugin_sub.add_parser(
-            manifest.name,
-            prog=f"ct plugin {manifest.name}",
-            help=manifest.description,
-            epilog=_plugin_epilog(plugin),
+            command.name,
+            prog=f"ct plugin {command.name}",
+            help=command.description,
+            epilog=_plugin_epilog(command),
             formatter_class=GhFormatter,
         )
         plugin_command.add_argument(
             "plugin_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS
         )
-        plugin_command.set_defaults(_plugin_handler=_handle_plugin_exec, _plugin=plugin)
+        plugin_command.set_defaults(
+            _plugin_handler=_handle_plugin_exec, _plugin_name=name
+        )
