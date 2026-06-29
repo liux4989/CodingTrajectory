@@ -67,7 +67,7 @@ install_cmd=(
 )
 
 check_cmd=(uv run python scripts/check_packaged_plugins.py)
-register_cmd=(uv run ct plugin register-builtins --replace)
+register_cmd=(ct plugin register-builtins --replace)
 
 if [[ "$check" == true ]]; then
   echo "+ ${check_cmd[*]}"
