@@ -308,6 +308,7 @@ export function ContextWindowRoute() {
                   const startsGroup = !previous || previous.group !== event.group || previous.turn_id !== event.turn_id;
                   const isActive = event.id === activeId;
                   const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
+                  const categoryColor = categoryColors[event.category] ?? categoryColors.unattributed;
                   const tokenPercent = totalUsedTokens > 0 && event.tokens
                     ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
                     : 0;
@@ -332,8 +333,10 @@ export function ContextWindowRoute() {
                             "relative grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 overflow-hidden rounded-xl border border-foreground/11 bg-foreground/5 px-4 py-3 text-start text-foreground cursor-pointer",
                             "dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]",
                             "hover:border-primary/60 hover:bg-foreground/8",
-                            (isActive || isCategoryHighlight) && "border-primary/60 bg-foreground/8",
+                            isActive && "border-primary/60 bg-foreground/8",
+                            isCategoryHighlight && "bg-foreground/10",
                           )}
+                          style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${categoryColor}` } : undefined}
                           aria-pressed={event.id === selectedId}
                           onMouseEnter={() => setHoveredId(event.id)}
                           onFocus={() => setHoveredId(event.id)}
