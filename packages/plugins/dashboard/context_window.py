@@ -28,18 +28,9 @@ def _visible_text_size(text: str) -> _VisibleTextSize:
     return _VisibleTextSize(tokens=max(1, (len(text) + 3) // 4) if text else 0)
 
 CategoryKey = Literal[
-    "system",
-    "project_instructions",
-    "memory",
-    "skills",
-    "mcp",
-    "rules",
-    "you",
-    "files",
-    "output",
-    "agent",
-    "assistant",
-    "hooks",
+    "starting_context",
+    "user_input",
+    "agent_work",
     "unattributed",
 ]
 Confidence = Literal["exact_usage", "exact_text", "estimated_tokens", "structural", "unknown"]
@@ -345,58 +336,26 @@ def _category_leaves(categories: Iterable[Any]) -> Iterable[dict[str, Any]]:
             yield category
 
 
+_STARTING_CONTEXT_KEYS = {
+    "base_system",
+    "developer_instructions",
+    "agents_md",
+    "skills",
+    "mcp",
+    "memory",
+}
+_USER_INPUT_KEYS = {"user_initial_request", "user_follow_up_requests"}
+
+
 def _category_key(source_key: str) -> CategoryKey:
-    mapping: dict[str, CategoryKey] = {
-        "base_system": "system",
-        "developer_instructions": "system",
-        "agents_md": "project_instructions",
-        "skills": "skills",
-        "mcp": "mcp",
-        "memory": "memory",
-        "user_initial_request": "you",
-        "user_follow_up_requests": "you",
-        "final_answer": "agent",
-        "progress_update": "agent",
-        "assistant_message": "agent",
-        "reasoning": "agent",
-        "context_readfile": "files",
-        "context_searchtext": "files",
-        "context_listfiles": "files",
-        "context_webfetch": "files",
-        "context_websearch": "files",
-        "output": "output",
-    }
-    if source_key in mapping:
-        return mapping[source_key]
-    if source_key.startswith(
-        (
-            "tool_editfile",
-            "tool_writefile",
-            "tool_todolist",
-            "tool_subagenttask",
-            "tool_sessionhandoff",
-            "editfile",
-            "writefile",
-            "todolist",
-            "subagenttask",
-            "sessionhandoff",
-        )
-    ):
-        return "agent"
-    if source_key.startswith(("context_", "tool_", "verification", "repository_", "command_")):
-        return "output"
-    return "unattributed"
+    if source_key in _STARTING_CONTEXT_KEYS:
+        return "starting_context"
+    if source_key in _USER_INPUT_KEYS:
+        return "user_input"
+    return "agent_work"
 
 
 def _category_events(categories: list[ContextCategory]) -> list[ContextEvent]:
-    starting_context_keys = {
-        "base_system",
-        "developer_instructions",
-        "agents_md",
-        "skills",
-        "mcp",
-        "memory",
-    }
     return [
         ContextEvent(
             id=f"event:{category.id}",
@@ -411,7 +370,7 @@ def _category_events(categories: list[ContextCategory]) -> list[ContextEvent]:
             terminal_visible=True,
         )
         for category in categories
-        if category.source_key in starting_context_keys
+        if category.source_key in _STARTING_CONTEXT_KEYS
     ]
 
 def _trajectory_events(
@@ -442,7 +401,7 @@ def _trajectory_events(
                         id=f"turn:{current_turn_id}:user",
                         group="turn",
                         turn_id=current_turn_id,
-                        category="you",
+                        category="user_input",
                         label="User prompt",
                         summary=request_text,
                         tokens=TokenEvidence(
@@ -492,7 +451,7 @@ def _activity_event(
             id=f"turn:{turn_id}:activity:{index}",
             group="turn",
             turn_id=turn_id,
-            category="agent",
+            category="agent_work",
             label="Assistant message",
             summary=text,
             tokens=TokenEvidence(
@@ -514,7 +473,7 @@ def _activity_event(
         id=f"turn:{turn_id}:activity:{index}",
         group="turn",
         turn_id=turn_id,
-        category=_tool_category(tool),
+        category="agent_work",
         label=tool,
         summary=summary,
         tokens=None,
@@ -522,17 +481,6 @@ def _activity_event(
         confidence="structural",
         detail_ref=detail_ref,
     )
-
-
-def _tool_category(tool: str) -> CategoryKey:
-    normalized = tool.lower()
-    if any(term in normalized for term in ("read", "search", "list", "find", "glob")):
-        return "files"
-    if any(term in normalized for term in ("edit", "write", "todo", "subagent", "handoff")):
-        return "agent"
-    if "hook" in normalized:
-        return "hooks"
-    return "output"
 
 
 def _activity_summary(activity: dict[str, Any]) -> str:

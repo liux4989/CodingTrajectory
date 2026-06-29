@@ -17,20 +17,23 @@ import { StateBlock } from "@/components/state-block";
 import { cn } from "@/lib/utils";
 
 const categoryColors: Record<string, string> = {
-  system: "var(--color-category-system)",
-  project_instructions: "var(--color-category-project-instructions)",
-  memory: "var(--color-category-memory)",
-  skills: "var(--color-category-skills)",
-  mcp: "var(--color-category-mcp)",
-  rules: "var(--color-category-rules)",
-  you: "var(--color-category-you)",
-  files: "var(--color-category-files)",
-  output: "var(--color-category-output)",
-  agent: "var(--color-category-agent)",
-  assistant: "var(--color-category-agent)",
-  hooks: "var(--color-category-hooks)",
+  starting_context: "var(--color-category-starting-context)",
+  user_input: "var(--color-category-user-input)",
+  agent_work: "var(--color-category-agent-work)",
   unattributed: "var(--color-category-unattributed)",
 };
+
+const CATEGORY_ORDER = ["starting_context", "user_input", "agent_work", "unattributed"];
+
+function aggregateCategories(categories: ContextCategory[]) {
+  const totals = new Map<string, number>();
+  for (const category of categories) {
+    totals.set(category.category, (totals.get(category.category) ?? 0) + category.tokens.value);
+  }
+  return CATEGORY_ORDER
+    .filter((key) => totals.has(key))
+    .map((key) => ({ category: key, tokens: totals.get(key) ?? 0 }));
+}
 
 function formatTokens(value: number | null | undefined) {
   if (value == null) return "-";
@@ -51,8 +54,9 @@ function evidenceLabel(evidence: TokenEvidence | null) {
 }
 
 function categoryLabel(category: string) {
-  if (category === "agent") return "Agent";
-  if (category === "project_instructions") return "CLAUDE.md";
+  if (category === "starting_context") return "Starting context";
+  if (category === "user_input") return "User input";
+  if (category === "agent_work") return "Agent work";
   return category.replaceAll("_", " ");
 }
 
@@ -118,48 +122,6 @@ function CapacityBar({
     >
       <span className="block bg-primary" style={{ width: `${widthPct}%` }} />
     </div>
-  );
-}
-
-function CompositionBar({ categories }: { categories: ContextCategory[] }) {
-  const total = categories.reduce((sum, category) => sum + category.tokens.value, 0);
-  if (total <= 0) return null;
-  return (
-    <Tooltip.Provider delayDuration={160} skipDelayDuration={120}>
-      <div
-        className="flex h-2.5 w-full overflow-hidden rounded-full border border-foreground/14 bg-foreground/7"
-        role="img"
-        aria-label={`Observed composition: ${formatTokens(total)} visible-content tokens`}
-      >
-        {categories.map((category) => {
-          const widthPct = (category.tokens.value / total) * 100;
-          if (widthPct < 0.1) return null;
-          return (
-            <Tooltip.Root key={category.id}>
-              <Tooltip.Trigger asChild>
-                <span
-                  className="block min-w-[2px] border-r border-r-white/20 last:border-r-0"
-                  style={{
-                    width: `${widthPct}%`,
-                    background: categoryColors[category.category] ?? categoryColors.unattributed,
-                  }}
-                />
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content
-                  className="z-[120] max-w-[min(20rem,calc(100vw-2rem))] rounded-md border border-foreground/12 bg-card px-3 py-2 text-caption leading-[1.35] text-foreground shadow-popover"
-                  side="bottom"
-                  sideOffset={6}
-                >
-                  {category.label}: {formatTokens(category.tokens.value)} estimated visible tokens
-                  <Tooltip.Arrow className="fill-card" />
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
-          );
-        })}
-      </div>
-    </Tooltip.Provider>
   );
 }
 
@@ -256,13 +218,13 @@ export function ContextWindowRoute() {
         contextWindowTokens={payload.context_window_tokens?.value ?? 0}
         usedTokens={totalUsedTokens}
       />
-      <CompositionBar categories={payload.categories} />
 
       <ul className="m-0 flex flex-wrap gap-x-4 gap-y-1.5 list-none" role="list">
-        {payload.categories.map((category: ContextCategory) => (
-          <li key={category.id} className="inline-flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
-            <span className="inline-block h-[0.55rem] w-[0.55rem] rounded-[2px]" style={categoryDotStyle(category.category)} />
-            <span>{category.label}</span>
+        {aggregateCategories(payload.categories).map(({ category, tokens }) => (
+          <li key={category} className="inline-flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
+            <span className="inline-block h-[0.55rem] w-[0.55rem] rounded-[2px]" style={categoryDotStyle(category)} />
+            <span>{categoryLabel(category)}</span>
+            <span className="font-mono">{formatTokens(tokens)}</span>
           </li>
         ))}
         <li className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">

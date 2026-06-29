@@ -38,17 +38,9 @@
   --color-sidebar: var(--sidebar);
   --color-sidebar-border: var(--sidebar-border);
 
-  --color-category-system: var(--category-system);
-  --color-category-project-instructions: var(--category-project-instructions);
-  --color-category-memory: var(--category-memory);
-  --color-category-skills: var(--category-skills);
-  --color-category-mcp: var(--category-mcp);
-  --color-category-rules: var(--category-rules);
-  --color-category-you: var(--category-you);
-  --color-category-files: var(--category-files);
-  --color-category-output: var(--category-output);
-  --color-category-agent: var(--category-agent);
-  --color-category-hooks: var(--category-hooks);
+  --color-category-starting-context: var(--category-starting-context);
+  --color-category-user-input: var(--category-user-input);
+  --color-category-agent-work: var(--category-agent-work);
   --color-category-unattributed: var(--category-unattributed);
 
   --color-warning: var(--warning);
@@ -126,17 +118,9 @@
     --sidebar: #f5e7c5;
     --sidebar-border: rgb(24 33 28 / 13%);
 
-    --category-system: #6d28d9;
-    --category-project-instructions: #b45309;
-    --category-memory: #be185d;
-    --category-skills: #0e7490;
-    --category-mcp: #1d4ed8;
-    --category-rules: #7e22ce;
-    --category-you: #0f766e;
-    --category-files: #4d7c0f;
-    --category-output: #c2410c;
-    --category-agent: #334155;
-    --category-hooks: #b91c1c;
+    --category-starting-context: #6d28d9;
+    --category-user-input: #0f766e;
+    --category-agent-work: #c2410c;
     --category-unattributed: #57534e;
 
     --warning: #92400e;
@@ -181,17 +165,9 @@
     --sidebar: #222019;
     --sidebar-border: rgb(255 255 255 / 8%);
 
-    --category-system: #8b5cf6;
-    --category-project-instructions: #d97706;
-    --category-memory: #c24183;
-    --category-skills: #0891b2;
-    --category-mcp: #2563eb;
-    --category-rules: #9333ea;
-    --category-you: #0d9488;
-    --category-files: #65a30d;
-    --category-output: #ea580c;
-    --category-agent: #475569;
-    --category-hooks: #dc2626;
+    --category-starting-context: #8b5cf6;
+    --category-user-input: #0d9488;
+    --category-agent-work: #ea580c;
     --category-unattributed: #78716c;
 
     --warning: #d97706;
@@ -237,17 +213,9 @@
       --sidebar: #222019;
       --sidebar-border: rgb(255 255 255 / 8%);
 
-      --category-system: #8b5cf6;
-      --category-project-instructions: #d97706;
-      --category-memory: #c24183;
-      --category-skills: #0891b2;
-      --category-mcp: #2563eb;
-      --category-rules: #9333ea;
-      --category-you: #0d9488;
-      --category-files: #65a30d;
-      --category-output: #ea580c;
-      --category-agent: #475569;
-      --category-hooks: #dc2626;
+      --category-starting-context: #8b5cf6;
+      --category-user-input: #0d9488;
+      --category-agent-work: #ea580c;
       --category-unattributed: #78716c;
 
       --warning: #d97706;
