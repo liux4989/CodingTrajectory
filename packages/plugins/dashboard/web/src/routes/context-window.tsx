@@ -353,21 +353,21 @@ export function ContextWindowRoute() {
                           }}
                         >
                           <span className="grid min-w-0 gap-1">
-                            <span className="flex items-center gap-2">
+                            <span className="flex min-w-0 items-center gap-2">
                               <span
                                 className="inline-block h-[0.55rem] w-[0.55rem] shrink-0 rounded-[2px]"
                                 style={categoryDotStyle(event.category)}
                               />
-                              <span className="inline-flex items-center gap-1.5">
-                                <Badge variant="secondary" className="font-mono text-[0.7rem]">
+                              <span className="inline-flex min-w-0 items-center gap-1.5">
+                                <Badge variant="secondary" className="shrink-0 font-mono text-[0.7rem]">
                                   {event.confidence === "exact_usage" || event.confidence === "exact_text" ? "auto" : event.confidence.replaceAll("_", " ")}
                                 </Badge>
-                                <span className="overflow-hidden text-ellipsis whitespace-nowrap text-body-sm text-muted-foreground">
+                                <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm text-muted-foreground">
                                   {event.source}
                                 </span>
                               </span>
                             </span>
-                            <strong className="font-display text-body">{event.label}</strong>
+                            <strong className="min-w-0 break-words font-display text-body">{event.label}</strong>
                           </span>
                           <span className="flex items-center gap-2">
                             {event.terminal_visible ? (
