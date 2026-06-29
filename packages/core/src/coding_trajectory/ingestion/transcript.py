@@ -246,6 +246,8 @@ class TranscriptProjector:
 
     def _handle_usage(self, record: TranscriptRecord) -> None:
         if self.current_turn is None:
+            if self.turns:
+                _append_event_id(self.turns[-1], record.record_id)
             return
         self._append_turn_event_id(record.record_id)
 
@@ -411,8 +413,12 @@ class TranscriptProjector:
     def _append_turn_event_id(self, event_id: UUID) -> None:
         if self.current_turn is None:
             return
-        if event_id not in self.current_turn.event_ids:
-            self.current_turn.event_ids.append(event_id)
+        _append_event_id(self.current_turn, event_id)
+
+
+def _append_event_id(turn: Turn, event_id: UUID) -> None:
+    if event_id not in turn.event_ids:
+        turn.event_ids.append(event_id)
 
 
 def project_transcript(
