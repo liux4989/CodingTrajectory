@@ -149,17 +149,21 @@ export function OverviewRoute() {
               <TableBody>
                 {data.sessions.top_sessions.map((session) => (
                   <TableRow key={session.id ?? `${session.project}-${session.title}`}>
-                    <TableCell className="max-w-[26rem] align-top">
-                      <div className="line-clamp-2 whitespace-normal break-words font-medium">
-                        {session.id ? (
-                          <SessionLink sessionId={session.id}>
-                            {session.title || shortSessionId(session.id)}
-                          </SessionLink>
-                        ) : (
-                          session.title || "Untitled session"
-                        )}
+                    <TableCell className="max-w-[26rem]">
+                      <div className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1 truncate font-medium">
+                          {session.id ? (
+                            <SessionLink sessionId={session.id}>
+                              {session.title || shortSessionId(session.id)}
+                            </SessionLink>
+                          ) : (
+                            session.title || "Untitled session"
+                          )}
+                        </span>
+                        <span className="shrink-0 whitespace-nowrap text-caption text-muted-foreground">
+                          {formatWhen(session.started_at)}
+                        </span>
                       </div>
-                      <p className="m-0 mt-1 text-caption text-muted-foreground whitespace-nowrap">{formatWhen(session.started_at)}</p>
                     </TableCell>
                     <TableCell>
                       {session.project ? (
