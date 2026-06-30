@@ -19,10 +19,13 @@ SESSION_HANDOFF = "SessionHandoff"
 
 VENDOR_TOOL_CONCEPT: dict[str, str] = {
     "Read": READ_FILE,
+    "read": READ_FILE,
     "View": READ_FILE,
     "Edit": EDIT_FILE,
+    "edit": EDIT_FILE,
     "MultiEdit": EDIT_FILE,
     "Write": WRITE_FILE,
+    "write": WRITE_FILE,
     "Grep": SEARCH_TEXT,
     "Glob": LIST_FILES,
     "LS": LIST_FILES,

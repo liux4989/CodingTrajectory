@@ -23,6 +23,9 @@ from coding_trajectory.analysis.shell_parser import split_shell_stages
 
 CommandFamily = Literal[
     "cli_report",
+    "search",
+    "list_files",
+    "read_file",
     "tests",
     "build",
     "code_fix",
@@ -66,6 +69,7 @@ _EXTERNAL_HEADS = frozenset({
 _RUNTIME_TOKENS = frozenset(
     {"dev", "serve", "server", "start", "up", "runserver", "preview"}
 )
+_SHELL_SETUP_HEADS = frozenset({"cd", "pushd", "popd", "export", "set", "unset"})
 
 
 def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, str]:
@@ -115,6 +119,12 @@ def classify_command_family(tool_input: Any) -> tuple[CommandFamily, str]:
 
     head = command_head(tokens)
     token_set = set(tokens)
+    if head in {"rg", "grep", "ag", "ack", "rga"}:
+        return "search", head
+    if head in {"ls", "eza", "exa", "tree", "find", "fd"}:
+        return "list_files", head
+    if head in {"cat", "bat", "head", "tail", "less", "more", "nl", "sed"}:
+        return "read_file", head
     if head == "ct":
         return "cli_report", head
     if head in {"git", "gh", "hg", "svn"} or tokens[0] in {"git", "gh", "hg", "svn"}:
@@ -150,11 +160,15 @@ def command_head(tokens: list[str]) -> str:
 
 
 def primary_stage(cmd: str) -> str:
+    cmd = unwrap_shell_command(cmd)
     stages = [stage for stage in split_shell_stages(cmd) if stage.strip()]
     if not stages:
         return cmd.strip()
     for stage in stages:
         if primary_command(stage) in INFORMATIVE_HEADS:
+            return stage.strip()
+    for stage in stages:
+        if primary_command(stage) not in _SHELL_SETUP_HEADS:
             return stage.strip()
     return stages[0].strip()
 
@@ -172,12 +186,8 @@ def shell_cmd(tool_input: Any) -> str:
 
 
 def primary_command(cmd: str) -> str:
+    cmd = unwrap_shell_command(cmd)
     tokens = safe_split(cmd)
-    if len(tokens) >= 2 and tokens[0] in {"bash", "sh", "zsh"} and tokens[1] in {"-c", "-lc", "-cl"}:
-        if len(tokens) >= 3:
-            inner = safe_split(tokens[2])
-            if inner:
-                return os.path.basename(inner[0])
     if not tokens:
         return ""
     for token in tokens:
@@ -187,6 +197,17 @@ def primary_command(cmd: str) -> str:
             continue
         return os.path.basename(token)
     return os.path.basename(tokens[0])
+
+
+def unwrap_shell_command(cmd: str) -> str:
+    tokens = safe_split(cmd)
+    if (
+        len(tokens) >= 3
+        and os.path.basename(tokens[0]) in {"bash", "sh", "zsh"}
+        and tokens[1] in {"-c", "-lc", "-cl"}
+    ):
+        return tokens[2].strip()
+    return cmd
 
 
 def safe_split(cmd: str) -> list[str]:

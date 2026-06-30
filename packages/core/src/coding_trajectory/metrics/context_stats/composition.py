@@ -70,6 +70,9 @@ _OUTPUT_CONCEPT_LABELS = {
 }
 _OUTPUT_FAMILY_LABELS = {
     "cli_report": "CLI reports",
+    "search": "Search output",
+    "list_files": "File listing output",
+    "read_file": "File read command output",
     "tests": "Test output",
     "build": "Build / lint output",
     "code_fix": "Formatter / fixer output",
