@@ -76,7 +76,7 @@ Structured View
    - use `--output json` when you need full item ids for drill-down
 4. `session stats [session_id] [--output markdown|json]` — inspect session stats with compact context/token sections
 5. `session usage [session_id] [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and costs reported by session logs
-6. `session items <item_id> [...]` — read the JSON evidence for one or more items
+6. `session items <session_id> [<item_id> ...]` — read all session items or the JSON evidence for specific items
 
 `session usage` is intentionally turn-focused. It reports token buckets and any
 cost recorded by the source session log; core does not estimate missing prices

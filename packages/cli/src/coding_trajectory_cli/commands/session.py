@@ -389,9 +389,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_items = session_sub.add_parser(
         "items",
         prog="ct session items",
-        help="Query items by explicit IDs or session scope.",
+        help="Query items within a session by explicit IDs or full session scope.",
         formatter_class=GhFormatter,
     )
+    session_items.add_argument("session_id", metavar="SESSION_ID")
     session_items.add_argument("resource_ids", metavar="ITEM_ID", nargs="*")
     add_output_flags(session_items)
     add_params_flag(session_items)
@@ -399,6 +400,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _method="session.items",
         _params=lambda args: {
             **params_from_json(args),
+            "session_id": args.session_id,
             **({"item_ids": args.resource_ids} if args.resource_ids else {}),
         },
         _default_output="json",

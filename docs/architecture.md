@@ -307,7 +307,7 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct session overview [ID]` | Session hierarchy overview |
 | `uv run ct session stats [ID]` | Context window statistics |
 | `uv run ct session usage [ID]` | Token and log-reported cost breakdown |
-| `uv run ct session items ITEM_ID` | Item detail (JSON) |
+| `uv run ct session items SESSION_ID [ITEM_ID ...]` | Session item detail (JSON) |
 | `uv run ct session events --params '{"event_ids": [...]}'` | Event detail (JSON) |
 | `uv run ct session events [ID] --type TYPE` | Filtered event search |
 | `uv run ct plugin list` | List available plugins |
