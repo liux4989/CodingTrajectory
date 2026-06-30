@@ -36,7 +36,8 @@ FILTER SYNTAX
   Dot-paths supported: result.error=*
 """
 
-CONTEXT_CATEGORY_WIDTH = 56
+CONTEXT_CATEGORY_WIDTH = 48
+CONTEXT_USAGE_WIDTH = 28
 
 
 def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
@@ -138,15 +139,18 @@ def _render_context_category(
     category: dict[str, Any],
     *,
     indent: int = 0,
-    include_real_tokens: bool = False,
+    include_allocated_usage: bool = False,
 ) -> None:
     label = str(category.get("label") or category.get("key") or "-")
     display_width = max(CONTEXT_CATEGORY_WIDTH - indent, 16)
     label = one_line(label, limit=display_width)
-    if include_real_tokens:
+    if include_allocated_usage:
+        allocated_usage = category.get("allocated_usage")
+        if allocated_usage is None:
+            allocated_usage = category.get("real_tokens")
         lines.append(
             f"{' ' * indent}{label:<{display_width}} {format_tokens(category.get('tokens')):>7} "
-            f"{_format_optional_tokens(category.get('real_tokens')):>11} "
+            f"{_format_allocated_usage(allocated_usage):>{CONTEXT_USAGE_WIDTH}} "
             f"{format_percent(category.get('percent')):>8}"
         )
     else:
@@ -160,12 +164,29 @@ def _render_context_category(
                 lines,
                 child,
                 indent=indent + 2,
-                include_real_tokens=include_real_tokens,
+                include_allocated_usage=include_allocated_usage,
             )
 
 
 def _format_optional_tokens(value: Any) -> str:
     return "-" if value is None else format_tokens(value)
+
+
+def _format_allocated_usage(value: Any) -> str:
+    if not isinstance(value, dict):
+        return _format_optional_tokens(value)
+    uncached = value.get("uncached_input_tokens")
+    cached = value.get("cached_input_tokens")
+    output = value.get("output_tokens")
+    reasoning = value.get("reasoning_output_tokens")
+    if uncached is None and cached is None and output is None and reasoning is None:
+        return "-"
+    return (
+        f"{format_tokens(uncached)}/"
+        f"{format_tokens(cached)}/"
+        f"{format_tokens(output)}/"
+        f"{format_tokens(reasoning)}"
+    )
 
 
 def _render_session_stats_text(payload: dict[str, Any]) -> str:
@@ -184,12 +205,13 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         f"Model: {model_name} ({format_tokens(context_tokens)} context)",
         "",
         "```",
-        f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Real tokens':>11} {'Share':>8}",
+        f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} "
+        f"{'Unc/Cache/Out/Reason':>{CONTEXT_USAGE_WIDTH}} {'Share':>8}",
     ]
 
     for category in context_window.get("categories") or []:
         if isinstance(category, dict):
-            _render_context_category(lines, category, include_real_tokens=True)
+            _render_context_category(lines, category, include_allocated_usage=True)
 
     lines.append("```")
 
@@ -224,7 +246,7 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     )
     if real_token_cost:
         lines.append(
-            f"- Tool allocated effective token cost: {render_usage_line(real_token_cost)}"
+            f"- Item allocated real token cost: {render_usage_line(real_token_cost)}"
         )
     lines.append(f"- {runtime_line}")
     if runtime.get("compactions"):

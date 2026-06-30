@@ -201,6 +201,11 @@ def _handler_for(static_dir: Path, service: DashboardDataService) -> type[BaseHT
                 return service.apply_project_cleanup(body)
             if path == "/api/cleanup/session/apply":
                 return service.apply_session_cleanup(body)
+            if path == "/api/sessions/analysis":
+                return service.session_analysis(body)
+            session_id = _session_analysis_id(path)
+            if session_id:
+                return service.session_analysis({**body, "session_id": session_id})
             raise ValueError("unknown api endpoint")
 
         def _serve_static(self, raw_path: str, *, include_body: bool) -> None:
@@ -253,6 +258,15 @@ def _handler_for(static_dir: Path, service: DashboardDataService) -> type[BaseHT
             self.wfile.write(data)
 
     return DashboardRequestHandler
+
+
+def _session_analysis_id(path: str) -> str | None:
+    prefix = "/api/sessions/"
+    suffix = "/analysis"
+    if not path.startswith(prefix) or not path.endswith(suffix):
+        return None
+    session_id = path[len(prefix) : -len(suffix)].strip("/")
+    return session_id or None
 
 
 if __name__ == "__main__":

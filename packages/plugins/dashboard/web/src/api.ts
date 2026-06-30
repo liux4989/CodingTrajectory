@@ -121,6 +121,75 @@ export type ContextWindowPayload = {
   warnings: string[];
 };
 
+export type SessionAnalysis = {
+  schema_version: 1;
+  session_id: string;
+  generated_at: string;
+  source: "codex_app_server_skill";
+  artifact_path: string | null;
+  app_server_thread_id: string;
+  app_server_turn_id: string | null;
+  task_story: {
+    initial_request: string | null;
+    follow_up_requests: string[];
+    phases: Array<{
+      label: string;
+      turn_ids: string[];
+      summary: string;
+    }>;
+    touched_artifacts: string[];
+    outcomes: string[];
+  };
+  usage_evidence: {
+    cumulative_tokens: number;
+    cumulative_input_tokens: number;
+    cumulative_cached_tokens: number;
+    cumulative_output_tokens: number;
+    cumulative_reasoning_tokens: number;
+    final_context_tokens: number | null;
+    context_window_tokens: number | null;
+    final_context_percent: number | null;
+    expensive_turns: Array<Record<string, unknown>>;
+  };
+  tool_evidence: {
+    total_requested_calls: number;
+    total_result_calls: number;
+    failed_result_calls: number;
+    output_chars: number;
+    buckets: Array<{
+      key: string;
+      label: string;
+      judgment: "good" | "neutral" | "risky";
+      calls: number;
+      failed_calls: number;
+      output_chars: number;
+      call_share: number;
+      output_share: number;
+    }>;
+    top_output_calls: Array<{
+      bucket: string;
+      tool: string;
+      output_chars: number;
+      failed: boolean;
+      command: string;
+      timestamp: string | null;
+    }>;
+  };
+  findings: Array<{
+    kind: "justified_expensive_work" | "avoidable_pattern" | "optimal_pattern" | "recommended_workflow";
+    title: string;
+    body: string;
+    impact: string | null;
+    evidence: string[];
+  }>;
+};
+
+export type SessionAnalysisResponse = {
+  status: "ready";
+  artifact_path: string | null;
+  analysis: SessionAnalysis;
+};
+
 export type CleanupSummary = {
   candidate_count: number;
   skipped_count: number;
@@ -185,6 +254,14 @@ export async function fetchSessions() {
 export async function fetchContextWindow(sessionId: string) {
   const params = new URLSearchParams({ session_id: sessionId });
   return fetchJson<ContextWindowPayload>(`/api/sessions/context-window?${params}`);
+}
+
+export async function analyzeSession(sessionId: string, refresh = false) {
+  return fetchJson<SessionAnalysisResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/analysis`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh }),
+  });
 }
 
 export async function fetchCleanupPreview(kind: "project" | "session") {

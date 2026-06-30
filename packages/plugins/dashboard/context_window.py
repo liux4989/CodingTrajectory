@@ -27,6 +27,7 @@ class _VisibleTextSize:
 def _visible_text_size(text: str) -> _VisibleTextSize:
     return _VisibleTextSize(tokens=max(1, (len(text) + 3) // 4) if text else 0)
 
+
 CategoryKey = Literal[
     "starting_context",
     "user_input",
@@ -35,7 +36,9 @@ CategoryKey = Literal[
     "agent",
     "unattributed",
 ]
-Confidence = Literal["exact_usage", "exact_text", "estimated_tokens", "structural", "unknown"]
+Confidence = Literal[
+    "exact_usage", "exact_text", "estimated_tokens", "structural", "unknown"
+]
 
 
 class TokenEvidence(BaseModel):
@@ -109,7 +112,12 @@ def main(
         description="Inspect context composition and trajectory events for one session.",
     )
     parser.add_argument("session_id")
-    parser.add_argument("--turn", dest="turn_id", default=None, help="Limit the event timeline to one turn.")
+    parser.add_argument(
+        "--turn",
+        dest="turn_id",
+        default=None,
+        help="Limit the event timeline to one turn.",
+    )
     parser.add_argument(
         "--output",
         choices=("markdown", "json"),
@@ -126,10 +134,18 @@ def main(
     return 0
 
 
-def build_projection(session_id: str, *, turn_id: str | None = None) -> ContextWindowProjection:
-    stats = _ct_json(["session", "stats", "--global-scope", "--output", "json", session_id])
-    overview = _ct_json(["session", "overview", "--global-scope", "--output", "json", session_id])
-    usage = _ct_json(["session", "usage", "--global-scope", "--output", "json", session_id])
+def build_projection(
+    session_id: str, *, turn_id: str | None = None
+) -> ContextWindowProjection:
+    stats = _ct_json(
+        ["session", "stats", "--global-scope", "--output", "json", session_id]
+    )
+    overview = _ct_json(
+        ["session", "overview", "--global-scope", "--output", "json", session_id]
+    )
+    usage = _ct_json(
+        ["session", "usage", "--global-scope", "--output", "json", session_id]
+    )
     tool_usage = _ct_api_result(
         "session.tool_usage",
         {"session_id": session_id},
@@ -156,7 +172,9 @@ def build_projection(session_id: str, *, turn_id: str | None = None) -> ContextW
     model = stats.get("model") or {}
     context = stats.get("context") or {}
     model_name = _optional_text(model.get("name"))
-    reported_context_window = model.get("context_window") or model.get("context_window_tokens")
+    reported_context_window = model.get("context_window") or model.get(
+        "context_window_tokens"
+    )
     catalog_context_window = token_pricing.get_model_context_window(
         model_name,
         provider=vendor,
@@ -205,8 +223,7 @@ def build_projection(session_id: str, *, turn_id: str | None = None) -> ContextW
                 source="session log",
             )
             if reported_cost is not None and not cost_not_reported
-            else
-            CostEvidence(
+            else CostEvidence(
                 value_usd=estimated_cost.amount_usd,
                 confidence="estimated",
                 source=estimated_cost.pricing_source,
@@ -224,11 +241,17 @@ def build_projection(session_id: str, *, turn_id: str | None = None) -> ContextW
 
 def render_markdown(projection: ContextWindowProjection) -> str:
     context_label = _format_tokens(
-        projection.context_window_tokens.value if projection.context_window_tokens else None
+        projection.context_window_tokens.value
+        if projection.context_window_tokens
+        else None
     )
-    used_label = _format_tokens(projection.used_tokens.value if projection.used_tokens else None)
+    used_label = _format_tokens(
+        projection.used_tokens.value if projection.used_tokens else None
+    )
     percent_label = (
-        f" ({projection.used_percent:.1f}%)" if projection.used_percent is not None else ""
+        f" ({projection.used_percent:.1f}%)"
+        if projection.used_percent is not None
+        else ""
     )
     lines = [
         "# Context Window",
@@ -275,7 +298,9 @@ def render_markdown(projection: ContextWindowProjection) -> str:
 
     if projection.warnings:
         lines.extend(["", "Warnings"])
-        lines.extend(f"  - {_one_line(warning, 110)}" for warning in projection.warnings)
+        lines.extend(
+            f"  - {_one_line(warning, 110)}" for warning in projection.warnings
+        )
     return "\n".join(lines)
 
 
@@ -289,7 +314,9 @@ def _project_categories(stats: dict[str, Any]) -> list[ContextCategory]:
         tokens = category.get("tokens")
         if not isinstance(tokens, int) or isinstance(tokens, bool):
             continue
-        confidence = _confidence(category.get("confidence"), fallback="estimated_tokens")
+        confidence = _confidence(
+            category.get("confidence"), fallback="estimated_tokens"
+        )
         projected.append(
             ContextCategory(
                 id=f"category:{source_key}:{index}",
@@ -324,8 +351,13 @@ def _project_provider_usage_buckets(stats: dict[str, Any]) -> list[ContextCatego
                 label=str(category.get("label") or source_key),
                 tokens=TokenEvidence(
                     value=tokens,
-                    confidence=_confidence(category.get("confidence"), fallback="exact_usage"),
-                    source=str(category.get("source") or "ct session stats:provider_usage_buckets"),
+                    confidence=_confidence(
+                        category.get("confidence"), fallback="exact_usage"
+                    ),
+                    source=str(
+                        category.get("source")
+                        or "ct session stats:provider_usage_buckets"
+                    ),
                 ),
                 percent=_optional_float(category.get("pct")),
             )
@@ -379,21 +411,18 @@ def _category_key(source_key: str) -> CategoryKey:
         return "files"
     if source_key == "output" or source_key.startswith("output_"):
         return "output"
-    if (
-        source_key in _AGENT_AGENT_KEYS
-        or source_key.startswith(
-            (
-                "tool_editfile",
-                "tool_writefile",
-                "tool_todolist",
-                "tool_subagenttask",
-                "tool_sessionhandoff",
-                "editfile",
-                "writefile",
-                "todolist",
-                "subagenttask",
-                "sessionhandoff",
-            )
+    if source_key in _AGENT_AGENT_KEYS or source_key.startswith(
+        (
+            "tool_editfile",
+            "tool_writefile",
+            "tool_todolist",
+            "tool_subagenttask",
+            "tool_sessionhandoff",
+            "editfile",
+            "writefile",
+            "todolist",
+            "subagenttask",
+            "sessionhandoff",
         )
     ):
         return "agent"
@@ -417,6 +446,7 @@ def _category_events(categories: list[ContextCategory]) -> list[ContextEvent]:
         for category in categories
         if category.source_key in _STARTING_CONTEXT_KEYS
     ]
+
 
 def _trajectory_events(
     overview: dict[str, Any],
@@ -495,7 +525,9 @@ def _trajectory_events(
     return events
 
 
-def _tool_events_by_turn(tool_usage: dict[str, Any]) -> dict[str, list[list[ContextEvent]]]:
+def _tool_events_by_turn(
+    tool_usage: dict[str, Any],
+) -> dict[str, list[list[ContextEvent]]]:
     by_turn: dict[str, list[list[ContextEvent]]] = {}
     for index, item in enumerate(tool_usage.get("tool_items") or []):
         if not isinstance(item, dict):
@@ -510,7 +542,11 @@ def _tool_events_by_turn(tool_usage: dict[str, Any]) -> dict[str, list[list[Cont
 def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]:
     item_id = str(item.get("item_id") or f"tool_item_{index}")
     tool = str(item.get("tool_name") or "Tool")
-    attribution = item.get("token_attribution") if isinstance(item.get("token_attribution"), dict) else {}
+    attribution = (
+        item.get("token_attribution")
+        if isinstance(item.get("token_attribution"), dict)
+        else {}
+    )
     real_cost = (
         item.get("allocated_real_token_cost")
         if isinstance(item.get("allocated_real_token_cost"), dict)
@@ -532,6 +568,7 @@ def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]
     }
     for source_key, detail_key in (
         ("input_tokens", "allocated_input_tokens"),
+        ("uncached_input_tokens", "allocated_uncached_input_tokens"),
         ("cached_input_tokens", "allocated_cached_input_tokens"),
         ("cache_creation_input_tokens", "allocated_cache_creation_input_tokens"),
         ("output_tokens", "allocated_output_tokens"),
@@ -655,7 +692,15 @@ def _tool_category(tool: str) -> CategoryKey:
     normalized = tool.lower()
     if any(
         term in normalized
-        for term in ("todo", "subagent", "handoff", "update_plan", "edit", "write", "apply_patch")
+        for term in (
+            "todo",
+            "subagent",
+            "handoff",
+            "update_plan",
+            "edit",
+            "write",
+            "apply_patch",
+        )
     ):
         return "agent"
     if normalized in {"read", "view"} or any(
@@ -694,7 +739,14 @@ def _tool_event_label(tool: str, input_summary: str) -> str:
 
 
 def _is_shell_tool(tool: str) -> bool:
-    return tool in {"bash", "Bash", "exec_command", "run_shell_command", "shell", "write_stdin"}
+    return tool in {
+        "bash",
+        "Bash",
+        "exec_command",
+        "run_shell_command",
+        "shell",
+        "write_stdin",
+    }
 
 
 def _shell_event_label(command: str) -> str:
@@ -722,7 +774,15 @@ def _primary_shell_stage(command: str) -> str:
     for separator in ("&&", "||", ";", "\n"):
         if separator in command:
             parts = [part.strip() for part in command.split(separator) if part.strip()]
-            informative = next((part for part in parts if _command_head(_safe_split(part)) in {"rg", "grep", "sed", "cat", "ls", "find", "fd"}), None)
+            informative = next(
+                (
+                    part
+                    for part in parts
+                    if _command_head(_safe_split(part))
+                    in {"rg", "grep", "sed", "cat", "ls", "find", "fd"}
+                ),
+                None,
+            )
             return informative or parts[0]
     return command.strip()
 
@@ -738,13 +798,38 @@ def _command_head(tokens: list[str]) -> str:
     if not tokens:
         return ""
     index = 0
-    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
+    while (
+        index < len(tokens)
+        and "=" in tokens[index]
+        and not tokens[index].startswith("-")
+    ):
         index += 1
-    if index < len(tokens) and tokens[index] in {"uv", "poetry", "pdm", "pipenv", "npx", "bunx", "pnpm", "yarn", "bun", "deno"}:
+    if index < len(tokens) and tokens[index] in {
+        "uv",
+        "poetry",
+        "pdm",
+        "pipenv",
+        "npx",
+        "bunx",
+        "pnpm",
+        "yarn",
+        "bun",
+        "deno",
+    }:
         index += 1
-        while index < len(tokens) and tokens[index] in {"run", "exec", "dlx", "tool", "task"}:
+        while index < len(tokens) and tokens[index] in {
+            "run",
+            "exec",
+            "dlx",
+            "tool",
+            "task",
+        }:
             index += 1
-    if index + 2 < len(tokens) and tokens[index] in {"python", "python3"} and tokens[index + 1] == "-m":
+    if (
+        index + 2 < len(tokens)
+        and tokens[index] in {"python", "python3"}
+        and tokens[index + 1] == "-m"
+    ):
         return os.path.basename(tokens[index + 2].lower())
     return os.path.basename(tokens[index].lower()) if index < len(tokens) else ""
 
@@ -753,9 +838,24 @@ def _grep_query(tokens: list[str], head: str) -> str | None:
     saw_head = False
     skip_next = False
     flag_value_options = {
-        "-A", "-B", "-C", "-e", "-f", "-g", "--glob", "-m", "--max-count",
-        "-t", "--type", "--type-not", "-T", "-r", "--replace", "--include",
-        "--exclude", "--exclude-dir",
+        "-A",
+        "-B",
+        "-C",
+        "-e",
+        "-f",
+        "-g",
+        "--glob",
+        "-m",
+        "--max-count",
+        "-t",
+        "--type",
+        "--type-not",
+        "-T",
+        "-r",
+        "--replace",
+        "--include",
+        "--exclude",
+        "--exclude-dir",
     }
     for token in tokens:
         if not saw_head:
@@ -850,8 +950,7 @@ def _activity_summary(activity: dict[str, Any]) -> str:
 
 def _projection_warnings(events: list[ContextEvent]) -> list[str]:
     has_tool_token_events = any(
-        event.id.startswith("tool:") and event.tokens is not None
-        for event in events
+        event.id.startswith("tool:") and event.tokens is not None for event in events
     )
     warnings = [
         "Turn usage is cumulative model accounting and is retained as a detail reference, "
@@ -882,10 +981,14 @@ def _overview_vendor(overview: dict[str, Any]) -> str | None:
 def _ct_json(args: list[str]) -> dict[str, Any]:
     ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
     if not ct:
-        raise SystemExit("ct executable not found; set CT_COMMAND to the ct command path")
+        raise SystemExit(
+            "ct executable not found; set CT_COMMAND to the ct command path"
+        )
     command = [*shlex.split(ct), *args]
     try:
-        completed = subprocess.run(command, check=False, text=True, capture_output=True, timeout=60)
+        completed = subprocess.run(
+            command, check=False, text=True, capture_output=True, timeout=60
+        )
     except subprocess.TimeoutExpired as exc:
         raise SystemExit(f"ct command timed out: {' '.join(command)}") from exc
     if completed.returncode != 0:
@@ -894,13 +997,19 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"ct command returned invalid JSON: {' '.join(command)}") from exc
+        raise SystemExit(
+            f"ct command returned invalid JSON: {' '.join(command)}"
+        ) from exc
     if not isinstance(payload, dict):
-        raise SystemExit(f"ct command returned a non-object payload: {' '.join(command)}")
+        raise SystemExit(
+            f"ct command returned a non-object payload: {' '.join(command)}"
+        )
     return payload
 
 
-def _ct_api_result(method: str, params: dict[str, Any], *, global_scope: bool = False) -> dict[str, Any]:
+def _ct_api_result(
+    method: str, params: dict[str, Any], *, global_scope: bool = False
+) -> dict[str, Any]:
     args = [
         "api",
         "call",
@@ -932,7 +1041,13 @@ def _token_evidence(
 
 
 def _confidence(value: Any, *, fallback: Confidence) -> Confidence:
-    if value in {"exact_usage", "exact_text", "estimated_tokens", "structural", "unknown"}:
+    if value in {
+        "exact_usage",
+        "exact_text",
+        "estimated_tokens",
+        "structural",
+        "unknown",
+    }:
         return value
     return fallback
 

@@ -26,7 +26,7 @@ from coding_trajectory.metrics.models import (
 def build_session_graph_context_stats(
     session_graph: SessionGraph,
     *,
-    tool_visible_tokens_by_item: dict[UUID, int] | None = None,
+    allocated_usage_by_item: dict[UUID, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     vendors = {session.vendor for session in session_graph.sessions if session.vendor}
     if not vendors:
@@ -42,13 +42,11 @@ def build_session_graph_context_stats(
     messages = message_stats(session_graph)
     categories = build_context_composition(
         session_graph,
-        tool_visible_tokens_by_item=tool_visible_tokens_by_item,
+        allocated_usage_by_item=allocated_usage_by_item,
     )
     observation = _latest_context_usage(session_graph)
     if observation is None:
-        no_obs_message = (
-            f"No {vendor.value} context usage observation found; provider context usage is unavailable."
-        )
+        no_obs_message = f"No {vendor.value} context usage observation found; provider context usage is unavailable."
         debug.warn(
             no_obs_message,
             code="context.no_observation",
@@ -108,7 +106,9 @@ def build_session_graph_context_stats(
     ).model_dump(mode="json")
 
 
-def _latest_context_usage(session_graph: SessionGraph) -> ContextUsageObservation | None:
+def _latest_context_usage(
+    session_graph: SessionGraph,
+) -> ContextUsageObservation | None:
     observations = [
         observation
         for session in session_graph.sessions
@@ -122,7 +122,9 @@ def _quota_stats(observation: ContextUsageObservation) -> QuotaStatsFlat | None:
     if not isinstance(quota, dict):
         return None
     primary = quota.get("primary") if isinstance(quota.get("primary"), dict) else {}
-    secondary = quota.get("secondary") if isinstance(quota.get("secondary"), dict) else {}
+    secondary = (
+        quota.get("secondary") if isinstance(quota.get("secondary"), dict) else {}
+    )
     credits = quota.get("credits") if isinstance(quota.get("credits"), dict) else {}
     individual = (
         quota.get("individual_limit")

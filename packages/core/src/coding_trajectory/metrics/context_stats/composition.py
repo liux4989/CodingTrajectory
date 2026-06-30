@@ -35,7 +35,7 @@ class _Measure:
     tokens: int = 0
     chars: int = 0
     items: int = 0
-    real_tokens: int | None = None
+    allocated_usage: dict[str, int] | None = None
 
     def add(
         self,
@@ -43,20 +43,19 @@ class _Measure:
         tokens: int,
         chars: int,
         items: int = 1,
-        real_tokens: int | None = None,
+        allocated_usage: dict[str, int] | None = None,
     ) -> None:
         self.tokens += max(tokens, 0)
         self.chars += max(chars, 0)
         self.items += max(items, 0)
-        if real_tokens is not None:
-            self.real_tokens = (self.real_tokens or 0) + max(real_tokens, 0)
+        self.allocated_usage = _sum_usage(self.allocated_usage, allocated_usage)
 
     def plus(self, other: "_Measure") -> "_Measure":
         return _Measure(
             tokens=self.tokens + other.tokens,
             chars=self.chars + other.chars,
             items=self.items + other.items,
-            real_tokens=_sum_optional_ints(self.real_tokens, other.real_tokens),
+            allocated_usage=_sum_usage(self.allocated_usage, other.allocated_usage),
         )
 
 
@@ -100,13 +99,16 @@ _OUTPUT_FAMILY_LABELS = {
 def build_context_composition(
     session_graph: SessionGraph,
     *,
-    tool_visible_tokens_by_item: dict[UUID, int] | None = None,
+    allocated_usage_by_item: dict[UUID, dict[str, int]] | None = None,
 ) -> list[ContextCategoryFlat]:
     starting = _starting_context(session_graph)
-    user_input = _user_input(session_graph)
+    user_input = _user_input(
+        session_graph,
+        allocated_usage_by_item=allocated_usage_by_item or {},
+    )
     agent_work = _agent_work(
         session_graph,
-        tool_visible_tokens_by_item=tool_visible_tokens_by_item or {},
+        allocated_usage_by_item=allocated_usage_by_item or {},
     )
     observed_total = starting[0].plus(user_input[0]).plus(agent_work[0]).tokens
     categories = [
@@ -140,7 +142,11 @@ def _starting_context(
     return _sum(child_measure for child_measure in buckets.values()), children
 
 
-def _user_input(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCategoryFlat]]:
+def _user_input(
+    session_graph: SessionGraph,
+    *,
+    allocated_usage_by_item: dict[UUID, dict[str, int]],
+) -> tuple[_Measure, list[ContextCategoryFlat]]:
     buckets: dict[str, _Measure] = defaultdict(_Measure)
     prompt_index = 0
     for session in session_graph.sessions:
@@ -150,9 +156,17 @@ def _user_input(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
             text = event.payload.get("text")
             if not isinstance(text, str) or not text:
                 continue
-            key = "user_initial_request" if prompt_index == 0 else "user_follow_up_requests"
+            key = (
+                "user_initial_request"
+                if prompt_index == 0
+                else "user_follow_up_requests"
+            )
             size = visible_text_size(text)
-            buckets[key].add(tokens=size.tokens, chars=size.chars)
+            buckets[key].add(
+                tokens=size.tokens,
+                chars=size.chars,
+                allocated_usage=allocated_usage_by_item.get(event.event_id),
+            )
             prompt_index += 1
     labels = {
         "user_initial_request": "Initial request",
@@ -169,35 +183,55 @@ def _user_input(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
 def _agent_work(
     session_graph: SessionGraph,
     *,
-    tool_visible_tokens_by_item: dict[UUID, int],
+    allocated_usage_by_item: dict[UUID, dict[str, int]],
 ) -> tuple[_Measure, list[ContextCategoryFlat]]:
     files: dict[str, _Measure] = defaultdict(_Measure)
     agent: dict[str, _Measure] = defaultdict(_Measure)
     output: dict[str, _Measure] = defaultdict(_Measure)
+    has_agent_message_items = any(
+        item.kind == "agent_message"
+        for session in session_graph.sessions
+        for turn in session.turns
+        for item in turn.items
+    )
 
     for session in session_graph.sessions:
-        for event in session.events:
-            if event.type != EventType.LLM_RESPONSE:
-                continue
-            text = event.payload.get("text")
-            if not isinstance(text, str) or not text:
-                continue
-            size = visible_text_size(text)
-            agent["assistant_messages"].add(tokens=size.tokens, chars=size.chars)
+        if not has_agent_message_items:
+            for event in session.events:
+                if event.type != EventType.LLM_RESPONSE:
+                    continue
+                text = event.payload.get("text")
+                if not isinstance(text, str) or not text:
+                    continue
+                size = visible_text_size(text)
+                agent["assistant_messages"].add(tokens=size.tokens, chars=size.chars)
 
         for turn in session.turns:
             for item in turn.items:
                 if item.kind == "reasoning":
                     text = item.text or ""
                     size = visible_text_size(text)
-                    agent["assistant_messages"].add(tokens=size.tokens, chars=size.chars)
+                    agent["assistant_messages"].add(
+                        tokens=size.tokens,
+                        chars=size.chars,
+                        allocated_usage=allocated_usage_by_item.get(item.item_id),
+                    )
+                    continue
+                if item.kind == "agent_message":
+                    text = item.text or ""
+                    size = visible_text_size(text)
+                    agent["assistant_messages"].add(
+                        tokens=size.tokens,
+                        chars=size.chars,
+                        allocated_usage=allocated_usage_by_item.get(item.item_id),
+                    )
                     continue
                 _add_tool_item(
                     item,
                     files=files,
                     agent=agent,
                     output=output,
-                    tool_visible_tokens_by_item=tool_visible_tokens_by_item,
+                    allocated_usage_by_item=allocated_usage_by_item,
                 )
 
     file_children = [
@@ -209,9 +243,15 @@ def _agent_work(
         for concept in _FILE_CONCEPT_LABELS
         if files[concept].items
     ]
-    message_children = [
-        _category("assistant_messages", "Assistant messages", agent["assistant_messages"])
-    ] if agent["assistant_messages"].items else []
+    message_children = (
+        [
+            _category(
+                "assistant_messages", "Assistant messages", agent["assistant_messages"]
+            )
+        ]
+        if agent["assistant_messages"].items
+        else []
+    )
     coordination_children = [
         _category(key, label, agent[key])
         for key, label in (
@@ -267,7 +307,7 @@ def _add_tool_item(
     files: dict[str, _Measure],
     agent: dict[str, _Measure],
     output: dict[str, _Measure],
-    tool_visible_tokens_by_item: dict[UUID, int],
+    allocated_usage_by_item: dict[UUID, dict[str, int]],
 ) -> None:
     if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
         return
@@ -275,20 +315,20 @@ def _add_tool_item(
     concept = str(summary.get("name") or item.tool_name or item.kind)
     input_size = item_input_size(item)
     output_size = item_output_size(item)
-    real_tokens = tool_visible_tokens_by_item.get(item.item_id)
+    allocated_usage = allocated_usage_by_item.get(item.item_id)
 
     if concept in _CONTEXT_CONCEPTS:
         files[concept].add(
             tokens=output_size.tokens,
             chars=output_size.chars,
-            real_tokens=real_tokens,
+            allocated_usage=allocated_usage,
         )
         return
     if concept in _OUTPUT_CONCEPT_LABELS:
         output[concept].add(
             tokens=output_size.tokens,
             chars=output_size.chars,
-            real_tokens=real_tokens,
+            allocated_usage=allocated_usage,
         )
         return
     if concept in _CODE_CHANGE_CONCEPTS:
@@ -296,7 +336,7 @@ def _add_tool_item(
         agent[key].add(
             tokens=input_size.tokens + output_size.tokens,
             chars=input_size.chars + output_size.chars,
-            real_tokens=real_tokens,
+            allocated_usage=allocated_usage,
         )
         return
     if concept in _COORDINATION_CONCEPTS:
@@ -304,13 +344,13 @@ def _add_tool_item(
         agent[key].add(
             tokens=input_size.tokens + output_size.tokens,
             chars=input_size.chars + output_size.chars,
-            real_tokens=real_tokens,
+            allocated_usage=allocated_usage,
         )
         return
     output[_output_family_key(summary, concept)].add(
         tokens=output_size.tokens,
         chars=output_size.chars,
-        real_tokens=real_tokens,
+        allocated_usage=allocated_usage,
     )
 
 
@@ -324,7 +364,11 @@ def _output_family_key(summary: dict[str, object], concept: str) -> str:
     if concept != RUN_COMMAND:
         return "other"
     family = summary.get("command_family")
-    return family if isinstance(family, str) and family in _OUTPUT_FAMILY_LABELS else "other"
+    return (
+        family
+        if isinstance(family, str) and family in _OUTPUT_FAMILY_LABELS
+        else "other"
+    )
 
 
 def _parent(
@@ -347,7 +391,7 @@ def _category(
         key=key,
         label=label,
         tokens=measure.tokens,
-        real_tokens=measure.real_tokens,
+        allocated_usage=measure.allocated_usage,
         observed_chars=measure.chars,
         items=measure.items,
         confidence="estimated_tokens",
@@ -358,7 +402,9 @@ def _category(
 
 def _set_percent(categories: Iterable[ContextCategoryFlat], denominator: int) -> None:
     for category in categories:
-        category.percent = round((category.tokens / denominator) * 100, 1) if denominator else None
+        category.percent = (
+            round((category.tokens / denominator) * 100, 1) if denominator else None
+        )
         _set_percent(category.children, denominator)
 
 
@@ -368,7 +414,7 @@ def _measure_from_categories(categories: Iterable[ContextCategoryFlat]) -> _Meas
             tokens=category.tokens,
             chars=category.observed_chars,
             items=category.items,
-            real_tokens=category.real_tokens,
+            allocated_usage=category.allocated_usage,
         )
         for category in categories
     )
@@ -381,10 +427,17 @@ def _sum(measures: Iterable[_Measure]) -> _Measure:
     return total
 
 
-def _sum_optional_ints(left: int | None, right: int | None) -> int | None:
+def _sum_usage(
+    left: dict[str, int] | None,
+    right: dict[str, int] | None,
+) -> dict[str, int] | None:
     if left is None and right is None:
         return None
-    return (left or 0) + (right or 0)
+    result: dict[str, int] = {}
+    for source in (left or {}, right or {}):
+        for key, value in source.items():
+            result[key] = result.get(key, 0) + max(value, 0)
+    return result or None
 
 
 def _label(value: str) -> str:

@@ -8,7 +8,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_serializer
 
-from coding_trajectory.metrics.accounting import usage_accounting_payload as _usage_accounting_payload
+from coding_trajectory.metrics.accounting import (
+    usage_accounting_payload as _usage_accounting_payload,
+)
 
 
 class TokenUsage(BaseModel):
@@ -32,9 +34,11 @@ class TokenUsage(BaseModel):
         return TokenUsage(
             input_tokens=self.input_tokens + other.input_tokens,
             cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
-            cache_creation_input_tokens=self.cache_creation_input_tokens + other.cache_creation_input_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens
+            + other.cache_creation_input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
-            reasoning_output_tokens=self.reasoning_output_tokens + other.reasoning_output_tokens,
+            reasoning_output_tokens=self.reasoning_output_tokens
+            + other.reasoning_output_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
         )
 
@@ -106,6 +110,7 @@ class SessionGraphMetrics(BaseModel):
 # Simplified flat output for ct session stats scopes
 # ---------------------------------------------------------------------------
 
+
 class TurnMetricsFlat(BaseModel):
     turn_id: UUID
     sequence: int
@@ -135,21 +140,21 @@ class ContextCategoryFlat(BaseModel):
     key: str
     label: str
     tokens: int = 0
-    real_tokens: int | None = None
+    allocated_usage: dict[str, int] | None = None
     observed_chars: int | None = None
     items: int | None = None
     percent: float | None = None
-    confidence: Literal["exact_usage", "exact_text", "estimated_tokens", "text_chars", "structural"] = (
-        "estimated_tokens"
-    )
+    confidence: Literal[
+        "exact_usage", "exact_text", "estimated_tokens", "text_chars", "structural"
+    ] = "estimated_tokens"
     source: str | None = None
     children: list["ContextCategoryFlat"] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
-        if data.get("real_tokens") is None:
-            data.pop("real_tokens", None)
+        if data.get("allocated_usage") is None:
+            data.pop("allocated_usage", None)
         if data.get("observed_chars") is None:
             data.pop("observed_chars", None)
         if data.get("items") is None:
@@ -195,7 +200,13 @@ class RuntimeStatsFlat(BaseModel):
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
-        for key in ("status", "started_at", "ended_at", "execution_seconds", "wait_seconds"):
+        for key in (
+            "status",
+            "started_at",
+            "ended_at",
+            "execution_seconds",
+            "wait_seconds",
+        ):
             if data.get(key) is None:
                 data.pop(key, None)
         return data
@@ -264,7 +275,9 @@ class SessionContextStatsFlat(BaseModel):
     root_session_id: UUID
     vendor: str
     model: ContextModelStatsFlat = Field(default_factory=ContextModelStatsFlat)
-    context_window: ContextWindowStatsFlat = Field(default_factory=ContextWindowStatsFlat)
+    context_window: ContextWindowStatsFlat = Field(
+        default_factory=ContextWindowStatsFlat
+    )
     provider_usage_buckets: list[ContextCategoryFlat] = Field(default_factory=list)
     runtime: RuntimeStatsFlat = Field(default_factory=RuntimeStatsFlat)
     messages: MessageStatsFlat = Field(default_factory=MessageStatsFlat)
@@ -357,6 +370,7 @@ class ReadAfterResult(BaseModel):
 
 class AllocatedRealTokenCost(BaseModel):
     input_tokens: int = 0
+    uncached_input_tokens: int = 0
     cached_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     output_tokens: int = 0
@@ -371,10 +385,12 @@ class AllocatedRealTokenCost(BaseModel):
 
 
 class AttributionPolicy(BaseModel):
-    scope: Literal["tool_items"] = "tool_items"
+    scope: Literal["tool_items", "all_items"] = "tool_items"
     cache: Literal["allocated_from_exact_usage"] = "allocated_from_exact_usage"
     usage_authority: Literal["session.usage"] = "session.usage"
-    method: Literal["visible_content_plus_event_order"] = "visible_content_plus_event_order"
+    method: Literal["visible_content_plus_event_order"] = (
+        "visible_content_plus_event_order"
+    )
     real_token_cost: Literal[
         "allocated_from_usage_observation_weighted_by_visible_item_tokens"
     ] = "allocated_from_usage_observation_weighted_by_visible_item_tokens"
@@ -414,6 +430,23 @@ class ToolItemFlat(BaseModel):
         return data
 
 
+class ItemRealTokenCostFlat(BaseModel):
+    item_id: UUID
+    session_id: UUID
+    turn_id: UUID
+    sequence: int
+    kind: str
+    visible_tokens: int = 0
+    allocated_real_token_cost: AllocatedRealTokenCost | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("allocated_real_token_cost") is None:
+            data.pop("allocated_real_token_cost", None)
+        return data
+
+
 class SessionGraphToolUsageFlat(BaseModel):
     root_session_id: UUID
     tool_item_count: int = 0
@@ -421,6 +454,7 @@ class SessionGraphToolUsageFlat(BaseModel):
     tool_output_chars: int = 0
     tool_output_original_tokens: int = 0
     allocated_real_token_cost: AllocatedRealTokenCost | None = None
+    item_real_token_costs: list[ItemRealTokenCostFlat] = Field(default_factory=list)
     tool_items: list[ToolItemFlat] = Field(default_factory=list)
     attribution_policy: AttributionPolicy = Field(default_factory=AttributionPolicy)
     warnings: list[str] = Field(default_factory=list)

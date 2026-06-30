@@ -14,9 +14,11 @@ from typing import Any, Callable
 try:
     from . import cleanup as cleanup_mod
     from . import context_window as context_window_mod
+    from . import session_analysis as session_analysis_mod
 except ImportError:
     import cleanup as cleanup_mod
     import context_window as context_window_mod
+    import session_analysis as session_analysis_mod
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +183,22 @@ class DashboardDataService:
             session_id,
             turn_id=_first(query, "turn_id"),
         ).model_dump(mode="json")
+
+    def session_analysis(self, body: dict[str, Any]) -> dict[str, Any]:
+        session_id = body.get("session_id")
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("session_id is required")
+        refresh = bool(body.get("refresh"))
+        analysis = session_analysis_mod.build_or_load_analysis(
+            session_id.strip(),
+            ct_json=_ct_json,
+            refresh=refresh,
+        )
+        return {
+            "status": "ready",
+            "artifact_path": analysis.artifact_path,
+            "analysis": analysis.model_dump(mode="json"),
+        }
 
     def vendors(self, query: dict[str, list[str]]) -> dict[str, Any]:
         vendor_stats: dict[str, dict[str, Any]] = {}

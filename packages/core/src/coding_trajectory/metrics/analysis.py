@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -12,10 +13,13 @@ from coding_trajectory.analysis.content_size import (
     item_output_text,
     output_is_truncated,
     reported_token_count,
+    visible_text_size,
 )
 from coding_trajectory import debug
 from coding_trajectory.ingestion.models import (
     ContextUsageObservation,
+    Event,
+    EventType,
     Item,
     Session,
     SessionGraph,
@@ -26,6 +30,7 @@ from coding_trajectory.metrics.models import (
     AllocatedRealTokenCost,
     AttributionPolicy,
     InvokeResponseTokens,
+    ItemRealTokenCostFlat,
     MetricSource,
     QuotaSnapshot,
     QuotaWindow,
@@ -98,14 +103,16 @@ def build_session_graph_full_metrics(
 def build_session_graph_context_stats(
     session_graph: SessionGraph,
     *,
-    tool_visible_tokens_by_item: dict[UUID, int] | None = None,
+    allocated_usage_by_item: dict[UUID, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Return provider-specific context-window stats by dispatching to a vendor handler."""
-    from coding_trajectory.metrics.context_stats import build_session_graph_context_stats as dispatch
+    from coding_trajectory.metrics.context_stats import (
+        build_session_graph_context_stats as dispatch,
+    )
 
     return dispatch(
         session_graph,
-        tool_visible_tokens_by_item=tool_visible_tokens_by_item,
+        allocated_usage_by_item=allocated_usage_by_item,
     )
 
 
@@ -180,8 +187,14 @@ def _turn_runtime(
     )
 
 
-def _turn_wait_before_seconds(previous_turn: TurnMetrics | None, turn: TurnMetrics) -> int | None:
-    if previous_turn is None or previous_turn.completed_at is None or turn.started_at is None:
+def _turn_wait_before_seconds(
+    previous_turn: TurnMetrics | None, turn: TurnMetrics
+) -> int | None:
+    if (
+        previous_turn is None
+        or previous_turn.completed_at is None
+        or turn.started_at is None
+    ):
         return None
     return max(round((turn.started_at - previous_turn.completed_at).total_seconds()), 0)
 
@@ -195,11 +208,21 @@ def _turn_execution_seconds(turn: TurnMetrics) -> int | None:
 def build_session_graph_tool_usage(
     session_graph: SessionGraph,
 ) -> dict[str, Any]:
-    """Return per-tool-item output size signals with visible-content token attribution."""
+    """Return tool usage plus cache-aware cost attribution over chronological items."""
     full = _build_full_metrics(session_graph)
 
     tool_items: list[ToolItemFlat] = []
+    item_real_token_costs: list[ItemRealTokenCostFlat] = []
     for session in session_graph.sessions:
+        session_item_real_token_costs = _build_item_real_token_costs_for_session(
+            session
+        )
+        item_real_token_costs.extend(session_item_real_token_costs)
+        session_costs_by_item_id = {
+            item.item_id: item.allocated_real_token_cost
+            for item in session_item_real_token_costs
+            if item.allocated_real_token_cost is not None
+        }
         for turn in session.turns:
             turn_observations = _turn_usage_observations(session, turn)
             tool_items.extend(
@@ -207,6 +230,7 @@ def build_session_graph_tool_usage(
                     turn,
                     session_id=session.session_id,
                     turn_observations=turn_observations,
+                    allocated_real_token_cost_by_item=session_costs_by_item_id,
                 )
             )
 
@@ -215,26 +239,30 @@ def build_session_graph_tool_usage(
         tool_item_count=len(tool_items),
         tool_call_count=len(tool_items),
         tool_output_chars=sum(item.output_chars for item in tool_items),
-        tool_output_original_tokens=sum(item.output_original_tokens or 0 for item in tool_items),
-        allocated_real_token_cost=_sum_allocated_real_token_costs(tool_items),
+        tool_output_original_tokens=sum(
+            item.output_original_tokens or 0 for item in tool_items
+        ),
+        allocated_real_token_cost=_sum_item_real_token_costs(item_real_token_costs),
+        item_real_token_costs=item_real_token_costs,
         tool_items=tool_items,
-        attribution_policy=AttributionPolicy(),
+        attribution_policy=AttributionPolicy(scope="all_items"),
         warnings=full.warnings,
     ).model_dump(mode="json")
 
 
-def _sum_allocated_real_token_costs(
-    tool_items: list[ToolItemFlat],
+def _sum_item_real_token_costs(
+    items: list[ItemRealTokenCostFlat],
 ) -> AllocatedRealTokenCost | None:
     costs = [
         item.allocated_real_token_cost
-        for item in tool_items
+        for item in items
         if item.allocated_real_token_cost is not None
     ]
     if not costs:
         return None
     return AllocatedRealTokenCost(
         input_tokens=sum(cost.input_tokens for cost in costs),
+        uncached_input_tokens=sum(cost.uncached_input_tokens for cost in costs),
         cached_input_tokens=sum(cost.cached_input_tokens for cost in costs),
         cache_creation_input_tokens=sum(
             cost.cache_creation_input_tokens for cost in costs
@@ -251,9 +279,7 @@ def _turn_usage_observations(
 ) -> list[TokenUsageObservation]:
     event_ids = set(turn.event_ids)
     observations = [
-        obs
-        for obs in session.context_usage
-        if obs.source_event_id in event_ids
+        obs for obs in session.context_usage if obs.source_event_id in event_ids
     ]
     token_observations: list[TokenUsageObservation] = []
     for observation in observations:
@@ -279,11 +305,172 @@ def _turn_usage_observations(
     return token_observations
 
 
+@dataclass(frozen=True)
+class _ItemCostEntry:
+    item_id: UUID
+    session_id: UUID
+    turn_id: UUID
+    sequence: int
+    started_at: datetime
+    kind: str
+    visible_tokens: int
+    output_eligible: bool = False
+
+
+def _build_item_real_token_costs_for_session(
+    session: Session,
+) -> list[ItemRealTokenCostFlat]:
+    entries = [
+        entry
+        for turn in sorted(session.turns, key=lambda item: item.sequence)
+        for entry in _item_cost_entries_for_turn(session, turn)
+    ]
+    if not entries:
+        return []
+
+    allocated_costs: dict[UUID, AllocatedRealTokenCost] = {}
+    for turn in sorted(session.turns, key=lambda item: item.sequence):
+        turn_observations = _turn_usage_observations(session, turn)
+        observation = turn_observations[-1] if turn_observations else None
+        if observation is None:
+            continue
+        visible_entries = [
+            entry for entry in entries if entry.started_at <= observation.timestamp
+        ]
+        response_entries = [
+            entry
+            for entry in visible_entries
+            if entry.turn_id == turn.turn_id and entry.output_eligible
+        ]
+        for item_id, cost in _allocate_real_token_costs_for_entries(
+            visible_entries,
+            observation,
+            output_entries=response_entries,
+        ).items():
+            allocated_costs[item_id] = _add_allocated_real_token_cost(
+                allocated_costs.get(item_id),
+                cost,
+            )
+
+    return [
+        ItemRealTokenCostFlat(
+            item_id=entry.item_id,
+            session_id=entry.session_id,
+            turn_id=entry.turn_id,
+            sequence=entry.sequence,
+            kind=entry.kind,
+            visible_tokens=entry.visible_tokens,
+            allocated_real_token_cost=_cap_cached_input_to_visible_tokens(
+                allocated_costs.get(entry.item_id),
+                visible_tokens=entry.visible_tokens,
+            ),
+        )
+        for entry in entries
+    ]
+
+
+def _add_allocated_real_token_cost(
+    left: AllocatedRealTokenCost | None,
+    right: AllocatedRealTokenCost,
+) -> AllocatedRealTokenCost:
+    if left is None:
+        return right
+    return AllocatedRealTokenCost(
+        input_tokens=left.input_tokens + right.input_tokens,
+        uncached_input_tokens=(
+            left.uncached_input_tokens + right.uncached_input_tokens
+        ),
+        cached_input_tokens=left.cached_input_tokens + right.cached_input_tokens,
+        cache_creation_input_tokens=(
+            left.cache_creation_input_tokens + right.cache_creation_input_tokens
+        ),
+        output_tokens=left.output_tokens + right.output_tokens,
+        reasoning_output_tokens=(
+            left.reasoning_output_tokens + right.reasoning_output_tokens
+        ),
+        total_tokens=left.total_tokens + right.total_tokens,
+        allocation_method=left.allocation_method,
+    )
+
+
+def _cap_cached_input_to_visible_tokens(
+    cost: AllocatedRealTokenCost | None,
+    *,
+    visible_tokens: int,
+) -> AllocatedRealTokenCost | None:
+    if cost is None:
+        return None
+    cached_input_tokens = min(cost.cached_input_tokens, max(visible_tokens, 0))
+    return AllocatedRealTokenCost(
+        input_tokens=cost.input_tokens,
+        uncached_input_tokens=cost.uncached_input_tokens,
+        cached_input_tokens=cached_input_tokens,
+        cache_creation_input_tokens=cost.cache_creation_input_tokens,
+        output_tokens=cost.output_tokens,
+        reasoning_output_tokens=cost.reasoning_output_tokens,
+        total_tokens=(
+            cost.uncached_input_tokens
+            + cached_input_tokens
+            + cost.cache_creation_input_tokens
+            + cost.output_tokens
+            + cost.reasoning_output_tokens
+        ),
+        allocation_method=cost.allocation_method,
+    )
+
+
+def _item_cost_entries_for_turn(session: Session, turn: Turn) -> list[_ItemCostEntry]:
+    entries: list[_ItemCostEntry] = []
+    user_event = _event_by_id(session.events, turn.user_request_event_id)
+    if user_event is not None and user_event.type == EventType.USER_PROMPT_SUBMITTED:
+        text = user_event.payload.get("text")
+        if isinstance(text, str) and text:
+            entries.append(
+                _ItemCostEntry(
+                    item_id=user_event.event_id,
+                    session_id=turn.session_id,
+                    turn_id=turn.turn_id,
+                    sequence=-1,
+                    started_at=user_event.timestamp,
+                    kind="user_prompt",
+                    visible_tokens=visible_text_size(text).tokens,
+                )
+            )
+
+    for item in sorted(turn.items, key=lambda item: (item.started_at, item.sequence)):
+        entries.append(
+            _ItemCostEntry(
+                item_id=item.item_id,
+                session_id=item.session_id,
+                turn_id=item.turn_id,
+                sequence=item.sequence,
+                started_at=item.started_at,
+                kind=item.kind,
+                visible_tokens=_item_visible_token_weight(item),
+                output_eligible=(
+                    item.kind in {"agent_message", "reasoning"}
+                    or is_tool_shaped_item(item)
+                ),
+            )
+        )
+    return entries
+
+
+def _event_by_id(events: list[Event], event_id: UUID | None) -> Event | None:
+    if event_id is None:
+        return None
+    for event in events:
+        if event.event_id == event_id:
+            return event
+    return None
+
+
 def _build_tool_items_for_turn(
     turn: Turn,
     *,
     session_id: UUID,
     turn_observations: list[TokenUsageObservation],
+    allocated_real_token_cost_by_item: dict[UUID, AllocatedRealTokenCost] | None = None,
 ) -> list[ToolItemFlat]:
     tool_entries = [item for item in turn.items if is_tool_shaped_item(item)]
     if not tool_entries:
@@ -306,25 +493,13 @@ def _build_tool_items_for_turn(
     if current:
         groups.append((current, _group_observation(current, turn_observations)))
 
-    real_token_costs: dict[UUID, AllocatedRealTokenCost] = {}
     observation_item_counts: dict[UUID, int] = {}
-    items_by_observation: dict[UUID, list[Any]] = {}
     for group_items, invoke_obs in groups:
-        if invoke_obs is None:
-            continue
-        observation_id = invoke_obs.source.event_id
-        if observation_id is None:
-            continue
-        items_by_observation.setdefault(observation_id, []).extend(group_items)
-
-    for observation_id, observation_items in items_by_observation.items():
-        observation = _observation_by_id(turn_observations, observation_id)
-        if observation is None:
-            continue
-        observation_item_counts[observation_id] = len(observation_items)
-        real_token_costs.update(
-            _allocate_real_token_costs(observation_items, observation)
-        )
+        observation_id = invoke_obs.source.event_id if invoke_obs is not None else None
+        if observation_id is not None:
+            observation_item_counts[observation_id] = observation_item_counts.get(
+                observation_id, 0
+            ) + len(group_items)
 
     items: list[ToolItemFlat] = []
     for group_items, invoke_obs in groups:
@@ -337,7 +512,9 @@ def _build_tool_items_for_turn(
                 turn_id=turn.turn_id,
             )
             base.token_attribution = _build_token_attribution(item)
-            base.allocated_real_token_cost = real_token_costs.get(item.item_id)
+            base.allocated_real_token_cost = (
+                allocated_real_token_cost_by_item or {}
+            ).get(item.item_id)
             base.invoke_response_tokens = _build_invoke_response_tokens(
                 invoke_obs, count=count
             )
@@ -348,16 +525,6 @@ def _build_tool_items_for_turn(
             )
             items.append(base)
     return items
-
-
-def _observation_by_id(
-    observations: list[TokenUsageObservation],
-    observation_id: UUID,
-) -> TokenUsageObservation | None:
-    for observation in observations:
-        if observation.source.event_id == observation_id:
-            return observation
-    return None
 
 
 def _item_observation_signature(
@@ -417,67 +584,94 @@ def _build_token_attribution(item: Any) -> ToolTokenAttribution:
     )
 
 
-def _allocate_real_token_costs(
-    group_items: list[Any],
+def _allocate_real_token_costs_for_entries(
+    entries: list[_ItemCostEntry],
     observation: TokenUsageObservation | None,
+    *,
+    output_entries: list[_ItemCostEntry] | None = None,
 ) -> dict[UUID, AllocatedRealTokenCost]:
-    if observation is None or not group_items:
+    if observation is None or not entries:
         return {}
     usage = observation.usage
     if _is_zero_usage(usage):
         return {}
 
-    weights = [_item_visible_token_weight(item) for item in group_items]
-    if sum(weights) > 0:
+    all_weights = [entry.visible_tokens for entry in entries]
+    if sum(all_weights) > 0:
         method = "usage_observation_weighted_by_visible_item_tokens"
     else:
         method = "usage_observation_even_split"
-        weights = [1 for _item in group_items]
+        all_weights = [1 for _entry in entries]
 
-    allocations_by_key = {
-        key: _allocate_int(total, weights)
-        for key, total in (
-            ("input_tokens", usage.input_tokens),
-            ("cached_input_tokens", usage.cached_input_tokens),
-            ("cache_creation_input_tokens", usage.cache_creation_input_tokens),
-            ("output_tokens", usage.output_tokens),
-            ("reasoning_output_tokens", usage.reasoning_output_tokens),
-            ("total_tokens", _effective_token_total(usage, observation)),
-        )
-    }
+    output_entry_ids = {entry.item_id for entry in (output_entries or [])}
+    output_weights = [
+        entry.visible_tokens if entry.item_id in output_entry_ids else 0
+        for entry in entries
+    ]
+    if sum(output_weights) <= 0:
+        output_weights = all_weights
+
+    effective_input_total = _effective_input_token_total(usage, observation)
+    input_allocations = _allocate_int(usage.input_tokens, all_weights)
+    cached_allocations = _allocate_item_local_cached_tokens(
+        usage.cached_input_tokens,
+        all_weights,
+    )
+    cache_creation_allocations = _allocate_int(
+        usage.cache_creation_input_tokens,
+        all_weights,
+    )
+    uncached_input_allocations = _allocate_int(effective_input_total, all_weights)
+    output_allocations = _allocate_int(usage.output_tokens, output_weights)
+    reasoning_allocations = _allocate_int(usage.reasoning_output_tokens, output_weights)
 
     result: dict[UUID, AllocatedRealTokenCost] = {}
-    for index, item in enumerate(group_items):
-        allocated = {
-            key: values[index]
-            for key, values in allocations_by_key.items()
-        }
-        result[item.item_id] = AllocatedRealTokenCost(
-            **allocated,
+    for index, entry in enumerate(entries):
+        result[entry.item_id] = AllocatedRealTokenCost(
+            input_tokens=input_allocations[index],
+            uncached_input_tokens=uncached_input_allocations[index],
+            cached_input_tokens=cached_allocations[index],
+            cache_creation_input_tokens=cache_creation_allocations[index],
+            output_tokens=output_allocations[index],
+            reasoning_output_tokens=reasoning_allocations[index],
+            total_tokens=(
+                uncached_input_allocations[index]
+                + cached_allocations[index]
+                + cache_creation_allocations[index]
+                + output_allocations[index]
+                + reasoning_allocations[index]
+            ),
             allocation_method=method,
         )
     return result
 
 
-def _effective_token_total(
+def _effective_input_token_total(
     usage: TokenUsage,
     observation: TokenUsageObservation,
 ) -> int:
     if _uses_net_input_convention(observation.provider, observation.model):
-        effective_input_tokens = usage.input_tokens
-    else:
-        effective_input_tokens = max(
-            usage.input_tokens
-            - usage.cached_input_tokens
-            - usage.cache_creation_input_tokens,
-            0,
-        )
-    return (
-        effective_input_tokens
-        + usage.cache_creation_input_tokens
-        + usage.output_tokens
-        + usage.reasoning_output_tokens
+        return usage.input_tokens
+    return max(
+        usage.input_tokens
+        - usage.cached_input_tokens
+        - usage.cache_creation_input_tokens,
+        0,
     )
+
+
+def _allocate_item_local_cached_tokens(total: int, weights: list[int]) -> list[int]:
+    if total <= 0 or not weights:
+        return [0 for _weight in weights]
+    capped_total = min(total, sum(max(weight, 0) for weight in weights))
+    return [
+        min(allocation, max(weight, 0))
+        for allocation, weight in zip(
+            _allocate_int(capped_total, weights),
+            weights,
+            strict=True,
+        )
+    ]
 
 
 def _uses_net_input_convention(provider: str | None, model: str | None) -> bool:
@@ -487,6 +681,9 @@ def _uses_net_input_convention(provider: str | None, model: str | None) -> bool:
 
 
 def _item_visible_token_weight(item: Any) -> int:
+    if item.kind in {"agent_message", "reasoning"}:
+        text = getattr(item, "text", None) or ""
+        return max(visible_text_size(text).tokens, 0)
     attribution = _build_token_attribution(item)
     return max(
         int(attribution.tool_input_tokens) + int(attribution.tool_output_tokens),
@@ -571,7 +768,11 @@ def _tool_item_flat(item: Item, *, session_id: UUID, turn_id: UUID) -> ToolItemF
         turn_id=turn_id,
         tool_name=getattr(item, "tool_name", None),
         status=getattr(item, "status", None),
-        input_summary=_tool_input_summary(getattr(item, "input", None) if item.kind != "command_execution" else getattr(item, "command", None)),
+        input_summary=_tool_input_summary(
+            getattr(item, "input", None)
+            if item.kind != "command_execution"
+            else getattr(item, "command", None)
+        ),
         output_chars=len(output),
         output_original_tokens=reported_token_count(output),
         output_truncated=output_is_truncated(output),
@@ -623,7 +824,9 @@ def _build_full_metrics(
                 code="usage.no_token_metrics",
                 severity="warning",
                 session_id=str(session.session_id),
-                vendor=session.vendor.value if getattr(session.vendor, "value", None) else None,
+                vendor=session.vendor.value
+                if getattr(session.vendor, "value", None)
+                else None,
             )
 
     return SessionGraphMetrics(
@@ -738,7 +941,9 @@ def _quota_snapshot_from_context_usage(
         plan_type=_as_str(rate_limits.get("plan_type")),
         primary=_quota_window(rate_limits.get("primary")),
         secondary=_quota_window(rate_limits.get("secondary")),
-        credits=rate_limits.get("credits") if isinstance(rate_limits.get("credits"), dict) else None,
+        credits=rate_limits.get("credits")
+        if isinstance(rate_limits.get("credits"), dict)
+        else None,
         individual_limit=(
             rate_limits.get("individual_limit")
             if isinstance(rate_limits.get("individual_limit"), dict)
@@ -761,9 +966,12 @@ def _quota_window(value: Any) -> QuotaWindow | None:
 def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
     return TokenUsage(
         input_tokens=_as_int(value.get("input_tokens") or value.get("inputTokens")),
-        cached_input_tokens=_as_int(value.get("cached_input_tokens") or value.get("cachedInputTokens")),
+        cached_input_tokens=_as_int(
+            value.get("cached_input_tokens") or value.get("cachedInputTokens")
+        ),
         cache_creation_input_tokens=_as_int(
-            value.get("cache_creation_input_tokens") or value.get("cacheCreationInputTokens")
+            value.get("cache_creation_input_tokens")
+            or value.get("cacheCreationInputTokens")
         ),
         output_tokens=_as_int(value.get("output_tokens") or value.get("outputTokens")),
         reasoning_output_tokens=_as_int(

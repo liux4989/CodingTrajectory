@@ -19,8 +19,19 @@ from coding_trajectory.discovery import (
     format_discovery_sources,
 )
 from coding_trajectory.contracts import service_contract
-from coding_trajectory.ingestion.common import format_datetime, normalize_project_key, prune_nones
-from coding_trajectory.ingestion.models import Event, EventType, Session, Item, SessionGraph, Turn
+from coding_trajectory.ingestion.common import (
+    format_datetime,
+    normalize_project_key,
+    prune_nones,
+)
+from coding_trajectory.ingestion.models import (
+    Event,
+    EventType,
+    Session,
+    Item,
+    SessionGraph,
+    Turn,
+)
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 
 
@@ -95,12 +106,24 @@ def _render_public_session_ids(value: Any, session_ids: dict[str, str]) -> Any:
         if key == "payload":
             rendered[key] = item
             continue
-        if key in {"root_session_id", "session_id", "parent_session_id", "agent_session_id", "handoff_session_id"}:
-            rendered[key] = _public_session_id_value(item, session_ids) if isinstance(item, str) else item
+        if key in {
+            "root_session_id",
+            "session_id",
+            "parent_session_id",
+            "agent_session_id",
+            "handoff_session_id",
+        }:
+            rendered[key] = (
+                _public_session_id_value(item, session_ids)
+                if isinstance(item, str)
+                else item
+            )
             continue
         if key in {"session_ids", "forked_session_ids"} and isinstance(item, list):
             rendered[key] = [
-                _public_session_id_value(entry, session_ids) if isinstance(entry, str) else entry
+                _public_session_id_value(entry, session_ids)
+                if isinstance(entry, str)
+                else entry
                 for entry in item
             ]
             continue
@@ -113,13 +136,17 @@ def _public_output_for_session_graph(session_graph: SessionGraph, payload: Any) 
 
 
 def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any]:
-    vendors = sorted({session.vendor.value for session in session_graph.sessions if session.vendor})
+    vendors = sorted(
+        {session.vendor.value for session in session_graph.sessions if session.vendor}
+    )
     return prune_nones(
         {
             "root_session_id": str(session_graph.root_session_id),
             "title": _session_graph_title(session_graph),
             "vendors": vendors or None,
-            "session_ids": [str(session.session_id) for session in session_graph.sessions],
+            "session_ids": [
+                str(session.session_id) for session in session_graph.sessions
+            ],
         }
     )
 
@@ -154,7 +181,9 @@ def serialize_item_detail(item: Item) -> dict[str, Any]:
             "session_id": str(item.session_id),
             "turn_id": str(item.turn_id),
             "kind": item.kind,
-            **item.model_dump(mode="json", exclude={"item_id", "session_id", "turn_id", "kind"}),
+            **item.model_dump(
+                mode="json", exclude={"item_id", "session_id", "turn_id", "kind"}
+            ),
         }
     )
 
@@ -173,9 +202,12 @@ def serialize_event_detail(event: Event) -> dict[str, Any]:
     )
 
 
-
 def serialize_tool_call_detail(event: Event) -> dict[str, Any] | None:
-    if event.type not in {EventType.TOOL_CALL_REQUESTED, EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED}:
+    if event.type not in {
+        EventType.TOOL_CALL_REQUESTED,
+        EventType.TOOL_CALL_SUCCEEDED,
+        EventType.TOOL_CALL_FAILED,
+    }:
         return None
 
     payload = event.payload
@@ -184,31 +216,45 @@ def serialize_tool_call_detail(event: Event) -> dict[str, Any] | None:
         EventType.TOOL_CALL_SUCCEEDED: "done",
         EventType.TOOL_CALL_FAILED: "failed",
     }
-    return prune_nones(
-        {
-            "tool_call_id": payload.get("tool_call_id"),
-            "tool_name": payload.get("tool_name"),
-            "input": payload.get("tool_args") or payload.get("input"),
-            "result": payload.get("result") or payload.get("tool_output") or payload.get("tool_text"),
-            "status": status_by_type.get(event.type),
-        }
-    ) or None
+    return (
+        prune_nones(
+            {
+                "tool_call_id": payload.get("tool_call_id"),
+                "tool_name": payload.get("tool_name"),
+                "input": payload.get("tool_args") or payload.get("input"),
+                "result": payload.get("result")
+                or payload.get("tool_output")
+                or payload.get("tool_text"),
+                "status": status_by_type.get(event.type),
+            }
+        )
+        or None
+    )
 
 
 def serialize_llm_detail(event: Event) -> dict[str, Any] | None:
     if event.type != EventType.LLM_RESPONSE:
         return None
 
-    usage = event.payload.get("usage") if isinstance(event.payload.get("usage"), dict) else {}
-    return prune_nones(
-        {
-            "model": event.payload.get("model") or event.payload.get("model_version"),
-            "input_tokens": usage.get("input_tokens") or usage.get("prompt_tokens"),
-            "output_tokens": usage.get("output_tokens") or usage.get("completion_tokens"),
-            "total_tokens": usage.get("total_tokens"),
-            "stop_reason": event.payload.get("stop_reason"),
-        }
-    ) or None
+    usage = (
+        event.payload.get("usage")
+        if isinstance(event.payload.get("usage"), dict)
+        else {}
+    )
+    return (
+        prune_nones(
+            {
+                "model": event.payload.get("model")
+                or event.payload.get("model_version"),
+                "input_tokens": usage.get("input_tokens") or usage.get("prompt_tokens"),
+                "output_tokens": usage.get("output_tokens")
+                or usage.get("completion_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+                "stop_reason": event.payload.get("stop_reason"),
+            }
+        )
+        or None
+    )
 
 
 def serialize_text_detail(event: Event) -> dict[str, Any] | None:
@@ -229,7 +275,9 @@ def _normalize_user_id(raw_id: str) -> str:
     return str(_parse_user_id(raw_id))
 
 
-def resolve_resource(store: DocumentStore, resource: str, raw_id: str) -> SessionGraph | Session | Turn | Event | Item:
+def resolve_resource(
+    store: DocumentStore, resource: str, raw_id: str
+) -> SessionGraph | Session | Turn | Event | Item:
     resource_id = _parse_user_id(raw_id)
 
     if resource == "session_graph":
@@ -263,22 +311,28 @@ def resolve_collection(
             session_graphs = [
                 item
                 for item in session_graphs
-                if item.project_identifier and normalize_project_key(item.project_identifier) == current_project
+                if item.project_identifier
+                and normalize_project_key(item.project_identifier) == current_project
             ]
         if project_name is not None:
             key = normalize_project_key(project_name)
             session_graphs = [
                 item
                 for item in session_graphs
-                if item.project_identifier and normalize_project_key(item.project_identifier) == key
+                if item.project_identifier
+                and normalize_project_key(item.project_identifier) == key
             ]
         if agent_vendor is not None:
             session_graphs = [
                 item
                 for item in session_graphs
-                if item.summary and any(v.value == agent_vendor for v in item.summary.vendors)
+                if item.summary
+                and any(v.value == agent_vendor for v in item.summary.vendors)
             ]
-        return sorted(session_graphs, key=lambda item: (item.project_identifier or "", str(item.root_session_id)))
+        return sorted(
+            session_graphs,
+            key=lambda item: (item.project_identifier or "", str(item.root_session_id)),
+        )
 
     if resource == "session":
         sessions = list(store.sessions.values())
@@ -289,7 +343,9 @@ def resolve_collection(
                 for item in sessions
                 if store.session_to_root.get(item.session_id) == tid
             ]
-        return sorted(sessions, key=lambda item: (item.started_at, str(item.session_id)))
+        return sorted(
+            sessions, key=lambda item: (item.started_at, str(item.session_id))
+        )
 
     raise ValueError(f"unsupported resource: {resource}")
 
@@ -310,7 +366,9 @@ class IndexCache:
     session_to_session_graph: dict[str, str] = field(default_factory=dict)
 
     def paths_for_session_graph(self, root_session_id: str) -> list[str]:
-        return [p for p, tid in self.path_to_session_graph.items() if tid == root_session_id]
+        return [
+            p for p, tid in self.path_to_session_graph.items() if tid == root_session_id
+        ]
 
     def save(self) -> None:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -375,18 +433,26 @@ def _resolve_session_graph(store: Any, raw_id: str | None) -> Any:
                 try:
                     return store.get_session_graph_for_turn(resource_id)
                 except ResourceNotFoundError:
-                    raise ResourceNotFoundError(f"resource not found: {raw_id}") from None
+                    raise ResourceNotFoundError(
+                        f"resource not found: {raw_id}"
+                    ) from None
     session_graphs = list(store.session_graphs.values())
     if len(session_graphs) == 1:
         return session_graphs[0]
     if not session_graphs:
         raise ValueError("no session_graphs found in store")
-    raise ValueError("session_id is required when the store contains multiple session_graphs")
+    raise ValueError(
+        "session_id is required when the store contains multiple session_graphs"
+    )
 
 
 def _session_graph_entrypoint_id(params: dict[str, Any]) -> str | None:
     """Return the public session entry point."""
-    return params.get("session_id") or params.get("root_session_id") or params.get("turn_id")
+    return (
+        params.get("session_id")
+        or params.get("root_session_id")
+        or params.get("turn_id")
+    )
 
 
 def _update_path_index(cache: IndexCache, sources: list[DiscoverySource]) -> None:
@@ -429,7 +495,9 @@ def _build_store_full(
     return discovery.store, format_discovery_sources(discovery.sources)
 
 
-def _build_store_targeted(paths: list[str], cache: IndexCache) -> tuple[DocumentStore, str]:
+def _build_store_targeted(
+    paths: list[str], cache: IndexCache
+) -> tuple[DocumentStore, str]:
     """Targeted discovery — ingest only the files mapped to a session_graph."""
     if not paths:
         return DocumentStore.from_session_graphs([]), "(no targeted paths)"
@@ -480,7 +548,9 @@ def resolve_store(
     entrypoint_id = _session_graph_entrypoint_id(params)
     if entrypoint_id and cache.path_to_session_graph:
         normalized_entrypoint_id = _normalize_user_id(entrypoint_id)
-        target_session_graph_id = cache.session_to_session_graph.get(normalized_entrypoint_id, normalized_entrypoint_id)
+        target_session_graph_id = cache.session_to_session_graph.get(
+            normalized_entrypoint_id, normalized_entrypoint_id
+        )
         cached_paths = cache.paths_for_session_graph(target_session_graph_id)
         if cached_paths:
             return _build_store_targeted(cached_paths, cache)
@@ -502,7 +572,9 @@ def resolve_store(
     )
 
 
-def _resolve_bulk_cached_paths(raw_ids: list[str], cache: IndexCache) -> list[str] | None:
+def _resolve_bulk_cached_paths(
+    raw_ids: list[str], cache: IndexCache
+) -> list[str] | None:
     """Collect targeted cached paths for a list of session IDs.
 
     Returns ``None`` when the cache path index is empty, signalling that
@@ -582,7 +654,8 @@ def project_list_metadata(
             "path": None,
             "vendors": sorted(temporary_vendors),
             "sessions": sorted(
-                temporary_sessions, key=lambda session: (session["project"], session["vendor"])
+                temporary_sessions,
+                key=lambda session: (session["project"], session["vendor"]),
             ),
         }
 
@@ -705,9 +778,7 @@ def _handle_project_sessions(
 
             item["runtime"] = build_session_graph_runtime(graph)
         items.append(_public_output_for_session_graph(graph, item))
-    return {
-        "items": items
-    }
+    return {"items": items}
 
 
 def _handle_project_list(
@@ -789,23 +860,23 @@ def _handle_session_stats(
     )
     _cache_session_graph(context, session_graph)
     tool_usage = build_session_graph_tool_usage(session_graph)
-    tool_visible_tokens_by_item: dict[UUID, int] = {}
-    for item in tool_usage.get("tool_items") or []:
-        if not isinstance(item, dict) or not isinstance(item.get("token_attribution"), dict):
+    allocated_usage_by_item: dict[UUID, dict[str, int]] = {}
+    for item in tool_usage.get("item_real_token_costs") or []:
+        if not isinstance(item, dict) or not isinstance(
+            item.get("allocated_real_token_cost"), dict
+        ):
             continue
-        token_attribution = item["token_attribution"]
-        input_tokens = token_attribution.get("tool_input_tokens")
-        output_tokens = token_attribution.get("tool_output_tokens")
-        if not isinstance(input_tokens, int) and not isinstance(output_tokens, int):
+        allocated_usage = _context_allocated_usage(item["allocated_real_token_cost"])
+        if allocated_usage is None:
             continue
         try:
             item_id = UUID(str(item.get("item_id")))
         except (TypeError, ValueError):
             continue
-        tool_visible_tokens_by_item[item_id] = (input_tokens or 0) + (output_tokens or 0)
+        allocated_usage_by_item[item_id] = allocated_usage
     result = build_session_graph_context_stats(
         session_graph,
-        tool_visible_tokens_by_item=tool_visible_tokens_by_item,
+        allocated_usage_by_item=allocated_usage_by_item,
     )
     if tool_usage.get("allocated_real_token_cost"):
         result["allocated_real_token_cost"] = tool_usage["allocated_real_token_cost"]
@@ -813,6 +884,32 @@ def _handle_session_stats(
         session_graph,
         result,
     )
+
+
+def _context_allocated_usage(cost: dict[str, Any]) -> dict[str, int] | None:
+    uncached_input_tokens = _int_token(cost.get("uncached_input_tokens"))
+    cached_input_tokens = _int_token(cost.get("cached_input_tokens"))
+    output_tokens = _int_token(cost.get("output_tokens"))
+    reasoning_output_tokens = _int_token(cost.get("reasoning_output_tokens"))
+    total_tokens = (
+        uncached_input_tokens
+        + cached_input_tokens
+        + output_tokens
+        + reasoning_output_tokens
+    )
+    if total_tokens <= 0:
+        return None
+    return {
+        "uncached_input_tokens": uncached_input_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "output_tokens": output_tokens,
+        "reasoning_output_tokens": reasoning_output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def _int_token(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _handle_session_turn_usage(
@@ -902,7 +999,9 @@ def _handle_session_events(
         for eid in event_ids:
             try:
                 event = resolve_resource(context.store, "event", eid)
-                session_graph = context.store.get_session_graph_for_session(event.session_id)
+                session_graph = context.store.get_session_graph_for_session(
+                    event.session_id
+                )
                 if root_session_id is None:
                     root_session_id = str(session_graph.root_session_id)
                 detail = _public_output_for_session_graph(
@@ -965,7 +1064,9 @@ def _handle_session_items(
         for item_id in item_ids:
             try:
                 item = resolve_resource(context.store, "item", item_id)
-                session_graph = context.store.get_session_graph_for_session(item.session_id)
+                session_graph = context.store.get_session_graph_for_session(
+                    item.session_id
+                )
                 result.append(
                     _public_output_for_session_graph(
                         session_graph,

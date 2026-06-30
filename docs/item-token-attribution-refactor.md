@@ -31,7 +31,8 @@ The current safe boundary is:
 
 - Do not move turn/session usage to item scope.
 - Do not claim item attribution is exact billing truth.
-- Do not allocate cached-token reuse to individual items in the first pass.
+- Do not turn allocated token buckets into USD without an explicit pricing
+  configuration.
 - Do not introduce USD cost into item/tool attribution.
 - Do not make plugin consumers depend on core-private helper APIs.
 
@@ -67,7 +68,10 @@ message stats.
 
 Keep this surface cache-aware and turn/session-scoped. Documentation and labels
 may clarify that category composition combines exact usage buckets with
-estimated structural/text evidence, but the API should not become item-level.
+estimated structural/text evidence. Category rows should show visible `tokens`
+separately from the allocated usage tuple (`uncached_input_tokens`,
+`cached_input_tokens`, `output_tokens`, `reasoning_output_tokens`) so
+composition does not collapse into a single pseudo-price.
 
 ### `session.tool_usage`
 
@@ -135,9 +139,15 @@ Field meaning:
   request in the same turn, meaning the result could have contributed to that
   request's input context.
 
-Do not add `cached_input_tokens_by_item` or `cache_creation_input_tokens_by_item`
-in the first pass. Cache attribution requires repeated-content matching and
-would make the item view harder to explain.
+The item view keeps provider usage buckets separate after allocation:
+`input_tokens`, `uncached_input_tokens`, `cached_input_tokens`,
+`cache_creation_input_tokens`, `output_tokens`, and
+`reasoning_output_tokens`. This makes the attribution rate-neutral: callers can
+apply pricing later without embedding model-specific rates in the metrics layer.
+`total_tokens` is the sum of allocated price-bearing buckets and includes cached
+input rather than subtracting it away as an effective-token shortcut.
+Cached input is capped to the item's own visible token footprint so a single
+item does not inherit unrelated cached context from the full replayed request.
 
 ## Attribution Rules
 
@@ -187,7 +197,8 @@ Attribution policy:
   set `included_in_turn_usage = true`;
 - if the turn completes or aborts before another model request, set
   `included_in_turn_usage = false`;
-- do not allocate cached-token reuse back to the item.
+- keep cached input as a separate allocated bucket rather than folding it into
+  uncached input or subtracting it from the total.
 
 ## Reconciliation
 
@@ -208,7 +219,7 @@ The `session.tool_usage` payload should include a note or metadata block:
 {
   "attribution_policy": {
     "scope": "tool_items",
-    "cache": "not_allocated_to_items",
+    "cache": "allocated_as_separate_usage_bucket",
     "usage_authority": "session.usage",
     "method": "visible_content_plus_event_order"
   }
@@ -251,7 +262,9 @@ attribution with labels such as:
 - `estimated`
 - `shared`
 
-Avoid labels such as `real item cost` or `per-tool billing`.
+Avoid labels such as `per-tool billing`; allocated item cost is still derived
+from observed session usage and visible item weights, not direct provider
+per-item billing.
 
 ## Implementation Status
 
@@ -285,5 +298,5 @@ Expected behavior:
    usage.
 5. Tool output token estimates prefer observed wrapper counts over rough text
    estimates.
-6. Item attribution metadata clearly states that cache reuse is not allocated to
-   items.
+6. Item attribution metadata clearly states that cache reuse is allocated as a
+   separate bucket, not merged into uncached input or USD billing.

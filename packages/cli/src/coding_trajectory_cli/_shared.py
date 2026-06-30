@@ -11,7 +11,9 @@ from coding_trajectory.analysis.projection_utils import truncate_text_preview
 
 OUTPUT_CHOICES = ("markdown", "json")
 TERMINAL_LINE_LIMIT = 140
-UUID_PATTERN = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+UUID_PATTERN = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
 
 
 class GhFormatter(argparse.RawDescriptionHelpFormatter):
@@ -43,7 +45,12 @@ class GhFormatter(argparse.RawDescriptionHelpFormatter):
                 remaining = lines[:flags_start] + lines[flags_end:]
                 while remaining and not remaining[-1].strip():
                     remaining.pop()
-                text = "\n".join(remaining) + "\n\n" + "\n".join(flags_block).rstrip() + "\n"
+                text = (
+                    "\n".join(remaining)
+                    + "\n\n"
+                    + "\n".join(flags_block).rstrip()
+                    + "\n"
+                )
         return text
 
 
@@ -82,7 +89,11 @@ def add_output_flags(parser: argparse.ArgumentParser) -> None:
         metavar="{" + ",".join(OUTPUT_CHOICES) + "}",
         help="Select stdout format.",
     )
-    parser.add_argument("--global-scope", action="store_true", help="Search all known log files instead of the most-recent session.")
+    parser.add_argument(
+        "--global-scope",
+        action="store_true",
+        help="Search all known log files instead of the most-recent session.",
+    )
 
 
 def add_params_flag(parser: argparse.ArgumentParser) -> None:
@@ -155,7 +166,9 @@ def json_text(payload: Any) -> str:
 
 
 def selected_output(args: argparse.Namespace) -> str:
-    return getattr(args, "output_format", None) or getattr(args, "_default_output", "markdown")
+    return getattr(args, "output_format", None) or getattr(
+        args, "_default_output", "markdown"
+    )
 
 
 def _strip_inline_markdown(text: str) -> str:
@@ -175,12 +188,19 @@ def _is_markdown_table_separator(line: str) -> bool:
 
 
 def _is_markdown_table_row(line: str) -> bool:
-    return line.strip().startswith("|") and line.strip().endswith("|") and "|" in line.strip()[1:-1]
+    return (
+        line.strip().startswith("|")
+        and line.strip().endswith("|")
+        and "|" in line.strip()[1:-1]
+    )
 
 
 def _render_markdown_table(rows: list[str]) -> list[str]:
     parsed_rows = [
-        [_normalize_terminal_text(cell.strip()) for cell in row.strip().strip("|").split("|")]
+        [
+            _normalize_terminal_text(cell.strip())
+            for cell in row.strip().strip("|").split("|")
+        ]
         for row in rows
         if not _is_markdown_table_separator(row)
     ]
@@ -192,7 +212,10 @@ def _render_markdown_table(rows: list[str]) -> list[str]:
         row.extend([""] * (column_count - len(row)))
         for index, cell in enumerate(row):
             widths[index] = max(widths[index], len(cell))
-    return ["  ".join(cell.ljust(widths[index]) for index, cell in enumerate(row)).rstrip() for row in parsed_rows]
+    return [
+        "  ".join(cell.ljust(widths[index]) for index, cell in enumerate(row)).rstrip()
+        for row in parsed_rows
+    ]
 
 
 def _trim_terminal_line(line: str, *, limit: int = TERMINAL_LINE_LIMIT) -> str:
@@ -232,7 +255,11 @@ def render_markdown_for_terminal(markdown: str) -> str:
             index += 1
             continue
 
-        if _is_markdown_table_row(line) and index + 1 < len(lines) and _is_markdown_table_separator(lines[index + 1]):
+        if (
+            _is_markdown_table_row(line)
+            and index + 1 < len(lines)
+            and _is_markdown_table_separator(lines[index + 1])
+        ):
             table_rows = [line]
             index += 2
             while index < len(lines) and _is_markdown_table_row(lines[index]):
@@ -243,10 +270,14 @@ def render_markdown_for_terminal(markdown: str) -> str:
 
         heading = re.fullmatch(r"#{1,6}\s+(.+)", stripped)
         if heading:
-            rendered.append(_trim_terminal_line(_normalize_terminal_text(heading.group(1))))
+            rendered.append(
+                _trim_terminal_line(_normalize_terminal_text(heading.group(1)))
+            )
         elif stripped.startswith(">"):
             quote = stripped.lstrip(">").strip()
-            rendered.append(_trim_terminal_line(f"Warning: {_normalize_terminal_text(quote)}"))
+            rendered.append(
+                _trim_terminal_line(f"Warning: {_normalize_terminal_text(quote)}")
+            )
         else:
             rendered.append(_trim_terminal_line(_normalize_terminal_text(line)))
         index += 1
@@ -258,33 +289,44 @@ def drop_none(item: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in item.items() if value is not None}
 
 
-def compact_usage(usage: dict[str, Any] | None, *, include_cost: bool = True) -> dict[str, Any] | None:
+def compact_usage(
+    usage: dict[str, Any] | None, *, include_cost: bool = True
+) -> dict[str, Any] | None:
     if not isinstance(usage, dict):
         return None
-    return drop_none(
-        {
-            "input": usage.get("input_tokens"),
-            "cached": usage.get("cached_input_tokens"),
-            "cache_creation": usage.get("cache_creation_input_tokens"),
-            "output": usage.get("output_tokens"),
-            "reasoning": usage.get("reasoning_output_tokens"),
-            "total": usage.get("total_tokens"),
-            "cost": usage.get("cost_usd") if include_cost else None,
-        }
-    ) or None
+    return (
+        drop_none(
+            {
+                "input": usage.get("input_tokens"),
+                "uncached_input": usage.get("uncached_input_tokens"),
+                "cached": usage.get("cached_input_tokens"),
+                "cache_creation": usage.get("cache_creation_input_tokens"),
+                "output": usage.get("output_tokens"),
+                "reasoning": usage.get("reasoning_output_tokens"),
+                "total": usage.get("total_tokens"),
+                "cost": usage.get("cost_usd") if include_cost else None,
+            }
+        )
+        or None
+    )
 
 
 def compact_request(request: Any) -> Any:
     if not isinstance(request, dict):
         return request
     text = request.get("content") or request.get("summary") or request.get("text")
-    return drop_none(
-        {
-            "text": text,
-            "source": request.get("source"),
-            "type": request.get("type") if request.get("type") not in {None, "message"} else None,
-        }
-    ) or None
+    return (
+        drop_none(
+            {
+                "text": text,
+                "source": request.get("source"),
+                "type": request.get("type")
+                if request.get("type") not in {None, "message"}
+                else None,
+            }
+        )
+        or None
+    )
 
 
 def compact_activity(activity: Any) -> Any:
@@ -308,7 +350,9 @@ def compact_activity(activity: Any) -> Any:
             compact.pop("count", None)
         return drop_none(compact)
     if "text" in activity:
-        return drop_none({"text": activity.get("text"), "item_ids": activity.get("item_ids")})
+        return drop_none(
+            {"text": activity.get("text"), "item_ids": activity.get("item_ids")}
+        )
     if "teammate_summary" in activity:
         return {"teammate_summary": activity.get("teammate_summary")}
     return activity
@@ -318,14 +362,19 @@ def compact_relationship(relationship: Any) -> Any:
     if not isinstance(relationship, dict):
         return relationship
     if relationship.get("role") == "main":
-        return drop_none({"role": "main", "forks": relationship.get("forked_session_ids")})
-    return drop_none(
-        {
-            "type": relationship.get("relationship"),
-            "parent": relationship.get("parent_session_id"),
-            "forks": relationship.get("forked_session_ids"),
-        }
-    ) or None
+        return drop_none(
+            {"role": "main", "forks": relationship.get("forked_session_ids")}
+        )
+    return (
+        drop_none(
+            {
+                "type": relationship.get("relationship"),
+                "parent": relationship.get("parent_session_id"),
+                "forks": relationship.get("forked_session_ids"),
+            }
+        )
+        or None
+    )
 
 
 def compact_context_category(category: Any) -> Any:
@@ -336,13 +385,17 @@ def compact_context_category(category: Any) -> Any:
             "key": category.get("key"),
             "label": category.get("label"),
             "tokens": category.get("tokens"),
-            "real": category.get("real_tokens"),
+            "usage": category.get("allocated_usage"),
             "pct": category.get("percent"),
             "chars": category.get("observed_chars"),
             "items": category.get("items"),
             "confidence": category.get("confidence"),
             "source": category.get("source"),
-            "children": [compact_context_category(child) for child in category.get("children") or []] or None,
+            "children": [
+                compact_context_category(child)
+                for child in category.get("children") or []
+            ]
+            or None,
         }
     )
 
@@ -353,7 +406,11 @@ def compact_payload(method: str, payload: Any) -> Any:
         return {
             "items": {
                 name: drop_none(
-                    {"path": item.get("path"), "vendors": item.get("vendors"), "sessions": item.get("sessions")}
+                    {
+                        "path": item.get("path"),
+                        "vendors": item.get("vendors"),
+                        "sessions": item.get("sessions"),
+                    }
                 )
                 for name, item in items.items()
                 if isinstance(item, dict)
@@ -387,7 +444,9 @@ def compact_payload(method: str, payload: Any) -> Any:
                 drop_none(
                     {
                         "id": session.get("session_id"),
-                        "relationship": compact_relationship(session.get("relationship")),
+                        "relationship": compact_relationship(
+                            session.get("relationship")
+                        ),
                         "vendor": session.get("vendor"),
                         "status": session.get("status"),
                         "agent": session.get("agent_name"),
@@ -397,11 +456,20 @@ def compact_payload(method: str, payload: Any) -> Any:
                                 {
                                     "id": turn.get("turn_id"),
                                     "status": turn.get("status"),
-                                    "request": compact_request(turn.get("user_request")),
-                                    "activity": [compact_activity(activity) for activity in turn.get("activity") or []]
+                                    "request": compact_request(
+                                        turn.get("user_request")
+                                    ),
+                                    "activity": [
+                                        compact_activity(activity)
+                                        for activity in turn.get("activity") or []
+                                    ]
                                     or None,
                                     "teammate_summary": turn.get("teammate_summary"),
-                                    "items": ((turn.get("refs") or {}).get("item_ids") if isinstance(turn.get("refs"), dict) else None),
+                                    "items": (
+                                        (turn.get("refs") or {}).get("item_ids")
+                                        if isinstance(turn.get("refs"), dict)
+                                        else None
+                                    ),
                                 }
                             )
                             for turn in session.get("turns") or []
@@ -439,10 +507,16 @@ def compact_payload(method: str, payload: Any) -> Any:
                             "session": turn.get("session_id"),
                             "runtime": drop_none(
                                 {
-                                    "start": (turn.get("runtime") or {}).get("started_at"),
+                                    "start": (turn.get("runtime") or {}).get(
+                                        "started_at"
+                                    ),
                                     "end": (turn.get("runtime") or {}).get("ended_at"),
-                                    "execution_seconds": (turn.get("runtime") or {}).get("execution_seconds"),
-                                    "wait_before_seconds": (turn.get("runtime") or {}).get("wait_before_seconds"),
+                                    "execution_seconds": (
+                                        turn.get("runtime") or {}
+                                    ).get("execution_seconds"),
+                                    "wait_before_seconds": (
+                                        turn.get("runtime") or {}
+                                    ).get("wait_before_seconds"),
                                 }
                             )
                             or None,
@@ -468,14 +542,20 @@ def compact_payload(method: str, payload: Any) -> Any:
                 "id": payload.get("root_session_id"),
                 "vendor": payload.get("vendor"),
                 "model": drop_none(
-                    {"name": model.get("name"), "context_window": model.get("context_window_tokens")}
+                    {
+                        "name": model.get("name"),
+                        "context_window": model.get("context_window_tokens"),
+                    }
                 )
                 or None,
                 "context": drop_none(
                     {
                         "used": ctx.get("used_tokens"),
                         "pct": ctx.get("used_percent"),
-                        "categories": [compact_context_category(item) for item in ctx.get("categories") or []]
+                        "categories": [
+                            compact_context_category(item)
+                            for item in ctx.get("categories") or []
+                        ]
                         or None,
                     }
                 )
@@ -500,7 +580,9 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "compactions": runtime.get("compactions"),
                         "interrupted_turns": runtime.get("interrupted_turns") or None,
                         "rollbacks": runtime.get("rollbacks") or None,
-                        "average_ttft_ms": runtime.get("average_time_to_first_token_ms"),
+                        "average_ttft_ms": runtime.get(
+                            "average_time_to_first_token_ms"
+                        ),
                     }
                 )
                 or None,
@@ -528,7 +610,9 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "primary_window_minutes": quota.get("primary_window_minutes"),
                         "primary_reset_at": quota.get("primary_resets_at"),
                         "secondary_pct": quota.get("secondary_used_percent"),
-                        "secondary_window_minutes": quota.get("secondary_window_minutes"),
+                        "secondary_window_minutes": quota.get(
+                            "secondary_window_minutes"
+                        ),
                         "secondary_reset_at": quota.get("secondary_resets_at"),
                         "has_credits": quota.get("credits_has_credits"),
                         "credits_unlimited": quota.get("credits_unlimited"),
@@ -649,6 +733,7 @@ def format_cost(value: Any) -> str:
 def render_usage_line(usage: dict[str, Any]) -> str:
     parts = [
         f"input {format_tokens(usage.get('input_tokens'))}",
+        f"uncached {format_tokens(usage.get('uncached_input_tokens'))}",
         f"cached {format_tokens(usage.get('cached_input_tokens'))}",
         f"output {format_tokens(usage.get('output_tokens'))}",
         f"reasoning {format_tokens(usage.get('reasoning_output_tokens'))}",
