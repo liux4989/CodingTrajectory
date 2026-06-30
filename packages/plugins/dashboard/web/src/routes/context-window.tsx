@@ -137,7 +137,6 @@ export function ContextWindowRoute() {
     queryFn: () => fetchContextWindow(sessionId),
   });
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
-  const [hoveredId, setHoveredId] = React.useState<string | null>(null);
   const [pinnedId, setPinnedId] = React.useState<string | null>(null);
   const [hoveredCategory, setHoveredCategory] = React.useState<string | null>(null);
   const eventRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
@@ -147,7 +146,7 @@ export function ContextWindowRoute() {
     if (!selectedId && events[0]) setSelectedId(events[0].id);
   }, [events, selectedId]);
 
-  const activeId = pinnedId ?? hoveredId ?? selectedId ?? events[0]?.id ?? null;
+  const activeId = pinnedId ?? selectedId ?? events[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
   const timelineSegments = React.useMemo(() => compactTimelineSegments(events), [events]);
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
@@ -302,10 +301,11 @@ export function ContextWindowRoute() {
             <ScrollArea.Viewport
               className="max-h-[min(48rem,calc(100vh-14rem))] min-h-[18rem] pe-3 scroll-py-3"
             >
-              <ol className="m-0 grid list-none gap-2 p-0" onMouseLeave={() => setHoveredId(null)}>
+              <ol className="m-0 grid list-none gap-2 p-0">
                 {events.map((event, index) => {
                   const previous = events[index - 1];
                   const startsGroup = !previous || previous.group !== event.group || previous.turn_id !== event.turn_id;
+                  const isSelected = event.id === selectedId;
                   const isActive = event.id === activeId;
                   const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
                   const categoryColor = categoryColors[event.category] ?? categoryColors.unattributed;
@@ -334,13 +334,12 @@ export function ContextWindowRoute() {
                             "dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]",
                             "hover:border-primary/60 hover:bg-foreground/8",
                             isActive && "border-primary/60 bg-foreground/8",
+                            isSelected && "ring-2 ring-primary ring-offset-1 ring-offset-card",
                             isCategoryHighlight && "bg-foreground/10",
                           )}
                           style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${categoryColor}` } : undefined}
-                          aria-pressed={event.id === selectedId}
-                          onMouseEnter={() => setHoveredId(event.id)}
-                          onFocus={() => setHoveredId(event.id)}
-                          onBlur={() => setHoveredId(null)}
+                          aria-pressed={isSelected}
+                          onFocus={() => setSelectedId(event.id)}
                           onClick={() => setSelectedId(event.id)}
                           onKeyDown={(eventKey) => {
                             if (eventKey.key === "ArrowDown") {
@@ -447,8 +446,8 @@ export function ContextWindowRoute() {
             </>
           ) : (
             <>
-              <h3 className="m-0 font-display text-heading">Hover or click any event</h3>
-              <p className="mt-1 text-muted-foreground">Hover to preview. Click to pin so you can scroll.</p>
+              <h3 className="m-0 font-display text-heading">Click any event</h3>
+              <p className="mt-1 text-muted-foreground">Click to preview details. Pin to keep it selected while you scroll.</p>
               <div className="mt-6 overflow-hidden rounded-xl border border-warning/30">
                 <div className="bg-warning px-4 py-2 font-display text-eyebrow font-extrabold uppercase tracking-wide text-white">
                   Key Takeaway
