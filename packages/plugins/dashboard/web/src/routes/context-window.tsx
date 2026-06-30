@@ -3,9 +3,10 @@ import { useParams, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as ScrollArea from "@radix-ui/react-scroll-area";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { ArrowLeft, Eye, Pin, PinOff, Play, Pause, Maximize, Minimize, Info } from "lucide-react";
+import { ArrowLeft, Eye, Pin, PinOff, Play, Pause, Maximize, Minimize, Info, Search, X } from "lucide-react";
 import {
   fetchContextWindow,
+  type ContextCategory,
   type ContextEvent,
   type TokenEvidence,
 } from "@/api";
@@ -24,30 +25,27 @@ const categoryColors: Record<string, string> = {
   unattributed: "var(--color-category-unattributed)",
 };
 
-const sourceColorMap: Record<string, string> = {
-  system: "var(--color-source-system)",
-  "claude.md": "var(--color-source-claude-md)",
-  memory: "var(--color-source-memory)",
-  skills: "var(--color-source-skills)",
-  mcp: "var(--color-source-mcp)",
-  rules: "var(--color-source-rules)",
-  you: "var(--color-source-you)",
-  files: "var(--color-source-files)",
-  output: "var(--color-source-output)",
-  claude: "var(--color-source-claude)",
-  hooks: "var(--color-source-hooks)",
-  subagent: "var(--color-source-subagent)",
-};
+const CATEGORY_ORDER = ["starting_context", "user_input", "files", "output", "agent", "unattributed"];
 
-function sourceColor(key: string) {
-  return sourceColorMap[key.toLowerCase()] ?? categoryColors[key] ?? categoryColors.unattributed;
+function aggregateCategories(categories: ContextCategory[]) {
+  const totals = new Map<string, number>();
+  for (const category of categories) {
+    totals.set(category.category, (totals.get(category.category) ?? 0) + category.tokens.value);
+  }
+  return CATEGORY_ORDER
+    .filter((key) => totals.has(key))
+    .map((key) => ({ category: key, tokens: totals.get(key) ?? 0 }));
+}
+
+function categoryDotStyle(category: string): React.CSSProperties {
+  return { background: categoryColors[category] ?? categoryColors.unattributed };
 }
 
 function eventColor(event: ContextEvent) {
-  return sourceColor(event.source);
+  return categoryColors[event.category] ?? categoryColors.unattributed;
 }
 
-function sourceTint(color: string, alpha: number) {
+function categoryTint(color: string, alpha: number) {
   return `color-mix(in srgb, ${color} ${alpha * 100}%, transparent)`;
 }
 
@@ -80,12 +78,13 @@ function groupHeader(event: ContextEvent, previous?: ContextEvent): string | nul
   return null;
 }
 
-function sourceLabel(source: string) {
-  if (source === "claude") return "Claude's work";
-  if (source === "you") return "Your input";
-  if (source === "hook") return "Hook";
-  if (source === "subagent") return "Subagent context";
-  return source.replaceAll("_", " ");
+function categoryLabel(category: string) {
+  if (category === "starting_context") return "Starting context";
+  if (category === "user_input") return "User input";
+  if (category === "files") return "Files";
+  if (category === "output") return "Output";
+  if (category === "agent") return "Agent";
+  return category.replaceAll("_", " ");
 }
 
 function keyTakeaway(event: ContextEvent) {
@@ -98,67 +97,6 @@ function keyTakeaway(event: ContextEvent) {
   return "Every item in context costs tokens. Pin an event to inspect it while scrolling.";
 }
 
-type TimelineSegment = {
-  id: string;
-  source: string;
-  startIndex: number;
-  endIndex: number;
-  eventCount: number;
-  tokens: number;
-  firstEventId: string;
-};
-
-function compactTimelineSegments(events: ContextEvent[]) {
-  const segments: TimelineSegment[] = [];
-  events.forEach((event, index) => {
-    const previous = segments[segments.length - 1];
-    if (previous && previous.source === event.source) {
-      previous.endIndex = index;
-      previous.eventCount += 1;
-      previous.tokens += event.tokens?.value ?? 0;
-      return;
-    }
-    segments.push({
-      id: `${event.source}:${index}:${event.id}`,
-      source: event.source,
-      startIndex: index,
-      endIndex: index,
-      eventCount: 1,
-      tokens: event.tokens?.value ?? 0,
-      firstEventId: event.id,
-    });
-  });
-  return segments;
-}
-
-function timelineSegmentLabel(segment: TimelineSegment) {
-  const rowLabel = segment.startIndex === segment.endIndex
-    ? `Segment ${segment.startIndex + 1}`
-    : `Segments ${segment.startIndex + 1}-${segment.endIndex + 1}`;
-  const tokens = segment.tokens ? `, ${formatTokens(segment.tokens)} tokens` : "";
-  return `${rowLabel}: ${segment.source}, ${segment.eventCount} row${segment.eventCount === 1 ? "" : "s"}${tokens}`;
-}
-
-function CapacityBar({
-  contextWindowTokens,
-  usedTokens,
-}: {
-  contextWindowTokens: number;
-  usedTokens: number;
-}) {
-  if (contextWindowTokens <= 0) return null;
-  const widthPct = Math.min((usedTokens / contextWindowTokens) * 100, 100);
-  return (
-    <div
-      className="flex h-2 w-full overflow-hidden rounded-full bg-foreground/10"
-      role="img"
-      aria-label={`Context window usage: ${formatTokens(usedTokens)} of ${formatTokens(contextWindowTokens)} tokens`}
-    >
-      <span className="block bg-moss" style={{ width: `${widthPct}%` }} />
-    </div>
-  );
-}
-
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
   const router = useRouter();
@@ -168,31 +106,45 @@ export function ContextWindowRoute() {
   });
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [pinnedId, setPinnedId] = React.useState<string | null>(null);
-  const [hoveredSource, setHoveredSource] = React.useState<string | null>(null);
+  const [hoveredCategory, setHoveredCategory] = React.useState<string | null>(null);
   const [isPlaying, setIsPlaying] = React.useState(false);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [activeCategories, setActiveCategories] = React.useState<Set<string>>(new Set());
   const eventRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const events = query.data?.events ?? [];
 
+  const filteredEvents = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return events.filter((event) => {
+      if (activeCategories.size > 0 && !activeCategories.has(event.category)) return false;
+      if (q && !event.label.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [events, activeCategories, searchQuery]);
+
   React.useEffect(() => {
-    if (!selectedId && events[0]) setSelectedId(events[0].id);
-  }, [events, selectedId]);
+    if (filteredEvents.length === 0) return;
+    if (!selectedId || !filteredEvents.some((e) => e.id === selectedId)) {
+      setSelectedId(filteredEvents[0].id);
+    }
+  }, [filteredEvents, selectedId]);
 
   React.useEffect(() => {
     if (!isPlaying) return;
     const interval = setInterval(() => {
       setSelectedId((current) => {
-        const idx = Math.max(events.findIndex((e) => e.id === current), 0);
-        const nextIndex = Math.min(idx + 1, events.length - 1);
+        const idx = Math.max(filteredEvents.findIndex((e) => e.id === current), 0);
+        const nextIndex = Math.min(idx + 1, filteredEvents.length - 1);
         if (nextIndex === idx) {
           setIsPlaying(false);
           return current;
         }
-        return events[nextIndex].id;
+        return filteredEvents[nextIndex].id;
       });
     }, 800);
     return () => clearInterval(interval);
-  }, [isPlaying, events]);
+  }, [isPlaying, filteredEvents]);
 
   React.useEffect(() => {
     const handler = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -200,21 +152,49 @@ export function ContextWindowRoute() {
     return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
 
-  const activeId = pinnedId ?? selectedId ?? events[0]?.id ?? null;
+  const activeId = pinnedId ?? selectedId ?? filteredEvents[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
-  const timelineSegments = React.useMemo(() => compactTimelineSegments(events), [events]);
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
+
+  const combinedSegments = React.useMemo(() => {
+    const capacity = query.data?.context_window_tokens?.value ?? 0;
+    return aggregateCategories(query.data?.categories ?? []).map(({ category, tokens }) => ({
+      category,
+      tokens,
+      widthPct: capacity > 0 ? Math.min((tokens / capacity) * 100, 100) : 0,
+    }));
+  }, [query.data?.categories, query.data?.context_window_tokens?.value]);
+  const remainingPct = Math.max(100 - (query.data?.used_percent ?? 0), 0);
+
+  const playbackIndex = filteredEvents.findIndex((e) => e.id === activeId);
+  const playbackPct = filteredEvents.length > 0
+    ? ((Math.max(playbackIndex, 0) + 1) / filteredEvents.length) * 100
+    : 0;
 
   React.useEffect(() => {
     if (!isPlaying || !activeId) return;
-    const index = events.findIndex((e) => e.id === activeId);
+    const index = filteredEvents.findIndex((e) => e.id === activeId);
     eventRefs.current[index]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [activeId, isPlaying, events]);
+  }, [activeId, isPlaying, filteredEvents]);
 
   function moveFocus(index: number, direction: -1 | 1) {
-    const next = Math.min(Math.max(index + direction, 0), events.length - 1);
+    const next = Math.min(Math.max(index + direction, 0), filteredEvents.length - 1);
     eventRefs.current[next]?.focus();
-    setSelectedId(events[next]?.id ?? null);
+    setSelectedId(filteredEvents[next]?.id ?? null);
+  }
+
+  function toggleCategory(category: string) {
+    setActiveCategories((current) => {
+      const next = new Set(current);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  }
+
+  function clearFilters() {
+    setActiveCategories(new Set());
+    setSearchQuery("");
   }
 
   function toggleFullscreen() {
@@ -233,6 +213,7 @@ export function ContextWindowRoute() {
   }
 
   const payload = query.data;
+  const hasFilters = activeCategories.size > 0 || searchQuery.trim().length > 0;
 
   return (
     <div className="mx-auto grid max-w-[96rem] gap-5 pb-8">
@@ -262,39 +243,40 @@ export function ContextWindowRoute() {
             </div>
           </CardAction>
         </CardHeader>
-        <CapacityBar
-          contextWindowTokens={payload.context_window_tokens?.value ?? 0}
-          usedTokens={totalUsedTokens}
-        />
       </Card>
 
       <figure className="m-0">
         <Tooltip.Provider delayDuration={160} skipDelayDuration={120}>
-          <ol
-            className="m-0 flex h-2 list-none gap-0 overflow-hidden rounded-full bg-foreground/10 p-0"
-            aria-label="Ordered context event timeline"
+          <div
+            className="flex h-3 w-full overflow-hidden rounded-full bg-foreground/10"
+            role="img"
+            aria-label={`Context window usage: ${formatTokens(totalUsedTokens)} of ${formatTokens(payload.context_window_tokens?.value ?? 0)} tokens, grouped by category`}
           >
-            {timelineSegments.map((segment) => {
-              const isActive = hoveredSource === segment.source;
-              const label = timelineSegmentLabel(segment);
+            {combinedSegments.map((seg) => {
+              const isActive = activeCategories.has(seg.category);
+              const label = `${categoryLabel(seg.category)}: ${formatTokens(seg.tokens)} tokens (${seg.widthPct.toFixed(1)}% of window)`;
               return (
-                <li key={segment.id} className="flex min-w-0.5 flex-1" style={{ flexGrow: segment.eventCount }}>
+                <div
+                  key={seg.category}
+                  className="flex h-full min-w-0"
+                  style={{ width: `${seg.widthPct}%` }}
+                >
                   <Tooltip.Root>
                     <Tooltip.Trigger asChild>
                       <button
                         type="button"
                         className={cn(
-                          "relative h-2 min-w-0.5 w-full cursor-pointer border-0 border-r border-r-white/28 p-0 opacity-80 last:border-r-0",
-                          "hover:z-10 hover:opacity-100 hover:outline-none hover:ring-2 hover:ring-white/80 hover:ring-offset-1",
-                          "focus-visible:z-10 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2",
-                          isActive && "z-10 opacity-100 ring-2 ring-white/80 ring-offset-1",
+                          "h-full w-full cursor-pointer border-0 border-r border-r-white/24 p-0 transition-opacity",
+                          "hover:opacity-100 hover:outline-none hover:ring-2 hover:ring-white/80",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
+                          isActive ? "opacity-100 ring-2 ring-white" : "opacity-80",
                         )}
-                        style={{ background: sourceColor(segment.source) }}
+                        style={{ background: categoryColors[seg.category] ?? categoryColors.unattributed }}
+                        aria-pressed={isActive}
                         aria-label={label}
-                        aria-current={isActive ? "step" : undefined}
-                        onClick={() => setSelectedId(segment.firstEventId)}
-                        onMouseEnter={() => setHoveredSource(segment.source)}
-                        onMouseLeave={() => setHoveredSource(null)}
+                        onClick={() => toggleCategory(seg.category)}
+                        onMouseEnter={() => setHoveredCategory(seg.category)}
+                        onMouseLeave={() => setHoveredCategory(null)}
                       >
                         <span className="sr-only">{label}</span>
                       </button>
@@ -310,129 +292,172 @@ export function ContextWindowRoute() {
                       </Tooltip.Content>
                     </Tooltip.Portal>
                   </Tooltip.Root>
+                </div>
+              );
+            })}
+            {remainingPct > 0 ? (
+              <div
+                className="h-full"
+                style={{ width: `${remainingPct}%` }}
+                aria-label="Unused capacity"
+              />
+            ) : null}
+          </div>
+        </Tooltip.Provider>
+
+        <div className="m-0 mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <ul className="m-0 flex flex-wrap gap-x-3 gap-y-2 list-none" role="list">
+            {aggregateCategories(payload.categories).map(({ category, tokens }) => {
+              const isActive = activeCategories.has(category);
+              return (
+                <li key={category}>
+                  <button
+                    type="button"
+                    onClick={() => toggleCategory(category)}
+                    onMouseEnter={() => setHoveredCategory(category)}
+                    onMouseLeave={() => setHoveredCategory(null)}
+                    onFocus={() => setHoveredCategory(category)}
+                    onBlur={() => setHoveredCategory(null)}
+                    aria-pressed={isActive}
+                    className={cn(
+                      "inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-caption transition-colors",
+                      isActive
+                        ? "bg-foreground/10 text-foreground font-medium"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <span className="inline-block h-2 w-2 rounded-[2px]" style={categoryDotStyle(category)} />
+                    <span>{categoryLabel(category)}</span>
+                    <span className="font-mono">{formatTokens(tokens)}</span>
+                  </button>
                 </li>
               );
             })}
-          </ol>
-        </Tooltip.Provider>
-        <ul className="m-0 mt-3 flex flex-wrap gap-x-4 gap-y-2 list-none" role="list">
-          {payload.categories.map((category) => (
-            <li
-              key={category.id}
-              tabIndex={0}
-              onMouseEnter={() => setHoveredSource(category.source_key)}
-              onMouseLeave={() => setHoveredSource(null)}
-              onFocus={() => setHoveredSource(category.source_key)}
-              onBlur={() => setHoveredSource(null)}
-              className={cn(
-                "inline-flex cursor-default items-center gap-1.5 text-caption text-muted-foreground transition-colors",
-                hoveredSource === category.source_key ? "text-foreground" : "hover:text-foreground",
-              )}
-            >
-              <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: sourceColor(category.source_key) }} />
-              <span>{category.label}</span>
+            <li className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
+              <Eye size={12} />
+              <span>= appears in your terminal</span>
             </li>
-          ))}
-          <li className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
-            <Eye size={12} />
-            <span>= appears in your terminal</span>
-          </li>
-        </ul>
+          </ul>
+
+          <div className="ml-auto flex items-center gap-2">
+            <div className="relative">
+              <Search size={14} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by name..."
+                className="h-8 w-56 rounded-md border border-foreground/15 bg-card pl-7 pr-2 text-caption text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              />
+            </div>
+            {hasFilters ? (
+              <Button size="sm" variant="ghost" onClick={clearFilters} className="h-8 gap-1 px-2 text-caption">
+                <X size={14} /> Clear
+              </Button>
+            ) : null}
+          </div>
+        </div>
       </figure>
 
       <div className="grid grid-cols-[minmax(22rem,1.15fr)_minmax(20rem,0.85fr)] items-start gap-4 max-lg:grid-cols-1">
         <section className="min-w-0" aria-labelledby="event-stream-title">
           <h2 id="event-stream-title" className="sr-only">Event stream</h2>
-          <ScrollArea.Root className="relative min-h-[18rem] max-h-[min(48rem,calc(100vh-14rem))] overflow-hidden">
-            <ScrollArea.Viewport className="max-h-[min(48rem,calc(100vh-14rem))] min-h-[18rem] pe-3 scroll-py-3">
-              <ol className="m-0 grid list-none gap-2 p-0">
-                {events.map((event, index) => {
-                  const previous = events[index - 1];
-                  const header = groupHeader(event, previous);
-                  const isSelected = event.id === selectedId;
-                  const isActive = event.id === activeId;
-                  const isSourceHighlight = hoveredSource != null && event.source === hoveredSource;
-                  const color = eventColor(event);
-                  const tokenPercent = totalUsedTokens > 0 && event.tokens
-                    ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
-                    : 0;
-                  const isSubagent = event.source === "subagent";
-                  return (
-                    <React.Fragment key={event.id}>
-                      {header ? (
+          {filteredEvents.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-foreground/15 p-8 text-center text-caption text-muted-foreground">
+              No events match the current filters.
+            </div>
+          ) : (
+            <ScrollArea.Root className="relative min-h-[18rem] max-h-[min(48rem,calc(100vh-14rem))] overflow-hidden">
+              <ScrollArea.Viewport className="max-h-[min(48rem,calc(100vh-14rem))] min-h-[18rem] pe-3 scroll-py-3">
+                <ol className="m-0 grid list-none gap-2 p-0">
+                  {filteredEvents.map((event, index) => {
+                    const previous = filteredEvents[index - 1];
+                    const header = groupHeader(event, previous);
+                    const isSelected = event.id === selectedId;
+                    const isActive = event.id === activeId;
+                    const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
+                    const color = eventColor(event);
+                    const tokenPercent = totalUsedTokens > 0 && event.tokens
+                      ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
+                      : 0;
+                    const isSubagent = event.source === "subagent";
+                    return (
+                      <React.Fragment key={event.id}>
+                        {header ? (
+                          <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-foreground/10 pl-4")}>
+                            <h4 className={cn(
+                              "font-display text-eyebrow font-extrabold uppercase tracking-wide text-muted-foreground",
+                              index > 0 && "mt-4",
+                            )}>
+                              {header}
+                            </h4>
+                          </li>
+                        ) : null}
                         <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-foreground/10 pl-4")}>
-                          <h4 className={cn(
-                            "font-display text-eyebrow font-extrabold uppercase tracking-wide text-muted-foreground",
-                            index > 0 && "mt-4",
-                          )}>
-                            {header}
-                          </h4>
-                        </li>
-                      ) : null}
-                      <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-foreground/10 pl-4")}>
-                        <button
-                          ref={(node) => { eventRefs.current[index] = node; }}
-                          type="button"
-                          className={cn(
-                            "relative flex w-full items-center gap-3 overflow-hidden rounded-xl border border-foreground/11 bg-foreground/5 px-3 py-2.5 text-start text-foreground cursor-pointer",
-                            "dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]",
-                            "hover:border-primary/60 hover:bg-foreground/8",
-                            isActive && "border-primary/60 bg-foreground/8",
-                            isSelected && "ring-2 ring-primary ring-offset-1 ring-offset-card",
-                            isSourceHighlight && "bg-foreground/10",
-                          )}
-                          style={isSourceHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
-                          aria-pressed={isSelected}
-                          onFocus={() => setSelectedId(event.id)}
-                          onClick={() => setSelectedId(event.id)}
-                          onKeyDown={(eventKey) => {
-                            if (eventKey.key === "ArrowDown") {
-                              eventKey.preventDefault();
-                              moveFocus(index, 1);
-                            } else if (eventKey.key === "ArrowUp") {
-                              eventKey.preventDefault();
-                              moveFocus(index, -1);
-                            }
-                          }}
-                        >
-                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
-                          <Badge
-                            variant="outline"
-                            className="shrink-0 px-1.5 py-0 text-caption text-foreground"
-                            style={{ backgroundColor: sourceTint(color, 0.15), borderColor: sourceTint(color, 0.25) }}
+                          <button
+                            ref={(node) => { eventRefs.current[index] = node; }}
+                            type="button"
+                            className={cn(
+                              "relative flex w-full items-center gap-3 overflow-hidden rounded-xl border border-foreground/11 bg-foreground/5 px-3 py-2.5 text-start text-foreground cursor-pointer",
+                              "dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]",
+                              "hover:border-primary/60 hover:bg-foreground/8",
+                              isActive && "border-primary/60 bg-foreground/8",
+                              isSelected && "ring-2 ring-primary ring-offset-1 ring-offset-card",
+                              isCategoryHighlight && "bg-foreground/10",
+                            )}
+                            style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
+                            aria-pressed={isSelected}
+                            onFocus={() => setSelectedId(event.id)}
+                            onClick={() => setSelectedId(event.id)}
+                            onKeyDown={(eventKey) => {
+                              if (eventKey.key === "ArrowDown") {
+                                eventKey.preventDefault();
+                                moveFocus(index, 1);
+                              } else if (eventKey.key === "ArrowUp") {
+                                eventKey.preventDefault();
+                                moveFocus(index, -1);
+                              }
+                            }}
                           >
-                            {event.source}
-                          </Badge>
-                          <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
-                            {event.label}
-                          </span>
-                          <span className="flex shrink-0 items-center gap-2">
-                            <span className="font-mono text-body-sm font-medium">
-                              {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
+                            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
+                            <Badge
+                              variant="outline"
+                              className="shrink-0 px-1.5 py-0 text-caption text-foreground"
+                              style={{ backgroundColor: categoryTint(color, 0.15), borderColor: categoryTint(color, 0.25) }}
+                            >
+                              {categoryLabel(event.category)}
+                            </Badge>
+                            <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
+                              {event.label}
                             </span>
-                            {tokenPercent > 0 ? (
-                              <span className="block h-1 w-12 overflow-hidden rounded-full bg-foreground/10">
-                                <span
-                                  className="block h-full rounded-full"
-                                  style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
-                                />
+                            <span className="flex shrink-0 items-center gap-2">
+                              <span className="font-mono text-body-sm font-medium">
+                                {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
                               </span>
-                            ) : null}
-                            {event.terminal_visible ? (
-                              <Eye size={14} className="text-muted-foreground" />
-                            ) : null}
-                          </span>
-                        </button>
-                      </li>
-                    </React.Fragment>
-                  );
-                })}
-              </ol>
-            </ScrollArea.Viewport>
-            <ScrollArea.Scrollbar className="flex w-2.5 touch-none select-none bg-foreground/5 p-px" orientation="vertical">
-              <ScrollArea.Thumb className="relative flex-1 rounded-full bg-foreground/28" />
-            </ScrollArea.Scrollbar>
-          </ScrollArea.Root>
+                              {tokenPercent > 0 ? (
+                                <span className="block h-1 w-12 overflow-hidden rounded-full bg-foreground/10">
+                                  <span
+                                    className="block h-full rounded-full"
+                                    style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
+                                  />
+                                </span>
+                              ) : null}
+                              {event.terminal_visible ? (
+                                <Eye size={14} className="text-muted-foreground" />
+                              ) : null}
+                            </span>
+                          </button>
+                        </li>
+                      </React.Fragment>
+                    );
+                  })}
+                </ol>
+              </ScrollArea.Viewport>
+              <ScrollArea.Scrollbar className="flex w-2.5 touch-none select-none bg-foreground/5 p-px" orientation="vertical">
+                <ScrollArea.Thumb className="relative flex-1 rounded-full bg-foreground/28" />
+              </ScrollArea.Scrollbar>
+            </ScrollArea.Root>
+          )}
         </section>
 
         <aside className="sticky top-4 rounded-xl border border-foreground/13 bg-card p-5 max-lg:static dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]">
@@ -448,9 +473,9 @@ export function ContextWindowRoute() {
                     <Badge
                       variant="outline"
                       className="px-2 text-caption text-foreground"
-                      style={{ backgroundColor: sourceTint(eventColor(activeEvent), 0.15), borderColor: sourceTint(eventColor(activeEvent), 0.25) }}
+                      style={{ backgroundColor: categoryTint(eventColor(activeEvent), 0.15), borderColor: categoryTint(eventColor(activeEvent), 0.25) }}
                     >
-                      {sourceLabel(activeEvent.source)}
+                      {categoryLabel(activeEvent.category)}
                     </Badge>
                     <span className="font-mono text-body-sm text-moss">{evidenceLabel(activeEvent.tokens)}</span>
                   </div>
@@ -513,16 +538,16 @@ export function ContextWindowRoute() {
             <div
               className="flex h-2 w-full overflow-hidden rounded-full bg-foreground/10"
               role="img"
-              aria-label={`Context window usage: ${formatTokens(totalUsedTokens)} of ${formatTokens(payload.context_window_tokens?.value ?? 0)} tokens`}
+              aria-label={`Replay progress: ${Math.max(playbackIndex, 0) + 1} of ${filteredEvents.length} events`}
             >
               <span
-                className="block bg-moss transition-all duration-500"
-                style={{ width: `${Math.min(payload.used_percent ?? 0, 100)}%` }}
+                className="block bg-moss transition-all duration-300"
+                style={{ width: `${Math.min(playbackPct, 100)}%` }}
               />
             </div>
           </div>
-          <span className="w-12 text-right font-mono text-body-sm">
-            {payload.used_percent != null ? `${payload.used_percent.toFixed(0)}%` : "-"}
+          <span className="w-16 text-right font-mono text-body-sm tabular-nums">
+            {filteredEvents.length > 0 ? `${Math.max(playbackIndex, 0) + 1}/${filteredEvents.length}` : "-"}
           </span>
           <Button
             size="icon"
