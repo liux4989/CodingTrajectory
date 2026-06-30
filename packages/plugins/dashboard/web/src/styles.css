@@ -45,19 +45,6 @@
   --color-category-agent: var(--category-agent);
   --color-category-unattributed: var(--category-unattributed);
 
-  --color-source-system: var(--source-system);
-  --color-source-claude-md: var(--source-claude-md);
-  --color-source-memory: var(--source-memory);
-  --color-source-skills: var(--source-skills);
-  --color-source-mcp: var(--source-mcp);
-  --color-source-rules: var(--source-rules);
-  --color-source-you: var(--source-you);
-  --color-source-files: var(--source-files);
-  --color-source-output: var(--source-output);
-  --color-source-claude: var(--source-claude);
-  --color-source-hooks: var(--source-hooks);
-  --color-source-subagent: var(--source-subagent);
-
   --color-warning: var(--warning);
   --color-success: var(--success);
   --color-border-subtle: var(--border-subtle);
@@ -140,19 +127,6 @@
     --category-agent: #334155;
     --category-unattributed: #57534e;
 
-    --source-system: #6b7280;
-    --source-claude-md: #3b82f6;
-    --source-memory: #c08457;
-    --source-skills: #d97706;
-    --source-mcp: #7c3aed;
-    --source-rules: #0d9488;
-    --source-you: #15803d;
-    --source-files: #6b7280;
-    --source-output: #6b7280;
-    --source-claude: #dc2626;
-    --source-hooks: #a16207;
-    --source-subagent: #7c3aed;
-
     --warning: #92400e;
     --success: #7a8c45;
     --border-subtle: rgb(24 33 28 / 8%);
@@ -201,19 +175,6 @@
     --category-output: #ea580c;
     --category-agent: #475569;
     --category-unattributed: #78716c;
-
-    --source-system: #9ca3af;
-    --source-claude-md: #60a5fa;
-    --source-memory: #d4a373;
-    --source-skills: #fbbf24;
-    --source-mcp: #a78bfa;
-    --source-rules: #2dd4bf;
-    --source-you: #4ade80;
-    --source-files: #9ca3af;
-    --source-output: #9ca3af;
-    --source-claude: #f87171;
-    --source-hooks: #c4b454;
-    --source-subagent: #a78bfa;
 
     --warning: #d97706;
     --success: #a8c060;
@@ -264,19 +225,6 @@
       --category-output: #ea580c;
       --category-agent: #475569;
       --category-unattributed: #78716c;
-
-      --source-system: #9ca3af;
-      --source-claude-md: #60a5fa;
-      --source-memory: #d4a373;
-      --source-skills: #fbbf24;
-      --source-mcp: #a78bfa;
-      --source-rules: #2dd4bf;
-      --source-you: #4ade80;
-      --source-files: #9ca3af;
-      --source-output: #9ca3af;
-      --source-claude: #f87171;
-      --source-hooks: #c4b454;
-      --source-subagent: #a78bfa;
 
       --warning: #d97706;
       --success: #a8c060;
