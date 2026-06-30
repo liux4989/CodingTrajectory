@@ -23,6 +23,7 @@ from coding_trajectory.ingestion.models import (
     is_tool_shaped_item,
 )
 from coding_trajectory.metrics.models import (
+    AllocatedRealTokenCost,
     AttributionPolicy,
     InvokeResponseTokens,
     MetricSource,
@@ -208,10 +209,33 @@ def build_session_graph_tool_usage(
         tool_call_count=len(tool_items),
         tool_output_chars=sum(item.output_chars for item in tool_items),
         tool_output_original_tokens=sum(item.output_original_tokens or 0 for item in tool_items),
+        allocated_real_token_cost=_sum_allocated_real_token_costs(tool_items),
         tool_items=tool_items,
         attribution_policy=AttributionPolicy(),
         warnings=full.warnings,
     ).model_dump(mode="json")
+
+
+def _sum_allocated_real_token_costs(
+    tool_items: list[ToolItemFlat],
+) -> AllocatedRealTokenCost | None:
+    costs = [
+        item.allocated_real_token_cost
+        for item in tool_items
+        if item.allocated_real_token_cost is not None
+    ]
+    if not costs:
+        return None
+    return AllocatedRealTokenCost(
+        input_tokens=sum(cost.input_tokens for cost in costs),
+        cached_input_tokens=sum(cost.cached_input_tokens for cost in costs),
+        cache_creation_input_tokens=sum(
+            cost.cache_creation_input_tokens for cost in costs
+        ),
+        output_tokens=sum(cost.output_tokens for cost in costs),
+        reasoning_output_tokens=sum(cost.reasoning_output_tokens for cost in costs),
+        total_tokens=sum(cost.total_tokens for cost in costs),
+    )
 
 
 def _turn_usage_observations(
@@ -275,9 +299,30 @@ def _build_tool_items_for_turn(
     if current:
         groups.append((current, _group_observation(current, turn_observations)))
 
+    real_token_costs: dict[UUID, AllocatedRealTokenCost] = {}
+    observation_item_counts: dict[UUID, int] = {}
+    items_by_observation: dict[UUID, list[Any]] = {}
+    for group_items, invoke_obs in groups:
+        if invoke_obs is None:
+            continue
+        observation_id = invoke_obs.source.event_id
+        if observation_id is None:
+            continue
+        items_by_observation.setdefault(observation_id, []).extend(group_items)
+
+    for observation_id, observation_items in items_by_observation.items():
+        observation = _observation_by_id(turn_observations, observation_id)
+        if observation is None:
+            continue
+        observation_item_counts[observation_id] = len(observation_items)
+        real_token_costs.update(
+            _allocate_real_token_costs(observation_items, observation)
+        )
+
     items: list[ToolItemFlat] = []
     for group_items, invoke_obs in groups:
-        count = len(group_items)
+        observation_id = invoke_obs.source.event_id if invoke_obs is not None else None
+        count = observation_item_counts.get(observation_id, len(group_items))
         for item in group_items:
             base = _tool_item_flat(
                 item,
@@ -285,6 +330,7 @@ def _build_tool_items_for_turn(
                 turn_id=turn.turn_id,
             )
             base.token_attribution = _build_token_attribution(item)
+            base.allocated_real_token_cost = real_token_costs.get(item.item_id)
             base.invoke_response_tokens = _build_invoke_response_tokens(
                 invoke_obs, count=count
             )
@@ -295,6 +341,16 @@ def _build_tool_items_for_turn(
             )
             items.append(base)
     return items
+
+
+def _observation_by_id(
+    observations: list[TokenUsageObservation],
+    observation_id: UUID,
+) -> TokenUsageObservation | None:
+    for observation in observations:
+        if observation.source.event_id == observation_id:
+            return observation
+    return None
 
 
 def _item_observation_signature(
@@ -352,6 +408,78 @@ def _build_token_attribution(item: Any) -> ToolTokenAttribution:
         tool_output_tokens=output_size.tokens,
         content_confidence=confidence,
     )
+
+
+def _allocate_real_token_costs(
+    group_items: list[Any],
+    observation: TokenUsageObservation | None,
+) -> dict[UUID, AllocatedRealTokenCost]:
+    if observation is None or not group_items:
+        return {}
+    usage = observation.usage
+    if _is_zero_usage(usage):
+        return {}
+
+    weights = [_item_visible_token_weight(item) for item in group_items]
+    if sum(weights) > 0:
+        method = "usage_observation_weighted_by_visible_item_tokens"
+    else:
+        method = "usage_observation_even_split"
+        weights = [1 for _item in group_items]
+
+    allocations_by_key = {
+        key: _allocate_int(total, weights)
+        for key, total in (
+            ("input_tokens", usage.input_tokens),
+            ("cached_input_tokens", usage.cached_input_tokens),
+            ("cache_creation_input_tokens", usage.cache_creation_input_tokens),
+            ("output_tokens", usage.output_tokens),
+            ("reasoning_output_tokens", usage.reasoning_output_tokens),
+            ("total_tokens", usage.total_tokens or usage.compute_total()),
+        )
+    }
+
+    result: dict[UUID, AllocatedRealTokenCost] = {}
+    for index, item in enumerate(group_items):
+        allocated = {
+            key: values[index]
+            for key, values in allocations_by_key.items()
+        }
+        result[item.item_id] = AllocatedRealTokenCost(
+            **allocated,
+            allocation_method=method,
+        )
+    return result
+
+
+def _item_visible_token_weight(item: Any) -> int:
+    attribution = _build_token_attribution(item)
+    return max(
+        int(attribution.tool_input_tokens) + int(attribution.tool_output_tokens),
+        0,
+    )
+
+
+def _allocate_int(total: int, weights: list[int]) -> list[int]:
+    if total <= 0 or not weights:
+        return [0 for _weight in weights]
+
+    weight_total = sum(weights)
+    if weight_total <= 0:
+        weights = [1 for _weight in weights]
+        weight_total = sum(weights)
+
+    raw = [(total * weight) / weight_total for weight in weights]
+    floors = [int(value) for value in raw]
+    remainder = total - sum(floors)
+    order = sorted(
+        range(len(weights)),
+        key=lambda index: (raw[index] - floors[index], weights[index]),
+        reverse=True,
+    )
+    for index in order[:remainder]:
+        floors[index] += 1
+    return floors
 
 
 def _build_invoke_response_tokens(

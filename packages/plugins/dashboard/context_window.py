@@ -511,9 +511,15 @@ def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]
     item_id = str(item.get("item_id") or f"tool_item_{index}")
     tool = str(item.get("tool_name") or "Tool")
     attribution = item.get("token_attribution") if isinstance(item.get("token_attribution"), dict) else {}
+    real_cost = (
+        item.get("allocated_real_token_cost")
+        if isinstance(item.get("allocated_real_token_cost"), dict)
+        else {}
+    )
     input_tokens = _optional_int(attribution.get("tool_input_tokens")) or 0
     output_tokens = _optional_int(attribution.get("tool_output_tokens")) or 0
     total_tokens = input_tokens + output_tokens
+    real_total_tokens = _optional_int(real_cost.get("total_tokens"))
     output_chars = _optional_int(item.get("output_chars")) or 0
     output_original_tokens = _optional_int(item.get("output_original_tokens"))
     detail_ref = {
@@ -524,6 +530,19 @@ def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]
         "tool_input_tokens": str(input_tokens),
         "tool_output_tokens": str(output_tokens),
     }
+    for source_key, detail_key in (
+        ("input_tokens", "allocated_input_tokens"),
+        ("cached_input_tokens", "allocated_cached_input_tokens"),
+        ("cache_creation_input_tokens", "allocated_cache_creation_input_tokens"),
+        ("output_tokens", "allocated_output_tokens"),
+        ("reasoning_output_tokens", "allocated_reasoning_output_tokens"),
+        ("total_tokens", "allocated_total_tokens"),
+    ):
+        value = _optional_int(real_cost.get(source_key))
+        if value is not None:
+            detail_ref[detail_key] = str(value)
+    if real_cost.get("allocation_method"):
+        detail_ref["allocated_token_method"] = str(real_cost["allocation_method"])
     status = _optional_text(item.get("status"))
     if status:
         detail_ref["status"] = status
@@ -531,6 +550,8 @@ def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]
     input_summary = _optional_text(item.get("input_summary")) or f"{tool} input"
     label = _tool_event_label(tool, input_summary)
     summary_bits = [input_summary, f"{output_chars} output chars"]
+    if real_total_tokens is not None:
+        summary_bits.append(f"{real_total_tokens} allocated real tokens")
     if output_original_tokens is not None:
         summary_bits.append(f"{output_original_tokens} observed output tokens")
     if item.get("output_truncated"):

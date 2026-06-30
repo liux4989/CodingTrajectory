@@ -352,11 +352,29 @@ class ReadAfterResult(BaseModel):
     ] = "unknown"
 
 
+class AllocatedRealTokenCost(BaseModel):
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    total_tokens: int = 0
+    allocation_method: Literal[
+        "usage_observation_weighted_by_visible_item_tokens",
+        "usage_observation_even_split",
+    ] = "usage_observation_weighted_by_visible_item_tokens"
+    confidence: Literal["allocated_from_exact_usage"] = "allocated_from_exact_usage"
+    usage_authority: Literal["session.usage"] = "session.usage"
+
+
 class AttributionPolicy(BaseModel):
     scope: Literal["tool_items"] = "tool_items"
-    cache: Literal["not_allocated_to_items"] = "not_allocated_to_items"
+    cache: Literal["allocated_from_exact_usage"] = "allocated_from_exact_usage"
     usage_authority: Literal["session.usage"] = "session.usage"
     method: Literal["visible_content_plus_event_order"] = "visible_content_plus_event_order"
+    real_token_cost: Literal[
+        "allocated_from_usage_observation_weighted_by_visible_item_tokens"
+    ] = "allocated_from_usage_observation_weighted_by_visible_item_tokens"
 
 
 class ToolItemFlat(BaseModel):
@@ -370,6 +388,7 @@ class ToolItemFlat(BaseModel):
     output_original_tokens: int | None = None
     output_truncated: bool = False
     token_attribution: ToolTokenAttribution | None = None
+    allocated_real_token_cost: AllocatedRealTokenCost | None = None
     invoke_response_tokens: InvokeResponseTokens | None = None
     read_after_result: ReadAfterResult | None = None
 
@@ -381,7 +400,12 @@ class ToolItemFlat(BaseModel):
                 data.pop(key, None)
         if data.get("output_truncated") is False:
             data.pop("output_truncated", None)
-        for key in ("token_attribution", "invoke_response_tokens", "read_after_result"):
+        for key in (
+            "token_attribution",
+            "allocated_real_token_cost",
+            "invoke_response_tokens",
+            "read_after_result",
+        ):
             if data.get(key) is None:
                 data.pop(key, None)
         return data
@@ -393,6 +417,7 @@ class SessionGraphToolUsageFlat(BaseModel):
     tool_call_count: int = 0
     tool_output_chars: int = 0
     tool_output_original_tokens: int = 0
+    allocated_real_token_cost: AllocatedRealTokenCost | None = None
     tool_items: list[ToolItemFlat] = Field(default_factory=list)
     attribution_policy: AttributionPolicy = Field(default_factory=AttributionPolicy)
     warnings: list[str] = Field(default_factory=list)
