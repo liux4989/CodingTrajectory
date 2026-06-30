@@ -516,6 +516,7 @@ def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]
     attribution = item.get("token_attribution") if isinstance(item.get("token_attribution"), dict) else {}
     input_tokens = _optional_int(attribution.get("tool_input_tokens")) or 0
     output_tokens = _optional_int(attribution.get("tool_output_tokens")) or 0
+    total_tokens = input_tokens + output_tokens
     output_chars = _optional_int(item.get("output_chars")) or 0
     output_original_tokens = _optional_int(item.get("output_original_tokens"))
     detail_ref = {
@@ -523,55 +524,58 @@ def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]
         "session_id": str(item.get("session_id") or ""),
         "turn_id": str(item.get("turn_id") or ""),
         "tool_name": tool,
+        "tool_input_tokens": str(input_tokens),
+        "tool_output_tokens": str(output_tokens),
     }
     status = _optional_text(item.get("status"))
     if status:
         detail_ref["status"] = status
 
     input_summary = _optional_text(item.get("input_summary")) or f"{tool} input"
-    output_bits = [f"{output_chars} output chars"]
+    summary_bits = [input_summary, f"{output_chars} output chars"]
     if output_original_tokens is not None:
-        output_bits.append(f"{output_original_tokens} observed output tokens")
+        summary_bits.append(f"{output_original_tokens} observed output tokens")
     if item.get("output_truncated"):
-        output_bits.append("output truncated")
+        summary_bits.append("output truncated")
 
     output_confidence = _tool_output_confidence(attribution.get("content_confidence"))
+    combined_confidence = _combined_tool_confidence(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        output_confidence=output_confidence,
+    )
     return [
         ContextEvent(
-            id=f"tool:{item_id}:input",
-            group="turn",
-            turn_id=detail_ref["turn_id"],
-            category="agent",
-            label=f"{tool} input",
-            summary=input_summary,
-            tokens=TokenEvidence(
-                value=input_tokens,
-                confidence="estimated_tokens",
-                source="ct session.tool_usage:tool_input_tokens",
-            ),
-            source="ct session.tool_usage:tool_items",
-            confidence="estimated_tokens",
-            detail_ref={**detail_ref, "tool_event": "input"},
-            terminal_visible=True,
-        ),
-        ContextEvent(
-            id=f"tool:{item_id}:output",
+            id=f"tool:{item_id}",
             group="turn",
             turn_id=detail_ref["turn_id"],
             category=_tool_category(tool),
-            label=f"{tool} output",
-            summary=", ".join(output_bits),
+            label=tool,
+            summary=", ".join(summary_bits),
             tokens=TokenEvidence(
-                value=output_tokens,
-                confidence=output_confidence,
-                source="ct session.tool_usage:tool_output_tokens",
+                value=total_tokens,
+                confidence=combined_confidence,
+                source="ct session.tool_usage:tool_input_tokens + tool_output_tokens",
             ),
             source="ct session.tool_usage:tool_items",
-            confidence=output_confidence,
-            detail_ref={**detail_ref, "tool_event": "output"},
+            confidence=combined_confidence,
+            detail_ref=detail_ref,
             terminal_visible=True,
         ),
     ]
+
+
+def _combined_tool_confidence(
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    output_confidence: Confidence,
+) -> Confidence:
+    if output_tokens == 0:
+        return "estimated_tokens" if input_tokens else "structural"
+    if input_tokens == 0:
+        return output_confidence
+    return "estimated_tokens"
 
 
 def _tool_output_confidence(value: Any) -> Confidence:
@@ -662,7 +666,7 @@ def _projection_warnings(events: list[ContextEvent]) -> list[str]:
     ]
     if has_tool_token_events:
         warnings.append(
-            "Tool input/output rows use raw session.tool_usage item evidence; USD cost remains a "
+            "Tool items combine input and output token evidence from session.tool_usage; USD cost remains a "
             "session-level derived estimate."
         )
     else:

@@ -68,6 +68,28 @@ function categoryDotStyle(category: string): React.CSSProperties {
   return { background: categoryColors[category] ?? categoryColors.unattributed };
 }
 
+const TOOL_DETAIL_TOKEN_KEYS = new Set(["tool_input_tokens", "tool_output_tokens"]);
+
+function numericDetail(value: string | undefined) {
+  if (value == null || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toolTokenBreakdown(event: ContextEvent) {
+  const inputTokens = numericDetail(event.detail_ref.tool_input_tokens);
+  const outputTokens = numericDetail(event.detail_ref.tool_output_tokens);
+  if (inputTokens == null && outputTokens == null) return null;
+  return {
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+  };
+}
+
+function detailEntries(event: ContextEvent) {
+  return Object.entries(event.detail_ref).filter(([key]) => !TOOL_DETAIL_TOKEN_KEYS.has(key));
+}
+
 type TimelineSegment = {
   id: string;
   category: string;
@@ -148,6 +170,8 @@ export function ContextWindowRoute() {
 
   const activeId = pinnedId ?? selectedId ?? events[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
+  const activeToolBreakdown = activeEvent ? toolTokenBreakdown(activeEvent) : null;
+  const activeDetailEntries = activeEvent ? detailEntries(activeEvent) : [];
   const timelineSegments = React.useMemo(() => compactTimelineSegments(events), [events]);
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
 
@@ -424,6 +448,21 @@ export function ContextWindowRoute() {
                   <dt className="font-display font-extrabold capitalize text-muted-foreground">Token impact</dt>
                   <dd className="m-0 break-words">{evidenceLabel(activeEvent.tokens)}</dd>
                 </div>
+                {activeToolBreakdown ? (
+                  <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
+                    <dt className="font-display font-extrabold capitalize text-muted-foreground">Tool tokens</dt>
+                    <dd className="m-0 grid gap-2">
+                      <span className="flex min-w-0 items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Input</span>
+                        <code>{formatTokens(activeToolBreakdown.inputTokens)}</code>
+                      </span>
+                      <span className="flex min-w-0 items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Output</span>
+                        <code>{formatTokens(activeToolBreakdown.outputTokens)}</code>
+                      </span>
+                    </dd>
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
                   <dt className="font-display font-extrabold capitalize text-muted-foreground">Evidence source</dt>
                   <dd className="m-0 break-words">{activeEvent.tokens?.source ?? activeEvent.source}</dd>
@@ -436,7 +475,7 @@ export function ContextWindowRoute() {
                   <dt className="font-display font-extrabold capitalize text-muted-foreground">Terminal visibility</dt>
                   <dd className="m-0 break-words">{activeEvent.terminal_visible ? "Visible" : "Hidden"}</dd>
                 </div>
-                {Object.entries(activeEvent.detail_ref).map(([key, value]) => (
+                {activeDetailEntries.map(([key, value]) => (
                   <div key={key} className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
                     <dt className="font-display font-extrabold capitalize text-muted-foreground">{key.replaceAll("_", " ")}</dt>
                     <dd className="m-0 break-words"><code>{value}</code></dd>
