@@ -135,6 +135,7 @@ class ContextCategoryFlat(BaseModel):
     key: str
     label: str
     tokens: int = 0
+    real_tokens: int | None = None
     observed_chars: int | None = None
     items: int | None = None
     percent: float | None = None
@@ -147,6 +148,8 @@ class ContextCategoryFlat(BaseModel):
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
+        if data.get("real_tokens") is None:
+            data.pop("real_tokens", None)
         if data.get("observed_chars") is None:
             data.pop("observed_chars", None)
         if data.get("items") is None:

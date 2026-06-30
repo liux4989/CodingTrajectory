@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Iterable
+from uuid import UUID
 
 from coding_trajectory.analysis.content_size import (
     item_input_size,
@@ -34,17 +35,28 @@ class _Measure:
     tokens: int = 0
     chars: int = 0
     items: int = 0
+    real_tokens: int | None = None
 
-    def add(self, *, tokens: int, chars: int, items: int = 1) -> None:
+    def add(
+        self,
+        *,
+        tokens: int,
+        chars: int,
+        items: int = 1,
+        real_tokens: int | None = None,
+    ) -> None:
         self.tokens += max(tokens, 0)
         self.chars += max(chars, 0)
         self.items += max(items, 0)
+        if real_tokens is not None:
+            self.real_tokens = (self.real_tokens or 0) + max(real_tokens, 0)
 
     def plus(self, other: "_Measure") -> "_Measure":
         return _Measure(
             tokens=self.tokens + other.tokens,
             chars=self.chars + other.chars,
             items=self.items + other.items,
+            real_tokens=_sum_optional_ints(self.real_tokens, other.real_tokens),
         )
 
 
@@ -85,10 +97,17 @@ _OUTPUT_FAMILY_LABELS = {
 }
 
 
-def build_context_composition(session_graph: SessionGraph) -> list[ContextCategoryFlat]:
+def build_context_composition(
+    session_graph: SessionGraph,
+    *,
+    tool_visible_tokens_by_item: dict[UUID, int] | None = None,
+) -> list[ContextCategoryFlat]:
     starting = _starting_context(session_graph)
     user_input = _user_input(session_graph)
-    agent_work = _agent_work(session_graph)
+    agent_work = _agent_work(
+        session_graph,
+        tool_visible_tokens_by_item=tool_visible_tokens_by_item or {},
+    )
     observed_total = starting[0].plus(user_input[0]).plus(agent_work[0]).tokens
     categories = [
         _category("starting_context", "Starting context", starting[0], starting[1]),
@@ -147,7 +166,11 @@ def _user_input(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
     return _sum(buckets.values()), children
 
 
-def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCategoryFlat]]:
+def _agent_work(
+    session_graph: SessionGraph,
+    *,
+    tool_visible_tokens_by_item: dict[UUID, int],
+) -> tuple[_Measure, list[ContextCategoryFlat]]:
     files: dict[str, _Measure] = defaultdict(_Measure)
     agent: dict[str, _Measure] = defaultdict(_Measure)
     output: dict[str, _Measure] = defaultdict(_Measure)
@@ -169,7 +192,13 @@ def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
                     size = visible_text_size(text)
                     agent["assistant_messages"].add(tokens=size.tokens, chars=size.chars)
                     continue
-                _add_tool_item(item, files=files, agent=agent, output=output)
+                _add_tool_item(
+                    item,
+                    files=files,
+                    agent=agent,
+                    output=output,
+                    tool_visible_tokens_by_item=tool_visible_tokens_by_item,
+                )
 
     file_children = [
         _category(
@@ -238,6 +267,7 @@ def _add_tool_item(
     files: dict[str, _Measure],
     agent: dict[str, _Measure],
     output: dict[str, _Measure],
+    tool_visible_tokens_by_item: dict[UUID, int],
 ) -> None:
     if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
         return
@@ -245,18 +275,28 @@ def _add_tool_item(
     concept = str(summary.get("name") or item.tool_name or item.kind)
     input_size = item_input_size(item)
     output_size = item_output_size(item)
+    real_tokens = tool_visible_tokens_by_item.get(item.item_id)
 
     if concept in _CONTEXT_CONCEPTS:
-        files[concept].add(tokens=output_size.tokens, chars=output_size.chars)
+        files[concept].add(
+            tokens=output_size.tokens,
+            chars=output_size.chars,
+            real_tokens=real_tokens,
+        )
         return
     if concept in _OUTPUT_CONCEPT_LABELS:
-        output[concept].add(tokens=output_size.tokens, chars=output_size.chars)
+        output[concept].add(
+            tokens=output_size.tokens,
+            chars=output_size.chars,
+            real_tokens=real_tokens,
+        )
         return
     if concept in _CODE_CHANGE_CONCEPTS:
         key = concept.lower()
         agent[key].add(
             tokens=input_size.tokens + output_size.tokens,
             chars=input_size.chars + output_size.chars,
+            real_tokens=real_tokens,
         )
         return
     if concept in _COORDINATION_CONCEPTS:
@@ -264,9 +304,14 @@ def _add_tool_item(
         agent[key].add(
             tokens=input_size.tokens + output_size.tokens,
             chars=input_size.chars + output_size.chars,
+            real_tokens=real_tokens,
         )
         return
-    output[_output_family_key(summary, concept)].add(tokens=output_size.tokens, chars=output_size.chars)
+    output[_output_family_key(summary, concept)].add(
+        tokens=output_size.tokens,
+        chars=output_size.chars,
+        real_tokens=real_tokens,
+    )
 
 
 def _file_category_key(concept: str) -> str:
@@ -302,6 +347,7 @@ def _category(
         key=key,
         label=label,
         tokens=measure.tokens,
+        real_tokens=measure.real_tokens,
         observed_chars=measure.chars,
         items=measure.items,
         confidence="estimated_tokens",
@@ -318,7 +364,12 @@ def _set_percent(categories: Iterable[ContextCategoryFlat], denominator: int) ->
 
 def _measure_from_categories(categories: Iterable[ContextCategoryFlat]) -> _Measure:
     return _sum(
-        _Measure(tokens=category.tokens, chars=category.observed_chars, items=category.items)
+        _Measure(
+            tokens=category.tokens,
+            chars=category.observed_chars,
+            items=category.items,
+            real_tokens=category.real_tokens,
+        )
         for category in categories
     )
 
@@ -328,6 +379,12 @@ def _sum(measures: Iterable[_Measure]) -> _Measure:
     for measure in measures:
         total = total.plus(measure)
     return total
+
+
+def _sum_optional_ints(left: int | None, right: int | None) -> int | None:
+    if left is None and right is None:
+        return None
+    return (left or 0) + (right or 0)
 
 
 def _label(value: str) -> str:

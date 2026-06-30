@@ -134,18 +134,38 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
 
 
 def _render_context_category(
-    lines: list[str], category: dict[str, Any], *, indent: int = 0
+    lines: list[str],
+    category: dict[str, Any],
+    *,
+    indent: int = 0,
+    include_real_tokens: bool = False,
 ) -> None:
     label = str(category.get("label") or category.get("key") or "-")
     display_width = max(CONTEXT_CATEGORY_WIDTH - indent, 16)
     label = one_line(label, limit=display_width)
-    lines.append(
-        f"{' ' * indent}{label:<{display_width}} {format_tokens(category.get('tokens')):>7} "
-        f"{format_percent(category.get('percent')):>8}"
-    )
+    if include_real_tokens:
+        lines.append(
+            f"{' ' * indent}{label:<{display_width}} {format_tokens(category.get('tokens')):>7} "
+            f"{_format_optional_tokens(category.get('real_tokens')):>11} "
+            f"{format_percent(category.get('percent')):>8}"
+        )
+    else:
+        lines.append(
+            f"{' ' * indent}{label:<{display_width}} {format_tokens(category.get('tokens')):>7} "
+            f"{format_percent(category.get('percent')):>8}"
+        )
     for child in category.get("children") or []:
         if isinstance(child, dict):
-            _render_context_category(lines, child, indent=indent + 2)
+            _render_context_category(
+                lines,
+                child,
+                indent=indent + 2,
+                include_real_tokens=include_real_tokens,
+            )
+
+
+def _format_optional_tokens(value: Any) -> str:
+    return "-" if value is None else format_tokens(value)
 
 
 def _render_session_stats_text(payload: dict[str, Any]) -> str:
@@ -154,6 +174,7 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     runtime = payload.get("runtime") or {}
     messages = payload.get("messages") or {}
     usage = payload.get("usage") or {}
+    real_token_cost = payload.get("allocated_real_token_cost") or {}
 
     model_name = model.get("name") or "-"
     context_tokens = model.get("context_window_tokens")
@@ -163,12 +184,12 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         f"Model: {model_name} ({format_tokens(context_tokens)} context)",
         "",
         "```",
-        f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Share':>8}",
+        f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Real tokens':>11} {'Share':>8}",
     ]
 
     for category in context_window.get("categories") or []:
         if isinstance(category, dict):
-            _render_context_category(lines, category)
+            _render_context_category(lines, category, include_real_tokens=True)
 
     lines.append("```")
 
@@ -201,6 +222,10 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     lines.append(
         f"- Used: {format_tokens(used_tokens)} tokens {format_percent(used_percent)} of context"
     )
+    if real_token_cost:
+        lines.append(
+            f"- Tool allocated effective token cost: {render_usage_line(real_token_cost)}"
+        )
     lines.append(f"- {runtime_line}")
     if runtime.get("compactions"):
         lines[-1] += f", {runtime['compactions']} compactions"

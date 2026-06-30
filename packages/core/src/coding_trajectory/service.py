@@ -779,15 +779,39 @@ def _handle_session_overview(
 def _handle_session_stats(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
-    from coding_trajectory.metrics import build_session_graph_context_stats
+    from coding_trajectory.metrics import (
+        build_session_graph_context_stats,
+        build_session_graph_tool_usage,
+    )
 
     session_graph = _resolve_session_graph(
         context.store, _session_graph_entrypoint_id(params)
     )
     _cache_session_graph(context, session_graph)
+    tool_usage = build_session_graph_tool_usage(session_graph)
+    tool_visible_tokens_by_item: dict[UUID, int] = {}
+    for item in tool_usage.get("tool_items") or []:
+        if not isinstance(item, dict) or not isinstance(item.get("token_attribution"), dict):
+            continue
+        token_attribution = item["token_attribution"]
+        input_tokens = token_attribution.get("tool_input_tokens")
+        output_tokens = token_attribution.get("tool_output_tokens")
+        if not isinstance(input_tokens, int) and not isinstance(output_tokens, int):
+            continue
+        try:
+            item_id = UUID(str(item.get("item_id")))
+        except (TypeError, ValueError):
+            continue
+        tool_visible_tokens_by_item[item_id] = (input_tokens or 0) + (output_tokens or 0)
+    result = build_session_graph_context_stats(
+        session_graph,
+        tool_visible_tokens_by_item=tool_visible_tokens_by_item,
+    )
+    if tool_usage.get("allocated_real_token_cost"):
+        result["allocated_real_token_cost"] = tool_usage["allocated_real_token_cost"]
     return _public_output_for_session_graph(
         session_graph,
-        build_session_graph_context_stats(session_graph),
+        result,
     )
 
 

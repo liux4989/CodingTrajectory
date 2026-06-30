@@ -1,6 +1,7 @@
 """Provider-neutral session context stats (used by `ct session stats`)."""
 
 from typing import Any
+from uuid import UUID
 
 from coding_trajectory import debug
 from coding_trajectory.ingestion.models import ContextUsageObservation, SessionGraph
@@ -22,7 +23,11 @@ from coding_trajectory.metrics.models import (
 )
 
 
-def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, Any]:
+def build_session_graph_context_stats(
+    session_graph: SessionGraph,
+    *,
+    tool_visible_tokens_by_item: dict[UUID, int] | None = None,
+) -> dict[str, Any]:
     vendors = {session.vendor for session in session_graph.sessions if session.vendor}
     if not vendors:
         raise ValueError("session_graph has no vendor sessions")
@@ -35,7 +40,10 @@ def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, 
     vendor = next(iter(vendors))
     runtime = runtime_stats(session_graph)
     messages = message_stats(session_graph)
-    categories = build_context_composition(session_graph)
+    categories = build_context_composition(
+        session_graph,
+        tool_visible_tokens_by_item=tool_visible_tokens_by_item,
+    )
     observation = _latest_context_usage(session_graph)
     if observation is None:
         no_obs_message = (

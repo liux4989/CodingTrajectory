@@ -336,6 +336,7 @@ def compact_context_category(category: Any) -> Any:
             "key": category.get("key"),
             "label": category.get("label"),
             "tokens": category.get("tokens"),
+            "real": category.get("real_tokens"),
             "pct": category.get("percent"),
             "chars": category.get("observed_chars"),
             "items": category.get("items"),
@@ -515,6 +516,9 @@ def compact_payload(method: str, payload: Any) -> Any:
                 )
                 or None,
                 "usage": compact_usage(payload.get("usage"), include_cost=False),
+                "allocated_real_token_cost": compact_usage(
+                    payload.get("allocated_real_token_cost"), include_cost=False
+                ),
                 "quota": drop_none(
                     {
                         "plan": quota.get("plan_type"),

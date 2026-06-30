@@ -95,11 +95,18 @@ def build_session_graph_full_metrics(
     return _build_full_metrics(session_graph)
 
 
-def build_session_graph_context_stats(session_graph: SessionGraph) -> dict[str, Any]:
+def build_session_graph_context_stats(
+    session_graph: SessionGraph,
+    *,
+    tool_visible_tokens_by_item: dict[UUID, int] | None = None,
+) -> dict[str, Any]:
     """Return provider-specific context-window stats by dispatching to a vendor handler."""
     from coding_trajectory.metrics.context_stats import build_session_graph_context_stats as dispatch
 
-    return dispatch(session_graph)
+    return dispatch(
+        session_graph,
+        tool_visible_tokens_by_item=tool_visible_tokens_by_item,
+    )
 
 
 def build_session_graph_usage(
@@ -435,7 +442,7 @@ def _allocate_real_token_costs(
             ("cache_creation_input_tokens", usage.cache_creation_input_tokens),
             ("output_tokens", usage.output_tokens),
             ("reasoning_output_tokens", usage.reasoning_output_tokens),
-            ("total_tokens", usage.total_tokens or usage.compute_total()),
+            ("total_tokens", _effective_token_total(usage, observation)),
         )
     }
 
@@ -450,6 +457,33 @@ def _allocate_real_token_costs(
             allocation_method=method,
         )
     return result
+
+
+def _effective_token_total(
+    usage: TokenUsage,
+    observation: TokenUsageObservation,
+) -> int:
+    if _uses_net_input_convention(observation.provider, observation.model):
+        effective_input_tokens = usage.input_tokens
+    else:
+        effective_input_tokens = max(
+            usage.input_tokens
+            - usage.cached_input_tokens
+            - usage.cache_creation_input_tokens,
+            0,
+        )
+    return (
+        effective_input_tokens
+        + usage.cache_creation_input_tokens
+        + usage.output_tokens
+        + usage.reasoning_output_tokens
+    )
+
+
+def _uses_net_input_convention(provider: str | None, model: str | None) -> bool:
+    if provider:
+        return provider.strip().lower() in {"anthropic", "claude", "claude-code"}
+    return "claude" in (model or "").lower()
 
 
 def _item_visible_token_weight(item: Any) -> int:
