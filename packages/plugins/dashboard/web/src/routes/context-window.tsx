@@ -3,10 +3,9 @@ import { useParams, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as ScrollArea from "@radix-ui/react-scroll-area";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { ArrowLeft, Eye, Pin, PinOff } from "lucide-react";
+import { ArrowLeft, Eye, Pin, PinOff, Play, Pause, Maximize, Minimize, Info } from "lucide-react";
 import {
   fetchContextWindow,
-  type ContextCategory,
   type ContextEvent,
   type TokenEvidence,
 } from "@/api";
@@ -25,16 +24,31 @@ const categoryColors: Record<string, string> = {
   unattributed: "var(--color-category-unattributed)",
 };
 
-const CATEGORY_ORDER = ["starting_context", "user_input", "files", "output", "agent", "unattributed"];
+const sourceColorMap: Record<string, string> = {
+  system: "var(--color-source-system)",
+  "claude.md": "var(--color-source-claude-md)",
+  memory: "var(--color-source-memory)",
+  skills: "var(--color-source-skills)",
+  mcp: "var(--color-source-mcp)",
+  rules: "var(--color-source-rules)",
+  you: "var(--color-source-you)",
+  files: "var(--color-source-files)",
+  output: "var(--color-source-output)",
+  claude: "var(--color-source-claude)",
+  hooks: "var(--color-source-hooks)",
+  subagent: "var(--color-source-subagent)",
+};
 
-function aggregateCategories(categories: ContextCategory[]) {
-  const totals = new Map<string, number>();
-  for (const category of categories) {
-    totals.set(category.category, (totals.get(category.category) ?? 0) + category.tokens.value);
-  }
-  return CATEGORY_ORDER
-    .filter((key) => totals.has(key))
-    .map((key) => ({ category: key, tokens: totals.get(key) ?? 0 }));
+function sourceColor(key: string) {
+  return sourceColorMap[key.toLowerCase()] ?? categoryColors[key] ?? categoryColors.unattributed;
+}
+
+function eventColor(event: ContextEvent) {
+  return sourceColor(event.source);
+}
+
+function sourceTint(color: string, alpha: number) {
+  return `color-mix(in srgb, ${color} ${alpha * 100}%, transparent)`;
 }
 
 function formatTokens(value: number | null | undefined) {
@@ -44,55 +58,49 @@ function formatTokens(value: number | null | undefined) {
   return String(value);
 }
 
-function groupLabel(event: ContextEvent) {
-  if (event.group === "before_first_prompt") return "BEFORE YOU TYPE ANYTHING";
-  if (event.group === "post_turn") return "AFTER FINAL TURN";
-  return `TURN ${event.turn_id ?? "-"}`;
-}
-
 function evidenceLabel(evidence: TokenEvidence | null) {
   if (!evidence) return "No event-level token evidence";
-  return `${formatTokens(evidence.value)} tokens, ${evidence.confidence.replaceAll("_", " ")}`;
+  return `${formatTokens(evidence.value)} tokens`;
 }
 
-function categoryLabel(category: string) {
-  if (category === "starting_context") return "Starting context";
-  if (category === "user_input") return "User input";
-  if (category === "files") return "Files";
-  if (category === "output") return "Output";
-  if (category === "agent") return "Agent";
-  return category.replaceAll("_", " ");
+function groupHeader(event: ContextEvent, previous?: ContextEvent): string | null {
+  if (event.source === "subagent" && previous?.source !== "subagent") {
+    return "SUBAGENT'S SEPARATE CONTEXT WINDOW";
+  }
+  if (event.group === "before_first_prompt" && (!previous || previous.group !== "before_first_prompt")) {
+    return "BEFORE YOU TYPE ANYTHING";
+  }
+  if (event.group === "post_turn" && (!previous || previous.group !== "post_turn")) {
+    return "CLAUDE WORKS";
+  }
+  if (event.group === "turn" && (!previous || previous.turn_id !== event.turn_id)) {
+    if (event.source === "you") return "you";
+    return "CLAUDE WORKS";
+  }
+  return null;
 }
 
-function categoryDotStyle(category: string): React.CSSProperties {
-  return { background: categoryColors[category] ?? categoryColors.unattributed };
+function sourceLabel(source: string) {
+  if (source === "claude") return "Claude's work";
+  if (source === "you") return "Your input";
+  if (source === "hook") return "Hook";
+  if (source === "subagent") return "Subagent context";
+  return source.replaceAll("_", " ");
 }
 
-const TOOL_DETAIL_TOKEN_KEYS = new Set(["tool_input_tokens", "tool_output_tokens"]);
-
-function numericDetail(value: string | undefined) {
-  if (value == null || value.trim() === "") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function toolTokenBreakdown(event: ContextEvent) {
-  const inputTokens = numericDetail(event.detail_ref.tool_input_tokens);
-  const outputTokens = numericDetail(event.detail_ref.tool_output_tokens);
-  if (inputTokens == null && outputTokens == null) return null;
-  return {
-    inputTokens: inputTokens ?? 0,
-    outputTokens: outputTokens ?? 0,
-  };
-}
-
-function detailEntries(event: ContextEvent) {
-  return Object.entries(event.detail_ref).filter(([key]) => !TOOL_DETAIL_TOKEN_KEYS.has(key));
+function keyTakeaway(event: ContextEvent) {
+  if (event.source === "hook") return "Hooks fire automatically on tool events. Output reaches Claude via additionalContext JSON.";
+  if (event.source === "subagent") return "Subagents run in their own context window. Only summaries flow back to the parent session.";
+  if (event.category === "starting_context") return "A lot loads before you type anything. System prompts, memory, skills, and MCP tools are all in context.";
+  if (event.category === "user_input") return "Your messages are tokenized and fed into context as user turns.";
+  if (event.category === "output") return "Model output is re-fed into context so Claude can build on prior responses.";
+  if (event.category === "files") return "File contents are expanded and placed in context when referenced.";
+  return "Every item in context costs tokens. Pin an event to inspect it while scrolling.";
 }
 
 type TimelineSegment = {
   id: string;
-  category: string;
+  source: string;
   startIndex: number;
   endIndex: number;
   eventCount: number;
@@ -104,15 +112,15 @@ function compactTimelineSegments(events: ContextEvent[]) {
   const segments: TimelineSegment[] = [];
   events.forEach((event, index) => {
     const previous = segments[segments.length - 1];
-    if (previous && previous.category === event.category) {
+    if (previous && previous.source === event.source) {
       previous.endIndex = index;
       previous.eventCount += 1;
       previous.tokens += event.tokens?.value ?? 0;
       return;
     }
     segments.push({
-      id: `${event.category}:${index}:${event.id}`,
-      category: event.category,
+      id: `${event.source}:${index}:${event.id}`,
+      source: event.source,
       startIndex: index,
       endIndex: index,
       eventCount: 1,
@@ -128,7 +136,7 @@ function timelineSegmentLabel(segment: TimelineSegment) {
     ? `Segment ${segment.startIndex + 1}`
     : `Segments ${segment.startIndex + 1}-${segment.endIndex + 1}`;
   const tokens = segment.tokens ? `, ${formatTokens(segment.tokens)} tokens` : "";
-  return `${rowLabel}: ${categoryLabel(segment.category)}, ${segment.eventCount} row${segment.eventCount === 1 ? "" : "s"}${tokens}`;
+  return `${rowLabel}: ${segment.source}, ${segment.eventCount} row${segment.eventCount === 1 ? "" : "s"}${tokens}`;
 }
 
 function CapacityBar({
@@ -142,11 +150,11 @@ function CapacityBar({
   const widthPct = Math.min((usedTokens / contextWindowTokens) * 100, 100);
   return (
     <div
-      className="flex h-2.5 w-full overflow-hidden rounded-full border border-foreground/14 bg-foreground/7"
+      className="flex h-2 w-full overflow-hidden rounded-full bg-foreground/10"
       role="img"
       aria-label={`Context window usage: ${formatTokens(usedTokens)} of ${formatTokens(contextWindowTokens)} tokens`}
     >
-      <span className="block bg-primary" style={{ width: `${widthPct}%` }} />
+      <span className="block bg-moss" style={{ width: `${widthPct}%` }} />
     </div>
   );
 }
@@ -160,7 +168,9 @@ export function ContextWindowRoute() {
   });
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [pinnedId, setPinnedId] = React.useState<string | null>(null);
-  const [hoveredCategory, setHoveredCategory] = React.useState<string | null>(null);
+  const [hoveredSource, setHoveredSource] = React.useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = React.useState(false);
+  const [isFullscreen, setIsFullscreen] = React.useState(false);
   const eventRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const events = query.data?.events ?? [];
 
@@ -168,17 +178,51 @@ export function ContextWindowRoute() {
     if (!selectedId && events[0]) setSelectedId(events[0].id);
   }, [events, selectedId]);
 
+  React.useEffect(() => {
+    if (!isPlaying) return;
+    const interval = setInterval(() => {
+      setSelectedId((current) => {
+        const idx = Math.max(events.findIndex((e) => e.id === current), 0);
+        const nextIndex = Math.min(idx + 1, events.length - 1);
+        if (nextIndex === idx) {
+          setIsPlaying(false);
+          return current;
+        }
+        return events[nextIndex].id;
+      });
+    }, 800);
+    return () => clearInterval(interval);
+  }, [isPlaying, events]);
+
+  React.useEffect(() => {
+    const handler = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
+
   const activeId = pinnedId ?? selectedId ?? events[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
-  const activeToolBreakdown = activeEvent ? toolTokenBreakdown(activeEvent) : null;
-  const activeDetailEntries = activeEvent ? detailEntries(activeEvent) : [];
   const timelineSegments = React.useMemo(() => compactTimelineSegments(events), [events]);
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
+
+  React.useEffect(() => {
+    if (!isPlaying || !activeId) return;
+    const index = events.findIndex((e) => e.id === activeId);
+    eventRefs.current[index]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeId, isPlaying, events]);
 
   function moveFocus(index: number, direction: -1 | 1) {
     const next = Math.min(Math.max(index + direction, 0), events.length - 1);
     eventRefs.current[next]?.focus();
     setSelectedId(events[next]?.id ?? null);
+  }
+
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
   }
 
   if (query.isPending) {
@@ -191,15 +235,15 @@ export function ContextWindowRoute() {
   const payload = query.data;
 
   return (
-    <div className="mx-auto grid max-w-[96rem] gap-5">
-      <Card className="gap-0 p-8">
+    <div className="mx-auto grid max-w-[96rem] gap-5 pb-8">
+      <Card className="gap-4 p-6">
         <CardHeader className="px-0">
           <button
             type="button"
             onClick={() => router.history.back()}
-            className="mb-4 inline-flex cursor-pointer items-center gap-1.5 font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]"
+            className="mb-2 inline-flex cursor-pointer items-center gap-1.5 font-display text-caption font-extrabold text-primary"
           >
-            <ArrowLeft size={16} /> Back
+            <ArrowLeft size={14} /> Back
           </button>
           <CardTitle className="font-display text-display leading-tight tracking-tight">
             Explore the context window
@@ -208,71 +252,49 @@ export function ContextWindowRoute() {
             A session showing what enters context and what it costs
           </CardDescription>
           <CardAction>
-            <p className="m-0 font-mono text-[0.9rem] text-moss">
-              ~{formatTokens(payload.used_tokens?.value)} tokens
-              {payload.context_window_tokens?.value
-                ? ` / ${formatTokens(payload.context_window_tokens.value)}`
-                : ""}
-              {payload.used_percent != null ? ` · ${payload.used_percent.toFixed(1)}%` : ""}
-            </p>
+            <div className="text-right">
+              <p className="m-0 font-mono text-heading font-bold leading-none text-moss">
+                ~{formatTokens(payload.used_tokens?.value)} tokens
+              </p>
+              <p className="m-0 mt-1 font-mono text-caption text-muted-foreground">
+                / {formatTokens(payload.context_window_tokens?.value)} · illustrative
+              </p>
+            </div>
           </CardAction>
         </CardHeader>
+        <CapacityBar
+          contextWindowTokens={payload.context_window_tokens?.value ?? 0}
+          usedTokens={totalUsedTokens}
+        />
       </Card>
 
-      <CapacityBar
-        contextWindowTokens={payload.context_window_tokens?.value ?? 0}
-        usedTokens={totalUsedTokens}
-      />
-
-      {payload.provider_usage_buckets.length > 0 ? (
-        <Card className="gap-3 p-5">
-          <CardHeader className="px-0">
-            <CardTitle className="text-base">Provider usage buckets</CardTitle>
-            <CardDescription>Exact accounting reported by the provider, kept separate from semantic composition.</CardDescription>
-          </CardHeader>
-          <ul className="m-0 grid gap-2 p-0" role="list">
-            {payload.provider_usage_buckets.map((bucket) => (
-              <li key={bucket.id} className="flex items-center justify-between gap-4 text-caption">
-                <span>{bucket.label}</span>
-                <strong className="font-mono">{formatTokens(bucket.tokens.value)}</strong>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      ) : null}
-
-      <figure className="m-0 rounded-xl border border-foreground/13 bg-card p-4 dark:border-border-subtle">
-        <figcaption className="flex items-center justify-between gap-4 font-display text-[0.9rem]">
-          <span>Context timeline</span>
-          <strong className="font-mono">
-            {formatTokens(payload.used_tokens?.value)}
-            {payload.used_percent != null ? ` (${payload.used_percent.toFixed(1)}%)` : ""} used
-          </strong>
-        </figcaption>
+      <figure className="m-0">
         <Tooltip.Provider delayDuration={160} skipDelayDuration={120}>
           <ol
-            className="m-[0.75rem_0_0.8rem] flex h-[0.5rem] list-none gap-0 overflow-hidden rounded-full border border-foreground/14 bg-foreground/7 p-0"
+            className="m-0 flex h-2 list-none gap-0 overflow-hidden rounded-full bg-foreground/10 p-0"
             aria-label="Ordered context event timeline"
           >
             {timelineSegments.map((segment) => {
-              const isActive = hoveredCategory === segment.category;
+              const isActive = hoveredSource === segment.source;
               const label = timelineSegmentLabel(segment);
               return (
-                <li key={segment.id} className="flex min-w-[2px] flex-1" style={{ flexGrow: segment.eventCount }}>
+                <li key={segment.id} className="flex min-w-0.5 flex-1" style={{ flexGrow: segment.eventCount }}>
                   <Tooltip.Root>
                     <Tooltip.Trigger asChild>
                       <button
                         type="button"
                         className={cn(
-                          "relative h-[0.5rem] min-w-[2px] w-full cursor-pointer border-0 border-r border-r-white/28 p-0 opacity-72 last:border-r-0",
-                          "hover:z-1 hover:opacity-100 hover:outline-none hover:shadow-[inset_0_0_0_2px_rgb(255_255_255/86%),0_0_0_2px_var(--accent-teal)]",
-                          "focus-visible:z-1 focus-visible:opacity-100 focus-visible:outline-none focus-visible:shadow-[inset_0_0_0_2px_rgb(255_255_255/92%),0_0_0_3px_var(--accent-teal)]",
-                          isActive && "z-1 opacity-100 outline-none shadow-[inset_0_0_0_2px_rgb(255_255_255/86%),0_0_0_2px_var(--accent-teal)]",
+                          "relative h-2 min-w-0.5 w-full cursor-pointer border-0 border-r border-r-white/28 p-0 opacity-80 last:border-r-0",
+                          "hover:z-10 hover:opacity-100 hover:outline-none hover:ring-2 hover:ring-white/80 hover:ring-offset-1",
+                          "focus-visible:z-10 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2",
+                          isActive && "z-10 opacity-100 ring-2 ring-white/80 ring-offset-1",
                         )}
-                        style={{ background: categoryColors[segment.category] ?? categoryColors.unattributed }}
+                        style={{ background: sourceColor(segment.source) }}
                         aria-label={label}
                         aria-current={isActive ? "step" : undefined}
                         onClick={() => setSelectedId(segment.firstEventId)}
+                        onMouseEnter={() => setHoveredSource(segment.source)}
+                        onMouseLeave={() => setHoveredSource(null)}
                       >
                         <span className="sr-only">{label}</span>
                       </button>
@@ -293,23 +315,22 @@ export function ContextWindowRoute() {
             })}
           </ol>
         </Tooltip.Provider>
-        <ul className="m-0 mt-1 flex flex-wrap gap-x-4 gap-y-1.5 list-none" role="list">
-          {aggregateCategories(payload.categories).map(({ category, tokens }) => (
+        <ul className="m-0 mt-3 flex flex-wrap gap-x-4 gap-y-2 list-none" role="list">
+          {payload.categories.map((category) => (
             <li
-              key={category}
+              key={category.id}
               tabIndex={0}
-              onMouseEnter={() => setHoveredCategory(category)}
-              onMouseLeave={() => setHoveredCategory(null)}
-              onFocus={() => setHoveredCategory(category)}
-              onBlur={() => setHoveredCategory(null)}
+              onMouseEnter={() => setHoveredSource(category.source_key)}
+              onMouseLeave={() => setHoveredSource(null)}
+              onFocus={() => setHoveredSource(category.source_key)}
+              onBlur={() => setHoveredSource(null)}
               className={cn(
-                "inline-flex min-w-0 cursor-default items-center gap-1.5 text-caption text-muted-foreground transition-colors",
-                hoveredCategory === category ? "text-foreground" : "hover:text-foreground",
+                "inline-flex cursor-default items-center gap-1.5 text-caption text-muted-foreground transition-colors",
+                hoveredSource === category.source_key ? "text-foreground" : "hover:text-foreground",
               )}
             >
-              <span className="inline-block h-[0.55rem] w-[0.55rem] rounded-[2px]" style={categoryDotStyle(category)} />
-              <span>{categoryLabel(category)}</span>
-              <span className="font-mono">{formatTokens(tokens)}</span>
+              <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: sourceColor(category.source_key) }} />
+              <span>{category.label}</span>
             </li>
           ))}
           <li className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
@@ -321,47 +342,46 @@ export function ContextWindowRoute() {
 
       <div className="grid grid-cols-[minmax(22rem,1.15fr)_minmax(20rem,0.85fr)] items-start gap-4 max-lg:grid-cols-1">
         <section className="min-w-0" aria-labelledby="event-stream-title">
+          <h2 id="event-stream-title" className="sr-only">Event stream</h2>
           <ScrollArea.Root className="relative min-h-[18rem] max-h-[min(48rem,calc(100vh-14rem))] overflow-hidden">
-            <ScrollArea.Viewport
-              className="max-h-[min(48rem,calc(100vh-14rem))] min-h-[18rem] pe-3 scroll-py-3"
-            >
+            <ScrollArea.Viewport className="max-h-[min(48rem,calc(100vh-14rem))] min-h-[18rem] pe-3 scroll-py-3">
               <ol className="m-0 grid list-none gap-2 p-0">
                 {events.map((event, index) => {
                   const previous = events[index - 1];
-                  const startsGroup = !previous || previous.group !== event.group || previous.turn_id !== event.turn_id;
+                  const header = groupHeader(event, previous);
                   const isSelected = event.id === selectedId;
                   const isActive = event.id === activeId;
-                  const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
-                  const categoryColor = categoryColors[event.category] ?? categoryColors.unattributed;
+                  const isSourceHighlight = hoveredSource != null && event.source === hoveredSource;
+                  const color = eventColor(event);
                   const tokenPercent = totalUsedTokens > 0 && event.tokens
                     ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
                     : 0;
+                  const isSubagent = event.source === "subagent";
                   return (
                     <React.Fragment key={event.id}>
-                      {startsGroup ? (
-                        <li className="list-none">
+                      {header ? (
+                        <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-foreground/10 pl-4")}>
                           <h4 className={cn(
-                            "font-display text-eyebrow font-extrabold uppercase tracking-wide",
-                            event.group === "before_first_prompt" ? "text-primary" : "text-muted-foreground",
+                            "font-display text-eyebrow font-extrabold uppercase tracking-wide text-muted-foreground",
                             index > 0 && "mt-4",
                           )}>
-                            {groupLabel(event)}
+                            {header}
                           </h4>
                         </li>
                       ) : null}
-                      <li>
+                      <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-foreground/10 pl-4")}>
                         <button
                           ref={(node) => { eventRefs.current[index] = node; }}
                           type="button"
                           className={cn(
-                            "relative grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 overflow-hidden rounded-xl border border-foreground/11 bg-foreground/5 px-4 py-3 text-start text-foreground cursor-pointer",
+                            "relative flex w-full items-center gap-3 overflow-hidden rounded-xl border border-foreground/11 bg-foreground/5 px-3 py-2.5 text-start text-foreground cursor-pointer",
                             "dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]",
                             "hover:border-primary/60 hover:bg-foreground/8",
                             isActive && "border-primary/60 bg-foreground/8",
                             isSelected && "ring-2 ring-primary ring-offset-1 ring-offset-card",
-                            isCategoryHighlight && "bg-foreground/10",
+                            isSourceHighlight && "bg-foreground/10",
                           )}
-                          style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${categoryColor}` } : undefined}
+                          style={isSourceHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
                           aria-pressed={isSelected}
                           onFocus={() => setSelectedId(event.id)}
                           onClick={() => setSelectedId(event.id)}
@@ -375,42 +395,33 @@ export function ContextWindowRoute() {
                             }
                           }}
                         >
-                          <span className="grid min-w-0 gap-1">
-                            <span className="flex min-w-0 items-center gap-2">
-                              <span
-                                className="inline-block h-[0.55rem] w-[0.55rem] shrink-0 rounded-[2px]"
-                                style={categoryDotStyle(event.category)}
-                              />
-                              <span className="inline-flex min-w-0 items-center gap-1.5">
-                                <Badge variant="secondary" className="shrink-0 font-mono text-[0.7rem]">
-                                  {event.confidence === "exact_usage" || event.confidence === "exact_text" ? "auto" : event.confidence.replaceAll("_", " ")}
-                                </Badge>
-                                <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm text-muted-foreground">
-                                  {event.source}
-                                </span>
-                              </span>
-                            </span>
-                            <strong className="min-w-0 break-words font-display text-body" title={event.label}>{event.label}</strong>
+                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 px-1.5 py-0 text-caption text-foreground"
+                            style={{ backgroundColor: sourceTint(color, 0.15), borderColor: sourceTint(color, 0.25) }}
+                          >
+                            {event.source}
+                          </Badge>
+                          <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
+                            {event.label}
                           </span>
-                          <span className="flex items-center gap-2">
-                            {event.terminal_visible ? (
-                              <Eye size={14} className="shrink-0 text-muted-foreground" />
-                            ) : null}
-                            <span className="font-mono text-[0.9rem] font-bold text-moss">
+                          <span className="flex shrink-0 items-center gap-2">
+                            <span className="font-mono text-body-sm font-medium">
                               {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
                             </span>
+                            {tokenPercent > 0 ? (
+                              <span className="block h-1 w-12 overflow-hidden rounded-full bg-foreground/10">
+                                <span
+                                  className="block h-full rounded-full"
+                                  style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
+                                />
+                              </span>
+                            ) : null}
+                            {event.terminal_visible ? (
+                              <Eye size={14} className="text-muted-foreground" />
+                            ) : null}
                           </span>
-                          {tokenPercent > 0 ? (
-                            <span className="col-span-2 mt-2 block h-[3px] w-full overflow-hidden rounded-full bg-foreground/8">
-                              <span
-                                className="block h-full rounded-full"
-                                style={{
-                                  width: `${tokenPercent}%`,
-                                  background: categoryColors[event.category] ?? categoryColors.unattributed,
-                                }}
-                              />
-                            </span>
-                          ) : null}
                         </button>
                       </li>
                     </React.Fragment>
@@ -418,7 +429,7 @@ export function ContextWindowRoute() {
                 })}
               </ol>
             </ScrollArea.Viewport>
-            <ScrollArea.Scrollbar className="flex w-[0.6rem] touch-none select-none bg-foreground/5 p-px" orientation="vertical">
+            <ScrollArea.Scrollbar className="flex w-2.5 touch-none select-none bg-foreground/5 p-px" orientation="vertical">
               <ScrollArea.Thumb className="relative flex-1 rounded-full bg-foreground/28" />
             </ScrollArea.Scrollbar>
           </ScrollArea.Root>
@@ -427,82 +438,101 @@ export function ContextWindowRoute() {
         <aside className="sticky top-4 rounded-xl border border-foreground/13 bg-card p-5 max-lg:static dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]">
           {activeEvent ? (
             <>
-              <div className="flex items-center justify-between gap-4 font-display">
-                <div>
-                  <p className="mb-1 font-display text-eyebrow font-extrabold uppercase tracking-wider text-primary">{categoryLabel(activeEvent.category)}</p>
-                  <h3 className="m-0 break-words font-display text-heading" title={activeEvent.label}>{activeEvent.label}</h3>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-[2px]" style={{ background: eventColor(activeEvent) }} />
+                    <h3 className="m-0 break-words font-display text-heading" title={activeEvent.label}>{activeEvent.label}</h3>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge
+                      variant="outline"
+                      className="px-2 text-caption text-foreground"
+                      style={{ backgroundColor: sourceTint(eventColor(activeEvent), 0.15), borderColor: sourceTint(eventColor(activeEvent), 0.25) }}
+                    >
+                      {sourceLabel(activeEvent.source)}
+                    </Badge>
+                    <span className="font-mono text-body-sm text-moss">{evidenceLabel(activeEvent.tokens)}</span>
+                  </div>
                 </div>
                 <Button
-                  size="sm"
+                  size="icon"
                   variant={pinnedId === activeEvent.id ? "default" : "secondary"}
                   onClick={() => setPinnedId((current) => current === activeEvent.id ? null : activeEvent.id)}
                   aria-pressed={pinnedId === activeEvent.id}
+                  aria-label={pinnedId === activeEvent.id ? "Unpin details" : "Pin details"}
                 >
                   {pinnedId === activeEvent.id ? <PinOff size={15} /> : <Pin size={15} />}
-                  {pinnedId === activeEvent.id ? "Unpin" : "Pin"}
                 </Button>
               </div>
-              <p className="mt-3 max-h-[18rem] overflow-auto whitespace-pre-wrap leading-relaxed">{activeEvent.summary ?? "No text preview is available."}</p>
-              <dl className="mt-4 grid gap-0">
-                <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
-                  <dt className="font-display font-extrabold capitalize text-muted-foreground">Token impact</dt>
-                  <dd className="m-0 break-words">{evidenceLabel(activeEvent.tokens)}</dd>
-                </div>
-                {activeToolBreakdown ? (
-                  <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
-                    <dt className="font-display font-extrabold capitalize text-muted-foreground">Tool tokens</dt>
-                    <dd className="m-0 grid gap-2">
-                      <span className="flex min-w-0 items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Input</span>
-                        <code>{formatTokens(activeToolBreakdown.inputTokens)}</code>
-                      </span>
-                      <span className="flex min-w-0 items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Output</span>
-                        <code>{formatTokens(activeToolBreakdown.outputTokens)}</code>
-                      </span>
-                    </dd>
+              <p className="mt-4 max-h-[18rem] overflow-auto whitespace-pre-wrap leading-relaxed">{activeEvent.summary ?? "No text preview is available."}</p>
+              {activeEvent.terminal_visible ? (
+                <div className="mt-4 overflow-hidden rounded-xl border border-foreground/13 bg-foreground/5 dark:border-border-subtle">
+                  <div className="flex items-center gap-2 px-4 py-3 font-display text-body-sm font-bold">
+                    <Info size={16} className="text-primary" />
+                    One-liner in your terminal
                   </div>
-                ) : null}
-                <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
-                  <dt className="font-display font-extrabold capitalize text-muted-foreground">Evidence source</dt>
-                  <dd className="m-0 break-words">{activeEvent.tokens?.source ?? activeEvent.source}</dd>
-                </div>
-                <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
-                  <dt className="font-display font-extrabold capitalize text-muted-foreground">Event confidence</dt>
-                  <dd className="m-0 break-words">{activeEvent.confidence.replaceAll("_", " ")}</dd>
-                </div>
-                <div className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
-                  <dt className="font-display font-extrabold capitalize text-muted-foreground">Terminal visibility</dt>
-                  <dd className="m-0 break-words">{activeEvent.terminal_visible ? "Visible" : "Hidden"}</dd>
-                </div>
-                {activeDetailEntries.map(([key, value]) => (
-                  <div key={key} className="grid grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)] gap-3 border-t border-foreground/9 py-3">
-                    <dt className="font-display font-extrabold capitalize text-muted-foreground">{key.replaceAll("_", " ")}</dt>
-                    <dd className="m-0 break-words"><code>{value}</code></dd>
+                  <div className="border-t border-foreground/10 px-4 py-3">
+                    <p className="m-0 text-body-sm text-muted-foreground">
+                      You see a brief mention, not the full content.
+                    </p>
                   </div>
-                ))}
-              </dl>
+                </div>
+              ) : null}
+              <div className="mt-4 overflow-hidden rounded-xl border border-warning/30">
+                <div className="bg-warning px-4 py-2 font-display text-eyebrow font-extrabold uppercase tracking-wide text-white">
+                  Key Takeaway
+                </div>
+                <div className="bg-foreground/5 px-4 py-4 dark:bg-[rgb(255_255_255/4%)]">
+                  <p className="m-0 font-display text-body font-bold leading-snug">
+                    {keyTakeaway(activeEvent)}
+                  </p>
+                </div>
+              </div>
             </>
           ) : (
             <>
               <h3 className="m-0 font-display text-heading">Click any event</h3>
               <p className="mt-1 text-muted-foreground">Click to preview details. Pin to keep it selected while you scroll.</p>
-              <div className="mt-6 overflow-hidden rounded-xl border border-warning/30">
-                <div className="bg-warning px-4 py-2 font-display text-eyebrow font-extrabold uppercase tracking-wide text-white">
-                  Key Takeaway
-                </div>
-                <div className="bg-foreground/5 px-4 py-4">
-                  <p className="m-0 font-display text-body font-bold leading-snug">
-                    A lot loads before you type anything.
-                  </p>
-                  <p className="m-0 mt-2 text-body-sm leading-relaxed text-muted-foreground">
-                    CLAUDE.md, memory, skills, and MCP tools are all in context before your first prompt.
-                  </p>
-                </div>
-              </div>
             </>
           )}
         </aside>
+      </div>
+
+      <div className="sticky bottom-0 z-50 mt-2 rounded-xl border border-foreground/13 bg-card p-3 shadow-lg dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]">
+        <div className="flex items-center gap-3">
+          <Button
+            size="icon"
+            variant="secondary"
+            onClick={() => setIsPlaying((p) => !p)}
+            aria-label={isPlaying ? "Pause playback" : "Play through events"}
+          >
+            {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+          </Button>
+          <div className="flex-1">
+            <div
+              className="flex h-2 w-full overflow-hidden rounded-full bg-foreground/10"
+              role="img"
+              aria-label={`Context window usage: ${formatTokens(totalUsedTokens)} of ${formatTokens(payload.context_window_tokens?.value ?? 0)} tokens`}
+            >
+              <span
+                className="block bg-moss transition-all duration-500"
+                style={{ width: `${Math.min(payload.used_percent ?? 0, 100)}%` }}
+              />
+            </div>
+          </div>
+          <span className="w-12 text-right font-mono text-body-sm">
+            {payload.used_percent != null ? `${payload.used_percent.toFixed(0)}%` : "-"}
+          </span>
+          <Button
+            size="icon"
+            variant="secondary"
+            onClick={toggleFullscreen}
+            aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+          >
+            {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+          </Button>
+        </div>
       </div>
     </div>
   );
