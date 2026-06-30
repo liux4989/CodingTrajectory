@@ -58,6 +58,7 @@ class ContextCategory(BaseModel):
     label: str
     tokens: TokenEvidence
     percent: float | None = None
+    estimated_cost: CostEvidence | None = None
 
 
 class ContextEvent(BaseModel):
@@ -74,6 +75,19 @@ class ContextEvent(BaseModel):
     confidence: Confidence
     detail_ref: dict[str, str] = Field(default_factory=dict)
     terminal_visible: bool = True
+    estimated_cost: CostEvidence | None = None
+
+
+class ExpensiveItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str
+    turn_id: str
+    category: CategoryKey
+    label: str
+    summary: str
+    allocated_usage: dict[str, int]
+    estimated_cost: CostEvidence
 
 
 class CostEvidence(BaseModel):
@@ -98,6 +112,7 @@ class ContextWindowProjection(BaseModel):
     token_cost: CostEvidence | None = None
     categories: list[ContextCategory]
     provider_usage_buckets: list[ContextCategory]
+    expensive_items: list[ExpensiveItem] = Field(default_factory=list)
     events: list[ContextEvent]
     warnings: list[str]
 
@@ -153,14 +168,27 @@ def build_projection(
     )
 
     vendor = str(stats.get("vendor") or _overview_vendor(overview) or "unknown")
-    categories = _project_categories(stats)
-    provider_usage_buckets = _project_provider_usage_buckets(stats)
+    model = stats.get("model") or {}
+    model_name = _optional_text(model.get("name"))
+    categories = _project_categories(stats, model=model_name, provider=vendor)
+    provider_usage_buckets = _project_provider_usage_buckets(
+        stats,
+        model=model_name,
+        provider=vendor,
+    )
+    expensive_items = _project_expensive_items(
+        tool_usage,
+        model=model_name,
+        provider=vendor,
+    )
     events = [
         *_category_events(categories),
         *_trajectory_events(
             overview,
             usage,
             tool_usage,
+            model=model_name,
+            provider=vendor,
             turn_id=turn_id,
         ),
     ]
@@ -169,9 +197,7 @@ def build_projection(
     if turn_id and not any(event.turn_id == turn_id for event in events):
         raise SystemExit(f"turn not found in session overview: {turn_id}")
 
-    model = stats.get("model") or {}
     context = stats.get("context") or {}
-    model_name = _optional_text(model.get("name"))
     reported_context_window = model.get("context_window") or model.get(
         "context_window_tokens"
     )
@@ -232,8 +258,13 @@ def build_projection(
             if estimated_cost
             else None
         ),
-        categories=categories,
-        provider_usage_buckets=provider_usage_buckets,
+        categories=sorted(categories, key=_category_sort_key, reverse=True),
+        provider_usage_buckets=sorted(
+            provider_usage_buckets,
+            key=_category_sort_key,
+            reverse=True,
+        ),
+        expensive_items=expensive_items,
         events=events,
         warnings=_dedupe(warnings),
     )
@@ -271,12 +302,17 @@ def render_markdown(projection: ContextWindowProjection) -> str:
     ]
     for category in sorted(
         projection.categories,
-        key=lambda item: item.tokens.value,
+        key=_category_sort_key,
         reverse=True,
     ):
+        cost_label = (
+            _format_cost(category.estimated_cost.value_usd)
+            if category.estimated_cost
+            else "-"
+        )
         lines.append(
             f"  {category.category:<20} {_format_delta(category.tokens.value):>8}  "
-            f"{_one_line(category.label, 62)} [{category.tokens.confidence}]"
+            f"{cost_label:>9}  {_one_line(category.label, 52)} [{category.tokens.confidence}]"
         )
     if projection.provider_usage_buckets:
         lines.extend(["", "Provider usage buckets"])
@@ -284,6 +320,19 @@ def render_markdown(projection: ContextWindowProjection) -> str:
             lines.append(
                 f"  {category.source_key:<20} {_format_delta(category.tokens.value):>8}  "
                 f"{_one_line(category.label, 62)} [{category.tokens.confidence}]"
+            )
+
+    if projection.expensive_items:
+        lines.extend(["", "Most Expensive Items"])
+        for item in projection.expensive_items[:12]:
+            usage = item.allocated_usage
+            lines.append(
+                f"  {_format_cost(item.estimated_cost.value_usd):>9}  "
+                f"{_format_tokens(usage.get('uncached_input_tokens'))}/"
+                f"{_format_tokens(usage.get('cached_input_tokens'))}/"
+                f"{_format_tokens(usage.get('output_tokens'))}/"
+                f"{_format_tokens(usage.get('reasoning_output_tokens'))}  "
+                f"{item.category:<10} {_one_line(item.label + ': ' + item.summary, 72)}"
             )
 
     current_group: tuple[str, str | None] | None = None
@@ -304,7 +353,19 @@ def render_markdown(projection: ContextWindowProjection) -> str:
     return "\n".join(lines)
 
 
-def _project_categories(stats: dict[str, Any]) -> list[ContextCategory]:
+def _category_sort_key(category: ContextCategory) -> tuple[float, int]:
+    return (
+        category.estimated_cost.value_usd if category.estimated_cost else 0.0,
+        category.tokens.value,
+    )
+
+
+def _project_categories(
+    stats: dict[str, Any],
+    *,
+    model: str | None,
+    provider: str,
+) -> list[ContextCategory]:
     context = stats.get("context") or {}
     leaves = list(_category_leaves(context.get("categories") or []))
     projected: list[ContextCategory] = []
@@ -317,6 +378,7 @@ def _project_categories(stats: dict[str, Any]) -> list[ContextCategory]:
         confidence = _confidence(
             category.get("confidence"), fallback="estimated_tokens"
         )
+        allocated_usage = _category_usage(category)
         projected.append(
             ContextCategory(
                 id=f"category:{source_key}:{index}",
@@ -329,12 +391,22 @@ def _project_categories(stats: dict[str, Any]) -> list[ContextCategory]:
                     source=f"ct session stats:context.categories.{source_key}",
                 ),
                 percent=_optional_float(category.get("pct")),
+                estimated_cost=_cost_evidence_from_usage(
+                    allocated_usage,
+                    model=model,
+                    provider=provider,
+                ),
             )
         )
     return projected
 
 
-def _project_provider_usage_buckets(stats: dict[str, Any]) -> list[ContextCategory]:
+def _project_provider_usage_buckets(
+    stats: dict[str, Any],
+    *,
+    model: str | None,
+    provider: str,
+) -> list[ContextCategory]:
     projected: list[ContextCategory] = []
     for index, category in enumerate(stats.get("provider_usage_buckets") or []):
         if not isinstance(category, dict):
@@ -343,6 +415,7 @@ def _project_provider_usage_buckets(stats: dict[str, Any]) -> list[ContextCatego
         if not isinstance(tokens, int) or isinstance(tokens, bool):
             continue
         source_key = str(category.get("key") or f"provider_bucket_{index}")
+        allocated_usage = _category_usage(category)
         projected.append(
             ContextCategory(
                 id=f"provider:{source_key}:{index}",
@@ -360,9 +433,62 @@ def _project_provider_usage_buckets(stats: dict[str, Any]) -> list[ContextCatego
                     ),
                 ),
                 percent=_optional_float(category.get("pct")),
+                estimated_cost=_cost_evidence_from_usage(
+                    allocated_usage,
+                    model=model,
+                    provider=provider,
+                ),
             )
         )
     return projected
+
+
+def _project_expensive_items(
+    tool_usage: dict[str, Any],
+    *,
+    model: str | None,
+    provider: str,
+) -> list[ExpensiveItem]:
+    items: list[ExpensiveItem] = []
+    for index, item in enumerate(tool_usage.get("tool_items") or []):
+        if not isinstance(item, dict):
+            continue
+        real_cost = item.get("allocated_real_token_cost")
+        if not isinstance(real_cost, dict):
+            continue
+        usage = _usage_dict(real_cost)
+        estimate = _cost_evidence_from_usage(usage, model=model, provider=provider)
+        if estimate is None:
+            continue
+        events = _tool_item_events(item, index=index, model=model, provider=provider)
+        event = events[0] if events else None
+        category = (
+            event.category
+            if event
+            else _tool_category(str(item.get("tool_name") or ""))
+        )
+        label = event.label if event else str(item.get("tool_name") or "Tool")
+        summary = event.summary if event else str(item.get("input_summary") or "")
+        items.append(
+            ExpensiveItem(
+                item_id=str(item.get("item_id") or f"tool_item_{index}"),
+                turn_id=str(item.get("turn_id") or ""),
+                category=category,
+                label=label,
+                summary=summary,
+                allocated_usage=usage,
+                estimated_cost=estimate,
+            )
+        )
+    return sorted(
+        items,
+        key=lambda item: (
+            item.estimated_cost.value_usd,
+            item.allocated_usage.get("uncached_input_tokens", 0),
+            item.allocated_usage.get("output_tokens", 0),
+        ),
+        reverse=True,
+    )
 
 
 def _category_leaves(categories: Iterable[Any]) -> Iterable[dict[str, Any]]:
@@ -374,6 +500,23 @@ def _category_leaves(categories: Iterable[Any]) -> Iterable[dict[str, Any]]:
             yield from _category_leaves(children)
         else:
             yield category
+
+
+def _category_usage(category: dict[str, Any]) -> dict[str, int]:
+    for key in ("allocated_usage", "usage", "real_tokens"):
+        usage = _usage_dict(category.get(key))
+        if usage.get("total_tokens", 0) > 0 or any(
+            usage.get(token_key, 0)
+            for token_key in (
+                "uncached_input_tokens",
+                "cached_input_tokens",
+                "cache_creation_input_tokens",
+                "output_tokens",
+                "reasoning_output_tokens",
+            )
+        ):
+            return usage
+    return {}
 
 
 _STARTING_CONTEXT_KEYS = {
@@ -453,6 +596,8 @@ def _trajectory_events(
     usage: dict[str, Any],
     tool_usage: dict[str, Any],
     *,
+    model: str | None,
+    provider: str,
     turn_id: str | None,
 ) -> list[ContextEvent]:
     usage_by_turn = {
@@ -460,7 +605,11 @@ def _trajectory_events(
         for item in usage.get("turns") or []
         if isinstance(item, dict) and item.get("id")
     }
-    tool_events_by_turn = _tool_events_by_turn(tool_usage)
+    tool_events_by_turn = _tool_events_by_turn(
+        tool_usage,
+        model=model,
+        provider=provider,
+    )
     events: list[ContextEvent] = []
     for session in overview.get("sessions") or []:
         if not isinstance(session, dict):
@@ -527,6 +676,9 @@ def _trajectory_events(
 
 def _tool_events_by_turn(
     tool_usage: dict[str, Any],
+    *,
+    model: str | None,
+    provider: str,
 ) -> dict[str, list[list[ContextEvent]]]:
     by_turn: dict[str, list[list[ContextEvent]]] = {}
     for index, item in enumerate(tool_usage.get("tool_items") or []):
@@ -535,11 +687,19 @@ def _tool_events_by_turn(
         turn_id = _optional_text(item.get("turn_id"))
         if turn_id is None:
             continue
-        by_turn.setdefault(turn_id, []).append(_tool_item_events(item, index=index))
+        by_turn.setdefault(turn_id, []).append(
+            _tool_item_events(item, index=index, model=model, provider=provider)
+        )
     return by_turn
 
 
-def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]:
+def _tool_item_events(
+    item: dict[str, Any],
+    *,
+    index: int,
+    model: str | None,
+    provider: str,
+) -> list[ContextEvent]:
     item_id = str(item.get("item_id") or f"tool_item_{index}")
     tool = str(item.get("tool_name") or "Tool")
     attribution = (
@@ -580,6 +740,13 @@ def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]
             detail_ref[detail_key] = str(value)
     if real_cost.get("allocation_method"):
         detail_ref["allocated_token_method"] = str(real_cost["allocation_method"])
+    estimated_cost = _cost_evidence_from_usage(
+        _usage_dict(real_cost),
+        model=model,
+        provider=provider,
+    )
+    if estimated_cost:
+        detail_ref["estimated_cost_usd"] = str(estimated_cost.value_usd)
     status = _optional_text(item.get("status"))
     if status:
         detail_ref["status"] = status
@@ -617,6 +784,7 @@ def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]
             confidence=combined_confidence,
             detail_ref=detail_ref,
             terminal_visible=True,
+            estimated_cost=estimated_cost,
         ),
     ]
 
@@ -959,7 +1127,7 @@ def _projection_warnings(events: list[ContextEvent]) -> list[str]:
     if has_tool_token_events:
         warnings.append(
             "Tool items combine input and output token evidence from session.tool_usage; USD cost remains a "
-            "session-level derived estimate."
+            "plugin-side estimate over allocated item usage."
         )
     else:
         warnings.append(
@@ -969,6 +1137,63 @@ def _projection_warnings(events: list[ContextEvent]) -> list[str]:
     if not any(event.tokens for event in events):
         warnings.append("No event-level token evidence is available for this session.")
     return warnings
+
+
+def _usage_dict(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "input_tokens": _optional_int(value.get("input_tokens")) or 0,
+        "uncached_input_tokens": _optional_int(value.get("uncached_input_tokens")) or 0,
+        "cached_input_tokens": _optional_int(value.get("cached_input_tokens")) or 0,
+        "cache_creation_input_tokens": _optional_int(
+            value.get("cache_creation_input_tokens")
+        )
+        or 0,
+        "output_tokens": _optional_int(value.get("output_tokens")) or 0,
+        "reasoning_output_tokens": _optional_int(value.get("reasoning_output_tokens"))
+        or 0,
+        "total_tokens": _optional_int(value.get("total_tokens")) or 0,
+    }
+
+
+def _cost_evidence_from_usage(
+    usage: dict[str, int],
+    *,
+    model: str | None,
+    provider: str,
+) -> CostEvidence | None:
+    if not any(
+        usage.get(key, 0)
+        for key in (
+            "input_tokens",
+            "uncached_input_tokens",
+            "cached_input_tokens",
+            "cache_creation_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        )
+    ):
+        return None
+    normalized_usage = dict(usage)
+    normalized_usage["input_tokens"] = (
+        normalized_usage.get("uncached_input_tokens", 0)
+        + normalized_usage.get("cached_input_tokens", 0)
+        + normalized_usage.get("cache_creation_input_tokens", 0)
+    )
+    estimate = token_pricing.estimate_cost(
+        normalized_usage,
+        model=model,
+        provider=provider,
+    )
+    if estimate is None:
+        return None
+    return CostEvidence(
+        value_usd=estimate.amount_usd,
+        confidence="estimated",
+        source=estimate.pricing_source,
+        effective_date=estimate.pricing_effective_date,
+    )
 
 
 def _overview_vendor(overview: dict[str, Any]) -> str | None:
@@ -1076,6 +1301,14 @@ def _format_tokens(value: int | None) -> str:
     if value >= 1_000:
         return f"{value / 1_000:.1f}K"
     return str(value)
+
+
+def _format_cost(value: float | None) -> str:
+    if value is None:
+        return "-"
+    if value < 0.01:
+        return f"${value:.4f}"
+    return f"${value:.2f}"
 
 
 def _format_delta(value: int) -> str:
