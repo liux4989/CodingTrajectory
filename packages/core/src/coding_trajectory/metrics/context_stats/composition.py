@@ -16,6 +16,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     EDIT_FILE,
     LIST_FILES,
     READ_FILE,
+    RUN_COMMAND,
     SEARCH_TEXT,
     SESSION_HANDOFF,
     SUBAGENT_TASK,
@@ -57,14 +58,28 @@ _STARTING_CONTEXT_LABELS = {
 }
 _FILE_CONCEPT_LABELS = {
     READ_FILE: "Files read",
-    SEARCH_TEXT: "Search results",
-    LIST_FILES: "File listings",
-    WEB_FETCH: "Web pages fetched",
-    WEB_SEARCH: "Web search results",
 }
 _CONTEXT_CONCEPTS = frozenset(_FILE_CONCEPT_LABELS)
 _CODE_CHANGE_CONCEPTS = frozenset({EDIT_FILE, WRITE_FILE})
 _COORDINATION_CONCEPTS = frozenset({TODO_LIST, SUBAGENT_TASK, SESSION_HANDOFF})
+_OUTPUT_CONCEPT_LABELS = {
+    SEARCH_TEXT: "Search output",
+    LIST_FILES: "File listing output",
+    WEB_FETCH: "Web fetch output",
+    WEB_SEARCH: "Web search output",
+}
+_OUTPUT_FAMILY_LABELS = {
+    "cli_report": "CLI reports",
+    "tests": "Test output",
+    "build": "Build / lint output",
+    "code_fix": "Formatter / fixer output",
+    "repository": "Repository output",
+    "dependency": "Dependency output",
+    "diagnostic": "Diagnostic output",
+    "external": "External service output",
+    "runtime": "Runtime output",
+    "other": "Other command output",
+}
 
 
 def build_context_composition(session_graph: SessionGraph) -> list[ContextCategoryFlat]:
@@ -132,7 +147,7 @@ def _user_input(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
 def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCategoryFlat]]:
     files: dict[str, _Measure] = defaultdict(_Measure)
     agent: dict[str, _Measure] = defaultdict(_Measure)
-    output = _Measure()
+    output: dict[str, _Measure] = defaultdict(_Measure)
 
     for session in session_graph.sessions:
         for event in session.events:
@@ -141,29 +156,21 @@ def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
             text = event.payload.get("text")
             if not isinstance(text, str) or not text:
                 continue
-            phase = event.payload.get("phase")
-            key = (
-                "final_answer"
-                if phase == "final_answer"
-                else "progress_update"
-                if isinstance(phase, str) and phase
-                else "assistant_message"
-            )
             size = visible_text_size(text)
-            agent[key].add(tokens=size.tokens, chars=size.chars)
+            agent["assistant_messages"].add(tokens=size.tokens, chars=size.chars)
 
         for turn in session.turns:
             for item in turn.items:
                 if item.kind == "reasoning":
                     text = item.text or ""
                     size = visible_text_size(text)
-                    agent["reasoning"].add(tokens=size.tokens, chars=size.chars)
+                    agent["assistant_messages"].add(tokens=size.tokens, chars=size.chars)
                     continue
                 _add_tool_item(item, files=files, agent=agent, output=output)
 
     file_children = [
         _category(
-            f"context_{concept.lower()}",
+            _file_category_key(concept),
             _FILE_CONCEPT_LABELS[concept],
             files[concept],
         )
@@ -171,12 +178,14 @@ def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
         if files[concept].items
     ]
     message_children = [
+        _category("assistant_messages", "Assistant messages", agent["assistant_messages"])
+    ] if agent["assistant_messages"].items else []
+    coordination_children = [
         _category(key, label, agent[key])
         for key, label in (
-            ("final_answer", "Final answers"),
-            ("progress_update", "Progress updates"),
-            ("assistant_message", "Other assistant messages"),
-            ("reasoning", "Reasoning"),
+            ("todolist", "Plans / todos"),
+            ("subagenttask", "Subagent results"),
+            ("sessionhandoff", "Handoffs"),
         )
         if agent[key].items
     ]
@@ -188,30 +197,31 @@ def _agent_work(session_graph: SessionGraph) -> tuple[_Measure, list[ContextCate
         )
         if agent[key].items
     ]
-    coordination_children = [
-        _category(key, label, agent[key])
-        for key, label in (
-            ("todolist", "Plans / todos"),
-            ("subagenttask", "Subagent results"),
-            ("sessionhandoff", "Handoffs"),
-        )
-        if agent[key].items
-    ]
     agent_children = [
         category
         for category in (
-            _parent("agent_messages", "Agent messages", message_children),
+            *message_children,
             _parent("code_changes", "Code changes", code_children),
             _parent("coordination", "Coordination", coordination_children),
         )
         if category is not None
     ]
+    output_children = [
+        _category(f"output_{concept.lower()}", label, output[concept])
+        for concept, label in _OUTPUT_CONCEPT_LABELS.items()
+        if output[concept].items
+    ]
+    output_children.extend(
+        _category(f"output_{key}", label, output[key])
+        for key, label in _OUTPUT_FAMILY_LABELS.items()
+        if output[key].items
+    )
 
     children = [
         category
         for category in (
             _parent("files", "Files", file_children),
-            _category("output", "Output", output) if output.items else None,
+            _parent("output", "Output", output_children),
             _parent("agent", "Agent", agent_children),
         )
         if category is not None
@@ -224,7 +234,7 @@ def _add_tool_item(
     *,
     files: dict[str, _Measure],
     agent: dict[str, _Measure],
-    output: _Measure,
+    output: dict[str, _Measure],
 ) -> None:
     if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
         return
@@ -235,6 +245,9 @@ def _add_tool_item(
 
     if concept in _CONTEXT_CONCEPTS:
         files[concept].add(tokens=output_size.tokens, chars=output_size.chars)
+        return
+    if concept in _OUTPUT_CONCEPT_LABELS:
+        output[concept].add(tokens=output_size.tokens, chars=output_size.chars)
         return
     if concept in _CODE_CHANGE_CONCEPTS:
         key = concept.lower()
@@ -250,7 +263,20 @@ def _add_tool_item(
             chars=input_size.chars + output_size.chars,
         )
         return
-    output.add(tokens=output_size.tokens, chars=output_size.chars)
+    output[_output_family_key(summary, concept)].add(tokens=output_size.tokens, chars=output_size.chars)
+
+
+def _file_category_key(concept: str) -> str:
+    if concept in _CODE_CHANGE_CONCEPTS:
+        return concept.lower()
+    return f"context_{concept.lower()}"
+
+
+def _output_family_key(summary: dict[str, object], concept: str) -> str:
+    if concept != RUN_COMMAND:
+        return "other"
+    family = summary.get("command_family")
+    return family if isinstance(family, str) and family in _OUTPUT_FAMILY_LABELS else "other"
 
 
 def _parent(

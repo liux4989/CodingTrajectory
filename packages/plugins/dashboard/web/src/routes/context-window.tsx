@@ -390,7 +390,7 @@ export function ContextWindowRoute() {
                                 </span>
                               </span>
                             </span>
-                            <strong className="min-w-0 break-words font-display text-body">{event.label}</strong>
+                            <strong className="min-w-0 break-words font-display text-body" title={event.label}>{event.label}</strong>
                           </span>
                           <span className="flex items-center gap-2">
                             {event.terminal_visible ? (
@@ -430,7 +430,7 @@ export function ContextWindowRoute() {
               <div className="flex items-center justify-between gap-4 font-display">
                 <div>
                   <p className="mb-1 font-display text-eyebrow font-extrabold uppercase tracking-wider text-primary">{categoryLabel(activeEvent.category)}</p>
-                  <h3 className="m-0 font-display text-heading">{activeEvent.label}</h3>
+                  <h3 className="m-0 break-words font-display text-heading" title={activeEvent.label}>{activeEvent.label}</h3>
                 </div>
                 <Button
                   size="sm"

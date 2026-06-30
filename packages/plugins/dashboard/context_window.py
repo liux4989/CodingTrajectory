@@ -355,12 +355,9 @@ _STARTING_CONTEXT_KEYS = {
 _USER_INPUT_KEYS = {"user_initial_request", "user_follow_up_requests"}
 _AGENT_FILES_KEYS = {
     "context_readfile",
-    "context_searchtext",
-    "context_listfiles",
-    "context_webfetch",
-    "context_websearch",
 }
 _AGENT_AGENT_KEYS = {
+    "assistant_messages",
     "final_answer",
     "progress_update",
     "assistant_message",
@@ -380,7 +377,7 @@ def _category_key(source_key: str) -> CategoryKey:
         return "user_input"
     if source_key in _AGENT_FILES_KEYS:
         return "files"
-    if source_key == "output":
+    if source_key == "output" or source_key.startswith("output_"):
         return "output"
     if (
         source_key in _AGENT_AGENT_KEYS
@@ -532,6 +529,7 @@ def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]
         detail_ref["status"] = status
 
     input_summary = _optional_text(item.get("input_summary")) or f"{tool} input"
+    label = _tool_event_label(tool, input_summary)
     summary_bits = [input_summary, f"{output_chars} output chars"]
     if output_original_tokens is not None:
         summary_bits.append(f"{output_original_tokens} observed output tokens")
@@ -550,7 +548,7 @@ def _tool_item_events(item: dict[str, Any], *, index: int) -> list[ContextEvent]
             group="turn",
             turn_id=detail_ref["turn_id"],
             category=_tool_category(tool),
-            label=tool,
+            label=label,
             summary=", ".join(summary_bits),
             tokens=TokenEvidence(
                 value=total_tokens,
@@ -634,11 +632,185 @@ def _activity_event(
 
 def _tool_category(tool: str) -> CategoryKey:
     normalized = tool.lower()
-    if any(term in normalized for term in ("read", "search", "list", "find", "glob")):
-        return "files"
-    if any(term in normalized for term in ("edit", "write", "todo", "subagent", "handoff")):
+    if any(
+        term in normalized
+        for term in ("todo", "subagent", "handoff", "update_plan", "edit", "write", "apply_patch")
+    ):
         return "agent"
+    if normalized in {"read", "view"} or any(
+        term in normalized for term in ("read_file", "readfile", "read_many_files")
+    ):
+        return "files"
     return "output"
+
+
+def _tool_event_label(tool: str, input_summary: str) -> str:
+    normalized = tool.lower()
+    if "apply_patch" in normalized:
+        target = _patch_target(input_summary)
+        return f"Edit {target}" if target else "Edit files"
+    if any(term in normalized for term in ("edit", "write")):
+        target = _path_title(input_summary)
+        action = "Write" if "write" in normalized else "Edit"
+        return f"{action} {target}" if target else f"{action} files"
+    if any(term in normalized for term in ("todo", "update_plan")):
+        return "Update plan"
+    if any(term in normalized for term in ("subagent", "handoff")):
+        return _compact_title(tool.replace("_", " ").title())
+    if _is_shell_tool(tool):
+        return _shell_event_label(input_summary)
+    if normalized in {"read", "view"} or any(
+        term in normalized for term in ("read_file", "readfile", "read_many_files")
+    ):
+        target = _path_title(input_summary)
+        return f"Read {target}" if target else "Read files"
+    if any(term in normalized for term in ("search", "grep")):
+        query = _search_query_title(input_summary)
+        return f"grep {_quote_title(query)}" if query else "Search output"
+    if any(term in normalized for term in ("list", "glob")):
+        return "File listing output"
+    return _compact_title(tool.replace("_", " ").strip().title() or "Tool")
+
+
+def _is_shell_tool(tool: str) -> bool:
+    return tool in {"bash", "Bash", "exec_command", "run_shell_command", "shell", "write_stdin"}
+
+
+def _shell_event_label(command: str) -> str:
+    primary = _primary_shell_stage(command)
+    tokens = _safe_split(primary)
+    head = _command_head(tokens)
+    if head in {"rg", "grep", "ag", "ack", "rga"}:
+        if any(token in {"--files", "-l", "--files-with-matches"} for token in tokens):
+            return "File listing output"
+        query = _grep_query(tokens, head)
+        return f"grep {_quote_title(query)}" if query else "Search output"
+    if head in {"ls", "find", "fd", "tree", "eza", "exa"}:
+        return "File listing output"
+    if head in {"cat", "bat", "head", "tail", "less", "more", "nl", "sed"}:
+        target = _shell_path_arg(tokens, head)
+        return f"Read {_path_title(target)}" if target else "Read command output"
+    if head in {"apply_patch", "applypatch"}:
+        target = _patch_target(command)
+        return f"Edit {target}" if target else "Edit files"
+    short = _compact_command(primary)
+    return f"{short} output" if short else "Command output"
+
+
+def _primary_shell_stage(command: str) -> str:
+    for separator in ("&&", "||", ";", "\n"):
+        if separator in command:
+            parts = [part.strip() for part in command.split(separator) if part.strip()]
+            informative = next((part for part in parts if _command_head(_safe_split(part)) in {"rg", "grep", "sed", "cat", "ls", "find", "fd"}), None)
+            return informative or parts[0]
+    return command.strip()
+
+
+def _safe_split(command: str) -> list[str]:
+    try:
+        return shlex.split(command, posix=True)
+    except ValueError:
+        return command.split()
+
+
+def _command_head(tokens: list[str]) -> str:
+    if not tokens:
+        return ""
+    index = 0
+    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
+        index += 1
+    if index < len(tokens) and tokens[index] in {"uv", "poetry", "pdm", "pipenv", "npx", "bunx", "pnpm", "yarn", "bun", "deno"}:
+        index += 1
+        while index < len(tokens) and tokens[index] in {"run", "exec", "dlx", "tool", "task"}:
+            index += 1
+    if index + 2 < len(tokens) and tokens[index] in {"python", "python3"} and tokens[index + 1] == "-m":
+        return os.path.basename(tokens[index + 2].lower())
+    return os.path.basename(tokens[index].lower()) if index < len(tokens) else ""
+
+
+def _grep_query(tokens: list[str], head: str) -> str | None:
+    saw_head = False
+    skip_next = False
+    flag_value_options = {
+        "-A", "-B", "-C", "-e", "-f", "-g", "--glob", "-m", "--max-count",
+        "-t", "--type", "--type-not", "-T", "-r", "--replace", "--include",
+        "--exclude", "--exclude-dir",
+    }
+    for token in tokens:
+        if not saw_head:
+            if os.path.basename(token) == head:
+                saw_head = True
+            continue
+        if skip_next:
+            skip_next = False
+            continue
+        if token in flag_value_options:
+            skip_next = True
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return None
+
+
+def _shell_path_arg(tokens: list[str], head: str) -> str | None:
+    saw_head = False
+    skip_next = False
+    for token in tokens:
+        if not saw_head:
+            if os.path.basename(token) == head:
+                saw_head = True
+            continue
+        if skip_next:
+            skip_next = False
+            continue
+        if token in {"-n", "-e"}:
+            skip_next = True
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return None
+
+
+def _patch_target(text: str) -> str | None:
+    for marker in ("*** Update File: ", "*** Add File: ", "*** Delete File: "):
+        if marker in text:
+            tail = text.split(marker, 1)[1]
+            return _path_title(tail.splitlines()[0].strip())
+    return _path_title(text) if "/" in text else None
+
+
+def _path_title(path: str | None) -> str | None:
+    if not path:
+        return None
+    cleaned = path.strip().strip("'\"")
+    if not cleaned:
+        return None
+    return os.path.basename(cleaned.rstrip("/")) or cleaned
+
+
+def _search_query_title(text: str) -> str | None:
+    if ":" in text:
+        text = text.split(":", 1)[-1]
+    stripped = text.strip().strip("'\"")
+    return stripped or None
+
+
+def _quote_title(value: str) -> str:
+    escaped = value.replace('"', '\\"')
+    return f'"{_compact_title(escaped, limit=48)}"'
+
+
+def _compact_command(command: str, *, limit: int = 48) -> str:
+    return _compact_title(" ".join(command.split()), limit=limit)
+
+
+def _compact_title(value: str, *, limit: int = 72) -> str:
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 
 def _activity_summary(activity: dict[str, Any]) -> str:
