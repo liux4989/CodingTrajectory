@@ -159,18 +159,18 @@ function ModelTable({ data }: { data: ModelUsagePayload }) {
       <CardContent>
         <div className="overflow-auto rounded-lg border border-border-subtle">
           <Table>
-            <TableHead className="bg-table-head font-display text-caption uppercase">
+            <TableHeader className="bg-table-head font-display text-caption uppercase">
               <TableRow>
-                <TableHeader>Model</TableHeader>
-                <TableHeader>Sessions</TableHeader>
-                <TableHeader>Turns</TableHeader>
-                <TableHeader className="text-right">Tokens</TableHeader>
-                <TableHeader className="text-right">Total Cost</TableHeader>
-                <TableHeader className="text-right">Avg Session</TableHeader>
-                <TableHeader className="text-right">Avg Turn</TableHeader>
-                <TableHeader>Pricing</TableHeader>
+                <TableHead>Model</TableHead>
+                <TableHead>Sessions</TableHead>
+                <TableHead>Turns</TableHead>
+                <TableHead className="text-right">Tokens</TableHead>
+                <TableHead className="text-right">Total Cost</TableHead>
+                <TableHead className="text-right">Avg Session</TableHead>
+                <TableHead className="text-right">Avg Turn</TableHead>
+                <TableHead>Pricing</TableHead>
               </TableRow>
-            </TableHead>
+            </TableHeader>
             <TableBody>
               {data.models.map((row) => (
                 <TableRow key={row.model_key}>
@@ -262,16 +262,16 @@ function SessionTable({ data }: { data: ModelUsagePayload }) {
       <CardContent>
         <div className="overflow-auto rounded-lg border border-border-subtle">
           <Table>
-            <TableHead className="bg-table-head font-display text-caption uppercase">
+            <TableHeader className="bg-table-head font-display text-caption uppercase">
               <TableRow>
-                <TableHeader>Session</TableHeader>
-                <TableHeader>Project</TableHeader>
-                <TableHeader>Dominant Model</TableHeader>
-                <TableHeader className="text-right">Context</TableHeader>
-                <TableHeader className="text-right">Tokens</TableHeader>
-                <TableHeader className="text-right">Cost</TableHeader>
+                <TableHead>Session</TableHead>
+                <TableHead>Project</TableHead>
+                <TableHead>Dominant Model</TableHead>
+                <TableHead className="text-right">Context</TableHead>
+                <TableHead className="text-right">Tokens</TableHead>
+                <TableHead className="text-right">Cost</TableHead>
               </TableRow>
-            </TableHead>
+            </TableHeader>
             <TableBody>
               {data.sessions.slice(0, 50).map((session) => (
                 <TableRow key={session.id}>
@@ -312,16 +312,16 @@ function TurnTable({ data }: { data: ModelUsagePayload }) {
       <CardContent>
         <div className="overflow-auto rounded-lg border border-border-subtle">
           <Table>
-            <TableHead className="bg-table-head font-display text-caption uppercase">
+            <TableHeader className="bg-table-head font-display text-caption uppercase">
               <TableRow>
-                <TableHeader>Turn</TableHeader>
-                <TableHeader>Session</TableHeader>
-                <TableHeader>Model</TableHeader>
-                <TableHeader className="text-right">Tokens</TableHeader>
-                <TableHeader className="text-right">Context</TableHeader>
-                <TableHeader className="text-right">Cost</TableHeader>
+                <TableHead>Turn</TableHead>
+                <TableHead>Session</TableHead>
+                <TableHead>Model</TableHead>
+                <TableHead className="text-right">Tokens</TableHead>
+                <TableHead className="text-right">Context</TableHead>
+                <TableHead className="text-right">Cost</TableHead>
               </TableRow>
-            </TableHead>
+            </TableHeader>
             <TableBody>
               {data.turns.slice(0, 30).map((turn) => (
                 <TableRow key={turn.turn_id}>
