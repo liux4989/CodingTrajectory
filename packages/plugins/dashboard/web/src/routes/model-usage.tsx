@@ -392,13 +392,22 @@ function OverviewModelTable({ data }: { data: ModelUsagePayload }) {
   );
 }
 
-function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
+type ModelTokenStats = {
+  avgSessionTokens: number;
+  avgTurnTokens: number;
+};
+
+function modelColumns(
+  view: "cost" | "tokens",
+  tokenStats: Map<string, ModelTokenStats>,
+): ColumnDef<ModelUsageModel>[] {
   const tokenBucketColumns: ColumnDef<ModelUsageModel>[] = [
     tokenColumn("input_tokens", "Input"),
     tokenColumn("cached_input_tokens", "Cached"),
     tokenColumn("output_tokens", "Output"),
     tokenColumn("reasoning_output_tokens", "Reasoning"),
   ];
+  const statsFor = (row: ModelUsageModel) => tokenStats.get(row.model_key);
   return [
     {
       accessorKey: "model_key",
@@ -425,10 +434,16 @@ function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
     ...(view === "tokens"
       ? [
           {
-            id: "token_confidence",
-            accessorFn: (row) => row.usage.total_confidence,
-            header: () => <HeaderLabel>Token Total</HeaderLabel>,
-            cell: ({ getValue }) => <TokenConfidenceBadge confidence={getValue<string>()} />,
+            id: "avg_session_tokens",
+            accessorFn: (row) => statsFor(row)?.avgSessionTokens ?? 0,
+            header: () => <HeaderLabel align="right">Avg Session Tokens</HeaderLabel>,
+            cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+          } satisfies ColumnDef<ModelUsageModel>,
+          {
+            id: "avg_turn_tokens",
+            accessorFn: (row) => statsFor(row)?.avgTurnTokens ?? 0,
+            header: () => <HeaderLabel align="right">Avg Turn Tokens</HeaderLabel>,
+            cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
           } satisfies ColumnDef<ModelUsageModel>,
         ]
       : []),
@@ -453,14 +468,14 @@ function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
             header: () => <HeaderLabel align="right">Avg Turn Cost</HeaderLabel>,
             cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
           } satisfies ColumnDef<ModelUsageModel>,
+          {
+            id: "pricing",
+            accessorFn: (row) => row.pricing.confidence,
+            header: () => <HeaderLabel>Pricing</HeaderLabel>,
+            cell: ({ getValue }) => <PricingBadge confidence={getValue<string>()} />,
+          } satisfies ColumnDef<ModelUsageModel>,
         ]
       : []),
-    {
-      id: "pricing",
-      accessorFn: (row) => row.pricing.confidence,
-      header: () => <HeaderLabel>Pricing</HeaderLabel>,
-      cell: ({ getValue }) => <PricingBadge confidence={getValue<string>()} />,
-    },
   ];
 }
 
@@ -478,7 +493,17 @@ function ModelTable({ data, view }: { data: ModelUsagePayload; view: "cost" | "t
     () => [...data.models].sort((left, right) => sortByLens(left, right, view)),
     [data.models, view],
   );
-  const columns = React.useMemo(() => modelColumns(view), [view]);
+  const tokenStats = React.useMemo(() => {
+    const map = new Map<string, ModelTokenStats>();
+    for (const model of data.models) {
+      map.set(model.model_key, {
+        avgSessionTokens: average(totalTokens(model.usage), model.sessions),
+        avgTurnTokens: average(totalTokens(model.usage), model.turns),
+      });
+    }
+    return map;
+  }, [data.models]);
+  const columns = React.useMemo(() => modelColumns(view, tokenStats), [view, tokenStats]);
   const table = useReactTable({
     data: rows,
     columns,
