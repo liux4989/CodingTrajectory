@@ -1,4 +1,17 @@
-"""Plugin command dispatch helpers."""
+"""Plugin command dispatch helpers.
+
+There is one dispatch path for ``ct plugin NAME ...``: an early raw-argv
+handler in ``cli.main`` delegates to :func:`dispatch_plugin_argv`, which
+resolves the plugin against the discovered manifest table, runs compatibility
+and entry-point preflight checks, then spawns the entry script as a
+subprocess. argparse only owns the ``ct plugin`` parent help and
+``ct plugin list`` subcommand.
+
+Plugin help is forwarded to the executable: ``ct plugin NAME -h`` and any
+``ct plugin NAME sub ... -h`` are passed through unchanged so the plugin owns
+its full flag and help surface. Core keeps only the brief ``ct plugin``
+index (names + descriptions from the manifests).
+"""
 
 from __future__ import annotations
 
@@ -12,17 +25,11 @@ from coding_trajectory_cli.outcome import CommandOutcome, EarlyDispatchOutcome, 
 from coding_trajectory_cli.plugins import (
     PLUGIN_COMMANDS,
     PluginCommand,
-    PluginTool,
+    compatibility_error,
     plugin_names,
     plugin_payload,
     run_plugin,
 )
-
-PLUGIN_EPILOG = """\
-PLUGIN COMMANDS
-  ct plugin list                                 list available ct CLI plugins
-  ct plugin NAME ...                             run one plugin command
-"""
 
 
 def _render_plugin_list_text(payload: dict[str, Any]) -> str:
@@ -51,142 +58,78 @@ def _handle_plugin_list(_args: argparse.Namespace) -> dict[str, Any]:
     return plugin_payload()
 
 
-def _handle_plugin_exec(args: argparse.Namespace) -> CommandOutcome:
-    plugin_name = getattr(args, "_plugin_name", None)
-    if plugin_name is None or plugin_name not in PLUGIN_COMMANDS:
-        print(
-            json.dumps({"error": {"message": "Plugin is not available"}}, indent=2),
-            file=sys.stderr,
-        )
-        return CommandOutcome.failed(exit_code=1, error="Plugin is not available")
-    plugin_args = getattr(args, "plugin_args", None) or []
-    exit_code = run_plugin(plugin_name, plugin_args)
-    if exit_code == 0:
-        return CommandOutcome.completed(exit_code=0)
-    return CommandOutcome.failed(
-        exit_code=exit_code,
-        error=status_error(f"plugin.{plugin_name}", exit_code),
+def _fail_outcome(command: str, message: str, exit_code: int) -> EarlyDispatchOutcome:
+    print(json.dumps({"error": {"message": message}}, indent=2), file=sys.stderr)
+    return EarlyDispatchOutcome(
+        command=command,
+        outcome=CommandOutcome.failed(exit_code=exit_code, error=message),
     )
 
 
 def dispatch_plugin_argv(raw_args: list[str]) -> EarlyDispatchOutcome | None:
+    """Early dispatch for ``ct plugin NAME ...``.
+
+    Returns ``None`` for forms argparse owns (``ct plugin``, ``ct plugin -h``/
+    ``--help``, and ``ct plugin list ...``) so they fall through to the normal
+    argparse path. Every other ``ct plugin NAME ...`` is handled here: name
+    resolution, compatibility preflight, missing-entry reporting, and
+    subprocess execution.
+    """
     if len(raw_args) < 2 or raw_args[0] != "plugin":
         return None
     plugin_name = raw_args[1]
-    plugin_args = raw_args[2:]
-    if plugin_name in {"list", "-h", "--help"}:
+    following = raw_args
+
+    # ``ct plugin`` alone, bare help, and the argparse-owned `list` subcommand
+    # all fall through to argparse.
+    if (
+        plugin_name in {"list", "-h", "--help"}
+        or plugin_name.startswith("-")
+    ):
         return None
+
+    command_label = f"plugin.{plugin_name}"
+
     if plugin_name not in PLUGIN_COMMANDS:
-        print(
-            json.dumps(
-                {"error": {"message": f"Plugin not found: {plugin_name}"}}, indent=2
-            ),
-            file=sys.stderr,
-        )
-        return EarlyDispatchOutcome(
-            command=f"plugin.{plugin_name}",
-            outcome=CommandOutcome.failed(
-                exit_code=2,
-                error=f"Plugin not found: {plugin_name}",
-            ),
-        )
+        return _fail_outcome(command_label, f"Plugin not found: {plugin_name}", 2)
+
     command = PLUGIN_COMMANDS[plugin_name]
-    help_exit = _plugin_help(command, plugin_args)
-    if help_exit is not None:
-        return EarlyDispatchOutcome(
-            command=f"plugin.{plugin_name}",
-            outcome=CommandOutcome.completed(exit_code=help_exit),
+
+    compat_error = compatibility_error(command)
+    if compat_error is not None:
+        return _fail_outcome(command_label, compat_error, 1)
+
+    if not command.entry_path.exists():
+        return _fail_outcome(
+            command_label,
+            f"Plugin entry point not found: {command.entry_path}",
+            127,
         )
-    exit_code = run_plugin(plugin_name, plugin_args)
-    outcome = (
-        CommandOutcome.completed(exit_code=0)
-        if exit_code == 0
-        else CommandOutcome.failed(
+
+    exit_code = run_plugin(plugin_name, following[2:])
+    if exit_code == 0:
+        outcome = CommandOutcome.completed(exit_code=0)
+    else:
+        outcome = CommandOutcome.failed(
             exit_code=exit_code,
-            error=status_error(f"plugin.{plugin_name}", exit_code),
+            error=status_error(command_label, exit_code),
         )
-    )
-    return EarlyDispatchOutcome(command=f"plugin.{plugin_name}", outcome=outcome)
+    return EarlyDispatchOutcome(command=command_label, outcome=outcome)
 
 
-def _plugin_help(command: PluginCommand, plugin_args: list[str]) -> int | None:
-    if plugin_args and plugin_args[-1] not in {"-h", "--help"}:
-        return None
-    command_path = plugin_args[:-1] if plugin_args else []
-    children = _plugin_help_children(command.tools, command_path)
-    if not children:
-        return None
-    print(_render_plugin_help(command, command_path, children))
-    return 0
-
-
-def _plugin_help_children(
-    tools: list[PluginTool], command_path: list[str]
-) -> list[PluginTool]:
-    children: list[PluginTool] = []
-    for tool in tools:
-        if tool.name == ".":
-            continue
-        parts = tool.name.split("/")
-        if parts[: len(command_path)] != command_path:
-            continue
-        if len(parts) == len(command_path) + 1:
-            children.append(tool)
-    return children
-
-
-def _plugin_tool_summary(
-    tools: list[PluginTool], command_path: list[str], default: str
-) -> str:
-    if not command_path:
-        return default
-    tool_name = "/".join(command_path)
-    for tool in tools:
-        if tool.name == tool_name:
-            return tool.summary
-    return default
-
-
-def _render_plugin_help(
-    command: PluginCommand,
-    command_path: list[str],
-    children: list[PluginTool],
-) -> str:
-    prog = " ".join(["ct", "plugin", command.name, *command_path])
-    description = _plugin_tool_summary(command.tools, command_path, command.description)
+def _plugin_index_epilog() -> str:
     lines = [
-        f"usage: {prog} [-h] <command> ...",
-        "",
-        description,
-        "",
-        "Commands:",
+        "PLUGIN COMMANDS",
+        "  ct plugin list                list available ct CLI plugins",
+        "  ct plugin NAME ...            run one plugin command (NAME -h for help)",
     ]
-    usage_rows = [
-        (f"{prog} {tool.name.split('/')[-1]}", tool.summary) for tool in children
-    ]
-    usage_width = max(len(usage) for usage, _summary in usage_rows)
-    for usage, summary in usage_rows:
-        lines.append(f"  {usage:<{usage_width}}  {summary}")
-    lines.extend(
-        [
-            "",
-            "options:",
-            "  -h, --help  show this help message and exit",
-        ]
-    )
+    if PLUGIN_COMMANDS:
+        lines.append("")
+        lines.append("PLUGINS")
+        for name in plugin_names():
+            command = PLUGIN_COMMANDS[name]
+            lines.append(f"  {name:<14} {command.description}".rstrip())
     return "\n".join(lines)
-
-
-def _plugin_epilog(command: PluginCommand) -> str | None:
-    lines: list[str] = []
-    if command.tools:
-        lines.append("PLUGIN COMMANDS")
-        for tool in command.tools:
-            if "/" in tool.name:
-                continue
-            usage = command.name if tool.name == "." else f"{command.name} {tool.name}"
-            lines.append(f"  ct plugin {usage:<32} {tool.summary}")
-    return "\n".join(lines) if lines else None
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -195,7 +138,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         prog="ct plugin",
         usage="ct plugin <command> [flags]",
         help="Run plugin-provided ct commands.",
-        epilog=PLUGIN_EPILOG,
+        epilog=_plugin_index_epilog(),
         formatter_class=GhFormatter,
     )
     plugin_sub = plugin_parser.add_subparsers(dest="plugin_action", required=True)
@@ -212,19 +155,3 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _renderer=_render_plugin_list_text,
         _default_output="markdown",
     )
-
-    for name in plugin_names():
-        command = PLUGIN_COMMANDS[name]
-        plugin_command = plugin_sub.add_parser(
-            command.name,
-            prog=f"ct plugin {command.name}",
-            help=command.description,
-            epilog=_plugin_epilog(command),
-            formatter_class=GhFormatter,
-        )
-        plugin_command.add_argument(
-            "plugin_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS
-        )
-        plugin_command.set_defaults(
-            _plugin_handler=_handle_plugin_exec, _plugin_name=name
-        )

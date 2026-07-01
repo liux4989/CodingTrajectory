@@ -1,0 +1,12 @@
+name = "code-time"
+description = "Today's coding work overview: time, sessions, and cost across projects."
+entry = "code_time.py"
+
+[requires]
+"project.list" = 1
+"project.sessions" = 1
+"session.usage" = 1
+
+[[tools]]
+name = "."
+summary = "Show today's coding time summary."

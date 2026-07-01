@@ -21,19 +21,20 @@ packs to ship independently.
 
 ## Dispatch
 
-Plugins are dispatched from source. `ct` owns a command table that maps each
-plugin name to its source directory and entry script:
+Plugins are dispatched from source. `ct` discovers plugins by scanning the
+plugin root for `plugin.toml` manifests (see _Plugin Manifest_), then resolves
+`ct plugin NAME ...` to the plugin's entry script and runs it via
+`python <entry>.py <args>` with the working directory set to the plugin's
+source directory. No core code edits, registration, or separate installation
+step is required to add a plugin: drop a directory containing a
+`plugin.toml` under the plugin root.
 
 ```text
 ct plugin NAME ...
 ```
 
-resolves `NAME` to the built-in command table and runs the plugin's entry
-script via `python <entry>.py <args>` with the working directory set to the
-plugin's source directory. No registration, manifest files, or separate
-installation step is required.
-
-`ct plugin list` shows all available plugins and their entry points.
+`ct plugin list` shows all discovered plugins, their entry points, required
+ct methods, and any compatibility errors.
 
 For local user-level publishing (installing `ct` as a global uv tool):
 
@@ -44,43 +45,55 @@ scripts/publish-local.sh
 The script rebuilds the global `coding-trajectory` uv tool from the current
 checkout. Plugins are dispatched from source and do not require installation.
 
-## Command Table
+### Plugin root resolution
 
-Each built-in plugin is defined by a `PluginCommand` entry in
-`packages/cli/src/coding_trajectory_cli/plugins.py`:
+`ct` resolves the plugin root in this order:
 
-- `name`: the namespace mounted under `ct plugin NAME`.
-- `description`: one-line help text for `ct plugin list` and `ct plugin --help`.
-- `dir`: plugin source directory relative to the workspace root.
+1. `CT_PLUGIN_DIR` environment variable (absolute path).
+2. The `packages/plugins` directory located next to the CLI package source
+   (the checkout layout under `[repo]/packages/plugins`).
+
+The editable install from `scripts/publish-local.sh` keeps `ct` tied to the
+source checkout, so the default resolution points at the live plugin source.
+
+## Plugin Manifest
+
+Each plugin ships a `plugin.toml` in its source directory. Fields:
+
+- `name`: the namespace mounted under `ct plugin NAME`. Must not be `list`.
+- `description`: one-line help text for `ct plugin list` and the `ct plugin`
+  index.
 - `entry`: entry script relative to the plugin directory.
-- `requires_methods`: required service methods and minimum contract versions.
-- `tools`: tool descriptors for help rendering.
+- `requires`: optional table of `"service.method" = min_version` entries;
+  `ct` checks these against `SERVICE_CONTRACTS` before invoking the plugin.
+- `tools`: optional array of `[[tools]]` tables with `name` and `summary`.
+  Tool names are descriptive only (`.` for the bare plugin command;
+  slash-delimited names such as `session/context-window` describe nested
+  tools in one flat list). Tool summaries may lag the executable's own `-h`.
 
-Tool descriptors are optional and intentionally small:
-
-- `name`: command segment under the plugin namespace, or `.` for the bare
-  plugin command. Slash-delimited names such as `cleanup/cache` represent
-  sub-level tools in one flat list.
-- `summary`: one-line help text.
-
-The command table is not an argparse schema. The plugin process owns its own
-flags, validation, help text, runtime, local server lifecycle, and output.
+The manifest is metadata for `ct plugin list` and the `ct plugin` index, not
+an argparse schema. The plugin process owns its own flags, validation, help
+text, runtime, local server lifecycle, and output.
 
 ## Executable Dispatch
 
-`ct plugin NAME ...` resolves `NAME` to the built-in command table and runs the
-plugin's entry script as a subprocess.
+`ct plugin NAME ...` resolves `NAME` against the discovered manifest table and
+runs the plugin's entry script as a subprocess.
 
 Dispatch rules:
 
+- Before invoking, `ct` runs the `requires` contract preflight and checks the
+  entry script exists; failures are reported as structured errors without
+  spawning the plugin.
 - The plugin process receives the remaining command-line arguments unchanged.
 - The subprocess working directory is the plugin's source directory.
 - The subprocess inherits stdin, stdout, stderr, and the relevant `CT_*`
   environment.
 - The subprocess exit status is the plugin exit status.
-- `ct plugin NAME -h` is rendered by `ct` from the command table.
-- Nested help such as `ct plugin NAME subcommand -h` is passed through to the
-  plugin executable.
+- All help is forwarded to the plugin executable: `ct plugin NAME -h`,
+  `ct plugin NAME sub -h`, and any deeper `... -h` are passed through
+  unchanged so the plugin owns its full help text. Core renders only the
+  brief `ct plugin` index (names + descriptions).
 
 Example:
 
@@ -137,7 +150,9 @@ There is no compatibility layer for the old in-process Python plugin API.
 
 First-party plugins live under `packages/plugins/` as workspace members.
 They are dispatched from source by `ct plugin NAME ...` and do not require
-separate installation, manifest registration, or wheel packaging.
+separate installation or wheel packaging. Each plugin advertises itself with
+a `plugin.toml` manifest in its source directory; `ct` discovers plugins by
+scanning the plugin root rather than maintaining a built-in command table.
 
 Plugin packages own their dependencies and do not import `coding_trajectory`
 or `coding_trajectory_cli`.

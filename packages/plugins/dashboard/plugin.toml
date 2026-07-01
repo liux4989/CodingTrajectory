@@ -1,0 +1,41 @@
+name = "dashboard"
+description = "Project and session management dashboard."
+entry = "dashboard.py"
+
+[requires]
+"project.list" = 1
+"project.sessions" = 1
+"session.overview" = 1
+"session.stats" = 1
+"session.usage" = 1
+"session.tool_usage" = 1
+"session.items" = 1
+"session.events" = 1
+
+[[tools]]
+name = "."
+summary = "Show dashboard entry information."
+
+[[tools]]
+name = "web"
+summary = "Run the dashboard web program."
+
+[[tools]]
+name = "project"
+summary = "List managed projects and project actions."
+
+[[tools]]
+name = "session"
+summary = "List sessions and session actions."
+
+[[tools]]
+name = "project/cleanup"
+summary = "Clean old project directories."
+
+[[tools]]
+name = "session/cleanup"
+summary = "Clean empty or low-value session logs."
+
+[[tools]]
+name = "session/context-window"
+summary = "Inspect session context composition and trajectory events."

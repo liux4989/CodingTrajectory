@@ -75,17 +75,9 @@ def command_path(args: argparse.Namespace) -> str:
     action = getattr(args, "action", None)
     if action:
         return f"{command}.{action}"
-    plugin_name = getattr(args, "_plugin_name", None)
-    if plugin_name:
-        return f"plugin.{plugin_name}"
     plugin_action = getattr(args, "plugin_action", None)
     if plugin_action:
         return f"{command}.{plugin_action}"
-    plugin = getattr(args, "_plugin", None)
-    manifest = getattr(plugin, "manifest", None)
-    plugin_manifest_name = getattr(manifest, "name", None)
-    if command == "plugin" and plugin_manifest_name:
-        return f"plugin.{plugin_manifest_name}"
     return command or "unknown"
 
 
