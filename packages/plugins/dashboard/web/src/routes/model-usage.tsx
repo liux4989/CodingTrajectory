@@ -33,6 +33,19 @@ import { cn } from "@/lib/utils";
 const ALL_PROJECTS = "__all_projects__";
 const ALL_MODELS = "__all_models__";
 const TIME_OPTIONS = [7, 14, 30, 90];
+type TokenBucketKey =
+  | "total_tokens"
+  | "input_tokens"
+  | "cached_input_tokens"
+  | "output_tokens"
+  | "reasoning_output_tokens";
+const TOKEN_BUCKET_DEFS = [
+  { key: "total_tokens", label: "Total" },
+  { key: "input_tokens", label: "Input" },
+  { key: "cached_input_tokens", label: "Cached" },
+  { key: "output_tokens", label: "Output" },
+  { key: "reasoning_output_tokens", label: "Reasoning" },
+] as const satisfies ReadonlyArray<{ key: TokenBucketKey; label: string }>;
 const VIEW_OPTIONS = [
   { value: "overview", label: "Overview" },
   { value: "cost", label: "Cost" },
@@ -203,6 +216,7 @@ function TokensView({ data }: { data: ModelUsagePayload }) {
   return (
     <>
       <SummaryCards data={data} view="tokens" />
+      <TokenBucketCards data={data} />
       <ModelTable data={data} view="tokens" />
       <TimeBuckets data={data} view="tokens" />
       <SessionTable data={data} view="tokens" />
@@ -215,6 +229,7 @@ function TimeView({ data }: { data: ModelUsagePayload }) {
   return (
     <>
       <SummaryCards data={data} view="time" />
+      <TimeOverviewTable data={data} />
       <SessionTable data={data} view="time" />
     </>
   );
@@ -231,12 +246,14 @@ function FilterLabel({ label, children }: { label: string; children: React.React
 
 function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView }) {
   if (view === "tokens") {
+    const medianSessionTokens = median(data.sessions.map((session) => totalTokens(session.usage)));
+    const medianTurnTokens = median(data.turns.map((turn) => totalTokens(turn.usage)));
     return (
       <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
         <MetricCard label="Total Tokens" value={compactNumber(data.summary.total_tokens)} detail={`${data.summary.sessions.toLocaleString()} sessions`} />
         <MetricCard label="Avg Session Tokens" value={compactNumber(data.summary.avg_tokens_per_session)} detail={`${compactNumber(data.summary.avg_tokens_per_turn)} per turn`} />
+        <MetricCard label="Median Session Tokens" value={compactNumber(medianSessionTokens)} detail={`${compactNumber(medianTurnTokens)} median turn tokens`} />
         <MetricCard label="Turns" value={compactNumber(data.summary.turns)} detail={`${data.summary.models.toLocaleString()} models in scope`} />
-        <MetricCard label="Estimated Cost" value={formatCost(data.summary.estimated_cost_usd)} detail="Shown for pricing context only" />
       </section>
     );
   }
@@ -272,6 +289,25 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
         value={data.summary.missing_price_count}
         detail={data.summary.top_model_by_sessions ? `Most sessions: ${data.summary.top_model_by_sessions}` : "No sessions"}
       />
+    </section>
+  );
+}
+
+function TokenBucketCards({ data }: { data: ModelUsagePayload }) {
+  return (
+    <section className="grid min-w-0 grid-cols-5 gap-4 max-[110rem]:grid-cols-3 max-lg:grid-cols-2 max-md:grid-cols-1">
+      {TOKEN_BUCKET_DEFS.map(({ key, label }) => {
+        const sessionValues = data.sessions.map((session) => usageValue(session.usage, key));
+        const turnValues = data.turns.map((turn) => usageValue(turn.usage, key));
+        return (
+          <MetricCard
+            key={key}
+            label={`${label} Tokens`}
+            value={compactNumber(sum(sessionValues))}
+            detail={`avg ${compactNumber(average(sum(sessionValues), sessionValues.length))} / med ${compactNumber(median(sessionValues))} per session · avg ${compactNumber(average(sum(turnValues), turnValues.length))} / med ${compactNumber(median(turnValues))} per turn`}
+          />
+        );
+      })}
     </section>
   );
 }
@@ -396,11 +432,15 @@ function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
           } satisfies ColumnDef<ModelUsageModel>,
         ]
       : []),
-    {
-      accessorKey: "estimated_cost_usd",
-      header: () => <HeaderLabel align="right">Total Cost</HeaderLabel>,
-      cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
-    },
+    ...(view === "tokens"
+      ? []
+      : [
+          {
+            accessorKey: "estimated_cost_usd",
+            header: () => <HeaderLabel align="right">Total Cost</HeaderLabel>,
+            cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+          } satisfies ColumnDef<ModelUsageModel>,
+        ]),
     ...(view === "cost"
       ? [
           {
@@ -569,6 +609,73 @@ function OverviewSessionTable({ data }: { data: ModelUsagePayload }) {
           table={table}
           columnCount={overviewSessionColumns.length}
           emptyMessage="No sessions found for this scope."
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+const timeOverviewModelColumns: ColumnDef<ModelUsageModel>[] = [
+  {
+    accessorKey: "model_key",
+    header: () => <HeaderLabel>Model</HeaderLabel>,
+    cell: ({ getValue }) => <span className="font-medium">{getValue<string>()}</span>,
+  },
+  {
+    accessorKey: "sessions",
+    header: () => <HeaderLabel>Sessions</HeaderLabel>,
+    cell: ({ getValue }) => getValue<number>().toLocaleString(),
+  },
+  {
+    accessorKey: "turns",
+    header: () => <HeaderLabel>Turns</HeaderLabel>,
+    cell: ({ getValue }) => getValue<number>().toLocaleString(),
+  },
+  {
+    accessorKey: "elapsed_seconds",
+    header: () => <HeaderLabel align="right">Elapsed</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{formatDuration(getValue<number>())}</RightCell>,
+  },
+  {
+    accessorKey: "avg_session_elapsed_seconds",
+    header: () => <HeaderLabel align="right">Avg Session Time</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{formatDuration(getValue<number>())}</RightCell>,
+  },
+  {
+    accessorKey: "avg_turn_elapsed_seconds",
+    header: () => <HeaderLabel align="right">Avg Turn Time</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{formatDuration(getValue<number>())}</RightCell>,
+  },
+  {
+    id: "tokens_per_min",
+    accessorFn: (row) => tokensPerMinute(totalTokens(row.usage), row.elapsed_seconds),
+    header: () => <HeaderLabel align="right">Tokens/Min</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+  },
+];
+
+function TimeOverviewTable({ data }: { data: ModelUsagePayload }) {
+  const rows = React.useMemo(
+    () => [...data.models].sort((left, right) => right.elapsed_seconds - left.elapsed_seconds),
+    [data.models],
+  );
+  const table = useReactTable({
+    data: rows,
+    columns: timeOverviewModelColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="font-display text-xl tracking-tight">Model Time Overview</CardTitle>
+        <CardDescription>Elapsed-time comparison across models, sessions, and turns.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <DataTable
+          table={table}
+          columnCount={timeOverviewModelColumns.length}
+          emptyMessage="No model timing found for this scope."
         />
       </CardContent>
     </Card>
@@ -833,9 +940,27 @@ function totalTokens(usage: UsageBuckets) {
   return usage.total_tokens ?? 0;
 }
 
+function usageValue(usage: UsageBuckets, key: TokenBucketKey) {
+  return usage[key] ?? 0;
+}
+
 function average(numerator: number, denominator: number) {
   if (denominator <= 0) return 0;
   return numerator / denominator;
+}
+
+function median(values: number[]) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+  return sorted[middle];
+}
+
+function sum(values: number[]) {
+  return values.reduce((total, value) => total + value, 0);
 }
 
 function bucketValue(row: ModelUsagePayload["time_buckets"][string][number], view: "cost" | "tokens") {
@@ -870,7 +995,7 @@ function modelTableDescription(view: "cost" | "tokens") {
 }
 
 function sessionTableDescription(view: UsageView) {
-  if (view === "time") return "Elapsed time is session-level; token and cost columns reflect the selected model filter.";
+  if (view === "time") return "Elapsed time is session-level; token throughput reflects the selected model filter.";
   if (view === "tokens") return "Sessions ranked by observed token volume for the selected scope.";
   return "Progressive drilldown from session cost to dominant model and context usage.";
 }
