@@ -270,8 +270,11 @@ export type ModelUsageModel = {
   turns: number;
   usage: UsageBuckets;
   estimated_cost_usd: number;
+  elapsed_seconds: number;
   avg_session_cost_usd: number;
   avg_turn_cost_usd: number;
+  avg_session_elapsed_seconds: number;
+  avg_turn_elapsed_seconds: number;
   pricing: ModelUsagePricing;
 };
 
@@ -283,6 +286,7 @@ export type ModelUsageOption = {
   turns: number;
   usage: UsageBuckets;
   estimated_cost_usd: number;
+  elapsed_seconds: number;
 };
 
 export type ModelUsageSession = {

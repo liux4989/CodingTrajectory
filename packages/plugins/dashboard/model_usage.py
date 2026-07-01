@@ -69,7 +69,9 @@ def build_projection(
     turn_rows = _turn_rows(session_rows)
     total_cost = sum(_number(row["estimated_cost_usd"]) for row in session_rows)
     total_tokens = sum(_usage_total(row.get("usage")) for row in session_rows)
-    total_elapsed_seconds = sum(int(_number(row.get("elapsed_seconds"))) for row in session_rows)
+    total_elapsed_seconds = sum(
+        int(_number(row.get("elapsed_seconds"))) for row in session_rows
+    )
 
     return {
         "schema_version": 1,
@@ -286,14 +288,21 @@ def _model_rows(session_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "turns": 0,
                     "usage": _empty_usage(),
                     "estimated_cost_usd": 0.0,
+                    "elapsed_seconds": 0.0,
                     "pricing": row.get("pricing") or {},
                     "avg_session_cost_usd": 0.0,
                     "avg_turn_cost_usd": 0.0,
+                    "avg_session_elapsed_seconds": 0.0,
+                    "avg_turn_elapsed_seconds": 0.0,
                 },
             )
             session_sets[key].add(str(session["id"]))
             target["turns"] += int(_number(row.get("turns")))
             target["estimated_cost_usd"] += _number(row.get("estimated_cost_usd"))
+            target["elapsed_seconds"] += _allocated_model_elapsed_seconds(
+                session,
+                row,
+            )
             _add_usage(target["usage"], row.get("usage") or {})
             if target["pricing"].get("confidence") == "missing_price":
                 target["pricing"] = row.get("pricing") or {}
@@ -305,6 +314,13 @@ def _model_rows(session_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         target["avg_turn_cost_usd"] = _safe_div(
             target["estimated_cost_usd"], target["turns"]
+        )
+        target["elapsed_seconds"] = round(_number(target["elapsed_seconds"]), 3)
+        target["avg_session_elapsed_seconds"] = _safe_div(
+            target["elapsed_seconds"], target["sessions"]
+        )
+        target["avg_turn_elapsed_seconds"] = _safe_div(
+            target["elapsed_seconds"], target["turns"]
         )
         target["usage"]["total_tokens"] = _usage_total(target["usage"])
     return sorted(
@@ -327,9 +343,22 @@ def _model_options(model_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "turns": row.get("turns"),
             "usage": row.get("usage") or {},
             "estimated_cost_usd": row.get("estimated_cost_usd"),
+            "elapsed_seconds": row.get("elapsed_seconds"),
         }
         for row in model_rows
     ]
+
+
+def _allocated_model_elapsed_seconds(
+    session: dict[str, Any],
+    model_row: dict[str, Any],
+) -> float:
+    elapsed = _number(session.get("elapsed_seconds"))
+    model_turns = _number(model_row.get("turns"))
+    total_turns = sum(_number(row.get("turns")) for row in session.get("models") or [])
+    if elapsed <= 0 or model_turns <= 0 or total_turns <= 0:
+        return 0.0
+    return elapsed * (model_turns / total_turns)
 
 
 def _dominant_model(models: list[dict[str, Any]]) -> dict[str, Any] | None:
