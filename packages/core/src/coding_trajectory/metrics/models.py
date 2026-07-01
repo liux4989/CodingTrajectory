@@ -20,6 +20,12 @@ class TokenUsage(BaseModel):
     output_tokens: int = 0
     reasoning_output_tokens: int = 0
     total_tokens: int = 0
+    reported_total_tokens: int | None = None
+    total_confidence: Literal[
+        "reported_consistent",
+        "reported_missing",
+        "reported_inconsistent",
+    ] = "reported_missing"
 
     def compute_total(self) -> int:
         return (
@@ -40,7 +46,32 @@ class TokenUsage(BaseModel):
             reasoning_output_tokens=self.reasoning_output_tokens
             + other.reasoning_output_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
+            reported_total_tokens=_optional_sum(
+                self.reported_total_tokens,
+                other.reported_total_tokens,
+            ),
+            total_confidence=_combine_total_confidence(
+                self.total_confidence,
+                other.total_confidence,
+            ),
         )
+
+
+def _optional_sum(left: int | None, right: int | None) -> int | None:
+    if left is None and right is None:
+        return None
+    return (left or 0) + (right or 0)
+
+
+def _combine_total_confidence(
+    left: Literal["reported_consistent", "reported_missing", "reported_inconsistent"],
+    right: Literal["reported_consistent", "reported_missing", "reported_inconsistent"],
+) -> Literal["reported_consistent", "reported_missing", "reported_inconsistent"]:
+    if "reported_inconsistent" in {left, right}:
+        return "reported_inconsistent"
+    if "reported_missing" in {left, right}:
+        return "reported_missing"
+    return "reported_consistent"
 
 
 class MetricSource(BaseModel):

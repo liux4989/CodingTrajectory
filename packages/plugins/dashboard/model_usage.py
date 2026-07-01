@@ -39,13 +39,35 @@ def build_projection(
         project_name=project_name,
         model_key=model_key,
     )
+    scope = _load_scope_model_usage(
+        ct_json=ct_json,
+        filters=filters,
+    )
+    projects = _project_options(scope["projects_payload"])
+    all_session_rows = [_session_row(payload) for payload in scope["usage_payloads"]]
+    model_options = _model_options(_model_rows(all_session_rows))
+    session_rows = _filter_session_rows_by_model(
+        all_session_rows,
+        filters.model_key,
+    )
+    return _projection_payload(
+        filters=filters,
+        projects=projects,
+        model_options=model_options,
+        session_rows=session_rows,
+    )
+
+
+def _load_scope_model_usage(
+    *,
+    ct_json: Callable[[list[str]], dict[str, Any]],
+    filters: ModelUsageFilters,
+) -> dict[str, Any]:
     projects_payload = ct_json(
         ["project", "list", "--params", "{}", "--output", "json"]
     )
-    projects = _project_options(projects_payload)
     session_params: dict[str, Any] = {
         "since_days": filters.since_days,
-        "include": ["runtime", "usage"],
     }
     if filters.project_name:
         session_params["project_name"] = filters.project_name
@@ -59,12 +81,19 @@ def build_projection(
         if item.get("root_session_id") or item.get("id")
     ]
     usage_payloads = _model_usage_batch(ct_json, session_ids)
-    all_session_rows = [_session_row(payload) for payload in usage_payloads]
-    model_options = _model_options(_model_rows(all_session_rows))
-    session_rows = _filter_session_rows_by_model(
-        all_session_rows,
-        filters.model_key,
-    )
+    return {
+        "projects_payload": projects_payload,
+        "usage_payloads": usage_payloads,
+    }
+
+
+def _projection_payload(
+    *,
+    filters: ModelUsageFilters,
+    projects: list[dict[str, Any]],
+    model_options: list[dict[str, Any]],
+    session_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
     model_rows = _model_rows(session_rows)
     turn_rows = _turn_rows(session_rows)
     total_cost = sum(_number(row["estimated_cost_usd"]) for row in session_rows)
@@ -512,23 +541,39 @@ def _model_key(provider: Any, model: Any) -> str:
     return "unknown"
 
 
-def _empty_usage() -> dict[str, int]:
-    return {key: 0 for key in (*TOKEN_KEYS, "total_tokens")}
+def _empty_usage() -> dict[str, Any]:
+    return {
+        **{key: 0 for key in (*TOKEN_KEYS, "total_tokens")},
+        "reported_total_tokens": 0,
+        "total_confidence": "reported_missing",
+    }
 
 
-def _add_usage(target: dict[str, int], usage: dict[str, Any]) -> None:
+def _add_usage(target: dict[str, Any], usage: dict[str, Any]) -> None:
     for key in TOKEN_KEYS:
         target[key] = int(target.get(key) or 0) + int(_number(usage.get(key)))
-    target["total_tokens"] = _usage_total(target)
+    target["total_tokens"] = int(target.get("total_tokens") or 0) + _usage_total(usage)
+    target["reported_total_tokens"] = int(
+        target.get("reported_total_tokens") or 0
+    ) + int(_number(usage.get("reported_total_tokens")))
+    target["total_confidence"] = _combine_total_confidence(
+        str(target.get("total_confidence") or "reported_missing"),
+        str(usage.get("total_confidence") or "reported_missing"),
+    )
 
 
 def _usage_total(usage: Any) -> int:
     if not isinstance(usage, dict):
         return 0
-    total = int(_number(usage.get("total_tokens")))
-    if total:
-        return total
-    return sum(int(_number(usage.get(key))) for key in TOKEN_KEYS)
+    return int(_number(usage.get("total_tokens")))
+
+
+def _combine_total_confidence(left: str, right: str) -> str:
+    if "reported_inconsistent" in {left, right}:
+        return "reported_inconsistent"
+    if "reported_missing" in {left, right}:
+        return "reported_missing"
+    return "reported_consistent"
 
 
 def _safe_div(numerator: float, denominator: int) -> float:

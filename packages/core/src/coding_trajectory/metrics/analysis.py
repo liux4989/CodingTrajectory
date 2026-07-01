@@ -557,7 +557,10 @@ def _turn_usage_observations(
     ]
     token_observations: list[TokenUsageObservation] = []
     for observation in observations:
-        usage = _token_usage_from_mapping(observation.usage)
+        usage = _token_usage_from_mapping(
+            observation.usage,
+            provider=observation.provider or session.vendor.value,
+        )
         if _is_zero_usage(usage):
             continue
         token_observations.append(
@@ -787,7 +790,8 @@ def _session_usage_observations(
 
     observations: list[tuple[TokenUsageObservation, UUID | None]] = []
     for observation in session.context_usage:
-        usage = _token_usage_from_mapping(observation.usage)
+        provider = observation.provider or session.vendor.value
+        usage = _token_usage_from_mapping(observation.usage, provider=provider)
         if _is_zero_usage(usage):
             continue
         observations.append(
@@ -797,7 +801,7 @@ def _session_usage_observations(
                     scope_id=session.session_id,
                     timestamp=observation.timestamp,
                     usage=usage,
-                    provider=observation.provider or session.vendor.value,
+                    provider=provider,
                     model=observation.model,
                     source=MetricSource(
                         vendor=session.vendor.value,
@@ -1228,6 +1232,17 @@ def _build_full_metrics(
                 if getattr(session.vendor, "value", None)
                 else None,
             )
+        for message in _usage_consistency_warnings(metrics):
+            warnings.append(message)
+            debug.warn(
+                message,
+                code="usage.reported_total_inconsistent",
+                severity="warning",
+                session_id=str(session.session_id),
+                vendor=session.vendor.value
+                if getattr(session.vendor, "value", None)
+                else None,
+            )
 
     return SessionGraphMetrics(
         root_session_id=session_graph.root_session_id,
@@ -1294,10 +1309,10 @@ def _usage_from_context_observation(
     turn: Turn,
     session: Session,
 ) -> TokenUsageObservation | None:
-    token_usage = _token_usage_from_mapping(observation.usage)
+    provider = observation.provider or session.vendor.value
+    token_usage = _token_usage_from_mapping(observation.usage, provider=provider)
     if token_usage is None or _is_zero_usage(token_usage):
         return None
-    provider = observation.provider or session.vendor.value
 
     return TokenUsageObservation(
         scope_type="turn",
@@ -1314,22 +1329,83 @@ def _usage_from_context_observation(
     )
 
 
-def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
-    return TokenUsage(
-        input_tokens=_as_int(value.get("input_tokens") or value.get("inputTokens")),
-        cached_input_tokens=_as_int(
-            value.get("cached_input_tokens") or value.get("cachedInputTokens")
-        ),
-        cache_creation_input_tokens=_as_int(
-            value.get("cache_creation_input_tokens")
-            or value.get("cacheCreationInputTokens")
-        ),
-        output_tokens=_as_int(value.get("output_tokens") or value.get("outputTokens")),
-        reasoning_output_tokens=_as_int(
-            value.get("reasoning_output_tokens") or value.get("reasoningOutputTokens")
-        ),
-        total_tokens=_as_int(value.get("total_tokens") or value.get("totalTokens")),
+def _token_usage_from_mapping(
+    value: dict[str, Any],
+    *,
+    provider: str | None = None,
+) -> TokenUsage:
+    input_tokens = _as_int(value.get("input_tokens") or value.get("inputTokens"))
+    cached_input_tokens = _as_int(
+        value.get("cached_input_tokens") or value.get("cachedInputTokens")
     )
+    cache_creation_input_tokens = _as_int(
+        value.get("cache_creation_input_tokens")
+        or value.get("cacheCreationInputTokens")
+    )
+    output_tokens = _as_int(value.get("output_tokens") or value.get("outputTokens"))
+    reasoning_output_tokens = _as_int(
+        value.get("reasoning_output_tokens") or value.get("reasoningOutputTokens")
+    )
+    reported_total_tokens = _as_int(
+        value.get("total_tokens") or value.get("totalTokens")
+    )
+    total_tokens, total_confidence = _normalized_total_tokens(
+        provider=provider,
+        input_tokens=input_tokens,
+        cached_input_tokens=cached_input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        output_tokens=output_tokens,
+        reasoning_output_tokens=reasoning_output_tokens,
+        reported_total_tokens=reported_total_tokens,
+    )
+    return TokenUsage(
+        input_tokens=input_tokens,
+        cached_input_tokens=cached_input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        output_tokens=output_tokens,
+        reasoning_output_tokens=reasoning_output_tokens,
+        total_tokens=total_tokens,
+        reported_total_tokens=(
+            reported_total_tokens if reported_total_tokens > 0 else None
+        ),
+        total_confidence=total_confidence,
+    )
+
+
+def _normalized_total_tokens(
+    *,
+    provider: str | None,
+    input_tokens: int,
+    cached_input_tokens: int,
+    cache_creation_input_tokens: int,
+    output_tokens: int,
+    reasoning_output_tokens: int,
+    reported_total_tokens: int,
+) -> tuple[int, str]:
+    inclusive_input_total = input_tokens + output_tokens + reasoning_output_tokens
+    additive_total = (
+        input_tokens
+        + cached_input_tokens
+        + cache_creation_input_tokens
+        + output_tokens
+        + reasoning_output_tokens
+    )
+    derived_total = (
+        additive_total
+        if _uses_net_input_convention(provider)
+        else inclusive_input_total
+    )
+    if reported_total_tokens <= 0:
+        return derived_total, "reported_missing"
+    if reported_total_tokens in {inclusive_input_total, additive_total}:
+        return reported_total_tokens, "reported_consistent"
+    return derived_total, "reported_inconsistent"
+
+
+def _uses_net_input_convention(provider: str | None) -> bool:
+    if not provider:
+        return False
+    return provider.strip().lower() in {"anthropic", "claude", "claude-code"}
 
 
 def _context_usage_for_turn(
@@ -1349,7 +1425,29 @@ def _session_has_usage(metrics: SessionMetrics) -> bool:
 
 
 def _is_zero_usage(usage: TokenUsage) -> bool:
-    return all(value == 0 for value in usage.model_dump().values())
+    return (
+        usage.input_tokens == 0
+        and usage.cached_input_tokens == 0
+        and usage.cache_creation_input_tokens == 0
+        and usage.output_tokens == 0
+        and usage.reasoning_output_tokens == 0
+        and usage.total_tokens == 0
+    )
+
+
+def _usage_consistency_warnings(metrics: SessionMetrics) -> list[str]:
+    inconsistent = sum(
+        1
+        for turn in metrics.turns
+        for observation in turn.observations
+        if observation.usage.total_confidence == "reported_inconsistent"
+    )
+    if inconsistent == 0:
+        return []
+    return [
+        f"{inconsistent} token usage observations had inconsistent reported "
+        "totals; total_tokens was derived from normalized buckets"
+    ]
 
 
 def _unique(values: list[str]) -> list[str]:

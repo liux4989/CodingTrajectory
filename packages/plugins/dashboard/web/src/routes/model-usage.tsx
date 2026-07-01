@@ -310,6 +310,12 @@ const overviewModelColumns: ColumnDef<ModelUsageModel>[] = [
     cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
   },
   {
+    id: "token_confidence",
+    accessorFn: (row) => row.usage.total_confidence,
+    header: () => <HeaderLabel>Token Total</HeaderLabel>,
+    cell: ({ getValue }) => <TokenConfidenceBadge confidence={getValue<string>()} />,
+  },
+  {
     accessorKey: "estimated_cost_usd",
     header: () => <HeaderLabel align="right">Total Cost</HeaderLabel>,
     cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
@@ -380,6 +386,16 @@ function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
       header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
       cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
     },
+    ...(view === "tokens"
+      ? [
+          {
+            id: "token_confidence",
+            accessorFn: (row) => row.usage.total_confidence,
+            header: () => <HeaderLabel>Token Total</HeaderLabel>,
+            cell: ({ getValue }) => <TokenConfidenceBadge confidence={getValue<string>()} />,
+          } satisfies ColumnDef<ModelUsageModel>,
+        ]
+      : []),
     {
       accessorKey: "estimated_cost_usd",
       header: () => <HeaderLabel align="right">Total Cost</HeaderLabel>,
@@ -795,6 +811,16 @@ function PricingBadge({ confidence }: { confidence: string }) {
       {confidence === "estimated" ? "estimated" : "missing price"}
     </Badge>
   );
+}
+
+function TokenConfidenceBadge({ confidence }: { confidence?: string }) {
+  if (confidence === "reported_inconsistent") {
+    return <Badge variant="secondary">derived</Badge>;
+  }
+  if (confidence === "reported_consistent") {
+    return <Badge variant="default">reported</Badge>;
+  }
+  return <Badge variant="secondary">derived</Badge>;
 }
 
 function modelLabel(value: ModelUsageSession["dominant_model"]) {

@@ -243,6 +243,8 @@ export type UsageBuckets = {
   output_tokens?: number;
   reasoning_output_tokens?: number;
   total_tokens?: number;
+  reported_total_tokens?: number | null;
+  total_confidence?: "reported_consistent" | "reported_missing" | "reported_inconsistent";
 };
 
 export type ModelUsageContext = {
