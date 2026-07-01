@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not config.static_dir.is_dir():
         print(
-            "error: dashboard web assets were not found; run `npm install && npm run build` "
+            "error: dashboard web assets were not found; run `bun install && bun run build` "
             "in packages/plugins/dashboard/web",
             file=sys.stderr,
         )

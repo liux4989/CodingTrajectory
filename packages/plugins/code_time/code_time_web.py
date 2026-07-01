@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not config.static_dir.is_dir():
         print(
-            "error: code-time web assets not found; run `npm install && npm run build` "
+            "error: code-time web assets not found; run `bun install && bun run build` "
             "in packages/plugins/code_time/web",
             file=sys.stderr,
         )
