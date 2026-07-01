@@ -293,6 +293,11 @@ def _bucket_turns(turn_rows: list[dict[str, Any]], grain: str) -> list[dict[str,
         started_at = _parse_datetime(turn.get("started_at"))
         if started_at is None:
             continue
+        if (
+            _usage_total(turn.get("usage")) == 0
+            and _number(turn.get("estimated_cost_usd")) == 0
+        ):
+            continue
         bucket = _bucket_key(started_at, grain)
         model_key = str(turn.get("model_key") or "unknown")
         target = grouped.setdefault(
