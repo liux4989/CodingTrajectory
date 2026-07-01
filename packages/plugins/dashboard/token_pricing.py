@@ -21,6 +21,8 @@ OPENAI_STANDARD_PRICING_SOURCE = (
     "https://developers.openai.com/api/docs/pricing?latest-pricing=standard"
 )
 OPENAI_STANDARD_PRICING_EFFECTIVE_DATE = "2026-06-30"
+OPENCODE_GO_PRICING_SOURCE = "https://opencode.ai/docs/go/#usage-limits"
+OPENCODE_GO_PRICING_EFFECTIVE_DATE = "2026-06-30"
 _MODELS_DEV_TTL = timedelta(hours=24)
 _MODELS_DEV_TIMEOUT_SECONDS = 5
 _MODELS_DEV_CACHE_VERSION = 1
@@ -275,7 +277,17 @@ def _threshold_rate(
 
 def _uses_net_input_convention(provider: str | None, model: str) -> bool:
     if provider:
-        return provider.strip().lower() in {"anthropic", "claude", "claude-code"}
+        return provider.strip().lower() in {
+            "anthropic",
+            "claude",
+            "claude-code",
+            "deepseek",
+            "moonshotai-cn",
+            "openai-codex",
+            "opencode",
+            "opencode-go",
+            "pi",
+        }
     return "claude" in model
 
 
@@ -298,7 +310,11 @@ def _load_live_price_rules(*, now: datetime) -> dict[str, PriceRule]:
                 return rules
         artifact = _load_models_dev_cache(now=now, refresh=True)
         rules = _catalog_to_price_rules(artifact) if artifact else {}
-        rules = {**_openai_standard_price_rules(), **rules}
+        rules = {
+            **_openai_standard_price_rules(),
+            **_opencode_go_price_rules(),
+            **rules,
+        }
         _LIVE_RULES_CACHE = (now, rules)
         return rules
 
@@ -353,6 +369,88 @@ def _openai_standard_price_rules() -> dict[str, PriceRule]:
     return OPENAI_STANDARD_PRICE_RULES
 
 
+def _opencode_go_price_rules() -> dict[str, PriceRule]:
+    rules = [
+        _opencode_go_rule(
+            "glm-5.2", input_rate=1.40, cached_rate=0.26, output_rate=4.40
+        ),
+        _opencode_go_rule(
+            "glm-5.1", input_rate=1.40, cached_rate=0.26, output_rate=4.40
+        ),
+        _opencode_go_rule(
+            "kimi-k2.7-code", input_rate=0.95, cached_rate=0.19, output_rate=4.00
+        ),
+        _opencode_go_rule(
+            "kimi-k2.6", input_rate=0.95, cached_rate=0.16, output_rate=4.00
+        ),
+        _opencode_go_rule(
+            "mimo-v2.5", input_rate=0.14, cached_rate=0.0028, output_rate=0.28
+        ),
+        _opencode_go_rule(
+            "mimo-v2.5-pro", input_rate=1.74, cached_rate=0.0145, output_rate=3.48
+        ),
+        _opencode_go_rule(
+            "minimax-m3", input_rate=0.30, cached_rate=0.06, output_rate=1.20
+        ),
+        _opencode_go_rule(
+            "minimax-m2.7",
+            input_rate=0.30,
+            cached_rate=0.06,
+            cache_creation_rate=0.375,
+            output_rate=1.20,
+        ),
+        _opencode_go_rule(
+            "minimax-m2.5",
+            input_rate=0.30,
+            cached_rate=0.06,
+            cache_creation_rate=0.375,
+            output_rate=1.20,
+        ),
+        _opencode_go_rule(
+            "qwen3.7-max",
+            input_rate=2.50,
+            cached_rate=0.50,
+            cache_creation_rate=3.125,
+            output_rate=7.50,
+        ),
+        _opencode_go_rule(
+            "qwen3.7-plus",
+            input_rate=0.40,
+            cached_rate=0.04,
+            cache_creation_rate=0.50,
+            output_rate=1.60,
+            threshold_tokens=256_000,
+            input_rate_above_threshold=1.20,
+            cached_rate_above_threshold=0.12,
+            cache_creation_rate_above_threshold=1.50,
+            output_rate_above_threshold=4.80,
+        ),
+        _opencode_go_rule(
+            "qwen3.6-plus",
+            input_rate=0.50,
+            cached_rate=0.05,
+            cache_creation_rate=0.625,
+            output_rate=3.00,
+            threshold_tokens=256_000,
+            input_rate_above_threshold=2.00,
+            cached_rate_above_threshold=0.20,
+            cache_creation_rate_above_threshold=2.50,
+            output_rate_above_threshold=6.00,
+        ),
+        _opencode_go_rule(
+            "deepseek-v4-pro", input_rate=1.74, cached_rate=0.0145, output_rate=3.48
+        ),
+        _opencode_go_rule(
+            "deepseek-v4-flash", input_rate=0.14, cached_rate=0.0028, output_rate=0.28
+        ),
+    ]
+    keyed: dict[str, PriceRule] = {}
+    for rule in rules:
+        for provider in ("opencode-go", "opencode"):
+            keyed[_provider_model_key(provider, rule.model)] = rule
+    return keyed
+
+
 def _openai_rule(
     model: str,
     *,
@@ -367,6 +465,37 @@ def _openai_rule(
         output_per_mtok=output_rate,
         pricing_source=OPENAI_STANDARD_PRICING_SOURCE,
         pricing_effective_date=OPENAI_STANDARD_PRICING_EFFECTIVE_DATE,
+    )
+
+
+def _opencode_go_rule(
+    model: str,
+    *,
+    input_rate: float,
+    cached_rate: float | None,
+    output_rate: float,
+    cache_creation_rate: float | None = None,
+    threshold_tokens: int | None = None,
+    input_rate_above_threshold: float | None = None,
+    cached_rate_above_threshold: float | None = None,
+    cache_creation_rate_above_threshold: float | None = None,
+    output_rate_above_threshold: float | None = None,
+) -> PriceRule:
+    return PriceRule(
+        model=model,
+        input_per_mtok=input_rate,
+        cached_input_per_mtok=cached_rate,
+        cache_creation_input_per_mtok=cache_creation_rate,
+        output_per_mtok=output_rate,
+        threshold_tokens=threshold_tokens,
+        input_per_mtok_above_threshold=input_rate_above_threshold,
+        cached_input_per_mtok_above_threshold=cached_rate_above_threshold,
+        cache_creation_input_per_mtok_above_threshold=(
+            cache_creation_rate_above_threshold
+        ),
+        output_per_mtok_above_threshold=output_rate_above_threshold,
+        pricing_source=OPENCODE_GO_PRICING_SOURCE,
+        pricing_effective_date=OPENCODE_GO_PRICING_EFFECTIVE_DATE,
     )
 
 
@@ -523,7 +652,11 @@ def _normalize_model_name(model: str | None) -> str | None:
     if not model:
         return None
     normalized = model.strip().lower()
-    normalized = normalized.removeprefix("openai/").removeprefix("anthropic.")
+    normalized = (
+        normalized.removeprefix("openai/")
+        .removeprefix("anthropic.")
+        .removeprefix("opencode-go/")
+    )
     if "." in normalized and "claude-" in normalized:
         normalized = normalized[normalized.find("claude-") :]
     normalized = re.sub(r"-\d{8}$", "", normalized)

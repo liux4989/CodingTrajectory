@@ -32,7 +32,9 @@ def normalize_codex_token_count(
     """Return normalized usage facts from a Codex token_count event."""
     info_map = info if isinstance(info, dict) else {}
     metrics = NormalizedUsageMetrics(
-        model=_as_str(info_map.get("model")) or _as_str(info_map.get("model_name")) or _as_str(model),
+        model=_as_str(info_map.get("model"))
+        or _as_str(info_map.get("model_name"))
+        or _as_str(model),
         last_token_usage=_dict_or_none(info_map.get("last_token_usage")),
         total_token_usage=_dict_or_none(info_map.get("total_token_usage")),
         model_context_window=_as_int_or_none(info_map.get("model_context_window")),
@@ -64,23 +66,28 @@ def normalize_claude_usage(*, model: Any, usage: Any) -> dict[str, Any]:
     )
 
 
-def normalize_pi_usage(*, provider: Any = None, model: Any, usage: Any) -> dict[str, Any]:
+def normalize_pi_usage(
+    *, provider: Any = None, model: Any, usage: Any
+) -> dict[str, Any]:
     usage_map = usage if isinstance(usage, dict) else {}
     input_tokens = _as_int_or_none(usage_map.get("input")) or 0
     cache_read = _as_int_or_none(usage_map.get("cacheRead")) or 0
     cache_write = _as_int_or_none(usage_map.get("cacheWrite")) or 0
     output_tokens = _as_int_or_none(usage_map.get("output")) or 0
+    normalized_usage = {
+        "input_tokens": input_tokens,
+        "cached_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_write,
+        "output_tokens": output_tokens,
+        "total_tokens": _as_int_or_none(usage_map.get("totalTokens"))
+        or (input_tokens + cache_read + cache_write + output_tokens),
+    }
+    if (cost_usd := _pi_cost_usd(usage_map.get("cost"))) is not None:
+        normalized_usage["cost_usd"] = cost_usd
     return _normalized_usage_metrics(
         model=model,
         provider=provider,
-        usage={
-            "input_tokens": input_tokens,
-            "cached_input_tokens": cache_read,
-            "cache_creation_input_tokens": cache_write,
-            "output_tokens": output_tokens,
-            "total_tokens": _as_int_or_none(usage_map.get("totalTokens"))
-            or (input_tokens + cache_read + cache_write + output_tokens),
-        },
+        usage=normalized_usage,
         cumulative_input_tokens=input_tokens + cache_read + cache_write,
     )
 
@@ -109,8 +116,16 @@ def context_usage_observation(
     categories: list[ContextCategoryObservation] = []
     if category_source is not None:
         category_specs = (
-            ("cached_context", "Cached prefix (system + tools + prior turns)", "cached_input_tokens"),
-            ("new_cached_prefix", "Newly cached this turn", "cache_creation_input_tokens"),
+            (
+                "cached_context",
+                "Cached prefix (system + tools + prior turns)",
+                "cached_input_tokens",
+            ),
+            (
+                "new_cached_prefix",
+                "Newly cached this turn",
+                "cache_creation_input_tokens",
+            ),
             ("messages", "Messages (uncached input)", "input_tokens"),
         )
         categories = [
@@ -147,11 +162,7 @@ def context_usage_observation(
 
 
 def _is_zero_usage(usage: dict[str, Any]) -> bool:
-    return not any(
-        _as_int_or_none(value)
-        for value in usage.values()
-    )
-
+    return not any(_as_int_or_none(value) for value in usage.values())
 
 
 def _normalized_usage_metrics(
@@ -184,3 +195,12 @@ def _as_str(value: Any) -> str | None:
 
 def _as_int_or_none(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _pi_cost_usd(value: Any) -> float | None:
+    if not isinstance(value, dict):
+        return None
+    total = value.get("total")
+    if isinstance(total, int | float) and not isinstance(total, bool):
+        return float(total)
+    return None

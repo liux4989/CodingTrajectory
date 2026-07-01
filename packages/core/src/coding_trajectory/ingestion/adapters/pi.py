@@ -21,7 +21,11 @@ from coding_trajectory.ingestion.models import (
     Vendor,
     VendorExtensions,
 )
-from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
+from coding_trajectory.ingestion.transcript import (
+    TranscriptRecord,
+    events_from_transcript,
+    project_transcript,
+)
 from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
     context_usage_observation,
     normalize_pi_usage,
@@ -31,15 +35,32 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PI_SESSIONS_DIR = Path.home() / ".pi" / "agent" / "sessions"
 
-_PI_FILE_TOOL_NAMES: frozenset[str] = frozenset({
-    "readFile", "read_file", "read_many_files",
-    "writeFile", "write_file", "create_file",
-    "editFile", "edit_file", "replace", "apply_patch",
-    "Read", "Edit", "MultiEdit", "Write", "View",
-})
-_PI_PLAN_TOOL_NAMES: frozenset[str] = frozenset({
-    "TodoWrite", "TodoRead", "update_plan",
-})
+_PI_FILE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "readFile",
+        "read_file",
+        "read_many_files",
+        "writeFile",
+        "write_file",
+        "create_file",
+        "editFile",
+        "edit_file",
+        "replace",
+        "apply_patch",
+        "Read",
+        "Edit",
+        "MultiEdit",
+        "Write",
+        "View",
+    }
+)
+_PI_PLAN_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "TodoWrite",
+        "TodoRead",
+        "update_plan",
+    }
+)
 
 
 def _pi_item_kind(tool_name: str | None) -> str:
@@ -70,7 +91,8 @@ def _tool_calls_from_content(content: list[dict]) -> list[dict]:
     if not isinstance(content, list):
         return []
     return [
-        block for block in content
+        block
+        for block in content
         if isinstance(block, dict) and block.get("type") == "toolCall"
     ]
 
@@ -81,7 +103,9 @@ def _thinking_blocks(content: list[dict]) -> list[str]:
     return [
         block.get("thinking", "")
         for block in content
-        if isinstance(block, dict) and block.get("type") == "thinking" and block.get("thinking")
+        if isinstance(block, dict)
+        and block.get("type") == "thinking"
+        and block.get("thinking")
     ]
 
 
@@ -103,6 +127,7 @@ def _parse_usage(message: dict) -> dict | None:
         "cacheRead": usage.get("cacheRead"),
         "cacheWrite": usage.get("cacheWrite"),
         "totalTokens": usage.get("totalTokens"),
+        "cost": usage.get("cost"),
     }
 
 
@@ -148,7 +173,11 @@ class PiAdapter(BaseAdapter):
                 title = record.get("name") or title
             elif entry_type == "message" and title is None:
                 message = record.get("message")
-                if isinstance(message, dict) and message.get("role") == "user" and _is_real_user_message(message):
+                if (
+                    isinstance(message, dict)
+                    and message.get("role") == "user"
+                    and _is_real_user_message(message)
+                ):
                     text = _content_text(message.get("content", []))
                     if text:
                         title = " ".join(text.split()) or None
@@ -277,7 +306,8 @@ class PiAdapter(BaseAdapter):
             elif role == "assistant":
                 content = message.get("content") or []
                 text_parts = [
-                    block for block in content
+                    block
+                    for block in content
                     if isinstance(block, dict) and block.get("type") in ("text",)
                 ]
                 text = _content_text(text_parts)
@@ -307,7 +337,9 @@ class PiAdapter(BaseAdapter):
                         kind="assistant_message",
                         data={
                             "text": text,
-                            "vendor_data": {k: v for k, v in vendor_data.items() if v is not None},
+                            "vendor_data": {
+                                k: v for k, v in vendor_data.items() if v is not None
+                            },
                         },
                     )
                 )
@@ -315,7 +347,11 @@ class PiAdapter(BaseAdapter):
                 for tc in tool_calls:
                     tool_call_id = tc.get("id")
                     tool_name = tc.get("name")
-                    if tool_name == "bash" and isinstance(tool_call_id, str) and tool_call_id:
+                    if (
+                        tool_name == "bash"
+                        and isinstance(tool_call_id, str)
+                        and tool_call_id
+                    ):
                         self._pending_bash_tool_call_ids.append(tool_call_id)
                     transcript.append(
                         TranscriptRecord(
@@ -350,7 +386,11 @@ class PiAdapter(BaseAdapter):
                                 break
 
                 success = infer_tool_success(output)
-                status = ToolStatus.FAILED.value if (is_error or success is False) else ToolStatus.COMPLETED.value
+                status = (
+                    ToolStatus.FAILED.value
+                    if (is_error or success is False)
+                    else ToolStatus.COMPLETED.value
+                )
 
                 transcript.append(
                     TranscriptRecord(
@@ -394,7 +434,9 @@ class PiAdapter(BaseAdapter):
                             "tool_name": "bash",
                             "output": text_content,
                             "exit_code": exit_code,
-                            "status": ToolStatus.FAILED.value if exit_code and exit_code != 0 else ToolStatus.COMPLETED.value,
+                            "status": ToolStatus.FAILED.value
+                            if exit_code and exit_code != 0
+                            else ToolStatus.COMPLETED.value,
                         },
                         fidelity="synthetic",
                     )

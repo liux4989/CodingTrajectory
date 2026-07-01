@@ -319,9 +319,9 @@ def build_session_graph_stats_token_usage(
             _sum_usage_dicts(allocated_usage_by_item.values()),
             _sum_usage_dicts(allocated_usage_by_context_source.values()),
         )
-    ) == _allocated_cost_usage_dict(
-        billed_token_usage
-    ), "session stats attribution must reconcile to billed token usage"
+    ) == _allocated_cost_usage_dict(billed_token_usage), (
+        "session stats attribution must reconcile to billed token usage"
+    )
     return {
         "allocated_usage_by_item": allocated_usage_by_item,
         "allocated_usage_by_context_source": allocated_usage_by_context_source,
@@ -455,8 +455,7 @@ def _build_item_real_token_costs_for_session(
         response_entries = [
             entry
             for entry in present_entries
-            if entry.output_eligible
-            and (turn_id is None or entry.turn_id == turn_id)
+            if entry.output_eligible and (turn_id is None or entry.turn_id == turn_id)
         ]
         for item_id, cost in _allocate_real_token_costs_for_entries(
             present_entries,
@@ -491,9 +490,9 @@ def _assert_item_real_token_costs_reconcile(
 ) -> None:
     expected = _sum_allocated_usage_for_present_observations(session, entries)
     actual = _allocated_cost_usage_dict(_sum_item_real_token_costs(items))
-    assert (
-        actual == expected
-    ), "item real token cost allocation must reconcile to observed session usage"
+    assert actual == expected, (
+        "item real token cost allocation must reconcile to observed session usage"
+    )
 
 
 def _sum_allocated_usage_for_present_observations(
@@ -1135,6 +1134,7 @@ def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
             value.get("reasoning_output_tokens") or value.get("reasoningOutputTokens")
         ),
         total_tokens=_as_int(value.get("total_tokens") or value.get("totalTokens")),
+        cost_usd=_as_float_or_none(value.get("cost_usd") or value.get("costUsd")),
     )
 
 
@@ -1171,3 +1171,9 @@ def _unique(values: list[str]) -> list[str]:
 
 def _as_int(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _as_float_or_none(value: Any) -> float | None:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    return None
