@@ -16,7 +16,9 @@ import { Toolbar } from "@/components/toolbar";
 import { StateBlock } from "@/components/state-block";
 import { VendorBadges } from "@/components/badges";
 import { RefreshButton } from "@/components/refresh-button";
-import { DataTable, SortableHeader, TablePagination } from "@/components/data-table";
+import { DataTable } from "@/components/data-table";
+import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SessionLink } from "@/components/session-link";
 import { relativeTime } from "@/lib/relative-time";
 
@@ -42,18 +44,18 @@ const columns: ColumnDef<SessionItem>[] = [
   {
     id: "vendors",
     accessorFn: (row) => sessionVendors(row).join(", "),
-    header: ({ column }) => <SortableHeader column={column} label="Vendors" />,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Vendors" />,
     cell: ({ row }) => <VendorBadges vendors={sessionVendors(row.original)} />,
   },
   {
     accessorKey: "title",
-    header: ({ column }) => <SortableHeader column={column} label="Title" />,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Title" />,
     cell: ({ getValue }) => getValue<string | null>() ?? "-",
   },
   {
     id: "updated",
     accessorFn: (row) => row.updated_at ?? row.started_at ?? "",
-    header: ({ column }) => <SortableHeader column={column} label="Updated" />,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Updated" />,
     cell: ({ row }) => (
       <span className="font-mono text-body-sm" title={row.original.updated_at ?? row.original.started_at ?? ""}>
         {relativeTime(row.original.updated_at ?? row.original.started_at)}
@@ -95,7 +97,7 @@ export function SessionsRoute() {
       {sessions.data ? (
         <>
           <DataTable table={table} columnCount={columns.length} emptyMessage="No sessions match the current filter." />
-          <TablePagination table={table} />
+          <DataTablePagination table={table} />
         </>
       ) : null}
     </div>
