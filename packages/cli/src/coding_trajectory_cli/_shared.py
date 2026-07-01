@@ -536,7 +536,6 @@ def compact_payload(method: str, payload: Any) -> Any:
         ctx = payload.get("context_window") or {}
         runtime = payload.get("runtime") or {}
         messages = payload.get("messages") or {}
-        quota = payload.get("quota") or {}
         return drop_none(
             {
                 "id": payload.get("root_session_id"),
@@ -601,31 +600,6 @@ def compact_payload(method: str, payload: Any) -> Any:
                 "allocated_real_token_cost": compact_usage(
                     payload.get("allocated_real_token_cost"), include_cost=False
                 ),
-                "quota": drop_none(
-                    {
-                        "plan": quota.get("plan_type"),
-                        "limit_id": quota.get("limit_id"),
-                        "limit_name": quota.get("limit_name"),
-                        "primary_pct": quota.get("primary_used_percent"),
-                        "primary_window_minutes": quota.get("primary_window_minutes"),
-                        "primary_reset_at": quota.get("primary_resets_at"),
-                        "secondary_pct": quota.get("secondary_used_percent"),
-                        "secondary_window_minutes": quota.get(
-                            "secondary_window_minutes"
-                        ),
-                        "secondary_reset_at": quota.get("secondary_resets_at"),
-                        "has_credits": quota.get("credits_has_credits"),
-                        "credits_unlimited": quota.get("credits_unlimited"),
-                        "credits_balance": quota.get("credits_balance"),
-                        "individual_limit": quota.get("individual_limit"),
-                        "individual_used": quota.get("individual_used"),
-                        "individual_remaining_pct": quota.get(
-                            "individual_remaining_percent"
-                        ),
-                        "reached": quota.get("rate_limit_reached_type"),
-                    }
-                )
-                or None,
                 "warnings": payload.get("warnings") or None,
             }
         )
