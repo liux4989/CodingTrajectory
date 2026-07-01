@@ -29,7 +29,7 @@
 │  Analysis Layer          │  Metrics Layer                               │
 │  ┌───────────────────────┐│  ┌──────────────────────────────────────┐   │
 │  │ projections           ││  │ token usage, reported cost           │   │
-│  │ event_scan            ││  │ context stats, quota tracking        │   │
+│  │ event_scan            ││  │ context stats, token usage           │   │
 │  │ item_details          ││  │ tool usage                            │   │
 │  │ session_graph_views   ││  │                                      │   │
 │  └───────────┬───────────┘│  └──────────────┬───────────────────────┘   │
@@ -184,7 +184,7 @@ coding-trajectory/
 | Document store | In-memory UUID-indexed store with cross-resource navigation |
 | Service contracts | Versioned Pydantic requests/responses with registered handlers |
 | Token usage | Per-turn, per-session token accounting from normalized session logs, plus log-reported cost when available |
-| Context stats | Context window utilization, category breakdown, quota tracking |
+| Context stats | Context window utilization, category breakdown, token usage tracking |
 | Tool usage analysis | Tool invocation counts, output sizes, token attribution |
 | CLI (`ct`) | Progressive-disclosure command surface with markdown + JSON output |
 | Plugin system | Source-dispatched plugins via `plugin.toml` discovery, no core imports |

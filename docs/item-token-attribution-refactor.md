@@ -18,7 +18,7 @@ boundary. In current public surfaces this is represented at turn/session level:
 Item-level token cost is different. Codex persisted logs do not attach
 `token_count` records to item IDs or tool call IDs. A `response_item` tool call
 has a `call_id`, but the later `event_msg.token_count` has only
-`last_token_usage`, `total_token_usage`, and context/quota metadata. Therefore
+`last_token_usage`, `total_token_usage`, and context-window metadata. Therefore
 per-item token cost cannot be measured directly from Codex logs.
 
 The current safe boundary is:
@@ -63,7 +63,7 @@ would mix measured provider usage with estimated visible-content attribution.
 
 ### `session.stats`
 
-Purpose: context-window composition, category breakdown, quota, runtime, and
+Purpose: context-window composition, category breakdown, runtime, and
 message stats.
 
 Keep this surface cache-aware and turn/session-scoped. Documentation and labels

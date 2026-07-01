@@ -21,10 +21,9 @@ The two surfaces are related but not identical:
 | `turn/started` | `event_msg.task_started` | turn context window and exact start metadata |
 | `turn/completed` | `event_msg.task_complete` | terminal turn status and exact timing |
 | interrupted turn | `event_msg.turn_aborted` | interrupted status and duration |
-| `thread/tokenUsage/updated` | `event_msg.token_count` | token usage, context window, quota |
+| `thread/tokenUsage/updated` | `event_msg.token_count` | token usage, context window |
 | `item/*` tool lifecycle | `response_item` call/output pairs | canonical tool items and output metrics |
 | context compaction item | `event_msg.context_compacted` | compaction count |
-| rate-limit update | `token_count.rate_limits` | quota snapshot |
 | `turn/steer` | another `user_message` with the same raw turn id | message in the existing turn |
 
 The Codex source confirms that `TokenUsageInfo` contains:
@@ -49,7 +48,6 @@ CodingTrajectory now uses the Codex sources as follows:
 | tool count and outputs | persisted response items | observed tool calls/results |
 | tool duration | call/result timestamps | observed elapsed boundary, not model billing |
 | turn runtime and TTFT | turn completion/abort events | exact Codex-reported values when present |
-| quota | `rate_limits` | complete persisted snapshot |
 | cost | token usage plus pricing table | derived estimate, not a Codex billing record |
 
 Per-tool token cost is not available in the Codex protocol. Token usage arrives
@@ -99,17 +97,6 @@ The adapter now preserves:
 
 Session stats expose interrupted turns, rollbacks, observed model-turn runtime,
 and average time to first token when the source records provide them.
-
-### Quota completeness
-
-Quota normalization now preserves the full source snapshot:
-
-- limit id and name;
-- primary and secondary windows and reset timestamps;
-- credits state and balance;
-- individual spend-control limit;
-- plan type;
-- reached-limit reason.
 
 ## Remaining Weaknesses
 
