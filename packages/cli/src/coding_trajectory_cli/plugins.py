@@ -158,10 +158,6 @@ def plugin_names() -> list[str]:
     return sorted(PLUGIN_COMMANDS)
 
 
-def get_plugin(name: str) -> PluginCommand | None:
-    return PLUGIN_COMMANDS.get(name)
-
-
 def run_plugin(name: str, plugin_args: list[str]) -> int:
     """Execute a plugin entry point from its source directory."""
     command = PLUGIN_COMMANDS[name]

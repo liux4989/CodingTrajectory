@@ -62,10 +62,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _render_payload(args: argparse.Namespace, payload: Any) -> str:
-    plugin_renderer = getattr(args, "_render_payload", None)
-    if callable(plugin_renderer):
-        return plugin_renderer(args, payload)
-
     method = getattr(args, "_method", None)
     if selected_output(args) == "json":
         if method:

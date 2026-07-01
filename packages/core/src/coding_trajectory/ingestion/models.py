@@ -114,7 +114,6 @@ class ContextUsageObservation(BaseModel):
     used_input_tokens:     int = 0
     usage:                 dict[str, Any] = Field(default_factory=dict)
     cumulative_usage:      dict[str, Any] | None = None
-    quota:                 dict[str, Any] | None = None
     categories:            list[ContextCategoryObservation] = Field(default_factory=list)
 
 

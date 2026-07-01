@@ -24,7 +24,6 @@ from coding_trajectory_cli._shared import GhFormatter, add_base_output_flags
 from coding_trajectory_cli.outcome import CommandOutcome, EarlyDispatchOutcome, status_error
 from coding_trajectory_cli.plugins import (
     PLUGIN_COMMANDS,
-    PluginCommand,
     compatibility_error,
     plugin_names,
     plugin_payload,

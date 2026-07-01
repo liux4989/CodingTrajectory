@@ -112,7 +112,6 @@ class SessionStatsResponse(ContractModel):
     messages: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, Any] = Field(default_factory=dict)
     allocated_real_token_cost: dict[str, Any] | None = None
-    quota: dict[str, Any] | None = None
     provider_usage_buckets: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -181,7 +180,6 @@ class PublicSessionStatsResponse(ContractModel):
     messages: dict[str, Any] | None = None
     usage: dict[str, Any] | None = None
     allocated_real_token_cost: dict[str, Any] | None = None
-    quota: dict[str, Any] | None = None
     warnings: list[str] | None = None
 
 

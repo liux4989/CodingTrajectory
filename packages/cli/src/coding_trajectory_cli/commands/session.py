@@ -273,27 +273,6 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
             f"{messages.get('tool_outputs') or 0} tool outputs, "
             f"{messages.get('reasoning_items') or 0} reasoning items"
         )
-    quota = payload.get("quota") or {}
-    if quota:
-        quota_bits = (
-            [f"plan {quota.get('plan_type')}"] if quota.get("plan_type") else []
-        )
-        if quota.get("limit_name") or quota.get("limit_id"):
-            quota_bits.append(
-                f"limit {quota.get('limit_name') or quota.get('limit_id')}"
-            )
-        if quota.get("primary_used_percent") is not None:
-            quota_bits.append(f"primary {quota['primary_used_percent']:.1f}%")
-        if quota.get("secondary_used_percent") is not None:
-            quota_bits.append(f"secondary {quota['secondary_used_percent']:.1f}%")
-        if quota.get("credits_balance") is not None:
-            quota_bits.append(f"credits {quota['credits_balance']}")
-        elif quota.get("credits_unlimited"):
-            quota_bits.append("credits unlimited")
-        if quota.get("rate_limit_reached_type"):
-            quota_bits.append(f"reached {quota['rate_limit_reached_type']}")
-        if quota_bits:
-            lines.append("- Quota: " + ", ".join(quota_bits))
     return "\n".join(lines).rstrip()
 
 

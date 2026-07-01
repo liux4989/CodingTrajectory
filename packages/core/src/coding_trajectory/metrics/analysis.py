@@ -32,8 +32,6 @@ from coding_trajectory.metrics.models import (
     InvokeResponseTokens,
     ItemRealTokenCostFlat,
     MetricSource,
-    QuotaSnapshot,
-    QuotaWindow,
     ReadAfterResult,
     SessionMetrics,
     SessionMetricsFlat,
@@ -807,7 +805,7 @@ def _turn_model(turn: TurnMetrics) -> str | None:
 def _build_full_metrics(
     session_graph: SessionGraph,
 ) -> SessionGraphMetrics:
-    """Return full token/quota metrics projected onto the session_graph hierarchy."""
+    """Return full token metrics projected onto the session_graph hierarchy."""
     session_metrics: list[SessionMetrics] = []
     total = TokenUsage()
     warnings: list[str] = []
@@ -842,14 +840,11 @@ def _build_session_metrics(
 ) -> SessionMetrics:
     turn_metrics: list[TurnMetrics] = []
     session_total = TokenUsage()
-    latest_quota: QuotaSnapshot | None = None
 
     for turn in session.turns:
         metrics = _build_turn_metrics(session, turn)
         turn_metrics.append(metrics)
         session_total = session_total.plus(metrics.token_usage)
-        if metrics.quota_snapshots:
-            latest_quota = metrics.quota_snapshots[-1]
 
     return SessionMetrics(
         session_id=session.session_id,
@@ -857,7 +852,6 @@ def _build_session_metrics(
         status=session.status.value,
         token_usage=session_total,
         turns=turn_metrics,
-        quota_snapshot=latest_quota,
     )
 
 
@@ -881,13 +875,6 @@ def _build_turn_metrics(
     for observation in observations:
         total = total.plus(observation.usage)
 
-    quota_snapshots: list[QuotaSnapshot] = []
-    for observation in context_observations:
-        quota = _quota_snapshot_from_context_usage(observation)
-        if quota is not None:
-            quota_snapshots.append(quota)
-    quota_snapshots.sort(key=lambda item: item.timestamp)
-
     return TurnMetrics(
         turn_id=turn.turn_id,
         sequence=turn.sequence,
@@ -896,7 +883,6 @@ def _build_turn_metrics(
         completed_at=turn.ended_at,
         token_usage=total,
         observations=observations,
-        quota_snapshots=quota_snapshots,
     )
 
 
@@ -923,43 +909,6 @@ def _usage_from_context_observation(
             source_type="session.context_usage",
             event_id=observation.source_event_id,
         ),
-    )
-
-
-def _quota_snapshot_from_context_usage(
-    observation: ContextUsageObservation,
-) -> QuotaSnapshot | None:
-    rate_limits = observation.quota
-    if not isinstance(rate_limits, dict) or observation.source_event_id is None:
-        return None
-
-    return QuotaSnapshot(
-        timestamp=observation.timestamp,
-        source_event_id=observation.source_event_id,
-        limit_id=_as_str(rate_limits.get("limit_id")),
-        limit_name=_as_str(rate_limits.get("limit_name")),
-        plan_type=_as_str(rate_limits.get("plan_type")),
-        primary=_quota_window(rate_limits.get("primary")),
-        secondary=_quota_window(rate_limits.get("secondary")),
-        credits=rate_limits.get("credits")
-        if isinstance(rate_limits.get("credits"), dict)
-        else None,
-        individual_limit=(
-            rate_limits.get("individual_limit")
-            if isinstance(rate_limits.get("individual_limit"), dict)
-            else None
-        ),
-        rate_limit_reached_type=_as_str(rate_limits.get("rate_limit_reached_type")),
-    )
-
-
-def _quota_window(value: Any) -> QuotaWindow | None:
-    if not isinstance(value, dict):
-        return None
-    return QuotaWindow(
-        used_percent=_as_float(value.get("used_percent")),
-        window_minutes=_as_int(value.get("window_minutes")),
-        resets_at=_as_int(value.get("resets_at")),
     )
 
 
@@ -1014,13 +963,3 @@ def _unique(values: list[str]) -> list[str]:
 
 def _as_int(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _as_float(value: Any) -> float | None:
-    if isinstance(value, (float, int)) and not isinstance(value, bool):
-        return float(value)
-    return None
-
-
-def _as_str(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None

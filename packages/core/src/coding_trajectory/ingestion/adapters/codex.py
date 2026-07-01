@@ -531,7 +531,6 @@ class CodexAdapter(BaseAdapter):
                     normalized_metrics = normalize_codex_token_count(
                         model=state.turn_context.get("model"),
                         info=info,
-                        rate_limits=payload.get("rate_limits"),
                     )
                     usage_record = TranscriptRecord(
                         sequence=len(transcript),
