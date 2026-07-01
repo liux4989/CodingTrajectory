@@ -50,37 +50,41 @@ class ContextCompositionEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     category: str
+    concept: str
+    source_key: str
     label: str
     tokens: int
     percent: float | None
     confidence: str
-    estimated_cost_usd: float | None
+    resident_estimated_cost_usd: float | None
 
 
-class ExpensiveContextItem(BaseModel):
+class ExpensiveBilledItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str
     category: str
     summary: str
-    total_tokens: int
-    estimated_cost_usd: float
+    billed_tokens: int
+    billed_estimated_cost_usd: float
 
 
 class UsageEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    cumulative_tokens: int
-    cumulative_input_tokens: int
-    cumulative_cached_tokens: int
-    cumulative_output_tokens: int
-    cumulative_reasoning_tokens: int
-    final_context_tokens: int | None
+    billed_tokens: int
+    billed_input_tokens: int
+    billed_uncached_input_tokens: int
+    billed_cached_tokens: int
+    billed_cache_creation_tokens: int
+    billed_output_tokens: int
+    billed_reasoning_tokens: int
+    resident_context_tokens: int | None
     context_window_tokens: int | None
-    final_context_percent: float | None
-    expensive_turns: list[dict[str, Any]]
+    resident_context_percent: float | None
+    high_billed_turns: list[dict[str, Any]]
     context_composition: list[ContextCompositionEntry] = []
-    expensive_context_items: list[ExpensiveContextItem] = []
+    expensive_billed_items: list[ExpensiveBilledItem] = []
 
 
 class ToolBucket(BaseModel):
@@ -131,7 +135,7 @@ class AnalysisFinding(BaseModel):
 class SessionAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     session_id: str
     generated_at: str
     source: AnalysisSource
@@ -176,10 +180,7 @@ def build_or_load_analysis(
     provider = _normalize_provider(provider)
     artifact = _artifact_path(session_id, artifact_dir, provider=provider)
     if not refresh and artifact.is_file():
-        try:
-            return SessionAnalysis.model_validate_json(artifact.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        return SessionAnalysis.model_validate_json(artifact.read_text(encoding="utf-8"))
     analysis = build_analysis(session_id, ct_json=ct_json, provider=provider)
     artifact.parent.mkdir(parents=True, exist_ok=True)
     analysis = analysis.model_copy(update={"artifact_path": str(artifact)})
@@ -228,10 +229,15 @@ def build_analysis(
         "tool.call.failed",
     ])
     task_story = _task_story(overview)
-    usage_evidence = _usage_evidence(usage, stats)
+    usage_evidence = _usage_evidence(stats, usage)
     tool_evidence = _tool_evidence(requested, succeeded, failed)
     resolved_session_id = str(stats.get("id") or overview.get("id") or session_id)
-    usage_evidence = _augment_usage_evidence(resolved_session_id, usage_evidence, ct_json=ct_json)
+    usage_evidence = _augment_usage_evidence(
+        resolved_session_id,
+        usage_evidence,
+        stats=stats,
+        ct_json=ct_json,
+    )
     evidence_packet = _evidence_packet(
         session_id=resolved_session_id,
         task_story=task_story,
@@ -301,6 +307,8 @@ def _evidence_packet(
         "tool_evidence": tool_evidence.model_dump(mode="json"),
         "domain_review_hints": [
             "Judge tool cost against task necessity.",
+            "Use usage_evidence.context_composition[].concept/source_key as the canonical context concept taxonomy.",
+            "Keep resident context composition separate from billed token usage.",
             "Do not treat cloud/live state checks as automatically bad.",
             "Prefer missed routing artifacts, broad output, and repeated avoidable probes as prioritization signals.",
         ],
@@ -333,7 +341,7 @@ def _json_from_text(text: str) -> Any:
 def _artifact_path(session_id: str, artifact_dir: Path | None, *, provider: AnalysisProvider) -> Path:
     safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", session_id).strip("-") or "session"
     directory = artifact_dir or Path.home() / ".coding-trajectory" / "dashboard" / "session-analysis"
-    return directory / f"{safe_id}.{provider}.json"
+    return directory / f"{safe_id}.{provider}.v3.json"
 
 
 def _task_story(overview: dict[str, Any]) -> TaskStory:
@@ -442,12 +450,14 @@ def _looks_like_outcome(text: str) -> bool:
     return any(term in lower for term in ["implemented and committed", "done and committed", "current status", "killed them", "the short answer"])
 
 
-def _usage_evidence(usage: dict[str, Any], stats: dict[str, Any]) -> UsageEvidence:
-    total = usage.get("usage") or usage.get("total_usage") or {}
+def _usage_evidence(stats: dict[str, Any], usage: dict[str, Any]) -> UsageEvidence:
+    billed = stats.get("billed_token_usage")
+    if not isinstance(billed, dict):
+        raise ValueError("session stats payload is missing billed_token_usage")
     context = stats.get("context") or stats.get("context_window") or {}
     model = stats.get("model") or {}
     turns = usage.get("turns") or []
-    expensive_turns = sorted(
+    high_billed_turns = sorted(
         [
             {
                 "turn_id": turn.get("id") or turn.get("turn_id"),
@@ -462,70 +472,184 @@ def _usage_evidence(usage: dict[str, Any], stats: dict[str, Any]) -> UsageEviden
         reverse=True,
     )[:6]
     return UsageEvidence(
-        cumulative_tokens=_int_value(total.get("total")),
-        cumulative_input_tokens=_int_value(total.get("input")),
-        cumulative_cached_tokens=_int_value(total.get("cached")),
-        cumulative_output_tokens=_int_value(total.get("output")),
-        cumulative_reasoning_tokens=_int_value(total.get("reasoning")),
-        final_context_tokens=_optional_int(context.get("used") or context.get("used_tokens")),
+        billed_tokens=_usage_int(billed, "total"),
+        billed_input_tokens=_usage_int(billed, "input"),
+        billed_uncached_input_tokens=_usage_int(billed, "uncached_input"),
+        billed_cached_tokens=_usage_int(billed, "cached"),
+        billed_cache_creation_tokens=_usage_int(billed, "cache_creation"),
+        billed_output_tokens=_usage_int(billed, "output"),
+        billed_reasoning_tokens=_usage_int(billed, "reasoning"),
+        resident_context_tokens=_optional_int(
+            context.get("used") or context.get("used_tokens")
+        ),
         context_window_tokens=_optional_int(model.get("context_window") or model.get("context_window_tokens")),
-        final_context_percent=_optional_float(context.get("pct") or context.get("used_percent")),
-        expensive_turns=expensive_turns,
+        resident_context_percent=_optional_float(
+            context.get("pct") or context.get("used_percent")
+        ),
+        high_billed_turns=high_billed_turns,
     )
+
+
+def _usage_int(usage: dict[str, Any], key: str) -> int:
+    raw_key = {
+        "input": "input_tokens",
+        "uncached_input": "uncached_input_tokens",
+        "cached": "cached_input_tokens",
+        "cache_creation": "cache_creation_input_tokens",
+        "output": "output_tokens",
+        "reasoning": "reasoning_output_tokens",
+        "total": "total_tokens",
+    }[key]
+    return _int_value(usage.get(raw_key) if raw_key in usage else usage.get(key))
+
+
+def _composition_leaves(stats: dict[str, Any]) -> list[dict[str, Any]]:
+    context = stats.get("context") or stats.get("context_window") or {}
+    leaves = list(_category_leaves(context.get("categories") or []))
+    return sorted(
+        leaves,
+        key=lambda item: (
+            _int_value(item.get("tokens")),
+            _int_value((item.get("allocated_usage") or {}).get("total_tokens")),
+        ),
+        reverse=True,
+    )
+
+
+def _category_leaves(categories: list[Any]) -> list[dict[str, Any]]:
+    leaves: list[dict[str, Any]] = []
+    for category in categories:
+        if not isinstance(category, dict):
+            continue
+        children = category.get("children") or []
+        if children:
+            leaves.extend(_category_leaves(children))
+        else:
+            leaves.append(category)
+    return leaves
+
+
+def _composition_category(source_key: str) -> str:
+    if source_key in {
+        "base_system",
+        "developer_instructions",
+        "agents_md",
+        "skills",
+        "mcp",
+        "memory",
+    }:
+        return "starting_context"
+    if source_key in {"user_initial_request", "user_follow_up_requests"}:
+        return "user_input"
+    if source_key in {"context_readfile", "files"}:
+        return "files"
+    if source_key.startswith("output_") or source_key == "output":
+        return "output"
+    if source_key in {
+        "assistant_messages",
+        "code_changes",
+        "coordination",
+        "editfile",
+        "writefile",
+        "todolist",
+        "subagenttask",
+        "sessionhandoff",
+        "agent",
+    }:
+        return "agent_work"
+    return "unattributed"
+
+
+def _composition_concept(source_key: str) -> str:
+    if source_key in {"editfile", "writefile", "code_changes"}:
+        return "code_change"
+    if source_key in {"todolist", "subagenttask", "sessionhandoff", "coordination"}:
+        return "coordination"
+    if source_key in {"context_readfile", "files"}:
+        return "read_context"
+    if source_key.startswith("output_") or source_key == "output":
+        return "command_output"
+    if source_key in {"assistant_messages", "agent"}:
+        return "assistant_message"
+    if source_key in {"user_initial_request", "user_follow_up_requests"}:
+        return "user_prompt"
+    if source_key in {
+        "base_system",
+        "developer_instructions",
+        "agents_md",
+        "skills",
+        "mcp",
+        "memory",
+        "starting_context",
+    }:
+        return "initial_context"
+    return source_key
 
 
 def _augment_usage_evidence(
     session_id: str,
     usage_evidence: UsageEvidence,
     *,
+    stats: dict[str, Any],
     ct_json: CtJson,
 ) -> UsageEvidence:
     try:
         projection = context_window_mod.build_projection(session_id, ct_json=ct_json)
     except Exception:
         return usage_evidence
+    projected_by_source_key = {
+        category.source_key: category for category in projection.categories
+    }
     composition = [
         ContextCompositionEntry(
-            category=category.category,
-            label=_one_line(category.label, 120),
-            tokens=category.tokens.value,
-            percent=category.percent,
-            confidence=category.tokens.confidence,
-            estimated_cost_usd=(
-                category.estimated_cost.value_usd if category.estimated_cost else None
+            category=_composition_category(source_key),
+            concept=_composition_concept(source_key),
+            source_key=source_key,
+            label=_one_line(str(raw_category.get("label") or source_key), 120),
+            tokens=_int_value(raw_category.get("tokens")),
+            percent=_optional_float(
+                raw_category.get("percent") or raw_category.get("pct")
+            ),
+            confidence=str(raw_category.get("confidence") or "estimated_tokens"),
+            resident_estimated_cost_usd=(
+                projected.estimated_cost.value_usd
+                if projected and projected.estimated_cost
+                else None
             ),
         )
-        for category in projection.categories[:12]
+        for raw_category in _composition_leaves(stats)
+        if (source_key := str(raw_category.get("key") or "")).strip()
+        for projected in [projected_by_source_key.get(source_key)]
     ]
     expensive_items = [
-        ExpensiveContextItem(
+        ExpensiveBilledItem(
             label=_one_line(item.label, 120),
             category=item.category,
             summary=_one_line(item.summary, 220),
-            total_tokens=item.allocated_usage.get("total_tokens", 0),
-            estimated_cost_usd=item.estimated_cost.value_usd,
+            billed_tokens=item.allocated_usage.get("total_tokens", 0),
+            billed_estimated_cost_usd=item.estimated_cost.value_usd,
         )
         for item in projection.expensive_items[:8]
     ]
     return usage_evidence.model_copy(
         update={
-            "final_context_tokens": (
+            "resident_context_tokens": (
                 projection.used_tokens.value
                 if projection.used_tokens
-                else usage_evidence.final_context_tokens
+                else usage_evidence.resident_context_tokens
             ),
             "context_window_tokens": (
                 projection.context_window_tokens.value
                 if projection.context_window_tokens
                 else usage_evidence.context_window_tokens
             ),
-            "final_context_percent": (
+            "resident_context_percent": (
                 projection.used_percent
                 if projection.used_percent is not None
-                else usage_evidence.final_context_percent
+                else usage_evidence.resident_context_percent
             ),
             "context_composition": composition,
-            "expensive_context_items": expensive_items,
+            "expensive_billed_items": expensive_items,
         }
     )
 

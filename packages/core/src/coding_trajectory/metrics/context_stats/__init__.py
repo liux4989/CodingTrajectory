@@ -26,6 +26,7 @@ def build_session_graph_context_stats(
     session_graph: SessionGraph,
     *,
     allocated_usage_by_item: dict[UUID, dict[str, int]] | None = None,
+    allocated_usage_by_context_source: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     vendors = {session.vendor for session in session_graph.sessions if session.vendor}
     if not vendors:
@@ -42,6 +43,7 @@ def build_session_graph_context_stats(
     categories = build_context_composition(
         session_graph,
         allocated_usage_by_item=allocated_usage_by_item,
+        allocated_usage_by_context_source=allocated_usage_by_context_source,
     )
     observation = _latest_context_usage(session_graph)
     if observation is None:

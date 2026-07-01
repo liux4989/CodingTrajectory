@@ -852,77 +852,27 @@ def _handle_session_stats(
 ) -> dict[str, Any]:
     from coding_trajectory.metrics import (
         build_session_graph_context_stats,
-        build_session_graph_tool_usage,
+        build_session_graph_stats_token_usage,
     )
 
     session_graph = _resolve_session_graph(
         context.store, _session_graph_entrypoint_id(params)
     )
     _cache_session_graph(context, session_graph)
-    tool_usage = build_session_graph_tool_usage(session_graph)
-    billed_usage_by_item = _billed_usage_by_item(tool_usage)
+    stats_usage = build_session_graph_stats_token_usage(session_graph)
     result = build_session_graph_context_stats(
         session_graph,
-        allocated_usage_by_item=billed_usage_by_item,
+        allocated_usage_by_item=stats_usage["allocated_usage_by_item"],
+        allocated_usage_by_context_source=stats_usage[
+            "allocated_usage_by_context_source"
+        ],
     )
-    if tool_usage.get("allocated_real_token_cost"):
-        result["billed_token_usage"] = tool_usage["allocated_real_token_cost"]
+    if stats_usage.get("billed_token_usage"):
+        result["billed_token_usage"] = stats_usage["billed_token_usage"]
     return _public_output_for_session_graph(
         session_graph,
         result,
     )
-
-
-def _billed_usage_by_item(tool_usage: dict[str, Any]) -> dict[UUID, dict[str, int]]:
-    result: dict[UUID, dict[str, int]] = {}
-    for item in tool_usage.get("item_real_token_costs") or []:
-        if not isinstance(item, dict):
-            continue
-        cost = item.get("allocated_real_token_cost")
-        if not isinstance(cost, dict):
-            continue
-        try:
-            item_id = UUID(str(item.get("item_id")))
-        except (TypeError, ValueError):
-            continue
-        usage = _usage_dict_from_allocated_cost(cost)
-        if usage:
-            result[item_id] = usage
-    assert _sum_usage_dicts(result.values()) == _usage_dict_from_allocated_cost(
-        tool_usage.get("allocated_real_token_cost")
-    ), "session stats item usage must reconcile to billed token usage"
-    return result
-
-
-def _usage_dict_from_allocated_cost(cost: Any) -> dict[str, int]:
-    if not isinstance(cost, dict):
-        return {}
-    usage = {
-        "input_tokens": _int_token(cost.get("input_tokens")),
-        "uncached_input_tokens": _int_token(cost.get("uncached_input_tokens")),
-        "cached_input_tokens": _int_token(cost.get("cached_input_tokens")),
-        "cache_creation_input_tokens": _int_token(
-            cost.get("cache_creation_input_tokens")
-        ),
-        "output_tokens": _int_token(cost.get("output_tokens")),
-        "reasoning_output_tokens": _int_token(cost.get("reasoning_output_tokens")),
-        "total_tokens": _int_token(cost.get("total_tokens")),
-    }
-    return {key: value for key, value in usage.items() if value > 0}
-
-
-def _sum_usage_dicts(items: Any) -> dict[str, int]:
-    result: dict[str, int] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        for key, value in item.items():
-            result[key] = result.get(key, 0) + _int_token(value)
-    return {key: value for key, value in result.items() if value > 0}
-
-
-def _int_token(value: Any) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _handle_session_turn_usage(

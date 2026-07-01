@@ -100,9 +100,14 @@ def build_context_composition(
     session_graph: SessionGraph,
     *,
     allocated_usage_by_item: dict[UUID, dict[str, int]] | None = None,
+    allocated_usage_by_context_source: dict[str, dict[str, int]] | None = None,
 ) -> list[ContextCategoryFlat]:
     allocated_usage_by_item = allocated_usage_by_item or {}
-    starting = _starting_context(session_graph)
+    allocated_usage_by_context_source = allocated_usage_by_context_source or {}
+    starting = _starting_context(
+        session_graph,
+        allocated_usage_by_context_source=allocated_usage_by_context_source,
+    )
     user_input = _user_input(
         session_graph,
         allocated_usage_by_item=allocated_usage_by_item,
@@ -121,19 +126,31 @@ def build_context_composition(
     _assert_context_composition_usage_reconciles(
         categories,
         allocated_usage_by_item,
+        allocated_usage_by_context_source,
     )
     return categories
 
 
 def _starting_context(
     session_graph: SessionGraph,
+    *,
+    allocated_usage_by_context_source: dict[str, dict[str, int]],
 ) -> tuple[_Measure, list[ContextCategoryFlat]]:
     buckets: dict[str, _Measure] = defaultdict(_Measure)
     labels: dict[str, str] = {}
+    usage_added_keys: set[str] = set()
     for session in session_graph.sessions:
         for source in session.context_sources:
             size = visible_text_size(source.text)
-            buckets[source.key].add(tokens=size.tokens, chars=size.chars)
+            allocated_usage = None
+            if source.key not in usage_added_keys:
+                allocated_usage = allocated_usage_by_context_source.get(source.key)
+                usage_added_keys.add(source.key)
+            buckets[source.key].add(
+                tokens=size.tokens,
+                chars=size.chars,
+                allocated_usage=allocated_usage,
+            )
             labels[source.key] = source.label
     children = [
         _category(
@@ -428,16 +445,22 @@ def _measure_from_categories(categories: Iterable[ContextCategoryFlat]) -> _Meas
 def _assert_context_composition_usage_reconciles(
     categories: list[ContextCategoryFlat],
     allocated_usage_by_item: dict[UUID, dict[str, int]],
+    allocated_usage_by_context_source: dict[str, dict[str, int]],
 ) -> None:
-    if not allocated_usage_by_item:
+    if not allocated_usage_by_item and not allocated_usage_by_context_source:
         return
-    expected = _sum_usage_values(allocated_usage_by_item.values())
+    expected = _sum_usage_values(
+        (
+            _sum_usage_values(allocated_usage_by_context_source.values()),
+            _sum_usage_values(allocated_usage_by_item.values()),
+        )
+    )
     actual = _sum_usage_values(
         category.allocated_usage or {} for category in categories
     )
     assert (
         actual == expected
-    ), "context composition allocated usage must reconcile to resident item usage"
+    ), "context composition allocated usage must reconcile to stats attribution"
 
 
 def _sum_usage_values(items: Iterable[dict[str, int]]) -> dict[str, int]:

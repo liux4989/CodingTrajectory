@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from coding_trajectory.analysis.content_size import (
     item_input_size,
@@ -102,6 +102,7 @@ def build_session_graph_context_stats(
     session_graph: SessionGraph,
     *,
     allocated_usage_by_item: dict[UUID, dict[str, int]] | None = None,
+    allocated_usage_by_context_source: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Return provider-specific context-window stats by dispatching to a vendor handler."""
     from coding_trajectory.metrics.context_stats import (
@@ -111,6 +112,7 @@ def build_session_graph_context_stats(
     return dispatch(
         session_graph,
         allocated_usage_by_item=allocated_usage_by_item,
+        allocated_usage_by_context_source=allocated_usage_by_context_source,
     )
 
 
@@ -248,6 +250,85 @@ def build_session_graph_tool_usage(
     ).model_dump(mode="json")
 
 
+def build_session_graph_stats_token_usage(
+    session_graph: SessionGraph,
+) -> dict[str, Any]:
+    """Return stats-table token attribution across starting context and items."""
+    allocated_by_item: dict[UUID, AllocatedRealTokenCost] = {}
+    allocated_by_context_key: dict[str, AllocatedRealTokenCost] = {}
+    billed_token_usage: AllocatedRealTokenCost | None = None
+
+    for session in session_graph.sessions:
+        entries = _stats_cost_entries_for_session(session)
+        if not entries:
+            continue
+        context_entry_ids = {
+            entry.item_id: entry.context_key
+            for entry in entries
+            if entry.context_key is not None
+        }
+        for observation, turn_id in _session_usage_observations(session):
+            present_entries = [
+                entry for entry in entries if entry.started_at <= observation.timestamp
+            ]
+            if not present_entries:
+                continue
+            response_entries = [
+                entry
+                for entry in present_entries
+                if entry.context_key is None
+                and entry.output_eligible
+                and (turn_id is None or entry.turn_id == turn_id)
+            ]
+            costs = _allocate_real_token_costs_for_entries(
+                present_entries,
+                observation,
+                output_entries=response_entries,
+            )
+            billed_token_usage = _add_allocated_real_token_cost(
+                billed_token_usage,
+                _allocated_cost_from_usage_observation(observation),
+            )
+            for entry_id, cost in costs.items():
+                context_key = context_entry_ids.get(entry_id)
+                if context_key is not None:
+                    allocated_by_context_key[context_key] = (
+                        _add_allocated_real_token_cost(
+                            allocated_by_context_key.get(context_key),
+                            cost,
+                        )
+                    )
+                    continue
+                allocated_by_item[entry_id] = _add_allocated_real_token_cost(
+                    allocated_by_item.get(entry_id),
+                    cost,
+                )
+
+    allocated_usage_by_item = {
+        item_id: usage
+        for item_id, cost in allocated_by_item.items()
+        if (usage := _allocated_cost_usage_dict(cost))
+    }
+    allocated_usage_by_context_source = {
+        key: usage
+        for key, cost in allocated_by_context_key.items()
+        if (usage := _allocated_cost_usage_dict(cost))
+    }
+    assert _sum_usage_dicts(
+        (
+            _sum_usage_dicts(allocated_usage_by_item.values()),
+            _sum_usage_dicts(allocated_usage_by_context_source.values()),
+        )
+    ) == _allocated_cost_usage_dict(
+        billed_token_usage
+    ), "session stats attribution must reconcile to billed token usage"
+    return {
+        "allocated_usage_by_item": allocated_usage_by_item,
+        "allocated_usage_by_context_source": allocated_usage_by_context_source,
+        "billed_token_usage": _allocated_cost_usage_dict(billed_token_usage),
+    }
+
+
 def _sum_item_real_token_costs(
     items: list[ItemRealTokenCostFlat],
 ) -> AllocatedRealTokenCost | None:
@@ -307,12 +388,43 @@ def _turn_usage_observations(
 class _ItemCostEntry:
     item_id: UUID
     session_id: UUID
-    turn_id: UUID
+    turn_id: UUID | None
     sequence: int
     started_at: datetime
     kind: str
     visible_tokens: int
     output_eligible: bool = False
+    context_key: str | None = None
+
+
+def _stats_cost_entries_for_session(session: Session) -> list[_ItemCostEntry]:
+    entries: list[_ItemCostEntry] = []
+    for source_index, source in enumerate(session.context_sources):
+        size = visible_text_size(source.text)
+        if size.tokens <= 0:
+            continue
+        entries.append(
+            _ItemCostEntry(
+                item_id=uuid5(
+                    session.session_id,
+                    "context_source:"
+                    f"{source_index}:{source.key}:{source.timestamp.isoformat()}",
+                ),
+                session_id=session.session_id,
+                turn_id=None,
+                sequence=-2,
+                started_at=source.timestamp,
+                kind="context_source",
+                visible_tokens=size.tokens,
+                context_key=source.key,
+            )
+        )
+    entries.extend(
+        entry
+        for turn in sorted(session.turns, key=lambda item: item.sequence)
+        for entry in _item_cost_entries_for_turn(session, turn)
+    )
+    return entries
 
 
 def _build_item_real_token_costs_for_session(
@@ -421,6 +533,28 @@ def _resident_expected_usage(observation: TokenUsageObservation) -> dict[str, in
         "total_tokens": total_tokens,
     }
     return {key: value for key, value in usage_dict.items() if value > 0}
+
+
+def _allocated_cost_from_usage_observation(
+    observation: TokenUsageObservation,
+) -> AllocatedRealTokenCost:
+    usage = observation.usage
+    uncached_input_tokens = _effective_input_token_total(usage, observation)
+    return AllocatedRealTokenCost(
+        input_tokens=usage.input_tokens,
+        uncached_input_tokens=uncached_input_tokens,
+        cached_input_tokens=usage.cached_input_tokens,
+        cache_creation_input_tokens=usage.cache_creation_input_tokens,
+        output_tokens=usage.output_tokens,
+        reasoning_output_tokens=usage.reasoning_output_tokens,
+        total_tokens=(
+            uncached_input_tokens
+            + usage.cached_input_tokens
+            + usage.cache_creation_input_tokens
+            + usage.output_tokens
+            + usage.reasoning_output_tokens
+        ),
+    )
 
 
 def _allocated_cost_usage_dict(

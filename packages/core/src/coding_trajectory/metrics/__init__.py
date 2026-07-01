@@ -1,6 +1,7 @@
 """Derived execution metrics."""
 
 from coding_trajectory.metrics.analysis import (
+    build_session_graph_stats_token_usage,
     build_session_graph_context_stats,
     build_session_graph_full_metrics,
     build_session_graph_metrics,
@@ -64,6 +65,7 @@ __all__ = [
     "build_session_graph_context_stats",
     "build_session_graph_full_metrics",
     "build_session_graph_metrics",
+    "build_session_graph_stats_token_usage",
     "build_session_graph_runtime",
     "build_session_graph_tool_usage",
     "build_session_graph_usage",
