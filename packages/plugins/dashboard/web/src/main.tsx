@@ -68,12 +68,22 @@ const sessionsRoute = createRoute({
 const modelUsageRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/model-usage",
-  validateSearch: (search: Record<string, unknown>): { sinceDays: number | undefined; projectName: string | undefined } => ({
+  validateSearch: (search: Record<string, unknown>): {
+    sinceDays: number | undefined;
+    projectName: string | undefined;
+    modelKey: string | undefined;
+    view: "overview" | "cost" | "tokens" | "time" | undefined;
+  } => ({
     sinceDays:
       search.sinceDays != null && !Number.isNaN(Number(search.sinceDays))
         ? Number(search.sinceDays)
         : undefined,
     projectName: typeof search.projectName === "string" ? search.projectName : undefined,
+    modelKey: typeof search.modelKey === "string" ? search.modelKey : undefined,
+    view:
+      search.view === "cost" || search.view === "tokens" || search.view === "time" || search.view === "overview"
+        ? search.view
+        : undefined,
   }),
   component: () => <RouteBoundary><ModelUsageRoute /></RouteBoundary>,
 });

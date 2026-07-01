@@ -25,7 +25,7 @@ export function AppShell() {
             <Link to="/" className="rounded-md px-3 py-1.5 font-medium text-muted-foreground [&.active]:bg-primary [&.active]:text-primary-foreground">
               Overview
             </Link>
-            <Link to="/model-usage" search={{ sinceDays: 7, projectName: undefined }} className="rounded-md px-3 py-1.5 font-medium text-muted-foreground [&.active]:bg-primary [&.active]:text-primary-foreground">
+            <Link to="/model-usage" search={{ sinceDays: 7, projectName: undefined, modelKey: undefined, view: undefined }} className="rounded-md px-3 py-1.5 font-medium text-muted-foreground [&.active]:bg-primary [&.active]:text-primary-foreground">
               Model usage
             </Link>
             <Link to="/error-collection" search={{ sinceDays: 7, projectName: undefined }} className="rounded-md px-3 py-1.5 font-medium text-muted-foreground [&.active]:bg-primary [&.active]:text-primary-foreground">

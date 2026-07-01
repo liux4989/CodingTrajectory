@@ -24,6 +24,7 @@ TOKEN_KEYS = (
 class ModelUsageFilters(BaseModel):
     since_days: int = Field(default=7, ge=1)
     project_name: str | None = None
+    model_key: str | None = None
 
 
 def build_projection(
@@ -31,8 +32,13 @@ def build_projection(
     ct_json: Callable[[list[str]], dict[str, Any]],
     since_days: int = 7,
     project_name: str | None = None,
+    model_key: str | None = None,
 ) -> dict[str, Any]:
-    filters = ModelUsageFilters(since_days=since_days, project_name=project_name)
+    filters = ModelUsageFilters(
+        since_days=since_days,
+        project_name=project_name,
+        model_key=model_key,
+    )
     projects_payload = ct_json(
         ["project", "list", "--params", "{}", "--output", "json"]
     )
@@ -53,21 +59,35 @@ def build_projection(
         if item.get("root_session_id") or item.get("id")
     ]
     usage_payloads = _model_usage_batch(ct_json, session_ids)
-    session_rows = [_session_row(payload) for payload in usage_payloads]
+    all_session_rows = [_session_row(payload) for payload in usage_payloads]
+    model_options = _model_options(_model_rows(all_session_rows))
+    session_rows = _filter_session_rows_by_model(
+        all_session_rows,
+        filters.model_key,
+    )
     model_rows = _model_rows(session_rows)
     turn_rows = _turn_rows(session_rows)
     total_cost = sum(_number(row["estimated_cost_usd"]) for row in session_rows)
     total_tokens = sum(_usage_total(row.get("usage")) for row in session_rows)
+    total_elapsed_seconds = sum(int(_number(row.get("elapsed_seconds"))) for row in session_rows)
 
     return {
         "schema_version": 1,
         "filters": filters.model_dump(mode="json"),
         "project_options": projects,
+        "model_options": model_options,
         "summary": {
             "sessions": len(session_rows),
             "turns": len(turn_rows),
             "models": len(model_rows),
             "total_tokens": total_tokens,
+            "total_elapsed_seconds": total_elapsed_seconds,
+            "avg_tokens_per_session": _safe_div(total_tokens, len(session_rows)),
+            "avg_tokens_per_turn": _safe_div(total_tokens, len(turn_rows)),
+            "avg_elapsed_seconds_per_session": _safe_div(
+                total_elapsed_seconds,
+                len(session_rows),
+            ),
             "estimated_cost_usd": round(total_cost, 8),
             "missing_price_count": sum(
                 1
@@ -170,6 +190,10 @@ def _session_row(payload: dict[str, Any]) -> dict[str, Any]:
         "vendor": payload.get("vendor"),
         "started_at": payload.get("started_at"),
         "completed_at": payload.get("completed_at"),
+        "elapsed_seconds": _elapsed_seconds(
+            payload.get("started_at"),
+            payload.get("completed_at"),
+        ),
         "usage": payload.get("usage") or {},
         "context": payload.get("context"),
         "dominant_model": payload.get("dominant_model"),
@@ -178,6 +202,36 @@ def _session_row(payload: dict[str, Any]) -> dict[str, Any]:
         "turns": turns,
         "warnings": payload.get("warnings") or [],
     }
+
+
+def _filter_session_rows_by_model(
+    session_rows: list[dict[str, Any]],
+    model_key: str | None,
+) -> list[dict[str, Any]]:
+    if not model_key:
+        return session_rows
+    rows: list[dict[str, Any]] = []
+    for session in session_rows:
+        models = [row for row in session["models"] if row.get("model_key") == model_key]
+        if not models:
+            continue
+        turns = [row for row in session["turns"] if row.get("model_key") == model_key]
+        usage = _empty_usage()
+        total_cost = 0.0
+        for row in models:
+            _add_usage(usage, row.get("usage") or {})
+            total_cost += _number(row.get("estimated_cost_usd"))
+        rows.append(
+            {
+                **session,
+                "usage": usage,
+                "dominant_model": _dominant_model(models),
+                "estimated_cost_usd": round(total_cost, 8),
+                "models": models,
+                "turns": turns,
+            }
+        )
+    return rows
 
 
 def _priced_model(row: dict[str, Any]) -> dict[str, Any]:
@@ -261,6 +315,32 @@ def _model_rows(session_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ),
         reverse=True,
     )
+
+
+def _model_options(model_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "model_key": row["model_key"],
+            "provider": row.get("provider"),
+            "model": row.get("model"),
+            "sessions": row.get("sessions"),
+            "turns": row.get("turns"),
+            "usage": row.get("usage") or {},
+            "estimated_cost_usd": row.get("estimated_cost_usd"),
+        }
+        for row in model_rows
+    ]
+
+
+def _dominant_model(models: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not models:
+        return None
+    row = max(models, key=lambda item: _usage_total(item.get("usage")))
+    return {
+        "provider": row.get("provider"),
+        "model": row.get("model"),
+        "basis": "filtered_usage",
+    }
 
 
 def _turn_rows(session_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -376,6 +456,15 @@ def _parse_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed
+
+
+def _elapsed_seconds(started_at: Any, completed_at: Any) -> int:
+    start = _parse_datetime(started_at)
+    end = _parse_datetime(completed_at)
+    if start is None or end is None:
+        return 0
+    seconds = int((end - start).total_seconds())
+    return max(0, seconds)
 
 
 def _top_model_by_sessions(rows: list[dict[str, Any]]) -> str | None:

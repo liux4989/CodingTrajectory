@@ -206,6 +206,7 @@ class DashboardDataService:
             ct_json=_ct_json,
             since_days=_int(query, "since_days", 7),
             project_name=_first(query, "project_name"),
+            model_key=_first(query, "model_key"),
         )
 
     def error_collection(self, query: dict[str, list[str]]) -> dict[str, Any]:

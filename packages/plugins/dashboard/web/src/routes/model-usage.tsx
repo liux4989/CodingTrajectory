@@ -11,14 +11,15 @@ import {
   type ModelUsageTurn,
   type UsageBuckets,
 } from "@/api";
+import { DataTable } from "@/components/data-table";
 import { MetricCard } from "@/components/metric-card";
 import { RefreshButton } from "@/components/refresh-button";
 import { RouteHeader } from "@/components/route-header";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { DataTable } from "@/components/data-table";
 import {
   Select,
   SelectContent,
@@ -30,16 +31,27 @@ import { MetricSkeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 const ALL_PROJECTS = "__all_projects__";
+const ALL_MODELS = "__all_models__";
 const TIME_OPTIONS = [7, 14, 30, 90];
+const VIEW_OPTIONS = [
+  { value: "overview", label: "Overview" },
+  { value: "cost", label: "Cost" },
+  { value: "tokens", label: "Tokens" },
+  { value: "time", label: "Time" },
+] as const;
+
+type UsageView = (typeof VIEW_OPTIONS)[number]["value"];
 
 export function ModelUsageRoute() {
   const search = useSearch({ from: "/model-usage" });
   const navigate = useNavigate({ from: "/model-usage" });
   const sinceDays = search.sinceDays ?? 7;
   const projectName = search.projectName ?? null;
+  const modelKey = search.modelKey ?? null;
+  const view = search.view ?? "overview";
   const query = useQuery({
-    queryKey: ["model-usage", sinceDays, projectName],
-    queryFn: () => fetchModelUsage({ sinceDays, projectName }),
+    queryKey: ["model-usage", sinceDays, projectName, modelKey],
+    queryFn: () => fetchModelUsage({ sinceDays, projectName, modelKey }),
   });
 
   const setSinceDays = (value: string) => {
@@ -50,6 +62,22 @@ export function ModelUsageRoute() {
       search: (current) => ({
         ...current,
         projectName: value === ALL_PROJECTS ? undefined : value,
+      }),
+    });
+  };
+  const setModelKey = (value: string) => {
+    void navigate({
+      search: (current) => ({
+        ...current,
+        modelKey: value === ALL_MODELS ? undefined : value,
+      }),
+    });
+  };
+  const setView = (nextView: UsageView) => {
+    void navigate({
+      search: (current) => ({
+        ...current,
+        view: nextView === "overview" ? undefined : nextView,
       }),
     });
   };
@@ -75,12 +103,12 @@ export function ModelUsageRoute() {
     <div className="mx-auto grid w-full min-w-0 max-w-[96rem] gap-5 overflow-hidden">
       <RouteHeader
         eyebrow="Model economics"
-        title="Model usage and relative session cost"
+        title="Model usage overview"
         action={<RefreshButton queries={["model-usage"]} />}
       />
 
       <Card className="min-w-0">
-        <CardContent className="flex flex-wrap items-center gap-3 pt-6">
+        <CardContent className="flex flex-wrap items-end gap-3 pt-6">
           <FilterLabel label="Time limit">
             <Select value={String(sinceDays)} onValueChange={setSinceDays}>
               <SelectTrigger className="min-w-[10rem]">
@@ -110,15 +138,87 @@ export function ModelUsageRoute() {
               </SelectContent>
             </Select>
           </FilterLabel>
+          <FilterLabel label="Model">
+            <Select value={modelKey ?? ALL_MODELS} onValueChange={setModelKey}>
+              <SelectTrigger className="min-w-[18rem] max-w-[30rem]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_MODELS}>All models</SelectItem>
+                {data.model_options.map((model) => (
+                  <SelectItem key={model.model_key} value={model.model_key}>
+                    {model.model_key}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FilterLabel>
+          <nav className="flex flex-wrap gap-2" aria-label="Model usage views">
+            {VIEW_OPTIONS.map((option) => (
+              <Button
+                key={option.value}
+                type="button"
+                size="sm"
+                variant={view === option.value ? "default" : "outline"}
+                onClick={() => setView(option.value)}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </nav>
         </CardContent>
       </Card>
 
-      <SummaryCards data={data} />
-      <ModelTable data={data} />
-      <TimeBuckets data={data} />
-      <SessionTable data={data} />
-      <TurnTable data={data} />
+      {view === "overview" ? <OverviewView data={data} /> : null}
+      {view === "cost" ? <CostView data={data} /> : null}
+      {view === "tokens" ? <TokensView data={data} /> : null}
+      {view === "time" ? <TimeView data={data} /> : null}
     </div>
+  );
+}
+
+function OverviewView({ data }: { data: ModelUsagePayload }) {
+  return (
+    <>
+      <SummaryCards data={data} view="overview" />
+      <ModelTable data={data} view="overview" />
+      <TimeBuckets data={data} view="cost" />
+      <SessionTable data={data} view="cost" />
+      <TurnTable data={data} view="cost" />
+    </>
+  );
+}
+
+function CostView({ data }: { data: ModelUsagePayload }) {
+  return (
+    <>
+      <SummaryCards data={data} view="cost" />
+      <ModelTable data={data} view="cost" />
+      <TimeBuckets data={data} view="cost" />
+      <SessionTable data={data} view="cost" />
+      <TurnTable data={data} view="cost" />
+    </>
+  );
+}
+
+function TokensView({ data }: { data: ModelUsagePayload }) {
+  return (
+    <>
+      <SummaryCards data={data} view="tokens" />
+      <ModelTable data={data} view="tokens" />
+      <TimeBuckets data={data} view="tokens" />
+      <SessionTable data={data} view="tokens" />
+      <TurnTable data={data} view="tokens" />
+    </>
+  );
+}
+
+function TimeView({ data }: { data: ModelUsagePayload }) {
+  return (
+    <>
+      <SummaryCards data={data} view="time" />
+      <SessionTable data={data} view="time" />
+    </>
   );
 }
 
@@ -131,7 +231,27 @@ function FilterLabel({ label, children }: { label: string; children: React.React
   );
 }
 
-function SummaryCards({ data }: { data: ModelUsagePayload }) {
+function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView }) {
+  if (view === "tokens") {
+    return (
+      <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
+        <MetricCard label="Total Tokens" value={compactNumber(data.summary.total_tokens)} detail={`${data.summary.sessions.toLocaleString()} sessions`} />
+        <MetricCard label="Avg Session Tokens" value={compactNumber(data.summary.avg_tokens_per_session)} detail={`${compactNumber(data.summary.avg_tokens_per_turn)} per turn`} />
+        <MetricCard label="Turns" value={compactNumber(data.summary.turns)} detail={`${data.summary.models.toLocaleString()} models in scope`} />
+        <MetricCard label="Estimated Cost" value={formatCost(data.summary.estimated_cost_usd)} detail="Shown for pricing context only" />
+      </section>
+    );
+  }
+  if (view === "time") {
+    return (
+      <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
+        <MetricCard label="Elapsed Time" value={formatDuration(data.summary.total_elapsed_seconds)} detail={`${data.summary.sessions.toLocaleString()} completed sessions`} />
+        <MetricCard label="Avg Session Time" value={formatDuration(data.summary.avg_elapsed_seconds_per_session)} detail={`${compactNumber(tokensPerMinute(data.summary.total_tokens, data.summary.total_elapsed_seconds))} tokens/min`} />
+        <MetricCard label="Turns" value={compactNumber(data.summary.turns)} detail={`${compactNumber(data.summary.total_tokens)} filtered tokens`} />
+        <MetricCard label="Models" value={data.summary.models} detail="Elapsed time is session-level" />
+      </section>
+    );
+  }
   return (
     <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
       <MetricCard
@@ -158,75 +278,102 @@ function SummaryCards({ data }: { data: ModelUsagePayload }) {
   );
 }
 
-const modelColumns: ColumnDef<ModelUsageModel>[] = [
-  {
-    accessorKey: "model_key",
-    header: () => <HeaderLabel>Model</HeaderLabel>,
-    cell: ({ getValue }) => <span className="font-medium">{getValue<string>()}</span>,
-  },
-  {
-    accessorKey: "sessions",
-    header: () => <HeaderLabel>Sessions</HeaderLabel>,
-    cell: ({ getValue }) => getValue<number>().toLocaleString(),
-  },
-  {
-    accessorKey: "turns",
-    header: () => <HeaderLabel>Turns</HeaderLabel>,
-    cell: ({ getValue }) => getValue<number>().toLocaleString(),
-  },
-  {
-    id: "tokens",
-    accessorFn: (row) => totalTokens(row.usage),
-    header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
-    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
-  },
-  {
-    accessorKey: "estimated_cost_usd",
-    header: () => <HeaderLabel align="right">Total Cost</HeaderLabel>,
-    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
-  },
-  {
-    accessorKey: "avg_session_cost_usd",
-    header: () => <HeaderLabel align="right">Avg Session</HeaderLabel>,
-    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
-  },
-  {
-    accessorKey: "avg_turn_cost_usd",
-    header: () => <HeaderLabel align="right">Avg Turn</HeaderLabel>,
-    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
-  },
-  {
-    id: "pricing",
-    accessorFn: (row) => row.pricing.confidence,
-    header: () => <HeaderLabel>Pricing</HeaderLabel>,
-    cell: ({ getValue }) => {
-      const confidence = getValue<string>();
-      return (
-        <Badge variant={confidence === "estimated" ? "default" : "secondary"}>
-          {confidence === "estimated" ? "estimated" : "missing price"}
-        </Badge>
-      );
+function modelColumns(view: UsageView): ColumnDef<ModelUsageModel>[] {
+  const tokenBucketColumns: ColumnDef<ModelUsageModel>[] = [
+    tokenColumn("input_tokens", "Input"),
+    tokenColumn("cached_input_tokens", "Cached"),
+    tokenColumn("output_tokens", "Output"),
+    tokenColumn("reasoning_output_tokens", "Reasoning"),
+  ];
+  return [
+    {
+      accessorKey: "model_key",
+      header: () => <HeaderLabel>Model</HeaderLabel>,
+      cell: ({ getValue }) => <span className="font-medium">{getValue<string>()}</span>,
     },
-  },
-];
+    {
+      accessorKey: "sessions",
+      header: () => <HeaderLabel>Sessions</HeaderLabel>,
+      cell: ({ getValue }) => getValue<number>().toLocaleString(),
+    },
+    {
+      accessorKey: "turns",
+      header: () => <HeaderLabel>Turns</HeaderLabel>,
+      cell: ({ getValue }) => getValue<number>().toLocaleString(),
+    },
+    ...(view === "tokens" ? tokenBucketColumns : []),
+    {
+      id: "tokens",
+      accessorFn: (row) => totalTokens(row.usage),
+      header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
+      cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+    },
+    {
+      accessorKey: "estimated_cost_usd",
+      header: () => <HeaderLabel align="right">Total Cost</HeaderLabel>,
+      cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+    },
+    ...(view === "tokens"
+      ? []
+      : [
+          {
+            accessorKey: "avg_session_cost_usd",
+            header: () => <HeaderLabel align="right">Avg Session</HeaderLabel>,
+            cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+          } satisfies ColumnDef<ModelUsageModel>,
+          {
+            accessorKey: "avg_turn_cost_usd",
+            header: () => <HeaderLabel align="right">Avg Turn</HeaderLabel>,
+            cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+          } satisfies ColumnDef<ModelUsageModel>,
+        ]),
+    {
+      id: "pricing",
+      accessorFn: (row) => row.pricing.confidence,
+      header: () => <HeaderLabel>Pricing</HeaderLabel>,
+      cell: ({ getValue }) => {
+        const confidence = getValue<string>();
+        return (
+          <Badge variant={confidence === "estimated" ? "default" : "secondary"}>
+            {confidence === "estimated" ? "estimated" : "missing price"}
+          </Badge>
+        );
+      },
+    },
+  ];
+}
 
-function ModelTable({ data }: { data: ModelUsagePayload }) {
+function tokenColumn(key: keyof UsageBuckets, label: string): ColumnDef<ModelUsageModel> {
+  return {
+    id: key,
+    accessorFn: (row) => row.usage[key] ?? 0,
+    header: () => <HeaderLabel align="right">{label}</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+  };
+}
+
+function ModelTable({ data, view }: { data: ModelUsagePayload; view: UsageView }) {
+  const rows = React.useMemo(
+    () => [...data.models].sort((left, right) => sortByLens(left, right, view)),
+    [data.models, view],
+  );
+  const columns = React.useMemo(() => modelColumns(view), [view]);
   const table = useReactTable({
-    data: data.models,
-    columns: modelColumns,
+    data: rows,
+    columns,
     getCoreRowModel: getCoreRowModel(),
   });
 
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="font-display text-xl tracking-tight">Model Mix</CardTitle>
-        <CardDescription>Cost is estimated in the dashboard from observed core usage buckets.</CardDescription>
+        <CardTitle className="font-display text-xl tracking-tight">Model Mix{view === "overview" ? "" : ` by ${viewLabel(view)}`}</CardTitle>
+        <CardDescription>{modelTableDescription(view)}</CardDescription>
       </CardHeader>
       <CardContent>
         <DataTable
           table={table}
-          columnCount={modelColumns.length}
+          columnCount={columns.length}
           emptyMessage="No model usage found for this scope."
         />
       </CardContent>
@@ -234,17 +381,20 @@ function ModelTable({ data }: { data: ModelUsagePayload }) {
   );
 }
 
-function TimeBuckets({ data }: { data: ModelUsagePayload }) {
+function TimeBuckets({ data, view }: { data: ModelUsagePayload; view: "cost" | "tokens" }) {
   const [grain, setGrain] = React.useState("daily");
   const rows = data.time_buckets[grain] ?? [];
-  const topRows = rows.slice(-18);
-  const maxCost = Math.max(...topRows.map((row) => row.estimated_cost_usd), 0);
+  const topRows = React.useMemo(
+    () => [...rows].sort((left, right) => bucketValue(right, view) - bucketValue(left, view)).slice(0, 18),
+    [rows, view],
+  );
+  const maxValue = Math.max(...topRows.map((row) => bucketValue(row, view)), 0);
 
   return (
     <Card className="min-w-0">
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
         <div>
-          <CardTitle className="font-display text-xl tracking-tight">Cost Over Time</CardTitle>
+          <CardTitle className="font-display text-xl tracking-tight">{view === "tokens" ? "Tokens Over Time" : "Cost Over Time"}</CardTitle>
           <CardDescription>Grouped by model and selected time grain.</CardDescription>
         </div>
         <Select value={grain} onValueChange={setGrain}>
@@ -261,22 +411,25 @@ function TimeBuckets({ data }: { data: ModelUsagePayload }) {
       </CardHeader>
       <CardContent className="grid gap-3">
         {topRows.length ? (
-          topRows.map((row) => (
-            <div key={`${row.bucket}-${row.model_key}`} className="grid gap-1">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-body-sm">
-                <span className="font-medium">{row.bucket}</span>
-                <span className="text-muted-foreground">
-                  {row.model_key} · {row.turns} turns · {formatCost(row.estimated_cost_usd)}
-                </span>
+          topRows.map((row) => {
+            const value = bucketValue(row, view);
+            return (
+              <div key={`${row.bucket}-${row.model_key}`} className="grid gap-1">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-body-sm">
+                  <span className="font-medium">{row.bucket}</span>
+                  <span className="text-muted-foreground">
+                    {row.model_key} · {row.turns} turns · {view === "tokens" ? `${compactNumber(value)} tokens` : formatCost(value)}
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded bg-muted">
+                  <div
+                    className="h-full rounded bg-primary"
+                    style={{ width: `${maxValue ? Math.max(4, (value / maxValue) * 100) : 0}%` }}
+                  />
+                </div>
               </div>
-              <div className="h-2 overflow-hidden rounded bg-muted">
-                <div
-                  className="h-full rounded bg-primary"
-                  style={{ width: `${maxCost ? Math.max(4, (row.estimated_cost_usd / maxCost) * 100) : 0}%` }}
-                />
-              </div>
-            </div>
-          ))
+            );
+          })
         ) : (
           <StateBlock title="No time buckets" detail="No turn timestamps were available in this scope." />
         )}
@@ -285,65 +438,87 @@ function TimeBuckets({ data }: { data: ModelUsagePayload }) {
   );
 }
 
-const sessionColumns: ColumnDef<ModelUsageSession>[] = [
-  {
-    id: "session",
-    header: () => <HeaderLabel>Session</HeaderLabel>,
-    cell: ({ row }) => (
-      <div className="max-w-[24rem]">
-        <SessionLink sessionId={row.original.id}>
-          {row.original.title || shortSessionId(row.original.id)}
-        </SessionLink>
-      </div>
-    ),
-  },
-  {
-    id: "project",
-    accessorFn: (row) => row.project ?? "unknown",
-    header: () => <HeaderLabel>Project</HeaderLabel>,
-  },
-  {
-    id: "dominant_model",
-    accessorFn: (row) => modelLabel(row.dominant_model),
-    header: () => <HeaderLabel>Dominant Model</HeaderLabel>,
-  },
-  {
-    id: "context",
-    accessorFn: (row) => formatPercent(row.context?.max_used_percent),
-    header: () => <HeaderLabel align="right">Context</HeaderLabel>,
-    cell: ({ getValue }) => <RightCell>{getValue<string>()}</RightCell>,
-  },
-  {
-    id: "tokens",
-    accessorFn: (row) => totalTokens(row.usage),
-    header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
-    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
-  },
-  {
-    accessorKey: "estimated_cost_usd",
-    header: () => <HeaderLabel align="right">Cost</HeaderLabel>,
-    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
-  },
-];
+function sessionColumns(view: UsageView): ColumnDef<ModelUsageSession>[] {
+  return [
+    {
+      id: "session",
+      header: () => <HeaderLabel>Session</HeaderLabel>,
+      cell: ({ row }) => (
+        <div className="max-w-[24rem]">
+          <SessionLink sessionId={row.original.id}>
+            {row.original.title || shortSessionId(row.original.id)}
+          </SessionLink>
+        </div>
+      ),
+    },
+    {
+      id: "project",
+      accessorFn: (row) => row.project ?? "unknown",
+      header: () => <HeaderLabel>Project</HeaderLabel>,
+    },
+    {
+      id: "dominant_model",
+      accessorFn: (row) => modelLabel(row.dominant_model),
+      header: () => <HeaderLabel>Dominant Model</HeaderLabel>,
+    },
+    ...(view === "time"
+      ? [
+          {
+            accessorKey: "elapsed_seconds",
+            header: () => <HeaderLabel align="right">Elapsed</HeaderLabel>,
+            cell: ({ getValue }) => <RightCell>{formatDuration(getValue<number>())}</RightCell>,
+          } satisfies ColumnDef<ModelUsageSession>,
+          {
+            id: "tokens_per_min",
+            accessorFn: (row) => tokensPerMinute(totalTokens(row.usage), row.elapsed_seconds),
+            header: () => <HeaderLabel align="right">Tokens/Min</HeaderLabel>,
+            cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+          } satisfies ColumnDef<ModelUsageSession>,
+        ]
+      : [
+          {
+            id: "context",
+            accessorFn: (row) => formatPercent(row.context?.max_used_percent),
+            header: () => <HeaderLabel align="right">Context</HeaderLabel>,
+            cell: ({ getValue }) => <RightCell>{getValue<string>()}</RightCell>,
+          } satisfies ColumnDef<ModelUsageSession>,
+        ]),
+    {
+      id: "tokens",
+      accessorFn: (row) => totalTokens(row.usage),
+      header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
+      cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+    },
+    {
+      accessorKey: "estimated_cost_usd",
+      header: () => <HeaderLabel align="right">Cost</HeaderLabel>,
+      cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+    },
+  ];
+}
 
-function SessionTable({ data }: { data: ModelUsagePayload }) {
-  const rows = React.useMemo(() => data.sessions.slice(0, 50), [data.sessions]);
+function SessionTable({ data, view }: { data: ModelUsagePayload; view: UsageView }) {
+  const rows = React.useMemo(
+    () => [...data.sessions].sort((left, right) => sortByLens(left, right, view)).slice(0, 50),
+    [data.sessions, view],
+  );
+  const columns = React.useMemo(() => sessionColumns(view), [view]);
   const table = useReactTable({
     data: rows,
-    columns: sessionColumns,
+    columns,
     getCoreRowModel: getCoreRowModel(),
   });
 
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="font-display text-xl tracking-tight">Sessions</CardTitle>
-        <CardDescription>Progressive drilldown from session cost to dominant model and context usage.</CardDescription>
+        <CardTitle className="font-display text-xl tracking-tight">{view === "time" ? "Slowest Sessions" : "Sessions"}</CardTitle>
+        <CardDescription>{sessionTableDescription(view)}</CardDescription>
       </CardHeader>
       <CardContent>
         <DataTable
           table={table}
-          columnCount={sessionColumns.length}
+          columnCount={columns.length}
           emptyMessage="No sessions found for this scope."
         />
       </CardContent>
@@ -389,8 +564,11 @@ const turnColumns: ColumnDef<ModelUsageTurn>[] = [
   },
 ];
 
-function TurnTable({ data }: { data: ModelUsagePayload }) {
-  const rows = React.useMemo(() => data.turns.slice(0, 30), [data.turns]);
+function TurnTable({ data, view }: { data: ModelUsagePayload; view: "cost" | "tokens" }) {
+  const rows = React.useMemo(
+    () => [...data.turns].sort((left, right) => sortByLens(left, right, view)).slice(0, 30),
+    [data.turns, view],
+  );
   const table = useReactTable({
     data: rows,
     columns: turnColumns,
@@ -401,9 +579,9 @@ function TurnTable({ data }: { data: ModelUsagePayload }) {
     <Card className="min-w-0">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 font-display text-xl tracking-tight">
-          <BarChart3 size={18} /> Expensive Turns
+          <BarChart3 size={18} /> {view === "tokens" ? "Largest Token Turns" : "Expensive Turns"}
         </CardTitle>
-        <CardDescription>Top turns by estimated cost, capped to the first 200 rows from the backend.</CardDescription>
+        <CardDescription>{view === "tokens" ? "Top turns by observed token volume." : "Top turns by estimated cost, capped to the first 200 rows from the backend."}</CardDescription>
       </CardHeader>
       <CardContent>
         <DataTable
@@ -443,6 +621,43 @@ function totalTokens(usage: UsageBuckets) {
   return usage.total_tokens ?? 0;
 }
 
+function bucketValue(row: ModelUsagePayload["time_buckets"][string][number], view: "cost" | "tokens") {
+  return view === "tokens" ? totalTokens(row.usage) : row.estimated_cost_usd;
+}
+
+function sortByLens<T extends { usage: UsageBuckets; estimated_cost_usd: number; elapsed_seconds?: number }>(
+  left: T,
+  right: T,
+  view: UsageView | "cost" | "tokens",
+) {
+  if (view === "tokens") return totalTokens(right.usage) - totalTokens(left.usage);
+  if (view === "time") return (right.elapsed_seconds ?? 0) - (left.elapsed_seconds ?? 0);
+  return right.estimated_cost_usd - left.estimated_cost_usd;
+}
+
+function tokensPerMinute(tokens: number, seconds: number) {
+  if (seconds <= 0) return 0;
+  return Math.round((tokens / seconds) * 60);
+}
+
+function viewLabel(view: UsageView) {
+  if (view === "tokens") return "Tokens";
+  if (view === "time") return "Time";
+  return "Cost";
+}
+
+function modelTableDescription(view: UsageView) {
+  if (view === "tokens") return "Model-price-neutral token volume with bucket breakdown.";
+  if (view === "cost") return "Cost is estimated in the dashboard from observed core usage buckets.";
+  return "Cost, volume, and pricing status across models in the selected scope.";
+}
+
+function sessionTableDescription(view: UsageView) {
+  if (view === "time") return "Elapsed time is session-level; token and cost columns reflect the selected model filter.";
+  if (view === "tokens") return "Sessions ranked by observed token volume for the selected scope.";
+  return "Progressive drilldown from session cost to dominant model and context usage.";
+}
+
 function compactNumber(value: number) {
   return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
@@ -453,6 +668,16 @@ function formatCost(value: number) {
     currency: "USD",
     maximumFractionDigits: value < 0.01 && value > 0 ? 4 : 2,
   }).format(value);
+}
+
+function formatDuration(value: number) {
+  const seconds = Math.max(0, Math.round(value));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
+  return `${remainingSeconds}s`;
 }
 
 function formatPercent(value?: number | null) {

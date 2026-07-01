@@ -275,6 +275,16 @@ export type ModelUsageModel = {
   pricing: ModelUsagePricing;
 };
 
+export type ModelUsageOption = {
+  provider: string | null;
+  model: string | null;
+  model_key: string;
+  sessions: number;
+  turns: number;
+  usage: UsageBuckets;
+  estimated_cost_usd: number;
+};
+
 export type ModelUsageSession = {
   id: string;
   project: string | null;
@@ -282,6 +292,7 @@ export type ModelUsageSession = {
   vendor: string | null;
   started_at: string | null;
   completed_at: string | null;
+  elapsed_seconds: number;
   usage: UsageBuckets;
   context: ModelUsageContext | null;
   dominant_model: { provider: string | null; model: string | null; basis: string } | null;
@@ -308,13 +319,18 @@ export type ModelUsageTurn = {
 
 export type ModelUsagePayload = {
   schema_version: 1;
-  filters: { since_days: number; project_name: string | null };
+  filters: { since_days: number; project_name: string | null; model_key: string | null };
   project_options: ProjectItem[];
+  model_options: ModelUsageOption[];
   summary: {
     sessions: number;
     turns: number;
     models: number;
     total_tokens: number;
+    total_elapsed_seconds: number;
+    avg_tokens_per_session: number;
+    avg_tokens_per_turn: number;
+    avg_elapsed_seconds_per_session: number;
     estimated_cost_usd: number;
     missing_price_count: number;
     top_model_by_cost: string | null;
@@ -406,10 +422,11 @@ export async function fetchCleanupPreview(kind: "project" | "session") {
   return fetchJson<CleanupPreview>(`/api/cleanup/${kind}/preview`);
 }
 
-export async function fetchModelUsage(params: { sinceDays?: number; projectName?: string | null }) {
+export async function fetchModelUsage(params: { sinceDays?: number; projectName?: string | null; modelKey?: string | null }) {
   const search = new URLSearchParams();
   search.set("since_days", String(params.sinceDays ?? 7));
   if (params.projectName) search.set("project_name", params.projectName);
+  if (params.modelKey) search.set("model_key", params.modelKey);
   return fetchJson<ModelUsagePayload>(`/api/model-usage?${search}`);
 }
 
