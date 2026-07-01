@@ -125,7 +125,8 @@ export type SessionAnalysis = {
   schema_version: 1;
   session_id: string;
   generated_at: string;
-  source: "codex_app_server_skill";
+  source: "codex_app_server_skill" | "pi_rpc_skill";
+  provider: AnalysisProvider;
   artifact_path: string | null;
   app_server_thread_id: string;
   app_server_turn_id: string | null;
@@ -183,6 +184,8 @@ export type SessionAnalysis = {
     evidence: string[];
   }>;
 };
+
+export type AnalysisProvider = "codex" | "pi";
 
 export type SessionAnalysisResponse = {
   status: "ready";
@@ -256,11 +259,11 @@ export async function fetchContextWindow(sessionId: string) {
   return fetchJson<ContextWindowPayload>(`/api/sessions/context-window?${params}`);
 }
 
-export async function analyzeSession(sessionId: string, refresh = false) {
+export async function analyzeSession(sessionId: string, refresh = false, provider: AnalysisProvider = "codex") {
   return fetchJson<SessionAnalysisResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/analysis`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh }),
+    body: JSON.stringify({ refresh, provider }),
   });
 }
 

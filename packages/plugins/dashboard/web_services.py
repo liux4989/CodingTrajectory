@@ -189,10 +189,14 @@ class DashboardDataService:
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValueError("session_id is required")
         refresh = bool(body.get("refresh"))
+        provider = body.get("provider", "codex")
+        if not isinstance(provider, str):
+            raise ValueError("provider must be codex or pi")
         analysis = session_analysis_mod.build_or_load_analysis(
             session_id.strip(),
             ct_json=_ct_json,
             refresh=refresh,
+            provider=provider,
         )
         return {
             "status": "ready",

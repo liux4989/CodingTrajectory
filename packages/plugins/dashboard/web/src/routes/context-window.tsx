@@ -7,6 +7,7 @@ import { ArrowLeft, Eye, Pin, PinOff, Play, Pause, Maximize, Minimize, Info, Sea
 import {
   analyzeSession,
   fetchContextWindow,
+  type AnalysisProvider,
   type ContextCategory,
   type ContextEvent,
   type SessionAnalysis,
@@ -15,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StateBlock } from "@/components/state-block";
 import { cn } from "@/lib/utils";
 
@@ -125,12 +127,13 @@ function findingTone(kind: SessionAnalysis["findings"][number]["kind"]) {
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
   const router = useRouter();
+  const [analysisProvider, setAnalysisProvider] = React.useState<AnalysisProvider>("codex");
   const query = useQuery({
     queryKey: ["context-window", sessionId],
     queryFn: () => fetchContextWindow(sessionId),
   });
   const analysisMutation = useMutation({
-    mutationFn: (refresh: boolean) => analyzeSession(sessionId, refresh),
+    mutationFn: (refresh: boolean) => analyzeSession(sessionId, refresh, analysisProvider),
   });
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [pinnedId, setPinnedId] = React.useState<string | null>(null);
@@ -182,7 +185,10 @@ export function ContextWindowRoute() {
 
   const activeId = pinnedId ?? selectedId ?? filteredEvents[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
-  const analysis = analysisMutation.data?.analysis ?? null;
+  const analysis =
+    analysisMutation.data?.analysis.provider === analysisProvider
+      ? analysisMutation.data.analysis
+      : null;
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
 
   const combinedSegments = React.useMemo(() => {
@@ -267,7 +273,7 @@ export function ContextWindowRoute() {
             A session showing what enters context and what it costs
           </CardDescription>
           <CardAction>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center justify-end gap-3">
               <div className="text-right">
                 <p className="m-0 font-mono text-heading font-bold leading-none text-moss">
                   ~{formatTokens(payload.used_tokens?.value)} tokens
@@ -276,6 +282,19 @@ export function ContextWindowRoute() {
                   / {formatTokens(payload.context_window_tokens?.value)} · illustrative
                 </p>
               </div>
+              <Select
+                value={analysisProvider}
+                onValueChange={(value) => setAnalysisProvider(value as AnalysisProvider)}
+                disabled={analysisMutation.isPending}
+              >
+                <SelectTrigger size="sm" className="min-w-28">
+                  <SelectValue aria-label="Analysis provider" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="codex">Codex</SelectItem>
+                  <SelectItem value="pi">Pi</SelectItem>
+                </SelectContent>
+              </Select>
               <Button
                 size="sm"
                 variant={analysis ? "secondary" : "default"}
