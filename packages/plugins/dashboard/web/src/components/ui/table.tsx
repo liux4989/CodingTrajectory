@@ -2,6 +2,10 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * Root `<table>`. Wraps the table in a horizontally scrollable container so
+ * wide tables don't blow out their parent.
+ */
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
     <div
@@ -17,6 +21,19 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
   )
 }
 
+/**
+ * `<thead>` — the row-container that wraps the header row(s).
+ *
+ * Usage:
+ *   <TableHeader>
+ *     <TableRow>
+ *       <TableHead>Column</TableHead>   {/* `<th>` cell *\/}
+ *     </TableRow>
+ *   </TableHeader>
+ *
+ * Note: naming follows the shadcn convention where `TableHeader` is the
+ * `<thead>` wrapper and `TableHead` is a `<th>` cell. Don't swap them.
+ */
 function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
   return (
     <thead
@@ -63,6 +80,11 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
   )
 }
 
+/**
+ * `<th>` — a single header cell. Must be placed inside a `TableRow`, which
+ * must be placed inside a `TableHeader` (or `TableBody` for row-grouped
+ * headers).
+ */
 function TableHead({ className, ...props }: React.ComponentProps<"th">) {
   return (
     <th
@@ -112,3 +134,4 @@ export {
   TableCell,
   TableCaption,
 }
+
