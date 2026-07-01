@@ -74,20 +74,17 @@ def normalize_pi_usage(
     cache_read = _as_int_or_none(usage_map.get("cacheRead")) or 0
     cache_write = _as_int_or_none(usage_map.get("cacheWrite")) or 0
     output_tokens = _as_int_or_none(usage_map.get("output")) or 0
-    normalized_usage = {
-        "input_tokens": input_tokens,
-        "cached_input_tokens": cache_read,
-        "cache_creation_input_tokens": cache_write,
-        "output_tokens": output_tokens,
-        "total_tokens": _as_int_or_none(usage_map.get("totalTokens"))
-        or (input_tokens + cache_read + cache_write + output_tokens),
-    }
-    if (cost_usd := _pi_cost_usd(usage_map.get("cost"))) is not None:
-        normalized_usage["cost_usd"] = cost_usd
     return _normalized_usage_metrics(
         model=model,
         provider=provider,
-        usage=normalized_usage,
+        usage={
+            "input_tokens": input_tokens,
+            "cached_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_write,
+            "output_tokens": output_tokens,
+            "total_tokens": _as_int_or_none(usage_map.get("totalTokens"))
+            or (input_tokens + cache_read + cache_write + output_tokens),
+        },
         cumulative_input_tokens=input_tokens + cache_read + cache_write,
     )
 
@@ -195,12 +192,3 @@ def _as_str(value: Any) -> str | None:
 
 def _as_int_or_none(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-
-def _pi_cost_usd(value: Any) -> float | None:
-    if not isinstance(value, dict):
-        return None
-    total = value.get("total")
-    if isinstance(total, int | float) and not isinstance(total, bool):
-        return float(total)
-    return None

@@ -127,7 +127,6 @@ def _parse_usage(message: dict) -> dict | None:
         "cacheRead": usage.get("cacheRead"),
         "cacheWrite": usage.get("cacheWrite"),
         "totalTokens": usage.get("totalTokens"),
-        "cost": usage.get("cost"),
     }
 
 

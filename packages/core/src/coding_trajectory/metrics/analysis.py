@@ -1134,7 +1134,6 @@ def _token_usage_from_mapping(value: dict[str, Any]) -> TokenUsage:
             value.get("reasoning_output_tokens") or value.get("reasoningOutputTokens")
         ),
         total_tokens=_as_int(value.get("total_tokens") or value.get("totalTokens")),
-        cost_usd=_as_float_or_none(value.get("cost_usd") or value.get("costUsd")),
     )
 
 
@@ -1171,9 +1170,3 @@ def _unique(values: list[str]) -> list[str]:
 
 def _as_int(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _as_float_or_none(value: Any) -> float | None:
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return float(value)
-    return None
