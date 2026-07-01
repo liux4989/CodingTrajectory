@@ -101,6 +101,20 @@ def _projection_payload(
     total_elapsed_seconds = sum(
         int(_number(row.get("elapsed_seconds"))) for row in session_rows
     )
+    token_stats = _summary_token_stats(session_rows, turn_rows)
+    cost_stats = {
+        "session": _distribution(
+            [_number(row.get("estimated_cost_usd")) for row in session_rows]
+        ),
+        "turn": _distribution(
+            [_number(row.get("estimated_cost_usd")) for row in turn_rows]
+        ),
+    }
+    elapsed_stats = {
+        "session": _distribution(
+            [_number(row.get("elapsed_seconds")) for row in session_rows]
+        ),
+    }
 
     return {
         "schema_version": 1,
@@ -119,6 +133,9 @@ def _projection_payload(
                 total_elapsed_seconds,
                 len(session_rows),
             ),
+            "token_stats": token_stats,
+            "cost_stats": cost_stats,
+            "elapsed_stats": elapsed_stats,
             "estimated_cost_usd": round(total_cost, 8),
             "missing_price_count": sum(
                 1
@@ -304,6 +321,10 @@ def _priced_turn(row: dict[str, Any], *, session_id: str) -> dict[str, Any]:
 def _model_rows(session_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     session_sets: dict[str, set[str]] = defaultdict(set)
+    session_token_values: dict[str, list[float]] = defaultdict(list)
+    turn_token_values: dict[str, list[float]] = defaultdict(list)
+    session_cost_values: dict[str, list[float]] = defaultdict(list)
+    turn_cost_values: dict[str, list[float]] = defaultdict(list)
     for session in session_rows:
         for row in session["models"]:
             key = row["model_key"]
@@ -323,9 +344,13 @@ def _model_rows(session_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "avg_turn_cost_usd": 0.0,
                     "avg_session_elapsed_seconds": 0.0,
                     "avg_turn_elapsed_seconds": 0.0,
+                    "token_stats": {},
+                    "cost_stats": {},
                 },
             )
             session_sets[key].add(str(session["id"]))
+            session_token_values[key].append(float(_usage_total(row.get("usage"))))
+            session_cost_values[key].append(_number(row.get("estimated_cost_usd")))
             target["turns"] += int(_number(row.get("turns")))
             target["estimated_cost_usd"] += _number(row.get("estimated_cost_usd"))
             target["elapsed_seconds"] += _allocated_model_elapsed_seconds(
@@ -335,6 +360,10 @@ def _model_rows(session_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             _add_usage(target["usage"], row.get("usage") or {})
             if target["pricing"].get("confidence") == "missing_price":
                 target["pricing"] = row.get("pricing") or {}
+        for turn in session["turns"]:
+            key = turn["model_key"]
+            turn_token_values[key].append(float(_usage_total(turn.get("usage"))))
+            turn_cost_values[key].append(_number(turn.get("estimated_cost_usd")))
     for key, target in grouped.items():
         target["sessions"] = len(session_sets[key])
         target["estimated_cost_usd"] = round(target["estimated_cost_usd"], 8)
@@ -352,6 +381,14 @@ def _model_rows(session_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             target["elapsed_seconds"], target["turns"]
         )
         target["usage"]["total_tokens"] = _usage_total(target["usage"])
+        target["token_stats"] = {
+            "session": _distribution(session_token_values.get(key, [])),
+            "turn": _distribution(turn_token_values.get(key, [])),
+        }
+        target["cost_stats"] = {
+            "session": _distribution(session_cost_values.get(key, [])),
+            "turn": _distribution(turn_cost_values.get(key, [])),
+        }
     return sorted(
         grouped.values(),
         key=lambda row: (
@@ -459,6 +496,28 @@ def _bucket_turns(turn_rows: list[dict[str, Any]], grain: str) -> list[dict[str,
         row["usage"]["total_tokens"] = _usage_total(row["usage"])
         rows.append(row)
     return sorted(rows, key=lambda row: (row["bucket"], row["model_key"]))
+
+
+def _summary_token_stats(
+    session_rows: list[dict[str, Any]],
+    turn_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    buckets = {
+        key: {
+            "session": _distribution(
+                [_number((row.get("usage") or {}).get(key)) for row in session_rows]
+            ),
+            "turn": _distribution(
+                [_number((row.get("usage") or {}).get(key)) for row in turn_rows]
+            ),
+        }
+        for key in (*TOKEN_KEYS, "total_tokens")
+    }
+    return {
+        "session": buckets["total_tokens"]["session"],
+        "turn": buckets["total_tokens"]["turn"],
+        "buckets": buckets,
+    }
 
 
 def _project_options(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -580,6 +639,45 @@ def _safe_div(numerator: float, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return round(numerator / denominator, 8)
+
+
+def _distribution(values: list[float]) -> dict[str, Any]:
+    clean = [float(value) for value in values if value >= 0]
+    if not clean:
+        return {
+            "count": 0,
+            "avg": 0.0,
+            "median": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "max": 0.0,
+        }
+    ordered = sorted(clean)
+    return {
+        "count": len(ordered),
+        "avg": _safe_div(sum(ordered), len(ordered)),
+        "median": _percentile(ordered, 0.5),
+        "p90": _percentile(ordered, 0.9),
+        "p95": _percentile(ordered, 0.95),
+        "max": round(ordered[-1], 8),
+    }
+
+
+def _percentile(ordered_values: list[float], percentile: float) -> float:
+    if not ordered_values:
+        return 0.0
+    if len(ordered_values) == 1:
+        return round(ordered_values[0], 8)
+    position = (len(ordered_values) - 1) * percentile
+    lower = int(position)
+    upper = min(lower + 1, len(ordered_values) - 1)
+    if lower == upper:
+        return round(ordered_values[lower], 8)
+    weight = position - lower
+    return round(
+        ordered_values[lower] * (1 - weight) + ordered_values[upper] * weight,
+        8,
+    )
 
 
 def _number(value: Any) -> float:

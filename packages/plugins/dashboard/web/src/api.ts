@@ -264,6 +264,24 @@ export type ModelUsagePricing = {
   breakdown?: Record<string, number>;
 };
 
+export type DistributionStats = {
+  count: number;
+  avg: number;
+  median: number;
+  p90: number;
+  p95: number;
+  max: number;
+};
+
+export type SessionTurnDistributionStats = {
+  session: DistributionStats;
+  turn: DistributionStats;
+};
+
+export type ModelUsageTokenStats = SessionTurnDistributionStats & {
+  buckets: Record<string, SessionTurnDistributionStats>;
+};
+
 export type ModelUsageModel = {
   provider: string | null;
   model: string | null;
@@ -277,6 +295,8 @@ export type ModelUsageModel = {
   avg_turn_cost_usd: number;
   avg_session_elapsed_seconds: number;
   avg_turn_elapsed_seconds: number;
+  token_stats: SessionTurnDistributionStats;
+  cost_stats: SessionTurnDistributionStats;
   pricing: ModelUsagePricing;
 };
 
@@ -303,7 +323,19 @@ export type ModelUsageSession = {
   context: ModelUsageContext | null;
   dominant_model: { provider: string | null; model: string | null; basis: string } | null;
   estimated_cost_usd: number;
-  models: Array<Omit<ModelUsageModel, "sessions" | "avg_session_cost_usd" | "avg_turn_cost_usd">>;
+  models: Array<
+    Omit<
+      ModelUsageModel,
+      | "sessions"
+      | "avg_session_cost_usd"
+      | "avg_turn_cost_usd"
+      | "avg_session_elapsed_seconds"
+      | "avg_turn_elapsed_seconds"
+      | "elapsed_seconds"
+      | "token_stats"
+      | "cost_stats"
+    >
+  >;
 };
 
 export type ModelUsageTurn = {
@@ -337,6 +369,9 @@ export type ModelUsagePayload = {
     avg_tokens_per_session: number;
     avg_tokens_per_turn: number;
     avg_elapsed_seconds_per_session: number;
+    token_stats: ModelUsageTokenStats;
+    cost_stats: SessionTurnDistributionStats;
+    elapsed_stats: { session: DistributionStats };
     estimated_cost_usd: number;
     missing_price_count: number;
     top_model_by_cost: string | null;
