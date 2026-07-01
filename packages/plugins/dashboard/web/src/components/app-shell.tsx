@@ -28,6 +28,9 @@ export function AppShell() {
             <Link to="/model-usage" search={{ sinceDays: 7, projectName: undefined }} className="rounded-md px-3 py-1.5 font-medium text-muted-foreground [&.active]:bg-primary [&.active]:text-primary-foreground">
               Model usage
             </Link>
+            <Link to="/error-collection" search={{ sinceDays: 7, projectName: undefined }} className="rounded-md px-3 py-1.5 font-medium text-muted-foreground [&.active]:bg-primary [&.active]:text-primary-foreground">
+              Errors
+            </Link>
             <Link to="/sessions" className="rounded-md px-3 py-1.5 font-medium text-muted-foreground [&.active]:bg-primary [&.active]:text-primary-foreground">
               Sessions
             </Link>

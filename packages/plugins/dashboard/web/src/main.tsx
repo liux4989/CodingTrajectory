@@ -12,6 +12,7 @@ const ProjectDetailRoute = React.lazy(() => import("@/routes/projects").then((mo
 const SessionsRoute = React.lazy(() => import("@/routes/sessions").then((mod) => ({ default: mod.SessionsRoute })));
 const ContextWindowRoute = React.lazy(() => import("@/routes/context-window").then((mod) => ({ default: mod.ContextWindowRoute })));
 const ModelUsageRoute = React.lazy(() => import("@/routes/model-usage").then((mod) => ({ default: mod.ModelUsageRoute })));
+const ErrorCollectionRoute = React.lazy(() => import("@/routes/error-collection").then((mod) => ({ default: mod.ErrorCollectionRoute })));
 const CleanupRoute = React.lazy(() => import("@/routes/cleanup").then((mod) => ({ default: mod.CleanupRoute })));
 
 function RouteBoundary({ children }: { children: React.ReactNode }) {
@@ -77,6 +78,19 @@ const modelUsageRoute = createRoute({
   component: () => <RouteBoundary><ModelUsageRoute /></RouteBoundary>,
 });
 
+const errorCollectionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/error-collection",
+  validateSearch: (search: Record<string, unknown>): { sinceDays: number | undefined; projectName: string | undefined } => ({
+    sinceDays:
+      search.sinceDays != null && !Number.isNaN(Number(search.sinceDays))
+        ? Number(search.sinceDays)
+        : undefined,
+    projectName: typeof search.projectName === "string" ? search.projectName : undefined,
+  }),
+  component: () => <RouteBoundary><ErrorCollectionRoute /></RouteBoundary>,
+});
+
 const contextWindowRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId/context-window",
@@ -95,6 +109,7 @@ const router = createRouter({
     projectDetailRoute,
     sessionsRoute,
     modelUsageRoute,
+    errorCollectionRoute,
     contextWindowRoute,
     cleanupRoute,
   ]),

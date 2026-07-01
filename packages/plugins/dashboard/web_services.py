@@ -14,11 +14,13 @@ from typing import Any, Callable
 try:
     from . import cleanup as cleanup_mod
     from . import context_window as context_window_mod
+    from . import error_collection as error_collection_mod
     from . import model_usage as model_usage_mod
     from . import session_analysis as session_analysis_mod
 except ImportError:
     import cleanup as cleanup_mod
     import context_window as context_window_mod
+    import error_collection as error_collection_mod
     import model_usage as model_usage_mod
     import session_analysis as session_analysis_mod
 
@@ -201,6 +203,13 @@ class DashboardDataService:
 
     def model_usage(self, query: dict[str, list[str]]) -> dict[str, Any]:
         return model_usage_mod.build_projection(
+            ct_json=_ct_json,
+            since_days=_int(query, "since_days", 7),
+            project_name=_first(query, "project_name"),
+        )
+
+    def error_collection(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        return error_collection_mod.build_projection(
             ct_json=_ct_json,
             since_days=_int(query, "since_days", 7),
             project_name=_first(query, "project_name"),

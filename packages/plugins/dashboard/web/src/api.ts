@@ -335,6 +335,42 @@ export type ModelUsagePayload = {
   warnings: Array<{ session_id: string; message: string }>;
 };
 
+export type ErrorCollectionKind =
+  | "abort_coding_session"
+  | "abrupt_coding_mid_session"
+  | "fail_tool_coverage";
+
+export type ErrorCollectionItem = {
+  id: string;
+  session_id: string;
+  project: string | null;
+  session_title: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  kind: ErrorCollectionKind;
+  severity: "info" | "warning" | "critical";
+  confidence: "direct" | "inferred";
+  title: string;
+  detail: string;
+  evidence: string[];
+};
+
+export type ErrorCollectionPayload = {
+  schema_version: 1;
+  filters: { since_days: number; project_name: string | null };
+  project_options: ProjectItem[];
+  summary: {
+    sessions: number;
+    affected_sessions: number;
+    total_errors: number;
+    by_kind: Record<ErrorCollectionKind, number>;
+    by_severity: Record<"critical" | "warning" | "info", number>;
+    top_projects: Array<{ project: string; errors: number }>;
+    generated_at: string;
+  };
+  errors: ErrorCollectionItem[];
+};
+
 export async function fetchOverview() {
   return fetchJson<OverviewPayload>("/api/overview");
 }
@@ -375,6 +411,13 @@ export async function fetchModelUsage(params: { sinceDays?: number; projectName?
   search.set("since_days", String(params.sinceDays ?? 7));
   if (params.projectName) search.set("project_name", params.projectName);
   return fetchJson<ModelUsagePayload>(`/api/model-usage?${search}`);
+}
+
+export async function fetchErrorCollection(params: { sinceDays?: number; projectName?: string | null }) {
+  const search = new URLSearchParams();
+  search.set("since_days", String(params.sinceDays ?? 7));
+  if (params.projectName) search.set("project_name", params.projectName);
+  return fetchJson<ErrorCollectionPayload>(`/api/error-collection?${search}`);
 }
 
 export async function applyCleanup(kind: "project" | "session", payload: CleanupApplyPayload) {

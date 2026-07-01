@@ -145,6 +145,8 @@ def _handler_for(
                     payload = service.context_window(query)
                 elif path == "/api/model-usage":
                     payload = service.model_usage(query)
+                elif path == "/api/error-collection":
+                    payload = service.error_collection(query)
                 elif path == "/api/vendors":
                     payload = service.vendors(query)
                 elif path == "/api/cleanup/project/preview":
