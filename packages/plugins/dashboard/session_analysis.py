@@ -10,8 +10,10 @@ from typing import Any, Callable, Literal, Protocol
 from pydantic import BaseModel, ConfigDict
 
 try:
+    from . import context_window as context_window_mod
     from .codex_app_server import CodexAppServerClient, CodexAppServerResult, PiRpcClient
 except ImportError:
+    import context_window as context_window_mod
     from codex_app_server import CodexAppServerClient, CodexAppServerResult, PiRpcClient
 
 
@@ -44,6 +46,27 @@ class TaskStory(BaseModel):
     outcomes: list[str]
 
 
+class ContextCompositionEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: str
+    label: str
+    tokens: int
+    percent: float | None
+    confidence: str
+    estimated_cost_usd: float | None
+
+
+class ExpensiveContextItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    category: str
+    summary: str
+    total_tokens: int
+    estimated_cost_usd: float
+
+
 class UsageEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -56,6 +79,8 @@ class UsageEvidence(BaseModel):
     context_window_tokens: int | None
     final_context_percent: float | None
     expensive_turns: list[dict[str, Any]]
+    context_composition: list[ContextCompositionEntry] = []
+    expensive_context_items: list[ExpensiveContextItem] = []
 
 
 class ToolBucket(BaseModel):
@@ -206,6 +231,7 @@ def build_analysis(
     usage_evidence = _usage_evidence(usage, stats)
     tool_evidence = _tool_evidence(requested, succeeded, failed)
     resolved_session_id = str(stats.get("id") or overview.get("id") or session_id)
+    usage_evidence = _augment_usage_evidence(resolved_session_id, usage_evidence, ct_json=ct_json)
     evidence_packet = _evidence_packet(
         session_id=resolved_session_id,
         task_story=task_story,
@@ -445,6 +471,62 @@ def _usage_evidence(usage: dict[str, Any], stats: dict[str, Any]) -> UsageEviden
         context_window_tokens=_optional_int(model.get("context_window") or model.get("context_window_tokens")),
         final_context_percent=_optional_float(context.get("pct") or context.get("used_percent")),
         expensive_turns=expensive_turns,
+    )
+
+
+def _augment_usage_evidence(
+    session_id: str,
+    usage_evidence: UsageEvidence,
+    *,
+    ct_json: CtJson,
+) -> UsageEvidence:
+    try:
+        projection = context_window_mod.build_projection(session_id, ct_json=ct_json)
+    except Exception:
+        return usage_evidence
+    composition = [
+        ContextCompositionEntry(
+            category=category.category,
+            label=_one_line(category.label, 120),
+            tokens=category.tokens.value,
+            percent=category.percent,
+            confidence=category.tokens.confidence,
+            estimated_cost_usd=(
+                category.estimated_cost.value_usd if category.estimated_cost else None
+            ),
+        )
+        for category in projection.categories[:12]
+    ]
+    expensive_items = [
+        ExpensiveContextItem(
+            label=_one_line(item.label, 120),
+            category=item.category,
+            summary=_one_line(item.summary, 220),
+            total_tokens=item.allocated_usage.get("total_tokens", 0),
+            estimated_cost_usd=item.estimated_cost.value_usd,
+        )
+        for item in projection.expensive_items[:8]
+    ]
+    return usage_evidence.model_copy(
+        update={
+            "final_context_tokens": (
+                projection.used_tokens.value
+                if projection.used_tokens
+                else usage_evidence.final_context_tokens
+            ),
+            "context_window_tokens": (
+                projection.context_window_tokens.value
+                if projection.context_window_tokens
+                else usage_evidence.context_window_tokens
+            ),
+            "final_context_percent": (
+                projection.used_percent
+                if projection.used_percent is not None
+                else usage_evidence.final_context_percent
+            ),
+            "context_composition": composition,
+            "expensive_context_items": expensive_items,
+        }
     )
 
 

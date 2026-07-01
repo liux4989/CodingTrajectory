@@ -7,7 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -150,21 +150,26 @@ def main(
 
 
 def build_projection(
-    session_id: str, *, turn_id: str | None = None
+    session_id: str,
+    *,
+    turn_id: str | None = None,
+    ct_json: Callable[[list[str]], dict[str, Any]] | None = None,
 ) -> ContextWindowProjection:
-    stats = _ct_json(
+    run = ct_json or _ct_json
+    stats = run(
         ["session", "stats", "--global-scope", "--output", "json", session_id]
     )
-    overview = _ct_json(
+    overview = run(
         ["session", "overview", "--global-scope", "--output", "json", session_id]
     )
-    usage = _ct_json(
+    usage = run(
         ["session", "usage", "--global-scope", "--output", "json", session_id]
     )
     tool_usage = _ct_api_result(
         "session.tool_usage",
         {"session_id": session_id},
         global_scope=True,
+        ct_json=run,
     )
 
     vendor = str(stats.get("vendor") or _overview_vendor(overview) or "unknown")
@@ -1233,7 +1238,11 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
 
 
 def _ct_api_result(
-    method: str, params: dict[str, Any], *, global_scope: bool = False
+    method: str,
+    params: dict[str, Any],
+    *,
+    global_scope: bool = False,
+    ct_json: Callable[[list[str]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     args = [
         "api",
@@ -1244,7 +1253,7 @@ def _ct_api_result(
     ]
     if global_scope:
         args.insert(3, "--global-scope")
-    payload = _ct_json(args)
+    payload = (ct_json or _ct_json)(args)
     if not payload.get("ok"):
         error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
         raise SystemExit(str(error.get("message") or f"ct api call failed: {method}"))
