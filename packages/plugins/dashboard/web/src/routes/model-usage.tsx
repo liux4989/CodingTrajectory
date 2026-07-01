@@ -1,8 +1,16 @@
 import * as React from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { BarChart3 } from "lucide-react";
-import { fetchModelUsage, type ModelUsagePayload, type UsageBuckets } from "@/api";
+import {
+  fetchModelUsage,
+  type ModelUsageModel,
+  type ModelUsagePayload,
+  type ModelUsageSession,
+  type ModelUsageTurn,
+  type UsageBuckets,
+} from "@/api";
 import { MetricCard } from "@/components/metric-card";
 import { RefreshButton } from "@/components/refresh-button";
 import { RouteHeader } from "@/components/route-header";
@@ -10,6 +18,7 @@ import { SessionLink, shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { DataTable } from "@/components/data-table";
 import {
   Select,
   SelectContent,
@@ -18,7 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MetricSkeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 const ALL_PROJECTS = "__all_projects__";
 const TIME_OPTIONS = [7, 14, 30, 90];
@@ -149,7 +158,65 @@ function SummaryCards({ data }: { data: ModelUsagePayload }) {
   );
 }
 
+const modelColumns: ColumnDef<ModelUsageModel>[] = [
+  {
+    accessorKey: "model_key",
+    header: () => <HeaderLabel>Model</HeaderLabel>,
+    cell: ({ getValue }) => <span className="font-medium">{getValue<string>()}</span>,
+  },
+  {
+    accessorKey: "sessions",
+    header: () => <HeaderLabel>Sessions</HeaderLabel>,
+    cell: ({ getValue }) => getValue<number>().toLocaleString(),
+  },
+  {
+    accessorKey: "turns",
+    header: () => <HeaderLabel>Turns</HeaderLabel>,
+    cell: ({ getValue }) => getValue<number>().toLocaleString(),
+  },
+  {
+    id: "tokens",
+    accessorFn: (row) => totalTokens(row.usage),
+    header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+  },
+  {
+    accessorKey: "estimated_cost_usd",
+    header: () => <HeaderLabel align="right">Total Cost</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+  },
+  {
+    accessorKey: "avg_session_cost_usd",
+    header: () => <HeaderLabel align="right">Avg Session</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+  },
+  {
+    accessorKey: "avg_turn_cost_usd",
+    header: () => <HeaderLabel align="right">Avg Turn</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+  },
+  {
+    id: "pricing",
+    accessorFn: (row) => row.pricing.confidence,
+    header: () => <HeaderLabel>Pricing</HeaderLabel>,
+    cell: ({ getValue }) => {
+      const confidence = getValue<string>();
+      return (
+        <Badge variant={confidence === "estimated" ? "default" : "secondary"}>
+          {confidence === "estimated" ? "estimated" : "missing price"}
+        </Badge>
+      );
+    },
+  },
+];
+
 function ModelTable({ data }: { data: ModelUsagePayload }) {
+  const table = useReactTable({
+    data: data.models,
+    columns: modelColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+
   return (
     <Card className="min-w-0">
       <CardHeader>
@@ -157,45 +224,11 @@ function ModelTable({ data }: { data: ModelUsagePayload }) {
         <CardDescription>Cost is estimated in the dashboard from observed core usage buckets.</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="overflow-auto rounded-lg border border-border-subtle">
-          <Table>
-            <TableHeader className="bg-table-head font-display text-caption uppercase">
-              <TableRow>
-                <TableHead>Model</TableHead>
-                <TableHead>Sessions</TableHead>
-                <TableHead>Turns</TableHead>
-                <TableHead className="text-right">Tokens</TableHead>
-                <TableHead className="text-right">Total Cost</TableHead>
-                <TableHead className="text-right">Avg Session</TableHead>
-                <TableHead className="text-right">Avg Turn</TableHead>
-                <TableHead>Pricing</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.models.map((row) => (
-                <TableRow key={row.model_key}>
-                  <TableCell className="font-medium">{row.model_key}</TableCell>
-                  <TableCell>{row.sessions.toLocaleString()}</TableCell>
-                  <TableCell>{row.turns.toLocaleString()}</TableCell>
-                  <TableCell className="text-right">{compactNumber(totalTokens(row.usage))}</TableCell>
-                  <TableCell className="text-right">{formatCost(row.estimated_cost_usd)}</TableCell>
-                  <TableCell className="text-right">{formatCost(row.avg_session_cost_usd)}</TableCell>
-                  <TableCell className="text-right">{formatCost(row.avg_turn_cost_usd)}</TableCell>
-                  <TableCell>
-                    <Badge variant={row.pricing.confidence === "estimated" ? "default" : "secondary"}>
-                      {row.pricing.confidence === "estimated" ? "estimated" : "missing price"}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!data.models.length ? (
-                <TableRow>
-                  <TableCell colSpan={8}>No model usage found for this scope.</TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable
+          table={table}
+          columnCount={modelColumns.length}
+          emptyMessage="No model usage found for this scope."
+        />
       </CardContent>
     </Card>
   );
@@ -252,7 +285,55 @@ function TimeBuckets({ data }: { data: ModelUsagePayload }) {
   );
 }
 
+const sessionColumns: ColumnDef<ModelUsageSession>[] = [
+  {
+    id: "session",
+    header: () => <HeaderLabel>Session</HeaderLabel>,
+    cell: ({ row }) => (
+      <div className="max-w-[24rem]">
+        <SessionLink sessionId={row.original.id}>
+          {row.original.title || shortSessionId(row.original.id)}
+        </SessionLink>
+      </div>
+    ),
+  },
+  {
+    id: "project",
+    accessorFn: (row) => row.project ?? "unknown",
+    header: () => <HeaderLabel>Project</HeaderLabel>,
+  },
+  {
+    id: "dominant_model",
+    accessorFn: (row) => modelLabel(row.dominant_model),
+    header: () => <HeaderLabel>Dominant Model</HeaderLabel>,
+  },
+  {
+    id: "context",
+    accessorFn: (row) => formatPercent(row.context?.max_used_percent),
+    header: () => <HeaderLabel align="right">Context</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{getValue<string>()}</RightCell>,
+  },
+  {
+    id: "tokens",
+    accessorFn: (row) => totalTokens(row.usage),
+    header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+  },
+  {
+    accessorKey: "estimated_cost_usd",
+    header: () => <HeaderLabel align="right">Cost</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+  },
+];
+
 function SessionTable({ data }: { data: ModelUsagePayload }) {
+  const rows = React.useMemo(() => data.sessions.slice(0, 50), [data.sessions]);
+  const table = useReactTable({
+    data: rows,
+    columns: sessionColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+
   return (
     <Card className="min-w-0">
       <CardHeader>
@@ -260,47 +341,62 @@ function SessionTable({ data }: { data: ModelUsagePayload }) {
         <CardDescription>Progressive drilldown from session cost to dominant model and context usage.</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="overflow-auto rounded-lg border border-border-subtle">
-          <Table>
-            <TableHeader className="bg-table-head font-display text-caption uppercase">
-              <TableRow>
-                <TableHead>Session</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Dominant Model</TableHead>
-                <TableHead className="text-right">Context</TableHead>
-                <TableHead className="text-right">Tokens</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.sessions.slice(0, 50).map((session) => (
-                <TableRow key={session.id}>
-                  <TableCell className="max-w-[24rem]">
-                    <SessionLink sessionId={session.id}>
-                      {session.title || shortSessionId(session.id)}
-                    </SessionLink>
-                  </TableCell>
-                  <TableCell>{session.project ?? "unknown"}</TableCell>
-                  <TableCell>{modelLabel(session.dominant_model)}</TableCell>
-                  <TableCell className="text-right">{formatPercent(session.context?.max_used_percent)}</TableCell>
-                  <TableCell className="text-right">{compactNumber(totalTokens(session.usage))}</TableCell>
-                  <TableCell className="text-right">{formatCost(session.estimated_cost_usd)}</TableCell>
-                </TableRow>
-              ))}
-              {!data.sessions.length ? (
-                <TableRow>
-                  <TableCell colSpan={6}>No sessions found for this scope.</TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable
+          table={table}
+          columnCount={sessionColumns.length}
+          emptyMessage="No sessions found for this scope."
+        />
       </CardContent>
     </Card>
   );
 }
 
+const turnColumns: ColumnDef<ModelUsageTurn>[] = [
+  {
+    accessorKey: "sequence",
+    header: () => <HeaderLabel>Turn</HeaderLabel>,
+    cell: ({ getValue }) => <span className="font-mono text-body-sm">#{getValue<number>()}</span>,
+  },
+  {
+    id: "session",
+    header: () => <HeaderLabel>Session</HeaderLabel>,
+    cell: ({ row }) => (
+      <SessionLink sessionId={row.original.session_id}>
+        {row.original.session_title || shortSessionId(row.original.session_id)}
+      </SessionLink>
+    ),
+  },
+  {
+    accessorKey: "model_key",
+    header: () => <HeaderLabel>Model</HeaderLabel>,
+  },
+  {
+    id: "tokens",
+    accessorFn: (row) => totalTokens(row.usage),
+    header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+  },
+  {
+    id: "context",
+    accessorFn: (row) => formatPercent(row.context?.final_used_percent),
+    header: () => <HeaderLabel align="right">Context</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{getValue<string>()}</RightCell>,
+  },
+  {
+    accessorKey: "estimated_cost_usd",
+    header: () => <HeaderLabel align="right">Cost</HeaderLabel>,
+    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+  },
+];
+
 function TurnTable({ data }: { data: ModelUsagePayload }) {
+  const rows = React.useMemo(() => data.turns.slice(0, 30), [data.turns]);
+  const table = useReactTable({
+    data: rows,
+    columns: turnColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+
   return (
     <Card className="min-w-0">
       <CardHeader>
@@ -310,47 +406,34 @@ function TurnTable({ data }: { data: ModelUsagePayload }) {
         <CardDescription>Top turns by estimated cost, capped to the first 200 rows from the backend.</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="overflow-auto rounded-lg border border-border-subtle">
-          <Table>
-            <TableHeader className="bg-table-head font-display text-caption uppercase">
-              <TableRow>
-                <TableHead>Turn</TableHead>
-                <TableHead>Session</TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead className="text-right">Tokens</TableHead>
-                <TableHead className="text-right">Context</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.turns.slice(0, 30).map((turn) => (
-                <TableRow key={turn.turn_id}>
-                  <TableCell className="font-mono text-body-sm">#{turn.sequence}</TableCell>
-                  <TableCell>
-                    <SessionLink sessionId={turn.session_id}>
-                      {turn.session_title || shortSessionId(turn.session_id)}
-                    </SessionLink>
-                  </TableCell>
-                  <TableCell>{turn.model_key}</TableCell>
-                  <TableCell className="text-right">{compactNumber(totalTokens(turn.usage))}</TableCell>
-                  <TableCell className="text-right">{formatPercent(turn.context?.final_used_percent)}</TableCell>
-                  <TableCell className="text-right">{formatCost(turn.estimated_cost_usd)}</TableCell>
-                </TableRow>
-              ))}
-              {!data.turns.length ? (
-                <TableRow>
-                  <TableCell colSpan={6}>No turns found for this scope.</TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable
+          table={table}
+          columnCount={turnColumns.length}
+          emptyMessage="No turns found for this scope."
+        />
       </CardContent>
     </Card>
   );
 }
 
-function modelLabel(value: ModelUsagePayload["sessions"][number]["dominant_model"]) {
+function HeaderLabel({ children, align = "left" }: { children: React.ReactNode; align?: "left" | "right" }) {
+  return (
+    <span
+      className={cn(
+        "font-extrabold uppercase tracking-wide",
+        align === "right" && "text-right",
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function RightCell({ children }: { children: React.ReactNode }) {
+  return <div className="text-right">{children}</div>;
+}
+
+function modelLabel(value: ModelUsageSession["dominant_model"]) {
   if (!value) return "unknown";
   if (value.provider && value.model) return `${value.provider}/${value.model}`;
   return value.model ?? value.provider ?? "unknown";
