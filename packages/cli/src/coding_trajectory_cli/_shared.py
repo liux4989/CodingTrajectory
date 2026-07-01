@@ -597,8 +597,8 @@ def compact_payload(method: str, payload: Any) -> Any:
                 )
                 or None,
                 "usage": compact_usage(payload.get("usage"), include_cost=False),
-                "allocated_real_token_cost": compact_usage(
-                    payload.get("allocated_real_token_cost"), include_cost=False
+                "billed_token_usage": compact_usage(
+                    payload.get("billed_token_usage"), include_cost=False
                 ),
                 "warnings": payload.get("warnings") or None,
             }
@@ -709,6 +709,7 @@ def render_usage_line(usage: dict[str, Any]) -> str:
         f"input {format_tokens(usage.get('input_tokens'))}",
         f"uncached {format_tokens(usage.get('uncached_input_tokens'))}",
         f"cached {format_tokens(usage.get('cached_input_tokens'))}",
+        f"cache creation {format_tokens(usage.get('cache_creation_input_tokens'))}",
         f"output {format_tokens(usage.get('output_tokens'))}",
         f"reasoning {format_tokens(usage.get('reasoning_output_tokens'))}",
         f"total {format_tokens(usage.get('total_tokens'))}",

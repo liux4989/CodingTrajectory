@@ -37,7 +37,7 @@ FILTER SYNTAX
 """
 
 CONTEXT_CATEGORY_WIDTH = 48
-CONTEXT_USAGE_WIDTH = 28
+CONTEXT_USAGE_WIDTH = 34
 
 
 def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
@@ -177,13 +177,21 @@ def _format_allocated_usage(value: Any) -> str:
         return _format_optional_tokens(value)
     uncached = value.get("uncached_input_tokens")
     cached = value.get("cached_input_tokens")
+    cache_creation = value.get("cache_creation_input_tokens")
     output = value.get("output_tokens")
     reasoning = value.get("reasoning_output_tokens")
-    if uncached is None and cached is None and output is None and reasoning is None:
+    if (
+        uncached is None
+        and cached is None
+        and cache_creation is None
+        and output is None
+        and reasoning is None
+    ):
         return "-"
     return (
         f"{format_tokens(uncached)}/"
         f"{format_tokens(cached)}/"
+        f"{format_tokens(cache_creation)}/"
         f"{format_tokens(output)}/"
         f"{format_tokens(reasoning)}"
     )
@@ -195,7 +203,7 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     runtime = payload.get("runtime") or {}
     messages = payload.get("messages") or {}
     usage = payload.get("usage") or {}
-    real_token_cost = payload.get("allocated_real_token_cost") or {}
+    billed_token_usage = payload.get("billed_token_usage") or {}
 
     model_name = model.get("name") or "-"
     context_tokens = model.get("context_window_tokens")
@@ -205,8 +213,9 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         f"Model: {model_name} ({format_tokens(context_tokens)} context)",
         "",
         "```",
-        f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} "
-        f"{'Unc/Cache/Out/Reason':>{CONTEXT_USAGE_WIDTH}} {'Share':>8}",
+        f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
+        f"{'Billed Unc/Cache/Create/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
+        f"{'Share':>8}",
     ]
 
     for category in context_window.get("categories") or []:
@@ -242,11 +251,12 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     runtime_line += f", {runtime.get('subagent_sessions') or 0} subagent sessions"
     lines.append("")
     lines.append(
-        f"- Used: {format_tokens(used_tokens)} tokens {format_percent(used_percent)} of context"
+        f"- Context window: {format_tokens(used_tokens)} tokens "
+        f"{format_percent(used_percent)} of context window"
     )
-    if real_token_cost:
+    if billed_token_usage:
         lines.append(
-            f"- Item allocated real token cost: {render_usage_line(real_token_cost)}"
+            f"- Billed tokens (all API calls): {render_usage_line(billed_token_usage)}"
         )
     lines.append(f"- {runtime_line}")
     if runtime.get("compactions"):

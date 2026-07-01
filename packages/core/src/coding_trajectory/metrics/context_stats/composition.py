@@ -101,14 +101,15 @@ def build_context_composition(
     *,
     allocated_usage_by_item: dict[UUID, dict[str, int]] | None = None,
 ) -> list[ContextCategoryFlat]:
+    allocated_usage_by_item = allocated_usage_by_item or {}
     starting = _starting_context(session_graph)
     user_input = _user_input(
         session_graph,
-        allocated_usage_by_item=allocated_usage_by_item or {},
+        allocated_usage_by_item=allocated_usage_by_item,
     )
     agent_work = _agent_work(
         session_graph,
-        allocated_usage_by_item=allocated_usage_by_item or {},
+        allocated_usage_by_item=allocated_usage_by_item,
     )
     observed_total = starting[0].plus(user_input[0]).plus(agent_work[0]).tokens
     categories = [
@@ -117,6 +118,10 @@ def build_context_composition(
         _category("agent_work", "Agent work", agent_work[0], agent_work[1]),
     ]
     _set_percent(categories, observed_total)
+    _assert_context_composition_usage_reconciles(
+        categories,
+        allocated_usage_by_item,
+    )
     return categories
 
 
@@ -418,6 +423,29 @@ def _measure_from_categories(categories: Iterable[ContextCategoryFlat]) -> _Meas
         )
         for category in categories
     )
+
+
+def _assert_context_composition_usage_reconciles(
+    categories: list[ContextCategoryFlat],
+    allocated_usage_by_item: dict[UUID, dict[str, int]],
+) -> None:
+    if not allocated_usage_by_item:
+        return
+    expected = _sum_usage_values(allocated_usage_by_item.values())
+    actual = _sum_usage_values(
+        category.allocated_usage or {} for category in categories
+    )
+    assert (
+        actual == expected
+    ), "context composition allocated usage must reconcile to resident item usage"
+
+
+def _sum_usage_values(items: Iterable[dict[str, int]]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for item in items:
+        for key, value in item.items():
+            result[key] = result.get(key, 0) + max(value, 0)
+    return {key: value for key, value in result.items() if value > 0}
 
 
 def _sum(measures: Iterable[_Measure]) -> _Measure:
