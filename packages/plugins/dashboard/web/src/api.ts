@@ -236,6 +236,105 @@ export type CleanupResult = {
   errors: Array<{ path: string; error: string }>;
 };
 
+export type UsageBuckets = {
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
+  total_tokens?: number;
+};
+
+export type ModelUsageContext = {
+  final_used_tokens?: number | null;
+  max_used_tokens?: number | null;
+  context_window_tokens?: number | null;
+  final_used_percent?: number | null;
+  max_used_percent?: number | null;
+  source?: string | null;
+  confidence?: string;
+};
+
+export type ModelUsagePricing = {
+  confidence: "estimated" | "missing_price";
+  source: string | null;
+  effective_date: string | null;
+  breakdown?: Record<string, number>;
+};
+
+export type ModelUsageModel = {
+  provider: string | null;
+  model: string | null;
+  model_key: string;
+  sessions: number;
+  turns: number;
+  usage: UsageBuckets;
+  estimated_cost_usd: number;
+  avg_session_cost_usd: number;
+  avg_turn_cost_usd: number;
+  pricing: ModelUsagePricing;
+};
+
+export type ModelUsageSession = {
+  id: string;
+  project: string | null;
+  title: string | null;
+  vendor: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  usage: UsageBuckets;
+  context: ModelUsageContext | null;
+  dominant_model: { provider: string | null; model: string | null; basis: string } | null;
+  estimated_cost_usd: number;
+  models: Array<Omit<ModelUsageModel, "sessions" | "avg_session_cost_usd" | "avg_turn_cost_usd">>;
+};
+
+export type ModelUsageTurn = {
+  session_id: string;
+  turn_id: string;
+  sequence: number;
+  started_at: string | null;
+  provider: string | null;
+  model: string | null;
+  model_key: string;
+  project?: string | null;
+  session_title?: string | null;
+  vendor?: string | null;
+  usage: UsageBuckets;
+  context: ModelUsageContext | null;
+  estimated_cost_usd: number;
+  pricing: ModelUsagePricing;
+};
+
+export type ModelUsagePayload = {
+  schema_version: 1;
+  filters: { since_days: number; project_name: string | null };
+  project_options: ProjectItem[];
+  summary: {
+    sessions: number;
+    turns: number;
+    models: number;
+    total_tokens: number;
+    estimated_cost_usd: number;
+    missing_price_count: number;
+    top_model_by_cost: string | null;
+    top_model_by_sessions: string | null;
+  };
+  models: ModelUsageModel[];
+  sessions: ModelUsageSession[];
+  turns: ModelUsageTurn[];
+  time_buckets: Record<string, Array<{
+    bucket: string;
+    model_key: string;
+    provider: string | null;
+    model: string | null;
+    turns: number;
+    estimated_cost_usd: number;
+    usage: UsageBuckets;
+  }>>;
+  warnings: Array<{ session_id: string; message: string }>;
+};
+
 export async function fetchOverview() {
   return fetchJson<OverviewPayload>("/api/overview");
 }
@@ -269,6 +368,13 @@ export async function analyzeSession(sessionId: string, refresh = false, provide
 
 export async function fetchCleanupPreview(kind: "project" | "session") {
   return fetchJson<CleanupPreview>(`/api/cleanup/${kind}/preview`);
+}
+
+export async function fetchModelUsage(params: { sinceDays?: number; projectName?: string | null }) {
+  const search = new URLSearchParams();
+  search.set("since_days", String(params.sinceDays ?? 7));
+  if (params.projectName) search.set("project_name", params.projectName);
+  return fetchJson<ModelUsagePayload>(`/api/model-usage?${search}`);
 }
 
 export async function applyCleanup(kind: "project" | "session", payload: CleanupApplyPayload) {

@@ -77,7 +77,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--open", action="store_true", help="Open the dashboard in a browser.")
+    parser.add_argument(
+        "--open", action="store_true", help="Open the dashboard in a browser."
+    )
     parser.add_argument("--static-dir", default=None, help=argparse.SUPPRESS)
     return parser
 
@@ -88,7 +90,9 @@ def _static_dir(raw: str | None) -> Path:
     return Path(__file__).resolve().parent / "web" / "dist"
 
 
-def _handler_for(static_dir: Path, service: DashboardDataService) -> type[BaseHTTPRequestHandler]:
+def _handler_for(
+    static_dir: Path, service: DashboardDataService
+) -> type[BaseHTTPRequestHandler]:
     class DashboardRequestHandler(BaseHTTPRequestHandler):
         server_version = "CodingTrajectoryDashboard/0.1"
 
@@ -139,6 +143,8 @@ def _handler_for(static_dir: Path, service: DashboardDataService) -> type[BaseHT
                     payload = service.session_timeline(query)
                 elif path == "/api/sessions/context-window":
                     payload = service.context_window(query)
+                elif path == "/api/model-usage":
+                    payload = service.model_usage(query)
                 elif path == "/api/vendors":
                     payload = service.vendors(query)
                 elif path == "/api/cleanup/project/preview":
@@ -182,7 +188,9 @@ def _handler_for(static_dir: Path, service: DashboardDataService) -> type[BaseHT
             if not resolved.is_file():
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
-            content_type = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
+            content_type = (
+                mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
+            )
             data = resolved.read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
@@ -210,7 +218,9 @@ def _handler_for(static_dir: Path, service: DashboardDataService) -> type[BaseHT
             self.wfile.write(data)
 
         def _json_error(self, status: HTTPStatus, message: str) -> None:
-            data = json.dumps({"error": {"message": message}}, ensure_ascii=False).encode("utf-8")
+            data = json.dumps(
+                {"error": {"message": message}}, ensure_ascii=False
+            ).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))

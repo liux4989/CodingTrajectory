@@ -1,4 +1,4 @@
-import { Outlet } from "@tanstack/react-router";
+import { Link, Outlet } from "@tanstack/react-router";
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "@/hooks/use-theme";
 import { Button } from "@/components/ui/button";
@@ -20,14 +20,27 @@ export function AppShell() {
             <h1 className="m-0 font-display text-[1rem] font-bold tracking-tight">CodingTrajectory</h1>
           </div>
         </div>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={toggle}
-          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-        >
-          {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-        </Button>
+        <div className="flex items-center gap-2">
+          <nav className="flex items-center gap-1 rounded-lg border border-border-subtle bg-background/50 p-1 text-body-sm">
+            <Link to="/" className="rounded-md px-3 py-1.5 font-medium text-muted-foreground [&.active]:bg-primary [&.active]:text-primary-foreground">
+              Overview
+            </Link>
+            <Link to="/model-usage" search={{ sinceDays: 7, projectName: undefined }} className="rounded-md px-3 py-1.5 font-medium text-muted-foreground [&.active]:bg-primary [&.active]:text-primary-foreground">
+              Model usage
+            </Link>
+            <Link to="/sessions" className="rounded-md px-3 py-1.5 font-medium text-muted-foreground [&.active]:bg-primary [&.active]:text-primary-foreground">
+              Sessions
+            </Link>
+          </nav>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={toggle}
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+          </Button>
+        </div>
       </header>
       <section className="min-w-0 p-[clamp(1rem,2vw,2rem)]">
         <Outlet />

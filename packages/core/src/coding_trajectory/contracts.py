@@ -53,6 +53,10 @@ class SessionUsageRequest(SessionEntryRequest):
     pass
 
 
+class SessionModelUsageRequest(SessionEntryRequest):
+    pass
+
+
 class SessionToolUsageRequest(SessionEntryRequest):
     pass
 
@@ -123,6 +127,21 @@ class SessionUsageResponse(ContractModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class SessionModelUsageResponse(ContractModel):
+    root_session_id: str
+    vendor: str | None = None
+    project: str | None = None
+    title: str | None = None
+    started_at: Any | None = None
+    completed_at: Any | None = None
+    usage: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] | None = None
+    models: list[dict[str, Any]] = Field(default_factory=list)
+    dominant_model: dict[str, Any] | None = None
+    turns: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class SessionTurnUsageResponse(ContractModel):
     root_session_id: str
     token_usage: dict[str, Any]
@@ -187,6 +206,21 @@ class PublicSessionUsageResponse(ContractModel):
     id: str
     runtime: dict[str, Any] | None = None
     usage: dict[str, Any]
+    turns: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] | None = None
+
+
+class PublicSessionModelUsageResponse(ContractModel):
+    id: str
+    vendor: str | None = None
+    project: str | None = None
+    title: str | None = None
+    started_at: Any | None = None
+    completed_at: Any | None = None
+    usage: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] | None = None
+    models: list[dict[str, Any]] = Field(default_factory=list)
+    dominant_model: dict[str, Any] | None = None
     turns: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] | None = None
 
@@ -269,6 +303,13 @@ SERVICE_CONTRACTS = {
             SessionUsageRequest,
             SessionUsageResponse,
             PublicSessionUsageResponse,
+        ),
+        ServiceContract(
+            "session.model_usage",
+            1,
+            SessionModelUsageRequest,
+            SessionModelUsageResponse,
+            PublicSessionModelUsageResponse,
         ),
         ServiceContract(
             "session.tool_usage", 1, SessionToolUsageRequest, SessionToolUsageResponse

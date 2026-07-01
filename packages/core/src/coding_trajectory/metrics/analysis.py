@@ -29,10 +29,15 @@ from coding_trajectory.ingestion.models import (
 from coding_trajectory.metrics.models import (
     AllocatedRealTokenCost,
     AttributionPolicy,
+    DominantModelFlat,
     InvokeResponseTokens,
     ItemRealTokenCostFlat,
     MetricSource,
+    ModelUsageContextFlat,
+    ModelUsageModelFlat,
+    ModelUsageTurnFlat,
     ReadAfterResult,
+    SessionGraphModelUsageFlat,
     SessionMetrics,
     SessionMetricsFlat,
     SessionUsageCompactFlat,
@@ -149,6 +154,89 @@ def build_session_graph_usage(
     ).model_dump(mode="json")
 
 
+def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, Any]:
+    """Return provider/model usage facts at session and turn granularity."""
+    full = _build_full_metrics(session_graph)
+    sessions_by_id = {session.session_id: session for session in session_graph.sessions}
+    root_session = sessions_by_id.get(session_graph.root_session_id)
+    turns: list[ModelUsageTurnFlat] = []
+    model_usage: dict[tuple[str | None, str | None], TokenUsage] = {}
+    model_turns: dict[tuple[str | None, str | None], set[UUID]] = {}
+
+    for session_metrics in full.sessions:
+        source_session = sessions_by_id.get(session_metrics.session_id)
+        for turn in session_metrics.turns:
+            groups = _model_groups_for_turn(turn)
+            primary = _dominant_group(groups)
+            for group in groups:
+                key = (group.provider, group.model)
+                model_usage[key] = model_usage.get(key, TokenUsage()).plus(group.usage)
+                model_turns.setdefault(key, set()).add(turn.turn_id)
+            turns.append(
+                ModelUsageTurnFlat(
+                    turn_id=turn.turn_id,
+                    session_id=session_metrics.session_id,
+                    vendor=session_metrics.vendor,
+                    sequence=turn.sequence,
+                    started_at=turn.started_at,
+                    completed_at=turn.completed_at,
+                    provider=primary.provider if primary else None,
+                    model=primary.model if primary else None,
+                    usage=turn.token_usage,
+                    models=groups,
+                    context=_context_for_turn(source_session, turn.turn_id)
+                    if source_session
+                    else None,
+                )
+            )
+
+    models = [
+        ModelUsageModelFlat(
+            provider=provider,
+            model=model,
+            turns=len(model_turns.get((provider, model), set())),
+            usage=usage,
+        )
+        for (provider, model), usage in sorted(
+            model_usage.items(),
+            key=lambda item: item[1].total_tokens,
+            reverse=True,
+        )
+    ]
+    dominant = _dominant_group(models)
+
+    return SessionGraphModelUsageFlat(
+        root_session_id=session_graph.root_session_id,
+        vendor=root_session.vendor.value if root_session else None,
+        project=session_graph.project_identifier,
+        title=_session_graph_title(session_graph),
+        started_at=min(
+            (session.started_at for session in session_graph.sessions),
+            default=None,
+        ),
+        completed_at=max(
+            (
+                session.ended_at
+                for session in session_graph.sessions
+                if session.ended_at
+            ),
+            default=None,
+        ),
+        usage=full.token_usage,
+        context=_context_for_session_graph(session_graph),
+        models=models,
+        dominant_model=DominantModelFlat(
+            provider=dominant.provider,
+            model=dominant.model,
+            basis="total_tokens",
+        )
+        if dominant
+        else None,
+        turns=turns,
+        warnings=full.warnings,
+    ).model_dump(mode="json")
+
+
 def build_session_graph_runtime(session_graph: SessionGraph) -> dict[str, Any]:
     """Return canonical runtime summary fields for one session graph."""
     return runtime_stats(session_graph).model_dump(mode="json")
@@ -185,6 +273,113 @@ def _turn_runtime(
         execution_seconds=execution_seconds,
         wait_before_seconds=wait_before_seconds,
     )
+
+
+def _model_groups_for_turn(turn: TurnMetrics) -> list[ModelUsageModelFlat]:
+    grouped: dict[tuple[str | None, str | None], TokenUsage] = {}
+    for observation in turn.observations:
+        key = (observation.provider, observation.model)
+        grouped[key] = grouped.get(key, TokenUsage()).plus(observation.usage)
+    if not grouped and not _is_zero_usage(turn.token_usage):
+        grouped[(None, None)] = turn.token_usage
+    return [
+        ModelUsageModelFlat(provider=provider, model=model, turns=1, usage=usage)
+        for (provider, model), usage in sorted(
+            grouped.items(),
+            key=lambda item: item[1].total_tokens,
+            reverse=True,
+        )
+    ]
+
+
+def _dominant_group(
+    groups: Iterable[ModelUsageModelFlat],
+) -> ModelUsageModelFlat | None:
+    return max(groups, key=lambda item: item.usage.total_tokens, default=None)
+
+
+def _context_for_turn(session: Session, turn_id: UUID) -> ModelUsageContextFlat | None:
+    event_ids = {
+        event_id
+        for turn in session.turns
+        if turn.turn_id == turn_id
+        for event_id in turn.event_ids
+    }
+    observations = [
+        observation
+        for observation in session.context_usage
+        if observation.source_event_id in event_ids
+    ]
+    return _context_from_observations(observations)
+
+
+def _context_for_session_graph(
+    session_graph: SessionGraph,
+) -> ModelUsageContextFlat | None:
+    observations = [
+        observation
+        for session in session_graph.sessions
+        for observation in session.context_usage
+    ]
+    return _context_from_observations(observations)
+
+
+def _context_from_observations(
+    observations: Iterable[ContextUsageObservation],
+) -> ModelUsageContextFlat | None:
+    ordered = sorted(observations, key=lambda item: item.timestamp)
+    if not ordered:
+        return None
+    final = ordered[-1]
+    max_used = max((item.used_input_tokens for item in ordered), default=0)
+    context_window = final.context_window_tokens or next(
+        (
+            item.context_window_tokens
+            for item in reversed(ordered)
+            if item.context_window_tokens
+        ),
+        None,
+    )
+    return ModelUsageContextFlat(
+        final_used_tokens=final.used_input_tokens or None,
+        max_used_tokens=max_used or None,
+        context_window_tokens=context_window,
+        final_used_percent=_percent(final.used_input_tokens, context_window),
+        max_used_percent=_percent(max_used, context_window),
+        source=final.source,
+        confidence="exact_usage",
+    )
+
+
+def _percent(numerator: int | None, denominator: int | None) -> float | None:
+    if not numerator or not denominator:
+        return None
+    return round((numerator / denominator) * 100, 1)
+
+
+def _session_graph_title(session_graph: SessionGraph) -> str | None:
+    by_id = {session.session_id: session for session in session_graph.sessions}
+    root = by_id.get(session_graph.root_session_id)
+    if root is not None:
+        title = _session_title(root)
+        if title:
+            return title
+    for session in session_graph.sessions:
+        title = _session_title(session)
+        if title:
+            return title
+    return None
+
+
+def _session_title(session: Session) -> str | None:
+    extensions = session.extensions
+    if extensions and extensions.codex and extensions.codex.title:
+        return extensions.codex.title
+    if extensions and extensions.claude_code and extensions.claude_code.title:
+        return extensions.claude_code.title
+    if extensions and extensions.pi and extensions.pi.title:
+        return extensions.pi.title
+    return None
 
 
 def _turn_wait_before_seconds(

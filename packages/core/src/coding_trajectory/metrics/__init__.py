@@ -5,6 +5,7 @@ from coding_trajectory.metrics.analysis import (
     build_session_graph_context_stats,
     build_session_graph_full_metrics,
     build_session_graph_metrics,
+    build_session_graph_model_usage,
     build_session_graph_runtime,
     build_session_graph_tool_usage,
     build_session_graph_usage,
@@ -25,6 +26,7 @@ from coding_trajectory.metrics.models import (
     SessionMetricsFlat,
     SessionGraphMetrics,
     SessionGraphMetricsFlat,
+    SessionGraphModelUsageFlat,
     SessionGraphToolUsageFlat,
     SessionUsageCompactFlat,
     ToolItemFlat,
@@ -36,6 +38,7 @@ from coding_trajectory.metrics.models import (
     TurnUsageCompactFlat,
     UsageSpan,
 )
+
 __all__ = [
     "AttributionPolicy",
     "ContextCategoryFlat",
@@ -52,6 +55,7 @@ __all__ = [
     "SessionMetricsFlat",
     "SessionGraphMetrics",
     "SessionGraphMetricsFlat",
+    "SessionGraphModelUsageFlat",
     "SessionGraphToolUsageFlat",
     "SessionUsageCompactFlat",
     "ToolItemFlat",
@@ -65,6 +69,7 @@ __all__ = [
     "build_session_graph_context_stats",
     "build_session_graph_full_metrics",
     "build_session_graph_metrics",
+    "build_session_graph_model_usage",
     "build_session_graph_stats_token_usage",
     "build_session_graph_runtime",
     "build_session_graph_tool_usage",

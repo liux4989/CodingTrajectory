@@ -932,6 +932,21 @@ def _handle_session_usage(
     )
 
 
+def _handle_session_model_usage(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    from coding_trajectory.metrics import build_session_graph_model_usage
+
+    session_graph = _resolve_session_graph(
+        context.store, _session_graph_entrypoint_id(params)
+    )
+    _cache_session_graph(context, session_graph)
+    return _public_output_for_session_graph(
+        session_graph,
+        build_session_graph_model_usage(session_graph),
+    )
+
+
 def _handle_session_tool_usage(
     params: dict[str, Any],
     context: ServiceContext,
@@ -1068,6 +1083,7 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "session.stats": _handle_session_stats,
     "session.turn_usage": _handle_session_turn_usage,
     "session.usage": _handle_session_usage,
+    "session.model_usage": _handle_session_model_usage,
     "session.tool_usage": _handle_session_tool_usage,
     "session.events": _handle_session_events,
     "session.items": _handle_session_items,

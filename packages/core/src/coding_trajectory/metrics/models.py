@@ -273,6 +273,90 @@ class SessionUsageCompactFlat(BaseModel):
         return data
 
 
+class ModelUsageContextFlat(BaseModel):
+    final_used_tokens: int | None = None
+    max_used_tokens: int | None = None
+    context_window_tokens: int | None = None
+    final_used_percent: float | None = None
+    max_used_percent: float | None = None
+    source: str | None = None
+    confidence: Literal["exact_usage", "derived", "unknown"] = "unknown"
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        return {key: value for key, value in data.items() if value is not None}
+
+
+class ModelUsageModelFlat(BaseModel):
+    provider: str | None = None
+    model: str | None = None
+    turns: int = 0
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("usage"):
+            data["usage"] = _usage_accounting_payload(data["usage"])
+        return data
+
+
+class DominantModelFlat(BaseModel):
+    provider: str | None = None
+    model: str | None = None
+    basis: Literal["total_tokens", "turns"] = "total_tokens"
+
+
+class ModelUsageTurnFlat(BaseModel):
+    turn_id: UUID
+    session_id: UUID
+    vendor: str
+    sequence: int
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    provider: str | None = None
+    model: str | None = None
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    models: list[ModelUsageModelFlat] = Field(default_factory=list)
+    context: ModelUsageContextFlat | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("usage"):
+            data["usage"] = _usage_accounting_payload(data["usage"])
+        if data.get("context") == {}:
+            data.pop("context", None)
+        return data
+
+
+class SessionGraphModelUsageFlat(BaseModel):
+    root_session_id: UUID
+    vendor: str | None = None
+    project: str | None = None
+    title: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    context: ModelUsageContextFlat | None = None
+    models: list[ModelUsageModelFlat] = Field(default_factory=list)
+    dominant_model: DominantModelFlat | None = None
+    turns: list[ModelUsageTurnFlat] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("usage"):
+            data["usage"] = _usage_accounting_payload(data["usage"])
+        if data.get("context") == {}:
+            data.pop("context", None)
+        if data.get("dominant_model") == {}:
+            data.pop("dominant_model", None)
+        return data
+
+
 class UsageSpan(BaseModel):
     usage_observation_id: UUID
     turn_id: UUID

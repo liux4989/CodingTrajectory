@@ -14,10 +14,12 @@ from typing import Any, Callable
 try:
     from . import cleanup as cleanup_mod
     from . import context_window as context_window_mod
+    from . import model_usage as model_usage_mod
     from . import session_analysis as session_analysis_mod
 except ImportError:
     import cleanup as cleanup_mod
     import context_window as context_window_mod
+    import model_usage as model_usage_mod
     import session_analysis as session_analysis_mod
 
 
@@ -33,7 +35,9 @@ class TtlCache:
         self._entries: dict[tuple[Any, ...], CacheEntry] = {}
         self._lock = threading.Lock()
 
-    def get_or_set(self, key: tuple[Any, ...], factory: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    def get_or_set(
+        self, key: tuple[Any, ...], factory: Callable[[], dict[str, Any]]
+    ) -> dict[str, Any]:
         now = time.monotonic()
         with self._lock:
             entry = self._entries.get(key)
@@ -116,13 +120,17 @@ class DashboardDataService:
 
     def projects(self, query: dict[str, list[str]]) -> dict[str, Any]:
         vendor = _first(query, "agent_vendor")
-        return self._cache.get_or_set(("projects", vendor), lambda: self._projects_uncached(vendor))
+        return self._cache.get_or_set(
+            ("projects", vendor), lambda: self._projects_uncached(vendor)
+        )
 
     def project_detail(self, query: dict[str, list[str]]) -> dict[str, Any]:
         project_name = _first(query, "project_name")
         if not project_name:
             raise ValueError("project_name is required")
-        projects = _ct_json(["project", "list", "--params", json.dumps({}), "--output", "json"])
+        projects = _ct_json(
+            ["project", "list", "--params", json.dumps({}), "--output", "json"]
+        )
         items = projects.get("items") or {}
         meta = items.get(project_name)
         if not meta:
@@ -132,7 +140,14 @@ class DashboardDataService:
         if since_days_raw is not None:
             sessions_params["since_days"] = int(since_days_raw)
         sessions = _ct_json(
-            ["project", "sessions", "--params", json.dumps(sessions_params), "--output", "json"]
+            [
+                "project",
+                "sessions",
+                "--params",
+                json.dumps(sessions_params),
+                "--output",
+                "json",
+            ]
         )
         return {
             "name": project_name,
@@ -184,6 +199,13 @@ class DashboardDataService:
             turn_id=_first(query, "turn_id"),
         ).model_dump(mode="json")
 
+    def model_usage(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        return model_usage_mod.build_projection(
+            ct_json=_ct_json,
+            since_days=_int(query, "since_days", 7),
+            project_name=_first(query, "project_name"),
+        )
+
     def session_analysis(self, body: dict[str, Any]) -> dict[str, Any]:
         session_id = body.get("session_id")
         if not isinstance(session_id, str) or not session_id.strip():
@@ -221,7 +243,9 @@ class DashboardDataService:
                     "project_count": stats["count"],
                     "projects": stats["projects"],
                 }
-                for vendor, stats in sorted(vendor_stats.items(), key=lambda x: -x[1]["count"])
+                for vendor, stats in sorted(
+                    vendor_stats.items(), key=lambda x: -x[1]["count"]
+                )
             }
         }
 
@@ -239,7 +263,8 @@ class DashboardDataService:
         selected = [
             target
             for target in preview.candidates
-            if isinstance(target, cleanup_mod.ProjectTarget) and target.path in selected_paths
+            if isinstance(target, cleanup_mod.ProjectTarget)
+            and target.path in selected_paths
         ]
         _require_all_selected(selected_paths, [target.path for target in selected])
         result = cleanup_mod.apply_project_selection(
@@ -266,7 +291,8 @@ class DashboardDataService:
         selected = [
             target
             for target in preview.candidates
-            if isinstance(target, cleanup_mod.SessionTarget) and target.path in selected_paths
+            if isinstance(target, cleanup_mod.SessionTarget)
+            and target.path in selected_paths
         ]
         _require_all_selected(selected_paths, [target.path for target in selected])
         result = cleanup_mod.apply_session_selection(
@@ -288,7 +314,9 @@ class DashboardDataService:
         params: dict[str, Any] = {}
         if vendor:
             params["agent_vendor"] = vendor
-        payload = _ct_json(["project", "list", "--params", json.dumps(params), "--output", "json"])
+        payload = _ct_json(
+            ["project", "list", "--params", json.dumps(params), "--output", "json"]
+        )
         items = payload.get("items") or {}
         return {
             "items": [
@@ -302,7 +330,9 @@ class DashboardDataService:
         }
 
     def _sessions_uncached(self, params: dict[str, Any]) -> dict[str, Any]:
-        payload = _ct_json(["project", "sessions", "--params", json.dumps(params), "--output", "json"])
+        payload = _ct_json(
+            ["project", "sessions", "--params", json.dumps(params), "--output", "json"]
+        )
         return {"items": payload.get("items") or []}
 
     def _session_data_uncached(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -327,7 +357,10 @@ class DashboardDataService:
         )
         if not payload.get("ok"):
             error = payload.get("error") or {}
-            return {"items": [], "errors": [{"message": error.get("message") or "request failed"}]}
+            return {
+                "items": [],
+                "errors": [{"message": error.get("message") or "request failed"}],
+            }
         result = payload.get("result") or {}
         return {
             "items": [
@@ -341,7 +374,9 @@ class DashboardDataService:
 
 def _session_query_params(query: dict[str, list[str]]) -> dict[str, Any]:
     params: dict[str, Any] = {
-        "since_days": None if _bool(query, "all_time") else _int(query, "since_days", 30)
+        "since_days": None
+        if _bool(query, "all_time")
+        else _int(query, "since_days", 30)
     }
     project_name = _first(query, "project_name")
     vendor = _first(query, "agent_vendor")
@@ -365,7 +400,9 @@ def _session_data_query_params(query: dict[str, list[str]]) -> dict[str, Any]:
         params["agent_vendor"] = vendor
     include = _first(query, "include")
     if include:
-        params["include"] = [item.strip() for item in include.split(",") if item.strip()]
+        params["include"] = [
+            item.strip() for item in include.split(",") if item.strip()
+        ]
     return params
 
 
@@ -377,7 +414,12 @@ def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
         "tool_calls": 0,
         "failed_tool_calls": 0,
     }
-    usage_totals = {"total_tokens": 0, "cost_usd": 0.0, "known_cost_count": 0, "missing_cost_count": 0}
+    usage_totals = {
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+        "known_cost_count": 0,
+        "missing_cost_count": 0,
+    }
     project_stats: dict[str, dict[str, Any]] = {}
     warnings: list[dict[str, Any]] = []
 
@@ -456,13 +498,17 @@ def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _batch_result(responses: dict[str, dict[str, Any]], request_id: str) -> dict[str, Any]:
+def _batch_result(
+    responses: dict[str, dict[str, Any]], request_id: str
+) -> dict[str, Any]:
     response = responses.get(request_id)
     if response is None:
         raise RuntimeError(f"ct api batch omitted response: {request_id}")
     if not response.get("ok"):
         error = response.get("error") or {}
-        raise RuntimeError(str(error.get("message") or f"ct api request failed: {request_id}"))
+        raise RuntimeError(
+            str(error.get("message") or f"ct api request failed: {request_id}")
+        )
     result = response.get("result") or {}
     if not isinstance(result, dict):
         raise RuntimeError(f"ct api request returned invalid result: {request_id}")
@@ -551,7 +597,9 @@ def _preview_payload(preview: cleanup_mod.CleanupPreview) -> dict[str, Any]:
         "candidates": [target.model_dump(mode="json") for target in preview.candidates],
         "skipped": [
             item.model_dump(mode="json")
-            for item in sorted(preview.skipped, key=lambda target: (target.kind, target.path))
+            for item in sorted(
+                preview.skipped, key=lambda target: (target.kind, target.path)
+            )
         ],
     }
 
@@ -583,7 +631,9 @@ def _selected_paths(body: dict[str, Any]) -> set[str]:
 def _require_all_selected(requested: set[str], matched: list[str]) -> None:
     missing = requested - set(matched)
     if missing:
-        raise ValueError(f"selected path is no longer a cleanup candidate: {sorted(missing)[0]}")
+        raise ValueError(
+            f"selected path is no longer a cleanup candidate: {sorted(missing)[0]}"
+        )
 
 
 def _body_query(body: dict[str, Any]) -> dict[str, list[str]]:
@@ -600,14 +650,20 @@ def _body_query(body: dict[str, Any]) -> dict[str, list[str]]:
 def _ct_json(args: list[str]) -> dict[str, Any]:
     ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
     if not ct:
-        raise RuntimeError("ct executable not found; set CT_COMMAND to the ct command path")
+        raise RuntimeError(
+            "ct executable not found; set CT_COMMAND to the ct command path"
+        )
     command = [*shlex.split(ct), *args]
     try:
-        completed = subprocess.run(command, check=False, text=True, capture_output=True, timeout=30)
+        completed = subprocess.run(
+            command, check=False, text=True, capture_output=True, timeout=30
+        )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"ct command timed out: {' '.join(command)}") from exc
     if completed.returncode != 0:
-        message = completed.stderr.strip() or completed.stdout.strip() or "ct command failed"
+        message = (
+            completed.stderr.strip() or completed.stdout.strip() or "ct command failed"
+        )
         raise RuntimeError(message)
     return json.loads(completed.stdout)
 
