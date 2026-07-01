@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { AlertTriangle, CircleSlash, ShieldAlert } from "lucide-react";
 import {
   fetchErrorCollection,
@@ -15,6 +16,7 @@ import { shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { DataTable } from "@/components/data-table";
 import {
   Select,
   SelectContent,
@@ -23,7 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MetricSkeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 const ALL_PROJECTS = "__all_projects__";
 const TIME_OPTIONS = [7, 14, 30, 90];
@@ -215,7 +217,98 @@ function ProjectCards({ data }: { data: ErrorCollectionPayload }) {
   );
 }
 
+const errorColumns: ColumnDef<ErrorCollectionItem>[] = [
+  {
+    id: "type",
+    header: () => <HeaderLabel>Type</HeaderLabel>,
+    cell: ({ row }) => {
+      const item = row.original;
+      return (
+        <div className="min-w-[13rem]">
+          <div className="flex items-center gap-2 font-medium">
+            <KindIcon kind={item.kind} compact />
+            {KIND_LABELS[item.kind]}
+          </div>
+          <p className="m-0 mt-1 text-body-sm text-muted-foreground">{item.detail}</p>
+        </div>
+      );
+    },
+  },
+  {
+    id: "session",
+    header: () => <HeaderLabel>Session</HeaderLabel>,
+    cell: ({ row }) => {
+      const item = row.original;
+      return (
+        <div className="min-w-[14rem]">
+          <Link
+            to="/sessions/$sessionId/context-window"
+            params={{ sessionId: item.session_id }}
+            className="font-medium text-primary hover:underline"
+          >
+            {shortSessionId(item.session_id)}
+          </Link>
+          <p className="m-0 mt-1 max-w-[28rem] truncate text-body-sm text-muted-foreground">
+            {item.session_title || item.started_at || "Untitled session"}
+          </p>
+        </div>
+      );
+    },
+  },
+  {
+    id: "project",
+    accessorFn: (row) => row.project || "unknown",
+    header: () => <HeaderLabel>Project</HeaderLabel>,
+  },
+  {
+    id: "severity",
+    accessorFn: (row) => row.severity,
+    header: () => <HeaderLabel>Severity</HeaderLabel>,
+    cell: ({ getValue }) => {
+      const severity = getValue<"info" | "warning" | "critical">();
+      return (
+        <Badge variant={severity === "critical" ? "destructive" : "secondary"}>{severity}</Badge>
+      );
+    },
+  },
+  {
+    id: "confidence",
+    accessorFn: (row) => row.confidence,
+    header: () => <HeaderLabel>Confidence</HeaderLabel>,
+    cell: ({ getValue }) => {
+      const confidence = getValue<"direct" | "inferred">();
+      return (
+        <Badge variant={confidence === "direct" ? "default" : "outline"}>{confidence}</Badge>
+      );
+    },
+  },
+  {
+    id: "evidence",
+    accessorFn: (row) => row.evidence,
+    header: () => <HeaderLabel>Evidence</HeaderLabel>,
+    cell: ({ getValue }) => {
+      const items = getValue<string[]>();
+      return (
+        <ul className="m-0 grid min-w-[18rem] gap-1 p-0 text-body-sm text-muted-foreground">
+          {items.map((item) => (
+            <li key={item} className="list-none">
+              {item}
+            </li>
+          ))}
+        </ul>
+      );
+    },
+    enableSorting: false,
+  },
+];
+
 function ErrorTable({ rows }: { rows: ErrorCollectionItem[] }) {
+  const table = useReactTable({
+    data: rows,
+    columns: errorColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+
   return (
     <Card className="min-w-0">
       <CardHeader>
@@ -223,77 +316,22 @@ function ErrorTable({ rows }: { rows: ErrorCollectionItem[] }) {
         <CardDescription>Each row keeps the classifier evidence visible with direct or inferred confidence.</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="overflow-auto rounded-lg border border-border-subtle">
-          <Table>
-            <TableHead className="bg-table-head font-display text-caption uppercase">
-              <TableRow>
-                <TableHeader>Type</TableHeader>
-                <TableHeader>Session</TableHeader>
-                <TableHeader>Project</TableHeader>
-                <TableHeader>Severity</TableHeader>
-                <TableHeader>Confidence</TableHeader>
-                <TableHeader>Evidence</TableHeader>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {rows.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell className="min-w-[13rem]">
-                    <div className="flex items-center gap-2 font-medium">
-                      <KindIcon kind={row.kind} compact />
-                      {KIND_LABELS[row.kind]}
-                    </div>
-                    <p className="m-0 mt-1 text-body-sm text-muted-foreground">{row.detail}</p>
-                  </TableCell>
-                  <TableCell className="min-w-[14rem]">
-                    <Link
-                      to="/sessions/$sessionId/context-window"
-                      params={{ sessionId: row.session_id }}
-                      className="font-medium text-primary hover:underline"
-                    >
-                      {shortSessionId(row.session_id)}
-                    </Link>
-                    <p className="m-0 mt-1 max-w-[28rem] truncate text-body-sm text-muted-foreground">
-                      {row.session_title || row.started_at || "Untitled session"}
-                    </p>
-                  </TableCell>
-                  <TableCell>{row.project || "unknown"}</TableCell>
-                  <TableCell>
-                    <Badge variant={row.severity === "critical" ? "destructive" : "secondary"}>
-                      {row.severity}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={row.confidence === "direct" ? "default" : "outline"}>
-                      {row.confidence}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="min-w-[18rem]">
-                    <ul className="m-0 grid gap-1 p-0 text-body-sm text-muted-foreground">
-                      {row.evidence.map((item) => (
-                        <li key={item} className="list-none">
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!rows.length ? (
-                <TableRow>
-                  <TableCell colSpan={6}>No collected errors for this scope.</TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable
+          table={table}
+          columnCount={errorColumns.length}
+          emptyMessage="No collected errors for this scope."
+        />
       </CardContent>
     </Card>
   );
 }
 
+function HeaderLabel({ children }: { children: React.ReactNode }) {
+  return <span className="font-extrabold uppercase tracking-wide">{children}</span>;
+}
+
 function KindIcon({ kind, compact = false }: { kind: ErrorCollectionKind; compact?: boolean }) {
-  const className = compact ? "h-4 w-4 text-primary" : "h-8 w-8 text-primary";
+  const className = cn(compact ? "h-4 w-4 text-primary" : "h-8 w-8 text-primary");
   if (kind === "abort_coding_session") {
     return <CircleSlash className={className} aria-hidden="true" />;
   }

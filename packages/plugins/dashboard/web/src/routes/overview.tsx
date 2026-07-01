@@ -1,8 +1,10 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchOverview } from "@/api";
+import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { fetchOverview, type OverviewPayload } from "@/api";
 import { ProjectLink } from "@/components/project-link";
 import { SessionLink, shortSessionId } from "@/components/session-link";
+import { DataTable } from "@/components/data-table";
 import { MetricSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
 import { MetricCard } from "@/components/metric-card";
@@ -10,7 +12,6 @@ import { RefreshButton } from "@/components/refresh-button";
 import { StateBlock } from "@/components/state-block";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export function OverviewRoute() {
   const overview = useQuery({ queryKey: ["overview"], queryFn: fetchOverview });
@@ -135,56 +136,7 @@ export function OverviewRoute() {
           <CardDescription>Sessions ranked by token usage.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="overflow-auto rounded-lg border border-border-subtle">
-            <Table>
-              <TableHead className="bg-table-head font-display text-caption uppercase">
-                <TableRow>
-                  <TableHeader>Session</TableHeader>
-                  <TableHeader>Project</TableHeader>
-                  <TableHeader>Vendor</TableHeader>
-                  <TableHeader className="text-right">Runtime</TableHeader>
-                  <TableHeader className="text-right">Tokens</TableHeader>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {data.sessions.top_sessions.map((session) => (
-                  <TableRow key={session.id ?? `${session.project}-${session.title}`}>
-                    <TableCell className="max-w-[26rem]">
-                      <div className="flex items-baseline gap-2">
-                        <span className="min-w-0 flex-1 truncate font-medium">
-                          {session.id ? (
-                            <SessionLink sessionId={session.id}>
-                              {session.title || shortSessionId(session.id)}
-                            </SessionLink>
-                          ) : (
-                            session.title || "Untitled session"
-                          )}
-                        </span>
-                        <span className="shrink-0 whitespace-nowrap text-caption text-muted-foreground">
-                          {formatWhen(session.started_at)}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {session.project ? (
-                        <ProjectLink name={session.project} sinceDays={data.sessions.window_days} />
-                      ) : (
-                        "unknown"
-                      )}
-                    </TableCell>
-                    <TableCell>{session.vendor}</TableCell>
-                    <TableCell className="text-right">{formatDuration(session.execution_seconds)}</TableCell>
-                    <TableCell className="text-right">{compactNumber(session.total_tokens)}</TableCell>
-                  </TableRow>
-                ))}
-                {!data.sessions.top_sessions.length ? (
-                  <TableRow>
-                    <TableCell colSpan={5}>No sessions with token usage in this window.</TableCell>
-                  </TableRow>
-                ) : null}
-              </TableBody>
-            </Table>
-          </div>
+          <TopSessionsTable sessions={data.sessions.top_sessions} windowDays={data.sessions.window_days} />
         </CardContent>
       </Card>
 
@@ -223,6 +175,93 @@ function IssueRow({ label, message, detail }: { label: string; message: string; 
       <p className="m-0 break-words text-body-sm">{message}</p>
     </div>
   );
+}
+
+type TopSession = OverviewPayload["sessions"]["top_sessions"][number];
+
+function TopSessionsTable({ sessions, windowDays }: { sessions: TopSession[]; windowDays: number }) {
+  const columns = React.useMemo<ColumnDef<TopSession>[]>(
+    () => [
+      {
+        id: "session",
+        header: () => <HeaderLabel>Session</HeaderLabel>,
+        cell: ({ row }) => {
+          const session = row.original;
+          return (
+            <div className="flex max-w-[26rem] items-baseline gap-2">
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {session.id ? (
+                  <SessionLink sessionId={session.id}>
+                    {session.title || shortSessionId(session.id)}
+                  </SessionLink>
+                ) : (
+                  session.title || "Untitled session"
+                )}
+              </span>
+              <span className="shrink-0 whitespace-nowrap text-caption text-muted-foreground">
+                {formatWhen(session.started_at)}
+              </span>
+            </div>
+          );
+        },
+      },
+      {
+        id: "project",
+        accessorFn: (row) => row.project ?? "unknown",
+        header: () => <HeaderLabel>Project</HeaderLabel>,
+        cell: ({ row, getValue }) => {
+          const project = row.original.project;
+          return project ? (
+            <ProjectLink name={project} sinceDays={windowDays} />
+          ) : (
+            getValue<string>()
+          );
+        },
+      },
+      {
+        accessorKey: "vendor",
+        header: () => <HeaderLabel>Vendor</HeaderLabel>,
+      },
+      {
+        id: "runtime",
+        accessorFn: (row) => row.execution_seconds,
+        header: () => <HeaderLabel align="right">Runtime</HeaderLabel>,
+        cell: ({ getValue }) => <RightCell>{formatDuration(getValue<number>())}</RightCell>,
+      },
+      {
+        id: "tokens",
+        accessorFn: (row) => row.total_tokens,
+        header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
+        cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+      },
+    ],
+    [windowDays],
+  );
+
+  const table = useReactTable({
+    data: sessions,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+  return (
+    <DataTable
+      table={table}
+      columnCount={columns.length}
+      emptyMessage="No sessions with token usage in this window."
+    />
+  );
+}
+
+function HeaderLabel({ children, align = "left" }: { children: React.ReactNode; align?: "left" | "right" }) {
+  return (
+    <span className={align === "right" ? "text-right font-extrabold uppercase tracking-wide" : "font-extrabold uppercase tracking-wide"}>
+      {children}
+    </span>
+  );
+}
+
+function RightCell({ children }: { children: React.ReactNode }) {
+  return <div className="text-right">{children}</div>;
 }
 
 function compactNumber(value: number) {
