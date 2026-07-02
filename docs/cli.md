@@ -56,6 +56,12 @@ example `ct api schema session.usage`.
 `session stats` and `session usage` default to markdown reports and switch to
 compact JSON with `--output json`.
 
+Token usage payloads follow the glossary in
+[`token-usage-glossary.md`](token-usage-glossary.md): provider totals are kept
+as reported, while `processed_tokens` and `prompt_completion_tokens` provide
+explicit derived totals. New compact CLI JSON uses `prompt_completion` for the
+prompt-plus-completion total.
+
 Most session-scoped commands locate sessions automatically from the most-recent
 session in the current working directory. Use `--global-scope` on commands that
 support it to search all known log files instead. `project list` always uses the

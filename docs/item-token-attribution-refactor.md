@@ -144,8 +144,11 @@ The item view keeps provider usage buckets separate after allocation:
 `cache_creation_input_tokens`, `output_tokens`, and
 `reasoning_output_tokens`. This makes the attribution rate-neutral: callers can
 apply pricing later without embedding model-specific rates in the metrics layer.
-`total_tokens` is the sum of allocated price-bearing buckets and includes cached
-input rather than subtracting it away as an effective-token shortcut.
+`total_tokens` remains the compatibility total for the allocated price-bearing
+buckets in this item-allocation view. Session usage payloads additionally expose
+the glossary totals from [`token-usage-glossary.md`](token-usage-glossary.md),
+including `reported_total_tokens`, `processed_tokens`, and
+`prompt_completion_tokens`.
 Cached input is capped to the item's own visible token footprint so a single
 item does not inherit unrelated cached context from the full replayed request.
 

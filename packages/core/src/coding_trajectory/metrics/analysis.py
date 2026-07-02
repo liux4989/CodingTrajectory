@@ -767,6 +767,14 @@ def _allocated_cost_usage_dict(
         "output_tokens": cost.output_tokens,
         "reasoning_output_tokens": cost.reasoning_output_tokens,
         "total_tokens": cost.total_tokens,
+        "prompt_tokens": cost.input_tokens,
+        "cached_prompt_tokens": cost.cached_input_tokens,
+        "cache_write_tokens": cost.cache_creation_input_tokens,
+        "completion_tokens": cost.output_tokens,
+        "reasoning_tokens": cost.reasoning_output_tokens,
+        "processed_tokens": cost.total_tokens,
+        "prompt_completion_tokens": cost.input_tokens + cost.output_tokens,
+        "fresh_io_tokens": cost.input_tokens + cost.output_tokens,
     }
     return {key: value for key, value in usage_dict.items() if value > 0}
 
@@ -1349,7 +1357,7 @@ def _token_usage_from_mapping(
     reported_total_tokens = _as_int(
         value.get("total_tokens") or value.get("totalTokens")
     )
-    total_tokens, total_confidence = _normalized_total_tokens(
+    total_tokens, processed_tokens, total_confidence = _normalized_total_tokens(
         provider=provider,
         input_tokens=input_tokens,
         cached_input_tokens=cached_input_tokens,
@@ -1365,6 +1373,7 @@ def _token_usage_from_mapping(
         output_tokens=output_tokens,
         reasoning_output_tokens=reasoning_output_tokens,
         total_tokens=total_tokens,
+        processed_tokens=processed_tokens,
         reported_total_tokens=(
             reported_total_tokens if reported_total_tokens > 0 else None
         ),
@@ -1381,31 +1390,25 @@ def _normalized_total_tokens(
     output_tokens: int,
     reasoning_output_tokens: int,
     reported_total_tokens: int,
-) -> tuple[int, str]:
-    inclusive_input_total = input_tokens + output_tokens + reasoning_output_tokens
-    additive_total = (
-        input_tokens
-        + cached_input_tokens
-        + cache_creation_input_tokens
-        + output_tokens
-        + reasoning_output_tokens
+) -> tuple[int, int, str]:
+    fresh_io_total = input_tokens + output_tokens
+    reasoning_inclusive_total = fresh_io_total + reasoning_output_tokens
+    processed_without_reasoning_total = (
+        input_tokens + cached_input_tokens + cache_creation_input_tokens + output_tokens
     )
-    derived_total = (
-        additive_total
-        if _uses_net_input_convention(provider)
-        else inclusive_input_total
-    )
+    processed_total = processed_without_reasoning_total + reasoning_output_tokens
     if reported_total_tokens <= 0:
-        return derived_total, "reported_missing"
-    if reported_total_tokens in {inclusive_input_total, additive_total}:
-        return reported_total_tokens, "reported_consistent"
-    return derived_total, "reported_inconsistent"
-
-
-def _uses_net_input_convention(provider: str | None, model: str | None = None) -> bool:
-    if not provider:
-        return "claude" in (model or "").lower()
-    return provider.strip().lower() in {"anthropic", "claude", "claude-code"}
+        derived_total = (
+            processed_total
+            if _uses_net_input_convention(provider, None)
+            else reasoning_inclusive_total
+        )
+        return derived_total, derived_total, "reported_missing"
+    if reported_total_tokens in {fresh_io_total, reasoning_inclusive_total}:
+        return reported_total_tokens, reasoning_inclusive_total, "reported_consistent"
+    if reported_total_tokens in {processed_without_reasoning_total, processed_total}:
+        return reported_total_tokens, processed_total, "reported_consistent"
+    return processed_total, processed_total, "reported_inconsistent"
 
 
 def _context_usage_for_turn(
@@ -1446,7 +1449,7 @@ def _usage_consistency_warnings(metrics: SessionMetrics) -> list[str]:
         return []
     return [
         f"{inconsistent} token usage observations had inconsistent reported "
-        "totals; total_tokens was derived from normalized buckets"
+        "totals; total_tokens was derived from processed token buckets"
     ]
 
 

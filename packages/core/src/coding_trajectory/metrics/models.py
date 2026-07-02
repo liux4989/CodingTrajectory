@@ -20,6 +20,7 @@ class TokenUsage(BaseModel):
     output_tokens: int = 0
     reasoning_output_tokens: int = 0
     total_tokens: int = 0
+    processed_tokens: int = 0
     reported_total_tokens: int | None = None
     total_confidence: Literal[
         "reported_consistent",
@@ -36,6 +37,32 @@ class TokenUsage(BaseModel):
             + self.reasoning_output_tokens
         )
 
+    def processed_token_total(self) -> int:
+        return self.processed_tokens or self.compute_total()
+
+    def fresh_io_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def prompt_completion_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        data.update(
+            {
+                "prompt_tokens": self.input_tokens,
+                "cached_prompt_tokens": self.cached_input_tokens,
+                "cache_write_tokens": self.cache_creation_input_tokens,
+                "completion_tokens": self.output_tokens,
+                "reasoning_tokens": self.reasoning_output_tokens,
+                "processed_tokens": self.processed_token_total(),
+                "prompt_completion_tokens": self.prompt_completion_tokens(),
+                "fresh_io_tokens": self.fresh_io_tokens(),
+            }
+        )
+        return data
+
     def plus(self, other: "TokenUsage") -> "TokenUsage":
         return TokenUsage(
             input_tokens=self.input_tokens + other.input_tokens,
@@ -46,6 +73,8 @@ class TokenUsage(BaseModel):
             reasoning_output_tokens=self.reasoning_output_tokens
             + other.reasoning_output_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
+            processed_tokens=self.processed_token_total()
+            + other.processed_token_total(),
             reported_total_tokens=_optional_sum(
                 self.reported_total_tokens,
                 other.reported_total_tokens,
