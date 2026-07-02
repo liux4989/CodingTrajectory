@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 try:
@@ -666,7 +667,12 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
     command = [*shlex.split(ct), *args]
     try:
         completed = subprocess.run(
-            command, check=False, text=True, capture_output=True, timeout=30
+            command,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            cwd=_repo_root(),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"ct command timed out: {' '.join(command)}") from exc
@@ -676,6 +682,10 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
         )
         raise RuntimeError(message)
     return json.loads(completed.stdout)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
 
 
 def _first(query: dict[str, list[str]], key: str) -> str | None:

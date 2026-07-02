@@ -1402,9 +1402,9 @@ def _normalized_total_tokens(
     return derived_total, "reported_inconsistent"
 
 
-def _uses_net_input_convention(provider: str | None) -> bool:
+def _uses_net_input_convention(provider: str | None, model: str | None = None) -> bool:
     if not provider:
-        return False
+        return "claude" in (model or "").lower()
     return provider.strip().lower() in {"anthropic", "claude", "claude-code"}
 
 
