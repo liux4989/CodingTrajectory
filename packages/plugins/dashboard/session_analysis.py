@@ -161,14 +161,12 @@ class AgentReviewOutput(BaseModel):
 
 
 class AnalysisRunner(Protocol):
-    def run_skill_turn(
+    def run_turn(
         self,
         *,
         cwd: Path,
-        skill_name: str,
-        skill_path: Path,
         user_text: str,
-        output_schema: dict[str, Any],
+        output_schema: dict[str, Any] | None = None,
     ) -> CodexAppServerResult: ...
 
 
@@ -259,14 +257,12 @@ def build_analysis(
         usage_evidence=usage_evidence,
         tool_evidence=tool_evidence,
     )
-    app_result = _analysis_runner(provider).run_skill_turn(
+    app_result = _analysis_runner(provider).run_turn(
         cwd=_repo_root(),
-        skill_name="coding-session-review",
-        skill_path=_skill_path(),
         user_text=_analysis_request_text(evidence_packet),
         output_schema=AgentReviewOutput.model_json_schema(),
     )
-    review = AgentReviewOutput.model_validate(_json_from_text(app_result.text))
+    review = AgentReviewOutput.model_validate(app_result.parse_json())
     return SessionAnalysis(
         session_id=resolved_session_id,
         generated_at=dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -304,15 +300,6 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _skill_path() -> Path:
-    return (
-        Path(__file__).resolve().parent
-        / "skills"
-        / "coding-session-review"
-        / "SKILL.md"
-    )
-
-
 def _evidence_packet(
     *,
     session_id: str,
@@ -335,27 +322,43 @@ def _evidence_packet(
     }
 
 
+_REVIEW_INSTRUCTIONS = """\
+# Role
+You review one CodingTrajectory coding session for workflow quality.
+
+# Task
+Read the evidence packet below. Treat it as the only source of facts. Do not run \
+tools, browse, or infer unprovided raw evidence. Return only JSON matching the \
+output schema.
+
+# Review rules
+- Judge cost against the task story, not in isolation.
+- Separate justified expensive work from avoidable inefficiency.
+- Preserve raw-vs-derived boundaries: cumulative usage is from `ct session usage`; \
+the final context snapshot is from `ct session stats`; raw tool evidence is from \
+`ct session events`; findings are derived from the packet.
+- Use `usage_evidence.context_composition[].concept/source_key` as the canonical \
+context concept taxonomy, and keep resident context separate from billed tokens.
+- Mention high-impact ratios when available, and prefer actionable workflow \
+improvements over generic token-saving advice.
+- If the packet includes domain routing hints, use them to identify missed \
+optimal paths. Do not treat cloud/live state checks as automatically bad.
+
+# Output
+- `task_story`: initial request, follow-up pivots, phases, touched artifacts, outcomes.
+- `findings`: include at least one `avoidable_pattern` when risky buckets are \
+material, one `justified_expensive_work` when correctness work was necessary, one \
+`optimal_pattern` worth preserving, and one `recommended_workflow` for next time. \
+Keep each finding short enough for a dashboard card."""
+
+
 def _analysis_request_text(evidence_packet: dict[str, Any]) -> str:
     return (
-        "$coding-session-review Review this CodingTrajectory session and return only JSON matching "
-        "the output schema. Use the evidence packet as the only source of facts.\n\n"
-        f"{json.dumps(evidence_packet, ensure_ascii=False, separators=(',', ':'))}"
+        f"{_REVIEW_INSTRUCTIONS}\n\n"
+        "<evidence_packet>\n"
+        f"{json.dumps(evidence_packet, ensure_ascii=False, separators=(',', ':'))}\n"
+        "</evidence_packet>"
     )
-
-
-def _json_from_text(text: str) -> Any:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
-        stripped = re.sub(r"\s*```$", "", stripped)
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start >= 0 and end > start:
-            return json.loads(stripped[start : end + 1])
-        raise
 
 
 def _artifact_path(

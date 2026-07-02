@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import shlex
 import shutil
 import subprocess
@@ -19,18 +20,35 @@ class CodexAppServerResult:
     turn_id: str | None
     text: str
 
+    def parse_json(self) -> Any:
+        """Parse the agent reply as JSON for structured-output turns.
+
+        Invokers that run a turn with an ``output_schema`` call this and then
+        validate the value with their own model; plain-text turns use ``text``.
+        """
+        stripped = self.text.strip()
+        if stripped.startswith("```"):
+            stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+            stripped = re.sub(r"\s*```$", "", stripped)
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            start = stripped.find("{")
+            end = stripped.rfind("}")
+            if start >= 0 and end > start:
+                return json.loads(stripped[start : end + 1])
+            raise
+
 
 class CodexAppServerClient:
     def __init__(self, *, timeout_seconds: float = 180) -> None:
         self.timeout_seconds = timeout_seconds
         self._next_id = 1
 
-    def run_skill_turn(
+    def run_turn(
         self,
         *,
         cwd: Path,
-        skill_name: str,
-        skill_path: Path,
         user_text: str,
         output_schema: dict[str, Any] | None = None,
     ) -> CodexAppServerResult:
@@ -110,11 +128,6 @@ class CodexAppServerClient:
                 "approvalPolicy": "never",
                 "input": [
                     {"type": "text", "text": user_text},
-                    {
-                        "type": "skill",
-                        "name": skill_name,
-                        "path": str(skill_path),
-                    },
                 ],
             }
             if output_schema is not None:
@@ -233,12 +246,10 @@ class PiRpcClient:
         self.timeout_seconds = timeout_seconds
         self._next_id = 1
 
-    def run_skill_turn(
+    def run_turn(
         self,
         *,
         cwd: Path,
-        skill_name: str,
-        skill_path: Path,
         user_text: str,
         output_schema: dict[str, Any] | None = None,
     ) -> CodexAppServerResult:
@@ -279,9 +290,7 @@ class PiRpcClient:
                 {
                     "id": prompt_request_id,
                     "type": "prompt",
-                    "message": _pi_skill_prompt(
-                        skill_name=skill_name,
-                        skill_path=skill_path,
+                    "message": _pi_prompt(
                         user_text=user_text,
                         output_schema=output_schema,
                     ),
@@ -376,29 +385,18 @@ def _pi_rpc_command() -> list[str]:
     return [pi, "--mode", "rpc", "--no-session"]
 
 
-def _pi_skill_prompt(
+def _pi_prompt(
     *,
-    skill_name: str,
-    skill_path: Path,
     user_text: str,
     output_schema: dict[str, Any] | None = None,
 ) -> str:
-    try:
-        skill_text = skill_path.read_text(encoding="utf-8")
-    except OSError:
-        skill_text = ""
     schema_instruction = ""
     if output_schema is not None:
         schema_instruction = (
             "Return only JSON matching this schema.\n\n"
             f"<output_schema>\n{json.dumps(output_schema, ensure_ascii=False, separators=(',', ':'))}\n</output_schema>\n\n"
         )
-    return (
-        f"Use the following skill instructions for ${skill_name}.\n\n"
-        f"<skill_instructions>\n{skill_text}\n</skill_instructions>\n\n"
-        f"{schema_instruction}"
-        f"{user_text}"
-    )
+    return f"{schema_instruction}{user_text}"
 
 
 def _pi_message_text(message: Any) -> str | None:

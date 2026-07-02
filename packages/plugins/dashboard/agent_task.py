@@ -32,12 +32,10 @@ class AgentTaskResult(BaseModel):
 
 
 class AgentTaskRunner(Protocol):
-    def run_skill_turn(
+    def run_turn(
         self,
         *,
         cwd: Path,
-        skill_name: str,
-        skill_path: Path,
         user_text: str,
         output_schema: dict[str, Any] | None = None,
     ) -> CodexAppServerResult:
@@ -57,10 +55,8 @@ def run_agent_task(
     if not task_context:
         raise ValueError("task_context is required")
     provider = _normalize_provider(provider)
-    app_result = _agent_task_runner(provider).run_skill_turn(
+    app_result = _agent_task_runner(provider).run_turn(
         cwd=_repo_root(),
-        skill_name="dashboard-agent-task",
-        skill_path=_skill_path(),
         user_text=_task_request_text(task_goal, task_context),
     )
     return AgentTaskResult(
@@ -97,15 +93,27 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _skill_path() -> Path:
-    return Path(__file__).resolve().parent / "skills" / "dashboard-agent-task" / "SKILL.md"
+_TASK_INSTRUCTIONS = """\
+# Role
+You run a general dashboard agent task.
+
+# Task
+- `task_goal`: what the dashboard feature wants accomplished.
+- `task_context`: the plain-text context supplied by that feature.
+
+# Rules
+Use the supplied context as the evidence boundary. If the goal asks for fixes, \
+include likely causes, concrete next actions, and any missing evidence needed to \
+proceed. Return plain text only."""
 
 
 def _task_request_text(task_goal: str, task_context: str) -> str:
     packet = {"task_goal": task_goal, "task_context": task_context}
     return (
-        "$dashboard-agent-task Run this dashboard agent task. Return a plain text response.\n\n"
-        f"{json.dumps(packet, ensure_ascii=False, separators=(',', ':'))}"
+        f"{_TASK_INSTRUCTIONS}\n\n"
+        "<task>\n"
+        f"{json.dumps(packet, ensure_ascii=False, separators=(',', ':'))}\n"
+        "</task>"
     )
 
 
