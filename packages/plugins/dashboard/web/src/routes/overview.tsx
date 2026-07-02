@@ -9,6 +9,7 @@ import { DataTable } from "@/components/data-table";
 import { MetricSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
 import { MetricCard } from "@/components/metric-card";
+import { StaggerGroup } from "@/components/stagger-group";
 import { RefreshButton } from "@/components/refresh-button";
 import { StateBlock } from "@/components/state-block";
 import { MiniBarChart } from "@/components/charts";
@@ -46,6 +47,7 @@ export function OverviewRoute() {
         action={<RefreshButton queries={["overview"]} />}
       />
       <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
+        <StaggerGroup className="contents">
         <MetricCard
           label="Projects"
           value={data.projects.count}
@@ -68,6 +70,7 @@ export function OverviewRoute() {
           value={compactNumber(usage.processed_tokens)}
           detail={`${formatCost(usage.cost_usd)} known cost${usage.missing_cost_count ? `, ${usage.missing_cost_count} partial` : ""}`}
         />
+        </StaggerGroup>
       </section>
       <section className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(22rem,0.8fr)] gap-4 max-xl:grid-cols-1">
         <Card className="min-w-0">

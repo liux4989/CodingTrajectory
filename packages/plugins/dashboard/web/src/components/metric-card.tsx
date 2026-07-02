@@ -1,4 +1,5 @@
 import * as React from "react";
+import { motion } from "motion/react";
 import {
   Card,
   CardAction,
@@ -10,6 +11,8 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MiniBarChart } from "@/components/charts";
+import { AnimatedNumber } from "@/components/animated-number";
+import { popIn, staggerItem } from "@/lib/motion";
 
 type MetricCardProps = {
   label: string;
@@ -28,17 +31,24 @@ type MetricCardProps = {
  */
 export function MetricCard({ label, value, detail, sparklineEntries, ratio, trend }: MetricCardProps) {
   return (
+    <motion.div variants={staggerItem}>
     <Card className="@container/card metric-card min-w-0 gap-0 overflow-hidden">
       <CardHeader>
         <CardDescription>{label}</CardDescription>
         <CardTitle className="font-display text-metric font-extrabold tabular-nums leading-tight">
-          {typeof value === "number" ? value.toLocaleString() : value}
+          {typeof value === "number" ? (
+            <AnimatedNumber value={value} />
+          ) : (
+            value
+          )}
         </CardTitle>
         {trend ? (
           <CardAction>
-            <Badge variant="outline">
-              {trend.direction === "down" ? "▼" : "▲"} {trend.value}
-            </Badge>
+            <motion.div variants={popIn}>
+              <Badge variant="outline">
+                {trend.direction === "down" ? "▼" : "▲"} {trend.value}
+              </Badge>
+            </motion.div>
           </CardAction>
         ) : null}
       </CardHeader>
@@ -58,13 +68,16 @@ export function MetricCard({ label, value, detail, sparklineEntries, ratio, tren
             role="img"
             aria-label={`${Math.round(ratio * 100)}%`}
           >
-            <div
-              className="h-full rounded-full bg-primary transition-[width] duration-400"
-              style={{ width: `${Math.round(ratio * 100)}%` }}
+            <motion.div
+              className="h-full rounded-full bg-primary"
+              initial={{ width: 0 }}
+              animate={{ width: `${Math.min(100, Math.max(0, Math.round(ratio * 100)))}%` }}
+              transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1], delay: 0.1 }}
             />
           </div>
         ) : null}
       </CardFooter>
     </Card>
+    </motion.div>
   );
 }
