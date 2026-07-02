@@ -581,7 +581,7 @@ export function ContextWindowRoute() {
               </div>
               <p className="mt-4 max-h-[18rem] overflow-auto whitespace-pre-wrap leading-relaxed">{activeEvent.summary ?? "No text preview is available."}</p>
               {activeEvent.terminal_visible ? (
-                <div className="mt-4 overflow-hidden rounded-xl border border-border-soft bg-surface-subtle">
+                <div className="panel-subtle mt-4 overflow-hidden rounded-xl">
                   <div className="flex items-center gap-2 px-4 py-3 font-display text-body-sm font-bold">
                     <Info size={16} className="text-primary" />
                     One-liner in your terminal
@@ -706,7 +706,7 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
           ))}
         </div>
 
-        <div className="rounded-xl border border-border-soft bg-surface-subtle p-4">
+        <div className="panel-subtle rounded-xl p-4">
           <h3 className="m-0 font-display text-body font-bold">Output buckets</h3>
           <div className="mt-3 grid gap-3">
             {topBuckets.map((bucket) => (
@@ -738,7 +738,7 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
 
 function MetricTile({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="rounded-xl border border-border-soft bg-surface-subtle px-4 py-3">
+    <div className="panel-subtle rounded-xl px-4 py-3">
       <p className="m-0 text-caption text-muted-foreground">{label}</p>
       <p className="m-0 mt-1 mono text-heading font-bold text-foreground">{value}</p>
       <p className="m-0 mt-1 text-caption text-muted-foreground">{detail}</p>

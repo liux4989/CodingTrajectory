@@ -85,7 +85,7 @@ export function OverviewRoute() {
                 {data.sessions.top_projects.map((project) => (
                   <div
                     key={project.project}
-                    className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded-lg border border-border-soft p-3 max-sm:grid-cols-1"
+                    className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 panel max-sm:grid-cols-1"
                   >
                     <div className="min-w-0">
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -212,7 +212,7 @@ function overviewIssueContext(data: OverviewPayload) {
 
 function IssueRow({ label, message, detail }: { label: string; message: string; detail?: string }) {
   return (
-    <div className="grid gap-1 rounded-lg border border-border-soft p-3">
+    <div className="panel grid gap-1">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="secondary">{label}</Badge>
         {detail ? <span className="mono text-caption text-muted-foreground">{detail}</span> : null}

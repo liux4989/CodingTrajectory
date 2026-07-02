@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "@tanstack/react-router";
 import {
   useReactTable,
   getCoreRowModel,
@@ -75,6 +76,7 @@ const columns: ColumnDef<SessionItem>[] = [
 export function SessionsRoute() {
   const [filter, setFilter] = React.useState("");
   const [sorting, setSorting] = React.useState<SortingState>([]);
+  const router = useRouter();
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: fetchSessions });
   const data = sessions.data?.items ?? [];
 
@@ -104,7 +106,15 @@ export function SessionsRoute() {
       {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} /> : null}
       {sessions.data ? (
         <>
-          <DataTable table={table} columnCount={columns.length} emptyMessage="No sessions match the current filter." />
+          <DataTable
+            table={table}
+            columnCount={columns.length}
+            emptyMessage="No sessions match the current filter."
+            onRowClick={(item) => {
+              const id = sessionId(item);
+              if (id) router.navigate({ to: "/sessions/$sessionId/context-window", params: { sessionId: id } });
+            }}
+          />
           <DataTablePagination table={table} />
         </>
       ) : null}

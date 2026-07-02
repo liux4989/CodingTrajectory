@@ -14,6 +14,7 @@ type DataTableProps<TData extends RowData> = {
   emptyMessage: string;
   className?: string;
   tableHeadClassName?: string;
+  onRowClick?: (row: TData) => void;
 };
 
 export function DataTable<TData extends RowData>({
@@ -22,6 +23,7 @@ export function DataTable<TData extends RowData>({
   emptyMessage,
   className,
   tableHeadClassName,
+  onRowClick,
 }: DataTableProps<TData>) {
   return (
     <div className={cn("overflow-auto rounded-2xl border border-border-soft bg-card/78", className)}>
@@ -39,7 +41,12 @@ export function DataTable<TData extends RowData>({
         </TableHeader>
         <TableBody>
           {table.getRowModel().rows.map((row) => (
-            <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
+            <TableRow
+              key={row.id}
+              data-state={row.getIsSelected() && "selected"}
+              onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+              className={onRowClick ? "cursor-pointer" : undefined}
+            >
               {row.getVisibleCells().map((cell) => (
                 <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
               ))}
