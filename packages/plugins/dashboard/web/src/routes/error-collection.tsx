@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/select";
 import { MetricSkeleton } from "@/components/ui/skeleton";
 import { useDateRange } from "@/hooks/use-date-range";
-import { cn } from "@/lib/utils";
+import { HeaderLabel, FilterLabel } from "@/components/table-cells";
 
 const ALL_PROJECTS = "__all_projects__";
 
@@ -112,15 +112,6 @@ export function ErrorCollectionRoute() {
   );
 }
 
-function FilterLabel({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="grid gap-1 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-      {label}
-      {children}
-    </label>
-  );
-}
-
 function SummaryCards({ data }: { data: ErrorCollectionPayload }) {
   const affectedRatio = data.summary.sessions
     ? data.summary.affected_sessions / data.summary.sessions
@@ -161,7 +152,7 @@ function KindCards({ data }: { data: ErrorCollectionPayload }) {
             <KindIcon kind={kind as ErrorCollectionKind} />
             <div className="min-w-0">
               <p className="m-0 text-muted-foreground">{label}</p>
-              <p className="m-0 font-display text-h1 font-extrabold leading-tight">
+              <p className="m-0 metric-hero">
                 {data.summary.by_kind[kind as ErrorCollectionKind].toLocaleString()}
               </p>
             </div>
@@ -313,12 +304,8 @@ function ErrorTable({ rows }: { rows: ErrorCollectionItem[] }) {
   );
 }
 
-function HeaderLabel({ children }: { children: React.ReactNode }) {
-  return <span className="label-uppercase">{children}</span>;
-}
-
 function KindIcon({ kind, compact = false }: { kind: ErrorCollectionKind; compact?: boolean }) {
-  const className = cn(compact ? "h-4 w-4 text-primary" : "h-8 w-8 text-primary");
+  const className = compact ? "size-4 text-primary" : "size-8 text-primary";
   if (kind === "abort_coding_session") {
     return <CircleSlash className={className} aria-hidden="true" />;
   }

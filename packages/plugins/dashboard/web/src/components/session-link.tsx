@@ -21,10 +21,7 @@ export function SessionLink({ sessionId, className, children }: SessionLinkProps
     <Link
       to="/sessions/$sessionId/context-window"
       params={{ sessionId }}
-      className={cn(
-        "font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]",
-        className,
-      )}
+      className={cn("link font-display font-extrabold", className)}
     >
       {children ?? shortSessionId(sessionId)}
     </Link>

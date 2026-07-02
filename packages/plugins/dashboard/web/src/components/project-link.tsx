@@ -15,7 +15,7 @@ export function ProjectLink({ name, sinceDays, className, children }: ProjectLin
       to="/projects/$projectName"
       params={{ projectName: name }}
       search={{ sinceDays }}
-      className={cn("text-primary decoration-[0.08em] underline-offset-[0.2em]", className)}
+      className={cn("link", className)}
     >
       {children ?? name}
     </Link>

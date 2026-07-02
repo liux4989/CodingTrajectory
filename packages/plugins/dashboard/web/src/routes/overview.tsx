@@ -2,7 +2,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { fetchOverview, type OverviewPayload } from "@/api";
-import { cn } from "@/lib/utils";
+import { HeaderLabel, RightCell } from "@/components/table-cells";
 import { ProjectLink } from "@/components/project-link";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { AgentTaskPanel } from "@/components/agent-task-panel";
@@ -295,18 +295,6 @@ function TopSessionsTable({ sessions, windowDays }: { sessions: TopSession[]; wi
       emptyMessage="No sessions with token usage in this window."
     />
   );
-}
-
-function HeaderLabel({ children, align = "left" }: { children: React.ReactNode; align?: "left" | "right" }) {
-  return (
-    <span className={cn("label-uppercase", align === "right" && "text-right")}>
-      {children}
-    </span>
-  );
-}
-
-function RightCell({ children }: { children: React.ReactNode }) {
-  return <div className="text-right">{children}</div>;
 }
 
 function compactNumber(value: number) {

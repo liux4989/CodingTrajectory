@@ -108,7 +108,7 @@ export function AgentTaskPanel({
           />
         ) : null}
         {job.status === "error" ? (
-          <div role="alert" className="rounded-lg border border-destructive/35 bg-destructive/8 p-3 text-body-sm text-destructive">
+          <div role="alert" className="alert alert-destructive text-body-sm text-destructive">
             {job.error}
           </div>
         ) : null}

@@ -30,8 +30,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MetricSkeleton } from "@/components/ui/skeleton";
+import { FilterLabel, HeaderLabel, RightCell } from "@/components/table-cells";
 import { useDateRange } from "@/hooks/use-date-range";
-import { cn } from "@/lib/utils";
 
 const ALL_PROJECTS = "__all_projects__";
 const ALL_MODELS = "__all_models__";
@@ -224,15 +224,6 @@ function TimeView({ data }: { data: ModelUsagePayload }) {
   );
 }
 
-function FilterLabel({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="eyebrow-soft grid gap-1 text-muted-foreground">
-      {label}
-      {children}
-    </label>
-  );
-}
-
 function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView }) {
   if (view === "tokens") {
     const sessionStats = data.summary.token_stats.session;
@@ -297,7 +288,7 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
 
 function TokenBucketCards({ data }: { data: ModelUsagePayload }) {
   return (
-    <section className="grid min-w-0 grid-cols-5 gap-4 max-[110rem]:grid-cols-3 max-lg:grid-cols-2 max-md:grid-cols-1">
+    <section className="stat-grid-5 min-w-0">
       {TOKEN_BUCKET_DEFS.map(({ key, label }) => {
         const sessionValues = data.sessions.map((session) => usageValue(session.usage, key));
         const bucketStats = data.summary.token_stats.buckets[key];
@@ -886,23 +877,6 @@ function TurnTable({ data, view }: { data: ModelUsagePayload; view: "cost" | "to
       </CardContent>
     </Card>
   );
-}
-
-function HeaderLabel({ children, align = "left" }: { children: React.ReactNode; align?: "left" | "right" }) {
-  return (
-    <span
-      className={cn(
-        "label-uppercase",
-        align === "right" && "text-right",
-      )}
-    >
-      {children}
-    </span>
-  );
-}
-
-function RightCell({ children }: { children: React.ReactNode }) {
-  return <div className="text-right">{children}</div>;
 }
 
 function PricingBadge({ confidence }: { confidence: string }) {

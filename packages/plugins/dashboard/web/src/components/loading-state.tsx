@@ -38,7 +38,7 @@ export function LoadingState({
         <CardContent className="flex items-center gap-3">
           <Loader2 size={18} className="shrink-0 animate-spin text-primary" />
           <div className="min-w-0 flex-1">
-            <p className="m-0 font-display text-lg font-semibold">{title}</p>
+            <p className="m-0 title-state">{title}</p>
             {detail ? <p className="m-0 text-body-sm text-muted-foreground">{detail}</p> : null}
             {progress ? (
               <p className="m-0 mt-1 text-caption text-muted-foreground">{progress}</p>

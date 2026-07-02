@@ -378,6 +378,35 @@
     font-weight: 600;
   }
 
+  /* Section heading inside a card body (findings, buckets). */
+  .heading-section {
+    font-family: var(--font-display);
+    font-size: var(--text-body);
+    font-weight: 700;
+  }
+
+  /* Title for transient state surfaces (loading, error). */
+  .title-state {
+    font-family: var(--font-display);
+    font-size: 1.125rem;
+    font-weight: 600;
+  }
+
+  /* Large standalone metric number (kind cards, metric tiles). */
+  .metric-hero {
+    font-family: var(--font-display);
+    font-size: var(--text-h1);
+    font-weight: 800;
+    line-height: var(--leading-tight);
+  }
+
+  /* Inline navigation link: primary color, subtle underline geometry. */
+  .link {
+    color: var(--primary);
+    text-decoration-thickness: 0.08em;
+    text-underline-offset: 0.2em;
+  }
+
   /* Mono numerals for IDs, counts, token figures. */
   .mono {
     font-family: var(--font-mono);
@@ -407,6 +436,22 @@
     .stat-grid { grid-template-columns: minmax(0, 1fr); }
   }
 
+  /* Five-column variant for token bucket cards: 5→3→2→1. */
+  .stat-grid-5 {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--gap-section);
+  }
+  @media (max-width: 110rem) {
+    .stat-grid-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 64rem) {
+    .stat-grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 48rem) {
+    .stat-grid-5 { grid-template-columns: minmax(0, 1fr); }
+  }
+
   /* Compact bordered panel: cards, list items, detail blocks. */
   .panel {
     border-radius: var(--radius-lg);
@@ -418,6 +463,66 @@
     border: 1px solid var(--border-soft);
     background: var(--surface-subtle);
     padding: var(--pad-panel);
+  }
+
+  /* ---- Alert / callout tones ----
+   * Use .alert as the base, then a tone modifier. Composed from semantic
+   * color tokens with low-opacity backgrounds. */
+  .alert {
+    border-radius: var(--radius-lg);
+    border: 1px solid;
+    padding: 0.75rem 1rem;
+  }
+  .alert-destructive {
+    border-color: color-mix(in srgb, var(--destructive) 30%, transparent);
+    background: color-mix(in srgb, var(--destructive) 8%, transparent);
+  }
+  .alert-warning {
+    border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+    background: color-mix(in srgb, var(--warning) 8%, transparent);
+  }
+  .alert-success {
+    border-color: color-mix(in srgb, var(--success) 35%, transparent);
+    background: color-mix(in srgb, var(--success) 8%, transparent);
+  }
+  .alert-info {
+    border-color: var(--border-soft);
+    background: var(--surface-subtle);
+  }
+
+  /* ---- Event stream row (context window) ----
+   * Interactive list item with hover / active / selected / highlight states.
+   * State is driven by data-attributes so the class stays static. */
+  .event-row {
+    position: relative;
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 0.75rem;
+    overflow: hidden;
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border-soft);
+    background: var(--surface-subtle);
+    padding: 0.625rem 0.75rem;
+    text-align: start;
+    color: var(--foreground);
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s;
+  }
+  .event-row:hover {
+    border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+    background: var(--surface-emphasis);
+  }
+  .event-row[data-active] {
+    border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+    background: var(--surface-emphasis);
+  }
+  .event-row[data-selected] {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+  .event-row[data-highlight] {
+    background: var(--surface-emphasis);
   }
 }
 

@@ -328,7 +328,7 @@ export function ContextWindowRoute() {
         />
       ) : null}
       {analysisJob.status === "error" ? (
-        <div className="rounded-xl border border-destructive/30 bg-destructive/8 px-4 py-3 text-body-sm text-foreground">
+        <div className="alert alert-destructive rounded-xl text-body-sm text-foreground">
           {analysisJob.error}
         </div>
       ) : null}
@@ -487,13 +487,10 @@ export function ContextWindowRoute() {
                           <button
                             ref={(node) => { eventRefs.current[index] = node; }}
                             type="button"
-                            className={cn(
-                              "relative flex w-full items-center gap-3 overflow-hidden rounded-xl border border-border-soft bg-surface-subtle px-3 py-2.5 text-start text-foreground cursor-pointer",
-                              "hover:border-primary/60 hover:bg-surface-emphasis",
-                              isActive && "border-primary/60 bg-surface-emphasis",
-                              isSelected && "ring-2 ring-primary ring-offset-1 ring-offset-card",
-                              isCategoryHighlight && "bg-surface-emphasis",
-                            )}
+                              className="event-row"
+                            data-active={isActive || undefined}
+                            data-selected={isSelected || undefined}
+                            data-highlight={isCategoryHighlight || undefined}
                             style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
                             aria-pressed={isSelected}
                             onFocus={() => setSelectedId(event.id)}
@@ -598,7 +595,7 @@ export function ContextWindowRoute() {
                   Key Takeaway
                 </div>
                 <div className="bg-surface-subtle px-4 py-4">
-                  <p className="m-0 font-display text-body font-bold leading-snug">
+                  <p className="m-0 heading-section leading-snug">
                     {keyTakeaway(activeEvent)}
                   </p>
                 </div>
@@ -689,7 +686,7 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
                 <Badge variant="outline" className="text-caption">{findingLabel(finding.kind)}</Badge>
                 {finding.impact ? <span className="mono text-caption text-muted-foreground">{finding.impact}</span> : null}
               </div>
-              <h3 className="m-0 mt-2 font-display text-body font-bold">{finding.title}</h3>
+              <h3 className="m-0 mt-2 heading-section">{finding.title}</h3>
               <p className="m-0 mt-1 text-body-sm leading-relaxed text-muted-foreground">{finding.body}</p>
               {finding.evidence.length > 0 ? (
                 <ul className="m-0 mt-2 flex list-none flex-wrap gap-1.5 p-0">
@@ -707,7 +704,7 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
         </div>
 
         <div className="panel-subtle rounded-xl p-4">
-          <h3 className="m-0 font-display text-body font-bold">Output buckets</h3>
+          <h3 className="m-0 heading-section">Output buckets</h3>
           <div className="mt-3 grid gap-3">
             {topBuckets.map((bucket) => (
               <div key={bucket.key}>
