@@ -165,6 +165,8 @@ def _handler_for(
             self._json_response(payload)
 
         def _handle_api_post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+            if path == "/api/agent-task":
+                return service.agent_task(body)
             if path == "/api/cleanup/project/apply":
                 return service.apply_project_cleanup(body)
             if path == "/api/cleanup/session/apply":

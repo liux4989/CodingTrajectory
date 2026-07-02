@@ -4,6 +4,7 @@ import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-
 import { fetchOverview, type OverviewPayload } from "@/api";
 import { ProjectLink } from "@/components/project-link";
 import { SessionLink, shortSessionId } from "@/components/session-link";
+import { AgentTaskPanel } from "@/components/agent-task-panel";
 import { DataTable } from "@/components/data-table";
 import { MetricSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
@@ -35,6 +36,7 @@ export function OverviewRoute() {
   const runtime = data.sessions.runtime;
   const usage = data.sessions.usage;
   const issueCount = data.sessions.errors.length + data.sessions.warnings.length;
+  const issueAgentContext = issueCount ? overviewIssueContext(data) : "";
 
   return (
     <div className="mx-auto grid w-full min-w-0 max-w-[96rem] gap-5 overflow-hidden">
@@ -163,8 +165,45 @@ export function OverviewRoute() {
           </CardContent>
         </Card>
       ) : null}
+      {issueCount ? (
+        <AgentTaskPanel
+          title="Agent Fix Analysis"
+          description="Ask the coding agent to analyze the collected dashboard issues and suggest concrete fixes."
+          taskGoal="Analyze these dashboard warnings and errors. Identify likely causes, missing evidence, and concrete fix actions."
+          taskContext={issueAgentContext}
+        />
+      ) : null}
     </div>
   );
+}
+
+function overviewIssueContext(data: OverviewPayload) {
+  const lines = [
+    "Dashboard: overview",
+    `Window days: ${data.sessions.window_days}`,
+    `Session count: ${data.sessions.count}`,
+    `Error count: ${data.sessions.errors.length}`,
+    `Warning count: ${data.sessions.warnings.length}`,
+    "",
+    "Errors:",
+  ];
+  if (data.sessions.errors.length) {
+    data.sessions.errors.forEach((error, index) => {
+      lines.push(`${index + 1}. ${formatIssue(error)}`);
+    });
+  } else {
+    lines.push("- none");
+  }
+  lines.push("", "Warnings:");
+  if (data.sessions.warnings.length) {
+    data.sessions.warnings.forEach((warning, index) => {
+      const session = warning.session_id ? ` session_id=${warning.session_id}` : "";
+      lines.push(`${index + 1}. project=${warning.project}${session} message=${warning.message}`);
+    });
+  } else {
+    lines.push("- none");
+  }
+  return lines.join("\n");
 }
 
 function IssueRow({ label, message, detail }: { label: string; message: string; detail?: string }) {

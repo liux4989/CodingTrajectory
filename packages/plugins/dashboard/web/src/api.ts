@@ -193,6 +193,22 @@ export type SessionAnalysisResponse = {
   analysis: SessionAnalysis;
 };
 
+export type AgentTaskResult = {
+  schema_version: 1;
+  task_goal: string;
+  generated_at: string;
+  source: "codex_app_server_skill" | "pi_rpc_skill";
+  provider: AnalysisProvider;
+  app_server_thread_id: string;
+  app_server_turn_id: string | null;
+  response_text: string;
+};
+
+export type AgentTaskResponse = {
+  status: "ready";
+  result: AgentTaskResult;
+};
+
 export type CleanupSummary = {
   candidate_count: number;
   skipped_count: number;
@@ -456,6 +472,22 @@ export async function analyzeSession(sessionId: string, refresh = false, provide
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh, provider }),
+  });
+}
+
+export async function runAgentTask(params: {
+  taskGoal: string;
+  taskContext: string;
+  provider?: AnalysisProvider;
+}) {
+  return fetchJson<AgentTaskResponse>("/api/agent-task", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      task_goal: params.taskGoal,
+      task_context: params.taskContext,
+      provider: params.provider ?? "codex",
+    }),
   });
 }
 

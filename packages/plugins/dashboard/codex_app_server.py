@@ -32,7 +32,7 @@ class CodexAppServerClient:
         skill_name: str,
         skill_path: Path,
         user_text: str,
-        output_schema: dict[str, Any],
+        output_schema: dict[str, Any] | None = None,
     ) -> CodexAppServerResult:
         command = _app_server_command()
         proc = subprocess.Popen(
@@ -104,25 +104,27 @@ class CodexAppServerClient:
             if not thread_id:
                 raise RuntimeError("codex app-server thread/start returned no thread id")
             turn_request_id = self._request_id()
+            turn_params: dict[str, Any] = {
+                "threadId": thread_id,
+                "cwd": str(cwd),
+                "approvalPolicy": "never",
+                "input": [
+                    {"type": "text", "text": user_text},
+                    {
+                        "type": "skill",
+                        "name": skill_name,
+                        "path": str(skill_path),
+                    },
+                ],
+            }
+            if output_schema is not None:
+                turn_params["outputSchema"] = output_schema
             self._send(
                 proc,
                 {
                     "method": "turn/start",
                     "id": turn_request_id,
-                    "params": {
-                        "threadId": thread_id,
-                        "cwd": str(cwd),
-                        "approvalPolicy": "never",
-                        "outputSchema": output_schema,
-                        "input": [
-                            {"type": "text", "text": user_text},
-                            {
-                                "type": "skill",
-                                "name": skill_name,
-                                "path": str(skill_path),
-                            },
-                        ],
-                    },
+                    "params": turn_params,
                 },
             )
             turn_result = self._wait_response(messages, turn_request_id, proc, stderr_lines)
@@ -238,7 +240,7 @@ class PiRpcClient:
         skill_name: str,
         skill_path: Path,
         user_text: str,
-        output_schema: dict[str, Any],
+        output_schema: dict[str, Any] | None = None,
     ) -> CodexAppServerResult:
         command = _pi_rpc_command()
         proc = subprocess.Popen(
@@ -277,7 +279,7 @@ class PiRpcClient:
                 {
                     "id": prompt_request_id,
                     "type": "prompt",
-                    "message": _pi_review_prompt(
+                    "message": _pi_skill_prompt(
                         skill_name=skill_name,
                         skill_path=skill_path,
                         user_text=user_text,
@@ -374,22 +376,27 @@ def _pi_rpc_command() -> list[str]:
     return [pi, "--mode", "rpc", "--no-session"]
 
 
-def _pi_review_prompt(
+def _pi_skill_prompt(
     *,
     skill_name: str,
     skill_path: Path,
     user_text: str,
-    output_schema: dict[str, Any],
+    output_schema: dict[str, Any] | None = None,
 ) -> str:
     try:
         skill_text = skill_path.read_text(encoding="utf-8")
     except OSError:
         skill_text = ""
+    schema_instruction = ""
+    if output_schema is not None:
+        schema_instruction = (
+            "Return only JSON matching this schema.\n\n"
+            f"<output_schema>\n{json.dumps(output_schema, ensure_ascii=False, separators=(',', ':'))}\n</output_schema>\n\n"
+        )
     return (
         f"Use the following skill instructions for ${skill_name}.\n\n"
         f"<skill_instructions>\n{skill_text}\n</skill_instructions>\n\n"
-        "Return only JSON matching this schema.\n\n"
-        f"<output_schema>\n{json.dumps(output_schema, ensure_ascii=False, separators=(',', ':'))}\n</output_schema>\n\n"
+        f"{schema_instruction}"
         f"{user_text}"
     )
 

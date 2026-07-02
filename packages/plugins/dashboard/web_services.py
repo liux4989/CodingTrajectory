@@ -13,12 +13,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 try:
+    from . import agent_task as agent_task_mod
     from . import cleanup as cleanup_mod
     from . import context_window as context_window_mod
     from . import error_collection as error_collection_mod
     from . import model_usage as model_usage_mod
     from . import session_analysis as session_analysis_mod
 except ImportError:
+    import agent_task as agent_task_mod
     import cleanup as cleanup_mod
     import context_window as context_window_mod
     import error_collection as error_collection_mod
@@ -236,6 +238,23 @@ class DashboardDataService:
             "artifact_path": analysis.artifact_path,
             "analysis": analysis.model_dump(mode="json"),
         }
+
+    def agent_task(self, body: dict[str, Any]) -> dict[str, Any]:
+        task_goal = body.get("task_goal")
+        task_context = body.get("task_context")
+        provider = body.get("provider", "codex")
+        if not isinstance(task_goal, str) or not task_goal.strip():
+            raise ValueError("task_goal is required")
+        if not isinstance(task_context, str) or not task_context.strip():
+            raise ValueError("task_context is required")
+        if not isinstance(provider, str):
+            raise ValueError("provider must be codex or pi")
+        result = agent_task_mod.run_agent_task(
+            task_goal=task_goal,
+            task_context=task_context,
+            provider=provider,
+        )
+        return {"status": "ready", "result": result.model_dump(mode="json")}
 
     def vendors(self, query: dict[str, list[str]]) -> dict[str, Any]:
         vendor_stats: dict[str, dict[str, Any]] = {}
