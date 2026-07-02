@@ -1,5 +1,6 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
+import { MotionConfig } from "motion/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
@@ -124,10 +125,12 @@ declare module "@tanstack/react-router" {
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <DateRangeProvider>
-        <RouterProvider router={router} />
-      </DateRangeProvider>
-    </QueryClientProvider>
+    <MotionConfig reducedMotion="user">
+      <QueryClientProvider client={queryClient}>
+        <DateRangeProvider>
+          <RouterProvider router={router} />
+        </DateRangeProvider>
+      </QueryClientProvider>
+    </MotionConfig>
   </React.StrictMode>,
 );

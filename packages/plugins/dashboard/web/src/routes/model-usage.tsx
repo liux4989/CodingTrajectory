@@ -97,9 +97,9 @@ export function ModelUsageRoute() {
 
   if (query.isPending) {
     return (
-      <div className="mx-auto grid max-w-[96rem] gap-5">
+      <div className="route-container">
         <RouteHeader eyebrow="Model economics" title="Loading model usage" />
-        <section className="grid grid-cols-4 gap-4 max-lg:grid-cols-1">
+        <section className="stat-grid">
           {Array.from({ length: 4 }, (_, i) => <MetricSkeleton key={i} />)}
         </section>
       </div>
@@ -113,7 +113,7 @@ export function ModelUsageRoute() {
   const data = query.data;
 
   return (
-    <div className="mx-auto grid w-full min-w-0 max-w-[96rem] gap-5 overflow-hidden">
+    <div className="route-container w-full min-w-0 overflow-hidden">
       <RouteHeader
         eyebrow="Model economics"
         title="Model usage overview"
@@ -122,7 +122,7 @@ export function ModelUsageRoute() {
 
       <Card className="min-w-0">
         <CardContent className="flex flex-wrap items-end gap-3 pt-6">
-          <p className="font-display text-caption font-extrabold uppercase tracking-wide text-muted-foreground">
+          <p className="eyebrow-soft text-muted-foreground">
             Showing last {sinceDays} day{sinceDays === 1 ? "" : "s"} · adjust in the header
           </p>
           <FilterLabel label="Project">
@@ -226,7 +226,7 @@ function TimeView({ data }: { data: ModelUsagePayload }) {
 
 function FilterLabel({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="grid gap-1 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+    <label className="eyebrow-soft grid gap-1 text-muted-foreground">
       {label}
       {children}
     </label>
@@ -238,7 +238,7 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     const sessionStats = data.summary.token_stats.session;
     const turnStats = data.summary.token_stats.turn;
     return (
-      <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
+      <section className="stat-grid min-w-0">
         <MetricCard label="Processed Tokens" value={compactNumber(data.summary.processed_tokens)} detail={`${data.summary.sessions.toLocaleString()} sessions`} />
         <MetricCard label="Session Tokens" value={compactNumber(sessionStats.avg)} detail={distributionDetail(sessionStats)} />
         <MetricCard label="Turn Tokens" value={compactNumber(turnStats.avg)} detail={distributionDetail(turnStats)} />
@@ -249,7 +249,7 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
   if (view === "time") {
     const sessionStats = data.summary.elapsed_stats.session;
     return (
-      <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
+      <section className="stat-grid min-w-0">
         <MetricCard label="Elapsed Time" value={formatDuration(data.summary.total_elapsed_seconds)} detail={`${data.summary.sessions.toLocaleString()} completed sessions`} />
         <MetricCard label="Session Time" value={formatDuration(sessionStats.avg)} detail={distributionDetail(sessionStats, formatDuration)} />
         <MetricCard label="Turns" value={compactNumber(data.summary.turns)} detail={`${compactNumber(data.summary.processed_tokens)} filtered tokens`} />
@@ -261,7 +261,7 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     const sessionStats = data.summary.cost_stats.session;
     const turnStats = data.summary.cost_stats.turn;
     return (
-      <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
+      <section className="stat-grid min-w-0">
         <MetricCard label="Estimated Cost" value={formatCost(data.summary.estimated_cost_usd)} detail={`${data.summary.sessions.toLocaleString()} sessions in ${data.filters.since_days} days`} />
         <MetricCard label="Session Cost" value={formatCost(sessionStats.avg)} detail={distributionDetail(sessionStats, formatCost)} />
         <MetricCard label="Turn Cost" value={formatCost(turnStats.avg)} detail={distributionDetail(turnStats, formatCost)} />
@@ -270,7 +270,7 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     );
   }
   return (
-    <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
+    <section className="stat-grid min-w-0">
       <MetricCard
         label="Estimated Cost"
         value={formatCost(data.summary.estimated_cost_usd)}
@@ -380,7 +380,7 @@ function OverviewModelTable({ data }: { data: ModelUsagePayload }) {
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="font-display text-xl tracking-tight">Model Mix Overview</CardTitle>
+        <CardTitle className="title-card">Model Mix Overview</CardTitle>
         <CardDescription>General model comparison across volume, allocated time, and estimated cost.</CardDescription>
       </CardHeader>
       <CardContent>
@@ -534,7 +534,7 @@ function ModelTable({ data, view }: { data: ModelUsagePayload; view: "cost" | "t
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="font-display text-xl tracking-tight">Model Mix by {viewLabel(view)}</CardTitle>
+        <CardTitle className="title-card">Model Mix by {viewLabel(view)}</CardTitle>
         <CardDescription>{modelTableDescription(view)}</CardDescription>
       </CardHeader>
       <CardContent>
@@ -594,7 +594,7 @@ function OverviewSessionTable({ data }: { data: ModelUsagePayload }) {
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="font-display text-xl tracking-tight">Session Overview</CardTitle>
+        <CardTitle className="title-card">Session Overview</CardTitle>
         <CardDescription>Broad session comparison across time, tokens, cost, and context.</CardDescription>
       </CardHeader>
       <CardContent>
@@ -661,7 +661,7 @@ function TimeOverviewTable({ data }: { data: ModelUsagePayload }) {
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="font-display text-xl tracking-tight">Model Time Overview</CardTitle>
+        <CardTitle className="title-card">Model Time Overview</CardTitle>
         <CardDescription>Elapsed-time comparison across models, sessions, and turns.</CardDescription>
       </CardHeader>
       <CardContent>
@@ -781,7 +781,7 @@ function SessionTable({ data, view }: { data: ModelUsagePayload; view: UsageView
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="font-display text-xl tracking-tight">{view === "time" ? "Slowest Sessions" : "Sessions"}</CardTitle>
+        <CardTitle className="title-card">{view === "time" ? "Slowest Sessions" : "Sessions"}</CardTitle>
         <CardDescription>{sessionTableDescription(view)}</CardDescription>
       </CardHeader>
       <CardContent>
@@ -800,7 +800,7 @@ function turnColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageTurn>[] {
     {
       accessorKey: "sequence",
       header: () => <HeaderLabel>Turn</HeaderLabel>,
-      cell: ({ getValue }) => <span className="font-mono text-body-sm">#{getValue<number>()}</span>,
+      cell: ({ getValue }) => <span className="mono text-body-sm">#{getValue<number>()}</span>,
     },
     {
       id: "session",
@@ -872,7 +872,7 @@ function TurnTable({ data, view }: { data: ModelUsagePayload; view: "cost" | "to
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 font-display text-xl tracking-tight">
+        <CardTitle className="flex items-center gap-2 title-card">
           <BarChart3 size={18} /> {view === "tokens" ? "Largest Token Turns" : "Expensive Turns"}
         </CardTitle>
         <CardDescription>{view === "tokens" ? "Top turns by observed token volume." : "Top turns by estimated cost, capped to the first 200 rows from the backend."}</CardDescription>
@@ -892,7 +892,7 @@ function HeaderLabel({ children, align = "left" }: { children: React.ReactNode; 
   return (
     <span
       className={cn(
-        "font-extrabold uppercase tracking-wide",
+        "label-uppercase",
         align === "right" && "text-right",
       )}
     >

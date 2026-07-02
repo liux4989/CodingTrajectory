@@ -36,9 +36,9 @@ function sessionVendors(item: SessionItem) {
 const columns: ColumnDef<SessionItem>[] = [
   {
     id: "session",
-    header: () => <span className="font-extrabold uppercase tracking-wide">Session</span>,
+    header: () => <span className="label-uppercase">Session</span>,
     cell: ({ row }) => (
-      <span className="font-mono text-body-sm">
+      <span className="mono text-body-sm">
         <SessionLink sessionId={sessionId(row.original)} />
       </span>
     ),
@@ -60,7 +60,7 @@ const columns: ColumnDef<SessionItem>[] = [
     accessorFn: (row) => row.updated_at ?? row.started_at ?? "",
     header: ({ column }) => <DataTableColumnHeader column={column} label="Updated" />,
     cell: ({ row }) => (
-      <span className="font-mono text-body-sm" title={row.original.updated_at ?? row.original.started_at ?? ""}>
+      <span className="mono text-body-sm" title={row.original.updated_at ?? row.original.started_at ?? ""}>
         {relativeTime(row.original.updated_at ?? row.original.started_at)}
       </span>
     ),
@@ -100,7 +100,7 @@ export function ProjectDetailRoute() {
   });
 
   return (
-    <div className="mx-auto grid max-w-[96rem] gap-5">
+    <div className="route-container">
       <RouteHeader
         eyebrow="Project drill-down"
         title={projectName}
@@ -110,7 +110,7 @@ export function ProjectDetailRoute() {
         <FolderGit2 size={16} className="text-muted-foreground" />
         <VendorBadges vendors={detail.data?.vendors ?? []} />
         {detail.data?.path ? (
-          <span className="font-mono text-body-sm text-muted-foreground">{detail.data.path}</span>
+          <span className="mono text-body-sm text-muted-foreground">{detail.data.path}</span>
         ) : null}
         <span className="text-body-sm text-muted-foreground">
           {detail.data?.session_count ?? 0} session(s) from the last {sinceDays} day{sinceDays === 1 ? "" : "s"}

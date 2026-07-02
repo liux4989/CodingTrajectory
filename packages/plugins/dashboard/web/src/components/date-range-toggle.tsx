@@ -21,7 +21,7 @@ export function DateRangeToggle({ className, label = "Date range" }: Props) {
       role="radiogroup"
       aria-label={label}
       className={cn(
-        "inline-flex items-center gap-1 rounded-lg border border-border-subtle bg-background/50 p-1 text-body-sm",
+        "inline-flex items-center gap-1 rounded-lg border border-border-soft bg-background/50 p-1 text-body-sm",
         className,
       )}
     >

@@ -58,9 +58,9 @@ export function ErrorCollectionRoute() {
 
   if (query.isPending) {
     return (
-      <div className="mx-auto grid max-w-[96rem] gap-5">
+      <div className="route-container">
         <RouteHeader eyebrow="Session quality" title="Loading error collection" />
-        <section className="grid grid-cols-4 gap-4 max-lg:grid-cols-1">
+        <section className="stat-grid">
           {Array.from({ length: 4 }, (_, i) => <MetricSkeleton key={i} />)}
         </section>
       </div>
@@ -74,7 +74,7 @@ export function ErrorCollectionRoute() {
   const data = query.data;
 
   return (
-    <div className="mx-auto grid w-full min-w-0 max-w-[96rem] gap-5 overflow-hidden">
+    <div className="route-container w-full min-w-0 overflow-hidden">
       <RouteHeader
         eyebrow="Session quality"
         title="Error collection"
@@ -83,7 +83,7 @@ export function ErrorCollectionRoute() {
 
       <Card className="min-w-0">
         <CardContent className="flex flex-wrap items-center gap-3 pt-6">
-          <p className="font-display text-caption font-extrabold uppercase tracking-wide text-muted-foreground">
+          <p className="eyebrow-soft text-muted-foreground">
             Showing last {sinceDays} day{sinceDays === 1 ? "" : "s"} · adjust in the header
           </p>
           <FilterLabel label="Project">
@@ -126,7 +126,7 @@ function SummaryCards({ data }: { data: ErrorCollectionPayload }) {
     ? data.summary.affected_sessions / data.summary.sessions
     : 0;
   return (
-    <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
+    <section className="stat-grid min-w-0">
       <MetricCard
         label="Errors"
         value={data.summary.total_errors}
@@ -161,7 +161,7 @@ function KindCards({ data }: { data: ErrorCollectionPayload }) {
             <KindIcon kind={kind as ErrorCollectionKind} />
             <div className="min-w-0">
               <p className="m-0 text-muted-foreground">{label}</p>
-              <p className="m-0 font-display text-[2rem] font-extrabold leading-tight">
+              <p className="m-0 font-display text-h1 font-extrabold leading-tight">
                 {data.summary.by_kind[kind as ErrorCollectionKind].toLocaleString()}
               </p>
             </div>
@@ -179,7 +179,7 @@ function ProjectCards({ data }: { data: ErrorCollectionPayload }) {
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="font-display text-xl tracking-tight">Project Concentration</CardTitle>
+        <CardTitle className="title-card">Project Concentration</CardTitle>
         <CardDescription>Projects with the highest number of collected coding-session errors.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
@@ -299,7 +299,7 @@ function ErrorTable({ rows }: { rows: ErrorCollectionItem[] }) {
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="font-display text-xl tracking-tight">Collected Errors</CardTitle>
+        <CardTitle className="title-card">Collected Errors</CardTitle>
         <CardDescription>Each row keeps the classifier evidence visible with direct or inferred confidence.</CardDescription>
       </CardHeader>
       <CardContent>
@@ -314,7 +314,7 @@ function ErrorTable({ rows }: { rows: ErrorCollectionItem[] }) {
 }
 
 function HeaderLabel({ children }: { children: React.ReactNode }) {
-  return <span className="font-extrabold uppercase tracking-wide">{children}</span>;
+  return <span className="label-uppercase">{children}</span>;
 }
 
 function KindIcon({ kind, compact = false }: { kind: ErrorCollectionKind; compact?: boolean }) {

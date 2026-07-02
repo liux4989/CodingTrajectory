@@ -2,6 +2,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { fetchOverview, type OverviewPayload } from "@/api";
+import { cn } from "@/lib/utils";
 import { ProjectLink } from "@/components/project-link";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { AgentTaskPanel } from "@/components/agent-task-panel";
@@ -21,9 +22,9 @@ export function OverviewRoute() {
 
   if (overview.isPending) {
     return (
-      <div className="mx-auto grid max-w-[96rem] gap-5">
+      <div className="route-container">
         <RouteHeader eyebrow="Operational scan" title="Loading dashboard data" />
-        <section className="grid grid-cols-4 gap-4 max-lg:grid-cols-1">
+        <section className="stat-grid">
           {Array.from({ length: 4 }, (_, i) => <MetricSkeleton key={i} />)}
         </section>
       </div>
@@ -40,13 +41,13 @@ export function OverviewRoute() {
   const issueAgentContext = issueCount ? overviewIssueContext(data) : "";
 
   return (
-    <div className="mx-auto grid w-full min-w-0 max-w-[96rem] gap-5 overflow-hidden">
+    <div className="route-container w-full min-w-0 overflow-hidden">
       <RouteHeader
         eyebrow="Usage activity"
         title="Recent project and session activity from today."
         action={<RefreshButton queries={["overview"]} />}
       />
-      <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
+      <section className="stat-grid min-w-0">
         <StaggerGroup className="contents">
         <MetricCard
           label="Projects"
@@ -75,7 +76,7 @@ export function OverviewRoute() {
       <section className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(22rem,0.8fr)] gap-4 max-xl:grid-cols-1">
         <Card className="min-w-0">
           <CardHeader>
-            <CardTitle className="font-display text-xl tracking-tight">Recent Activity by Project</CardTitle>
+            <CardTitle className="title-card">Recent Activity by Project</CardTitle>
             <CardDescription className="break-words">Session volume, vendor mix, runtime, tokens, and known cost.</CardDescription>
           </CardHeader>
           <CardContent>
@@ -84,7 +85,7 @@ export function OverviewRoute() {
                 {data.sessions.top_projects.map((project) => (
                   <div
                     key={project.project}
-                    className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded-lg border border-border-subtle p-3 max-sm:grid-cols-1"
+                    className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded-lg border border-border-soft p-3 max-sm:grid-cols-1"
                   >
                     <div className="min-w-0">
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -119,7 +120,7 @@ export function OverviewRoute() {
 
         <Card className="min-w-0">
           <CardHeader>
-            <CardTitle className="font-display text-xl tracking-tight">Vendor Coverage</CardTitle>
+            <CardTitle className="title-card">Vendor Coverage</CardTitle>
             <CardDescription>Discovered project metadata grouped by agent vendor.</CardDescription>
           </CardHeader>
           <CardContent>
@@ -139,7 +140,7 @@ export function OverviewRoute() {
 
       <Card className="min-w-0">
         <CardHeader>
-          <CardTitle className="font-display text-xl tracking-tight">Top Token-Cost Sessions</CardTitle>
+          <CardTitle className="title-card">Top Token-Cost Sessions</CardTitle>
           <CardDescription>Sessions ranked by token usage.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -150,7 +151,7 @@ export function OverviewRoute() {
       {issueCount ? (
         <Card className="min-w-0 border-warning/40">
           <CardHeader>
-            <CardTitle className="font-display text-xl tracking-tight">Warnings and Errors</CardTitle>
+            <CardTitle className="title-card">Warnings and Errors</CardTitle>
             <CardDescription>Issues reported while collecting session metrics.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
@@ -211,10 +212,10 @@ function overviewIssueContext(data: OverviewPayload) {
 
 function IssueRow({ label, message, detail }: { label: string; message: string; detail?: string }) {
   return (
-    <div className="grid gap-1 rounded-lg border border-border-subtle p-3">
+    <div className="grid gap-1 rounded-lg border border-border-soft p-3">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="secondary">{label}</Badge>
-        {detail ? <span className="font-mono text-caption text-muted-foreground">{detail}</span> : null}
+        {detail ? <span className="mono text-caption text-muted-foreground">{detail}</span> : null}
       </div>
       <p className="m-0 break-words text-body-sm">{message}</p>
     </div>
@@ -298,7 +299,7 @@ function TopSessionsTable({ sessions, windowDays }: { sessions: TopSession[]; wi
 
 function HeaderLabel({ children, align = "left" }: { children: React.ReactNode; align?: "left" | "right" }) {
   return (
-    <span className={align === "right" ? "text-right font-extrabold uppercase tracking-wide" : "font-extrabold uppercase tracking-wide"}>
+    <span className={cn("label-uppercase", align === "right" && "text-right")}>
       {children}
     </span>
   );

@@ -1,6 +1,10 @@
 import * as React from "react";
 import { motion } from "motion/react";
 import { fadeSoft } from "@/lib/motion";
+import { cn } from "@/lib/utils";
+
+const headerSurface =
+  "border border-border-soft bg-[image:var(--gradient-header)] p-[clamp(1rem,3vw,2.2rem)] shadow-popover";
 
 type RouteHeaderProps = {
   eyebrow: string;
@@ -14,13 +18,10 @@ export function RouteHeader({ eyebrow, title, action }: RouteHeaderProps) {
       variants={fadeSoft}
       initial="hidden"
       animate="visible"
-      className="flex items-start justify-between gap-4 rounded-3xl border border-foreground/13 bg-[linear-gradient(135deg,rgb(255_249_234/94%),rgb(215_200_164/34%)),var(--paper-strong)] p-[clamp(1rem,3vw,2.2rem)] shadow-[var(--shadow),0_24px_70px_rgb(49_42_25/18%)] dark:border-border-subtle dark:bg-[linear-gradient(135deg,rgb(34_32_25/94%),rgb(58_54_44/34%)),var(--paper-strong)] dark:shadow-[0_24px_70px_rgb(0_0_0/40%)]"
+      className={cn("flex items-start justify-between gap-4 rounded-3xl", headerSurface)}
     >
       <div>
-        <motion.p
-          variants={fadeSoft}
-          className="mb-1 font-display text-eyebrow font-extrabold uppercase tracking-wider text-primary"
-        >
+        <motion.p variants={fadeSoft} className="eyebrow mb-1 text-primary">
           {eyebrow}
         </motion.p>
         <motion.h2

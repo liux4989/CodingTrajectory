@@ -40,7 +40,7 @@ export function AgentTaskPanel({
     <Card className={cn("min-w-0", className)}>
       <CardHeader className="items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
         <div className="min-w-0">
-          <CardTitle className="flex min-w-0 items-center gap-2 font-display text-xl tracking-tight">
+          <CardTitle className="flex min-w-0 items-center gap-2 title-card">
             <Bot size={18} className="shrink-0" />
             <span className="truncate">{title}</span>
           </CardTitle>
@@ -77,7 +77,7 @@ export function AgentTaskPanel({
         </form>
       </CardHeader>
       <CardContent className="grid gap-3">
-        <div className="rounded-lg border border-border-soft bg-muted/20 p-3">
+        <div className="panel bg-muted/20">
           <div className="eyebrow-soft text-muted-foreground">Goal</div>
           <p className="m-0 mt-1 break-words text-body-sm">{taskGoal}</p>
         </div>
@@ -94,7 +94,7 @@ export function AgentTaskPanel({
           </span>
         </button>
         {showContext ? (
-          <pre className="max-h-72 overflow-auto rounded-lg border border-border-soft bg-background p-3 text-caption leading-relaxed text-muted-foreground whitespace-pre-wrap">
+          <pre className="panel max-h-72 overflow-auto bg-background text-caption leading-relaxed text-muted-foreground whitespace-pre-wrap">
             {taskContext}
           </pre>
         ) : null}
@@ -113,10 +113,10 @@ export function AgentTaskPanel({
           </div>
         ) : null}
         {result ? (
-          <section className="grid gap-3 rounded-lg border border-border-soft p-3" aria-label="Agent response">
+          <section className="panel grid gap-3" aria-label="Agent response">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary">{result.provider}</Badge>
-              <span className="font-mono text-caption text-muted-foreground">{result.source}</span>
+              <span className="mono text-caption text-muted-foreground">{result.source}</span>
             </div>
             <div className="whitespace-pre-wrap break-words text-body-sm leading-relaxed">{result.response_text}</div>
           </section>

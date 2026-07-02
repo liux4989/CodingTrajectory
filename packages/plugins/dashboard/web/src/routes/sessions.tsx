@@ -33,9 +33,9 @@ function sessionVendors(item: SessionItem) {
 const columns: ColumnDef<SessionItem>[] = [
   {
     id: "session",
-    header: () => <span className="font-extrabold uppercase tracking-wide">Session</span>,
+    header: () => <span className="label-uppercase">Session</span>,
     cell: ({ row }) => (
-      <span className="font-mono text-body-sm">
+      <span className="mono text-body-sm">
         <SessionLink sessionId={sessionId(row.original)} />
       </span>
     ),
@@ -50,14 +50,22 @@ const columns: ColumnDef<SessionItem>[] = [
   {
     accessorKey: "title",
     header: ({ column }) => <DataTableColumnHeader column={column} label="Title" />,
-    cell: ({ getValue }) => getValue<string | null>() ?? "-",
+    cell: ({ getValue }) => {
+      const value = getValue<string | null>();
+      if (!value) return "-";
+      return (
+        <span className="max-w-[28ch] truncate inline-block" title={value}>
+          {value}
+        </span>
+      );
+    },
   },
   {
     id: "updated",
     accessorFn: (row) => row.updated_at ?? row.started_at ?? "",
     header: ({ column }) => <DataTableColumnHeader column={column} label="Updated" />,
     cell: ({ row }) => (
-      <span className="font-mono text-body-sm" title={row.original.updated_at ?? row.original.started_at ?? ""}>
+      <span className="mono text-body-sm" title={row.original.updated_at ?? row.original.started_at ?? ""}>
         {relativeTime(row.original.updated_at ?? row.original.started_at)}
       </span>
     ),
@@ -89,7 +97,7 @@ export function SessionsRoute() {
   });
 
   return (
-    <div className="mx-auto grid max-w-[96rem] gap-5">
+    <div className="route-container">
       <RouteHeader eyebrow="Session stream" title="Recent session entry points, kept compact for triage." action={<RefreshButton queries={["sessions"]} />} />
       <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, project, or id" />
       {sessions.isPending ? <TableSkeleton rows={6} cols={4} /> : null}

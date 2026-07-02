@@ -260,7 +260,7 @@ export function ContextWindowRoute() {
       : "Analyze session";
 
   return (
-    <div className="mx-auto grid max-w-[96rem] gap-5 pb-8">
+    <div className="route-container pb-8">
       <Card className="gap-4 p-6">
         <CardHeader className="px-0">
           <button
@@ -279,10 +279,10 @@ export function ContextWindowRoute() {
           <CardAction>
             <div className="flex flex-wrap items-center justify-end gap-3">
               <div className="text-right">
-                <p className="m-0 font-mono text-heading font-bold leading-none text-moss">
+                <p className="m-0 mono text-heading font-bold leading-none text-moss">
                   ~{formatTokens(payload.used_tokens?.value)} tokens
                 </p>
-                <p className="m-0 mt-1 font-mono text-caption text-muted-foreground">
+                <p className="m-0 mt-1 mono text-caption text-muted-foreground">
                   / {formatTokens(payload.context_window_tokens?.value)} · illustrative
                 </p>
               </div>
@@ -338,7 +338,7 @@ export function ContextWindowRoute() {
       <figure className="m-0">
         <Tooltip.Provider delayDuration={160} skipDelayDuration={120}>
           <div
-            className="flex h-3 w-full overflow-hidden rounded-full bg-foreground/10"
+            className="flex h-3 w-full overflow-hidden rounded-full bg-surface-emphasis"
             role="img"
             aria-label={`Context window usage: ${formatTokens(totalUsedTokens)} of ${formatTokens(payload.context_window_tokens?.value ?? 0)} tokens, grouped by category`}
           >
@@ -373,7 +373,7 @@ export function ContextWindowRoute() {
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
                       <Tooltip.Content
-                        className="z-[120] max-w-[min(28rem,calc(100vw-2rem))] rounded-md border border-foreground/12 bg-card px-3 py-2 text-caption leading-[1.35] text-foreground shadow-popover"
+                        className="z-[120] max-w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border-soft bg-card px-3 py-2 text-caption leading-[1.35] text-foreground shadow-popover"
                         side="top"
                         sideOffset={8}
                       >
@@ -412,7 +412,7 @@ export function ContextWindowRoute() {
                     className={cn(
                       "inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-caption transition-colors",
                       isActive
-                        ? "bg-foreground/10 text-foreground font-medium"
+                        ? "bg-surface-emphasis text-foreground font-medium"
                         : "text-muted-foreground hover:text-foreground",
                     )}
                   >
@@ -437,7 +437,7 @@ export function ContextWindowRoute() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search by name..."
-                className="h-8 w-56 rounded-md border border-foreground/15 bg-card pl-7 pr-2 text-caption text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                className="h-8 w-56 rounded-md border border-border-soft bg-card pl-7 pr-2 text-caption text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               />
             </div>
             {hasFilters ? (
@@ -453,7 +453,7 @@ export function ContextWindowRoute() {
         <section className="min-w-0" aria-labelledby="event-stream-title">
           <h2 id="event-stream-title" className="sr-only">Event stream</h2>
           {filteredEvents.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-foreground/15 p-8 text-center text-caption text-muted-foreground">
+            <div className="rounded-xl border border-dashed border-border-soft p-8 text-center text-caption text-muted-foreground">
               No events match the current filters.
             </div>
           ) : (
@@ -474,26 +474,25 @@ export function ContextWindowRoute() {
                     return (
                       <React.Fragment key={event.id}>
                         {header ? (
-                          <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-foreground/10 pl-4")}>
+                          <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
                             <h4 className={cn(
-                              "font-display text-eyebrow font-extrabold uppercase tracking-wide text-muted-foreground",
+                              "eyebrow-soft text-muted-foreground",
                               index > 0 && "mt-4",
                             )}>
                               {header}
                             </h4>
                           </li>
                         ) : null}
-                        <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-foreground/10 pl-4")}>
+                        <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
                           <button
                             ref={(node) => { eventRefs.current[index] = node; }}
                             type="button"
                             className={cn(
-                              "relative flex w-full items-center gap-3 overflow-hidden rounded-xl border border-foreground/11 bg-foreground/5 px-3 py-2.5 text-start text-foreground cursor-pointer",
-                              "dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]",
-                              "hover:border-primary/60 hover:bg-foreground/8",
-                              isActive && "border-primary/60 bg-foreground/8",
+                              "relative flex w-full items-center gap-3 overflow-hidden rounded-xl border border-border-soft bg-surface-subtle px-3 py-2.5 text-start text-foreground cursor-pointer",
+                              "hover:border-primary/60 hover:bg-surface-emphasis",
+                              isActive && "border-primary/60 bg-surface-emphasis",
                               isSelected && "ring-2 ring-primary ring-offset-1 ring-offset-card",
-                              isCategoryHighlight && "bg-foreground/10",
+                              isCategoryHighlight && "bg-surface-emphasis",
                             )}
                             style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
                             aria-pressed={isSelected}
@@ -521,11 +520,11 @@ export function ContextWindowRoute() {
                               {event.label}
                             </span>
                             <span className="flex shrink-0 items-center gap-2">
-                              <span className="font-mono text-body-sm font-medium">
+                              <span className="mono text-body-sm font-medium">
                                 {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
                               </span>
                               {tokenPercent > 0 ? (
-                                <span className="block h-1 w-12 overflow-hidden rounded-full bg-foreground/10">
+                                <span className="block h-1 w-12 overflow-hidden rounded-full bg-surface-emphasis">
                                   <span
                                     className="block h-full rounded-full"
                                     style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
@@ -543,14 +542,14 @@ export function ContextWindowRoute() {
                   })}
                 </ol>
               </ScrollArea.Viewport>
-              <ScrollArea.Scrollbar className="flex w-2.5 touch-none select-none bg-foreground/5 p-px" orientation="vertical">
+              <ScrollArea.Scrollbar className="flex w-2.5 touch-none select-none bg-surface-subtle p-px" orientation="vertical">
                 <ScrollArea.Thumb className="relative flex-1 rounded-full bg-foreground/28" />
               </ScrollArea.Scrollbar>
             </ScrollArea.Root>
           )}
         </section>
 
-        <aside className="sticky top-4 rounded-xl border border-foreground/13 bg-card p-5 max-lg:static dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]">
+        <aside className="sticky top-4 rounded-xl border border-border-soft bg-card p-5 max-lg:static">
           {activeEvent ? (
             <>
               <div className="flex items-start justify-between gap-4">
@@ -567,7 +566,7 @@ export function ContextWindowRoute() {
                     >
                       {categoryLabel(activeEvent.category)}
                     </Badge>
-                    <span className="font-mono text-body-sm text-moss">{evidenceLabel(activeEvent.tokens)}</span>
+                    <span className="mono text-body-sm text-moss">{evidenceLabel(activeEvent.tokens)}</span>
                   </div>
                 </div>
                 <Button
@@ -582,12 +581,12 @@ export function ContextWindowRoute() {
               </div>
               <p className="mt-4 max-h-[18rem] overflow-auto whitespace-pre-wrap leading-relaxed">{activeEvent.summary ?? "No text preview is available."}</p>
               {activeEvent.terminal_visible ? (
-                <div className="mt-4 overflow-hidden rounded-xl border border-foreground/13 bg-foreground/5 dark:border-border-subtle">
+                <div className="mt-4 overflow-hidden rounded-xl border border-border-soft bg-surface-subtle">
                   <div className="flex items-center gap-2 px-4 py-3 font-display text-body-sm font-bold">
                     <Info size={16} className="text-primary" />
                     One-liner in your terminal
                   </div>
-                  <div className="border-t border-foreground/10 px-4 py-3">
+                  <div className="border-t border-border-subtle px-4 py-3">
                     <p className="m-0 text-body-sm text-muted-foreground">
                       You see a brief mention, not the full content.
                     </p>
@@ -595,10 +594,10 @@ export function ContextWindowRoute() {
                 </div>
               ) : null}
               <div className="mt-4 overflow-hidden rounded-xl border border-warning/30">
-                <div className="bg-warning px-4 py-2 font-display text-eyebrow font-extrabold uppercase tracking-wide text-white">
+                <div className="bg-warning px-4 py-2 eyebrow text-white">
                   Key Takeaway
                 </div>
-                <div className="bg-foreground/5 px-4 py-4 dark:bg-[rgb(255_255_255/4%)]">
+                <div className="bg-surface-subtle px-4 py-4">
                   <p className="m-0 font-display text-body font-bold leading-snug">
                     {keyTakeaway(activeEvent)}
                   </p>
@@ -614,7 +613,7 @@ export function ContextWindowRoute() {
         </aside>
       </div>
 
-      <div className="sticky bottom-0 z-50 mt-2 rounded-xl border border-foreground/13 bg-card p-3 shadow-lg dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]">
+      <div className="sticky bottom-0 z-50 mt-2 rounded-xl border border-border-soft bg-card p-3 shadow-lg">
         <div className="flex items-center gap-3">
           <Button
             size="icon"
@@ -626,7 +625,7 @@ export function ContextWindowRoute() {
           </Button>
           <div className="flex-1">
             <div
-              className="flex h-2 w-full overflow-hidden rounded-full bg-foreground/10"
+              className="flex h-2 w-full overflow-hidden rounded-full bg-surface-emphasis"
               role="img"
               aria-label={`Replay progress: ${Math.max(playbackIndex, 0) + 1} of ${filteredEvents.length} events`}
             >
@@ -636,7 +635,7 @@ export function ContextWindowRoute() {
               />
             </div>
           </div>
-          <span className="w-16 text-right font-mono text-body-sm tabular-nums">
+          <span className="w-16 text-right mono text-body-sm">
             {filteredEvents.length > 0 ? `${Math.max(playbackIndex, 0) + 1}/${filteredEvents.length}` : "-"}
           </span>
           <Button
@@ -667,7 +666,7 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
             Generated from ct session usage, stats, overview, and tool events.
           </p>
         </div>
-        <Badge variant="outline" className="font-mono text-caption">
+        <Badge variant="outline" className="mono text-caption">
           {analysis.source}
         </Badge>
       </div>
@@ -688,7 +687,7 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
             >
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="outline" className="text-caption">{findingLabel(finding.kind)}</Badge>
-                {finding.impact ? <span className="font-mono text-caption text-muted-foreground">{finding.impact}</span> : null}
+                {finding.impact ? <span className="mono text-caption text-muted-foreground">{finding.impact}</span> : null}
               </div>
               <h3 className="m-0 mt-2 font-display text-body font-bold">{finding.title}</h3>
               <p className="m-0 mt-1 text-body-sm leading-relaxed text-muted-foreground">{finding.body}</p>
@@ -707,16 +706,16 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
           ))}
         </div>
 
-        <div className="rounded-xl border border-foreground/13 bg-foreground/5 p-4 dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]">
+        <div className="rounded-xl border border-border-soft bg-surface-subtle p-4">
           <h3 className="m-0 font-display text-body font-bold">Output buckets</h3>
           <div className="mt-3 grid gap-3">
             {topBuckets.map((bucket) => (
               <div key={bucket.key}>
                 <div className="mb-1 flex items-center justify-between gap-3 text-caption">
                   <span className="font-medium">{bucket.label}</span>
-                  <span className="font-mono text-muted-foreground">{formatPercent(bucket.output_share)}</span>
+                  <span className="mono text-muted-foreground">{formatPercent(bucket.output_share)}</span>
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-foreground/10">
+                <div className="h-2 overflow-hidden rounded-full bg-surface-emphasis">
                   <span
                     className={cn(
                       "block h-full rounded-full",
@@ -725,7 +724,7 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
                     style={{ width: `${Math.min(bucket.output_share, 100)}%` }}
                   />
                 </div>
-                <div className="mt-1 font-mono text-caption text-muted-foreground">
+                <div className="mt-1 mono text-caption text-muted-foreground">
                   {bucket.calls} calls · {formatCount(bucket.output_chars)} chars
                 </div>
               </div>
@@ -739,9 +738,9 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
 
 function MetricTile({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="rounded-xl border border-foreground/13 bg-foreground/5 px-4 py-3 dark:border-border-subtle dark:bg-[rgb(255_255_255/4%)]">
+    <div className="rounded-xl border border-border-soft bg-surface-subtle px-4 py-3">
       <p className="m-0 text-caption text-muted-foreground">{label}</p>
-      <p className="m-0 mt-1 font-mono text-heading font-bold text-foreground">{value}</p>
+      <p className="m-0 mt-1 mono text-heading font-bold text-foreground">{value}</p>
       <p className="m-0 mt-1 text-caption text-muted-foreground">{detail}</p>
     </div>
   );

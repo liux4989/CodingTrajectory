@@ -1,12 +1,16 @@
 import type { Variants } from "motion/react";
 
 /**
- * Shared motion variants for the dashboard. Designed to feel calm and fluent:
- * short durations, soft easing, small distances. All respect user motion
- * preferences via the global `motion/react` reduced-motion handling.
+ * Shared motion tokens for the dashboard. Designed to feel calm and fluent:
+ * short durations, soft easing, small distances.
+ *
+ * Apply globally with `<MotionConfig reducedMotion="user">` (see main.tsx) so
+ * every variant here is automatically disabled for users who request reduced
+ * motion — no per-component handling required.
  */
 
-const EASE = [0.22, 1, 0.36, 1] as const;
+/** Primary ease-out curve used across the dashboard. */
+export const EASE = [0.22, 1, 0.36, 1] as const;
 
 /** A single element rising/fading into view. */
 export const fadeUp: Variants = {
@@ -18,6 +22,12 @@ export const fadeUp: Variants = {
 export const fadeSoft: Variants = {
   hidden: { opacity: 0, y: 6 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: EASE } },
+};
+
+/** Page/route transition: slightly faster than fadeUp for navigation. */
+export const pageTransition: Variants = {
+  hidden: { opacity: 0, y: 8 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.34, ease: EASE } },
 };
 
 /** Stagger container: children animate in sequence as they mount. */

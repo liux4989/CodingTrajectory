@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { pageTransition } from "@/lib/motion";
 
 export function AppShell() {
   const location = useLocation();
@@ -21,9 +22,9 @@ export function AppShell() {
         <main className="flex flex-1 flex-col">
           <motion.div
             key={location.pathname}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
+            variants={pageTransition}
+            initial="hidden"
+            animate="visible"
             className="@container/main flex flex-1 flex-col gap-4 p-[clamp(1rem,2vw,2rem)] md:gap-6"
           >
             <Outlet />

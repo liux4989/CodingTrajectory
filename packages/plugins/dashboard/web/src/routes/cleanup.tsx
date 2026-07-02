@@ -38,7 +38,7 @@ import { ShieldAlert, RefreshCcw } from "lucide-react";
 
 export function CleanupRoute() {
   return (
-    <div className="mx-auto grid max-w-[96rem] gap-5">
+    <div className="route-container">
       <RouteHeader eyebrow="Safety first" title="Preview cleanup candidates, choose targets, then explicitly confirm the action." />
       <section className="grid grid-cols-2 gap-4 max-lg:grid-cols-1">
         <CleanupPanel kind="project" title="Project Cleanup" description="Old or missing project paths plus stale provider metadata." />
@@ -71,12 +71,12 @@ function makeColumns(kind: "project" | "session"): ColumnDef<CleanupTarget>[] {
     },
     {
       id: "target",
-      header: () => <span className="font-extrabold uppercase tracking-wide">Target</span>,
+      header: () => <span className="label-uppercase">Target</span>,
       cell: ({ row }) => <TargetLabel target={row.original} />,
     },
     {
       id: "reason",
-      header: () => <span className="font-extrabold uppercase tracking-wide">Reason</span>,
+      header: () => <span className="label-uppercase">Reason</span>,
       cell: ({ row }) => <ReasonBadges reasons={row.original.reason} />,
     },
   ];
@@ -142,7 +142,7 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
       <CardHeader>
         <div className="flex items-center justify-between gap-3 max-[32rem]:flex-col max-[32rem]:items-stretch">
           <div>
-            <CardTitle className="font-display text-xl tracking-tight">{title}</CardTitle>
+            <CardTitle className="title-card">{title}</CardTitle>
             <CardDescription>{description}</CardDescription>
           </div>
           <Badge variant={preview.data?.summary.candidate_count ? "destructive" : "secondary"}>
@@ -161,7 +161,7 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
               </Button>
               {kind === "session" ? (
                 <div className="grid min-w-[8rem] gap-1">
-                  <span className="font-display text-caption font-extrabold uppercase tracking-wide text-muted-foreground">Action</span>
+                  <span className="eyebrow-soft text-muted-foreground">Action</span>
                   <Select value={sessionAction} onValueChange={(v) => setSessionAction(v as "trash" | "delete")}>
                     <SelectTrigger>
                       <SelectValue />
@@ -216,7 +216,7 @@ function TargetLabel({ target }: { target: CleanupTarget }) {
   return (
     <div className="grid gap-1">
       <strong>{target.project ?? target.vendor ?? "target"}</strong>
-      <span className="break-words font-mono text-caption text-muted-foreground">{target.path}</span>
+      <span className="break-words mono text-caption text-muted-foreground">{target.path}</span>
     </div>
   );
 }

@@ -45,7 +45,7 @@ export function LoadingState({
             ) : null}
           </div>
           {elapsedMs != null && elapsedMs > 0 ? (
-            <span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
+            <span className="shrink-0 mono text-caption text-muted-foreground">
               {formatElapsed(elapsedMs)}
             </span>
           ) : null}

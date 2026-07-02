@@ -24,7 +24,7 @@ export function DataTable<TData extends RowData>({
   tableHeadClassName,
 }: DataTableProps<TData>) {
   return (
-    <div className={cn("overflow-auto rounded-2xl border border-foreground/13 bg-card/78 dark:border-border-subtle", className)}>
+    <div className={cn("overflow-auto rounded-2xl border border-border-soft bg-card/78", className)}>
       <Table>
         <TableHeader className={cn("sticky top-0 z-1 bg-table-head font-display text-caption uppercase", tableHeadClassName)}>
           {table.getHeaderGroups().map((headerGroup) => (

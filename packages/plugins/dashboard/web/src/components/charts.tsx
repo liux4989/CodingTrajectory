@@ -210,7 +210,7 @@ export function UsageTimelineChart({ buckets, view }: UsageTimelineChartProps) {
   return (
     <Card className="@container/card min-w-0">
       <CardHeader>
-        <CardTitle className="font-display text-xl tracking-tight">
+        <CardTitle className="title-card">
           {view === "tokens" ? "Tokens Over Time" : "Cost Over Time"}
         </CardTitle>
         <CardDescription>

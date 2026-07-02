@@ -12,7 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { MiniBarChart } from "@/components/charts";
 import { AnimatedNumber } from "@/components/animated-number";
-import { popIn, staggerItem } from "@/lib/motion";
+import { popIn, staggerItem, EASE } from "@/lib/motion";
 
 type MetricCardProps = {
   label: string;
@@ -64,7 +64,7 @@ export function MetricCard({ label, value, detail, sparklineEntries, ratio, tren
         <p className="m-0 break-words text-muted-foreground">{detail}</p>
         {ratio != null ? (
           <div
-            className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/8"
+            className="h-1.5 w-full overflow-hidden rounded-full bg-surface-emphasis"
             role="img"
             aria-label={`${Math.round(ratio * 100)}%`}
           >
@@ -72,7 +72,7 @@ export function MetricCard({ label, value, detail, sparklineEntries, ratio, tren
               className="h-full rounded-full bg-primary"
               initial={{ width: 0 }}
               animate={{ width: `${Math.min(100, Math.max(0, Math.round(ratio * 100)))}%` }}
-              transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1], delay: 0.1 }}
+              transition={{ duration: 0.7, ease: EASE, delay: 0.1 }}
             />
           </div>
         ) : null}
