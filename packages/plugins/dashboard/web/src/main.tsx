@@ -5,6 +5,7 @@ import { createRootRoute, createRoute, createRouter, RouterProvider } from "@tan
 import { AppShell } from "@/components/app-shell";
 import { StateBlock } from "@/components/state-block";
 import { Toaster } from "@/components/ui/sonner";
+import { DateRangeProvider } from "@/hooks/use-date-range";
 import "@/styles.css";
 
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
@@ -65,19 +66,20 @@ const sessionsRoute = createRoute({
   component: () => <RouteBoundary><SessionsRoute /></RouteBoundary>,
 });
 
+const contextWindowRoute = createRoute({
+  getParentRoute: () => sessionsRoute,
+  path: "$sessionId/context-window",
+  component: () => <RouteBoundary><ContextWindowRoute /></RouteBoundary>,
+});
+
 const modelUsageRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/model-usage",
   validateSearch: (search: Record<string, unknown>): {
-    sinceDays: number | undefined;
     projectName: string | undefined;
     modelKey: string | undefined;
     view: "overview" | "cost" | "tokens" | "time" | undefined;
   } => ({
-    sinceDays:
-      search.sinceDays != null && !Number.isNaN(Number(search.sinceDays))
-        ? Number(search.sinceDays)
-        : undefined,
     projectName: typeof search.projectName === "string" ? search.projectName : undefined,
     modelKey: typeof search.modelKey === "string" ? search.modelKey : undefined,
     view:
@@ -91,20 +93,10 @@ const modelUsageRoute = createRoute({
 const errorCollectionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/error-collection",
-  validateSearch: (search: Record<string, unknown>): { sinceDays: number | undefined; projectName: string | undefined } => ({
-    sinceDays:
-      search.sinceDays != null && !Number.isNaN(Number(search.sinceDays))
-        ? Number(search.sinceDays)
-        : undefined,
+  validateSearch: (search: Record<string, unknown>): { projectName: string | undefined } => ({
     projectName: typeof search.projectName === "string" ? search.projectName : undefined,
   }),
   component: () => <RouteBoundary><ErrorCollectionRoute /></RouteBoundary>,
-});
-
-const contextWindowRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/sessions/$sessionId/context-window",
-  component: () => <RouteBoundary><ContextWindowRoute /></RouteBoundary>,
 });
 
 const cleanupRoute = createRoute({
@@ -117,10 +109,9 @@ const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
     projectDetailRoute,
-    sessionsRoute,
+    sessionsRoute.addChildren([contextWindowRoute]),
     modelUsageRoute,
     errorCollectionRoute,
-    contextWindowRoute,
     cleanupRoute,
   ]),
 });
@@ -134,7 +125,9 @@ declare module "@tanstack/react-router" {
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <DateRangeProvider>
+        <RouterProvider router={router} />
+      </DateRangeProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

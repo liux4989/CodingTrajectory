@@ -29,11 +29,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MetricSkeleton } from "@/components/ui/skeleton";
+import { useDateRange } from "@/hooks/use-date-range";
 import { cn } from "@/lib/utils";
 
 const ALL_PROJECTS = "__all_projects__";
 const ALL_MODELS = "__all_models__";
-const TIME_OPTIONS = [7, 14, 30, 90];
 type TokenBucketKey =
   | "total_tokens"
   | "input_tokens"
@@ -59,18 +59,16 @@ type UsageView = (typeof VIEW_OPTIONS)[number]["value"];
 export function ModelUsageRoute() {
   const search = useSearch({ from: "/model-usage" });
   const navigate = useNavigate({ from: "/model-usage" });
-  const sinceDays = search.sinceDays ?? 7;
+  const { days: sinceDays } = useDateRange();
   const projectName = search.projectName ?? null;
   const modelKey = search.modelKey ?? null;
   const view = search.view ?? "overview";
   const query = useQuery({
     queryKey: ["model-usage", sinceDays, projectName, modelKey],
     queryFn: () => fetchModelUsage({ sinceDays, projectName, modelKey }),
+    placeholderData: (previous) => previous,
   });
 
-  const setSinceDays = (value: string) => {
-    void navigate({ search: (current) => ({ ...current, sinceDays: Number(value) }) });
-  };
   const setProjectName = (value: string) => {
     void navigate({
       search: (current) => ({
@@ -123,20 +121,9 @@ export function ModelUsageRoute() {
 
       <Card className="min-w-0">
         <CardContent className="flex flex-wrap items-end gap-3 pt-6">
-          <FilterLabel label="Time limit">
-            <Select value={String(sinceDays)} onValueChange={setSinceDays}>
-              <SelectTrigger className="min-w-[10rem]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {TIME_OPTIONS.map((days) => (
-                  <SelectItem key={days} value={String(days)}>
-                    Last {days} days
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FilterLabel>
+          <p className="font-display text-caption font-extrabold uppercase tracking-wide text-muted-foreground">
+            Showing last {sinceDays} day{sinceDays === 1 ? "" : "s"} · adjust in the header
+          </p>
           <FilterLabel label="Project">
             <Select value={projectName ?? ALL_PROJECTS} onValueChange={setProjectName}>
               <SelectTrigger className="min-w-[18rem] max-w-[26rem]">

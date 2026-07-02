@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link, useParams, useSearch } from "@tanstack/react-router";
+import { useParams, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   useReactTable,
@@ -10,7 +10,7 @@ import {
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowLeft, FolderGit2 } from "lucide-react";
+import { FolderGit2 } from "lucide-react";
 import { fetchProjectDetail, type SessionItem } from "@/api";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
@@ -22,6 +22,7 @@ import { DataTable } from "@/components/data-table";
 import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SessionLink } from "@/components/session-link";
+import { useDateRange } from "@/hooks/use-date-range";
 import { relativeTime } from "@/lib/relative-time";
 
 function sessionId(item: SessionItem) {
@@ -68,12 +69,15 @@ const columns: ColumnDef<SessionItem>[] = [
 
 export function ProjectDetailRoute() {
   const { projectName } = useParams({ from: "/projects/$projectName" });
-  const { sinceDays } = useSearch({ from: "/projects/$projectName" });
+  const { sinceDays: urlSinceDays } = useSearch({ from: "/projects/$projectName" });
+  const { days: rangeDays } = useDateRange();
+  const sinceDays = urlSinceDays ?? rangeDays;
   const [filter, setFilter] = React.useState("");
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const detail = useQuery({
     queryKey: ["project", projectName, sinceDays],
     queryFn: () => fetchProjectDetail(projectName, sinceDays),
+    placeholderData: (previous) => previous,
   });
   const data = detail.data?.sessions ?? [];
 
@@ -97,12 +101,6 @@ export function ProjectDetailRoute() {
 
   return (
     <div className="mx-auto grid max-w-[96rem] gap-5">
-      <Link
-        to="/"
-        className="inline-flex items-center gap-1.5 font-display font-extrabold text-primary decoration-[0.08em] underline-offset-[0.2em]"
-      >
-        <ArrowLeft size={16} /> Overview
-      </Link>
       <RouteHeader
         eyebrow="Project drill-down"
         title={projectName}
@@ -115,8 +113,7 @@ export function ProjectDetailRoute() {
           <span className="font-mono text-body-sm text-muted-foreground">{detail.data.path}</span>
         ) : null}
         <span className="text-body-sm text-muted-foreground">
-          {detail.data?.session_count ?? 0} session(s)
-          {sinceDays != null ? ` from the last ${sinceDays} day${sinceDays === 1 ? "" : "s"}` : ""}
+          {detail.data?.session_count ?? 0} session(s) from the last {sinceDays} day{sinceDays === 1 ? "" : "s"}
         </span>
       </div>
       <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, or id" />

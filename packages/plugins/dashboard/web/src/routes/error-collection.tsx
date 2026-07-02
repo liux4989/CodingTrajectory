@@ -25,10 +25,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MetricSkeleton } from "@/components/ui/skeleton";
+import { useDateRange } from "@/hooks/use-date-range";
 import { cn } from "@/lib/utils";
 
 const ALL_PROJECTS = "__all_projects__";
-const TIME_OPTIONS = [7, 14, 30, 90];
 
 const KIND_LABELS: Record<ErrorCollectionKind, string> = {
   abort_coding_session: "Abort coding session",
@@ -39,16 +39,14 @@ const KIND_LABELS: Record<ErrorCollectionKind, string> = {
 export function ErrorCollectionRoute() {
   const search = useSearch({ from: "/error-collection" });
   const navigate = useNavigate({ from: "/error-collection" });
-  const sinceDays = search.sinceDays ?? 7;
+  const { days: sinceDays } = useDateRange();
   const projectName = search.projectName ?? null;
   const query = useQuery({
     queryKey: ["error-collection", sinceDays, projectName],
     queryFn: () => fetchErrorCollection({ sinceDays, projectName }),
+    placeholderData: (previous) => previous,
   });
 
-  const setSinceDays = (value: string) => {
-    void navigate({ search: (current) => ({ ...current, sinceDays: Number(value) }) });
-  };
   const setProjectName = (value: string) => {
     void navigate({
       search: (current) => ({
@@ -85,20 +83,9 @@ export function ErrorCollectionRoute() {
 
       <Card className="min-w-0">
         <CardContent className="flex flex-wrap items-center gap-3 pt-6">
-          <FilterLabel label="Time interval">
-            <Select value={String(sinceDays)} onValueChange={setSinceDays}>
-              <SelectTrigger className="min-w-[10rem]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {TIME_OPTIONS.map((days) => (
-                  <SelectItem key={days} value={String(days)}>
-                    Last {days} days
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FilterLabel>
+          <p className="font-display text-caption font-extrabold uppercase tracking-wide text-muted-foreground">
+            Showing last {sinceDays} day{sinceDays === 1 ? "" : "s"} · adjust in the header
+          </p>
           <FilterLabel label="Project">
             <Select value={projectName ?? ALL_PROJECTS} onValueChange={setProjectName}>
               <SelectTrigger className="min-w-[18rem] max-w-[26rem]">
