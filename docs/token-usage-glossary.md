@@ -26,3 +26,13 @@ reasoning tokens separately from the provider total.
 
 Cost should be computed from component buckets or provider-reported cost, not
 from one total multiplied by one rate.
+
+## Allocated item cost
+
+`session.tool_usage` exposes `item_real_token_costs` as a derived attribution
+layer. The raw item chronology remains unchanged; each observed provider usage
+record is allocated across the items visible at that observation, weighted by
+visible item tokens. The allocated rows reconcile in glossary buckets
+(`prompt_tokens`, `cached_prompt_tokens`, `processed_tokens`, and related
+fields), not in internal model field names such as `input_tokens` or
+`total_tokens`.

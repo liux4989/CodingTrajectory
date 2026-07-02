@@ -711,25 +711,9 @@ def _sum_allocated_usage_for_present_observations(
 
 
 def _resident_expected_usage(observation: TokenUsageObservation) -> dict[str, int]:
-    usage = observation.usage
-    uncached_input_tokens = _effective_input_token_total(usage, observation)
-    total_tokens = (
-        uncached_input_tokens
-        + usage.cached_input_tokens
-        + usage.cache_creation_input_tokens
-        + usage.output_tokens
-        + usage.reasoning_output_tokens
+    return _allocated_cost_usage_dict(
+        _allocated_cost_from_usage_observation(observation)
     )
-    usage_dict = {
-        "input_tokens": usage.input_tokens,
-        "uncached_input_tokens": uncached_input_tokens,
-        "cached_input_tokens": usage.cached_input_tokens,
-        "cache_creation_input_tokens": usage.cache_creation_input_tokens,
-        "output_tokens": usage.output_tokens,
-        "reasoning_output_tokens": usage.reasoning_output_tokens,
-        "total_tokens": total_tokens,
-    }
-    return {key: value for key, value in usage_dict.items() if value > 0}
 
 
 def _allocated_cost_from_usage_observation(
