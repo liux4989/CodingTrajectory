@@ -246,10 +246,12 @@ def serialize_llm_detail(event: Event) -> dict[str, Any] | None:
             {
                 "model": event.payload.get("model")
                 or event.payload.get("model_version"),
-                "input_tokens": usage.get("input_tokens") or usage.get("prompt_tokens"),
-                "output_tokens": usage.get("output_tokens")
-                or usage.get("completion_tokens"),
-                "total_tokens": usage.get("total_tokens"),
+                "prompt_tokens": usage.get("prompt_tokens")
+                or usage.get("input_tokens"),
+                "completion_tokens": usage.get("completion_tokens")
+                or usage.get("output_tokens"),
+                "reported_total_tokens": usage.get("reported_total_tokens")
+                or usage.get("total_tokens"),
                 "stop_reason": event.payload.get("stop_reason"),
             }
         )

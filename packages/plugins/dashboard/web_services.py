@@ -445,7 +445,7 @@ def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
         "failed_tool_calls": 0,
     }
     usage_totals = {
-        "total_tokens": 0,
+        "processed_tokens": 0,
         "cost_usd": 0.0,
         "known_cost_count": 0,
         "missing_cost_count": 0,
@@ -458,7 +458,7 @@ def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
         usage = item.get("usage") or {}
         for key in runtime_totals:
             runtime_totals[key] += _number(runtime.get(key))
-        usage_totals["total_tokens"] += int(_number(usage.get("total_tokens")))
+        usage_totals["processed_tokens"] += int(_number(usage.get("processed_tokens")))
         if isinstance(usage, dict) and isinstance(usage.get("cost_usd"), int | float):
             usage_totals["cost_usd"] += float(usage["cost_usd"])
             usage_totals["known_cost_count"] += 1
@@ -473,14 +473,14 @@ def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
                 "count": 0,
                 "vendors": {},
                 "execution_seconds": 0,
-                "total_tokens": 0,
+                "processed_tokens": 0,
                 "cost_usd": 0.0,
                 "known_cost_count": 0,
             },
         )
         stats["count"] += 1
         stats["execution_seconds"] += _number(runtime.get("execution_seconds"))
-        stats["total_tokens"] += int(_number(usage.get("total_tokens")))
+        stats["processed_tokens"] += int(_number(usage.get("processed_tokens")))
         if isinstance(usage, dict) and isinstance(usage.get("cost_usd"), int | float):
             stats["cost_usd"] += float(usage["cost_usd"])
             stats["known_cost_count"] += 1
@@ -513,9 +513,9 @@ def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
         (
             _overview_session(item)
             for item in items
-            if int(_number((item.get("usage") or {}).get("total_tokens"))) > 0
+            if int(_number((item.get("usage") or {}).get("processed_tokens"))) > 0
         ),
-        key=lambda item: item["total_tokens"],
+        key=lambda item: item["processed_tokens"],
         reverse=True,
     )[:8]
 
@@ -574,7 +574,7 @@ def _overview_session(item: dict[str, Any]) -> dict[str, Any]:
         "turns": int(_number(runtime.get("turns"))),
         "tool_calls": int(_number(runtime.get("tool_calls"))),
         "failed_tool_calls": int(_number(runtime.get("failed_tool_calls"))),
-        "total_tokens": int(_number(usage.get("total_tokens"))),
+        "processed_tokens": int(_number(usage.get("processed_tokens"))),
     }
 
 

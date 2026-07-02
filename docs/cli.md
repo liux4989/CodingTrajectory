@@ -44,7 +44,7 @@ exact data:
   names remain meaningful; short names are used only when they are established
   and unambiguous in context, such as `id`, `cwd`, `url`, `cmd`, and `pct`.
   Redundant suffixes may be omitted when the containing object supplies the
-  meaning, such as `usage.input` instead of `usage.input_tokens`.
+  meaning, such as `usage.prompt` instead of `usage.prompt_tokens`.
 
 Automation can pass command params as a JSON object with `--params JSON` on
 commands that dispatch to the core query surface. Explicit CLI flags override

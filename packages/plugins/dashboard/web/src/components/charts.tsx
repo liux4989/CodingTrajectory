@@ -124,7 +124,7 @@ export type UsageTimelineChartBuckets = Record<
     model_key: string
     turns: number
     estimated_cost_usd: number
-    usage: { total_tokens?: number }
+    usage: { processed_tokens?: number }
   }>
 >
 
@@ -300,7 +300,7 @@ function bucketValue(
   row: UsageTimelineChartBuckets[string][number],
   view: "cost" | "tokens",
 ) {
-  return view === "tokens" ? row.usage.total_tokens ?? 0 : row.estimated_cost_usd
+  return view === "tokens" ? row.usage.processed_tokens ?? 0 : row.estimated_cost_usd
 }
 
 function compactNumber(value: number) {

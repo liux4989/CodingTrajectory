@@ -760,21 +760,14 @@ def _allocated_cost_usage_dict(
     if cost is None:
         return {}
     usage_dict = {
-        "input_tokens": cost.input_tokens,
-        "uncached_input_tokens": cost.uncached_input_tokens,
-        "cached_input_tokens": cost.cached_input_tokens,
-        "cache_creation_input_tokens": cost.cache_creation_input_tokens,
-        "output_tokens": cost.output_tokens,
-        "reasoning_output_tokens": cost.reasoning_output_tokens,
-        "total_tokens": cost.total_tokens,
         "prompt_tokens": cost.input_tokens,
+        "uncached_prompt_tokens": cost.uncached_input_tokens,
         "cached_prompt_tokens": cost.cached_input_tokens,
         "cache_write_tokens": cost.cache_creation_input_tokens,
         "completion_tokens": cost.output_tokens,
         "reasoning_tokens": cost.reasoning_output_tokens,
         "processed_tokens": cost.total_tokens,
         "prompt_completion_tokens": cost.input_tokens + cost.output_tokens,
-        "fresh_io_tokens": cost.input_tokens + cost.output_tokens,
     }
     return {key: value for key, value in usage_dict.items() if value > 0}
 

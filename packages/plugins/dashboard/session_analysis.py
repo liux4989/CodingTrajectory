@@ -11,7 +11,11 @@ from pydantic import BaseModel, ConfigDict
 
 try:
     from . import context_window as context_window_mod
-    from .codex_app_server import CodexAppServerClient, CodexAppServerResult, PiRpcClient
+    from .codex_app_server import (
+        CodexAppServerClient,
+        CodexAppServerResult,
+        PiRpcClient,
+    )
 except ImportError:
     import context_window as context_window_mod
     from codex_app_server import CodexAppServerClient, CodexAppServerResult, PiRpcClient
@@ -65,19 +69,19 @@ class ExpensiveBilledItem(BaseModel):
     label: str
     category: str
     summary: str
-    billed_tokens: int
+    processed_tokens: int
     billed_estimated_cost_usd: float
 
 
 class UsageEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    billed_tokens: int
-    billed_input_tokens: int
-    billed_uncached_input_tokens: int
-    billed_cached_tokens: int
-    billed_cache_creation_tokens: int
-    billed_output_tokens: int
+    processed_tokens: int
+    billed_prompt_tokens: int
+    billed_uncached_prompt_tokens: int
+    billed_cached_prompt_tokens: int
+    billed_cache_write_tokens: int
+    billed_completion_tokens: int
     billed_reasoning_tokens: int
     resident_context_tokens: int | None
     context_window_tokens: int | None
@@ -165,8 +169,7 @@ class AnalysisRunner(Protocol):
         skill_path: Path,
         user_text: str,
         output_schema: dict[str, Any],
-    ) -> CodexAppServerResult:
-        ...
+    ) -> CodexAppServerResult: ...
 
 
 def build_or_load_analysis(
@@ -195,39 +198,51 @@ def build_analysis(
     provider: AnalysisProvider = "codex",
 ) -> SessionAnalysis:
     provider = _normalize_provider(provider)
-    overview = ct_json(["session", "overview", "--global-scope", "--output", "json", session_id])
-    usage = ct_json(["session", "usage", "--global-scope", "--output", "json", session_id])
-    stats = ct_json(["session", "stats", "--global-scope", "--output", "json", session_id])
-    requested = ct_json([
-        "session",
-        "events",
-        "--global-scope",
-        "--output",
-        "json",
-        session_id,
-        "--type",
-        "tool.call.requested",
-    ])
-    succeeded = ct_json([
-        "session",
-        "events",
-        "--global-scope",
-        "--output",
-        "json",
-        session_id,
-        "--type",
-        "tool.call.succeeded",
-    ])
-    failed = ct_json([
-        "session",
-        "events",
-        "--global-scope",
-        "--output",
-        "json",
-        session_id,
-        "--type",
-        "tool.call.failed",
-    ])
+    overview = ct_json(
+        ["session", "overview", "--global-scope", "--output", "json", session_id]
+    )
+    usage = ct_json(
+        ["session", "usage", "--global-scope", "--output", "json", session_id]
+    )
+    stats = ct_json(
+        ["session", "stats", "--global-scope", "--output", "json", session_id]
+    )
+    requested = ct_json(
+        [
+            "session",
+            "events",
+            "--global-scope",
+            "--output",
+            "json",
+            session_id,
+            "--type",
+            "tool.call.requested",
+        ]
+    )
+    succeeded = ct_json(
+        [
+            "session",
+            "events",
+            "--global-scope",
+            "--output",
+            "json",
+            session_id,
+            "--type",
+            "tool.call.succeeded",
+        ]
+    )
+    failed = ct_json(
+        [
+            "session",
+            "events",
+            "--global-scope",
+            "--output",
+            "json",
+            session_id,
+            "--type",
+            "tool.call.failed",
+        ]
+    )
     task_story = _task_story(overview)
     usage_evidence = _usage_evidence(stats, usage)
     tool_evidence = _tool_evidence(requested, succeeded, failed)
@@ -290,7 +305,12 @@ def _repo_root() -> Path:
 
 
 def _skill_path() -> Path:
-    return Path(__file__).resolve().parent / "skills" / "coding-session-review" / "SKILL.md"
+    return (
+        Path(__file__).resolve().parent
+        / "skills"
+        / "coding-session-review"
+        / "SKILL.md"
+    )
 
 
 def _evidence_packet(
@@ -338,9 +358,14 @@ def _json_from_text(text: str) -> Any:
         raise
 
 
-def _artifact_path(session_id: str, artifact_dir: Path | None, *, provider: AnalysisProvider) -> Path:
+def _artifact_path(
+    session_id: str, artifact_dir: Path | None, *, provider: AnalysisProvider
+) -> Path:
     safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", session_id).strip("-") or "session"
-    directory = artifact_dir or Path.home() / ".coding-trajectory" / "dashboard" / "session-analysis"
+    directory = (
+        artifact_dir
+        or Path.home() / ".coding-trajectory" / "dashboard" / "session-analysis"
+    )
     return directory / f"{safe_id}.{provider}.v3.json"
 
 
@@ -394,7 +419,9 @@ def _session_phases(turns: list[dict[str, Any]]) -> list[SessionPhase]:
     return [
         SessionPhase(
             label=label,
-            turn_ids=[str(turn.get("id") or turn.get("turn_id") or "-") for turn in items],
+            turn_ids=[
+                str(turn.get("id") or turn.get("turn_id") or "-") for turn in items
+            ],
             summary=_phase_summary(label, items),
         )
         for label, items in groups
@@ -405,7 +432,9 @@ def _phase_label(request: str) -> str:
     lower = request.lower()
     if lower in {"do it", "implement it", "fix it"} or "do it" == lower.strip():
         return "implementation"
-    if any(term in lower for term in ["why", "review", "status", "still", "does", "can we"]):
+    if any(
+        term in lower for term in ["why", "review", "status", "still", "does", "can we"]
+    ):
         return "diagnosis"
     if any(term in lower for term in ["deploy", "docker", "ci", "push", "kill"]):
         return "operations"
@@ -447,7 +476,16 @@ def _extract_paths(text: str) -> set[str]:
 
 def _looks_like_outcome(text: str) -> bool:
     lower = text.lower()
-    return any(term in lower for term in ["implemented and committed", "done and committed", "current status", "killed them", "the short answer"])
+    return any(
+        term in lower
+        for term in [
+            "implemented and committed",
+            "done and committed",
+            "current status",
+            "killed them",
+            "the short answer",
+        ]
+    )
 
 
 def _usage_evidence(stats: dict[str, Any], usage: dict[str, Any]) -> UsageEvidence:
@@ -461,28 +499,34 @@ def _usage_evidence(stats: dict[str, Any], usage: dict[str, Any]) -> UsageEviden
         [
             {
                 "turn_id": turn.get("id") or turn.get("turn_id"),
-                "total_tokens": _int_value((turn.get("usage") or {}).get("total")),
-                "input_tokens": _int_value((turn.get("usage") or {}).get("input")),
-                "cached_tokens": _int_value((turn.get("usage") or {}).get("cached")),
+                "processed_tokens": _int_value(
+                    (turn.get("usage") or {}).get("processed")
+                ),
+                "prompt_tokens": _int_value((turn.get("usage") or {}).get("prompt")),
+                "cached_prompt_tokens": _int_value(
+                    (turn.get("usage") or {}).get("cached_prompt")
+                ),
             }
             for turn in turns
             if isinstance(turn, dict)
         ],
-        key=lambda item: item["total_tokens"],
+        key=lambda item: item["processed_tokens"],
         reverse=True,
     )[:6]
     return UsageEvidence(
-        billed_tokens=_usage_int(billed, "total"),
-        billed_input_tokens=_usage_int(billed, "input"),
-        billed_uncached_input_tokens=_usage_int(billed, "uncached_input"),
-        billed_cached_tokens=_usage_int(billed, "cached"),
-        billed_cache_creation_tokens=_usage_int(billed, "cache_creation"),
-        billed_output_tokens=_usage_int(billed, "output"),
+        processed_tokens=_usage_int(billed, "processed"),
+        billed_prompt_tokens=_usage_int(billed, "prompt"),
+        billed_uncached_prompt_tokens=_usage_int(billed, "uncached_prompt"),
+        billed_cached_prompt_tokens=_usage_int(billed, "cached_prompt"),
+        billed_cache_write_tokens=_usage_int(billed, "cache_write"),
+        billed_completion_tokens=_usage_int(billed, "completion"),
         billed_reasoning_tokens=_usage_int(billed, "reasoning"),
         resident_context_tokens=_optional_int(
             context.get("used") or context.get("used_tokens")
         ),
-        context_window_tokens=_optional_int(model.get("context_window") or model.get("context_window_tokens")),
+        context_window_tokens=_optional_int(
+            model.get("context_window") or model.get("context_window_tokens")
+        ),
         resident_context_percent=_optional_float(
             context.get("pct") or context.get("used_percent")
         ),
@@ -492,13 +536,13 @@ def _usage_evidence(stats: dict[str, Any], usage: dict[str, Any]) -> UsageEviden
 
 def _usage_int(usage: dict[str, Any], key: str) -> int:
     raw_key = {
-        "input": "input_tokens",
-        "uncached_input": "uncached_input_tokens",
-        "cached": "cached_input_tokens",
-        "cache_creation": "cache_creation_input_tokens",
-        "output": "output_tokens",
-        "reasoning": "reasoning_output_tokens",
-        "total": "total_tokens",
+        "prompt": "prompt_tokens",
+        "uncached_prompt": "uncached_prompt_tokens",
+        "cached_prompt": "cached_prompt_tokens",
+        "cache_write": "cache_write_tokens",
+        "completion": "completion_tokens",
+        "reasoning": "reasoning_tokens",
+        "processed": "processed_tokens",
     }[key]
     return _int_value(usage.get(raw_key) if raw_key in usage else usage.get(key))
 
@@ -510,7 +554,7 @@ def _composition_leaves(stats: dict[str, Any]) -> list[dict[str, Any]]:
         leaves,
         key=lambda item: (
             _int_value(item.get("tokens")),
-            _int_value((item.get("allocated_usage") or {}).get("total_tokens")),
+            _int_value((item.get("allocated_usage") or {}).get("processed_tokens")),
         ),
         reverse=True,
     )
@@ -626,7 +670,7 @@ def _augment_usage_evidence(
             label=_one_line(item.label, 120),
             category=item.category,
             summary=_one_line(item.summary, 220),
-            billed_tokens=item.allocated_usage.get("total_tokens", 0),
+            processed_tokens=item.allocated_usage.get("processed_tokens", 0),
             billed_estimated_cost_usd=item.estimated_cost.value_usd,
         )
         for item in projection.expensive_items[:8]
@@ -667,7 +711,9 @@ def _tool_evidence(
         if isinstance(match.get("payload"), dict)
     }
     examples: list[ToolExample] = []
-    bucket_data: dict[str, dict[str, int]] = defaultdict(lambda: {"calls": 0, "failed": 0, "chars": 0})
+    bucket_data: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"calls": 0, "failed": 0, "chars": 0}
+    )
     total_chars = 0
     for result in results:
         payload = result.get("payload") or {}
@@ -690,7 +736,9 @@ def _tool_evidence(
                 output_chars=output_chars,
                 failed=failed,
                 command=_one_line(command, 220),
-                timestamp=result.get("timestamp") if isinstance(result.get("timestamp"), str) else None,
+                timestamp=result.get("timestamp")
+                if isinstance(result.get("timestamp"), str)
+                else None,
             )
         )
     total_result_calls = sum(data["calls"] for data in bucket_data.values())
@@ -705,7 +753,9 @@ def _tool_evidence(
             call_share=_ratio(data["calls"], total_result_calls),
             output_share=_ratio(data["chars"], total_chars),
         )
-        for key, data in sorted(bucket_data.items(), key=lambda item: item[1]["chars"], reverse=True)
+        for key, data in sorted(
+            bucket_data.items(), key=lambda item: item[1]["chars"], reverse=True
+        )
     ]
     return ToolEvidence(
         total_requested_calls=len(requested),
@@ -713,7 +763,9 @@ def _tool_evidence(
         failed_result_calls=sum(data["failed"] for data in bucket_data.values()),
         output_chars=total_chars,
         buckets=buckets,
-        top_output_calls=sorted(examples, key=lambda item: item.output_chars, reverse=True)[:12],
+        top_output_calls=sorted(
+            examples, key=lambda item: item.output_chars, reverse=True
+        )[:12],
     )
 
 
@@ -770,7 +822,10 @@ def _classify_tool(command: str, tool: str) -> str:
         ]
     ):
         return "cloud_state_check"
-    if any(term in lower for term in ["py_compile", "bun run check", "diff --check", "ruby -e"]):
+    if any(
+        term in lower
+        for term in ["py_compile", "bun run check", "diff --check", "ruby -e"]
+    ):
         return "validation"
     if any(term in lower for term in ["git add", "git commit"]):
         return "git_write"

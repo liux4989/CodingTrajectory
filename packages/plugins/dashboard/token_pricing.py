@@ -48,18 +48,18 @@ class TokenUsage(BaseModel):
         if not isinstance(value, dict):
             return value
         return {
-            "input_tokens": value.get("input_tokens", value.get("input", 0)),
+            "input_tokens": value.get("prompt_tokens", value.get("input", 0)),
             "cached_input_tokens": value.get(
-                "cached_input_tokens",
+                "cached_prompt_tokens",
                 value.get("cached", 0),
             ),
             "cache_creation_input_tokens": value.get(
-                "cache_creation_input_tokens",
+                "cache_write_tokens",
                 value.get("cache_creation", 0),
             ),
-            "output_tokens": value.get("output_tokens", value.get("output", 0)),
+            "output_tokens": value.get("completion_tokens", value.get("output", 0)),
             "reasoning_output_tokens": value.get(
-                "reasoning_output_tokens",
+                "reasoning_tokens",
                 value.get("reasoning", 0),
             ),
         }

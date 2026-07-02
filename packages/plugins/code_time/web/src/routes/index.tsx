@@ -187,8 +187,8 @@ export function OverviewRoute() {
             />
             <StatCard
               label="Tokens"
-              value={formatTokens(totals.tokens.total_tokens)}
-              detail={`${formatTokens(totals.tokens.output_tokens)} output`}
+              value={formatTokens(totals.tokens.processed_tokens)}
+              detail={`${formatTokens(totals.tokens.completion_tokens)} completion`}
               className="animate-rise-in [animation-delay:180ms]"
             />
             <StatCard

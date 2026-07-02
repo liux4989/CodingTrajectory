@@ -61,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
 # Data collection
 # ---------------------------------------------------------------------------
 
+
 def build_report(
     *,
     window: str,
@@ -75,9 +76,17 @@ def build_report(
     since_days = WINDOW_SINCE_DAYS[window]
     ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
     if not ct:
-        raise SystemExit("ct executable not found; set CT_COMMAND to the ct command path")
+        raise SystemExit(
+            "ct executable not found; set CT_COMMAND to the ct command path"
+        )
 
-    project_names = [project_filter] if project_filter else sorted((_ct_json(["project", "list", "--output", "json"]).get("items") or {}))
+    project_names = (
+        [project_filter]
+        if project_filter
+        else sorted(
+            (_ct_json(["project", "list", "--output", "json"]).get("items") or {})
+        )
+    )
 
     project_sessions: dict[str, list[dict[str, Any]]] = {}
     all_session_ids: list[str] = []
@@ -88,12 +97,23 @@ def build_report(
         if agent_vendor:
             params["agent_vendor"] = agent_vendor
         payload = _ct_json_safe(
-            ["project", "sessions", "--global-scope", "--params", json.dumps(params), "--output", "json"]
+            [
+                "project",
+                "sessions",
+                "--global-scope",
+                "--params",
+                json.dumps(params),
+                "--output",
+                "json",
+            ]
         )
         return name, (payload or {}).get("items") or []
 
     with ThreadPoolExecutor(max_workers=min(8, len(project_names) or 1)) as pool:
-        futures = {pool.submit(_fetch_sessions_for_project, name): name for name in project_names}
+        futures = {
+            pool.submit(_fetch_sessions_for_project, name): name
+            for name in project_names
+        }
         for future in as_completed(futures):
             name, sessions = future.result()
             if not sessions:
@@ -118,17 +138,19 @@ def build_report(
             meta = session_meta.get(root_id, {})
             vendors = meta.get("vendors") or []
             vendor = vendors[0] if vendors else data.get("vendor", "unknown")
-            session_slices.append({
-                "root_session_id": root_id,
-                "title": meta.get("title"),
-                "vendor": vendor,
-                "execution_seconds": data.get("execution_seconds", 0),
-                "wait_seconds": data.get("wait_seconds", 0),
-                "turns": data.get("turns", 0),
-                "tool_calls": data.get("tool_calls", 0),
-                "tokens": data.get("tokens", _empty_tokens()),
-                "cost_usd": data.get("cost_usd"),
-            })
+            session_slices.append(
+                {
+                    "root_session_id": root_id,
+                    "title": meta.get("title"),
+                    "vendor": vendor,
+                    "execution_seconds": data.get("execution_seconds", 0),
+                    "wait_seconds": data.get("wait_seconds", 0),
+                    "turns": data.get("turns", 0),
+                    "tool_calls": data.get("tool_calls", 0),
+                    "tokens": data.get("tokens", _empty_tokens()),
+                    "cost_usd": data.get("cost_usd"),
+                }
+            )
 
         if session_slices:
             project_slices.append(_aggregate_project(project_name, session_slices))
@@ -146,9 +168,12 @@ def build_report(
 
 def _empty_tokens() -> dict[str, int]:
     return {
-        "input_tokens": 0, "cached_input_tokens": 0,
-        "cache_creation_input_tokens": 0, "output_tokens": 0,
-        "reasoning_output_tokens": 0, "total_tokens": 0,
+        "prompt_tokens": 0,
+        "cached_prompt_tokens": 0,
+        "cache_write_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": 0,
+        "processed_tokens": 0,
     }
 
 
@@ -176,9 +201,11 @@ def _fetch_session_data_bulk(
         payload = _ct_json_with_command(
             ct,
             [
-                "api", "batch",
+                "api",
+                "batch",
                 "--global-scope",
-                "--requests", json.dumps(requests),
+                "--requests",
+                json.dumps(requests),
             ],
         )
         for item in payload.get("items") or []:
@@ -226,12 +253,12 @@ def _report_cache_set(key: tuple, report: dict[str, Any]) -> None:
 
 def _extract_tokens(usage: dict[str, Any]) -> dict[str, int]:
     return {
-        "input_tokens": usage.get("input_tokens") or 0,
-        "cached_input_tokens": usage.get("cached_input_tokens") or 0,
-        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens") or 0,
-        "output_tokens": usage.get("output_tokens") or 0,
-        "reasoning_output_tokens": usage.get("reasoning_output_tokens") or 0,
-        "total_tokens": usage.get("total_tokens") or 0,
+        "prompt_tokens": usage.get("prompt_tokens") or 0,
+        "cached_prompt_tokens": usage.get("cached_prompt_tokens") or 0,
+        "cache_write_tokens": usage.get("cache_write_tokens") or 0,
+        "completion_tokens": usage.get("completion_tokens") or 0,
+        "reasoning_tokens": usage.get("reasoning_tokens") or 0,
+        "processed_tokens": usage.get("processed_tokens") or 0,
     }
 
 
@@ -282,12 +309,12 @@ def _aggregate_totals(project_slices: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _sum_tokens(iterable) -> dict[str, int]:
     result = {
-        "input_tokens": 0,
-        "cached_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "output_tokens": 0,
-        "reasoning_output_tokens": 0,
-        "total_tokens": 0,
+        "prompt_tokens": 0,
+        "cached_prompt_tokens": 0,
+        "cache_write_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": 0,
+        "processed_tokens": 0,
     }
     for tokens in iterable:
         for key in result:
@@ -298,6 +325,7 @@ def _sum_tokens(iterable) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
+
 
 def render_report(report: dict[str, Any]) -> str:
     totals = report["totals"]
@@ -331,7 +359,7 @@ def render_report(report: dict[str, Any]) -> str:
         name = _one_line(project["project_name"], col_project)
         sessions_n = project["session_count"]
         coding = _format_duration(project["execution_seconds"])
-        tokens = _format_tokens(project["tokens"]["total_tokens"])
+        tokens = _format_tokens(project["tokens"]["processed_tokens"])
         cost = _format_cost(project["cost_usd"])
         lines.append(
             f"  {name:<{col_project}}  {sessions_n:>8}  {coding:>10}  "
@@ -341,7 +369,7 @@ def render_report(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append("  " + "-" * (len(header) - 2))
     t_coding = _format_duration(totals["execution_seconds"])
-    t_tokens = _format_tokens(totals["tokens"]["total_tokens"])
+    t_tokens = _format_tokens(totals["tokens"]["processed_tokens"])
     t_cost = _format_cost(totals["cost_usd"])
     lines.append(
         f"  {'Total':<{col_project}}  {totals['session_count']:>8}  {t_coding:>10}  "
@@ -371,7 +399,7 @@ def _totals_line(totals: dict[str, Any]) -> str:
         f"Wait time: {_format_duration(totals['wait_seconds'])}",
         f"Turns: {totals['turns']}",
         f"Tool calls: {totals['tool_calls']}",
-        f"Tokens: {_format_tokens(totals['tokens']['total_tokens'])}",
+        f"Tokens: {_format_tokens(totals['tokens']['processed_tokens'])}",
     ]
     if totals.get("cost_usd") is not None:
         parts.append(f"Cost: {_format_cost(totals['cost_usd'])}")
@@ -417,17 +445,22 @@ def _one_line(value: str, limit: int) -> str:
 # ct subprocess helpers
 # ---------------------------------------------------------------------------
 
+
 def _ct_json(args: list[str]) -> dict[str, Any]:
     ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
     if not ct:
-        raise SystemExit("ct executable not found; set CT_COMMAND to the ct command path")
+        raise SystemExit(
+            "ct executable not found; set CT_COMMAND to the ct command path"
+        )
     return _ct_json_with_command(ct, args)
 
 
 def _ct_json_with_command(ct: str, args: list[str]) -> dict[str, Any]:
     command = [*shlex.split(ct), *args]
     try:
-        completed = subprocess.run(command, check=False, text=True, capture_output=True, timeout=60)
+        completed = subprocess.run(
+            command, check=False, text=True, capture_output=True, timeout=60
+        )
     except subprocess.TimeoutExpired as exc:
         raise SystemExit(f"ct command timed out: {' '.join(command)}") from exc
     if completed.returncode != 0:
@@ -442,7 +475,9 @@ def _ct_json_safe(args: list[str]) -> dict[str, Any] | None:
         return None
     command = [*shlex.split(ct), *args]
     try:
-        completed = subprocess.run(command, check=False, text=True, capture_output=True, timeout=60)
+        completed = subprocess.run(
+            command, check=False, text=True, capture_output=True, timeout=60
+        )
     except subprocess.TimeoutExpired:
         return None
     if completed.returncode != 0:

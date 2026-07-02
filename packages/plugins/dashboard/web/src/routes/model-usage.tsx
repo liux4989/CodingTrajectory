@@ -36,17 +36,17 @@ import { cn } from "@/lib/utils";
 const ALL_PROJECTS = "__all_projects__";
 const ALL_MODELS = "__all_models__";
 type TokenBucketKey =
-  | "total_tokens"
-  | "input_tokens"
-  | "cached_input_tokens"
-  | "output_tokens"
-  | "reasoning_output_tokens";
+  | "processed_tokens"
+  | "prompt_tokens"
+  | "cached_prompt_tokens"
+  | "completion_tokens"
+  | "reasoning_tokens";
 const TOKEN_BUCKET_DEFS = [
-  { key: "total_tokens", label: "Total" },
-  { key: "input_tokens", label: "Input" },
-  { key: "cached_input_tokens", label: "Cached" },
-  { key: "output_tokens", label: "Output" },
-  { key: "reasoning_output_tokens", label: "Reasoning" },
+  { key: "processed_tokens", label: "Processed" },
+  { key: "prompt_tokens", label: "Prompt" },
+  { key: "cached_prompt_tokens", label: "Cached" },
+  { key: "completion_tokens", label: "Completion" },
+  { key: "reasoning_tokens", label: "Reasoning" },
 ] as const satisfies ReadonlyArray<{ key: TokenBucketKey; label: string }>;
 const VIEW_OPTIONS = [
   { value: "overview", label: "Overview" },
@@ -239,7 +239,7 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     const turnStats = data.summary.token_stats.turn;
     return (
       <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
-        <MetricCard label="Total Tokens" value={compactNumber(data.summary.total_tokens)} detail={`${data.summary.sessions.toLocaleString()} sessions`} />
+        <MetricCard label="Processed Tokens" value={compactNumber(data.summary.processed_tokens)} detail={`${data.summary.sessions.toLocaleString()} sessions`} />
         <MetricCard label="Session Tokens" value={compactNumber(sessionStats.avg)} detail={distributionDetail(sessionStats)} />
         <MetricCard label="Turn Tokens" value={compactNumber(turnStats.avg)} detail={distributionDetail(turnStats)} />
         <MetricCard label="Turns" value={compactNumber(data.summary.turns)} detail={`${data.summary.models.toLocaleString()} models in scope`} />
@@ -252,8 +252,8 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
       <section className="grid min-w-0 grid-cols-4 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
         <MetricCard label="Elapsed Time" value={formatDuration(data.summary.total_elapsed_seconds)} detail={`${data.summary.sessions.toLocaleString()} completed sessions`} />
         <MetricCard label="Session Time" value={formatDuration(sessionStats.avg)} detail={distributionDetail(sessionStats, formatDuration)} />
-        <MetricCard label="Turns" value={compactNumber(data.summary.turns)} detail={`${compactNumber(data.summary.total_tokens)} filtered tokens`} />
-        <MetricCard label="Throughput" value={compactNumber(tokensPerMinute(data.summary.total_tokens, data.summary.total_elapsed_seconds))} detail="tokens/min across elapsed time" />
+        <MetricCard label="Turns" value={compactNumber(data.summary.turns)} detail={`${compactNumber(data.summary.processed_tokens)} filtered tokens`} />
+        <MetricCard label="Throughput" value={compactNumber(tokensPerMinute(data.summary.processed_tokens, data.summary.total_elapsed_seconds))} detail="tokens/min across elapsed time" />
       </section>
     );
   }
@@ -279,7 +279,7 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
       <MetricCard
         label="Turns"
         value={compactNumber(data.summary.turns)}
-        detail={`${compactNumber(data.summary.total_tokens)} observed tokens`}
+        detail={`${compactNumber(data.summary.processed_tokens)} observed tokens`}
       />
       <MetricCard
         label="Models"
@@ -344,7 +344,7 @@ const overviewModelColumns: ColumnDef<ModelUsageModel>[] = [
   {
     id: "tokens",
     accessorFn: (row) => totalTokens(row.usage),
-    header: () => <HeaderLabel align="right">Total Tokens</HeaderLabel>,
+    header: () => <HeaderLabel align="right">Processed Tokens</HeaderLabel>,
     cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
   },
   {
@@ -396,10 +396,10 @@ function OverviewModelTable({ data }: { data: ModelUsagePayload }) {
 
 function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
   const tokenBucketColumns: ColumnDef<ModelUsageModel>[] = [
-    tokenColumn("input_tokens", "Input"),
-    tokenColumn("cached_input_tokens", "Cached"),
-    tokenColumn("output_tokens", "Output"),
-    tokenColumn("reasoning_output_tokens", "Reasoning"),
+    tokenColumn("prompt_tokens", "Prompt"),
+    tokenColumn("cached_prompt_tokens", "Cached"),
+    tokenColumn("completion_tokens", "Completion"),
+    tokenColumn("reasoning_tokens", "Reasoning"),
   ];
   return [
     {
@@ -696,10 +696,10 @@ function sessionColumns(view: UsageView): ColumnDef<ModelUsageSession>[] {
         ]
       : view === "tokens"
         ? [
-            sessionTokenColumn("input_tokens", "Input"),
-            sessionTokenColumn("cached_input_tokens", "Cached"),
-            sessionTokenColumn("output_tokens", "Output"),
-            sessionTokenColumn("reasoning_output_tokens", "Reasoning"),
+            sessionTokenColumn("prompt_tokens", "Prompt"),
+            sessionTokenColumn("cached_prompt_tokens", "Cached"),
+            sessionTokenColumn("completion_tokens", "Completion"),
+            sessionTokenColumn("reasoning_tokens", "Reasoning"),
           ]
       : [
           {
@@ -817,10 +817,10 @@ function turnColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageTurn>[] {
     },
     ...(view === "tokens"
       ? [
-          turnTokenColumn("input_tokens", "Input"),
-          turnTokenColumn("cached_input_tokens", "Cached"),
-          turnTokenColumn("output_tokens", "Output"),
-          turnTokenColumn("reasoning_output_tokens", "Reasoning"),
+          turnTokenColumn("prompt_tokens", "Prompt"),
+          turnTokenColumn("cached_prompt_tokens", "Cached"),
+          turnTokenColumn("completion_tokens", "Completion"),
+          turnTokenColumn("reasoning_tokens", "Reasoning"),
         ]
       : [
           {
@@ -930,7 +930,7 @@ function modelLabel(value: ModelUsageSession["dominant_model"]) {
 }
 
 function totalTokens(usage: UsageBuckets) {
-  return usage.total_tokens ?? 0;
+  return usage.processed_tokens ?? 0;
 }
 
 function usageValue(usage: UsageBuckets, key: TokenBucketKey) {

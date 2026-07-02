@@ -1,10 +1,10 @@
 export type TokenUsage = {
-  input_tokens: number;
-  cached_input_tokens: number;
-  cache_creation_input_tokens: number;
-  output_tokens: number;
-  reasoning_output_tokens: number;
-  total_tokens: number;
+  prompt_tokens: number;
+  cached_prompt_tokens: number;
+  cache_write_tokens: number;
+  completion_tokens: number;
+  reasoning_tokens: number;
+  processed_tokens: number;
 };
 
 export type SessionSlice = {

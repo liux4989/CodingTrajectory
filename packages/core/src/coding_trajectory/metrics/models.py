@@ -40,27 +40,24 @@ class TokenUsage(BaseModel):
     def processed_token_total(self) -> int:
         return self.processed_tokens or self.compute_total()
 
-    def fresh_io_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
-
     def prompt_completion_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
-        data = handler(self)
-        data.update(
-            {
-                "prompt_tokens": self.input_tokens,
-                "cached_prompt_tokens": self.cached_input_tokens,
-                "cache_write_tokens": self.cache_creation_input_tokens,
-                "completion_tokens": self.output_tokens,
-                "reasoning_tokens": self.reasoning_output_tokens,
-                "processed_tokens": self.processed_token_total(),
-                "prompt_completion_tokens": self.prompt_completion_tokens(),
-                "fresh_io_tokens": self.fresh_io_tokens(),
-            }
-        )
+        _ = handler
+        data: dict[str, int | str | None] = {
+            "prompt_tokens": self.input_tokens,
+            "cached_prompt_tokens": self.cached_input_tokens,
+            "cache_write_tokens": self.cache_creation_input_tokens,
+            "completion_tokens": self.output_tokens,
+            "reasoning_tokens": self.reasoning_output_tokens,
+            "processed_tokens": self.processed_token_total(),
+            "prompt_completion_tokens": self.prompt_completion_tokens(),
+            "total_confidence": self.total_confidence,
+        }
+        if self.reported_total_tokens is not None:
+            data["reported_total_tokens"] = self.reported_total_tokens
         return data
 
     def plus(self, other: "TokenUsage") -> "TokenUsage":
@@ -473,6 +470,23 @@ class AllocatedRealTokenCost(BaseModel):
     ] = "usage_observation_weighted_by_visible_item_tokens"
     confidence: Literal["allocated_from_exact_usage"] = "allocated_from_exact_usage"
     usage_authority: Literal["session.usage"] = "session.usage"
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        _ = handler
+        return {
+            "prompt_tokens": self.input_tokens,
+            "uncached_prompt_tokens": self.uncached_input_tokens,
+            "cached_prompt_tokens": self.cached_input_tokens,
+            "cache_write_tokens": self.cache_creation_input_tokens,
+            "completion_tokens": self.output_tokens,
+            "reasoning_tokens": self.reasoning_output_tokens,
+            "processed_tokens": self.total_tokens,
+            "prompt_completion_tokens": self.input_tokens + self.output_tokens,
+            "allocation_method": self.allocation_method,
+            "confidence": self.confidence,
+            "usage_authority": self.usage_authority,
+        }
 
 
 class AttributionPolicy(BaseModel):

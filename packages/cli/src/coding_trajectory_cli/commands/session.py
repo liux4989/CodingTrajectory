@@ -175,11 +175,11 @@ def _format_optional_tokens(value: Any) -> str:
 def _format_allocated_usage(value: Any) -> str:
     if not isinstance(value, dict):
         return _format_optional_tokens(value)
-    uncached = value.get("uncached_input_tokens")
-    cached = value.get("cached_input_tokens")
-    cache_creation = value.get("cache_creation_input_tokens")
-    output = value.get("output_tokens")
-    reasoning = value.get("reasoning_output_tokens")
+    uncached = value.get("uncached_prompt_tokens")
+    cached = value.get("cached_prompt_tokens")
+    cache_creation = value.get("cache_write_tokens")
+    output = value.get("completion_tokens")
+    reasoning = value.get("reasoning_tokens")
     if (
         uncached is None
         and cached is None
@@ -235,7 +235,7 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
                 _render_context_category(lines, category)
         lines.append("```")
 
-    used_tokens = context_window.get("used_tokens") or usage.get("input_tokens")
+    used_tokens = context_window.get("used_tokens") or usage.get("prompt_tokens")
     used_percent = context_window.get("used_percent")
     tool_calls_total = runtime.get("tool_calls") or 0
     failed_tool_calls = runtime.get("failed_tool_calls") or 0

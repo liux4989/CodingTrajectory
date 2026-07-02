@@ -156,15 +156,11 @@ def build_projection(
     ct_json: Callable[[list[str]], dict[str, Any]] | None = None,
 ) -> ContextWindowProjection:
     run = ct_json or _ct_json
-    stats = run(
-        ["session", "stats", "--global-scope", "--output", "json", session_id]
-    )
+    stats = run(["session", "stats", "--global-scope", "--output", "json", session_id])
     overview = run(
         ["session", "overview", "--global-scope", "--output", "json", session_id]
     )
-    usage = run(
-        ["session", "usage", "--global-scope", "--output", "json", session_id]
-    )
+    usage = run(["session", "usage", "--global-scope", "--output", "json", session_id])
     tool_usage = _ct_api_result(
         "session.tool_usage",
         {"session_id": session_id},
@@ -333,10 +329,10 @@ def render_markdown(projection: ContextWindowProjection) -> str:
             usage = item.allocated_usage
             lines.append(
                 f"  {_format_cost(item.estimated_cost.value_usd):>9}  "
-                f"{_format_tokens(usage.get('uncached_input_tokens'))}/"
-                f"{_format_tokens(usage.get('cached_input_tokens'))}/"
-                f"{_format_tokens(usage.get('output_tokens'))}/"
-                f"{_format_tokens(usage.get('reasoning_output_tokens'))}  "
+                f"{_format_tokens(usage.get('uncached_prompt_tokens'))}/"
+                f"{_format_tokens(usage.get('cached_prompt_tokens'))}/"
+                f"{_format_tokens(usage.get('completion_tokens'))}/"
+                f"{_format_tokens(usage.get('reasoning_tokens'))}  "
                 f"{item.category:<10} {_one_line(item.label + ': ' + item.summary, 72)}"
             )
 
@@ -489,8 +485,8 @@ def _project_expensive_items(
         items,
         key=lambda item: (
             item.estimated_cost.value_usd,
-            item.allocated_usage.get("uncached_input_tokens", 0),
-            item.allocated_usage.get("output_tokens", 0),
+            item.allocated_usage.get("uncached_prompt_tokens", 0),
+            item.allocated_usage.get("completion_tokens", 0),
         ),
         reverse=True,
     )
@@ -510,14 +506,14 @@ def _category_leaves(categories: Iterable[Any]) -> Iterable[dict[str, Any]]:
 def _category_usage(category: dict[str, Any]) -> dict[str, int]:
     for key in ("allocated_usage", "usage", "real_tokens"):
         usage = _usage_dict(category.get(key))
-        if usage.get("total_tokens", 0) > 0 or any(
+        if usage.get("processed_tokens", 0) > 0 or any(
             usage.get(token_key, 0)
             for token_key in (
-                "uncached_input_tokens",
-                "cached_input_tokens",
-                "cache_creation_input_tokens",
-                "output_tokens",
-                "reasoning_output_tokens",
+                "uncached_prompt_tokens",
+                "cached_prompt_tokens",
+                "cache_write_tokens",
+                "completion_tokens",
+                "reasoning_tokens",
             )
         ):
             return usage
@@ -720,7 +716,7 @@ def _tool_item_events(
     input_tokens = _optional_int(attribution.get("tool_input_tokens")) or 0
     output_tokens = _optional_int(attribution.get("tool_output_tokens")) or 0
     total_tokens = input_tokens + output_tokens
-    real_total_tokens = _optional_int(real_cost.get("total_tokens"))
+    real_total_tokens = _optional_int(real_cost.get("processed_tokens"))
     output_chars = _optional_int(item.get("output_chars")) or 0
     output_original_tokens = _optional_int(item.get("output_original_tokens"))
     detail_ref = {
@@ -732,13 +728,13 @@ def _tool_item_events(
         "tool_output_tokens": str(output_tokens),
     }
     for source_key, detail_key in (
-        ("input_tokens", "allocated_input_tokens"),
-        ("uncached_input_tokens", "allocated_uncached_input_tokens"),
-        ("cached_input_tokens", "allocated_cached_input_tokens"),
-        ("cache_creation_input_tokens", "allocated_cache_creation_input_tokens"),
-        ("output_tokens", "allocated_output_tokens"),
-        ("reasoning_output_tokens", "allocated_reasoning_output_tokens"),
-        ("total_tokens", "allocated_total_tokens"),
+        ("prompt_tokens", "allocated_prompt_tokens"),
+        ("uncached_prompt_tokens", "allocated_uncached_prompt_tokens"),
+        ("cached_prompt_tokens", "allocated_cached_prompt_tokens"),
+        ("cache_write_tokens", "allocated_cache_write_tokens"),
+        ("completion_tokens", "allocated_completion_tokens"),
+        ("reasoning_tokens", "allocated_reasoning_tokens"),
+        ("processed_tokens", "allocated_processed_tokens"),
     ):
         value = _optional_int(real_cost.get(source_key))
         if value is not None:
@@ -1148,17 +1144,16 @@ def _usage_dict(value: Any) -> dict[str, int]:
     if not isinstance(value, dict):
         return {}
     return {
-        "input_tokens": _optional_int(value.get("input_tokens")) or 0,
-        "uncached_input_tokens": _optional_int(value.get("uncached_input_tokens")) or 0,
-        "cached_input_tokens": _optional_int(value.get("cached_input_tokens")) or 0,
-        "cache_creation_input_tokens": _optional_int(
-            value.get("cache_creation_input_tokens")
-        )
+        "prompt_tokens": _optional_int(value.get("prompt_tokens")) or 0,
+        "uncached_prompt_tokens": _optional_int(value.get("uncached_prompt_tokens"))
         or 0,
-        "output_tokens": _optional_int(value.get("output_tokens")) or 0,
-        "reasoning_output_tokens": _optional_int(value.get("reasoning_output_tokens"))
+        "cached_prompt_tokens": _optional_int(value.get("cached_prompt_tokens")) or 0,
+        "cache_write_tokens": _optional_int(value.get("cache_write_tokens")) or 0,
+        "completion_tokens": _optional_int(value.get("completion_tokens")) or 0,
+        "reasoning_tokens": _optional_int(value.get("reasoning_tokens")) or 0,
+        "processed_tokens": _optional_int(value.get("processed_tokens")) or 0,
+        "prompt_completion_tokens": _optional_int(value.get("prompt_completion_tokens"))
         or 0,
-        "total_tokens": _optional_int(value.get("total_tokens")) or 0,
     }
 
 
@@ -1171,23 +1166,17 @@ def _cost_evidence_from_usage(
     if not any(
         usage.get(key, 0)
         for key in (
-            "input_tokens",
-            "uncached_input_tokens",
-            "cached_input_tokens",
-            "cache_creation_input_tokens",
-            "output_tokens",
-            "reasoning_output_tokens",
+            "prompt_tokens",
+            "uncached_prompt_tokens",
+            "cached_prompt_tokens",
+            "cache_write_tokens",
+            "completion_tokens",
+            "reasoning_tokens",
         )
     ):
         return None
-    normalized_usage = dict(usage)
-    normalized_usage["input_tokens"] = (
-        normalized_usage.get("uncached_input_tokens", 0)
-        + normalized_usage.get("cached_input_tokens", 0)
-        + normalized_usage.get("cache_creation_input_tokens", 0)
-    )
     estimate = token_pricing.estimate_cost(
-        normalized_usage,
+        usage,
         model=model,
         provider=provider,
     )

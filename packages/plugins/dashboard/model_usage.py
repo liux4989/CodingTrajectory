@@ -13,11 +13,11 @@ except ImportError:
     import token_pricing
 
 TOKEN_KEYS = (
-    "input_tokens",
-    "cached_input_tokens",
-    "cache_creation_input_tokens",
-    "output_tokens",
-    "reasoning_output_tokens",
+    "prompt_tokens",
+    "cached_prompt_tokens",
+    "cache_write_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
 )
 
 
@@ -97,7 +97,7 @@ def _projection_payload(
     model_rows = _model_rows(session_rows)
     turn_rows = _turn_rows(session_rows)
     total_cost = sum(_number(row["estimated_cost_usd"]) for row in session_rows)
-    total_tokens = sum(_usage_total(row.get("usage")) for row in session_rows)
+    processed_tokens = sum(_usage_total(row.get("usage")) for row in session_rows)
     total_elapsed_seconds = sum(
         int(_number(row.get("elapsed_seconds"))) for row in session_rows
     )
@@ -125,10 +125,10 @@ def _projection_payload(
             "sessions": len(session_rows),
             "turns": len(turn_rows),
             "models": len(model_rows),
-            "total_tokens": total_tokens,
+            "processed_tokens": processed_tokens,
             "total_elapsed_seconds": total_elapsed_seconds,
-            "avg_tokens_per_session": _safe_div(total_tokens, len(session_rows)),
-            "avg_tokens_per_turn": _safe_div(total_tokens, len(turn_rows)),
+            "avg_tokens_per_session": _safe_div(processed_tokens, len(session_rows)),
+            "avg_tokens_per_turn": _safe_div(processed_tokens, len(turn_rows)),
             "avg_elapsed_seconds_per_session": _safe_div(
                 total_elapsed_seconds,
                 len(session_rows),
@@ -380,7 +380,7 @@ def _model_rows(session_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         target["avg_turn_elapsed_seconds"] = _safe_div(
             target["elapsed_seconds"], target["turns"]
         )
-        target["usage"]["total_tokens"] = _usage_total(target["usage"])
+        target["usage"]["processed_tokens"] = _usage_total(target["usage"])
         target["token_stats"] = {
             "session": _distribution(session_token_values.get(key, [])),
             "turn": _distribution(turn_token_values.get(key, [])),
@@ -493,7 +493,7 @@ def _bucket_turns(turn_rows: list[dict[str, Any]], grain: str) -> list[dict[str,
     rows = []
     for row in grouped.values():
         row["estimated_cost_usd"] = round(row["estimated_cost_usd"], 8)
-        row["usage"]["total_tokens"] = _usage_total(row["usage"])
+        row["usage"]["processed_tokens"] = _usage_total(row["usage"])
         rows.append(row)
     return sorted(rows, key=lambda row: (row["bucket"], row["model_key"]))
 
@@ -511,11 +511,11 @@ def _summary_token_stats(
                 [_number((row.get("usage") or {}).get(key)) for row in turn_rows]
             ),
         }
-        for key in (*TOKEN_KEYS, "total_tokens")
+        for key in (*TOKEN_KEYS, "processed_tokens", "prompt_completion_tokens")
     }
     return {
-        "session": buckets["total_tokens"]["session"],
-        "turn": buckets["total_tokens"]["turn"],
+        "session": buckets["processed_tokens"]["session"],
+        "turn": buckets["processed_tokens"]["turn"],
         "buckets": buckets,
     }
 
@@ -602,7 +602,10 @@ def _model_key(provider: Any, model: Any) -> str:
 
 def _empty_usage() -> dict[str, Any]:
     return {
-        **{key: 0 for key in (*TOKEN_KEYS, "total_tokens")},
+        **{
+            key: 0
+            for key in (*TOKEN_KEYS, "processed_tokens", "prompt_completion_tokens")
+        },
         "reported_total_tokens": 0,
         "total_confidence": "reported_missing",
     }
@@ -611,7 +614,12 @@ def _empty_usage() -> dict[str, Any]:
 def _add_usage(target: dict[str, Any], usage: dict[str, Any]) -> None:
     for key in TOKEN_KEYS:
         target[key] = int(target.get(key) or 0) + int(_number(usage.get(key)))
-    target["total_tokens"] = int(target.get("total_tokens") or 0) + _usage_total(usage)
+    target["processed_tokens"] = int(
+        target.get("processed_tokens") or 0
+    ) + _usage_total(usage)
+    target["prompt_completion_tokens"] = int(
+        target.get("prompt_completion_tokens") or 0
+    ) + int(_number(usage.get("prompt_completion_tokens")))
     target["reported_total_tokens"] = int(
         target.get("reported_total_tokens") or 0
     ) + int(_number(usage.get("reported_total_tokens")))
@@ -624,7 +632,7 @@ def _add_usage(target: dict[str, Any], usage: dict[str, Any]) -> None:
 def _usage_total(usage: Any) -> int:
     if not isinstance(usage, dict):
         return 0
-    return int(_number(usage.get("total_tokens")))
+    return int(_number(usage.get("processed_tokens")))
 
 
 def _combine_total_confidence(left: str, right: str) -> str:

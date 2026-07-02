@@ -11,7 +11,7 @@ export type OverviewPayload = {
       failed_tool_calls: number;
     };
     usage: {
-      total_tokens: number;
+      processed_tokens: number;
       cost_usd: number;
       known_cost_count: number;
       missing_cost_count: number;
@@ -21,7 +21,7 @@ export type OverviewPayload = {
       count: number;
       vendors: Record<string, number>;
       execution_seconds: number;
-      total_tokens: number;
+      processed_tokens: number;
       cost_usd: number;
       known_cost_count: number;
     }>;
@@ -37,7 +37,7 @@ export type OverviewPayload = {
       turns: number;
       tool_calls: number;
       failed_tool_calls: number;
-      total_tokens: number;
+      processed_tokens: number;
     }>;
     warnings: Array<{ session_id?: string | null; project: string; message: string }>;
     errors: unknown[];
@@ -253,12 +253,13 @@ export type CleanupResult = {
 };
 
 export type UsageBuckets = {
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  cache_creation_input_tokens?: number;
-  output_tokens?: number;
-  reasoning_output_tokens?: number;
-  total_tokens?: number;
+  prompt_tokens?: number;
+  cached_prompt_tokens?: number;
+  cache_write_tokens?: number;
+  completion_tokens?: number;
+  reasoning_tokens?: number;
+  processed_tokens?: number;
+  prompt_completion_tokens?: number;
   reported_total_tokens?: number | null;
   total_confidence?: "reported_consistent" | "reported_missing" | "reported_inconsistent";
 };
@@ -380,7 +381,7 @@ export type ModelUsagePayload = {
     sessions: number;
     turns: number;
     models: number;
-    total_tokens: number;
+    processed_tokens: number;
     total_elapsed_seconds: number;
     avg_tokens_per_session: number;
     avg_tokens_per_turn: number;

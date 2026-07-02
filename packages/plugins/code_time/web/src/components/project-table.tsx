@@ -70,7 +70,7 @@ function ProjectRow({ project }: { project: ProjectSlice }) {
         <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">{formatDuration(project.wait_seconds)}</td>
         <td className="px-4 py-2 text-right tabular-nums">{project.turns}</td>
         <td className="px-4 py-2 text-right tabular-nums">{project.tool_calls}</td>
-        <td className="px-4 py-2 text-right tabular-nums">{formatTokens(project.tokens.total_tokens)}</td>
+        <td className="px-4 py-2 text-right tabular-nums">{formatTokens(project.tokens.processed_tokens)}</td>
         <td className="px-4 py-2 text-right tabular-nums">{formatCost(project.cost_usd)}</td>
       </tr>
       {project.sessions.map((s) => (
@@ -84,7 +84,7 @@ function ProjectRow({ project }: { project: ProjectSlice }) {
           <td className="px-4 py-1.5 text-right tabular-nums">{formatDuration(s.wait_seconds)}</td>
           <td className="px-4 py-1.5 text-right tabular-nums">{s.turns}</td>
           <td className="px-4 py-1.5 text-right tabular-nums">{s.tool_calls}</td>
-          <td className="px-4 py-1.5 text-right tabular-nums">{formatTokens(s.tokens.total_tokens)}</td>
+          <td className="px-4 py-1.5 text-right tabular-nums">{formatTokens(s.tokens.processed_tokens)}</td>
           <td className="px-4 py-1.5 text-right tabular-nums">{formatCost(s.cost_usd)}</td>
         </tr>
       ))}

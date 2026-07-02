@@ -297,33 +297,15 @@ def compact_usage(
     return (
         drop_none(
             {
-                "prompt": usage.get("prompt_tokens", usage.get("input_tokens")),
-                "uncached_prompt": usage.get("uncached_input_tokens"),
-                "cached_prompt": usage.get(
-                    "cached_prompt_tokens",
-                    usage.get("cached_input_tokens"),
-                ),
-                "cache_write": usage.get(
-                    "cache_write_tokens",
-                    usage.get("cache_creation_input_tokens"),
-                ),
-                "completion": usage.get(
-                    "completion_tokens",
-                    usage.get("output_tokens"),
-                ),
-                "reasoning": usage.get(
-                    "reasoning_tokens",
-                    usage.get("reasoning_output_tokens"),
-                ),
-                "reported_total": usage.get(
-                    "reported_total_tokens",
-                    usage.get("total_tokens"),
-                ),
+                "prompt": usage.get("prompt_tokens"),
+                "uncached_prompt": usage.get("uncached_prompt_tokens"),
+                "cached_prompt": usage.get("cached_prompt_tokens"),
+                "cache_write": usage.get("cache_write_tokens"),
+                "completion": usage.get("completion_tokens"),
+                "reasoning": usage.get("reasoning_tokens"),
+                "reported_total": usage.get("reported_total_tokens"),
                 "processed": usage.get("processed_tokens"),
-                "prompt_completion": usage.get(
-                    "prompt_completion_tokens",
-                    usage.get("fresh_io_tokens"),
-                ),
+                "prompt_completion": usage.get("prompt_completion_tokens"),
                 "cost": usage.get("cost_usd") if include_cost else None,
             }
         )
@@ -726,15 +708,15 @@ def format_cost(value: Any) -> str:
 
 def render_usage_line(usage: dict[str, Any]) -> str:
     parts = [
-        f"prompt {format_tokens(usage.get('prompt_tokens', usage.get('input_tokens')))}",
-        f"uncached {format_tokens(usage.get('uncached_input_tokens'))}",
-        f"cached {format_tokens(usage.get('cached_prompt_tokens', usage.get('cached_input_tokens')))}",
-        f"cache write {format_tokens(usage.get('cache_write_tokens', usage.get('cache_creation_input_tokens')))}",
-        f"completion {format_tokens(usage.get('completion_tokens', usage.get('output_tokens')))}",
-        f"reasoning {format_tokens(usage.get('reasoning_tokens', usage.get('reasoning_output_tokens')))}",
-        f"reported {format_tokens(usage.get('reported_total_tokens', usage.get('total_tokens')))}",
+        f"prompt {format_tokens(usage.get('prompt_tokens'))}",
+        f"uncached {format_tokens(usage.get('uncached_prompt_tokens'))}",
+        f"cached {format_tokens(usage.get('cached_prompt_tokens'))}",
+        f"cache write {format_tokens(usage.get('cache_write_tokens'))}",
+        f"completion {format_tokens(usage.get('completion_tokens'))}",
+        f"reasoning {format_tokens(usage.get('reasoning_tokens'))}",
+        f"reported {format_tokens(usage.get('reported_total_tokens'))}",
         f"processed {format_tokens(usage.get('processed_tokens'))}",
-        f"prompt+completion {format_tokens(usage.get('prompt_completion_tokens', usage.get('fresh_io_tokens')))}",
+        f"prompt+completion {format_tokens(usage.get('prompt_completion_tokens'))}",
     ]
     if "cost_usd" in usage:
         parts.append(f"cost {format_cost(usage.get('cost_usd'))}")

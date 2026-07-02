@@ -65,7 +65,7 @@ export function OverviewRoute() {
         />
         <MetricCard
           label="Tokens"
-          value={compactNumber(usage.total_tokens)}
+          value={compactNumber(usage.processed_tokens)}
           detail={`${formatCost(usage.cost_usd)} known cost${usage.missing_cost_count ? `, ${usage.missing_cost_count} partial` : ""}`}
         />
       </section>
@@ -102,7 +102,7 @@ export function OverviewRoute() {
                     </div>
                     <div className="grid min-w-[12rem] gap-1 text-right text-body-sm text-muted-foreground max-sm:text-left">
                       <span>{formatDuration(project.execution_seconds)} runtime</span>
-                      <span>{compactNumber(project.total_tokens)} tokens</span>
+                      <span>{compactNumber(project.processed_tokens)} tokens</span>
                       <span>{project.known_cost_count ? formatCost(project.cost_usd) : "Cost unavailable"}</span>
                     </div>
                   </div>
@@ -271,7 +271,7 @@ function TopSessionsTable({ sessions, windowDays }: { sessions: TopSession[]; wi
       },
       {
         id: "tokens",
-        accessorFn: (row) => row.total_tokens,
+        accessorFn: (row) => row.processed_tokens,
         header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
         cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
       },

@@ -46,12 +46,13 @@ Keep this surface unchanged. It should remain the highest-confidence answer for
 the token cost of a user turn. It includes cache-aware token buckets exactly as
 reported or normalized:
 
-- `input_tokens`
-- `cached_input_tokens`
-- `cache_creation_input_tokens`
-- `output_tokens`
-- `reasoning_output_tokens`
-- `total_tokens`
+- `prompt_tokens`
+- `cached_prompt_tokens`
+- `cache_write_tokens`
+- `completion_tokens`
+- `reasoning_tokens`
+- `reported_total_tokens`
+- `processed_tokens`
 
 ### `session.usage`
 
@@ -69,8 +70,8 @@ message stats.
 Keep this surface cache-aware and turn/session-scoped. Documentation and labels
 may clarify that category composition combines exact usage buckets with
 estimated structural/text evidence. Category rows should show visible `tokens`
-separately from the allocated usage tuple (`uncached_input_tokens`,
-`cached_input_tokens`, `output_tokens`, `reasoning_output_tokens`) so
+separately from the allocated usage tuple (`uncached_prompt_tokens`,
+`cached_prompt_tokens`, `completion_tokens`, `reasoning_tokens`) so
 composition does not collapse into a single pseudo-price.
 
 ### `session.tool_usage`
@@ -117,8 +118,8 @@ diagnostics:
     "method": "visible_content_estimate"
   },
   "invoke_response_tokens": {
-    "output_tokens": 82,
-    "reasoning_output_tokens": 11,
+    "completion_tokens": 82,
+    "reasoning_tokens": 11,
     "attribution": "shared_model_response"
   },
   "read_after_result": {
@@ -140,15 +141,13 @@ Field meaning:
   request's input context.
 
 The item view keeps provider usage buckets separate after allocation:
-`input_tokens`, `uncached_input_tokens`, `cached_input_tokens`,
-`cache_creation_input_tokens`, `output_tokens`, and
-`reasoning_output_tokens`. This makes the attribution rate-neutral: callers can
+`prompt_tokens`, `uncached_prompt_tokens`, `cached_prompt_tokens`,
+`cache_write_tokens`, `completion_tokens`, and
+`reasoning_tokens`. This makes the attribution rate-neutral: callers can
 apply pricing later without embedding model-specific rates in the metrics layer.
-`total_tokens` remains the compatibility total for the allocated price-bearing
-buckets in this item-allocation view. Session usage payloads additionally expose
-the glossary totals from [`token-usage-glossary.md`](token-usage-glossary.md),
-including `reported_total_tokens`, `processed_tokens`, and
-`prompt_completion_tokens`.
+`processed_tokens` is the allocated price-bearing total. Session usage payloads
+also expose the provider/log-source total as `reported_total_tokens` when the
+source reports one.
 Cached input is capped to the item's own visible token footprint so a single
 item does not inherit unrelated cached context from the full replayed request.
 
