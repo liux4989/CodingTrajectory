@@ -187,12 +187,6 @@ export type SessionAnalysis = {
 
 export type AnalysisProvider = "codex" | "pi";
 
-export type SessionAnalysisResponse = {
-  status: "ready";
-  artifact_path: string | null;
-  analysis: SessionAnalysis;
-};
-
 export type AgentTaskResult = {
   schema_version: 1;
   task_goal: string;
@@ -202,11 +196,6 @@ export type AgentTaskResult = {
   app_server_thread_id: string;
   app_server_turn_id: string | null;
   response_text: string;
-};
-
-export type AgentTaskResponse = {
-  status: "ready";
-  result: AgentTaskResult;
 };
 
 export type CleanupSummary = {
@@ -469,7 +458,7 @@ export async function fetchContextWindow(sessionId: string) {
 }
 
 export async function analyzeSession(sessionId: string, refresh = false, provider: AnalysisProvider = "codex") {
-  return fetchJson<SessionAnalysisResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/analysis`, {
+  return fetchJson<JobAccepted>(`/api/sessions/${encodeURIComponent(sessionId)}/analysis`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh, provider }),
@@ -481,7 +470,7 @@ export async function runAgentTask(params: {
   taskContext: string;
   provider?: AnalysisProvider;
 }) {
-  return fetchJson<AgentTaskResponse>("/api/agent-task", {
+  return fetchJson<JobAccepted>("/api/agent-task", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -490,6 +479,25 @@ export async function runAgentTask(params: {
       provider: params.provider ?? "codex",
     }),
   });
+}
+
+export type JobStatus = "pending" | "running" | "ready" | "error";
+
+export type JobRecord = {
+  id: string;
+  kind: string;
+  status: JobStatus;
+  created_at: string;
+  updated_at: string;
+  progress: string | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+};
+
+type JobAccepted = { status: "pending"; job_id: string };
+
+export async function fetchJobStatus(jobId: string) {
+  return fetchJson<JobRecord>(`/api/jobs/${encodeURIComponent(jobId)}`);
 }
 
 export async function fetchCleanupPreview(kind: "project" | "session") {

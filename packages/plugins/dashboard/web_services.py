@@ -19,6 +19,7 @@ try:
     from . import error_collection as error_collection_mod
     from . import model_usage as model_usage_mod
     from . import session_analysis as session_analysis_mod
+    from .jobs import JobRunner, JobStore
 except ImportError:
     import agent_task as agent_task_mod
     import cleanup as cleanup_mod
@@ -26,6 +27,7 @@ except ImportError:
     import error_collection as error_collection_mod
     import model_usage as model_usage_mod
     import session_analysis as session_analysis_mod
+    from jobs import JobRunner, JobStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +65,8 @@ class TtlCache:
 class DashboardDataService:
     def __init__(self, *, cache_ttl_seconds: float = 12) -> None:
         self._cache = TtlCache(cache_ttl_seconds)
+        self._jobs = JobStore()
+        self._runner = JobRunner(self._jobs)
 
     def overview(self) -> dict[str, Any]:
         return self._cache.get_or_set(("overview",), self._overview_uncached)
@@ -227,17 +231,15 @@ class DashboardDataService:
         provider = body.get("provider", "codex")
         if not isinstance(provider, str):
             raise ValueError("provider must be codex or pi")
-        analysis = session_analysis_mod.build_or_load_analysis(
+        job_id = self._runner.submit(
+            "session-analysis",
+            session_analysis_mod.build_or_load_analysis,
             session_id.strip(),
             ct_json=_ct_json,
             refresh=refresh,
             provider=provider,
         )
-        return {
-            "status": "ready",
-            "artifact_path": analysis.artifact_path,
-            "analysis": analysis.model_dump(mode="json"),
-        }
+        return {"status": "pending", "job_id": job_id}
 
     def agent_task(self, body: dict[str, Any]) -> dict[str, Any]:
         task_goal = body.get("task_goal")
@@ -249,12 +251,20 @@ class DashboardDataService:
             raise ValueError("task_context is required")
         if not isinstance(provider, str):
             raise ValueError("provider must be codex or pi")
-        result = agent_task_mod.run_agent_task(
+        job_id = self._runner.submit(
+            "agent-task",
+            agent_task_mod.run_agent_task,
             task_goal=task_goal,
             task_context=task_context,
             provider=provider,
         )
-        return {"status": "ready", "result": result.model_dump(mode="json")}
+        return {"status": "pending", "job_id": job_id}
+
+    def job_status(self, job_id: str) -> dict[str, Any]:
+        record = self._jobs.get(job_id)
+        if record is None:
+            raise ValueError("unknown job_id")
+        return record.public()
 
     def vendors(self, query: dict[str, list[str]]) -> dict[str, Any]:
         vendor_stats: dict[str, dict[str, Any]] = {}

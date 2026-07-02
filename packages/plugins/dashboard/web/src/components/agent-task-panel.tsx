@@ -1,7 +1,8 @@
 import * as React from "react";
-import { useMutation } from "@tanstack/react-query";
-import { Bot, ChevronDown, ChevronRight, RefreshCw, Sparkles } from "lucide-react";
-import { runAgentTask, type AnalysisProvider } from "@/api";
+import { Bot, ChevronDown, ChevronRight, Sparkles, Square } from "lucide-react";
+import { runAgentTask, type AgentTaskResult, type AnalysisProvider, type JobRecord } from "@/api";
+import { useJob } from "@/hooks/use-job";
+import { LoadingState } from "@/components/loading-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,11 +28,13 @@ export function AgentTaskPanel({
 }: AgentTaskPanelProps) {
   const [provider, setProvider] = React.useState<AnalysisProvider>(defaultProvider);
   const [showContext, setShowContext] = React.useState(false);
-  const mutation = useMutation({
-    mutationFn: () => runAgentTask({ taskGoal, taskContext, provider }),
+  const job = useJob<AgentTaskResult>({
+    start: () => runAgentTask({ taskGoal, taskContext, provider }),
+    resolve: (record: JobRecord) => record.result as unknown as AgentTaskResult,
   });
-  const result = mutation.data?.result;
-  const disabled = mutation.isPending || !taskGoal.trim() || !taskContext.trim();
+  const result = job.data;
+  const running = job.status === "pending" || job.status === "running";
+  const disabled = running || !taskGoal.trim() || !taskContext.trim();
 
   return (
     <Card className={cn("min-w-0", className)}>
@@ -47,7 +50,8 @@ export function AgentTaskPanel({
           className="flex flex-wrap items-center gap-2"
           onSubmit={(event) => {
             event.preventDefault();
-            mutation.mutate();
+            job.reset();
+            job.start();
           }}
         >
           <label className="sr-only" htmlFor="agent-task-provider">
@@ -56,7 +60,7 @@ export function AgentTaskPanel({
           <Select
             value={provider}
             onValueChange={(value) => setProvider(value as AnalysisProvider)}
-            disabled={mutation.isPending}
+            disabled={running}
           >
             <SelectTrigger id="agent-task-provider" className="h-8 w-[8rem]">
               <SelectValue />
@@ -67,19 +71,19 @@ export function AgentTaskPanel({
             </SelectContent>
           </Select>
           <Button type="submit" size="sm" disabled={disabled}>
-            {mutation.isPending ? <RefreshCw size={15} className="animate-spin" /> : <Sparkles size={15} />}
+            {running ? <Square size={13} className="fill-current" /> : <Sparkles size={15} />}
             {result ? "Rerun agent" : "Run agent"}
           </Button>
         </form>
       </CardHeader>
       <CardContent className="grid gap-3">
-        <div className="rounded-lg border border-border-subtle bg-muted/20 p-3">
-          <div className="text-caption font-extrabold uppercase tracking-wide text-muted-foreground">Goal</div>
+        <div className="rounded-lg border border-border-soft bg-muted/20 p-3">
+          <div className="eyebrow-soft text-muted-foreground">Goal</div>
           <p className="m-0 mt-1 break-words text-body-sm">{taskGoal}</p>
         </div>
         <button
           type="button"
-          className="flex min-h-9 w-full items-center justify-between gap-2 rounded-md border border-border-subtle px-3 py-2 text-left text-body-sm hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex min-h-9 w-full items-center justify-between gap-2 rounded-md border border-border-soft px-3 py-2 text-left text-body-sm hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-expanded={showContext}
           onClick={() => setShowContext((current) => !current)}
         >
@@ -90,17 +94,26 @@ export function AgentTaskPanel({
           </span>
         </button>
         {showContext ? (
-          <pre className="max-h-72 overflow-auto rounded-lg border border-border-subtle bg-background p-3 text-caption leading-relaxed text-muted-foreground whitespace-pre-wrap">
+          <pre className="max-h-72 overflow-auto rounded-lg border border-border-soft bg-background p-3 text-caption leading-relaxed text-muted-foreground whitespace-pre-wrap">
             {taskContext}
           </pre>
         ) : null}
-        {mutation.isError ? (
+        {running ? (
+          <LoadingState
+            title="Running agent"
+            detail="The coding agent is working on the task."
+            elapsedMs={job.elapsedMs}
+            progress={job.progress}
+            onCancel={job.cancel}
+          />
+        ) : null}
+        {job.status === "error" ? (
           <div role="alert" className="rounded-lg border border-destructive/35 bg-destructive/8 p-3 text-body-sm text-destructive">
-            {mutation.error.message}
+            {job.error}
           </div>
         ) : null}
         {result ? (
-          <section className="grid gap-3 rounded-lg border border-border-subtle p-3" aria-label="Agent response">
+          <section className="grid gap-3 rounded-lg border border-border-soft p-3" aria-label="Agent response">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary">{result.provider}</Badge>
               <span className="font-mono text-caption text-muted-foreground">{result.source}</span>

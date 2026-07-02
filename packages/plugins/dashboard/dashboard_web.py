@@ -117,14 +117,14 @@ def _handler_for(
                 return
             try:
                 body = self._read_json_body()
-                payload = self._handle_api_post(parsed.path, body)
+                payload, status = self._handle_api_post(parsed.path, body)
             except ValueError as exc:
                 self._json_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
             except RuntimeError as exc:
                 self._json_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
                 return
-            self._json_response(payload)
+            self._json_response(payload, status=status)
 
         def log_message(self, format: str, *args: Any) -> None:
             print(f"{self.address_string()} - {format % args}", file=sys.stderr)
@@ -153,6 +153,9 @@ def _handler_for(
                     payload = service.project_cleanup_preview(query)
                 elif path == "/api/cleanup/session/preview":
                     payload = service.session_cleanup_preview(query)
+                elif path.startswith("/api/jobs/"):
+                    self._handle_job_get(path)
+                    return
                 else:
                     self._json_error(HTTPStatus.NOT_FOUND, "not found")
                     return
@@ -164,19 +167,36 @@ def _handler_for(
                 return
             self._json_response(payload)
 
-        def _handle_api_post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        def _handle_api_post(
+            self, path: str, body: dict[str, Any]
+        ) -> tuple[dict[str, Any], HTTPStatus]:
             if path == "/api/agent-task":
-                return service.agent_task(body)
+                return service.agent_task(body), HTTPStatus.ACCEPTED
             if path == "/api/cleanup/project/apply":
-                return service.apply_project_cleanup(body)
+                return service.apply_project_cleanup(body), HTTPStatus.OK
             if path == "/api/cleanup/session/apply":
-                return service.apply_session_cleanup(body)
+                return service.apply_session_cleanup(body), HTTPStatus.OK
             if path == "/api/sessions/analysis":
-                return service.session_analysis(body)
+                return service.session_analysis(body), HTTPStatus.ACCEPTED
             session_id = _session_analysis_id(path)
             if session_id:
-                return service.session_analysis({**body, "session_id": session_id})
+                return (
+                    service.session_analysis({**body, "session_id": session_id}),
+                    HTTPStatus.ACCEPTED,
+                )
             raise ValueError("unknown api endpoint")
+
+        def _handle_job_get(self, path: str) -> None:
+            job_id = path[len("/api/jobs/") :].strip("/")
+            if not job_id:
+                self._json_error(HTTPStatus.NOT_FOUND, "not found")
+                return
+            try:
+                payload = service.job_status(job_id)
+            except ValueError as exc:
+                self._json_error(HTTPStatus.NOT_FOUND, str(exc))
+                return
+            self._json_response(payload)
 
         def _serve_static(self, raw_path: str, *, include_body: bool) -> None:
             relative = raw_path.lstrip("/")
@@ -213,9 +233,11 @@ def _handler_for(
                 raise ValueError("request body must be a JSON object")
             return value
 
-        def _json_response(self, payload: dict[str, Any]) -> None:
+        def _json_response(
+            self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK
+        ) -> None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()

@@ -1,19 +1,22 @@
 import * as React from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import * as ScrollArea from "@radix-ui/react-scroll-area";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { ArrowLeft, Eye, Pin, PinOff, Play, Pause, Maximize, Minimize, Info, Search, X, Sparkles, RefreshCw } from "lucide-react";
+import { ArrowLeft, Eye, Pin, PinOff, Play, Pause, Maximize, Minimize, Info, Search, X, Sparkles, Square } from "lucide-react";
 import {
   analyzeSession,
   fetchContextWindow,
   type AnalysisProvider,
   type ContextCategory,
   type ContextEvent,
+  type JobRecord,
   type SessionAnalysis,
   type TokenEvidence,
 } from "@/api";
+import { useJob } from "@/hooks/use-job";
 import { Button } from "@/components/ui/button";
+import { LoadingState } from "@/components/loading-state";
 import { Card, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -121,19 +124,21 @@ function findingLabel(kind: SessionAnalysis["findings"][number]["kind"]) {
 function findingTone(kind: SessionAnalysis["findings"][number]["kind"]) {
   if (kind === "avoidable_pattern") return "border-warning/35 bg-warning/8";
   if (kind === "optimal_pattern") return "border-moss/35 bg-moss/8";
-  return "border-foreground/13 bg-foreground/5";
+  return "border-border-soft bg-surface-subtle";
 }
 
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
   const router = useRouter();
   const [analysisProvider, setAnalysisProvider] = React.useState<AnalysisProvider>("codex");
+  const [analysisRefresh, setAnalysisRefresh] = React.useState(false);
   const query = useQuery({
     queryKey: ["context-window", sessionId],
     queryFn: () => fetchContextWindow(sessionId),
   });
-  const analysisMutation = useMutation({
-    mutationFn: (refresh: boolean) => analyzeSession(sessionId, refresh, analysisProvider),
+  const analysisJob = useJob<SessionAnalysis>({
+    start: () => analyzeSession(sessionId, analysisRefresh, analysisProvider),
+    resolve: (record: JobRecord) => record.result as unknown as SessionAnalysis,
   });
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [pinnedId, setPinnedId] = React.useState<string | null>(null);
@@ -186,9 +191,7 @@ export function ContextWindowRoute() {
   const activeId = pinnedId ?? selectedId ?? filteredEvents[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
   const analysis =
-    analysisMutation.data?.analysis.provider === analysisProvider
-      ? analysisMutation.data.analysis
-      : null;
+    analysisJob.data?.provider === analysisProvider ? analysisJob.data : null;
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
 
   const combinedSegments = React.useMemo(() => {
@@ -241,7 +244,7 @@ export function ContextWindowRoute() {
   }
 
   if (query.isPending) {
-    return <StateBlock title="Loading context window" detail="Reading normalized session projections." />;
+    return <LoadingState title="Loading context window" detail="Reading normalized session projections." />;
   }
   if (query.isError) {
     return <StateBlock title="Context window failed" detail={query.error.message} />;
@@ -249,7 +252,8 @@ export function ContextWindowRoute() {
 
   const payload = query.data;
   const hasFilters = activeCategories.size > 0 || searchQuery.trim().length > 0;
-  const analysisButtonLabel = analysisMutation.isPending
+  const analysisRunning = analysisJob.status === "pending" || analysisJob.status === "running";
+  const analysisButtonLabel = analysisRunning
     ? "Analyzing..."
     : analysis
       ? "Refresh analysis"
@@ -285,7 +289,7 @@ export function ContextWindowRoute() {
               <Select
                 value={analysisProvider}
                 onValueChange={(value) => setAnalysisProvider(value as AnalysisProvider)}
-                disabled={analysisMutation.isPending}
+                disabled={analysisRunning}
               >
                 <SelectTrigger size="sm" className="min-w-28">
                   <SelectValue aria-label="Analysis provider" />
@@ -298,11 +302,15 @@ export function ContextWindowRoute() {
               <Button
                 size="sm"
                 variant={analysis ? "secondary" : "default"}
-                onClick={() => analysisMutation.mutate(Boolean(analysis))}
-                disabled={analysisMutation.isPending}
+                onClick={() => {
+                  setAnalysisRefresh(Boolean(analysis));
+                  analysisJob.reset();
+                  analysisJob.start();
+                }}
+                disabled={analysisRunning}
                 className="gap-1.5"
               >
-                {analysisMutation.isPending ? <RefreshCw size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                {analysisRunning ? <Square size={13} className="fill-current" /> : <Sparkles size={15} />}
                 {analysisButtonLabel}
               </Button>
             </div>
@@ -310,9 +318,18 @@ export function ContextWindowRoute() {
         </CardHeader>
       </Card>
 
-      {analysisMutation.isError ? (
+      {analysisRunning ? (
+        <LoadingState
+          title="Analyzing session"
+          detail="The coding agent is reviewing session usage and tool events."
+          elapsedMs={analysisJob.elapsedMs}
+          progress={analysisJob.progress}
+          onCancel={analysisJob.cancel}
+        />
+      ) : null}
+      {analysisJob.status === "error" ? (
         <div className="rounded-xl border border-destructive/30 bg-destructive/8 px-4 py-3 text-body-sm text-foreground">
-          {analysisMutation.error.message}
+          {analysisJob.error}
         </div>
       ) : null}
 
