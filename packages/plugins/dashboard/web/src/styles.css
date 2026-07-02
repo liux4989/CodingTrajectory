@@ -50,6 +50,12 @@
   --color-border-subtle: var(--border-subtle);
   --color-border-strong: var(--border-strong);
   --color-table-head: var(--table-head);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
 
   --text-eyebrow: 0.75rem;
   --text-caption: 0.8125rem;
@@ -132,6 +138,13 @@
     --border-subtle: rgb(24 33 28 / 8%);
     --border-strong: rgb(24 33 28 / 18%);
     --table-head: #eee0bd;
+
+    --chart-1: var(--primary);
+    --chart-2: var(--moss);
+    --chart-3: var(--ember);
+    --chart-4: var(--category-starting-context);
+    --chart-5: var(--category-output);
+    --chart-6: var(--category-agent);
   }
 
   [data-theme="dark"] {

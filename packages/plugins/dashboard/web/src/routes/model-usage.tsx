@@ -18,6 +18,7 @@ import { RefreshButton } from "@/components/refresh-button";
 import { RouteHeader } from "@/components/route-header";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
+import { UsageTimelineChart } from "@/components/charts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -548,60 +549,7 @@ function ModelTable({ data, view }: { data: ModelUsagePayload; view: "cost" | "t
 }
 
 function TimeBuckets({ data, view }: { data: ModelUsagePayload; view: "cost" | "tokens" }) {
-  const [grain, setGrain] = React.useState("daily");
-  const rows = data.time_buckets[grain] ?? [];
-  const topRows = React.useMemo(
-    () => [...rows].sort((left, right) => bucketValue(right, view) - bucketValue(left, view)).slice(0, 18),
-    [rows, view],
-  );
-  const maxValue = Math.max(...topRows.map((row) => bucketValue(row, view)), 0);
-
-  return (
-    <Card className="min-w-0">
-      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
-        <div>
-          <CardTitle className="font-display text-xl tracking-tight">{view === "tokens" ? "Tokens Over Time" : "Cost Over Time"}</CardTitle>
-          <CardDescription>Grouped by model and selected time grain.</CardDescription>
-        </div>
-        <Select value={grain} onValueChange={setGrain}>
-          <SelectTrigger className="min-w-[10rem]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="five_hour">Per 5 hours</SelectItem>
-            <SelectItem value="daily">Per day</SelectItem>
-            <SelectItem value="weekly">Per week</SelectItem>
-            <SelectItem value="monthly">Per month</SelectItem>
-          </SelectContent>
-        </Select>
-      </CardHeader>
-      <CardContent className="grid gap-3">
-        {topRows.length ? (
-          topRows.map((row) => {
-            const value = bucketValue(row, view);
-            return (
-              <div key={`${row.bucket}-${row.model_key}`} className="grid gap-1">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-body-sm">
-                  <span className="font-medium">{row.bucket}</span>
-                  <span className="text-muted-foreground">
-                    {row.model_key} · {row.turns} turns · {view === "tokens" ? `${compactNumber(value)} tokens` : formatCost(value)}
-                  </span>
-                </div>
-                <div className="h-2 overflow-hidden rounded bg-muted">
-                  <div
-                    className="h-full rounded bg-primary"
-                    style={{ width: `${maxValue ? Math.max(4, (value / maxValue) * 100) : 0}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })
-        ) : (
-          <StateBlock title="No time buckets" detail="No turn timestamps were available in this scope." />
-        )}
-      </CardContent>
-    </Card>
-  );
+  return <UsageTimelineChart buckets={data.time_buckets} view={view} />;
 }
 
 const overviewSessionColumns: ColumnDef<ModelUsageSession>[] = [
@@ -1003,10 +951,6 @@ function distributionDetail(
   formatValue: (value: number) => string = compactNumber,
 ) {
   return `avg ${formatValue(stats.avg)} / med ${formatValue(stats.median)} / p90 ${formatValue(stats.p90)} / p95 ${formatValue(stats.p95)}`;
-}
-
-function bucketValue(row: ModelUsagePayload["time_buckets"][string][number], view: "cost" | "tokens") {
-  return view === "tokens" ? totalTokens(row.usage) : row.estimated_cost_usd;
 }
 
 function sortByLens<T extends { usage: UsageBuckets; estimated_cost_usd: number; elapsed_seconds?: number }>(

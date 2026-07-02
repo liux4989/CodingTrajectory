@@ -10,6 +10,7 @@ import { RouteHeader } from "@/components/route-header";
 import { MetricCard } from "@/components/metric-card";
 import { RefreshButton } from "@/components/refresh-button";
 import { StateBlock } from "@/components/state-block";
+import { MiniBarChart } from "@/components/charts";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -116,13 +117,14 @@ export function OverviewRoute() {
             <CardTitle className="font-display text-xl tracking-tight">Vendor Coverage</CardTitle>
             <CardDescription>Discovered project metadata grouped by agent vendor.</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
+          <CardContent>
             {vendorEntries.length ? (
-              vendorEntries.map(([vendor, count]) => (
-                <Badge key={vendor}>
-                  {vendor} <strong>{count}</strong>
-                </Badge>
-              ))
+              <MiniBarChart
+                layout="horizontal"
+                data={vendorEntries.map(([label, value]) => ({ label, value }))}
+                ariaLabel="Vendor coverage"
+                className="h-48"
+              />
             ) : (
               <p className="text-muted-foreground">No vendor metadata found.</p>
             )}
