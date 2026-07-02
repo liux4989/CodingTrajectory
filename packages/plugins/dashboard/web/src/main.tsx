@@ -68,8 +68,8 @@ const sessionsRoute = createRoute({
 });
 
 const contextWindowRoute = createRoute({
-  getParentRoute: () => sessionsRoute,
-  path: "$sessionId/context-window",
+  getParentRoute: () => rootRoute,
+  path: "/sessions/$sessionId/context-window",
   component: () => <RouteBoundary><ContextWindowRoute /></RouteBoundary>,
 });
 
@@ -110,7 +110,8 @@ const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
     projectDetailRoute,
-    sessionsRoute.addChildren([contextWindowRoute]),
+    sessionsRoute,
+    contextWindowRoute,
     modelUsageRoute,
     errorCollectionRoute,
     cleanupRoute,
