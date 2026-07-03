@@ -552,8 +552,6 @@ def _session_target(
     vendor: str,
     visible_session_ids: set[str],
 ) -> tuple[SessionTarget | None, SkippedTarget | None]:
-    if _recently_modified(path, timedelta(hours=24)):
-        return None, _skip("session", str(path), "active_session_log")
     records = _load_jsonl(path)
     if records is None:
         return None, _skip("session", str(path), "invalid_session_log")
@@ -561,13 +559,19 @@ def _session_target(
     if not session_id:
         return None, _skip("session", str(path), "missing_session_id")
     if session_id in visible_session_ids:
+        if _recently_modified(path, timedelta(hours=24)):
+            return None, _skip("session", str(path), "active_session_log")
         return None, _skip("session", str(path), "visible_session")
+
+    reasons = ["orphan_session_log"]
+    if _recently_modified(path, timedelta(hours=24)):
+        reasons.append("recent_unlisted_session_log")
 
     return (
         SessionTarget(
             vendor=vendor,
             path=str(path.resolve()),
-            reason=["orphan_session_log"],
+            reason=reasons,
             modified_at=_modified_at(path),
             session_id=session_id,
         ),
@@ -949,7 +953,14 @@ def _apply_session_action(
     errors: list[dict[str, str]] = []
 
     if codex_targets:
-        errors.extend(_delete_codex_session_threads(codex_targets))
+        codex_errors = _delete_codex_session_threads(codex_targets)
+        errors.extend(codex_errors)
+        failed_codex_paths = {error["path"] for error in codex_errors}
+        filesystem_paths.extend(
+            Path(target.path)
+            for target in codex_targets
+            if target.path not in failed_codex_paths
+        )
 
     for path in filesystem_paths:
         try:
