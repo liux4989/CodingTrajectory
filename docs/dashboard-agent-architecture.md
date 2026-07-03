@@ -72,11 +72,20 @@ many jobs over time. The two ids should be linked server-side so a refreshed
 page can resume polling a known job and then continue the same agent session if
 the server has not evicted it.
 
+The server also owns one process-lifetime `CodexAppServerManager`. Dashboard
+agent features should reuse that manager instead of spawning a fresh
+`codex app-server` subprocess per analysis, per turn, or per page-lived agent
+session.
+
 ### Codex App Server
 
 Codex app-server owns the actual agent conversation execution. The dashboard
 server may create an app-server thread and run turns, but React should not use
 the raw app-server thread id as its primary continuation contract.
+
+Dashboard-created app-server threads should be ephemeral by default. Durable
+Codex thread persistence is an explicit future mode, not the default behavior
+for dashboard analysis.
 
 ### Core Service
 
@@ -110,7 +119,7 @@ continue the conversation:
 ```
 agent_session_id -> {
   app_server_thread_id,
-  process/client reference or resumable app-server connection,
+  cwd,
   created_at,
   last_used_at,
   route_scope,
@@ -130,8 +139,10 @@ Agent sessions are page-lived and server-memory-lived:
   the `agent_session_id` in URL state or `sessionStorage`.
 - A dashboard server restart loses all agent sessions.
 - The server evicts inactive sessions by TTL.
-- Eviction, explicit close, failed startup, and dashboard shutdown must close
-  app-server pipes, stop reader threads, and terminate the app-server process.
+- Dashboard shutdown must close app-server pipes, stop reader threads, and
+  terminate the shared app-server process.
+- Eviction and explicit close remove dashboard session metadata only; they do
+  not own a separate subprocess.
 - No local durable transcript files are required for generic agent tasks.
 
 This is ephemeral relative to disk and server restarts, but not disposable after
@@ -269,19 +280,21 @@ Agent sessions and projection caches must remain separate:
 - agent sessions are stateful conversations;
 - projection cache entries are deterministic data snapshots.
 
-## Current Implementation Gaps
+## Current Implementation
 
-The current generic agent flow is moving toward the right frontend ownership
-model, but it still needs a server lifecycle refactor:
+The dashboard uses a server-owned app-server manager and in-memory agent
+session store:
 
-- It exposes raw app-server thread ids to the frontend.
-- It starts a Codex app-server subprocess per turn.
-- It terminates that subprocess after the turn.
-- It has no dashboard-owned `agent_session_id`.
-- It has no server-side in-memory agent session registry.
-
-That means multi-turn continuity depends on behavior outside the intended
-dashboard-server ownership boundary.
+- `CodexAppServerManager` owns one app-server subprocess for the dashboard
+  server lifetime.
+- `AgentSessionStore` maps dashboard `agent_session_id` values to ephemeral
+  app-server thread ids and route metadata.
+- Session analysis uses the shared manager and runs from the recorded session
+  project directory when available.
+- Frontend routes use dashboard-owned `job_id` and `agent_session_id` handles,
+  not raw app-server process handles.
+- Restart recovery is intentionally unsupported for ephemeral dashboard agent
+  sessions.
 
 ## API Impact
 
@@ -290,16 +303,16 @@ define which primitive each API family should use.
 
 ### Stateful Agent APIs
 
-Generic agent APIs should change first because they need multi-turn continuity:
+Generic agent APIs use dashboard-owned handles because they need multi-turn
+continuity while the server process is alive:
 
-- replace raw `/api/agent-turn` continuation with dashboard-owned
-  `agent_session_id`;
 - keep async `job_id` for turn execution;
 - keep prompt and output-schema ownership with the invoker;
-- keep generic agent sessions in memory only.
+- keep generic agent sessions in memory only;
+- default app-server threads to ephemeral.
 
-Current generic invokers such as overview warning analysis should migrate to
-this API.
+The legacy `/api/agent-turn` path should remain a compatibility path only; new
+route work should use `agent_session_id`.
 
 ### Async One-Shot APIs
 
@@ -310,10 +323,11 @@ agent sessions unless they need follow-up UX:
 - session-analysis cached artifact generation;
 - future batch cleanup previews or large import/export tasks.
 
-These APIs can keep specialized request and result shapes. They should not
-expose app-server thread ids as continuation handles. If they use an agent
-internally, that agent execution is an implementation detail unless the UI needs
-to continue the conversation.
+These APIs can keep specialized request and result shapes. They should use the
+shared app-server manager, default to ephemeral threads, and avoid exposing
+app-server thread ids as continuation handles. If they use an agent internally,
+that agent execution is an implementation detail unless the UI needs to
+continue the conversation.
 
 ### Deterministic Read APIs
 
@@ -344,33 +358,37 @@ the approval UX and submits a separate explicit command to the dashboard server.
 
 ## Implementation Plan
 
-1. Add `AgentSessionStore`.
-   - In-memory map keyed by `agent_session_id`.
-   - TTL eviction.
-   - Owns app-server thread/process lifecycle.
-   - Tracks active and recent job ids for refresh recovery.
-   - Closes subprocess resources on eviction, explicit close, failed startup,
-     and dashboard shutdown.
+1. Maintain `CodexAppServerManager`.
+   - One app-server subprocess per dashboard server process.
+   - Serialized JSON-RPC access over one connection.
+   - Shutdown closes pipes, reader threads, and the subprocess.
+   - Dashboard agent work defaults to ephemeral app-server threads.
 
-2. Add agent session endpoints.
+2. Maintain `AgentSessionStore`.
+   - In-memory map keyed by `agent_session_id`.
+   - Stores route metadata, cwd, app-server thread id, and recent job ids.
+   - TTL eviction removes metadata for inactive sessions.
+   - Restart clears the map and invalidates frontend recovery handles.
+
+3. Keep agent session endpoints.
    - `POST /api/agent-sessions`.
    - `POST /api/agent-sessions/{id}/turns`.
    - `GET /api/agent-sessions/{id}` for existence/recovery state.
    - Optional endpoint to close a session explicitly.
 
-3. Add per-session turn queueing.
+4. Keep per-session turn queueing.
    - Serialize turns for each `agent_session_id`.
-   - Keep unrelated sessions concurrent through the existing job runner.
+   - App-server manager serializes actual JSON-RPC turns on one connection.
    - Return a distinct `job_id` for every queued turn.
 
-4. Update frontend agent hook.
+5. Maintain frontend agent hook.
    - Store `agent_session_id`, not app-server thread id.
    - Persist `agent_session_id` and active `job_id` in route state or
      `sessionStorage` for refresh recovery while the server stays alive.
    - Handle typed expired/not-found session responses by resetting the local
      agent state.
 
-5. Migrate overview agent analysis.
+6. Keep overview agent analysis on the agent-session API.
    - Overview continues assembling its own prompt.
    - Overview renders plain text and owns follow-up UI.
 

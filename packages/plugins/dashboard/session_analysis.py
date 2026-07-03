@@ -11,10 +11,10 @@ from pydantic import BaseModel, ConfigDict
 
 try:
     from . import context_window as context_window_mod
-    from .codex_app_server import CodexAppServerClient
+    from .codex_app_server import CodexAppServerClient, CodexAppServerManager
 except ImportError:
     import context_window as context_window_mod
-    from codex_app_server import CodexAppServerClient
+    from codex_app_server import CodexAppServerClient, CodexAppServerManager
 
 
 CtJson = Callable[[list[str]], dict[str, Any]]
@@ -170,6 +170,7 @@ def build_analysis(
     *,
     ct_json: CtJson,
     cwd: Path | None = None,
+    app_server: CodexAppServerManager | None = None,
 ) -> SessionAnalysis:
     overview = ct_json(
         ["session", "overview", "--global-scope", "--output", "json", session_id]
@@ -232,10 +233,13 @@ def build_analysis(
         usage_evidence=usage_evidence,
         tool_evidence=tool_evidence,
     )
-    app_result = CodexAppServerClient().run_turn(
-        cwd=cwd or _session_cwd(overview) or _repo_root(),
+    app_server_cwd = cwd or _session_cwd(overview) or _repo_root()
+    app_server_client = app_server or CodexAppServerClient()
+    app_result = app_server_client.run_turn(
+        cwd=app_server_cwd,
         user_text=_analysis_request_text(evidence_packet),
         output_schema=AgentReviewOutput.model_json_schema(),
+        ephemeral=True,
     )
     review = AgentReviewOutput.model_validate(app_result.parse_json())
     return SessionAnalysis(

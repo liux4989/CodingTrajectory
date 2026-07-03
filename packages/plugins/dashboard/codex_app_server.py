@@ -68,6 +68,68 @@ class CodexAppServerClient:
             session.close()
 
 
+class CodexAppServerManager:
+    """Owns one app-server subprocess for the dashboard server lifetime.
+
+    The app-server JSON-RPC stream is bidirectional and turn notifications are
+    global to the connection, so this manager serializes turns on one lock.
+    Dashboard-level job concurrency still works for non-agent projections.
+    """
+
+    def __init__(self, *, cwd: Path, timeout_seconds: float = 180) -> None:
+        self.cwd = cwd
+        self.timeout_seconds = timeout_seconds
+        self._lock = threading.Lock()
+        self._session: CodexAppServerSession | None = None
+        self._closed = False
+
+    def start_thread(self, *, cwd: Path | None = None, ephemeral: bool = True) -> str:
+        with self._lock:
+            return self._session_for_locked(cwd or self.cwd).start_thread(
+                cwd=cwd or self.cwd,
+                ephemeral=ephemeral,
+            )
+
+    def run_turn(
+        self,
+        *,
+        cwd: Path,
+        user_text: str,
+        output_schema: dict[str, Any] | None = None,
+        thread_id: str | None = None,
+        ephemeral: bool = True,
+    ) -> CodexAppServerResult:
+        with self._lock:
+            session = self._session_for_locked(cwd)
+            if thread_id is None:
+                session.start_thread(cwd=cwd, ephemeral=ephemeral)
+            else:
+                session.attach_thread(thread_id)
+            return session.run_turn(
+                cwd=cwd,
+                user_text=user_text,
+                output_schema=output_schema,
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            session = self._session
+            self._session = None
+        if session is not None:
+            session.close()
+
+    def _session_for_locked(self, cwd: Path) -> CodexAppServerSession:
+        if self._closed:
+            raise RuntimeError("codex app-server manager is closed")
+        if self._session is None:
+            self._session = CodexAppServerSession(
+                cwd=cwd,
+                timeout_seconds=self.timeout_seconds,
+            )
+        return self._session
+
+
 class CodexAppServerSession:
     def __init__(self, *, cwd: Path, timeout_seconds: float = 180) -> None:
         self.cwd = cwd
@@ -113,14 +175,15 @@ class CodexAppServerSession:
             self.close()
             raise
 
-    def start_thread(self, *, ephemeral: bool = False) -> str:
+    def start_thread(self, *, cwd: Path | None = None, ephemeral: bool = False) -> str:
+        cwd = cwd or self.cwd
         thread_request_id = self._request_id()
         self._send(
             {
                 "method": "thread/start",
                 "id": thread_request_id,
                 "params": {
-                    "cwd": str(self.cwd),
+                    "cwd": str(cwd),
                     "ephemeral": ephemeral,
                     "approvalPolicy": "never",
                     "sandbox": "read-only",
@@ -144,15 +207,17 @@ class CodexAppServerSession:
     def run_turn(
         self,
         *,
+        cwd: Path | None = None,
         user_text: str,
         output_schema: dict[str, Any] | None = None,
     ) -> CodexAppServerResult:
         if not self.thread_id:
             raise RuntimeError("codex app-server requires a thread id")
+        cwd = cwd or self.cwd
         turn_request_id = self._request_id()
         turn_params: dict[str, Any] = {
             "threadId": self.thread_id,
-            "cwd": str(self.cwd),
+            "cwd": str(cwd),
             "approvalPolicy": "never",
             "input": [
                 {"type": "text", "text": user_text},

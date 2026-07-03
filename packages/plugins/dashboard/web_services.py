@@ -13,7 +13,7 @@ try:
     from . import agent_task as agent_task_mod
     from .agent_sessions import AgentSessionStore
     from . import cleanup as cleanup_mod
-    from .codex_app_server import close_active_app_servers
+    from .codex_app_server import CodexAppServerManager, close_active_app_servers
     from . import context_window as context_window_mod
     from . import error_collection as error_collection_mod
     from . import model_usage as model_usage_mod
@@ -24,7 +24,7 @@ except ImportError:
     import agent_task as agent_task_mod
     from agent_sessions import AgentSessionStore
     import cleanup as cleanup_mod
-    from codex_app_server import close_active_app_servers
+    from codex_app_server import CodexAppServerManager, close_active_app_servers
     import context_window as context_window_mod
     import error_collection as error_collection_mod
     import model_usage as model_usage_mod
@@ -38,11 +38,16 @@ class DashboardDataService:
         self._work = DashboardWorkManager(cache_ttl_seconds)
         self._jobs = JobStore()
         self._runner = JobRunner(self._jobs)
-        self._agent_sessions = AgentSessionStore(cwd=_repo_root())
+        self._app_server = CodexAppServerManager(cwd=_repo_root())
+        self._agent_sessions = AgentSessionStore(
+            cwd=_repo_root(),
+            app_server=self._app_server,
+        )
 
     def shutdown(self) -> None:
         self._runner.shutdown(wait=False)
         self._agent_sessions.shutdown()
+        self._app_server.close()
         close_active_app_servers()
 
     def refresh(self) -> dict[str, Any]:
@@ -231,6 +236,7 @@ class DashboardDataService:
                 session_analysis_mod.build_analysis,
                 session_id.strip(),
                 ct_json=_ct_json,
+                app_server=self._app_server,
             )
             reused = False
         else:
@@ -240,6 +246,7 @@ class DashboardDataService:
                 session_analysis_mod.build_analysis,
                 session_id.strip(),
                 ct_json=_ct_json,
+                app_server=self._app_server,
             )
             reused = not created
         return {
@@ -251,7 +258,7 @@ class DashboardDataService:
 
     def create_agent_session(self, body: dict[str, Any]) -> dict[str, Any]:
         route_scope = body.get("route_scope")
-        ephemeral = bool(body.get("ephemeral", False))
+        ephemeral = bool(body.get("ephemeral", True))
         if route_scope is not None and not isinstance(route_scope, str):
             raise ValueError("route_scope must be a string")
         return self._agent_sessions.create(
@@ -308,6 +315,7 @@ class DashboardDataService:
             thread_id=thread_id,
             output_schema=output_schema,
             ephemeral=ephemeral,
+            app_server=self._app_server,
         )
         return {"status": "pending", "job_id": job_id}
 

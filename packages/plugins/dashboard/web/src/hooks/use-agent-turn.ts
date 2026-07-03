@@ -65,7 +65,7 @@ export function useAgentTurn(routeScope = "dashboard-agent") {
         }
         const session = await createAgentSession({
           routeScope,
-          ephemeral: pendingTurn.options.ephemeral,
+          ephemeral: pendingTurn.options.ephemeral ?? true,
         });
         sessionId = session.agent_session_id;
         updateAgentSessionId(sessionId);

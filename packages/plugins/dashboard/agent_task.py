@@ -7,9 +7,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 try:
-    from .codex_app_server import CodexAppServerClient
+    from .codex_app_server import CodexAppServerClient, CodexAppServerManager
 except ImportError:
-    from codex_app_server import CodexAppServerClient
+    from codex_app_server import CodexAppServerClient, CodexAppServerManager
 
 
 class AgentTurnResult(BaseModel):
@@ -27,13 +27,15 @@ def run_agent_turn(
     prompt: str,
     thread_id: str | None = None,
     output_schema: dict[str, Any] | None = None,
-    ephemeral: bool = False,
+    ephemeral: bool = True,
+    app_server: CodexAppServerManager | None = None,
 ) -> AgentTurnResult:
     prompt = _clean_text(prompt)
     thread_id = _clean_text(thread_id) or None
     if not prompt:
         raise ValueError("prompt is required")
-    app_result = CodexAppServerClient().run_turn(
+    app_server_client = app_server or CodexAppServerClient()
+    app_result = app_server_client.run_turn(
         cwd=_repo_root(),
         user_text=prompt,
         output_schema=output_schema,

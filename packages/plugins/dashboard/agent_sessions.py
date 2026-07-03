@@ -12,9 +12,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 try:
-    from .codex_app_server import CodexAppServerSession
+    from .codex_app_server import CodexAppServerManager
 except ImportError:
-    from codex_app_server import CodexAppServerSession
+    from codex_app_server import CodexAppServerManager
 
 
 class AgentTurnResult(BaseModel):
@@ -33,16 +33,24 @@ class AgentSessionRecord:
     route_scope: str | None
     created_at: float
     last_used_at: float
-    session: CodexAppServerSession
+    cwd: Path
+    app_server_thread_id: str
     lock: threading.Lock = field(default_factory=threading.Lock)
     recent_job_ids: deque[str] = field(default_factory=lambda: deque(maxlen=12))
     active_job_id: str | None = None
 
 
 class AgentSessionStore:
-    def __init__(self, *, ttl_seconds: float = 1800, cwd: Path) -> None:
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = 1800,
+        cwd: Path,
+        app_server: CodexAppServerManager,
+    ) -> None:
         self._ttl_seconds = ttl_seconds
         self._cwd = cwd
+        self._app_server = app_server
         self._sessions: dict[str, AgentSessionRecord] = {}
         self._lock = threading.Lock()
 
@@ -50,23 +58,24 @@ class AgentSessionStore:
         self,
         *,
         route_scope: str | None = None,
-        ephemeral: bool = False,
+        ephemeral: bool = True,
+        cwd: Path | None = None,
     ) -> dict[str, Any]:
         self._evict_expired()
         agent_session_id = uuid.uuid4().hex
-        session = CodexAppServerSession(cwd=self._cwd)
-        try:
-            session.start_thread(ephemeral=ephemeral)
-        except Exception:
-            session.close()
-            raise
+        session_cwd = cwd or self._cwd
+        app_server_thread_id = self._app_server.start_thread(
+            cwd=session_cwd,
+            ephemeral=ephemeral,
+        )
         now = time.monotonic()
         record = AgentSessionRecord(
             id=agent_session_id,
             route_scope=route_scope,
             created_at=now,
             last_used_at=now,
-            session=session,
+            cwd=session_cwd,
+            app_server_thread_id=app_server_thread_id,
         )
         with self._lock:
             self._sessions[agent_session_id] = record
@@ -102,7 +111,9 @@ class AgentSessionStore:
             with self._lock:
                 record.last_used_at = time.monotonic()
             try:
-                app_result = record.session.run_turn(
+                app_result = self._app_server.run_turn(
+                    cwd=record.cwd,
+                    thread_id=record.app_server_thread_id,
                     user_text=prompt,
                     output_schema=output_schema,
                 )
@@ -119,16 +130,11 @@ class AgentSessionStore:
 
     def close(self, agent_session_id: str) -> None:
         with self._lock:
-            record = self._sessions.pop(agent_session_id, None)
-        if record:
-            record.session.close()
+            self._sessions.pop(agent_session_id, None)
 
     def shutdown(self) -> None:
         with self._lock:
-            records = list(self._sessions.values())
             self._sessions.clear()
-        for record in records:
-            record.session.close()
 
     def _get(self, agent_session_id: str) -> AgentSessionRecord:
         self._evict_expired()
@@ -140,7 +146,6 @@ class AgentSessionStore:
 
     def _evict_expired(self) -> None:
         now = time.monotonic()
-        expired: list[AgentSessionRecord] = []
         with self._lock:
             for agent_session_id, record in list(self._sessions.items()):
                 if (
@@ -148,11 +153,7 @@ class AgentSessionStore:
                     and not record.lock.locked()
                     and record.active_job_id is None
                 ):
-                    expired.append(record)
                     del self._sessions[agent_session_id]
-        for record in expired:
-            record.session.close()
-
 
 def _iso_from_monotonic_age(value: float) -> str:
     age = max(time.monotonic() - value, 0.0)
