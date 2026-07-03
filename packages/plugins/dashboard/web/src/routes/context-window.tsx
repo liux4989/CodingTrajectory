@@ -2,7 +2,7 @@ import * as React from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AlertTriangle, ArrowLeft, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Info, Search, X, Sparkles, Square } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square } from "lucide-react";
 import {
   analyzeSession,
   fetchContextWindow,
@@ -15,7 +15,6 @@ import {
 import { useJob } from "@/hooks/use-job";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/loading-state";
-import { Card, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { StateBlock } from "@/components/state-block";
 import { cn } from "@/lib/utils";
@@ -298,29 +297,32 @@ export function ContextWindowRoute() {
 
   return (
     <div className="route-container w-full min-w-0 overflow-hidden pb-8">
-      <Card className="gap-4 p-6">
-        <CardHeader className="px-0">
+      <div className="context-window-shell">
+        <div className="context-window-topbar">
           <button
             type="button"
             onClick={() => router.history.back()}
-            className="mb-2 inline-flex cursor-pointer items-center gap-1.5 font-display text-caption font-extrabold text-primary"
+            className="inline-flex cursor-pointer items-center gap-1.5 font-display text-caption font-extrabold text-primary"
           >
             <ArrowLeft size={14} /> Back
           </button>
-          <CardTitle className="font-display text-display leading-tight tracking-tight">
-            Explore the context window
-          </CardTitle>
-          <CardDescription>
-            A session showing what enters context and what it costs
-          </CardDescription>
-          <CardAction>
+
+          <div className="context-window-title-row">
+            <div className="min-w-0">
+              <h1 className="m-0 font-display text-h1 leading-tight">
+                Explore the context window
+              </h1>
+              <p className="m-0 mt-1 text-body-sm text-muted-foreground">
+                A session showing what enters context and what it costs
+              </p>
+            </div>
             <div className="flex flex-wrap items-center justify-end gap-3">
               <div className="text-right">
                 <p className="m-0 mono text-heading font-bold leading-none text-moss">
-                  ~{formatTokens(payload.used_tokens?.value)} tokens
+                  ~{formatTokens(payload.used_tokens?.value)}
                 </p>
                 <p className="m-0 mt-1 mono text-caption text-muted-foreground">
-                  / {formatTokens(payload.context_window_tokens?.value)} · illustrative
+                  / {formatTokens(payload.context_window_tokens?.value)} tokens
                 </p>
               </div>
               <Button
@@ -338,142 +340,148 @@ export function ContextWindowRoute() {
                 {analysisButtonLabel}
               </Button>
             </div>
-          </CardAction>
-        </CardHeader>
-      </Card>
-
-      {analysisRunning ? (
-        <LoadingState
-          title="Analyzing session"
-          detail="The coding agent is reviewing session usage and tool events."
-          elapsedMs={analysisJob.elapsedMs}
-          progress={analysisJob.progress}
-          onCancel={analysisJob.cancel}
-        />
-      ) : null}
-      {analysisJob.status === "error" ? (
-        <div className="alert alert-destructive rounded-xl text-body-sm text-foreground">
-          {analysisJob.error}
-        </div>
-      ) : null}
-
-      {analysis ? <SessionAnalysisPanel analysis={analysis} /> : null}
-
-      <figure className="m-0">
-        <Tooltip.Provider delayDuration={160} skipDelayDuration={120}>
-          <div
-            className="flex h-3 w-full overflow-hidden rounded-full bg-surface-emphasis"
-            role="img"
-            aria-label={`Context window usage: ${formatTokens(totalUsedTokens)} of ${formatTokens(payload.context_window_tokens?.value ?? 0)} tokens, grouped by category`}
-          >
-            {combinedSegments.map((seg) => {
-              const isActive = activeCategories.has(seg.category);
-              const label = `${categoryLabel(seg.category)}: ${formatTokens(seg.tokens)} tokens (${seg.widthPct.toFixed(1)}% of window)`;
-              return (
-                <div
-                  key={seg.category}
-                  className="flex h-full min-w-0"
-                  style={{ width: `${seg.widthPct}%` }}
-                >
-                  <Tooltip.Root>
-                    <Tooltip.Trigger asChild>
-                      <button
-                        type="button"
-                        className={cn(
-                          "h-full w-full cursor-pointer border-0 border-r border-r-white/24 p-0 transition-opacity",
-                          "hover:opacity-100 hover:outline-none hover:ring-2 hover:ring-white/80",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
-                          isActive ? "opacity-100 ring-2 ring-white" : "opacity-80",
-                        )}
-                        style={{ background: categoryColors[seg.category] ?? categoryColors.unattributed }}
-                        aria-pressed={isActive}
-                        aria-label={label}
-                        onClick={() => toggleCategory(seg.category)}
-                        onMouseEnter={() => setHoveredCategory(seg.category)}
-                        onMouseLeave={() => setHoveredCategory(null)}
-                      >
-                        <span className="sr-only">{label}</span>
-                      </button>
-                    </Tooltip.Trigger>
-                    <Tooltip.Portal>
-                      <Tooltip.Content
-                        className="z-[120] max-w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border-soft bg-card px-3 py-2 text-caption leading-[1.35] text-foreground shadow-popover"
-                        side="top"
-                        sideOffset={8}
-                      >
-                        {label}
-                        <Tooltip.Arrow className="fill-card" />
-                      </Tooltip.Content>
-                    </Tooltip.Portal>
-                  </Tooltip.Root>
-                </div>
-              );
-            })}
-            {remainingPct > 0 ? (
-              <div
-                className="h-full"
-                style={{ width: `${remainingPct}%` }}
-                aria-label="Unused capacity"
-              />
-            ) : null}
           </div>
-        </Tooltip.Provider>
+        </div>
 
-        <div className="m-0 mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <ul className="m-0 flex flex-wrap gap-x-3 gap-y-2 list-none" role="list">
-            {aggregateCategories(payload.categories).map(({ category, tokens }) => {
-              const isActive = activeCategories.has(category);
-              return (
-                <li key={category}>
-                  <button
-                    type="button"
-                    onClick={() => toggleCategory(category)}
-                    onMouseEnter={() => setHoveredCategory(category)}
-                    onMouseLeave={() => setHoveredCategory(null)}
-                    onFocus={() => setHoveredCategory(category)}
-                    onBlur={() => setHoveredCategory(null)}
-                    aria-pressed={isActive}
-                    className={cn(
-                      "inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-caption transition-colors",
-                      isActive
-                        ? "bg-surface-emphasis text-foreground font-medium"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
+        {analysisRunning ? (
+          <LoadingState
+            title="Analyzing session"
+            detail="The coding agent is reviewing session usage and tool events."
+            elapsedMs={analysisJob.elapsedMs}
+            progress={analysisJob.progress}
+            onCancel={analysisJob.cancel}
+          />
+        ) : null}
+        {analysisJob.status === "error" ? (
+          <div className="alert alert-destructive rounded-xl text-body-sm text-foreground">
+            {analysisJob.error}
+          </div>
+        ) : null}
+
+        {analysis ? <SessionAnalysisPanel analysis={analysis} /> : null}
+
+        <figure className="m-0">
+          <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+            <figcaption className="m-0 text-body-sm text-muted-foreground">
+              Context composition
+            </figcaption>
+            <span className="mono text-caption text-muted-foreground">
+              {payload.used_percent == null ? "unknown" : `${payload.used_percent.toFixed(1)}%`} used
+            </span>
+          </div>
+          <Tooltip.Provider delayDuration={160} skipDelayDuration={120}>
+            <div
+              className="flex h-8 w-full overflow-hidden rounded-md border border-border-soft bg-surface-emphasis"
+              role="img"
+              aria-label={`Context window usage: ${formatTokens(totalUsedTokens)} of ${formatTokens(payload.context_window_tokens?.value ?? 0)} tokens, grouped by category`}
+            >
+              {combinedSegments.map((seg) => {
+                const isActive = activeCategories.has(seg.category);
+                const label = `${categoryLabel(seg.category)}: ${formatTokens(seg.tokens)} tokens (${seg.widthPct.toFixed(1)}% of window)`;
+                return (
+                  <div
+                    key={seg.category}
+                    className="flex h-full min-w-0"
+                    style={{ width: `${seg.widthPct}%` }}
                   >
-                    <span className="inline-block h-2 w-2 rounded-[2px]" style={categoryDotStyle(category)} />
-                    <span>{categoryLabel(category)}</span>
-                    <span className="font-mono">{formatTokens(tokens)}</span>
-                  </button>
-                </li>
-              );
-            })}
-            <li className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
-              <Eye size={12} />
-              <span>= appears in your terminal</span>
-            </li>
-          </ul>
-
-          <div className="ml-auto flex items-center gap-2">
-            <div className="relative">
-              <Search size={14} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Filter events"
-                className="h-8 w-56 rounded-md border border-border-soft bg-card pl-7 pr-2 text-caption text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-              />
+                    <Tooltip.Root>
+                      <Tooltip.Trigger asChild>
+                        <button
+                          type="button"
+                          className={cn(
+                            "h-full w-full cursor-pointer border-0 border-r border-r-white/24 p-0 transition-opacity",
+                            "hover:opacity-100 hover:outline-none hover:ring-2 hover:ring-white/80",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
+                            isActive ? "opacity-100 ring-2 ring-white" : "opacity-80",
+                          )}
+                          style={{ background: categoryColors[seg.category] ?? categoryColors.unattributed }}
+                          aria-pressed={isActive}
+                          aria-label={label}
+                          onClick={() => toggleCategory(seg.category)}
+                          onMouseEnter={() => setHoveredCategory(seg.category)}
+                          onMouseLeave={() => setHoveredCategory(null)}
+                        >
+                          <span className="sr-only">{label}</span>
+                        </button>
+                      </Tooltip.Trigger>
+                      <Tooltip.Portal>
+                        <Tooltip.Content
+                          className="z-[120] max-w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border-soft bg-card px-3 py-2 text-caption leading-[1.35] text-foreground shadow-popover"
+                          side="top"
+                          sideOffset={8}
+                        >
+                          {label}
+                          <Tooltip.Arrow className="fill-card" />
+                        </Tooltip.Content>
+                      </Tooltip.Portal>
+                    </Tooltip.Root>
+                  </div>
+                );
+              })}
+              {remainingPct > 0 ? (
+                <div
+                  className="h-full"
+                  style={{ width: `${remainingPct}%` }}
+                  aria-label="Unused capacity"
+                />
+              ) : null}
             </div>
-            {hasFilters ? (
-              <Button size="sm" variant="ghost" onClick={clearFilters} className="h-8 gap-1 px-2 text-caption">
-                <X size={14} /> Clear
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      </figure>
+          </Tooltip.Provider>
 
-      <div className="context-window-shell">
+          <div className="m-0 mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <ul className="m-0 flex flex-wrap gap-x-3 gap-y-2 list-none" role="list">
+              {aggregateCategories(payload.categories).map(({ category, tokens }) => {
+                const isActive = activeCategories.has(category);
+                return (
+                  <li key={category}>
+                    <button
+                      type="button"
+                      onClick={() => toggleCategory(category)}
+                      onMouseEnter={() => setHoveredCategory(category)}
+                      onMouseLeave={() => setHoveredCategory(null)}
+                      onFocus={() => setHoveredCategory(category)}
+                      onBlur={() => setHoveredCategory(null)}
+                      aria-pressed={isActive}
+                      className={cn(
+                        "inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-caption transition-colors",
+                        isActive
+                          ? "bg-surface-emphasis text-foreground font-medium"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <span className="inline-block h-2 w-2 rounded-[2px]" style={categoryDotStyle(category)} />
+                      <span>{categoryLabel(category)}</span>
+                      <span className="font-mono">{formatTokens(tokens)}</span>
+                    </button>
+                  </li>
+                );
+              })}
+              <li className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
+                <Eye size={12} />
+                <span>= appears in your terminal</span>
+              </li>
+            </ul>
+
+            <div className="ml-auto flex items-center gap-2">
+              <div className="relative">
+                <Search size={14} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Filter events"
+                  className="h-8 w-56 max-w-[calc(100vw-4rem)] rounded-md border border-border-soft bg-card pl-7 pr-2 text-caption text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                />
+              </div>
+              {hasFilters ? (
+                <Button size="sm" variant="ghost" onClick={clearFilters} className="h-8 gap-1 px-2 text-caption">
+                  <X size={14} /> Clear
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        </figure>
+
         <div className="context-window-layout">
           <section className="min-w-0" aria-labelledby="event-stream-title">
             <h2 id="event-stream-title" className="sr-only">Event stream</h2>
@@ -577,7 +585,7 @@ export function ContextWindowRoute() {
             )}
           </section>
 
-          <aside className="context-detail-rail min-w-0 self-start">
+          <aside className="context-detail-rail min-w-0">
             <div className="context-detail-pane rounded-[var(--radius-2xl)] p-6">
               <div className="context-detail-scroll">
                 {activeEvent ? (
@@ -610,19 +618,6 @@ export function ContextWindowRoute() {
                       </Button>
                     </div>
                     <p className="mt-4 whitespace-pre-wrap leading-relaxed">{activeEvent.summary ?? "No text preview is available."}</p>
-                    {activeEvent.terminal_visible ? (
-                      <div className="panel-subtle mt-4 overflow-hidden rounded-xl">
-                        <div className="flex items-center gap-2 px-4 py-3 font-display text-body-sm font-bold">
-                          <Info size={16} className="text-primary" />
-                          Visible in the terminal
-                        </div>
-                        <div className="border-t border-border-subtle px-4 py-3">
-                          <p className="m-0 text-body-sm text-muted-foreground">
-                            This event appeared in the terminal output at the time, but the dashboard does not expand the full terminal transcript here.
-                          </p>
-                        </div>
-                      </div>
-                    ) : null}
                     {activeEvidence.length > 0 ? (
                       <div className="mt-4 overflow-hidden rounded-xl border border-border-soft">
                         <div className="bg-surface-subtle px-4 py-2 eyebrow text-muted-foreground">
@@ -660,41 +655,41 @@ export function ContextWindowRoute() {
             </div>
           </aside>
         </div>
-      </div>
 
-      <div className="sticky bottom-0 z-50 mt-2 rounded-xl border border-border-soft bg-card p-3 shadow-lg">
-        <div className="flex items-center gap-3">
-          <Button
-            size="icon"
-            variant="secondary"
-            onClick={() => setIsPlaying((p) => !p)}
-            aria-label={isPlaying ? "Pause playback" : "Play through events"}
-          >
-            {isPlaying ? <Pause size={16} /> : <Play size={16} />}
-          </Button>
-          <div className="flex-1">
-            <div
-              className="flex h-2 w-full overflow-hidden rounded-full bg-surface-emphasis"
-              role="img"
-              aria-label={`Replay progress: ${Math.max(playbackIndex, 0) + 1} of ${filteredEvents.length} events`}
+        <div className="context-playback-rail">
+          <div className="flex items-center gap-3">
+            <Button
+              size="icon"
+              variant="secondary"
+              onClick={() => setIsPlaying((p) => !p)}
+              aria-label={isPlaying ? "Pause playback" : "Play through events"}
             >
-              <span
-                className="block bg-moss transition-all duration-300"
-                style={{ width: `${Math.min(playbackPct, 100)}%` }}
-              />
+              {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+            </Button>
+            <div className="flex-1">
+              <div
+                className="flex h-2 w-full overflow-hidden rounded-full bg-surface-emphasis"
+                role="img"
+                aria-label={`Replay progress: ${Math.max(playbackIndex, 0) + 1} of ${filteredEvents.length} events`}
+              >
+                <span
+                  className="block bg-moss transition-all duration-300"
+                  style={{ width: `${Math.min(playbackPct, 100)}%` }}
+                />
+              </div>
             </div>
+            <span className="w-16 text-right mono text-body-sm">
+              {filteredEvents.length > 0 ? `${Math.max(playbackIndex, 0) + 1}/${filteredEvents.length}` : "-"}
+            </span>
+            <Button
+              size="icon"
+              variant="secondary"
+              onClick={toggleFullscreen}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+            >
+              {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+            </Button>
           </div>
-          <span className="w-16 text-right mono text-body-sm">
-            {filteredEvents.length > 0 ? `${Math.max(playbackIndex, 0) + 1}/${filteredEvents.length}` : "-"}
-          </span>
-          <Button
-            size="icon"
-            variant="secondary"
-            onClick={toggleFullscreen}
-            aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-          >
-            {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
-          </Button>
         </div>
       </div>
     </div>

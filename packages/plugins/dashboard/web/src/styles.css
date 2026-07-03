@@ -496,7 +496,9 @@
   .event-row {
     position: relative;
     display: flex;
+    box-sizing: border-box;
     width: 100%;
+    max-inline-size: 100%;
     min-inline-size: 0;
     align-items: center;
     gap: 0.75rem;
@@ -559,53 +561,98 @@
   }
 
   /* ---- Context window grouped layout ----
-   * Timeline and inspector share one shell. On larger screens the inspector
-   * overlays from the right; on smaller screens it returns to normal flow. */
+   * One explorer surface: header, composition bar, event stream, inspector,
+   * and playback rail share one stable grid. */
   .context-window-shell {
+    display: grid;
+    gap: 1rem;
     border-radius: var(--radius-3xl);
     border: 1px solid var(--border-soft);
     background:
-      linear-gradient(180deg, color-mix(in srgb, var(--card) 90%, white 10%) 0%, var(--card) 100%);
-    padding: clamp(0.875rem, 1.4vw, 1.25rem);
+      linear-gradient(180deg, color-mix(in srgb, var(--card) 92%, white 8%) 0%, var(--card) 100%);
+    padding: clamp(1rem, 1.6vw, 1.5rem);
     overflow: hidden;
+    box-shadow: var(--shadow-md);
+  }
+  .context-window-topbar {
+    display: grid;
+    gap: 0.75rem;
+    border-block-end: 1px solid var(--border-subtle);
+    padding-block-end: 0.875rem;
+  }
+  .context-window-title-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    align-items: end;
+    gap: 1rem;
   }
   .context-window-layout {
     display: grid;
+    grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 24rem);
+    gap: 1rem;
+    block-size: clamp(28rem, calc(100dvh - 21rem), 42rem);
     inline-size: 100%;
     max-inline-size: 100%;
+    min-block-size: 0;
     min-inline-size: 0;
-    position: relative;
+    align-items: stretch;
   }
   .context-window-layout > section {
-    grid-area: 1 / 1;
+    display: flex;
+    flex-direction: column;
+    min-block-size: 0;
     min-inline-size: 0;
     max-inline-size: 100%;
+  }
+  .context-window-layout ol,
+  .context-window-layout li {
+    min-inline-size: 0;
+  }
+  .context-window-layout > section > ol {
+    flex: 1 1 auto;
+    min-block-size: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-inline-end: 0.35rem;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--foreground) 28%, transparent) var(--surface-subtle);
+  }
+  @supports not (scrollbar-color: auto) {
+    .context-window-layout > section > ol::-webkit-scrollbar {
+      width: 11px;
+    }
+    .context-window-layout > section > ol::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--foreground) 28%, transparent);
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    .context-window-layout > section > ol::-webkit-scrollbar-track {
+      background: var(--surface-subtle);
+      border-radius: 999px;
+    }
   }
 
   /* ---- Context window detail pane ----
-   * Sticky overlay inspector with a single internal scroll region. */
+   * Sticky inspector with a single internal scroll region. */
   .context-detail-rail {
-    grid-area: 1 / 1;
-    z-index: 10;
-    inline-size: clamp(16rem, 24vw, 22rem);
-    max-inline-size: min(100%, 22rem);
-    justify-self: end;
-    align-self: start;
-    pointer-events: none;
+    align-self: stretch;
+    block-size: 100%;
+    min-inline-size: 0;
   }
   .context-detail-pane {
     display: flex;
     flex-direction: column;
+    block-size: 100%;
     min-inline-size: 0;
     inline-size: 100%;
-    max-block-size: calc(100dvh - 7rem);
     overflow: hidden;
-    pointer-events: auto;
     border: 1px solid var(--border-soft);
     background: color-mix(in srgb, var(--card) 94%, white 6%);
-    box-shadow: var(--shadow-md);
   }
   .context-detail-scroll {
+    flex: 1 1 auto;
     min-block-size: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -635,24 +682,45 @@
       top: 1rem;
     }
   }
-  @media (max-width: 48rem) {
-    .context-window-layout {
-      gap: 1rem;
+  .context-playback-rail {
+    position: sticky;
+    inset-block-end: 0.75rem;
+    z-index: 50;
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border-soft);
+    background: color-mix(in srgb, var(--card) 96%, white 4%);
+    padding: 0.75rem;
+    box-shadow: var(--shadow-lg);
+  }
+  @media (max-width: 64rem) {
+    .context-window-title-row {
+      grid-template-columns: minmax(0, 1fr);
     }
-    .context-window-layout > section,
-    .context-detail-rail {
-      grid-area: auto;
+    .context-window-title-row > :last-child {
+      justify-content: flex-start;
+    }
+    .context-window-layout {
+      block-size: auto;
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .context-window-layout > section {
+      max-block-size: min(32rem, calc(100dvh - 14rem));
     }
     .context-detail-rail {
       position: static;
-      z-index: auto;
-      inline-size: 100%;
-      max-inline-size: none;
-      pointer-events: auto;
     }
     .context-detail-pane {
-      max-block-size: none;
-      box-shadow: none;
+      block-size: auto;
+      max-block-size: 24rem;
+    }
+  }
+  @media (max-width: 48rem) {
+    .context-window-shell {
+      padding: 0.875rem;
+    }
+    .context-window-title-row > :last-child {
+      align-items: flex-start;
+      justify-content: space-between;
     }
   }
 }
