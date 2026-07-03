@@ -17,7 +17,6 @@ import { RouteHeader } from "@/components/route-header";
 import { Toolbar } from "@/components/toolbar";
 import { StateBlock } from "@/components/state-block";
 import { VendorBadges } from "@/components/badges";
-import { RefreshButton } from "@/components/refresh-button";
 import { DataTable } from "@/components/data-table";
 import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -104,7 +103,6 @@ export function ProjectDetailRoute() {
       <RouteHeader
         eyebrow="Project drill-down"
         title={projectName}
-        action={<RefreshButton queries={["project"]} />}
       />
       <div className="flex flex-wrap items-center gap-2">
         <FolderGit2 size={16} className="text-muted-foreground" />

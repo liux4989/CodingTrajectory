@@ -2,20 +2,37 @@ import * as React from "react";
 import { useQueryClient, useIsFetching } from "@tanstack/react-query";
 import { RefreshCcw } from "lucide-react";
 import { motion } from "motion/react";
+import { refreshDashboardData } from "@/api";
 import { Button } from "@/components/ui/button";
 
-export function RefreshButton({ queries }: { queries: string[] }) {
+export function RefreshButton() {
   const client = useQueryClient();
-  const isFetching = useIsFetching({ queryKey: queries.length ? [queries[0]] : undefined });
+  const isFetching = useIsFetching();
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
   const spinning = isFetching > 0;
+
+  async function refresh() {
+    setIsRefreshing(true);
+    try {
+      await refreshDashboardData();
+      await client.invalidateQueries();
+    } catch (error) {
+      console.error("Dashboard refresh failed", error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }
+
   return (
     <Button
-      variant="secondary"
-      onClick={() => queries.forEach((query) => void client.invalidateQueries({ queryKey: [query] }))}
+      variant="outline"
+      size="sm"
+      onClick={() => void refresh()}
+      disabled={isRefreshing}
     >
       <motion.span
-        animate={spinning ? { rotate: 360 } : { rotate: 0 }}
-        transition={spinning ? { repeat: Infinity, ease: "linear", duration: 0.9 } : { duration: 0.2 }}
+        animate={spinning || isRefreshing ? { rotate: 360 } : { rotate: 0 }}
+        transition={spinning || isRefreshing ? { repeat: Infinity, ease: "linear", duration: 0.9 } : { duration: 0.2 }}
         className="inline-flex"
       >
         <RefreshCcw size={16} />

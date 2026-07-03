@@ -65,6 +65,10 @@ class DashboardWorkManager:
                 if key[: len(prefix)] == prefix:
                     del self._entries[key]
 
+    def clear_all(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
     def _compute(
         self,
         key: tuple[Any, ...],

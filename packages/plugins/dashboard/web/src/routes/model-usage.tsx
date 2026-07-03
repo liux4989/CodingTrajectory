@@ -14,7 +14,6 @@ import {
 } from "@/api";
 import { DataTable } from "@/components/data-table";
 import { MetricCard } from "@/components/metric-card";
-import { RefreshButton } from "@/components/refresh-button";
 import { RouteHeader } from "@/components/route-header";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
@@ -117,7 +116,6 @@ export function ModelUsageRoute() {
       <RouteHeader
         eyebrow="Model economics"
         title="Model usage overview"
-        action={<RefreshButton queries={["model-usage"]} />}
       />
 
       <Card className="min-w-0">

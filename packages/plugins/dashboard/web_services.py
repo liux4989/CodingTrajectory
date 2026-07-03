@@ -41,6 +41,10 @@ class DashboardDataService:
     def shutdown(self) -> None:
         self._agent_sessions.shutdown()
 
+    def refresh(self) -> dict[str, Any]:
+        self._work.clear_all()
+        return {"status": "refreshed"}
+
     def overview(self) -> dict[str, Any]:
         return self._work.get_or_compute(("overview",), self._overview_uncached)
 

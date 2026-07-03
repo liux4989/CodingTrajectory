@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { DateRangeToggle } from "@/components/date-range-toggle";
 import { Breadcrumbs } from "@/components/breadcrumbs";
+import { RefreshButton } from "@/components/refresh-button";
 
 export function SiteHeader() {
   const { theme, toggle } = useTheme();
@@ -20,6 +21,7 @@ export function SiteHeader() {
         />
         <Breadcrumbs />
         <div className="ml-auto flex items-center gap-2">
+          <RefreshButton />
           <DateRangeToggle />
           <Button
             variant="outline"

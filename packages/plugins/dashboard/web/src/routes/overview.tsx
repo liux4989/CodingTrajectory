@@ -13,7 +13,6 @@ import { MetricSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
 import { MetricCard } from "@/components/metric-card";
 import { StaggerGroup } from "@/components/stagger-group";
-import { RefreshButton } from "@/components/refresh-button";
 import { StateBlock } from "@/components/state-block";
 import { MiniBarChart } from "@/components/charts";
 import { Badge } from "@/components/ui/badge";
@@ -49,7 +48,6 @@ export function OverviewRoute() {
       <RouteHeader
         eyebrow="Usage activity"
         title="Recent project and session activity from today."
-        action={<RefreshButton queries={["overview"]} />}
       />
       <section className="stat-grid min-w-0">
         <StaggerGroup className="contents">

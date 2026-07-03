@@ -598,6 +598,10 @@ export async function fetchErrorCollection(params: { sinceDays?: number; project
   return fetchJson<ErrorCollectionPayload>(`/api/error-collection?${search}`);
 }
 
+export async function refreshDashboardData() {
+  return fetchJson<{ status: "refreshed" }>("/api/refresh", { method: "POST" });
+}
+
 export async function applyCleanup(kind: "project" | "session", payload: CleanupApplyPayload) {
   return fetchJson<CleanupResult>(`/api/cleanup/${kind}/apply`, {
     method: "POST",

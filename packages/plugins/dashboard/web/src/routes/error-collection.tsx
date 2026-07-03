@@ -10,7 +10,6 @@ import {
   type ErrorCollectionPayload,
 } from "@/api";
 import { MetricCard } from "@/components/metric-card";
-import { RefreshButton } from "@/components/refresh-button";
 import { RouteHeader } from "@/components/route-header";
 import { shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
@@ -78,7 +77,6 @@ export function ErrorCollectionRoute() {
       <RouteHeader
         eyebrow="Session quality"
         title="Error collection"
-        action={<RefreshButton queries={["error-collection"]} />}
       />
 
       <Card className="min-w-0">

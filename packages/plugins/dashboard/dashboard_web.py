@@ -192,6 +192,8 @@ def _handler_for(
         def _handle_api_post(
             self, path: str, body: dict[str, Any]
         ) -> tuple[dict[str, Any], HTTPStatus]:
+            if path == "/api/refresh":
+                return service.refresh(), HTTPStatus.OK
             if path == "/api/agent-sessions":
                 return service.create_agent_session(body), HTTPStatus.CREATED
             agent_session_id = _agent_session_turn_id(path)
@@ -292,6 +294,7 @@ def _handler_for(
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -302,6 +305,7 @@ def _handler_for(
             ).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

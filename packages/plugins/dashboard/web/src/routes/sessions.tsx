@@ -16,7 +16,6 @@ import { RouteHeader } from "@/components/route-header";
 import { Toolbar } from "@/components/toolbar";
 import { StateBlock } from "@/components/state-block";
 import { VendorBadges } from "@/components/badges";
-import { RefreshButton } from "@/components/refresh-button";
 import { DataTable } from "@/components/data-table";
 import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -100,7 +99,7 @@ export function SessionsRoute() {
 
   return (
     <div className="route-container">
-      <RouteHeader eyebrow="Session stream" title="Recent session entry points, kept compact for triage." action={<RefreshButton queries={["sessions"]} />} />
+      <RouteHeader eyebrow="Session stream" title="Recent session entry points, kept compact for triage." />
       <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, project, or id" />
       {sessions.isPending ? <TableSkeleton rows={6} cols={4} /> : null}
       {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} /> : null}
