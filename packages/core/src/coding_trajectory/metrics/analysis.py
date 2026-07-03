@@ -599,7 +599,8 @@ def _stats_cost_entries_for_session(session: Session) -> list[_ItemCostEntry]:
     entries: list[_ItemCostEntry] = []
     for source_index, source in enumerate(session.context_sources):
         size = visible_text_size(source.text)
-        if size.tokens <= 0:
+        tokens = size.tokens or (source.reported_tokens or 0)
+        if tokens <= 0:
             continue
         entries.append(
             _ItemCostEntry(
@@ -613,7 +614,7 @@ def _stats_cost_entries_for_session(session: Session) -> list[_ItemCostEntry]:
                 sequence=-2,
                 started_at=source.timestamp,
                 kind="context_source",
-                visible_tokens=size.tokens,
+                visible_tokens=tokens,
                 context_key=source.key,
             )
         )

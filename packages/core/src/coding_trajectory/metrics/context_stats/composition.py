@@ -142,12 +142,13 @@ def _starting_context(
     for session in session_graph.sessions:
         for source in session.context_sources:
             size = visible_text_size(source.text)
+            tokens = size.tokens or (source.reported_tokens or 0)
             allocated_usage = None
             if source.key not in usage_added_keys:
                 allocated_usage = allocated_usage_by_context_source.get(source.key)
                 usage_added_keys.add(source.key)
             buckets[source.key].add(
-                tokens=size.tokens,
+                tokens=tokens,
                 chars=size.chars,
                 allocated_usage=allocated_usage,
             )

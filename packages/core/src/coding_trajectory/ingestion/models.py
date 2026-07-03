@@ -127,6 +127,11 @@ class ContextSourceObservation(BaseModel):
     label:     str
     text:      str
     source:    str
+    # Vendor-reported token count for sources whose text is not captured in the
+    # log (e.g. Claude Code's cached system-prompt prefix). When present and the
+    # observed text is empty, composition and cost accounting use this in place
+    # of a visible-text token estimate.
+    reported_tokens: int | None = None
 
 
 class RuntimeObservation(BaseModel):
