@@ -1,7 +1,6 @@
 import * as React from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import * as ScrollArea from "@radix-ui/react-scroll-area";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { AlertTriangle, ArrowLeft, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Info, Search, X, Sparkles, Square } from "lucide-react";
 import {
@@ -461,7 +460,7 @@ export function ContextWindowRoute() {
                 type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by name..."
+                placeholder="Filter events"
                 className="h-8 w-56 rounded-md border border-border-soft bg-card pl-7 pr-2 text-caption text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               />
             </div>
@@ -482,109 +481,102 @@ export function ContextWindowRoute() {
               No events match the current filters.
             </div>
           ) : (
-            <ScrollArea.Root className="relative min-h-[18rem] max-h-[min(48rem,calc(100vh-14rem))] overflow-hidden">
-              <ScrollArea.Viewport className="max-h-[min(48rem,calc(100vh-14rem))] min-h-[18rem] pe-3 scroll-py-3">
-                <ol className="m-0 grid list-none gap-2 p-0">
-                  {filteredEvents.map((event, index) => {
-                    const previous = filteredEvents[index - 1];
-                    const header = groupHeader(event, previous);
-                    const isSelected = event.id === selectedId;
-                    const isActive = event.id === activeId;
-                    const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
-                    const color = eventColor(event);
-                    const tokenPercent = totalUsedTokens > 0 && event.tokens
-                      ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
-                      : 0;
-                    const isSubagent = event.source === "subagent";
-                    const eventEvidence = evidenceByEventId.get(event.id) ?? [];
-                    const hasWarning = eventEvidence.some((item) => item.severity === "warning");
-                    return (
-                      <React.Fragment key={event.id}>
-                        {header ? (
-                          <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
-                            <h4 className={cn(
-                              "eyebrow-soft text-muted-foreground",
-                              index > 0 && "mt-4",
-                            )}>
-                              {header}
-                            </h4>
-                          </li>
-                        ) : null}
-                        <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
-                          <button
-                            ref={(node) => { eventRefs.current[index] = node; }}
-                            type="button"
-                              className="event-row"
-                            data-active={isActive || undefined}
-                            data-selected={isSelected || undefined}
-                            data-highlight={isCategoryHighlight || undefined}
-                            style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
-                            aria-pressed={isSelected}
-                            onFocus={() => setSelectedId(event.id)}
-                            onClick={() => setSelectedId(event.id)}
-                            onKeyDown={(eventKey) => {
-                              if (eventKey.key === "ArrowDown") {
-                                eventKey.preventDefault();
-                                moveFocus(index, 1);
-                              } else if (eventKey.key === "ArrowUp") {
-                                eventKey.preventDefault();
-                                moveFocus(index, -1);
-                              }
-                            }}
-                          >
-                            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
-                            <Badge
-                              variant="outline"
-                              className="shrink-0 px-1.5 py-0 text-caption text-foreground"
-                              style={{ backgroundColor: categoryTint(color, 0.15), borderColor: categoryTint(color, 0.25) }}
+            <ol className="m-0 grid list-none gap-2 p-0">
+              {filteredEvents.map((event, index) => {
+                const previous = filteredEvents[index - 1];
+                const header = groupHeader(event, previous);
+                const isSelected = event.id === selectedId;
+                const isActive = event.id === activeId;
+                const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
+                const color = eventColor(event);
+                const tokenPercent = totalUsedTokens > 0 && event.tokens
+                  ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
+                  : 0;
+                const isSubagent = event.source === "subagent";
+                const eventEvidence = evidenceByEventId.get(event.id) ?? [];
+                const hasWarning = eventEvidence.some((item) => item.severity === "warning");
+                return (
+                  <React.Fragment key={event.id}>
+                    {header ? (
+                      <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
+                        <h4 className={cn(
+                          "eyebrow-soft text-muted-foreground",
+                          index > 0 && "mt-4",
+                        )}>
+                          {header}
+                        </h4>
+                      </li>
+                    ) : null}
+                    <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
+                      <button
+                        ref={(node) => { eventRefs.current[index] = node; }}
+                        type="button"
+                        className="event-row"
+                        data-active={isActive || undefined}
+                        data-selected={isSelected || undefined}
+                        data-highlight={isCategoryHighlight || undefined}
+                        style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
+                        aria-pressed={isSelected}
+                        onFocus={() => setSelectedId(event.id)}
+                        onClick={() => setSelectedId(event.id)}
+                        onKeyDown={(eventKey) => {
+                          if (eventKey.key === "ArrowDown") {
+                            eventKey.preventDefault();
+                            moveFocus(index, 1);
+                          } else if (eventKey.key === "ArrowUp") {
+                            eventKey.preventDefault();
+                            moveFocus(index, -1);
+                          }
+                        }}
+                      >
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
+                        <Badge
+                          variant="outline"
+                          className="shrink-0 px-1.5 py-0 text-caption text-foreground"
+                          style={{ backgroundColor: categoryTint(color, 0.15), borderColor: categoryTint(color, 0.25) }}
+                        >
+                          {categoryLabel(event.category)}
+                        </Badge>
+                        <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
+                          {event.label}
+                        </span>
+                        <span className="flex shrink-0 items-center gap-2">
+                          <span className="mono text-body-sm font-medium">
+                            {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
+                          </span>
+                          {tokenPercent > 0 ? (
+                            <span className="block h-1 w-12 overflow-hidden rounded-full bg-surface-emphasis">
+                              <span
+                                className="block h-full rounded-full"
+                                style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
+                              />
+                            </span>
+                          ) : null}
+                          {event.terminal_visible ? (
+                            <Eye size={14} className="text-muted-foreground" />
+                          ) : null}
+                          {eventEvidence.length > 0 ? (
+                            <span
+                              className={cn(
+                                "inline-flex h-5 min-w-5 items-center justify-center rounded-md border px-1",
+                                hasWarning ? "border-warning/45 bg-warning/10 text-warning" : "border-moss/40 bg-moss/10 text-moss",
+                              )}
+                              title={`${eventEvidence.length} analysis evidence ${eventEvidence.length === 1 ? "match" : "matches"}`}
                             >
-                              {categoryLabel(event.category)}
-                            </Badge>
-                            <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
-                              {event.label}
+                              {hasWarning ? <AlertTriangle size={13} /> : <Lightbulb size={13} />}
                             </span>
-                            <span className="flex shrink-0 items-center gap-2">
-                              <span className="mono text-body-sm font-medium">
-                                {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
-                              </span>
-                              {tokenPercent > 0 ? (
-                                <span className="block h-1 w-12 overflow-hidden rounded-full bg-surface-emphasis">
-                                  <span
-                                    className="block h-full rounded-full"
-                                    style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
-                                  />
-                                </span>
-                              ) : null}
-                              {event.terminal_visible ? (
-                                <Eye size={14} className="text-muted-foreground" />
-                              ) : null}
-                              {eventEvidence.length > 0 ? (
-                                <span
-                                  className={cn(
-                                    "inline-flex h-5 min-w-5 items-center justify-center rounded-md border px-1",
-                                    hasWarning ? "border-warning/45 bg-warning/10 text-warning" : "border-moss/40 bg-moss/10 text-moss",
-                                  )}
-                                  title={`${eventEvidence.length} analysis evidence ${eventEvidence.length === 1 ? "match" : "matches"}`}
-                                >
-                                  {hasWarning ? <AlertTriangle size={13} /> : <Lightbulb size={13} />}
-                                </span>
-                              ) : null}
-                            </span>
-                          </button>
-                        </li>
-                      </React.Fragment>
-                    );
-                  })}
-                </ol>
-              </ScrollArea.Viewport>
-              <ScrollArea.Scrollbar className="flex w-2.5 touch-none select-none bg-surface-subtle p-px" orientation="vertical">
-                <ScrollArea.Thumb className="relative flex-1 rounded-full bg-foreground/28" />
-              </ScrollArea.Scrollbar>
-            </ScrollArea.Root>
+                          ) : null}
+                        </span>
+                      </button>
+                    </li>
+                  </React.Fragment>
+                );
+              })}
+            </ol>
           )}
         </section>
 
-        <aside className="sticky top-4 rounded-xl border border-border-soft bg-card p-5 max-lg:static">
+        <aside className="self-start rounded-xl border border-border-soft bg-card p-5">
           {activeEvent ? (
             <>
               <div className="flex items-start justify-between gap-4">
@@ -619,11 +611,11 @@ export function ContextWindowRoute() {
                 <div className="panel-subtle mt-4 overflow-hidden rounded-xl">
                   <div className="flex items-center gap-2 px-4 py-3 font-display text-body-sm font-bold">
                     <Info size={16} className="text-primary" />
-                    One-liner in your terminal
+                    Visible in the terminal
                   </div>
                   <div className="border-t border-border-subtle px-4 py-3">
                     <p className="m-0 text-body-sm text-muted-foreground">
-                      You see a brief mention, not the full content.
+                      This event appeared in the terminal output at the time, but the dashboard does not expand the full terminal transcript here.
                     </p>
                   </div>
                 </div>
