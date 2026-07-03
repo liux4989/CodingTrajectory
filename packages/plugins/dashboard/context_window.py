@@ -719,6 +719,7 @@ def _tool_item_events(
     real_total_tokens = _optional_int(real_cost.get("processed_tokens"))
     output_chars = _optional_int(item.get("output_chars")) or 0
     output_original_tokens = _optional_int(item.get("output_original_tokens"))
+    input_summary = _optional_text(item.get("input_summary")) or f"{tool} input"
     detail_ref = {
         "item_id": item_id,
         "session_id": str(item.get("session_id") or ""),
@@ -753,7 +754,6 @@ def _tool_item_events(
     if status:
         detail_ref["status"] = status
 
-    input_summary = _optional_text(item.get("input_summary")) or f"{tool} input"
     label = _tool_event_label(tool, input_summary)
     summary_bits = [input_summary, f"{output_chars} output chars"]
     if real_total_tokens is not None:
