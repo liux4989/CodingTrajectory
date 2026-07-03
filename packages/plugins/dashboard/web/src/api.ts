@@ -125,7 +125,6 @@ export type SessionAnalysis = {
   schema_version: 5;
   session_id: string;
   generated_at: string;
-  artifact_path: string | null;
   app_server_thread_id: string;
   app_server_turn_id: string | null;
   task_story: {

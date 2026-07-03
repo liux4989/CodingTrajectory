@@ -220,20 +220,18 @@ class DashboardDataService:
         if refresh:
             job_id = self._runner.submit(
                 "session-analysis",
-                session_analysis_mod.build_or_load_analysis,
+                session_analysis_mod.build_analysis,
                 session_id.strip(),
                 ct_json=_ct_json,
-                refresh=True,
             )
             reused = False
         else:
             job_id, created = self._runner.submit_once(
                 operation_key,
                 "session-analysis",
-                session_analysis_mod.build_or_load_analysis,
+                session_analysis_mod.build_analysis,
                 session_id.strip(),
                 ct_json=_ct_json,
-                refresh=False,
             )
             reused = not created
         return {

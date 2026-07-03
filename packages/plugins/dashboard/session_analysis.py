@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import re
 from collections import defaultdict
-from pathlib import Path
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -150,7 +148,6 @@ class SessionAnalysis(BaseModel):
     schema_version: Literal[5] = 5
     session_id: str
     generated_at: str
-    artifact_path: str | None = None
     app_server_thread_id: str
     app_server_turn_id: str | None = None
     task_story: TaskStory
@@ -164,23 +161,6 @@ class AgentReviewOutput(BaseModel):
 
     task_story: TaskStory
     findings: list[AnalysisFinding]
-
-
-def build_or_load_analysis(
-    session_id: str,
-    *,
-    ct_json: CtJson,
-    refresh: bool = False,
-    artifact_dir: Path | None = None,
-) -> SessionAnalysis:
-    artifact = _artifact_path(session_id, artifact_dir)
-    if not refresh and artifact.is_file():
-        return SessionAnalysis.model_validate_json(artifact.read_text(encoding="utf-8"))
-    analysis = build_analysis(session_id, ct_json=ct_json)
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    analysis = analysis.model_copy(update={"artifact_path": str(artifact)})
-    artifact.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
-    return analysis
 
 
 def build_analysis(
@@ -338,15 +318,6 @@ def _analysis_request_text(evidence_packet: dict[str, Any]) -> str:
         f"{json.dumps(evidence_packet, ensure_ascii=False, separators=(',', ':'))}\n"
         "</evidence_packet>"
     )
-
-
-def _artifact_path(session_id: str, artifact_dir: Path | None) -> Path:
-    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", session_id).strip("-") or "session"
-    directory = (
-        artifact_dir
-        or Path.home() / ".coding-trajectory" / "dashboard" / "session-analysis"
-    )
-    return directory / f"{safe_id}.v5.json"
 
 
 def _task_story(overview: dict[str, Any]) -> TaskStory:
