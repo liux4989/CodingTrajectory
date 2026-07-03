@@ -17,6 +17,8 @@ import {
 } from "@/components/ui/card"
 import {
   ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
   type ChartConfig,
@@ -80,7 +82,7 @@ export function MiniBarChart({
       aria-label={ariaLabel}
     >
       {layout === "vertical" ? (
-        <BarChart data={chartData} margin={{ top: 2, right: 0, bottom: 12, left: 0 }}>
+        <BarChart accessibilityLayer data={chartData} margin={{ top: 2, right: 0, bottom: 12, left: 0 }}>
           <Bar dataKey="value" fill="var(--color-value)" radius={4} maxBarSize={28}>
             <LabelList
               position="bottom"
@@ -92,6 +94,7 @@ export function MiniBarChart({
         </BarChart>
       ) : (
         <BarChart
+          accessibilityLayer
           data={chartData}
           layout="vertical"
           margin={{ top: 0, right: 8, bottom: 0, left: 8 }}
@@ -253,7 +256,7 @@ export function UsageTimelineChart({ buckets, view }: UsageTimelineChartProps) {
       <CardContent className="pt-2">
         {hasData ? (
           <ChartContainer config={config} className="aspect-auto h-[260px] w-full">
-            <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
+            <BarChart accessibilityLayer data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
               <CartesianGrid vertical={false} />
               <XAxis
                 dataKey="bucket"
@@ -268,11 +271,24 @@ export function UsageTimelineChart({ buckets, view }: UsageTimelineChartProps) {
                 content={
                   <ChartTooltipContent
                     indicator="dot"
-                    formatter={(value) =>
-                      view === "tokens"
-                        ? compactNumber(Number(value))
-                        : formatCost(Number(value))
-                    }
+                    formatter={(value, name) => (
+                      <>
+                        <span
+                          className="size-2.5 shrink-0 rounded-[2px]"
+                          style={{ backgroundColor: `var(--color-${name})` }}
+                        />
+                        <div className="flex flex-1 justify-between leading-none">
+                          <span className="text-muted-foreground">
+                            {config[String(name)]?.label ?? String(name)}
+                          </span>
+                          <span className="font-mono font-medium text-foreground tabular-nums">
+                            {view === "tokens"
+                              ? compactNumber(Number(value))
+                              : formatCost(Number(value))}
+                          </span>
+                        </div>
+                      </>
+                    )}
                   />
                 }
               />
@@ -284,6 +300,7 @@ export function UsageTimelineChart({ buckets, view }: UsageTimelineChartProps) {
                   fill={`var(--color-${entry.key})`}
                 />
               ))}
+              <ChartLegend content={<ChartLegendContent />} />
             </BarChart>
           </ChartContainer>
         ) : (
