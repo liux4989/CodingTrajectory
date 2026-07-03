@@ -18,12 +18,16 @@ class ClaudeSubagentInput(BaseModel):
     team_name: str | None = None
     is_sidechain: bool | None = None
     permission_mode: str | None = None
+    mode: str | None = None
+    last_prompt: str | None = None
     parent_uuid: str | None = None
     request_id: str | None = None
     agent_name: str | None = None
     agent_role: str | None = None
     description: str | None = None
     title: str | None = None
+    tool_use_id: str | None = None
+    spawn_depth: int | None = None
 
 
 def canonical_session_ids(mechanism: ClaudeSubagentInput) -> tuple[UUID, UUID | None]:
@@ -53,8 +57,12 @@ def extensions(mechanism: ClaudeSubagentInput) -> VendorExtensions:
             team_name=mechanism.team_name,
             is_sidechain=mechanism.is_sidechain,
             permission_mode=mechanism.permission_mode,
+            mode=mechanism.mode,
+            last_prompt=mechanism.last_prompt,
             parent_uuid=mechanism.parent_uuid,
             request_id=mechanism.request_id,
+            tool_use_id=mechanism.tool_use_id,
+            spawn_depth=mechanism.spawn_depth,
             agent_name=mechanism.agent_name,
             agent_role=mechanism.agent_role,
             description=mechanism.description,

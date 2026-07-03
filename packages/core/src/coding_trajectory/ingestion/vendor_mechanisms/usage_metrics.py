@@ -53,15 +53,33 @@ def normalize_claude_usage(*, model: Any, usage: Any) -> dict[str, Any]:
     cache_creation = _as_int_or_none(usage_map.get("cache_creation_input_tokens")) or 0
     output_tokens = _as_int_or_none(usage_map.get("output_tokens")) or 0
     total = input_tokens + cache_read + cache_creation + output_tokens
-    return _normalized_usage_metrics(
-        model=model,
-        usage={
+
+    cache_creation_breakdown = _dict_or_none(usage_map.get("cache_creation")) or {}
+    server_tool_use = _dict_or_none(usage_map.get("server_tool_use")) or {}
+
+    usage_payload = compact_dict(
+        {
             "input_tokens": input_tokens,
             "cached_input_tokens": cache_read,
             "cache_creation_input_tokens": cache_creation,
+            "cache_creation_1h_input_tokens": _as_int_or_none(
+                cache_creation_breakdown.get("ephemeral_1h_input_tokens")
+            ),
+            "cache_creation_5m_input_tokens": _as_int_or_none(
+                cache_creation_breakdown.get("ephemeral_5m_input_tokens")
+            ),
             "output_tokens": output_tokens,
             "total_tokens": total,
-        },
+            "server_tool_use": server_tool_use if server_tool_use else None,
+            "service_tier": _as_str(usage_map.get("service_tier")),
+            "speed": _as_str(usage_map.get("speed")),
+            "inference_geo": _as_str(usage_map.get("inference_geo")),
+            "iterations": usage_map.get("iterations") if isinstance(usage_map.get("iterations"), list) else None,
+        }
+    )
+    return _normalized_usage_metrics(
+        model=model,
+        usage=usage_payload,
         cumulative_input_tokens=input_tokens + cache_read + cache_creation,
     )
 

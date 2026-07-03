@@ -57,8 +57,12 @@ class ClaudeCodeExtensions(BaseModel):
     title:          str | None = None
     is_sidechain:   bool | None = None
     permission_mode: str | None = None
+    mode:           str | None = None
+    last_prompt:    str | None = None
     parent_uuid:    str | None = None
     request_id:     str | None = None
+    tool_use_id:    str | None = None
+    spawn_depth:    int | None = None
 
 
 class CodexExtensions(BaseModel):
