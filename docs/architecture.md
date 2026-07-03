@@ -85,6 +85,9 @@
 | Linting | Ruff | Formatter + linter |
 | Web dashboard | React + TanStack | Served by Python HTTP server |
 
+Dashboard agent workflows and server-side lifecycle rules are documented in
+[`docs/dashboard-agent-architecture.md`](dashboard-agent-architecture.md).
+
 ## Project Structure
 
 ```
