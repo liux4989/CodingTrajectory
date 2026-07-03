@@ -170,8 +170,8 @@ def _handler_for(
         def _handle_api_post(
             self, path: str, body: dict[str, Any]
         ) -> tuple[dict[str, Any], HTTPStatus]:
-            if path == "/api/agent-task":
-                return service.agent_task(body), HTTPStatus.ACCEPTED
+            if path == "/api/agent-turn":
+                return service.agent_turn(body), HTTPStatus.ACCEPTED
             if path == "/api/cleanup/project/apply":
                 return service.apply_project_cleanup(body), HTTPStatus.OK
             if path == "/api/cleanup/session/apply":

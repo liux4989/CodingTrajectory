@@ -7,7 +7,6 @@ import { ArrowLeft, Eye, Pin, PinOff, Play, Pause, Maximize, Minimize, Info, Sea
 import {
   analyzeSession,
   fetchContextWindow,
-  type AnalysisProvider,
   type ContextCategory,
   type ContextEvent,
   type JobRecord,
@@ -19,7 +18,6 @@ import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/loading-state";
 import { Card, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StateBlock } from "@/components/state-block";
 import { cn } from "@/lib/utils";
 
@@ -130,14 +128,13 @@ function findingTone(kind: SessionAnalysis["findings"][number]["kind"]) {
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
   const router = useRouter();
-  const [analysisProvider, setAnalysisProvider] = React.useState<AnalysisProvider>("codex");
   const [analysisRefresh, setAnalysisRefresh] = React.useState(false);
   const query = useQuery({
     queryKey: ["context-window", sessionId],
     queryFn: () => fetchContextWindow(sessionId),
   });
   const analysisJob = useJob<SessionAnalysis>({
-    start: () => analyzeSession(sessionId, analysisRefresh, analysisProvider),
+    start: () => analyzeSession(sessionId, analysisRefresh),
     resolve: (record: JobRecord) => record.result as unknown as SessionAnalysis,
   });
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -190,8 +187,7 @@ export function ContextWindowRoute() {
 
   const activeId = pinnedId ?? selectedId ?? filteredEvents[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
-  const analysis =
-    analysisJob.data?.provider === analysisProvider ? analysisJob.data : null;
+  const analysis = analysisJob.data;
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
 
   const combinedSegments = React.useMemo(() => {
@@ -286,19 +282,6 @@ export function ContextWindowRoute() {
                   / {formatTokens(payload.context_window_tokens?.value)} · illustrative
                 </p>
               </div>
-              <Select
-                value={analysisProvider}
-                onValueChange={(value) => setAnalysisProvider(value as AnalysisProvider)}
-                disabled={analysisRunning}
-              >
-                <SelectTrigger size="sm" className="min-w-28">
-                  <SelectValue aria-label="Analysis provider" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="codex">Codex</SelectItem>
-                  <SelectItem value="pi">Pi</SelectItem>
-                </SelectContent>
-              </Select>
               <Button
                 size="sm"
                 variant={analysis ? "secondary" : "default"}
@@ -664,7 +647,7 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
           </p>
         </div>
         <Badge variant="outline" className="mono text-caption">
-          {analysis.source}
+          Codex
         </Badge>
       </div>
 

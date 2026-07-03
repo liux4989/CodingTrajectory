@@ -228,35 +228,33 @@ class DashboardDataService:
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValueError("session_id is required")
         refresh = bool(body.get("refresh"))
-        provider = body.get("provider", "codex")
-        if not isinstance(provider, str):
-            raise ValueError("provider must be codex or pi")
         job_id = self._runner.submit(
             "session-analysis",
             session_analysis_mod.build_or_load_analysis,
             session_id.strip(),
             ct_json=_ct_json,
             refresh=refresh,
-            provider=provider,
         )
         return {"status": "pending", "job_id": job_id}
 
-    def agent_task(self, body: dict[str, Any]) -> dict[str, Any]:
-        task_goal = body.get("task_goal")
-        task_context = body.get("task_context")
-        provider = body.get("provider", "codex")
-        if not isinstance(task_goal, str) or not task_goal.strip():
-            raise ValueError("task_goal is required")
-        if not isinstance(task_context, str) or not task_context.strip():
-            raise ValueError("task_context is required")
-        if not isinstance(provider, str):
-            raise ValueError("provider must be codex or pi")
+    def agent_turn(self, body: dict[str, Any]) -> dict[str, Any]:
+        prompt = body.get("prompt")
+        thread_id = body.get("thread_id")
+        output_schema = body.get("output_schema")
+        ephemeral = bool(body.get("ephemeral", False))
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("prompt is required")
+        if thread_id is not None and not isinstance(thread_id, str):
+            raise ValueError("thread_id must be a string")
+        if output_schema is not None and not isinstance(output_schema, dict):
+            raise ValueError("output_schema must be an object")
         job_id = self._runner.submit(
-            "agent-task",
-            agent_task_mod.run_agent_task,
-            task_goal=task_goal,
-            task_context=task_context,
-            provider=provider,
+            "agent-turn",
+            agent_task_mod.run_agent_turn,
+            prompt=prompt,
+            thread_id=thread_id,
+            output_schema=output_schema,
+            ephemeral=ephemeral,
         )
         return {"status": "pending", "job_id": job_id}
 

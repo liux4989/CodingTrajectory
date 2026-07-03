@@ -5,7 +5,13 @@ import { fetchOverview, type OverviewPayload } from "@/api";
 import { HeaderLabel, RightCell } from "@/components/table-cells";
 import { ProjectLink } from "@/components/project-link";
 import { SessionLink, shortSessionId } from "@/components/session-link";
-import { AgentTaskPanel } from "@/components/agent-task-panel";
+import {
+  AgentFollowUpForm,
+  AgentResponseBlock,
+  AgentRunButton,
+  AgentTurnStatus,
+  useAgentTurn,
+} from "@/components/agent-invocation";
 import { DataTable } from "@/components/data-table";
 import { MetricSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
@@ -39,6 +45,7 @@ export function OverviewRoute() {
   const usage = data.sessions.usage;
   const issueCount = data.sessions.errors.length + data.sessions.warnings.length;
   const issueAgentContext = issueCount ? overviewIssueContext(data) : "";
+  const issueAgentPrompt = issueCount ? overviewIssuePrompt(issueAgentContext) : "";
 
   return (
     <div className="route-container w-full min-w-0 overflow-hidden">
@@ -170,15 +177,67 @@ export function OverviewRoute() {
         </Card>
       ) : null}
       {issueCount ? (
-        <AgentTaskPanel
-          title="Agent Fix Analysis"
-          description="Ask the coding agent to analyze the collected dashboard issues and suggest concrete fixes."
-          taskGoal="Analyze these dashboard warnings and errors. Identify likely causes, missing evidence, and concrete fix actions."
-          taskContext={issueAgentContext}
-        />
+        <OverviewIssueAgent prompt={issueAgentPrompt} />
       ) : null}
     </div>
   );
+}
+
+function OverviewIssueAgent({ prompt }: { prompt: string }) {
+  const agent = useAgentTurn();
+  const running = agent.status === "pending" || agent.status === "running";
+  return (
+    <Card className="min-w-0">
+      <CardHeader className="items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="min-w-0">
+          <CardTitle className="title-card">Agent Fix Analysis</CardTitle>
+          <CardDescription>
+            Codex analyzes the collected dashboard issues and can continue in the same app-server thread.
+          </CardDescription>
+        </div>
+        <AgentRunButton
+          running={running}
+          hasResult={agent.result != null}
+          disabled={!prompt.trim()}
+          onClick={() => agent.run(prompt, { newThread: true })}
+        />
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <AgentTurnStatus
+          status={agent.status}
+          elapsedMs={agent.elapsedMs}
+          progress={agent.progress}
+          onCancel={agent.cancel}
+        />
+        {agent.status === "error" ? (
+          <div role="alert" className="alert alert-destructive text-body-sm text-destructive">
+            {agent.error}
+          </div>
+        ) : null}
+        <AgentResponseBlock result={agent.result} />
+        {agent.result ? (
+          <AgentFollowUpForm
+            disabled={running}
+            placeholder="Ask Codex to refine, inspect a likely cause, or turn the analysis into a fix plan."
+            onSubmit={(value) => agent.run(value)}
+          />
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function overviewIssuePrompt(taskContext: string) {
+  return [
+    "# Goal",
+    "Analyze these dashboard warnings and errors. Identify likely causes, missing evidence, and concrete fix actions.",
+    "",
+    "# Context",
+    taskContext,
+    "",
+    "# Response",
+    "Return concise plain text. Separate direct observations from likely causes and next actions.",
+  ].join("\n");
 }
 
 function overviewIssueContext(data: OverviewPayload) {

@@ -122,11 +122,9 @@ export type ContextWindowPayload = {
 };
 
 export type SessionAnalysis = {
-  schema_version: 1;
+  schema_version: 4;
   session_id: string;
   generated_at: string;
-  source: "codex_app_server_skill" | "pi_rpc_skill";
-  provider: AnalysisProvider;
   artifact_path: string | null;
   app_server_thread_id: string;
   app_server_turn_id: string | null;
@@ -185,14 +183,9 @@ export type SessionAnalysis = {
   }>;
 };
 
-export type AnalysisProvider = "codex" | "pi";
-
-export type AgentTaskResult = {
+export type AgentTurnResult = {
   schema_version: 1;
-  task_goal: string;
   generated_at: string;
-  source: "codex_app_server_skill" | "pi_rpc_skill";
-  provider: AnalysisProvider;
   app_server_thread_id: string;
   app_server_turn_id: string | null;
   response_text: string;
@@ -457,26 +450,28 @@ export async function fetchContextWindow(sessionId: string) {
   return fetchJson<ContextWindowPayload>(`/api/sessions/context-window?${params}`);
 }
 
-export async function analyzeSession(sessionId: string, refresh = false, provider: AnalysisProvider = "codex") {
+export async function analyzeSession(sessionId: string, refresh = false) {
   return fetchJson<JobAccepted>(`/api/sessions/${encodeURIComponent(sessionId)}/analysis`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh, provider }),
+    body: JSON.stringify({ refresh }),
   });
 }
 
-export async function runAgentTask(params: {
-  taskGoal: string;
-  taskContext: string;
-  provider?: AnalysisProvider;
+export async function runAgentTurn(params: {
+  prompt: string;
+  threadId?: string | null;
+  outputSchema?: Record<string, unknown> | null;
+  ephemeral?: boolean;
 }) {
-  return fetchJson<JobAccepted>("/api/agent-task", {
+  return fetchJson<JobAccepted>("/api/agent-turn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      task_goal: params.taskGoal,
-      task_context: params.taskContext,
-      provider: params.provider ?? "codex",
+      prompt: params.prompt,
+      thread_id: params.threadId ?? null,
+      output_schema: params.outputSchema ?? null,
+      ephemeral: params.ephemeral ?? false,
     }),
   });
 }

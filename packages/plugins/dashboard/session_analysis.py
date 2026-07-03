@@ -5,25 +5,19 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, Literal, Protocol
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict
 
 try:
     from . import context_window as context_window_mod
-    from .codex_app_server import (
-        CodexAppServerClient,
-        CodexAppServerResult,
-        PiRpcClient,
-    )
+    from .codex_app_server import CodexAppServerClient
 except ImportError:
     import context_window as context_window_mod
-    from codex_app_server import CodexAppServerClient, CodexAppServerResult, PiRpcClient
+    from codex_app_server import CodexAppServerClient
 
 
 CtJson = Callable[[list[str]], dict[str, Any]]
-AnalysisProvider = Literal["codex", "pi"]
-AnalysisSource = Literal["codex_app_server_skill", "pi_rpc_skill"]
 FindingKind = Literal[
     "justified_expensive_work",
     "avoidable_pattern",
@@ -139,11 +133,9 @@ class AnalysisFinding(BaseModel):
 class SessionAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[3] = 3
+    schema_version: Literal[4] = 4
     session_id: str
     generated_at: str
-    source: AnalysisSource
-    provider: AnalysisProvider
     artifact_path: str | None = None
     app_server_thread_id: str
     app_server_turn_id: str | None = None
@@ -160,29 +152,17 @@ class AgentReviewOutput(BaseModel):
     findings: list[AnalysisFinding]
 
 
-class AnalysisRunner(Protocol):
-    def run_turn(
-        self,
-        *,
-        cwd: Path,
-        user_text: str,
-        output_schema: dict[str, Any] | None = None,
-    ) -> CodexAppServerResult: ...
-
-
 def build_or_load_analysis(
     session_id: str,
     *,
     ct_json: CtJson,
     refresh: bool = False,
     artifact_dir: Path | None = None,
-    provider: AnalysisProvider = "codex",
 ) -> SessionAnalysis:
-    provider = _normalize_provider(provider)
-    artifact = _artifact_path(session_id, artifact_dir, provider=provider)
+    artifact = _artifact_path(session_id, artifact_dir)
     if not refresh and artifact.is_file():
         return SessionAnalysis.model_validate_json(artifact.read_text(encoding="utf-8"))
-    analysis = build_analysis(session_id, ct_json=ct_json, provider=provider)
+    analysis = build_analysis(session_id, ct_json=ct_json)
     artifact.parent.mkdir(parents=True, exist_ok=True)
     analysis = analysis.model_copy(update={"artifact_path": str(artifact)})
     artifact.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
@@ -193,9 +173,7 @@ def build_analysis(
     session_id: str,
     *,
     ct_json: CtJson,
-    provider: AnalysisProvider = "codex",
 ) -> SessionAnalysis:
-    provider = _normalize_provider(provider)
     overview = ct_json(
         ["session", "overview", "--global-scope", "--output", "json", session_id]
     )
@@ -257,7 +235,7 @@ def build_analysis(
         usage_evidence=usage_evidence,
         tool_evidence=tool_evidence,
     )
-    app_result = _analysis_runner(provider).run_turn(
+    app_result = CodexAppServerClient().run_turn(
         cwd=_repo_root(),
         user_text=_analysis_request_text(evidence_packet),
         output_schema=AgentReviewOutput.model_json_schema(),
@@ -266,8 +244,6 @@ def build_analysis(
     return SessionAnalysis(
         session_id=resolved_session_id,
         generated_at=dt.datetime.now(dt.timezone.utc).isoformat(),
-        source=_analysis_source(provider),
-        provider=provider,
         app_server_thread_id=app_result.thread_id,
         app_server_turn_id=app_result.turn_id,
         task_story=review.task_story,
@@ -275,25 +251,6 @@ def build_analysis(
         tool_evidence=tool_evidence,
         findings=review.findings,
     )
-
-
-def _analysis_runner(provider: AnalysisProvider) -> AnalysisRunner:
-    if provider == "pi":
-        return PiRpcClient()
-    return CodexAppServerClient()
-
-
-def _analysis_source(provider: AnalysisProvider) -> AnalysisSource:
-    return "pi_rpc_skill" if provider == "pi" else "codex_app_server_skill"
-
-
-def _normalize_provider(value: str) -> AnalysisProvider:
-    normalized = value.strip().lower().replace("_", "-")
-    if normalized in {"codex", "codex-app-server", "codex_app_server"}:
-        return "codex"
-    if normalized in {"pi", "pi-rpc", "pi_rpc"}:
-        return "pi"
-    raise ValueError("unknown analysis provider; expected codex or pi")
 
 
 def _repo_root() -> Path:
@@ -361,15 +318,13 @@ def _analysis_request_text(evidence_packet: dict[str, Any]) -> str:
     )
 
 
-def _artifact_path(
-    session_id: str, artifact_dir: Path | None, *, provider: AnalysisProvider
-) -> Path:
+def _artifact_path(session_id: str, artifact_dir: Path | None) -> Path:
     safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", session_id).strip("-") or "session"
     directory = (
         artifact_dir
         or Path.home() / ".coding-trajectory" / "dashboard" / "session-analysis"
     )
-    return directory / f"{safe_id}.{provider}.v3.json"
+    return directory / f"{safe_id}.v4.json"
 
 
 def _task_story(overview: dict[str, Any]) -> TaskStory:
