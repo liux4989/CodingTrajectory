@@ -6,11 +6,8 @@ import os
 import shlex
 import shutil
 import subprocess
-import threading
-import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 try:
     from . import agent_task as agent_task_mod
@@ -21,6 +18,7 @@ try:
     from . import model_usage as model_usage_mod
     from . import session_analysis as session_analysis_mod
     from .jobs import JobRunner, JobStore
+    from .work_manager import DashboardWorkManager
 except ImportError:
     import agent_task as agent_task_mod
     from agent_sessions import AgentSessionStore
@@ -30,43 +28,12 @@ except ImportError:
     import model_usage as model_usage_mod
     import session_analysis as session_analysis_mod
     from jobs import JobRunner, JobStore
-
-
-@dataclass(frozen=True, slots=True)
-class CacheEntry:
-    created_at: float
-    value: dict[str, Any]
-
-
-class TtlCache:
-    def __init__(self, ttl_seconds: float) -> None:
-        self._ttl_seconds = ttl_seconds
-        self._entries: dict[tuple[Any, ...], CacheEntry] = {}
-        self._lock = threading.Lock()
-
-    def get_or_set(
-        self, key: tuple[Any, ...], factory: Callable[[], dict[str, Any]]
-    ) -> dict[str, Any]:
-        now = time.monotonic()
-        with self._lock:
-            entry = self._entries.get(key)
-            if entry and now - entry.created_at < self._ttl_seconds:
-                return entry.value
-        value = factory()
-        with self._lock:
-            self._entries[key] = CacheEntry(time.monotonic(), value)
-        return value
-
-    def clear_prefix(self, prefix: tuple[Any, ...]) -> None:
-        with self._lock:
-            for key in list(self._entries):
-                if key[: len(prefix)] == prefix:
-                    del self._entries[key]
+    from work_manager import DashboardWorkManager
 
 
 class DashboardDataService:
     def __init__(self, *, cache_ttl_seconds: float = 12) -> None:
-        self._cache = TtlCache(cache_ttl_seconds)
+        self._work = DashboardWorkManager(cache_ttl_seconds)
         self._jobs = JobStore()
         self._runner = JobRunner(self._jobs)
         self._agent_sessions = AgentSessionStore(cwd=_repo_root())
@@ -75,7 +42,7 @@ class DashboardDataService:
         self._agent_sessions.shutdown()
 
     def overview(self) -> dict[str, Any]:
-        return self._cache.get_or_set(("overview",), self._overview_uncached)
+        return self._work.get_or_compute(("overview",), self._overview_uncached)
 
     def _overview_uncached(self) -> dict[str, Any]:
         payload = _ct_json(
@@ -135,7 +102,7 @@ class DashboardDataService:
 
     def projects(self, query: dict[str, list[str]]) -> dict[str, Any]:
         vendor = _first(query, "agent_vendor")
-        return self._cache.get_or_set(
+        return self._work.get_or_compute(
             ("projects", vendor), lambda: self._projects_uncached(vendor)
         )
 
@@ -175,14 +142,14 @@ class DashboardDataService:
 
     def sessions(self, query: dict[str, list[str]]) -> dict[str, Any]:
         params = _session_query_params(query)
-        return self._cache.get_or_set(
+        return self._work.get_or_compute(
             ("sessions", json.dumps(params, sort_keys=True)),
             lambda: self._sessions_uncached(params),
         )
 
     def session_data(self, query: dict[str, list[str]]) -> dict[str, Any]:
         params = _session_data_query_params(query)
-        return self._cache.get_or_set(
+        return self._work.get_or_compute(
             ("session_data", json.dumps(params, sort_keys=True)),
             lambda: self._session_data_uncached(params),
         )
@@ -209,24 +176,39 @@ class DashboardDataService:
         session_id = _first(query, "session_id")
         if not session_id:
             raise ValueError("session_id is required")
-        return context_window_mod.build_projection(
-            session_id,
-            turn_id=_first(query, "turn_id"),
-        ).model_dump(mode="json")
+        turn_id = _first(query, "turn_id")
+        return self._work.get_or_compute(
+            ("context_window", session_id, turn_id),
+            lambda: context_window_mod.build_projection(
+                session_id,
+                turn_id=turn_id,
+            ).model_dump(mode="json"),
+        )
 
     def model_usage(self, query: dict[str, list[str]]) -> dict[str, Any]:
-        return model_usage_mod.build_projection(
-            ct_json=_ct_json,
-            since_days=_int(query, "since_days", 7),
-            project_name=_first(query, "project_name"),
-            model_key=_first(query, "model_key"),
+        since_days = _int(query, "since_days", 7)
+        project_name = _first(query, "project_name")
+        model_key = _first(query, "model_key")
+        return self._work.get_or_compute(
+            ("model_usage", since_days, project_name, model_key),
+            lambda: model_usage_mod.build_projection(
+                ct_json=_ct_json,
+                since_days=since_days,
+                project_name=project_name,
+                model_key=model_key,
+            ),
         )
 
     def error_collection(self, query: dict[str, list[str]]) -> dict[str, Any]:
-        return error_collection_mod.build_projection(
-            ct_json=_ct_json,
-            since_days=_int(query, "since_days", 7),
-            project_name=_first(query, "project_name"),
+        since_days = _int(query, "since_days", 7)
+        project_name = _first(query, "project_name")
+        return self._work.get_or_compute(
+            ("error_collection", since_days, project_name),
+            lambda: error_collection_mod.build_projection(
+                ct_json=_ct_json,
+                since_days=since_days,
+                project_name=project_name,
+            ),
         )
 
     def session_analysis(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -353,10 +335,16 @@ class DashboardDataService:
         }
 
     def project_cleanup_preview(self, query: dict[str, list[str]]) -> dict[str, Any]:
-        return _preview_payload(_project_cleanup_preview(query))
+        return self._work.get_or_compute(
+            ("cleanup_preview", "project", _query_key(query)),
+            lambda: _preview_payload(_project_cleanup_preview(query)),
+        )
 
     def session_cleanup_preview(self, query: dict[str, list[str]]) -> dict[str, Any]:
-        return _preview_payload(_session_cleanup_preview(query))
+        return self._work.get_or_compute(
+            ("cleanup_preview", "session", _query_key(query)),
+            lambda: _preview_payload(_session_cleanup_preview(query)),
+        )
 
     def apply_project_cleanup(self, body: dict[str, Any]) -> dict[str, Any]:
         action = _cleanup_action(body, allow_trash=False)
@@ -383,7 +371,9 @@ class DashboardDataService:
             action,
             selected,
         )
-        self._cache.clear_prefix(("projects",))
+        self._work.clear_prefix(("projects",))
+        self._work.clear_prefix(("overview",))
+        self._work.clear_prefix(("cleanup_preview", "project"))
         return result
 
     def apply_session_cleanup(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -410,7 +400,12 @@ class DashboardDataService:
             action,
             selected,
         )
-        self._cache.clear_prefix(("sessions",))
+        self._work.clear_prefix(("sessions",))
+        self._work.clear_prefix(("session_data",))
+        self._work.clear_prefix(("overview",))
+        self._work.clear_prefix(("model_usage",))
+        self._work.clear_prefix(("error_collection",))
+        self._work.clear_prefix(("cleanup_preview", "session"))
         return result
 
     def _projects_uncached(self, vendor: str | None) -> dict[str, Any]:
@@ -748,6 +743,14 @@ def _body_query(body: dict[str, Any]) -> dict[str, list[str]]:
         if isinstance(key, str) and value is not None:
             query[key] = [str(value)]
     return query
+
+
+def _query_key(query: dict[str, list[str]]) -> str:
+    normalized = {
+        key: sorted(str(value) for value in values)
+        for key, values in sorted(query.items())
+    }
+    return json.dumps(normalized, sort_keys=True)
 
 
 def _ct_json(args: list[str]) -> dict[str, Any]:
