@@ -143,7 +143,11 @@ class AgentSessionStore:
         expired: list[AgentSessionRecord] = []
         with self._lock:
             for agent_session_id, record in list(self._sessions.items()):
-                if now - record.last_used_at > self._ttl_seconds:
+                if (
+                    now - record.last_used_at > self._ttl_seconds
+                    and not record.lock.locked()
+                    and record.active_job_id is None
+                ):
                     expired.append(record)
                     del self._sessions[agent_session_id]
         for record in expired:

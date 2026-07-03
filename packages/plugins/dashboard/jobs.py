@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
@@ -145,6 +145,9 @@ class JobRunner:
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="dashboard-job"
         )
+        self._futures: dict[Future[None], str] = {}
+        self._lock = threading.Lock()
+        self._closed = False
 
     def submit(
         self,
@@ -155,8 +158,8 @@ class JobRunner:
         **kwargs: Any,
     ) -> str:
         record = self._store.create(kind)
-        future = self._executor.submit(self._run, record.id, fn, *args, **kwargs)
-        future.add_done_callback(lambda _f: None)
+        future = self._submit_future(record.id, fn, *args, **kwargs)
+        future.add_done_callback(self._forget_future)
         return record.id
 
     def submit_once(
@@ -171,9 +174,38 @@ class JobRunner:
         record, created = self._store.create_for_operation(kind, operation_key)
         if not created:
             return record.id, False
-        future = self._executor.submit(self._run, record.id, fn, *args, **kwargs)
-        future.add_done_callback(lambda _f: None)
+        future = self._submit_future(record.id, fn, *args, **kwargs)
+        future.add_done_callback(self._forget_future)
         return record.id, True
+
+    def shutdown(self, *, wait: bool = False) -> None:
+        with self._lock:
+            self._closed = True
+            futures = dict(self._futures)
+        for future, job_id in futures.items():
+            if future.cancel():
+                self._store.update(job_id, status="error", error="job runner is closed")
+        self._executor.shutdown(wait=wait, cancel_futures=True)
+
+    def _submit_future(
+        self,
+        job_id: str,
+        fn: Callable[..., dict[str, Any]],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Future[None]:
+        with self._lock:
+            if self._closed:
+                self._store.update(job_id, status="error", error="job runner is closed")
+                raise RuntimeError("job runner is closed")
+            future = self._executor.submit(self._run, job_id, fn, *args, **kwargs)
+            self._futures[future] = job_id
+            return future
+
+    def _forget_future(self, future: Future[None]) -> None:
+        with self._lock:
+            self._futures.pop(future, None)
 
     def _run(
         self,
@@ -182,6 +214,10 @@ class JobRunner:
         *args: Any,
         **kwargs: Any,
     ) -> None:
+        with self._lock:
+            if self._closed:
+                self._store.update(job_id, status="error", error="job runner is closed")
+                return
         self._store.update(job_id, status="running")
         try:
             result = fn(*args, **kwargs)

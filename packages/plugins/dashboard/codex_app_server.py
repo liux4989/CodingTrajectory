@@ -9,9 +9,13 @@ import shutil
 import subprocess
 import threading
 import time
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+_ACTIVE_SESSIONS: weakref.WeakSet[CodexAppServerSession]
+_ACTIVE_SESSIONS_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +74,8 @@ class CodexAppServerSession:
         self.timeout_seconds = timeout_seconds
         self.thread_id: str | None = None
         self._next_id = 1
+        self._close_lock = threading.Lock()
+        self._closed = False
         self._proc = subprocess.Popen(
             _app_server_command(),
             cwd=str(cwd),
@@ -100,7 +106,12 @@ class CodexAppServerSession:
         )
         self._stdout_thread.start()
         self._stderr_thread.start()
-        self._initialize()
+        _register_session(self)
+        try:
+            self._initialize()
+        except Exception:
+            self.close()
+            raise
 
     def start_thread(self, *, ephemeral: bool = False) -> str:
         thread_request_id = self._request_id()
@@ -164,7 +175,14 @@ class CodexAppServerSession:
         )
 
     def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        _unregister_session(self)
         _terminate(self._proc)
+        _join_reader_thread(self._stdout_thread)
+        _join_reader_thread(self._stderr_thread)
 
     def _initialize(self) -> None:
         request_id = self._request_id()
@@ -285,6 +303,24 @@ def _app_server_command() -> list[str]:
     return [codex, "app-server", "--stdio"]
 
 
+def close_active_app_servers() -> None:
+    """Terminate every app-server process still owned by this Python process."""
+    with _ACTIVE_SESSIONS_LOCK:
+        sessions = list(_ACTIVE_SESSIONS)
+    for session in sessions:
+        session.close()
+
+
+def _register_session(session: CodexAppServerSession) -> None:
+    with _ACTIVE_SESSIONS_LOCK:
+        _ACTIVE_SESSIONS.add(session)
+
+
+def _unregister_session(session: CodexAppServerSession) -> None:
+    with _ACTIVE_SESSIONS_LOCK:
+        _ACTIVE_SESSIONS.discard(session)
+
+
 def _read_jsonl(stream: Any, messages: queue.Queue[dict[str, Any]]) -> None:
     for line in stream:
         line = line.strip()
@@ -319,9 +355,23 @@ def _raise_if_exited(
 def _terminate(proc: subprocess.Popen[str]) -> None:
     if proc.poll() is not None:
         return
+    if proc.stdin is not None:
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
     proc.terminate()
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=5)
+
+
+def _join_reader_thread(thread: threading.Thread) -> None:
+    if thread is threading.current_thread():
+        return
+    thread.join(timeout=1)
+
+
+_ACTIVE_SESSIONS = weakref.WeakSet()

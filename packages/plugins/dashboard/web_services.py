@@ -13,6 +13,7 @@ try:
     from . import agent_task as agent_task_mod
     from .agent_sessions import AgentSessionStore
     from . import cleanup as cleanup_mod
+    from .codex_app_server import close_active_app_servers
     from . import context_window as context_window_mod
     from . import error_collection as error_collection_mod
     from . import model_usage as model_usage_mod
@@ -23,6 +24,7 @@ except ImportError:
     import agent_task as agent_task_mod
     from agent_sessions import AgentSessionStore
     import cleanup as cleanup_mod
+    from codex_app_server import close_active_app_servers
     import context_window as context_window_mod
     import error_collection as error_collection_mod
     import model_usage as model_usage_mod
@@ -39,7 +41,9 @@ class DashboardDataService:
         self._agent_sessions = AgentSessionStore(cwd=_repo_root())
 
     def shutdown(self) -> None:
+        self._runner.shutdown(wait=False)
         self._agent_sessions.shutdown()
+        close_active_app_servers()
 
     def refresh(self) -> dict[str, Any]:
         self._work.clear_all()
