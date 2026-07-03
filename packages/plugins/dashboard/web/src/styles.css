@@ -524,6 +524,52 @@
   .event-row[data-highlight] {
     background: var(--surface-emphasis);
   }
+
+  /* ---- Context window detail pane ----
+   * Sticky right-side detail card with a single internal scroll region. */
+  .context-detail-rail {
+    inline-size: 100%;
+  }
+  .context-detail-pane {
+    display: flex;
+    flex-direction: column;
+    min-inline-size: 0;
+    max-inline-size: clamp(24rem, 34vw, 38rem);
+    max-block-size: calc(100dvh - 7rem);
+    overflow: hidden;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card) 92%, white 8%) 0%, var(--card) 100%);
+  }
+  .context-detail-scroll {
+    min-block-size: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--foreground) 28%, transparent) var(--surface-subtle);
+    padding-inline-end: 0.5rem;
+  }
+  @supports not (scrollbar-color: auto) {
+    .context-detail-scroll::-webkit-scrollbar {
+      width: 11px;
+    }
+    .context-detail-scroll::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--foreground) 28%, transparent);
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    .context-detail-scroll::-webkit-scrollbar-track {
+      background: var(--surface-subtle);
+      border-radius: 999px;
+    }
+  }
+  @media (max-width: 80rem) {
+    .context-detail-pane {
+      max-inline-size: none;
+      max-block-size: none;
+    }
+  }
 }
 
 @keyframes rise-in {

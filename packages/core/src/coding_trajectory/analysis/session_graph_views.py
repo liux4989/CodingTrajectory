@@ -48,6 +48,22 @@ def build_session_graph_overview(
     }
 
 
+def session_graph_has_visible_overview_content(session_graph: SessionGraph) -> bool:
+    index = build_session_graph_index(session_graph)
+    member_session_lookup = build_member_session_lookup(session_graph)
+    return any(
+        _include_session_in_overview(session, index=index)
+        and bool(
+            build_session_overview_turns(
+                session,
+                index=index,
+                member_session_lookup=member_session_lookup,
+            )
+        )
+        for session in ordered_sessions(index)
+    )
+
+
 def build_session_graph_narrative(
     session_graph: SessionGraph,
     *,
@@ -171,6 +187,35 @@ def _session_nav_node(
     num_turns: int | None = None,
     drop_turns: int | None = None,
 ) -> dict[str, Any] | None:
+    turns = build_session_overview_turns(
+        session,
+        index=index,
+        member_session_lookup=member_session_lookup,
+        num_turns=num_turns,
+        drop_turns=drop_turns,
+    )
+    if not turns:
+        return None
+
+    return prune_nones({
+        "session_id": str(session.session_id),
+        "relationship": _session_connection(session, index=index),
+        "vendor": session.vendor.value,
+        "status": session.status,
+        "agent_name": session.agent_name,
+        "cwd": session.cwd,
+        "turns": turns,
+    })
+
+
+def build_session_overview_turns(
+    session: Session,
+    *,
+    index: SessionGraphIndex,
+    member_session_lookup: dict[str, list[MemberSessionCandidate]],
+    num_turns: int | None = None,
+    drop_turns: int | None = None,
+) -> list[dict[str, Any]]:
     turns: list[dict[str, Any]] = []
     pending_teammate: dict[str, Any] | None = None
 
@@ -206,19 +251,7 @@ def _session_nav_node(
 
     if pending_teammate is not None:
         turns.append(pending_teammate)
-    turns = _apply_turn_window(turns, num_turns=num_turns, drop_turns=drop_turns)
-    if not turns:
-        return None
-
-    return prune_nones({
-        "session_id": str(session.session_id),
-        "relationship": _session_connection(session, index=index),
-        "vendor": session.vendor.value,
-        "status": session.status,
-        "agent_name": session.agent_name,
-        "cwd": session.cwd,
-        "turns": turns,
-    })
+    return _apply_turn_window(turns, num_turns=num_turns, drop_turns=drop_turns)
 
 
 def _turn_nav_node(

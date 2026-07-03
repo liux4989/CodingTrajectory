@@ -12,7 +12,6 @@ from uuid import UUID
 from coding_trajectory.discovery import (
     DiscoverySource,
     discover_project_metadata,
-    discover_session_metadata,
     discover_store,
     discover_store_from_file,
     discover_store_from_files,
@@ -670,12 +669,12 @@ def project_sessions_metadata(
     global_scope: bool,
     current_dir: Path,
 ) -> dict[str, Any]:
-    """List project sessions via header-only scans, skipping transcript projection.
+    """List project sessions using the same visible-turn semantics as overview."""
+    from coding_trajectory.analysis.session_graph_views import (
+        session_graph_has_visible_overview_content,
+    )
 
-    Used when no per-session usage/runtime is requested; those require a full
-    store and fall back to the regular dispatch path.
-    """
-    groups = discover_session_metadata(
+    discovery = discover_store(
         current_dir=current_dir,
         global_scope=global_scope,
         project_name=params.get("project_name"),
@@ -686,14 +685,21 @@ def project_sessions_metadata(
     items = [
         prune_nones(
             {
-                "root_session_id": str(group.root_session_id),
-                "title": group.title,
-                "vendors": group.vendors or None,
-                "session_ids": [str(session_id) for session_id in group.session_ids],
-                "project": group.project_identifier,
+                "root_session_id": str(graph.root_session_id),
+                "title": _session_graph_title(graph),
+                "vendors": sorted(
+                    {session.vendor.value for session in graph.sessions if session.vendor}
+                )
+                or None,
+                "session_ids": [str(session.session_id) for session in graph.sessions],
+                "project": graph.project_identifier,
             }
         )
-        for group in groups
+        for graph in sorted(
+            discovery.store.session_graphs.values(),
+            key=lambda item: (item.project_identifier or "", str(item.root_session_id)),
+        )
+        if session_graph_has_visible_overview_content(graph)
     ]
     return {"items": items}
 

@@ -128,6 +128,8 @@ def _session_cleanup_parser() -> argparse.ArgumentParser:
         description="Clean empty or low-value session logs.",
     )
     parser.add_argument("--agent-vendor", default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--detail", action="store_true")
     parser.add_argument("--trash", action="store_true")
     parser.add_argument("--delete", action="store_true")
     parser.add_argument("--confirm", action="store_true")

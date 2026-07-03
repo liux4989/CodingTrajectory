@@ -17,6 +17,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from coding_trajectory.analysis.session_graph_views import (
+    session_graph_has_visible_overview_content,
+)
+from coding_trajectory.discovery import stabilize_session
+from coding_trajectory.ingestion import CodexAdapter, PiAdapter
+from coding_trajectory.ingestion.graph import build_session_graph
+from coding_trajectory.ingestion.models import Vendor
+
 Action = Literal["dry-run", "interactive", "trash", "delete", "cancelled"]
 
 
@@ -505,8 +513,16 @@ def _session_target(
     records = _load_jsonl(path)
     if records is None:
         return None, _skip("session", str(path), "unreadable_or_invalid")
-
-    if _has_useful_session_records(vendor, records):
+    session = _ingest_session(path, vendor=vendor)
+    if session is None:
+        return None, _skip("session", str(path), "unreadable_or_invalid")
+    if session_graph_has_visible_overview_content(
+        build_session_graph(
+            root_session_id=session.session_id,
+            project_identifier=Path(session.cwd).name if session.cwd else path.stem,
+            sessions=[session],
+        )
+    ):
         return None, None
 
     return (
@@ -785,12 +801,16 @@ def _dedupe_skips(skipped: list[SkippedTarget]) -> list[SkippedTarget]:
 
 
 def _resolve_action(args: argparse.Namespace) -> Action:
-    if getattr(args, "delete", False):
+    if getattr(args, "dry_run", False):
+        action: Action = "dry-run"
+    elif getattr(args, "delete", False):
         action: Action = "delete"
     elif getattr(args, "trash", False):
         action = "trash"
     else:
         return "interactive"
+    if action == "dry-run":
+        return action
     if not getattr(args, "confirm", False):
         raise ValueError(f"--{action} requires --confirm")
     return action
@@ -1003,12 +1023,23 @@ def _git(path: Path, *args: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _has_useful_session_records(vendor: str, records: list[dict[str, Any]]) -> bool:
-    if vendor == "codex_cli":
-        return any(_is_useful_codex_record(record) for record in records)
-    if vendor == "pi":
-        return any(_is_useful_pi_record(record) for record in records)
-    return True
+def _ingest_session(path: Path, *, vendor: str):
+    try:
+        if vendor == "codex_cli":
+            return stabilize_session(
+                CodexAdapter().ingest_file(path),
+                vendor=Vendor.CODEX_CLI,
+                source=path,
+            )
+        if vendor == "pi":
+            return stabilize_session(
+                PiAdapter().ingest_file(path),
+                vendor=Vendor.PI,
+                source=path,
+            )
+    except Exception:
+        return None
+    return None
 
 
 def _session_id_from_records(vendor: str, records: list[dict[str, Any]]) -> str | None:
@@ -1024,25 +1055,6 @@ def _session_id_from_records(vendor: str, records: list[dict[str, Any]]) -> str 
             if record.get("type") == "session" and isinstance(record.get("id"), str):
                 return record["id"]
     return None
-
-
-def _is_useful_codex_record(record: dict[str, Any]) -> bool:
-    record_type = record.get("type")
-    payload = record.get("payload")
-    if record_type == "response_item":
-        return True
-    if record_type != "event_msg" or not isinstance(payload, dict):
-        return False
-    return payload.get("type") in {"user_message", "task_complete"}
-
-
-def _is_useful_pi_record(record: dict[str, Any]) -> bool:
-    if record.get("type") != "message":
-        return False
-    message = record.get("message")
-    if not isinstance(message, dict):
-        return False
-    return message.get("role") in {"user", "assistant", "toolResult", "bashExecution"}
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]] | None:
