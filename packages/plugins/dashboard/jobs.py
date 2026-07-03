@@ -46,6 +46,7 @@ class JobStore:
 
     def __init__(self) -> None:
         self._jobs: dict[str, JobRecord] = {}
+        self._operation_jobs: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def create(self, kind: str) -> JobRecord:
@@ -65,6 +66,36 @@ class JobStore:
     def get(self, job_id: str) -> JobRecord | None:
         with self._lock:
             return self._jobs.get(job_id)
+
+    def get_operation_job(self, operation_key: str) -> JobRecord | None:
+        with self._lock:
+            self._evict_expired_locked()
+            job_id = self._operation_jobs.get(operation_key)
+            if not job_id:
+                return None
+            return self._jobs.get(job_id)
+
+    def create_for_operation(
+        self, kind: str, operation_key: str
+    ) -> tuple[JobRecord, bool]:
+        with self._lock:
+            self._evict_expired_locked()
+            existing_id = self._operation_jobs.get(operation_key)
+            if existing_id:
+                existing = self._jobs.get(existing_id)
+                if existing and existing.status in {"pending", "running", "ready"}:
+                    return existing, False
+            now = _now()
+            record = JobRecord(
+                id=uuid.uuid4().hex,
+                kind=kind,
+                status="pending",
+                created_at=now,
+                updated_at=now,
+            )
+            self._jobs[record.id] = record
+            self._operation_jobs[operation_key] = record.id
+            return record, True
 
     def update(
         self,
@@ -101,6 +132,9 @@ class JobStore:
         ]
         for job_id in expired:
             del self._jobs[job_id]
+        for operation_key, job_id in list(self._operation_jobs.items()):
+            if job_id not in self._jobs:
+                del self._operation_jobs[operation_key]
 
 
 class JobRunner:
@@ -124,6 +158,22 @@ class JobRunner:
         future = self._executor.submit(self._run, record.id, fn, *args, **kwargs)
         future.add_done_callback(lambda _f: None)
         return record.id
+
+    def submit_once(
+        self,
+        operation_key: str,
+        kind: str,
+        fn: Callable[..., dict[str, Any]],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[str, bool]:
+        record, created = self._store.create_for_operation(kind, operation_key)
+        if not created:
+            return record.id, False
+        future = self._executor.submit(self._run, record.id, fn, *args, **kwargs)
+        future.add_done_callback(lambda _f: None)
+        return record.id, True
 
     def _run(
         self,

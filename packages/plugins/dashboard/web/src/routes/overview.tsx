@@ -181,7 +181,7 @@ export function OverviewRoute() {
 }
 
 function OverviewIssueAgent({ prompt }: { prompt: string }) {
-  const agent = useAgentTurn();
+  const agent = useAgentTurn("overview-issue-analysis");
   const [followUp, setFollowUp] = React.useState("");
   const running = agent.status === "pending" || agent.status === "running";
   const canFollowUp = !running && followUp.trim().length > 0;
@@ -198,7 +198,7 @@ function OverviewIssueAgent({ prompt }: { prompt: string }) {
           type="button"
           size="sm"
           disabled={running || !prompt.trim()}
-          onClick={() => agent.run(prompt, { newThread: true })}
+          onClick={() => agent.run(prompt, { newSession: true })}
         >
           {running ? <Square size={13} className="fill-current" /> : <Sparkles size={15} />}
           {agent.result ? "Start new analysis" : "Run agent"}
@@ -275,7 +275,7 @@ function OverviewIssueAgentResponse({ result }: { result: AgentTurnResult | null
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="secondary">Codex</Badge>
         <span className="mono text-caption text-muted-foreground">
-          thread {shortAgentId(result.app_server_thread_id)}
+          session {shortAgentId(result.agent_session_id)}
         </span>
         {result.app_server_turn_id ? (
           <span className="mono text-caption text-muted-foreground">

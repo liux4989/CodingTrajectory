@@ -184,11 +184,20 @@ export type SessionAnalysis = {
 };
 
 export type AgentTurnResult = {
-  schema_version: 1;
+  schema_version: 2;
   generated_at: string;
-  app_server_thread_id: string;
+  agent_session_id: string;
   app_server_turn_id: string | null;
   response_text: string;
+};
+
+export type AgentSession = {
+  agent_session_id: string;
+  route_scope: string | null;
+  created_at: string;
+  last_used_at: string;
+  active_job_id: string | null;
+  recent_job_ids: string[];
 };
 
 export type CleanupSummary = {
@@ -458,6 +467,49 @@ export async function analyzeSession(sessionId: string, refresh = false) {
   });
 }
 
+export async function createAgentSession(params: {
+  routeScope?: string | null;
+  ephemeral?: boolean;
+}) {
+  return fetchJson<AgentSession>("/api/agent-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      route_scope: params.routeScope ?? null,
+      ephemeral: params.ephemeral ?? false,
+    }),
+  });
+}
+
+export async function fetchAgentSession(agentSessionId: string) {
+  return fetchJson<AgentSession>(`/api/agent-sessions/${encodeURIComponent(agentSessionId)}`);
+}
+
+export async function closeAgentSession(agentSessionId: string) {
+  return fetchJson<{ status: "closed"; agent_session_id: string }>(
+    `/api/agent-sessions/${encodeURIComponent(agentSessionId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function runAgentSessionTurn(params: {
+  agentSessionId: string;
+  prompt: string;
+  outputSchema?: Record<string, unknown> | null;
+}) {
+  return fetchJson<JobAccepted>(
+    `/api/agent-sessions/${encodeURIComponent(params.agentSessionId)}/turns`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: params.prompt,
+        output_schema: params.outputSchema ?? null,
+      }),
+    },
+  );
+}
+
 export async function runAgentTurn(params: {
   prompt: string;
   threadId?: string | null;
@@ -489,7 +541,13 @@ export type JobRecord = {
   error: string | null;
 };
 
-type JobAccepted = { status: "pending"; job_id: string };
+type JobAccepted = {
+  status: "pending";
+  job_id: string;
+  operation_key?: string;
+  reused?: boolean;
+  agent_session_id?: string;
+};
 
 export async function fetchJobStatus(jobId: string) {
   return fetchJson<JobRecord>(`/api/jobs/${encodeURIComponent(jobId)}`);

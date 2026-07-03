@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 try:
     from . import agent_task as agent_task_mod
+    from .agent_sessions import AgentSessionStore
     from . import cleanup as cleanup_mod
     from . import context_window as context_window_mod
     from . import error_collection as error_collection_mod
@@ -22,6 +23,7 @@ try:
     from .jobs import JobRunner, JobStore
 except ImportError:
     import agent_task as agent_task_mod
+    from agent_sessions import AgentSessionStore
     import cleanup as cleanup_mod
     import context_window as context_window_mod
     import error_collection as error_collection_mod
@@ -67,6 +69,10 @@ class DashboardDataService:
         self._cache = TtlCache(cache_ttl_seconds)
         self._jobs = JobStore()
         self._runner = JobRunner(self._jobs)
+        self._agent_sessions = AgentSessionStore(cwd=_repo_root())
+
+    def shutdown(self) -> None:
+        self._agent_sessions.shutdown()
 
     def overview(self) -> dict[str, Any]:
         return self._cache.get_or_set(("overview",), self._overview_uncached)
@@ -228,14 +234,73 @@ class DashboardDataService:
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValueError("session_id is required")
         refresh = bool(body.get("refresh"))
-        job_id = self._runner.submit(
-            "session-analysis",
-            session_analysis_mod.build_or_load_analysis,
-            session_id.strip(),
-            ct_json=_ct_json,
-            refresh=refresh,
+        operation_key = _session_analysis_operation_key(session_id.strip(), refresh)
+        if refresh:
+            job_id = self._runner.submit(
+                "session-analysis",
+                session_analysis_mod.build_or_load_analysis,
+                session_id.strip(),
+                ct_json=_ct_json,
+                refresh=True,
+            )
+            reused = False
+        else:
+            job_id, created = self._runner.submit_once(
+                operation_key,
+                "session-analysis",
+                session_analysis_mod.build_or_load_analysis,
+                session_id.strip(),
+                ct_json=_ct_json,
+                refresh=False,
+            )
+            reused = not created
+        return {
+            "status": "pending",
+            "job_id": job_id,
+            "operation_key": operation_key,
+            "reused": reused,
+        }
+
+    def create_agent_session(self, body: dict[str, Any]) -> dict[str, Any]:
+        route_scope = body.get("route_scope")
+        ephemeral = bool(body.get("ephemeral", False))
+        if route_scope is not None and not isinstance(route_scope, str):
+            raise ValueError("route_scope must be a string")
+        return self._agent_sessions.create(
+            route_scope=route_scope.strip() if isinstance(route_scope, str) else None,
+            ephemeral=ephemeral,
         )
-        return {"status": "pending", "job_id": job_id}
+
+    def agent_session(self, agent_session_id: str) -> dict[str, Any]:
+        return self._agent_sessions.public(agent_session_id)
+
+    def close_agent_session(self, agent_session_id: str) -> dict[str, Any]:
+        self._agent_sessions.close(agent_session_id)
+        return {"status": "closed", "agent_session_id": agent_session_id}
+
+    def agent_session_turn(
+        self, agent_session_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        prompt = body.get("prompt")
+        output_schema = body.get("output_schema")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("prompt is required")
+        if output_schema is not None and not isinstance(output_schema, dict):
+            raise ValueError("output_schema must be an object")
+        self._agent_sessions.public(agent_session_id)
+        job_id = self._runner.submit(
+            "agent-session-turn",
+            self._agent_sessions.run_turn,
+            agent_session_id=agent_session_id,
+            prompt=prompt.strip(),
+            output_schema=output_schema,
+        )
+        self._agent_sessions.note_job_started(agent_session_id, job_id)
+        return {
+            "status": "pending",
+            "job_id": job_id,
+            "agent_session_id": agent_session_id,
+        }
 
     def agent_turn(self, body: dict[str, Any]) -> dict[str, Any]:
         prompt = body.get("prompt")
@@ -713,6 +778,11 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _session_analysis_operation_key(session_id: str, refresh: bool) -> str:
+    refresh_key = "refresh" if refresh else "cached"
+    return f"session-analysis:v4:{refresh_key}:{session_id}"
 
 
 def _first(query: dict[str, list[str]], key: str) -> str | None:

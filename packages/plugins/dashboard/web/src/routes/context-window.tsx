@@ -71,6 +71,18 @@ function formatPercent(value: number | null | undefined) {
   return `${value.toFixed(1)}%`;
 }
 
+function readStoredJobId(storageKey: string) {
+  if (typeof window === "undefined") return null;
+  const value = window.sessionStorage.getItem(storageKey);
+  return value?.trim() || null;
+}
+
+function writeStoredJobId(storageKey: string, jobId: string | null) {
+  if (typeof window === "undefined") return;
+  if (jobId) window.sessionStorage.setItem(storageKey, jobId);
+  else window.sessionStorage.removeItem(storageKey);
+}
+
 function evidenceLabel(evidence: TokenEvidence | null) {
   if (!evidence) return "No event-level token evidence";
   return `${formatTokens(evidence.value)} tokens`;
@@ -128,13 +140,17 @@ function findingTone(kind: SessionAnalysis["findings"][number]["kind"]) {
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
   const router = useRouter();
-  const [analysisRefresh, setAnalysisRefresh] = React.useState(false);
+  const analysisRefreshRef = React.useRef(false);
+  const analysisStorageKey = `ct-dashboard-session-analysis:${sessionId}`;
+  const [initialAnalysisJobId] = React.useState(() => readStoredJobId(analysisStorageKey));
   const query = useQuery({
     queryKey: ["context-window", sessionId],
     queryFn: () => fetchContextWindow(sessionId),
   });
   const analysisJob = useJob<SessionAnalysis>({
-    start: () => analyzeSession(sessionId, analysisRefresh),
+    initialJobId: initialAnalysisJobId,
+    onJobId: (jobId) => writeStoredJobId(analysisStorageKey, jobId),
+    start: () => analyzeSession(sessionId, analysisRefreshRef.current),
     resolve: (record: JobRecord) => record.result as unknown as SessionAnalysis,
   });
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -286,7 +302,7 @@ export function ContextWindowRoute() {
                 size="sm"
                 variant={analysis ? "secondary" : "default"}
                 onClick={() => {
-                  setAnalysisRefresh(Boolean(analysis));
+                  analysisRefreshRef.current = Boolean(analysis);
                   analysisJob.reset();
                   analysisJob.start();
                 }}

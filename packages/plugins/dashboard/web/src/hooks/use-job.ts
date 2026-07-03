@@ -10,12 +10,17 @@ export type UseJobOptions<T> = {
   start: () => Promise<{ job_id: string }>;
   /** Extracts the typed payload from the job record's `result` once ready. */
   resolve: (record: JobRecord) => T;
+  initialJobId?: string | null;
+  onJobId?: (jobId: string | null) => void;
+  onData?: (data: T) => void;
+  onTerminal?: () => void;
   /** Polling interval in ms. Defaults to 1200. */
   intervalMs?: number;
 };
 
 export type UseJobResult<T> = {
   status: UseJobStatus;
+  jobId: string | null;
   data: T | null;
   error: string | null;
   progress: string | null;
@@ -39,13 +44,28 @@ const DEFAULT_INTERVAL = 1200;
  * (the RefreshButton spinner already reacts to in-flight job polls).
  */
 export function useJob<T>(options: UseJobOptions<T>): UseJobResult<T> {
-  const { start: startJob, resolve, intervalMs = DEFAULT_INTERVAL } = options;
+  const {
+    start: startJob,
+    resolve,
+    initialJobId = null,
+    onJobId,
+    onData,
+    onTerminal,
+    intervalMs = DEFAULT_INTERVAL,
+  } = options;
   const queryClient = useQueryClient();
-  const [jobId, setJobId] = React.useState<string | null>(null);
+  const [jobId, setJobId] = React.useState<string | null>(initialJobId);
+
+  React.useEffect(() => {
+    setJobId(initialJobId);
+  }, [initialJobId]);
 
   const startMutation = useMutation({
     mutationFn: startJob,
-    onSuccess: (accepted) => setJobId(accepted.job_id),
+    onSuccess: (accepted) => {
+      setJobId(accepted.job_id);
+      onJobId?.(accepted.job_id);
+    },
   });
 
   const jobQuery = useQuery({
@@ -75,17 +95,29 @@ export function useJob<T>(options: UseJobOptions<T>): UseJobResult<T> {
         : startMutation.error ? String(startMutation.error) : null;
   const progress = record?.progress ?? null;
 
+  React.useEffect(() => {
+    if (data) onData?.(data);
+  }, [data, onData]);
+
+  React.useEffect(() => {
+    if (record?.status === "ready" || record?.status === "error") {
+      onTerminal?.();
+    }
+  }, [record?.status, onTerminal]);
+
   const start = React.useCallback(() => {
     setJobId(null);
+    onJobId?.(null);
     startMutation.mutate();
-  }, [startMutation]);
+  }, [onJobId, startMutation]);
 
   const clearJob = React.useCallback(() => {
     setJobId((current) => {
       if (current) queryClient.removeQueries({ queryKey: ["job", current] });
+      onJobId?.(null);
       return null;
     });
-  }, [queryClient]);
+  }, [onJobId, queryClient]);
 
   const cancel = React.useCallback(() => {
     startMutation.reset();
@@ -97,5 +129,5 @@ export function useJob<T>(options: UseJobOptions<T>): UseJobResult<T> {
     clearJob();
   }, [clearJob, startMutation]);
 
-  return { status, data, error, progress, elapsedMs, start, cancel, reset };
+  return { status, jobId, data, error, progress, elapsedMs, start, cancel, reset };
 }

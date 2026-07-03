@@ -66,6 +66,9 @@ def serve(config: DashboardWebConfig) -> int:
     except KeyboardInterrupt:
         print("\nDashboard web stopped.")
     finally:
+        service = getattr(handler, "dashboard_service", None)
+        if service is not None:
+            service.shutdown()
         server.server_close()
     return 0
 
@@ -95,6 +98,7 @@ def _handler_for(
 ) -> type[BaseHTTPRequestHandler]:
     class DashboardRequestHandler(BaseHTTPRequestHandler):
         server_version = "CodingTrajectoryDashboard/0.1"
+        dashboard_service = service
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -118,6 +122,21 @@ def _handler_for(
             try:
                 body = self._read_json_body()
                 payload, status = self._handle_api_post(parsed.path, body)
+            except ValueError as exc:
+                self._json_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            except RuntimeError as exc:
+                self._json_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+                return
+            self._json_response(payload, status=status)
+
+        def do_DELETE(self) -> None:
+            parsed = urlparse(self.path)
+            if not parsed.path.startswith("/api/"):
+                self._json_error(HTTPStatus.NOT_FOUND, "not found")
+                return
+            try:
+                payload, status = self._handle_api_delete(parsed.path)
             except ValueError as exc:
                 self._json_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
@@ -156,6 +175,9 @@ def _handler_for(
                 elif path.startswith("/api/jobs/"):
                     self._handle_job_get(path)
                     return
+                elif path.startswith("/api/agent-sessions/"):
+                    self._handle_agent_session_get(path)
+                    return
                 else:
                     self._json_error(HTTPStatus.NOT_FOUND, "not found")
                     return
@@ -170,6 +192,14 @@ def _handler_for(
         def _handle_api_post(
             self, path: str, body: dict[str, Any]
         ) -> tuple[dict[str, Any], HTTPStatus]:
+            if path == "/api/agent-sessions":
+                return service.create_agent_session(body), HTTPStatus.CREATED
+            agent_session_id = _agent_session_turn_id(path)
+            if agent_session_id:
+                return (
+                    service.agent_session_turn(agent_session_id, body),
+                    HTTPStatus.ACCEPTED,
+                )
             if path == "/api/agent-turn":
                 return service.agent_turn(body), HTTPStatus.ACCEPTED
             if path == "/api/cleanup/project/apply":
@@ -186,6 +216,12 @@ def _handler_for(
                 )
             raise ValueError("unknown api endpoint")
 
+        def _handle_api_delete(self, path: str) -> tuple[dict[str, Any], HTTPStatus]:
+            agent_session_id = _agent_session_id(path)
+            if agent_session_id:
+                return service.close_agent_session(agent_session_id), HTTPStatus.OK
+            raise ValueError("unknown api endpoint")
+
         def _handle_job_get(self, path: str) -> None:
             job_id = path[len("/api/jobs/") :].strip("/")
             if not job_id:
@@ -195,6 +231,23 @@ def _handler_for(
                 payload = service.job_status(job_id)
             except ValueError as exc:
                 self._json_error(HTTPStatus.NOT_FOUND, str(exc))
+                return
+            self._json_response(payload)
+
+        def _handle_agent_session_get(self, path: str) -> None:
+            agent_session_id = _agent_session_id(path)
+            if not agent_session_id:
+                self._json_error(HTTPStatus.NOT_FOUND, "not found")
+                return
+            try:
+                payload = service.agent_session(agent_session_id)
+            except ValueError as exc:
+                status = (
+                    HTTPStatus.NOT_FOUND
+                    if str(exc) == "agent_session_not_found"
+                    else HTTPStatus.BAD_REQUEST
+                )
+                self._json_error(status, str(exc))
                 return
             self._json_response(payload)
 
@@ -263,6 +316,27 @@ def _session_analysis_id(path: str) -> str | None:
         return None
     session_id = path[len(prefix) : -len(suffix)].strip("/")
     return session_id or None
+
+
+def _agent_session_id(path: str) -> str | None:
+    prefix = "/api/agent-sessions/"
+    if not path.startswith(prefix):
+        return None
+    suffix = path[len(prefix) :].strip("/")
+    if not suffix or "/" in suffix:
+        return None
+    return suffix
+
+
+def _agent_session_turn_id(path: str) -> str | None:
+    prefix = "/api/agent-sessions/"
+    suffix = "/turns"
+    if not path.startswith(prefix) or not path.endswith(suffix):
+        return None
+    agent_session_id = path[len(prefix) : -len(suffix)].strip("/")
+    if not agent_session_id or "/" in agent_session_id:
+        return None
+    return agent_session_id
 
 
 if __name__ == "__main__":
