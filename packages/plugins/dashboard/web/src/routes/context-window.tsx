@@ -473,7 +473,7 @@ export function ContextWindowRoute() {
         </div>
       </figure>
 
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_clamp(24rem,34vw,38rem)] items-start gap-6 max-xl:grid-cols-1">
+      <div className="context-window-layout">
         <section className="min-w-0" aria-labelledby="event-stream-title">
           <h2 id="event-stream-title" className="sr-only">Event stream</h2>
           {filteredEvents.length === 0 ? (
@@ -576,7 +576,7 @@ export function ContextWindowRoute() {
           )}
         </section>
 
-        <aside className="context-detail-rail min-w-0 self-start xl:sticky xl:top-4">
+        <aside className="context-detail-rail min-w-0 self-start">
           <div className="context-detail-pane rounded-[var(--radius-2xl)] border border-border-soft bg-card p-6">
             <div className="context-detail-scroll">
               {activeEvent ? (

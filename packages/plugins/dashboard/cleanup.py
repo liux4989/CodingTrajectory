@@ -17,13 +17,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from coding_trajectory.analysis.session_graph_views import (
-    session_graph_has_visible_overview_content,
-)
-from coding_trajectory.discovery import stabilize_session
-from coding_trajectory.ingestion import CodexAdapter, PiAdapter
-from coding_trajectory.ingestion.graph import build_session_graph
-from coding_trajectory.ingestion.models import Vendor
+try:
+    from .codex_app_server import CodexAppServerSession
+except ImportError:  # pragma: no cover - direct plugin execution fallback
+    from codex_app_server import CodexAppServerSession
 
 Action = Literal["dry-run", "interactive", "trash", "delete", "cancelled"]
 
@@ -252,6 +249,19 @@ def _load_project_list(params: dict[str, Any]) -> dict[str, Any]:
     return _ct_json(["project", "list", "--params", json.dumps(params), "--output", "json"])
 
 
+def _load_project_sessions(params: dict[str, Any]) -> dict[str, Any]:
+    return _ct_json(
+        [
+            "api",
+            "call",
+            "project.sessions",
+            "--global-scope",
+            "--params",
+            json.dumps(params),
+        ]
+    )
+
+
 def _ct_json(args: list[str]) -> dict[str, Any]:
     ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
     if not ct:
@@ -265,6 +275,31 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
         sys.stderr.write(completed.stderr or completed.stdout)
         raise SystemExit(completed.returncode)
     return json.loads(completed.stdout)
+
+
+def _visible_session_ids(vendor_filter: str | None) -> set[str]:
+    params: dict[str, Any] = {}
+    if vendor_filter:
+        params["agent_vendor"] = vendor_filter
+    payload = _load_project_sessions(params)
+    if not payload.get("ok"):
+        error = payload.get("error")
+        raise SystemExit(str(error.get("message") if isinstance(error, dict) else error))
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise SystemExit("ct api call project.sessions returned a non-object result")
+
+    session_ids: set[str] = set()
+    for item in result.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        root_session_id = item.get("root_session_id")
+        if isinstance(root_session_id, str) and root_session_id:
+            session_ids.add(root_session_id)
+        for session_id in item.get("session_ids") or []:
+            if isinstance(session_id, str) and session_id:
+                session_ids.add(session_id)
+    return session_ids
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +399,7 @@ def apply_project_selection(
 
 def preview_session_cleanup(args: argparse.Namespace) -> CleanupPreview:
     vendor_filter = _normalize_vendor(args.agent_vendor)
+    visible_session_ids = _visible_session_ids(vendor_filter)
     candidates: list[SessionTarget] = []
     skipped: list[SkippedTarget] = []
     for vendor, base_dir in _session_sources(vendor_filter):
@@ -377,7 +413,11 @@ def preview_session_cleanup(args: argparse.Namespace) -> CleanupPreview:
             )
             continue
         for path in sorted(base_dir.rglob("*.jsonl")):
-            target, skip = _session_target(path, vendor=vendor)
+            target, skip = _session_target(
+                path,
+                vendor=vendor,
+                visible_session_ids=visible_session_ids,
+            )
             if target is not None:
                 candidates.append(target)
             if skip is not None:
@@ -414,9 +454,7 @@ def apply_session_selection(
     action: Action,
     selected: list[SessionTarget],
 ) -> dict[str, Any]:
-    manifest_path, action_errors = _apply_action(
-        action, [Path(target.path) for target in selected], target_kind="session"
-    )
+    manifest_path, action_errors = _apply_session_action(action, selected)
     return _payload(
         command="cleanup session",
         action=action,
@@ -507,22 +545,17 @@ def _session_target(
     path: Path,
     *,
     vendor: str,
+    visible_session_ids: set[str],
 ) -> tuple[SessionTarget | None, SkippedTarget | None]:
     if _recently_modified(path, timedelta(hours=24)):
         return None, _skip("session", str(path), "modified_in_last_24h")
     records = _load_jsonl(path)
     if records is None:
         return None, _skip("session", str(path), "unreadable_or_invalid")
-    session = _ingest_session(path, vendor=vendor)
-    if session is None:
-        return None, _skip("session", str(path), "unreadable_or_invalid")
-    if session_graph_has_visible_overview_content(
-        build_session_graph(
-            root_session_id=session.session_id,
-            project_identifier=Path(session.cwd).name if session.cwd else path.stem,
-            sessions=[session],
-        )
-    ):
+    session_id = _session_id_from_records(vendor, records)
+    if not session_id:
+        return None, _skip("session", str(path), "missing_session_id")
+    if session_id in visible_session_ids:
         return None, None
 
     return (
@@ -531,7 +564,7 @@ def _session_target(
             path=str(path.resolve()),
             reason=["empty"],
             modified_at=_modified_at(path),
-            session_id=_session_id_from_records(vendor, records),
+            session_id=session_id,
         ),
         None,
     )
@@ -880,6 +913,96 @@ def _apply_action(
     return str(manifest_path), errors
 
 
+def _apply_session_action(
+    action: Action,
+    selected: list[SessionTarget],
+) -> tuple[str | None, list[dict[str, str]]]:
+    if action in {"dry-run", "interactive", "cancelled"} or not selected:
+        return None, []
+
+    codex_targets = [
+        target
+        for target in selected
+        if target.vendor == "codex_cli" and action == "delete"
+    ]
+    filesystem_paths = [
+        Path(target.path)
+        for target in selected
+        if not (target.vendor == "codex_cli" and action == "delete")
+    ]
+    manifest = {
+        "action": action,
+        "target_kind": "session",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "paths": [str(path) for path in filesystem_paths],
+        "codex_threads": [
+            {
+                "thread_id": target.session_id,
+                "path": target.path,
+            }
+            for target in codex_targets
+        ],
+        "config_entries": [],
+        "errors": [],
+    }
+    errors: list[dict[str, str]] = []
+
+    if codex_targets:
+        errors.extend(_delete_codex_session_threads(codex_targets))
+
+    for path in filesystem_paths:
+        try:
+            if action == "trash":
+                _move_to_trash(path)
+            elif action == "delete":
+                _delete_path(path)
+        except OSError as exc:
+            errors.append({"path": str(path), "error": str(exc)})
+
+    manifest["errors"] = errors
+    manifest_path = _write_manifest(manifest)
+    return str(manifest_path), errors
+
+
+def _delete_codex_session_threads(
+    targets: list[SessionTarget],
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    session: CodexAppServerSession | None = None
+    try:
+        session = CodexAppServerSession(cwd=Path.cwd(), timeout_seconds=30)
+        for target in targets:
+            if not target.session_id:
+                errors.append(
+                    {
+                        "path": target.path,
+                        "error": "missing Codex thread id",
+                    }
+                )
+                continue
+            try:
+                session.delete_thread(target.session_id)
+            except RuntimeError as exc:
+                errors.append(
+                    {
+                        "path": target.path,
+                        "error": str(exc),
+                    }
+                )
+    except RuntimeError as exc:
+        return [
+            {
+                "path": target.path,
+                "error": str(exc),
+            }
+            for target in targets
+        ]
+    finally:
+        if session is not None:
+            session.close()
+    return errors
+
+
 def _write_manifest(manifest: dict[str, Any]) -> Path:
     directory = Path.home() / ".coding-trajectory" / "cleanup-manifests"
     directory.mkdir(parents=True, exist_ok=True)
@@ -1016,30 +1139,6 @@ def _git(path: Path, *args: str) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout
-
-
-# ---------------------------------------------------------------------------
-# Session record analysis
-# ---------------------------------------------------------------------------
-
-
-def _ingest_session(path: Path, *, vendor: str):
-    try:
-        if vendor == "codex_cli":
-            return stabilize_session(
-                CodexAdapter().ingest_file(path),
-                vendor=Vendor.CODEX_CLI,
-                source=path,
-            )
-        if vendor == "pi":
-            return stabilize_session(
-                PiAdapter().ingest_file(path),
-                vendor=Vendor.PI,
-                source=path,
-            )
-    except Exception:
-        return None
-    return None
 
 
 def _session_id_from_records(vendor: str, records: list[dict[str, Any]]) -> str | None:

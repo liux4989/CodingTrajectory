@@ -122,6 +122,10 @@ class CodexAppServerManager:
                 effort=effort,
             )
 
+    def delete_thread(self, thread_id: str) -> None:
+        with self._lock:
+            self._session_for_locked(self.cwd).delete_thread(thread_id)
+
     def close(self) -> None:
         with self._lock:
             self._closed = True
@@ -264,6 +268,22 @@ class CodexAppServerSession:
         return CodexAppServerResult(
             thread_id=self.thread_id, turn_id=turn_id, text=text
         )
+
+    def delete_thread(self, thread_id: str | None) -> None:
+        thread_id = (thread_id or "").strip()
+        if not thread_id:
+            raise RuntimeError("codex app-server requires a thread id")
+        request_id = self._request_id()
+        self._send(
+            {
+                "method": "thread/delete",
+                "id": request_id,
+                "params": {"threadId": thread_id},
+            }
+        )
+        self._wait_response(request_id)
+        if self.thread_id == thread_id:
+            self.thread_id = None
 
     def close(self) -> None:
         with self._close_lock:
