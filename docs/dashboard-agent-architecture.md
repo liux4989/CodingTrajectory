@@ -65,6 +65,13 @@ The Python dashboard server is the lifecycle owner. It should:
 The server should remain thin in domain logic. It may orchestrate and shape
 data, but it should not become a second metrics engine.
 
+The server owns request recovery handles as well as conversation handles.
+`job_id` recovers one in-flight or recently completed operation. An
+`agent_session_id` recovers the page-lived agent conversation that may submit
+many jobs over time. The two ids should be linked server-side so a refreshed
+page can resume polling a known job and then continue the same agent session if
+the server has not evicted it.
+
 ### Codex App Server
 
 Codex app-server owns the actual agent conversation execution. The dashboard
@@ -107,6 +114,9 @@ agent_session_id -> {
   created_at,
   last_used_at,
   route_scope,
+  queued_turns,
+  active_job_id,
+  recent_job_ids,
 }
 ```
 
@@ -120,10 +130,47 @@ Agent sessions are page-lived and server-memory-lived:
   the `agent_session_id` in URL state or `sessionStorage`.
 - A dashboard server restart loses all agent sessions.
 - The server evicts inactive sessions by TTL.
+- Eviction, explicit close, failed startup, and dashboard shutdown must close
+  app-server pipes, stop reader threads, and terminate the app-server process.
 - No local durable transcript files are required for generic agent tasks.
 
 This is ephemeral relative to disk and server restarts, but not disposable after
 each turn.
+
+### Refresh and Recovery
+
+The frontend may preserve both `agent_session_id` and the current `job_id` in
+URL state or `sessionStorage`.
+
+- `job_id` is the recovery handle for a single request. After a page refresh,
+  the route can keep polling `/api/jobs/{job_id}` until the operation reaches a
+  terminal state.
+- `agent_session_id` is the recovery handle for conversation continuity. After
+  the job is ready, the route can submit follow-up turns to the same session.
+- The server should keep a small session-side index of active and recent job ids
+  so it can answer whether a session has recoverable work.
+- A missing, expired, or restarted-away `agent_session_id` should return a typed
+  `not_found` or `expired` error, not a generic agent failure.
+
+The recovery target is page refresh/reload while the same dashboard server is
+alive. It is not recovery after server restart.
+
+### Turn Queue
+
+Each `agent_session_id` owns a FIFO queue for turn execution. The dashboard
+server should not run two turns concurrently against the same app-server
+thread/process.
+
+When a turn request arrives:
+
+1. Validate the `agent_session_id` and enqueue the prompt request.
+2. Return a `job_id` for that queued turn.
+3. Run queued turns serially for that session.
+4. Allow different agent sessions to run concurrently subject to the dashboard
+   job runner's global worker limits.
+
+This keeps the shared app-server conversation ordered while preserving
+dashboard-level concurrency across unrelated sessions.
 
 ### Why Raw App-Server Thread IDs Are Not Enough
 
@@ -152,7 +199,11 @@ The generic server contract should stay close to:
 ```
 
 Plain text and structured output are both valid. If a route asks for structured
-JSON, that route owns validation and rendering of the parsed result.
+JSON, that route owns parsing, validation, and rendering of the parsed result.
+The generic agent server should return transport-level data: ids, status,
+diagnostics, and raw response text. Specialized route APIs may validate
+route-specific schemas, but that validation should not move into the generic
+agent-session endpoint.
 
 ## Job Design
 
@@ -173,10 +224,12 @@ minutes. The job result can include:
 - `agent_session_id`;
 - `app_server_turn_id` for diagnostics;
 - raw `response_text`;
-- optional parsed structured output when the invoker requested it and the
-  server validates it.
+- transport and lifecycle diagnostics needed for debugging.
 
 `job_id` is not a conversation handle. It is a handle for one async operation.
+The server should retain enough job metadata to let a refreshed browser recover
+an in-flight request by job id, but follow-up conversation turns must continue
+through `agent_session_id`.
 
 ## Projection Cache Design
 
@@ -226,11 +279,12 @@ dashboard-server ownership boundary.
 
 ## API Impact
 
-This architecture does not require changing every existing API.
+This architecture does not require changing every existing API, but it does
+define which primitive each API family should use.
 
-### Should Change
+### Stateful Agent APIs
 
-Generic agent APIs should change first:
+Generic agent APIs should change first because they need multi-turn continuity:
 
 - replace raw `/api/agent-turn` continuation with dashboard-owned
   `agent_session_id`;
@@ -241,17 +295,46 @@ Generic agent APIs should change first:
 Current generic invokers such as overview warning analysis should migrate to
 this API.
 
-### Can Stay
+### Async One-Shot APIs
 
-Specialized one-shot APIs can stay unless they need follow-up UX:
+Long-running one-shot APIs should use the shared job surface but do not need
+agent sessions unless they need follow-up UX:
 
 - context-window session analysis;
 - session-analysis cached artifact generation;
-- deterministic dashboard projections;
-- cleanup preview/apply APIs.
+- future batch cleanup previews or large import/export tasks.
 
-Those APIs may later adopt the shared job/cache primitives, but they do not
-need to become agent sessions by default.
+These APIs can keep specialized request and result shapes. They should not
+expose app-server thread ids as continuation handles. If they use an agent
+internally, that agent execution is an implementation detail unless the UI needs
+to continue the conversation.
+
+### Deterministic Read APIs
+
+Read-only projections should use deterministic cache keys and refresh controls,
+not agent sessions:
+
+- deterministic dashboard projections;
+- `/api/overview`;
+- `/api/model-usage`;
+- `/api/error-collection`;
+- `/api/sessions/context-window`;
+- cleanup previews.
+
+These APIs may adopt the projection cache when they are expensive or repeatedly
+queried during dashboard navigation. They should continue to source canonical
+session and metric facts from core `ct api` contracts.
+
+### Mutating APIs
+
+Mutating operations should use explicit command endpoints and job ids when they
+are long-running:
+
+- cleanup apply APIs;
+- future approval or fix-application workflows.
+
+Mutations should not be cached. If an agent proposes a mutation, the route owns
+the approval UX and submits a separate explicit command to the dashboard server.
 
 ## Implementation Plan
 
@@ -259,28 +342,45 @@ need to become agent sessions by default.
    - In-memory map keyed by `agent_session_id`.
    - TTL eviction.
    - Owns app-server thread/process lifecycle.
+   - Tracks active and recent job ids for refresh recovery.
+   - Closes subprocess resources on eviction, explicit close, failed startup,
+     and dashboard shutdown.
 
 2. Add agent session endpoints.
    - `POST /api/agent-sessions`.
    - `POST /api/agent-sessions/{id}/turns`.
+   - `GET /api/agent-sessions/{id}` for existence/recovery state.
    - Optional endpoint to close a session explicitly.
 
-3. Update frontend agent hook.
-   - Store `agent_session_id`, not app-server thread id.
-   - Optionally persist it in route state or `sessionStorage` for refresh
-     recovery while the server stays alive.
+3. Add per-session turn queueing.
+   - Serialize turns for each `agent_session_id`.
+   - Keep unrelated sessions concurrent through the existing job runner.
+   - Return a distinct `job_id` for every queued turn.
 
-4. Migrate overview agent analysis.
+4. Update frontend agent hook.
+   - Store `agent_session_id`, not app-server thread id.
+   - Persist `agent_session_id` and active `job_id` in route state or
+     `sessionStorage` for refresh recovery while the server stays alive.
+   - Handle typed expired/not-found session responses by resetting the local
+     agent state.
+
+5. Migrate overview agent analysis.
    - Overview continues assembling its own prompt.
    - Overview renders plain text and owns follow-up UI.
 
-5. Leave specialized session analysis unchanged.
+6. Leave specialized session analysis unchanged initially.
    - Keep structured schema and cached artifacts for context-window analysis.
    - Revisit only when it needs generic follow-up or approval flow.
 
-6. Add projection cache separately.
+7. Add projection cache separately.
    - Start with one expensive read-only endpoint.
    - Include TTL, refresh bypass, and concurrent deduplication.
+
+8. Classify the remaining dashboard APIs by primitive.
+   - Agent sessions for stateful multi-turn agent UX.
+   - Jobs for long-running one-shot operations.
+   - Projection cache for deterministic read-only views.
+   - Explicit command endpoints for mutations.
 
 ## Non-Goals
 
@@ -294,6 +394,7 @@ need to become agent sessions by default.
 
 Use ephemeral, server-memory-owned agent sessions for generic dashboard agent
 workflows. The browser owns UX and feature-specific prompt/rendering. The
-dashboard server owns session handles, jobs, cache, and external process
-lifecycle. Codex app-server owns agent execution. Core `ct api` remains the
-source of truth for session and metric semantics.
+dashboard server owns session handles, per-session turn queues, job recovery
+maps, projection cache, and external process lifecycle. Codex app-server owns
+agent execution. Core `ct api` remains the source of truth for session and
+metric semantics.
