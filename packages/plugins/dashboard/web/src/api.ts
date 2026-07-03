@@ -122,7 +122,7 @@ export type ContextWindowPayload = {
 };
 
 export type SessionAnalysis = {
-  schema_version: 4;
+  schema_version: 5;
   session_id: string;
   generated_at: string;
   artifact_path: string | null;
@@ -140,15 +140,36 @@ export type SessionAnalysis = {
     outcomes: string[];
   };
   usage_evidence: {
-    cumulative_tokens: number;
-    cumulative_input_tokens: number;
-    cumulative_cached_tokens: number;
-    cumulative_output_tokens: number;
-    cumulative_reasoning_tokens: number;
-    final_context_tokens: number | null;
+    processed_tokens: number;
+    billed_prompt_tokens: number;
+    billed_uncached_prompt_tokens: number;
+    billed_cached_prompt_tokens: number;
+    billed_cache_write_tokens: number;
+    billed_completion_tokens: number;
+    billed_reasoning_tokens: number;
+    resident_context_tokens: number | null;
     context_window_tokens: number | null;
-    final_context_percent: number | null;
-    expensive_turns: Array<Record<string, unknown>>;
+    resident_context_percent: number | null;
+    high_billed_turns: Array<Record<string, unknown>>;
+    context_composition: Array<{
+      category: string;
+      concept: string;
+      source_key: string;
+      label: string;
+      tokens: number;
+      percent: number | null;
+      confidence: string;
+      resident_estimated_cost_usd: number | null;
+    }>;
+    expensive_billed_items: Array<{
+      item_id: string;
+      turn_id: string;
+      label: string;
+      category: string;
+      summary: string;
+      processed_tokens: number;
+      billed_estimated_cost_usd: number;
+    }>;
   };
   tool_evidence: {
     total_requested_calls: number;
@@ -179,7 +200,13 @@ export type SessionAnalysis = {
     title: string;
     body: string;
     impact: string | null;
-    evidence: string[];
+    evidence: Array<{
+      kind: "context_category" | "tool_item" | "tool_bucket" | "turn";
+      ref: string;
+      label: string;
+      detail: string;
+      severity: "hint" | "warning";
+    }>;
   }>;
 };
 

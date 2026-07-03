@@ -724,6 +724,7 @@ def _tool_item_events(
         "session_id": str(item.get("session_id") or ""),
         "turn_id": str(item.get("turn_id") or ""),
         "tool_name": tool,
+        "tool_bucket": _tool_bucket_key(input_summary, tool),
         "tool_input_tokens": str(input_tokens),
         "tool_output_tokens": str(output_tokens),
     }
@@ -877,6 +878,55 @@ def _tool_category(tool: str) -> CategoryKey:
     ):
         return "files"
     return "output"
+
+
+def _tool_bucket_key(input_summary: str, tool: str) -> str:
+    lower = input_summary.lower()
+    normalized_tool = tool.lower()
+    if "apply_patch" in normalized_tool:
+        return "edits"
+    if normalized_tool == "reasoning":
+        return "reasoning_items"
+    if not _is_shell_tool(tool):
+        return "other_tool"
+    if "curl -fssl" in lower and "espn.com/soccer/" in lower and "| rg" in lower:
+        return "raw_html_scrape"
+    if lower.startswith("rg ") or lower.startswith("rg -n") or " rg -n " in lower:
+        if (
+            re.search(r"\s\.(?:$|\s)", lower)
+            or "src aws packages readme" in lower
+            or "docs" in lower
+            or "/memories/" in lower
+            or "world cup readiness|readiness" in lower
+            or "source-evidence|research|aws smoke" in lower
+            or "limit|limit|default_event_limit" in lower
+        ):
+            return "broad_search"
+        return "targeted_search"
+    if lower.startswith("sed ") or lower.startswith("nl ") or lower.startswith("cat "):
+        return "file_read_shell"
+    if any(term in lower for term in ["git status", "git diff", "git log"]):
+        return "git_inspection"
+    if any(
+        term in lower
+        for term in [
+            "aws batch",
+            " aws iam ",
+            " aws sts ",
+            "wrangler d1",
+            "tt research",
+            "curl -fss https://trailtrading-research-api",
+        ]
+    ):
+        return "cloud_state_check"
+    if any(
+        term in lower
+        for term in ["py_compile", "bun run check", "diff --check", "ruby -e"]
+    ):
+        return "validation"
+    if any(term in lower for term in ["git add", "git commit"]):
+        return "git_write"
+    return "other_exec"
 
 
 def _tool_event_label(tool: str, input_summary: str) -> str:

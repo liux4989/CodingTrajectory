@@ -782,7 +782,7 @@ def _repo_root() -> Path:
 
 def _session_analysis_operation_key(session_id: str, refresh: bool) -> str:
     refresh_key = "refresh" if refresh else "cached"
-    return f"session-analysis:v4:{refresh_key}:{session_id}"
+    return f"session-analysis:v5:{refresh_key}:{session_id}"
 
 
 def _first(query: dict[str, list[str]], key: str) -> str | None:

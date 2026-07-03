@@ -24,6 +24,8 @@ FindingKind = Literal[
     "optimal_pattern",
     "recommended_workflow",
 ]
+EvidenceKind = Literal["context_category", "tool_item", "tool_bucket", "turn"]
+EvidenceSeverity = Literal["hint", "warning"]
 
 
 class SessionPhase(BaseModel):
@@ -60,6 +62,8 @@ class ContextCompositionEntry(BaseModel):
 class ExpensiveBilledItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    item_id: str
+    turn_id: str
     label: str
     category: str
     summary: str
@@ -109,6 +113,16 @@ class ToolExample(BaseModel):
     timestamp: str | None = None
 
 
+class AnalysisEvidenceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: EvidenceKind
+    ref: str
+    label: str
+    detail: str
+    severity: EvidenceSeverity
+
+
 class ToolEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -127,13 +141,13 @@ class AnalysisFinding(BaseModel):
     title: str
     body: str
     impact: str | None
-    evidence: list[str]
+    evidence: list[AnalysisEvidenceRef]
 
 
 class SessionAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[4] = 4
+    schema_version: Literal[5] = 5
     session_id: str
     generated_at: str
     artifact_path: str | None = None
@@ -288,25 +302,33 @@ Read the evidence packet below. Treat it as the only source of facts. Do not run
 tools, browse, or infer unprovided raw evidence. Return only JSON matching the \
 output schema.
 
-# Review rules
-- Judge cost against the task story, not in isolation.
-- Separate justified expensive work from avoidable inefficiency.
-- Preserve raw-vs-derived boundaries: cumulative usage is from `ct session usage`; \
-the final context snapshot is from `ct session stats`; raw tool evidence is from \
-`ct session events`; findings are derived from the packet.
-- Use `usage_evidence.context_composition[].concept/source_key` as the canonical \
-context concept taxonomy, and keep resident context separate from billed tokens.
-- Mention high-impact ratios when available, and prefer actionable workflow \
-improvements over generic token-saving advice.
-- If the packet includes domain routing hints, use them to identify missed \
-optimal paths. Do not treat cloud/live state checks as automatically bad.
+# Review design
+- Make session-level findings concise overview statements.
+- Put specifics in `finding.evidence` as an evidence-based breakdown.
+- Judge cost against task necessity. Separate justified expensive work from \
+avoidable inefficiency.
+- Keep resident context composition from `ct session stats` separate from billed \
+usage from `ct session usage`.
+- Do not treat cloud/live state checks as automatically bad.
+
+# Evidence refs
+Every evidence item must use exactly one of these kinds, and its `ref` must match \
+the packet value named here:
+- `context_category`: `usage_evidence.context_composition[].source_key`.
+- `tool_item`: `usage_evidence.expensive_billed_items[].item_id`.
+- `tool_bucket`: `tool_evidence.buckets[].key`.
+- `turn`: `usage_evidence.high_billed_turns[].turn_id` or \
+`task_story.phases[].turn_ids[]`.
+
+Do not invent pattern refs. If a point has no timeline element, keep it in the \
+finding body and omit evidence for it.
 
 # Output
 - `task_story`: initial request, follow-up pivots, phases, touched artifacts, outcomes.
-- `findings`: include at least one `avoidable_pattern` when risky buckets are \
-material, one `justified_expensive_work` when correctness work was necessary, one \
-`optimal_pattern` worth preserving, and one `recommended_workflow` for next time. \
-Keep each finding short enough for a dashboard card."""
+- `findings`: overview cards. Prefer 3-5 findings total. Use short titles and \
+one-sentence bodies.
+- `finding.evidence`: 1-4 refs per finding, each with concise `label`, concrete \
+`detail`, and `severity` of `hint` or `warning`."""
 
 
 def _analysis_request_text(evidence_packet: dict[str, Any]) -> str:
@@ -324,7 +346,7 @@ def _artifact_path(session_id: str, artifact_dir: Path | None) -> Path:
         artifact_dir
         or Path.home() / ".coding-trajectory" / "dashboard" / "session-analysis"
     )
-    return directory / f"{safe_id}.v4.json"
+    return directory / f"{safe_id}.v5.json"
 
 
 def _task_story(overview: dict[str, Any]) -> TaskStory:
@@ -625,6 +647,8 @@ def _augment_usage_evidence(
     ]
     expensive_items = [
         ExpensiveBilledItem(
+            item_id=item.item_id,
+            turn_id=item.turn_id,
             label=_one_line(item.label, 120),
             category=item.category,
             summary=_one_line(item.summary, 220),

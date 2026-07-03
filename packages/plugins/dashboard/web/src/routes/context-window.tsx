@@ -3,7 +3,7 @@ import { useParams, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as ScrollArea from "@radix-ui/react-scroll-area";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { ArrowLeft, Eye, Pin, PinOff, Play, Pause, Maximize, Minimize, Info, Search, X, Sparkles, Square } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Info, Search, X, Sparkles, Square } from "lucide-react";
 import {
   analyzeSession,
   fetchContextWindow,
@@ -31,6 +31,11 @@ const categoryColors: Record<string, string> = {
 };
 
 const CATEGORY_ORDER = ["starting_context", "user_input", "files", "output", "agent", "unattributed"];
+type AnalysisFinding = SessionAnalysis["findings"][number];
+type AnalysisEvidenceRef = AnalysisFinding["evidence"][number];
+type TimelineEvidenceAnnotation = AnalysisEvidenceRef & {
+  finding: Pick<AnalysisFinding, "kind" | "title">;
+};
 
 function aggregateCategories(categories: ContextCategory[]) {
   const totals = new Map<string, number>();
@@ -137,6 +142,32 @@ function findingTone(kind: SessionAnalysis["findings"][number]["kind"]) {
   return "border-border-soft bg-surface-subtle";
 }
 
+function evidenceKindLabel(kind: AnalysisEvidenceRef["kind"]) {
+  if (kind === "context_category") return "Context";
+  if (kind === "tool_item") return "Tool item";
+  if (kind === "tool_bucket") return "Tool bucket";
+  return "Turn";
+}
+
+function evidenceRefMatchesEvent(ref: AnalysisEvidenceRef, event: ContextEvent) {
+  if (ref.kind === "context_category") {
+    return event.detail_ref.stats_category === ref.ref;
+  }
+  if (ref.kind === "tool_item") {
+    return event.detail_ref.item_id === ref.ref;
+  }
+  if (ref.kind === "tool_bucket") {
+    return event.detail_ref.tool_bucket === ref.ref;
+  }
+  return event.turn_id === ref.ref;
+}
+
+function evidenceBadgeTone(severity: AnalysisEvidenceRef["severity"]) {
+  return severity === "warning"
+    ? "border-warning/45 bg-warning/10 text-foreground"
+    : "border-moss/40 bg-moss/10 text-foreground";
+}
+
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
   const router = useRouter();
@@ -206,6 +237,26 @@ export function ContextWindowRoute() {
   const analysis = analysisJob.data;
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
 
+  const evidenceByEventId = React.useMemo(() => {
+    const next = new Map<string, TimelineEvidenceAnnotation[]>();
+    if (!analysis) return next;
+    for (const event of events) {
+      const matches: TimelineEvidenceAnnotation[] = [];
+      for (const finding of analysis.findings) {
+        for (const evidence of finding.evidence) {
+          if (evidenceRefMatchesEvent(evidence, event)) {
+            matches.push({
+              ...evidence,
+              finding: { kind: finding.kind, title: finding.title },
+            });
+          }
+        }
+      }
+      if (matches.length > 0) next.set(event.id, matches);
+    }
+    return next;
+  }, [analysis, events]);
+
   const combinedSegments = React.useMemo(() => {
     const capacity = query.data?.context_window_tokens?.value ?? 0;
     return aggregateCategories(query.data?.categories ?? []).map(({ category, tokens }) => ({
@@ -220,6 +271,7 @@ export function ContextWindowRoute() {
   const playbackPct = filteredEvents.length > 0
     ? ((Math.max(playbackIndex, 0) + 1) / filteredEvents.length) * 100
     : 0;
+  const activeEvidence = activeEvent ? evidenceByEventId.get(activeEvent.id) ?? [] : [];
 
   React.useEffect(() => {
     if (!isPlaying || !activeId) return;
@@ -470,6 +522,8 @@ export function ContextWindowRoute() {
                       ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
                       : 0;
                     const isSubagent = event.source === "subagent";
+                    const eventEvidence = evidenceByEventId.get(event.id) ?? [];
+                    const hasWarning = eventEvidence.some((item) => item.severity === "warning");
                     return (
                       <React.Fragment key={event.id}>
                         {header ? (
@@ -530,6 +584,17 @@ export function ContextWindowRoute() {
                               {event.terminal_visible ? (
                                 <Eye size={14} className="text-muted-foreground" />
                               ) : null}
+                              {eventEvidence.length > 0 ? (
+                                <span
+                                  className={cn(
+                                    "inline-flex h-5 min-w-5 items-center justify-center rounded-md border px-1",
+                                    hasWarning ? "border-warning/45 bg-warning/10 text-warning" : "border-moss/40 bg-moss/10 text-moss",
+                                  )}
+                                  title={`${eventEvidence.length} analysis evidence ${eventEvidence.length === 1 ? "match" : "matches"}`}
+                                >
+                                  {hasWarning ? <AlertTriangle size={13} /> : <Lightbulb size={13} />}
+                                </span>
+                              ) : null}
                             </span>
                           </button>
                         </li>
@@ -586,6 +651,32 @@ export function ContextWindowRoute() {
                     <p className="m-0 text-body-sm text-muted-foreground">
                       You see a brief mention, not the full content.
                     </p>
+                  </div>
+                </div>
+              ) : null}
+              {activeEvidence.length > 0 ? (
+                <div className="mt-4 overflow-hidden rounded-xl border border-border-soft">
+                  <div className="bg-surface-subtle px-4 py-2 eyebrow text-muted-foreground">
+                    Analysis Evidence
+                  </div>
+                  <div className="grid gap-2 px-4 py-3">
+                    {activeEvidence.map((item, index) => (
+                      <div
+                        key={`${item.kind}-${item.ref}-${index}`}
+                        className={cn("rounded-lg border px-3 py-2", evidenceBadgeTone(item.severity))}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="outline" className="text-caption">
+                            {evidenceKindLabel(item.kind)}
+                          </Badge>
+                          <span className="text-caption font-medium">{item.label}</span>
+                          <span className="text-caption text-muted-foreground">{item.finding.title}</span>
+                        </div>
+                        <p className="m-0 mt-1 text-caption leading-relaxed text-muted-foreground">
+                          {item.detail}
+                        </p>
+                      </div>
+                    ))}
                   </div>
                 </div>
               ) : null}
@@ -668,8 +759,8 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
       </div>
 
       <div className="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
-        <MetricTile label="Cumulative usage" value={formatTokens(analysis.usage_evidence.cumulative_tokens)} detail="all turns" />
-        <MetricTile label="Final context" value={formatTokens(analysis.usage_evidence.final_context_tokens)} detail={formatPercent(analysis.usage_evidence.final_context_percent)} />
+        <MetricTile label="Processed usage" value={formatTokens(analysis.usage_evidence.processed_tokens)} detail="billed tokens" />
+        <MetricTile label="Resident context" value={formatTokens(analysis.usage_evidence.resident_context_tokens)} detail={formatPercent(analysis.usage_evidence.resident_context_percent)} />
         <MetricTile label="Tool results" value={formatCount(analysis.tool_evidence.total_result_calls)} detail={`${analysis.tool_evidence.failed_result_calls} failed`} />
         <MetricTile label="Risky output" value={formatPercent(riskyBuckets.reduce((sum, bucket) => sum + bucket.output_share, 0))} detail={`${riskyBuckets.length} buckets`} />
       </div>
@@ -689,10 +780,14 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
               <p className="m-0 mt-1 text-body-sm leading-relaxed text-muted-foreground">{finding.body}</p>
               {finding.evidence.length > 0 ? (
                 <ul className="m-0 mt-2 flex list-none flex-wrap gap-1.5 p-0">
-                  {finding.evidence.slice(0, 4).map((item) => (
-                    <li key={item}>
-                      <Badge variant="secondary" className="max-w-[18rem] overflow-hidden text-ellipsis whitespace-nowrap text-caption">
-                        {item}
+                  {finding.evidence.slice(0, 4).map((item, evidenceIndex) => (
+                    <li key={`${item.kind}-${item.ref}-${evidenceIndex}`}>
+                      <Badge
+                        variant="secondary"
+                        className={cn("max-w-[18rem] overflow-hidden text-ellipsis whitespace-nowrap text-caption", evidenceBadgeTone(item.severity))}
+                        title={item.detail}
+                      >
+                        {evidenceKindLabel(item.kind)}: {item.label}
                       </Badge>
                     </li>
                   ))}
