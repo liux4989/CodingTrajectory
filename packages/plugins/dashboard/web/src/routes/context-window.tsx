@@ -473,111 +473,112 @@ export function ContextWindowRoute() {
         </div>
       </figure>
 
-      <div className="context-window-layout">
-        <section className="min-w-0" aria-labelledby="event-stream-title">
-          <h2 id="event-stream-title" className="sr-only">Event stream</h2>
-          {filteredEvents.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border-soft p-8 text-center text-caption text-muted-foreground">
-              No events match the current filters.
-            </div>
-          ) : (
-            <ol className="m-0 grid list-none gap-2 p-0">
-              {filteredEvents.map((event, index) => {
-                const previous = filteredEvents[index - 1];
-                const header = groupHeader(event, previous);
-                const isSelected = event.id === selectedId;
-                const isActive = event.id === activeId;
-                const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
-                const color = eventColor(event);
-                const tokenPercent = totalUsedTokens > 0 && event.tokens
-                  ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
-                  : 0;
-                const isSubagent = event.source === "subagent";
-                const eventEvidence = evidenceByEventId.get(event.id) ?? [];
-                const hasWarning = eventEvidence.some((item) => item.severity === "warning");
-                return (
-                  <React.Fragment key={event.id}>
-                    {header ? (
+      <div className="context-window-shell">
+        <div className="context-window-layout">
+          <section className="min-w-0" aria-labelledby="event-stream-title">
+            <h2 id="event-stream-title" className="sr-only">Event stream</h2>
+            {filteredEvents.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border-soft p-8 text-center text-caption text-muted-foreground">
+                No events match the current filters.
+              </div>
+            ) : (
+              <ol className="m-0 grid list-none gap-2 p-0">
+                {filteredEvents.map((event, index) => {
+                  const previous = filteredEvents[index - 1];
+                  const header = groupHeader(event, previous);
+                  const isSelected = event.id === selectedId;
+                  const isActive = event.id === activeId;
+                  const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
+                  const color = eventColor(event);
+                  const tokenPercent = totalUsedTokens > 0 && event.tokens
+                    ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
+                    : 0;
+                  const isSubagent = event.source === "subagent";
+                  const eventEvidence = evidenceByEventId.get(event.id) ?? [];
+                  const hasWarning = eventEvidence.some((item) => item.severity === "warning");
+                  return (
+                    <React.Fragment key={event.id}>
+                      {header ? (
+                        <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
+                          <h4 className={cn(
+                            "eyebrow-soft text-muted-foreground",
+                            index > 0 && "mt-4",
+                          )}>
+                            {header}
+                          </h4>
+                        </li>
+                      ) : null}
                       <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
-                        <h4 className={cn(
-                          "eyebrow-soft text-muted-foreground",
-                          index > 0 && "mt-4",
-                        )}>
-                          {header}
-                        </h4>
-                      </li>
-                    ) : null}
-                    <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
-                      <button
-                        ref={(node) => { eventRefs.current[index] = node; }}
-                        type="button"
-                        className="event-row"
-                        data-active={isActive || undefined}
-                        data-selected={isSelected || undefined}
-                        data-highlight={isCategoryHighlight || undefined}
-                        style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
-                        aria-pressed={isSelected}
-                        onFocus={() => setSelectedId(event.id)}
-                        onClick={() => setSelectedId(event.id)}
-                        onKeyDown={(eventKey) => {
-                          if (eventKey.key === "ArrowDown") {
-                            eventKey.preventDefault();
-                            moveFocus(index, 1);
-                          } else if (eventKey.key === "ArrowUp") {
-                            eventKey.preventDefault();
-                            moveFocus(index, -1);
-                          }
-                        }}
-                      >
-                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
-                        <Badge
-                          variant="outline"
-                          className="shrink-0 px-1.5 py-0 text-caption text-foreground"
-                          style={{ backgroundColor: categoryTint(color, 0.15), borderColor: categoryTint(color, 0.25) }}
+                        <button
+                          ref={(node) => { eventRefs.current[index] = node; }}
+                          type="button"
+                          className="event-row"
+                          data-active={isActive || undefined}
+                          data-selected={isSelected || undefined}
+                          data-highlight={isCategoryHighlight || undefined}
+                          style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
+                          aria-pressed={isSelected}
+                          onFocus={() => setSelectedId(event.id)}
+                          onClick={() => setSelectedId(event.id)}
+                          onKeyDown={(eventKey) => {
+                            if (eventKey.key === "ArrowDown") {
+                              eventKey.preventDefault();
+                              moveFocus(index, 1);
+                            } else if (eventKey.key === "ArrowUp") {
+                              eventKey.preventDefault();
+                              moveFocus(index, -1);
+                            }
+                          }}
                         >
-                          {categoryLabel(event.category)}
-                        </Badge>
-                        <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
-                          {event.label}
-                        </span>
-                        <span className="event-row-meta">
-                          <span className="event-row-token mono text-body-sm font-medium">
-                            {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
+                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 px-1.5 py-0 text-caption text-foreground"
+                            style={{ backgroundColor: categoryTint(color, 0.15), borderColor: categoryTint(color, 0.25) }}
+                          >
+                            {categoryLabel(event.category)}
+                          </Badge>
+                          <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
+                            {event.label}
                           </span>
-                          {tokenPercent > 0 ? (
-                            <span className="event-row-meter">
+                          <span className="event-row-meta">
+                            <span className="event-row-token mono text-body-sm font-medium">
+                              {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
+                            </span>
+                            {tokenPercent > 0 ? (
+                              <span className="event-row-meter">
+                                <span
+                                  className="block h-full rounded-full"
+                                  style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
+                                />
+                              </span>
+                            ) : null}
+                            {event.terminal_visible ? (
+                              <Eye size={14} className="text-muted-foreground" />
+                            ) : null}
+                            {eventEvidence.length > 0 ? (
                               <span
-                                className="block h-full rounded-full"
-                                style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
-                              />
-                            </span>
-                          ) : null}
-                          {event.terminal_visible ? (
-                            <Eye size={14} className="text-muted-foreground" />
-                          ) : null}
-                          {eventEvidence.length > 0 ? (
-                            <span
-                              className={cn(
-                                "inline-flex h-5 min-w-5 items-center justify-center rounded-md border px-1",
-                                hasWarning ? "border-warning/45 bg-warning/10 text-warning" : "border-moss/40 bg-moss/10 text-moss",
-                              )}
-                              title={`${eventEvidence.length} analysis evidence ${eventEvidence.length === 1 ? "match" : "matches"}`}
-                            >
-                              {hasWarning ? <AlertTriangle size={13} /> : <Lightbulb size={13} />}
-                            </span>
-                          ) : null}
-                        </span>
-                      </button>
-                    </li>
-                  </React.Fragment>
-                );
-              })}
-            </ol>
-          )}
-        </section>
+                                className={cn(
+                                  "inline-flex h-5 min-w-5 items-center justify-center rounded-md border px-1",
+                                  hasWarning ? "border-warning/45 bg-warning/10 text-warning" : "border-moss/40 bg-moss/10 text-moss",
+                                )}
+                                title={`${eventEvidence.length} analysis evidence ${eventEvidence.length === 1 ? "match" : "matches"}`}
+                              >
+                                {hasWarning ? <AlertTriangle size={13} /> : <Lightbulb size={13} />}
+                              </span>
+                            ) : null}
+                          </span>
+                        </button>
+                      </li>
+                    </React.Fragment>
+                  );
+                })}
+              </ol>
+            )}
+          </section>
 
-        <aside className="context-detail-rail min-w-0 self-start">
-          <div className="context-detail-pane rounded-[var(--radius-2xl)] border border-border-soft bg-card p-6">
+          <aside className="context-detail-rail min-w-0 self-start">
+            <div className="context-detail-pane rounded-[var(--radius-2xl)] p-6">
             <div className="context-detail-scroll">
               {activeEvent ? (
                 <>
@@ -656,8 +657,9 @@ export function ContextWindowRoute() {
                 </>
               )}
             </div>
-          </div>
-        </aside>
+            </div>
+          </aside>
+        </div>
       </div>
 
       <div className="sticky bottom-0 z-50 mt-2 rounded-xl border border-border-soft bg-card p-3 shadow-lg">

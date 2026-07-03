@@ -562,6 +562,14 @@
    * Left timeline owns the full responsive width. The inspector overlays
    * from the right on larger screens instead of participating in the main
    * width calculation. */
+  .context-window-shell {
+    border-radius: var(--radius-3xl);
+    border: 1px solid var(--border-soft);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card) 90%, white 10%) 0%, var(--card) 100%);
+    padding: clamp(0.875rem, 1.4vw, 1.25rem);
+    overflow: hidden;
+  }
   .context-window-layout {
     display: grid;
     inline-size: 100%;
@@ -594,8 +602,9 @@
     max-block-size: calc(100dvh - 7rem);
     overflow: hidden;
     pointer-events: auto;
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--card) 92%, white 8%) 0%, var(--card) 100%);
+    border: 1px solid var(--border-soft);
+    background: color-mix(in srgb, var(--card) 94%, white 6%);
+    box-shadow: var(--shadow-md);
   }
   .context-detail-scroll {
     min-block-size: 0;
@@ -644,6 +653,7 @@
     }
     .context-detail-pane {
       max-block-size: none;
+      box-shadow: none;
     }
   }
 }

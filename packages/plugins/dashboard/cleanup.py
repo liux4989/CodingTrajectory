@@ -553,21 +553,21 @@ def _session_target(
     visible_session_ids: set[str],
 ) -> tuple[SessionTarget | None, SkippedTarget | None]:
     if _recently_modified(path, timedelta(hours=24)):
-        return None, _skip("session", str(path), "modified_in_last_24h")
+        return None, _skip("session", str(path), "active_session_log")
     records = _load_jsonl(path)
     if records is None:
-        return None, _skip("session", str(path), "unreadable_or_invalid")
+        return None, _skip("session", str(path), "invalid_session_log")
     session_id = _session_id_from_records(vendor, records)
     if not session_id:
         return None, _skip("session", str(path), "missing_session_id")
     if session_id in visible_session_ids:
-        return None, None
+        return None, _skip("session", str(path), "visible_session")
 
     return (
         SessionTarget(
             vendor=vendor,
             path=str(path.resolve()),
-            reason=["empty"],
+            reason=["orphan_session_log"],
             modified_at=_modified_at(path),
             session_id=session_id,
         ),

@@ -34,7 +34,7 @@ summary = "Clean old project directories."
 
 [[tools]]
 name = "session/cleanup"
-summary = "Clean empty or low-value session logs."
+summary = "Clean orphaned or low-value session logs."
 
 [[tools]]
 name = "session/context-window"

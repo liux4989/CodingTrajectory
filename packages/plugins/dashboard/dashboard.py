@@ -58,7 +58,7 @@ def _build_root_parser() -> argparse.ArgumentParser:
     session.add_argument("--agent-vendor", default=None)
     session_cleanup = sub.add_parser(
         "session cleanup",
-        help="Clean empty or low-value session logs.",
+        help="Clean orphaned or low-value session logs.",
     )
     session_cleanup.add_argument("--agent-vendor", default=None)
     session_cleanup.add_argument("--trash", action="store_true")
@@ -114,7 +114,7 @@ def _session_list_parser() -> argparse.ArgumentParser:
         description="Alias for `ct project sessions`.",
         epilog=(
             "SUBCOMMANDS\n"
-            "  cleanup          Clean empty or low-value session logs.\n"
+            "  cleanup          Clean orphaned or low-value session logs.\n"
             "  context-window   Inspect context composition and trajectory events."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -125,7 +125,7 @@ def _session_list_parser() -> argparse.ArgumentParser:
 def _session_cleanup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct plugin dashboard session cleanup",
-        description="Clean empty or low-value session logs.",
+        description="Clean orphaned or low-value session logs.",
     )
     parser.add_argument("--agent-vendor", default=None)
     parser.add_argument("--dry-run", action="store_true")
