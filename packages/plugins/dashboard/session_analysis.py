@@ -18,6 +18,8 @@ except ImportError:
 
 
 CtJson = Callable[[list[str]], dict[str, Any]]
+ANALYSIS_MODEL = "gpt-5.4"
+ANALYSIS_REASONING_EFFORT = "low"
 FindingKind = Literal[
     "justified_expensive_work",
     "avoidable_pattern",
@@ -240,6 +242,8 @@ def build_analysis(
         user_text=_analysis_request_text(evidence_packet),
         output_schema=AgentReviewOutput.model_json_schema(),
         ephemeral=True,
+        model=ANALYSIS_MODEL,
+        effort=ANALYSIS_REASONING_EFFORT,
     )
     review = AgentReviewOutput.model_validate(app_result.parse_json())
     return SessionAnalysis(

@@ -56,14 +56,21 @@ class CodexAppServerClient:
         output_schema: dict[str, Any] | None = None,
         thread_id: str | None = None,
         ephemeral: bool = False,
+        model: str | None = None,
+        effort: str | None = None,
     ) -> CodexAppServerResult:
         session = CodexAppServerSession(cwd=cwd, timeout_seconds=self.timeout_seconds)
         try:
             if thread_id is None:
-                session.start_thread(ephemeral=ephemeral)
+                session.start_thread(ephemeral=ephemeral, model=model)
             else:
                 session.attach_thread(thread_id)
-            return session.run_turn(user_text=user_text, output_schema=output_schema)
+            return session.run_turn(
+                user_text=user_text,
+                output_schema=output_schema,
+                model=model,
+                effort=effort,
+            )
         finally:
             session.close()
 
@@ -98,17 +105,21 @@ class CodexAppServerManager:
         output_schema: dict[str, Any] | None = None,
         thread_id: str | None = None,
         ephemeral: bool = True,
+        model: str | None = None,
+        effort: str | None = None,
     ) -> CodexAppServerResult:
         with self._lock:
             session = self._session_for_locked(cwd)
             if thread_id is None:
-                session.start_thread(cwd=cwd, ephemeral=ephemeral)
+                session.start_thread(cwd=cwd, ephemeral=ephemeral, model=model)
             else:
                 session.attach_thread(thread_id)
             return session.run_turn(
                 cwd=cwd,
                 user_text=user_text,
                 output_schema=output_schema,
+                model=model,
+                effort=effort,
             )
 
     def close(self) -> None:
@@ -175,20 +186,29 @@ class CodexAppServerSession:
             self.close()
             raise
 
-    def start_thread(self, *, cwd: Path | None = None, ephemeral: bool = False) -> str:
+    def start_thread(
+        self,
+        *,
+        cwd: Path | None = None,
+        ephemeral: bool = False,
+        model: str | None = None,
+    ) -> str:
         cwd = cwd or self.cwd
+        params: dict[str, Any] = {
+            "cwd": str(cwd),
+            "ephemeral": ephemeral,
+            "approvalPolicy": "never",
+            "sandbox": "read-only",
+            "serviceName": "coding-trajectory-dashboard",
+        }
+        if model:
+            params["model"] = model
         thread_request_id = self._request_id()
         self._send(
             {
                 "method": "thread/start",
                 "id": thread_request_id,
-                "params": {
-                    "cwd": str(cwd),
-                    "ephemeral": ephemeral,
-                    "approvalPolicy": "never",
-                    "sandbox": "read-only",
-                    "serviceName": "coding-trajectory-dashboard",
-                },
+                "params": params,
             }
         )
         thread_result = self._wait_response(thread_request_id)
@@ -210,6 +230,8 @@ class CodexAppServerSession:
         cwd: Path | None = None,
         user_text: str,
         output_schema: dict[str, Any] | None = None,
+        model: str | None = None,
+        effort: str | None = None,
     ) -> CodexAppServerResult:
         if not self.thread_id:
             raise RuntimeError("codex app-server requires a thread id")
@@ -225,6 +247,10 @@ class CodexAppServerSession:
         }
         if output_schema is not None:
             turn_params["outputSchema"] = output_schema
+        if model:
+            turn_params["model"] = model
+        if effort:
+            turn_params["effort"] = effort
         self._send(
             {
                 "method": "turn/start",
