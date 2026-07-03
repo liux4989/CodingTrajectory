@@ -333,7 +333,10 @@ class ClaudeCodeAdapter(BaseAdapter):
                     source="claude_usage_block",
                     normalized=record.data.get("vendor_data", {}),
                     source_event_id=record.record_id,
-                    provider=None,
+                    # Claude Code emits Anthropic-schema usage (input_tokens is
+                    # uncached) regardless of the underlying routed model, so the
+                    # net-input convention applies to every observation.
+                    provider="anthropic",
                     category_source="claude_usage_block",
                 )
             )
@@ -504,13 +507,13 @@ class ClaudeCodeAdapter(BaseAdapter):
                                 "tool_name": tool_name,
                                 "tool_call_id": tool_id,
                                 "input": block.get("input"),
-                                "vendor_data": vendor_data,
                                 "item_kind": _claude_item_kind(tool_name),
                             },
                         )
                     )
 
             elif raw_type == "system":
+                base = _base_payload(record)
                 subtype = record.get("subtype")
                 if subtype in {"turn_duration", "local_command"}:
                     transcript.append(
@@ -536,6 +539,7 @@ class ClaudeCodeAdapter(BaseAdapter):
                 continue
 
             elif raw_type == "attachment":
+                base = _base_payload(record)
                 transcript.append(
                     TranscriptRecord(
                         sequence=len(transcript),
@@ -556,6 +560,7 @@ class ClaudeCodeAdapter(BaseAdapter):
                 continue
 
             elif raw_type == "queue-operation":
+                base = _base_payload(record)
                 transcript.append(
                     TranscriptRecord(
                         sequence=len(transcript),
