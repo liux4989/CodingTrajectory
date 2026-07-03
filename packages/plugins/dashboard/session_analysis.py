@@ -169,6 +169,7 @@ def build_analysis(
     session_id: str,
     *,
     ct_json: CtJson,
+    cwd: Path | None = None,
 ) -> SessionAnalysis:
     overview = ct_json(
         ["session", "overview", "--global-scope", "--output", "json", session_id]
@@ -232,7 +233,7 @@ def build_analysis(
         tool_evidence=tool_evidence,
     )
     app_result = CodexAppServerClient().run_turn(
-        cwd=_repo_root(),
+        cwd=cwd or _session_cwd(overview) or _repo_root(),
         user_text=_analysis_request_text(evidence_packet),
         output_schema=AgentReviewOutput.model_json_schema(),
     )
@@ -251,6 +252,22 @@ def build_analysis(
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _session_cwd(overview: dict[str, Any]) -> Path | None:
+    sessions = overview.get("sessions")
+    if not isinstance(sessions, list):
+        return None
+    for session in sessions:
+        if not isinstance(session, dict):
+            continue
+        raw_cwd = session.get("cwd")
+        if not isinstance(raw_cwd, str) or not raw_cwd.strip():
+            continue
+        cwd = Path(raw_cwd).expanduser()
+        if cwd.is_dir():
+            return cwd
+    return None
 
 
 def _evidence_packet(
