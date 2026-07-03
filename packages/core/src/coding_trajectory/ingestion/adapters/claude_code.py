@@ -5,12 +5,15 @@ from __future__ import annotations
 import logging
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.common import compact_dict, infer_tool_success, parse_timestamp
 from coding_trajectory.ingestion.models import (
+    ContextSourceObservation,
+    ContextUsageObservation,
     RuntimeObservation,
     Session,
     ToolStatus,
@@ -93,6 +96,41 @@ def _as_int_or_none(value: object) -> int | None:
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     return None
+
+
+def _starting_context_sources(
+    *,
+    started_at: datetime,
+    context_usage: list[ContextUsageObservation],
+) -> list[ContextSourceObservation]:
+    """Synthesize a starting-context source from the cached prompt prefix.
+
+    Claude Code JSONL never records the system prompt, tool definitions,
+    AGENTS.md, skills, or MCP text — they are injected client-side at request
+    time, so the observed context composition cannot measure them from visible
+    content. The first assistant turn's cached prefix (``cache_read`` +
+    ``cache_creation``, before any prior turns accumulate) is the best available
+    estimate of the stable starting-context size, so expose it as a single
+    ``base_system`` source with ``reported_tokens`` set.
+    """
+    for observation in context_usage:
+        usage = observation.usage or {}
+        cached = _as_int_or_none(usage.get("cached_input_tokens")) or 0
+        cache_creation = _as_int_or_none(usage.get("cache_creation_input_tokens")) or 0
+        estimate = cached + cache_creation
+        if estimate <= 0:
+            continue
+        return [
+            ContextSourceObservation(
+                timestamp=started_at,
+                key="base_system",
+                label="System prompt & tools",
+                text="",
+                source="claude_cached_prefix_estimate",
+                reported_tokens=estimate,
+            )
+        ]
+    return []
 
 
 def _record_title(record: dict[str, object]) -> str | None:
@@ -342,6 +380,9 @@ class ClaudeCodeAdapter(BaseAdapter):
             )
             is not None
         ]
+        context_sources = _starting_context_sources(
+            started_at=started_at, context_usage=context_usage
+        )
 
         return Session(
             session_id=session_id,
@@ -353,6 +394,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             events=events,
             turns=turns,
             context_usage=context_usage,
+            context_sources=context_sources,
             runtime_observations=runtime_observations,
             extensions=extensions,
         )
