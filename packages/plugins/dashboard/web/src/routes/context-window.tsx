@@ -66,16 +66,6 @@ function formatTokens(value: number | null | undefined) {
   return String(value);
 }
 
-function formatCount(value: number | null | undefined) {
-  if (value == null) return "-";
-  return new Intl.NumberFormat().format(value);
-}
-
-function formatPercent(value: number | null | undefined) {
-  if (value == null) return "-";
-  return `${value.toFixed(1)}%`;
-}
-
 function readStoredJobId(storageKey: string) {
   if (typeof window === "undefined") return null;
   const value = window.sessionStorage.getItem(storageKey);
@@ -119,27 +109,11 @@ function categoryLabel(category: string) {
   return category.replaceAll("_", " ");
 }
 
-function keyTakeaway(event: ContextEvent) {
-  if (event.source === "hook") return "Hooks fire automatically on tool events. Output reaches Claude via additionalContext JSON.";
-  if (event.source === "subagent") return "Subagents run in their own context window. Only summaries flow back to the parent session.";
-  if (event.category === "starting_context") return "A lot loads before you type anything. System prompts, memory, skills, and MCP tools are all in context.";
-  if (event.category === "user_input") return "Your messages are tokenized and fed into context as user turns.";
-  if (event.category === "output") return "Model output is re-fed into context so Claude can build on prior responses.";
-  if (event.category === "files") return "File contents are expanded and placed in context when referenced.";
-  return "Every item in context costs tokens. Pin an event to inspect it while scrolling.";
-}
-
 function findingLabel(kind: SessionAnalysis["findings"][number]["kind"]) {
   if (kind === "justified_expensive_work") return "Justified";
   if (kind === "avoidable_pattern") return "Avoidable";
   if (kind === "optimal_pattern") return "Optimal";
   return "Next workflow";
-}
-
-function findingTone(kind: SessionAnalysis["findings"][number]["kind"]) {
-  if (kind === "avoidable_pattern") return "border-warning/35 bg-warning/8";
-  if (kind === "optimal_pattern") return "border-moss/35 bg-moss/8";
-  return "border-border-soft bg-surface-subtle";
 }
 
 function evidenceKindLabel(kind: AnalysisEvidenceRef["kind"]) {
@@ -680,16 +654,6 @@ export function ContextWindowRoute() {
                   </div>
                 </div>
               ) : null}
-              <div className="mt-4 overflow-hidden rounded-xl border border-warning/30">
-                <div className="bg-warning px-4 py-2 eyebrow text-white">
-                  Key Takeaway
-                </div>
-                <div className="bg-surface-subtle px-4 py-4">
-                  <p className="m-0 heading-section leading-snug">
-                    {keyTakeaway(activeEvent)}
-                  </p>
-                </div>
-              </div>
             </>
           ) : (
             <>
@@ -740,99 +704,28 @@ export function ContextWindowRoute() {
 }
 
 function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
-  const riskyBuckets = analysis.tool_evidence.buckets.filter((bucket) => bucket.judgment === "risky");
-  const topBuckets = analysis.tool_evidence.buckets.slice(0, 6);
   return (
-    <section className="grid gap-4" aria-labelledby="session-analysis-title">
+    <section className="panel-subtle rounded-xl px-4 py-3" aria-labelledby="session-analysis-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="session-analysis-title" className="m-0 font-display text-heading">
-            Session analysis
+            Session overview
           </h2>
-          <p className="m-0 mt-1 text-body-sm text-muted-foreground">
-            Generated from ct session usage, stats, overview, and tool events.
-          </p>
         </div>
         <Badge variant="outline" className="mono text-caption">
           Codex
         </Badge>
       </div>
 
-      <div className="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
-        <MetricTile label="Processed usage" value={formatTokens(analysis.usage_evidence.processed_tokens)} detail="billed tokens" />
-        <MetricTile label="Resident context" value={formatTokens(analysis.usage_evidence.resident_context_tokens)} detail={formatPercent(analysis.usage_evidence.resident_context_percent)} />
-        <MetricTile label="Tool results" value={formatCount(analysis.tool_evidence.total_result_calls)} detail={`${analysis.tool_evidence.failed_result_calls} failed`} />
-        <MetricTile label="Risky output" value={formatPercent(riskyBuckets.reduce((sum, bucket) => sum + bucket.output_share, 0))} detail={`${riskyBuckets.length} buckets`} />
-      </div>
-
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(18rem,0.7fr)] gap-4 max-lg:grid-cols-1">
-        <div className="grid gap-3">
-          {analysis.findings.map((finding, index) => (
-            <article
-              key={`${finding.kind}-${index}`}
-              className={cn("rounded-xl border px-4 py-3", findingTone(finding.kind))}
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline" className="text-caption">{findingLabel(finding.kind)}</Badge>
-                {finding.impact ? <span className="mono text-caption text-muted-foreground">{finding.impact}</span> : null}
-              </div>
-              <h3 className="m-0 mt-2 heading-section">{finding.title}</h3>
-              <p className="m-0 mt-1 text-body-sm leading-relaxed text-muted-foreground">{finding.body}</p>
-              {finding.evidence.length > 0 ? (
-                <ul className="m-0 mt-2 flex list-none flex-wrap gap-1.5 p-0">
-                  {finding.evidence.slice(0, 4).map((item, evidenceIndex) => (
-                    <li key={`${item.kind}-${item.ref}-${evidenceIndex}`}>
-                      <Badge
-                        variant="secondary"
-                        className={cn("max-w-[18rem] overflow-hidden text-ellipsis whitespace-nowrap text-caption", evidenceBadgeTone(item.severity))}
-                        title={item.detail}
-                      >
-                        {evidenceKindLabel(item.kind)}: {item.label}
-                      </Badge>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </article>
-          ))}
-        </div>
-
-        <div className="panel-subtle rounded-xl p-4">
-          <h3 className="m-0 heading-section">Output buckets</h3>
-          <div className="mt-3 grid gap-3">
-            {topBuckets.map((bucket) => (
-              <div key={bucket.key}>
-                <div className="mb-1 flex items-center justify-between gap-3 text-caption">
-                  <span className="font-medium">{bucket.label}</span>
-                  <span className="mono text-muted-foreground">{formatPercent(bucket.output_share)}</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-surface-emphasis">
-                  <span
-                    className={cn(
-                      "block h-full rounded-full",
-                      bucket.judgment === "risky" ? "bg-warning" : bucket.judgment === "good" ? "bg-moss" : "bg-primary",
-                    )}
-                    style={{ width: `${Math.min(bucket.output_share, 100)}%` }}
-                  />
-                </div>
-                <div className="mt-1 mono text-caption text-muted-foreground">
-                  {bucket.calls} calls · {formatCount(bucket.output_chars)} chars
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+      <div className="mt-3 grid gap-2">
+        {analysis.findings.map((finding, index) => (
+          <p key={`${finding.kind}-${index}`} className="m-0 text-body-sm leading-relaxed text-muted-foreground">
+            <span className="font-medium text-foreground">{findingLabel(finding.kind)}: {finding.title}.</span>{" "}
+            {finding.body}
+            {finding.impact ? <span className="mono text-caption"> {finding.impact}</span> : null}
+          </p>
+        ))}
       </div>
     </section>
-  );
-}
-
-function MetricTile({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="panel-subtle rounded-xl px-4 py-3">
-      <p className="m-0 text-caption text-muted-foreground">{label}</p>
-      <p className="m-0 mt-1 mono text-heading font-bold text-foreground">{value}</p>
-      <p className="m-0 mt-1 text-caption text-muted-foreground">{detail}</p>
-    </div>
   );
 }
