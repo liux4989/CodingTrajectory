@@ -14,6 +14,7 @@ from coding_trajectory.metrics.context_stats._common import (
 from coding_trajectory.metrics.context_stats.composition import (
     build_context_composition,
 )
+from coding_trajectory.metrics.model_catalog import get_model_context_window
 from coding_trajectory.metrics.models import (
     ContextCategoryFlat,
     ContextModelStatsFlat,
@@ -62,7 +63,12 @@ def build_session_graph_context_stats(
             warnings=[no_obs_message],
         ).model_dump(mode="json")
 
-    context_window = observation.context_window_tokens or 0
+    context_window = observation.context_window_tokens or get_model_context_window(
+        observation.model, provider=observation.provider or vendor.value
+    )
+    context_window_inferred = (
+        not observation.context_window_tokens and context_window is not None
+    )
     provider_usage_buckets = [
         ContextCategoryFlat(
             key=category.key,
@@ -83,6 +89,11 @@ def build_session_graph_context_stats(
     if provider_usage_buckets:
         warnings.append(
             "Provider usage buckets are reported separately from semantic context composition."
+        )
+    if context_window_inferred:
+        warnings.append(
+            f"Context window of {context_window} tokens inferred from a static model "
+            f"catalog; {vendor.value} logs do not report the model context window."
         )
 
     return SessionContextStatsFlat(

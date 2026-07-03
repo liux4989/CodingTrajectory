@@ -54,6 +54,7 @@ from coding_trajectory.metrics.models import (
     TurnMetricsFlat,
 )
 from coding_trajectory.metrics.context_stats._common import runtime_stats
+from coding_trajectory.metrics.model_catalog import get_model_context_window
 
 
 def build_session_graph_metrics(
@@ -339,7 +340,7 @@ def _context_from_observations(
             if item.context_window_tokens
         ),
         None,
-    )
+    ) or get_model_context_window(final.model, provider=final.provider)
     return ModelUsageContextFlat(
         final_used_tokens=final.used_input_tokens or None,
         max_used_tokens=max_used or None,
