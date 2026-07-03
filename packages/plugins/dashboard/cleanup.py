@@ -511,7 +511,7 @@ def _project_metadata_target(
         else:
             reasons.append("older_than_retention")
         if not _looks_like_project_directory(resolved):
-            reasons.append("not_project_directory")
+            skips.append(_skip("project", str(resolved), "not_project_directory"))
         if (resolved / ".ct-cleanup-keep").exists():
             skips.append(_skip("project", str(resolved), "keep_marker"))
         git_skips = _git_skip_reasons(resolved)
@@ -526,6 +526,11 @@ def _project_metadata_target(
     cleanup_paths = (
         [str(path) for path in metadata_paths] if not resolved.exists() else []
     )
+    if resolved.exists():
+        cleanup_paths = [str(resolved)]
+        reasons.append("project_directory_deletion")
+    elif not cleanup_paths and not cleanup_config_paths:
+        return None, [_skip("project", str(resolved), "no_cleanup_paths")]
     return (
         ProjectTarget(
             project=project_name,
@@ -864,11 +869,7 @@ def _resolve_interactive_selection(
 def _target_cleanup_paths(target: ProjectTarget | SessionTarget) -> list[str]:
     if not isinstance(target, ProjectTarget):
         return [target.path]
-    if "project_path_missing" in target.reason:
-        return target.cleanup_paths
-    if target.cleanup_config_paths:
-        return target.cleanup_paths
-    return target.cleanup_paths or [target.path]
+    return target.cleanup_paths
 
 
 def _apply_action(

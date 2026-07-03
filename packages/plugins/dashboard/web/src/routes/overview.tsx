@@ -7,6 +7,7 @@ import { HeaderLabel, RightCell } from "@/components/table-cells";
 import { ProjectLink } from "@/components/project-link";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { useAgentTurn } from "@/hooks/use-agent-turn";
+import { useDateRange } from "@/hooks/use-date-range";
 import { formatElapsed } from "@/hooks/use-elapsed-timer";
 import { DataTable } from "@/components/data-table";
 import { MetricSkeleton } from "@/components/ui/skeleton";
@@ -20,7 +21,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function OverviewRoute() {
-  const overview = useQuery({ queryKey: ["overview"], queryFn: fetchOverview });
+  const { days: sinceDays } = useDateRange();
+  const overview = useQuery({
+    queryKey: ["overview", sinceDays],
+    queryFn: () => fetchOverview({ sinceDays }),
+  });
 
   if (overview.isPending) {
     return (
@@ -47,7 +52,7 @@ export function OverviewRoute() {
     <div className="route-container w-full min-w-0 overflow-hidden">
       <RouteHeader
         eyebrow="Usage activity"
-        title="Recent project and session activity from today."
+        title={`Recent project and session activity from the last ${sinceDays} day${sinceDays === 1 ? "" : "s"}.`}
       />
       <section className="stat-grid min-w-0">
         <StaggerGroup className="contents">

@@ -151,7 +151,7 @@ def _handler_for(
         def _handle_api_get(self, path: str, query: dict[str, list[str]]) -> None:
             try:
                 if path == "/api/overview":
-                    payload = service.overview()
+                    payload = service.overview(query)
                 elif path == "/api/projects":
                     payload = service.projects(query)
                 elif path == "/api/projects/detail":

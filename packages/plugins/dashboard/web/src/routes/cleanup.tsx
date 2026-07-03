@@ -8,6 +8,7 @@ import {
   type RowSelectionState,
 } from "@tanstack/react-table";
 import { applyCleanup, fetchCleanupPreview, type CleanupTarget } from "@/api";
+import { useDateRange } from "@/hooks/use-date-range";
 import { RouteHeader } from "@/components/route-header";
 import { StateBlock } from "@/components/state-block";
 import { ReasonBadges, ReasonSummary } from "@/components/badges";
@@ -34,7 +35,7 @@ import {
 } from "@/components/ui/select";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { DataTable } from "@/components/data-table";
-import { ShieldAlert, RefreshCcw } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 
 export function CleanupRoute() {
   return (
@@ -84,6 +85,7 @@ function makeColumns(kind: "project" | "session"): ColumnDef<CleanupTarget>[] {
 
 function CleanupPanel({ kind, title, description }: { kind: "project" | "session"; title: string; description: string }) {
   const queryClient = useQueryClient();
+  const { days: sinceDays } = useDateRange();
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [sessionAction, setSessionAction] = React.useState<"trash" | "delete">("trash");
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -91,8 +93,8 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
   const columns = React.useMemo(() => makeColumns(kind), [kind]);
 
   const preview = useQuery({
-    queryKey: ["cleanup", kind],
-    queryFn: () => fetchCleanupPreview(kind),
+    queryKey: ["cleanup", kind, sinceDays],
+    queryFn: () => fetchCleanupPreview(kind, { sinceDays }),
   });
 
   const candidates = preview.data?.candidates ?? [];
@@ -156,9 +158,6 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
         {preview.data ? (
           <>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 max-[32rem]:flex-col max-[32rem]:items-stretch">
-              <Button variant="secondary" size="sm" onClick={() => void preview.refetch()}>
-                <RefreshCcw size={15} /> Refresh
-              </Button>
               {kind === "session" ? (
                 <div className="grid min-w-[8rem] gap-1">
                   <span className="eyebrow-soft text-muted-foreground">Action</span>
@@ -189,6 +188,7 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
               className="max-h-96 bg-transparent"
             />
             <ReasonSummary title="Skipped reasons" reasons={preview.data.summary.skipped_reasons} />
+            <SkippedTargetsList skipped={preview.data.skipped} />
           </>
         ) : null}
       </CardContent>
@@ -210,6 +210,64 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
       </AlertDialog>
     </Card>
   );
+}
+
+type SkippedTarget = {
+  kind: string;
+  path: string;
+  reason: string[];
+};
+
+function SkippedTargetsList({ skipped }: { skipped: SkippedTarget[] }) {
+  const groups = React.useMemo(() => groupSkippedTargets(skipped), [skipped]);
+  if (!skipped.length) return null;
+
+  return (
+    <div className="mt-4 grid gap-2">
+      <h3 className="m-0 font-display font-semibold">Skipped items</h3>
+      <div className="grid gap-2">
+        {groups.map((group) => (
+          <details key={group.reason} className="rounded-md border border-border-soft bg-muted/20">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-body-sm font-medium marker:hidden">
+              <span className="min-w-0 truncate">{group.reason}</span>
+              <Badge variant="secondary" className="shrink-0">
+                {group.items.length}
+              </Badge>
+            </summary>
+            <div className="grid max-h-56 gap-2 overflow-auto border-t border-border-soft p-3">
+              {group.items.map((item) => (
+                <div key={`${group.reason}:${item.kind}:${item.path}`} className="grid gap-1 rounded-md bg-background/70 p-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">{item.kind}</Badge>
+                    {item.reason.length > 1 ? <ReasonBadges reasons={item.reason.filter((reason) => reason !== group.reason)} /> : null}
+                  </div>
+                  <span className="break-words mono text-caption text-muted-foreground">{item.path}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function groupSkippedTargets(skipped: SkippedTarget[]) {
+  const grouped = new Map<string, SkippedTarget[]>();
+  for (const item of skipped) {
+    const reasons = item.reason.length ? item.reason : ["unknown"];
+    for (const reason of reasons) {
+      const items = grouped.get(reason) ?? [];
+      items.push(item);
+      grouped.set(reason, items);
+    }
+  }
+  return Array.from(grouped.entries())
+    .map(([reason, items]) => ({
+      reason,
+      items: [...items].sort((left, right) => left.path.localeCompare(right.path)),
+    }))
+    .sort((left, right) => left.reason.localeCompare(right.reason));
 }
 
 function TargetLabel({ target }: { target: CleanupTarget }) {

@@ -462,8 +462,12 @@ export type ErrorCollectionPayload = {
   errors: ErrorCollectionItem[];
 };
 
-export async function fetchOverview() {
-  return fetchJson<OverviewPayload>("/api/overview");
+export async function fetchOverview(params?: { sinceDays?: number }) {
+  const search = new URLSearchParams();
+  if (params?.sinceDays != null) search.set("since_days", String(params.sinceDays));
+  const query = search.toString();
+  const suffix = query ? `?${query}` : "";
+  return fetchJson<OverviewPayload>(`/api/overview${suffix}`);
 }
 
 export async function fetchProjects() {
@@ -579,8 +583,12 @@ export async function fetchJobStatus(jobId: string) {
   return fetchJson<JobRecord>(`/api/jobs/${encodeURIComponent(jobId)}`);
 }
 
-export async function fetchCleanupPreview(kind: "project" | "session") {
-  return fetchJson<CleanupPreview>(`/api/cleanup/${kind}/preview`);
+export async function fetchCleanupPreview(kind: "project" | "session", params?: { sinceDays?: number }) {
+  const search = new URLSearchParams();
+  if (params?.sinceDays != null) search.set("since_days", String(params.sinceDays));
+  const query = search.toString();
+  const suffix = query ? `?${query}` : "";
+  return fetchJson<CleanupPreview>(`/api/cleanup/${kind}/preview${suffix}`);
 }
 
 export async function fetchModelUsage(params: { sinceDays?: number; projectName?: string | null; modelKey?: string | null }) {

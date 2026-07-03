@@ -297,7 +297,7 @@ export function ContextWindowRoute() {
       : "Analyze session";
 
   return (
-    <div className="route-container pb-8">
+    <div className="route-container w-full min-w-0 overflow-hidden pb-8">
       <Card className="gap-4 p-6">
         <CardHeader className="px-0">
           <button
@@ -540,12 +540,12 @@ export function ContextWindowRoute() {
                         <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
                           {event.label}
                         </span>
-                        <span className="flex shrink-0 items-center gap-2">
-                          <span className="mono text-body-sm font-medium">
+                        <span className="event-row-meta">
+                          <span className="event-row-token mono text-body-sm font-medium">
                             {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
                           </span>
                           {tokenPercent > 0 ? (
-                            <span className="block h-1 w-12 overflow-hidden rounded-full bg-surface-emphasis">
+                            <span className="event-row-meter">
                               <span
                                 className="block h-full rounded-full"
                                 style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}

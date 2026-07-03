@@ -497,6 +497,7 @@
     position: relative;
     display: flex;
     width: 100%;
+    min-inline-size: 0;
     align-items: center;
     gap: 0.75rem;
     overflow: hidden;
@@ -524,22 +525,66 @@
   .event-row[data-highlight] {
     background: var(--surface-emphasis);
   }
+  .event-row-meta {
+    display: flex;
+    min-inline-size: 0;
+    max-inline-size: 11rem;
+    flex: 0 1 auto;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    overflow: hidden;
+  }
+  .event-row-token {
+    flex: 0 1 auto;
+    min-inline-size: 0;
+    white-space: nowrap;
+  }
+  .event-row-meter {
+    display: block;
+    height: 0.25rem;
+    width: 3rem;
+    flex: 0 0 auto;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--surface-emphasis);
+  }
+  @media (max-width: 72rem) {
+    .event-row-meta {
+      max-inline-size: 6rem;
+    }
+    .event-row-meter {
+      display: none;
+    }
+  }
 
   /* ---- Context window split layout ----
-   * Left timeline stays fluid; right inspector keeps a bounded rail and
-   * drops below before the two-column layout becomes cramped. */
+   * Left timeline owns the full responsive width. The inspector overlays
+   * from the right on larger screens instead of participating in the main
+   * width calculation. */
   .context-window-layout {
     display: grid;
+    inline-size: 100%;
+    max-inline-size: 100%;
     min-inline-size: 0;
-    align-items: start;
-    gap: clamp(0.75rem, 1.1vw, 1.25rem);
-    grid-template-columns: minmax(0, 1fr) clamp(18rem, 28vw, 26rem);
+    position: relative;
+  }
+  .context-window-layout > section {
+    grid-area: 1 / 1;
+    min-inline-size: 0;
+    max-inline-size: 100%;
   }
 
   /* ---- Context window detail pane ----
    * Sticky right-side detail card with a single internal scroll region. */
   .context-detail-rail {
-    inline-size: 100%;
+    grid-area: 1 / 1;
+    z-index: 10;
+    inline-size: clamp(16rem, 24vw, 22rem);
+    max-inline-size: min(100%, 22rem);
+    justify-self: end;
+    align-self: start;
+    pointer-events: none;
   }
   .context-detail-pane {
     display: flex;
@@ -548,6 +593,7 @@
     inline-size: 100%;
     max-block-size: calc(100dvh - 7rem);
     overflow: hidden;
+    pointer-events: auto;
     background:
       linear-gradient(180deg, color-mix(in srgb, var(--card) 92%, white 8%) 0%, var(--card) 100%);
   }
@@ -575,15 +621,26 @@
       border-radius: 999px;
     }
   }
-  @media (min-width: 60rem) {
+  @media (min-width: 48rem) {
     .context-detail-rail {
       position: sticky;
       top: 1rem;
     }
   }
-  @media (max-width: 60rem) {
+  @media (max-width: 48rem) {
     .context-window-layout {
-      grid-template-columns: minmax(0, 1fr);
+      gap: 1rem;
+    }
+    .context-window-layout > section,
+    .context-detail-rail {
+      grid-area: auto;
+    }
+    .context-detail-rail {
+      position: static;
+      z-index: auto;
+      inline-size: 100%;
+      max-inline-size: none;
+      pointer-events: auto;
     }
     .context-detail-pane {
       max-block-size: none;

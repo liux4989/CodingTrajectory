@@ -54,10 +54,14 @@ class DashboardDataService:
         self._work.clear_all()
         return {"status": "refreshed"}
 
-    def overview(self) -> dict[str, Any]:
-        return self._work.get_or_compute(("overview",), self._overview_uncached)
+    def overview(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        since_days = _int(query, "since_days", 7)
+        return self._work.get_or_compute(
+            ("overview", since_days),
+            lambda: self._overview_uncached(since_days),
+        )
 
-    def _overview_uncached(self) -> dict[str, Any]:
+    def _overview_uncached(self, since_days: int) -> dict[str, Any]:
         payload = _ct_json(
             [
                 "api",
@@ -71,7 +75,7 @@ class DashboardDataService:
                             "id": "sessions",
                             "method": "project.sessions",
                             "params": {
-                                "since_days": 1,
+                                "since_days": since_days,
                                 "include": ["runtime", "usage"],
                             },
                         },
@@ -103,7 +107,7 @@ class DashboardDataService:
             "projects": {"count": len(project_items), "vendors": vendor_counts},
             "sessions": {
                 "count": len(session_items),
-                "window_days": 1,
+                "window_days": since_days,
                 "runtime": activity["runtime"],
                 "usage": activity["usage"],
                 "top_projects": activity["top_projects"],
@@ -669,9 +673,12 @@ def _number(value: Any) -> int | float:
 
 
 def _project_cleanup_preview(query: dict[str, list[str]]) -> cleanup_mod.CleanupPreview:
+    older_than = _first(query, "older_than")
+    if older_than is None:
+        older_than = f"{_int(query, 'since_days', 30)}d"
     return cleanup_mod.preview_project_cleanup(
         argparse.Namespace(
-            older_than=_first(query, "older_than") or "30d",
+            older_than=older_than,
             path=_first(query, "path"),
             trash=False,
             delete=False,
