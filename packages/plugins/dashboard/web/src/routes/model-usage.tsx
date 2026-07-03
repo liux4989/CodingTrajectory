@@ -119,53 +119,57 @@ export function ModelUsageRoute() {
       />
 
       <Card className="min-w-0">
-        <CardContent className="flex flex-wrap items-end gap-3 pt-6">
-          <p className="eyebrow-soft text-muted-foreground">
-            Showing last {sinceDays} day{sinceDays === 1 ? "" : "s"} · adjust in the header
-          </p>
-          <FilterLabel label="Project">
-            <Select value={projectName ?? ALL_PROJECTS} onValueChange={setProjectName}>
-              <SelectTrigger className="min-w-[18rem] max-w-[26rem]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_PROJECTS}>All projects</SelectItem>
-                {data.project_options.map((project) => (
-                  <SelectItem key={project.name} value={project.name}>
-                    {project.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FilterLabel>
-          <FilterLabel label="Model">
-            <Select value={modelKey ?? ALL_MODELS} onValueChange={setModelKey}>
-              <SelectTrigger className="min-w-[18rem] max-w-[30rem]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_MODELS}>All models</SelectItem>
-                {data.model_options.map((model) => (
-                  <SelectItem key={model.model_key} value={model.model_key}>
-                    {model.model_key}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FilterLabel>
-          <nav className="flex flex-wrap gap-2" aria-label="Model usage views">
-            {VIEW_OPTIONS.map((option) => (
-              <Button
-                key={option.value}
-                type="button"
-                size="sm"
-                variant={view === option.value ? "default" : "outline"}
-                onClick={() => setView(option.value)}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </nav>
+        <CardContent className="grid gap-6 pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="eyebrow-soft text-muted-foreground">
+              Showing last {sinceDays} day{sinceDays === 1 ? "" : "s"} · adjust in the header
+            </p>
+            <nav className="flex flex-wrap gap-2" aria-label="Model usage views">
+              {VIEW_OPTIONS.map((option) => (
+                <Button
+                  key={option.value}
+                  type="button"
+                  size="sm"
+                  variant={view === option.value ? "default" : "outline"}
+                  onClick={() => setView(option.value)}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </nav>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <FilterLabel label="Project">
+              <Select value={projectName ?? ALL_PROJECTS} onValueChange={setProjectName}>
+                <SelectTrigger className="min-w-[18rem] max-w-[26rem]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_PROJECTS}>All projects</SelectItem>
+                  {data.project_options.map((project) => (
+                    <SelectItem key={project.name} value={project.name}>
+                      {project.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FilterLabel>
+            <FilterLabel label="Model">
+              <Select value={modelKey ?? ALL_MODELS} onValueChange={setModelKey}>
+                <SelectTrigger className="min-w-[18rem] max-w-[30rem]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_MODELS}>All models</SelectItem>
+                  {data.model_options.map((model) => (
+                    <SelectItem key={model.model_key} value={model.model_key}>
+                      {model.model_key}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FilterLabel>
+          </div>
         </CardContent>
       </Card>
 
