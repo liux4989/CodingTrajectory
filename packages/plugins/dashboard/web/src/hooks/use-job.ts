@@ -81,7 +81,17 @@ export function useJob<T>(options: UseJobOptions<T>): UseJobResult<T> {
   });
 
   const record = jobQuery.data ?? null;
-  const status: UseJobStatus = jobId == null ? "idle" : (record?.status ?? "pending");
+  const jobQueryError =
+    jobQuery.error instanceof Error
+      ? jobQuery.error.message
+      : jobQuery.error ? String(jobQuery.error) : null;
+  const staleRecoveryJob = jobQuery.isError && jobQueryError === "unknown job_id";
+  const status: UseJobStatus =
+    jobId == null || staleRecoveryJob
+      ? "idle"
+      : jobQuery.isError
+        ? "error"
+        : (record?.status ?? "pending");
   const active = status === "pending" || status === "running";
   const elapsedMs = useElapsedTimer(active);
 
@@ -90,6 +100,8 @@ export function useJob<T>(options: UseJobOptions<T>): UseJobResult<T> {
   const error =
     record?.status === "error"
       ? record.error
+      : jobQuery.isError && !staleRecoveryJob
+        ? jobQueryError
       : startMutation.error instanceof Error
         ? startMutation.error.message
         : startMutation.error ? String(startMutation.error) : null;
@@ -100,10 +112,14 @@ export function useJob<T>(options: UseJobOptions<T>): UseJobResult<T> {
   }, [data, onData]);
 
   React.useEffect(() => {
-    if (record?.status === "ready" || record?.status === "error") {
+    if (
+      record?.status === "ready" ||
+      record?.status === "error" ||
+      (jobQuery.isError && !staleRecoveryJob)
+    ) {
       onTerminal?.();
     }
-  }, [record?.status, onTerminal]);
+  }, [jobQuery.isError, record?.status, onTerminal, staleRecoveryJob]);
 
   const start = React.useCallback(() => {
     setJobId(null);
@@ -118,6 +134,12 @@ export function useJob<T>(options: UseJobOptions<T>): UseJobResult<T> {
       return null;
     });
   }, [onJobId, queryClient]);
+
+  React.useEffect(() => {
+    if (staleRecoveryJob) {
+      clearJob();
+    }
+  }, [clearJob, staleRecoveryJob]);
 
   const cancel = React.useCallback(() => {
     startMutation.reset();

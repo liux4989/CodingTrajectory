@@ -155,6 +155,12 @@ URL state or `sessionStorage`.
 The recovery target is page refresh/reload while the same dashboard server is
 alive. It is not recovery after server restart.
 
+Frontend persistence such as `sessionStorage` may outlive the dashboard server,
+so persisted `job_id` or `agent_session_id` values are recovery hints only. If a
+restarted server returns `unknown job_id`, `agent_session_not_found`, or
+`expired`, the route must clear the stored handle and return to an idle state
+rather than displaying stale in-flight work.
+
 ### Turn Queue
 
 Each `agent_session_id` owns a FIFO queue for turn execution. The dashboard
