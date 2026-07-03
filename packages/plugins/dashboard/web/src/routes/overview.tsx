@@ -192,7 +192,7 @@ function OverviewIssueAgent({ prompt }: { prompt: string }) {
         <div className="min-w-0">
           <CardTitle className="title-card">Agent Fix Analysis</CardTitle>
           <CardDescription>
-            Codex analyzes the collected dashboard issues and can continue in the same app-server thread.
+            Codex analyzes the collected dashboard issues and can continue while this page is open.
           </CardDescription>
         </div>
         <AgentRunButton

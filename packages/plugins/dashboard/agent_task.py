@@ -27,7 +27,6 @@ def run_agent_turn(
     prompt: str,
     thread_id: str | None = None,
     output_schema: dict[str, Any] | None = None,
-    ephemeral: bool = False,
 ) -> AgentTurnResult:
     prompt = _clean_text(prompt)
     thread_id = _clean_text(thread_id) or None
@@ -38,7 +37,6 @@ def run_agent_turn(
         user_text=prompt,
         output_schema=output_schema,
         thread_id=thread_id,
-        ephemeral=ephemeral,
     )
     return AgentTurnResult(
         generated_at=dt.datetime.now(dt.timezone.utc).isoformat(),

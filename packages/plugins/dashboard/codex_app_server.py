@@ -52,7 +52,6 @@ class CodexAppServerClient:
         user_text: str,
         output_schema: dict[str, Any] | None = None,
         thread_id: str | None = None,
-        ephemeral: bool = False,
     ) -> CodexAppServerResult:
         command = _app_server_command()
         proc = subprocess.Popen(
@@ -113,7 +112,7 @@ class CodexAppServerClient:
                         "id": thread_request_id,
                         "params": {
                             "cwd": str(cwd),
-                            "ephemeral": ephemeral,
+                            "ephemeral": True,
                             "approvalPolicy": "never",
                             "sandbox": "read-only",
                             "serviceName": "coding-trajectory-dashboard",

@@ -9,7 +9,6 @@ import { cn } from "@/lib/utils";
 
 type AgentTurnOptions = {
   outputSchema?: Record<string, unknown> | null;
-  ephemeral?: boolean;
   newThread?: boolean;
 };
 
@@ -28,7 +27,6 @@ export function useAgentTurn(initialThreadId: string | null = null) {
         prompt: pendingTurn.prompt,
         threadId: pendingTurn.options.newThread ? null : threadId,
         outputSchema: pendingTurn.options.outputSchema,
-        ephemeral: pendingTurn.options.ephemeral,
       });
     },
     resolve: (record: JobRecord) => record.result as unknown as AgentTurnResult,
@@ -89,7 +87,7 @@ export function AgentTurnStatus({
       <div className="min-w-0 flex-1">
         <p className="m-0 title-state">Running agent</p>
         <p className="m-0 text-body-sm text-muted-foreground">
-          Codex is working in an app-server conversation.
+          Codex is working in a page-lived app-server conversation.
         </p>
         {progress ? <p className="m-0 mt-1 text-caption text-muted-foreground">{progress}</p> : null}
       </div>
