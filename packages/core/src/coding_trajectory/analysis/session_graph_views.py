@@ -28,17 +28,19 @@ def build_session_graph_overview(
     index = build_session_graph_index(session_graph)
     member_session_lookup = build_member_session_lookup(session_graph)
 
-    ordered = [
-        _session_nav_node(
+    ordered: list[dict[str, Any]] = []
+    for session in ordered_sessions(index):
+        if not _include_session_in_overview(session, index=index):
+            continue
+        node = _session_nav_node(
             session,
             index=index,
             member_session_lookup=member_session_lookup,
             num_turns=num_turns,
             drop_turns=drop_turns,
         )
-        for session in ordered_sessions(index)
-        if _include_session_in_overview(session, index=index)
-    ]
+        if node is not None:
+            ordered.append(node)
 
     return {
         "root_session_id": str(session_graph.root_session_id),
@@ -168,7 +170,7 @@ def _session_nav_node(
     member_session_lookup: dict[str, list[MemberSessionCandidate]],
     num_turns: int | None = None,
     drop_turns: int | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     turns: list[dict[str, Any]] = []
     pending_teammate: dict[str, Any] | None = None
 
@@ -205,6 +207,8 @@ def _session_nav_node(
     if pending_teammate is not None:
         turns.append(pending_teammate)
     turns = _apply_turn_window(turns, num_turns=num_turns, drop_turns=drop_turns)
+    if not turns:
+        return None
 
     return prune_nones({
         "session_id": str(session.session_id),
