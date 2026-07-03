@@ -558,10 +558,9 @@
     }
   }
 
-  /* ---- Context window split layout ----
-   * Left timeline owns the full responsive width. The inspector overlays
-   * from the right on larger screens instead of participating in the main
-   * width calculation. */
+  /* ---- Context window grouped layout ----
+   * Timeline and inspector share one shell. On larger screens the inspector
+   * overlays from the right; on smaller screens it returns to normal flow. */
   .context-window-shell {
     border-radius: var(--radius-3xl);
     border: 1px solid var(--border-soft);
@@ -584,7 +583,7 @@
   }
 
   /* ---- Context window detail pane ----
-   * Sticky right-side detail card with a single internal scroll region. */
+   * Sticky overlay inspector with a single internal scroll region. */
   .context-detail-rail {
     grid-area: 1 / 1;
     z-index: 10;

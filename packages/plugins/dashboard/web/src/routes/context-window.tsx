@@ -579,84 +579,84 @@ export function ContextWindowRoute() {
 
           <aside className="context-detail-rail min-w-0 self-start">
             <div className="context-detail-pane rounded-[var(--radius-2xl)] p-6">
-            <div className="context-detail-scroll">
-              {activeEvent ? (
-                <>
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-[2px]" style={{ background: eventColor(activeEvent) }} />
-                        <h3 className="m-0 break-words font-display text-heading" title={activeEvent.label}>{activeEvent.label}</h3>
-                      </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <Badge
-                          variant="outline"
-                          className="px-2 text-caption text-foreground"
-                          style={{ backgroundColor: categoryTint(eventColor(activeEvent), 0.15), borderColor: categoryTint(eventColor(activeEvent), 0.25) }}
-                        >
-                          {categoryLabel(activeEvent.category)}
-                        </Badge>
-                        <span className="mono text-body-sm text-moss">{evidenceLabel(activeEvent.tokens)}</span>
-                      </div>
-                    </div>
-                    <Button
-                      size="icon"
-                      variant={pinnedId === activeEvent.id ? "default" : "secondary"}
-                      onClick={() => setPinnedId((current) => current === activeEvent.id ? null : activeEvent.id)}
-                      aria-pressed={pinnedId === activeEvent.id}
-                      aria-label={pinnedId === activeEvent.id ? "Unpin details" : "Pin details"}
-                    >
-                      {pinnedId === activeEvent.id ? <PinOff size={15} /> : <Pin size={15} />}
-                    </Button>
-                  </div>
-                  <p className="mt-4 whitespace-pre-wrap leading-relaxed">{activeEvent.summary ?? "No text preview is available."}</p>
-                  {activeEvent.terminal_visible ? (
-                    <div className="panel-subtle mt-4 overflow-hidden rounded-xl">
-                      <div className="flex items-center gap-2 px-4 py-3 font-display text-body-sm font-bold">
-                        <Info size={16} className="text-primary" />
-                        Visible in the terminal
-                      </div>
-                      <div className="border-t border-border-subtle px-4 py-3">
-                        <p className="m-0 text-body-sm text-muted-foreground">
-                          This event appeared in the terminal output at the time, but the dashboard does not expand the full terminal transcript here.
-                        </p>
-                      </div>
-                    </div>
-                  ) : null}
-                  {activeEvidence.length > 0 ? (
-                    <div className="mt-4 overflow-hidden rounded-xl border border-border-soft">
-                      <div className="bg-surface-subtle px-4 py-2 eyebrow text-muted-foreground">
-                        Analysis Evidence
-                      </div>
-                      <div className="grid gap-2 px-4 py-3">
-                        {activeEvidence.map((item, index) => (
-                          <div
-                            key={`${item.kind}-${item.ref}-${index}`}
-                            className={cn("rounded-lg border px-3 py-2", evidenceBadgeTone(item.severity))}
+              <div className="context-detail-scroll">
+                {activeEvent ? (
+                  <>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-[2px]" style={{ background: eventColor(activeEvent) }} />
+                          <h3 className="m-0 break-words font-display text-heading" title={activeEvent.label}>{activeEvent.label}</h3>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <Badge
+                            variant="outline"
+                            className="px-2 text-caption text-foreground"
+                            style={{ backgroundColor: categoryTint(eventColor(activeEvent), 0.15), borderColor: categoryTint(eventColor(activeEvent), 0.25) }}
                           >
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Badge variant="outline" className="text-caption">
-                                {evidenceKindLabel(item.kind)}
-                              </Badge>
-                              <span className="text-caption font-medium">{item.label}</span>
-                              <span className="text-caption text-muted-foreground">{item.finding.title}</span>
-                            </div>
-                            <p className="m-0 mt-1 text-caption leading-relaxed text-muted-foreground">
-                              {item.detail}
-                            </p>
-                          </div>
-                        ))}
+                            {categoryLabel(activeEvent.category)}
+                          </Badge>
+                          <span className="mono text-body-sm text-moss">{evidenceLabel(activeEvent.tokens)}</span>
+                        </div>
                       </div>
+                      <Button
+                        size="icon"
+                        variant={pinnedId === activeEvent.id ? "default" : "secondary"}
+                        onClick={() => setPinnedId((current) => current === activeEvent.id ? null : activeEvent.id)}
+                        aria-pressed={pinnedId === activeEvent.id}
+                        aria-label={pinnedId === activeEvent.id ? "Unpin details" : "Pin details"}
+                      >
+                        {pinnedId === activeEvent.id ? <PinOff size={15} /> : <Pin size={15} />}
+                      </Button>
                     </div>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <h3 className="m-0 font-display text-heading">Click any event</h3>
-                  <p className="mt-1 text-muted-foreground">Click to preview details. Pin to keep it selected while you scroll.</p>
-                </>
-              )}
-            </div>
+                    <p className="mt-4 whitespace-pre-wrap leading-relaxed">{activeEvent.summary ?? "No text preview is available."}</p>
+                    {activeEvent.terminal_visible ? (
+                      <div className="panel-subtle mt-4 overflow-hidden rounded-xl">
+                        <div className="flex items-center gap-2 px-4 py-3 font-display text-body-sm font-bold">
+                          <Info size={16} className="text-primary" />
+                          Visible in the terminal
+                        </div>
+                        <div className="border-t border-border-subtle px-4 py-3">
+                          <p className="m-0 text-body-sm text-muted-foreground">
+                            This event appeared in the terminal output at the time, but the dashboard does not expand the full terminal transcript here.
+                          </p>
+                        </div>
+                      </div>
+                    ) : null}
+                    {activeEvidence.length > 0 ? (
+                      <div className="mt-4 overflow-hidden rounded-xl border border-border-soft">
+                        <div className="bg-surface-subtle px-4 py-2 eyebrow text-muted-foreground">
+                          Analysis Evidence
+                        </div>
+                        <div className="grid gap-2 px-4 py-3">
+                          {activeEvidence.map((item, index) => (
+                            <div
+                              key={`${item.kind}-${item.ref}-${index}`}
+                              className={cn("rounded-lg border px-3 py-2", evidenceBadgeTone(item.severity))}
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="outline" className="text-caption">
+                                  {evidenceKindLabel(item.kind)}
+                                </Badge>
+                                <span className="text-caption font-medium">{item.label}</span>
+                                <span className="text-caption text-muted-foreground">{item.finding.title}</span>
+                              </div>
+                              <p className="m-0 mt-1 text-caption leading-relaxed text-muted-foreground">
+                                {item.detail}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <h3 className="m-0 font-display text-heading">Click any event</h3>
+                    <p className="mt-1 text-muted-foreground">Click to preview details. Pin to keep it selected while you scroll.</p>
+                  </>
+                )}
+              </div>
             </div>
           </aside>
         </div>
