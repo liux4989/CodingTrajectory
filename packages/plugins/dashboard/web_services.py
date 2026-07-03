@@ -241,6 +241,7 @@ class DashboardDataService:
         prompt = body.get("prompt")
         thread_id = body.get("thread_id")
         output_schema = body.get("output_schema")
+        ephemeral = bool(body.get("ephemeral", False))
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt is required")
         if thread_id is not None and not isinstance(thread_id, str):
@@ -253,6 +254,7 @@ class DashboardDataService:
             prompt=prompt,
             thread_id=thread_id,
             output_schema=output_schema,
+            ephemeral=ephemeral,
         )
         return {"status": "pending", "job_id": job_id}
 

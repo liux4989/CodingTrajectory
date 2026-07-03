@@ -462,6 +462,7 @@ export async function runAgentTurn(params: {
   prompt: string;
   threadId?: string | null;
   outputSchema?: Record<string, unknown> | null;
+  ephemeral?: boolean;
 }) {
   return fetchJson<JobAccepted>("/api/agent-turn", {
     method: "POST",
@@ -470,6 +471,7 @@ export async function runAgentTurn(params: {
       prompt: params.prompt,
       thread_id: params.threadId ?? null,
       output_schema: params.outputSchema ?? null,
+      ephemeral: params.ephemeral ?? false,
     }),
   });
 }

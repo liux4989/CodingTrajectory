@@ -1,17 +1,13 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { fetchOverview, type OverviewPayload } from "@/api";
+import { Loader2, Send, Sparkles, Square, X } from "lucide-react";
+import { fetchOverview, type AgentTurnResult, type OverviewPayload } from "@/api";
 import { HeaderLabel, RightCell } from "@/components/table-cells";
 import { ProjectLink } from "@/components/project-link";
 import { SessionLink, shortSessionId } from "@/components/session-link";
-import {
-  AgentFollowUpForm,
-  AgentResponseBlock,
-  AgentRunButton,
-  AgentTurnStatus,
-  useAgentTurn,
-} from "@/components/agent-invocation";
+import { useAgentTurn } from "@/hooks/use-agent-turn";
+import { formatElapsed } from "@/hooks/use-elapsed-timer";
 import { DataTable } from "@/components/data-table";
 import { MetricSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
@@ -21,6 +17,7 @@ import { RefreshButton } from "@/components/refresh-button";
 import { StateBlock } from "@/components/state-block";
 import { MiniBarChart } from "@/components/charts";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function OverviewRoute() {
@@ -185,7 +182,9 @@ export function OverviewRoute() {
 
 function OverviewIssueAgent({ prompt }: { prompt: string }) {
   const agent = useAgentTurn();
+  const [followUp, setFollowUp] = React.useState("");
   const running = agent.status === "pending" || agent.status === "running";
+  const canFollowUp = !running && followUp.trim().length > 0;
   return (
     <Card className="min-w-0">
       <CardHeader className="items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -195,35 +194,99 @@ function OverviewIssueAgent({ prompt }: { prompt: string }) {
             Codex analyzes the collected dashboard issues and can continue while this page is open.
           </CardDescription>
         </div>
-        <AgentRunButton
-          running={running}
-          hasResult={agent.result != null}
-          disabled={!prompt.trim()}
+        <Button
+          type="button"
+          size="sm"
+          disabled={running || !prompt.trim()}
           onClick={() => agent.run(prompt, { newThread: true })}
-        />
+        >
+          {running ? <Square size={13} className="fill-current" /> : <Sparkles size={15} />}
+          {agent.result ? "Start new analysis" : "Run agent"}
+        </Button>
       </CardHeader>
       <CardContent className="grid gap-3">
-        <AgentTurnStatus
-          status={agent.status}
-          elapsedMs={agent.elapsedMs}
-          progress={agent.progress}
-          onCancel={agent.cancel}
-        />
+        {running ? (
+          <div className="panel flex items-center gap-3">
+            <Loader2 size={18} className="shrink-0 animate-spin text-primary" />
+            <div className="min-w-0 flex-1">
+              <p className="m-0 title-state">Running issue analysis</p>
+              <p className="m-0 text-body-sm text-muted-foreground">
+                Codex is reviewing the overview warnings and errors.
+              </p>
+              {agent.progress ? (
+                <p className="m-0 mt-1 text-caption text-muted-foreground">{agent.progress}</p>
+              ) : null}
+            </div>
+            {agent.elapsedMs > 0 ? (
+              <span className="shrink-0 mono text-caption text-muted-foreground">
+                {formatElapsed(agent.elapsedMs)}
+              </span>
+            ) : null}
+            <Button size="icon-sm" variant="ghost" onClick={agent.cancel} aria-label="Cancel overview issue analysis">
+              <X size={15} />
+            </Button>
+          </div>
+        ) : null}
         {agent.status === "error" ? (
           <div role="alert" className="alert alert-destructive text-body-sm text-destructive">
             {agent.error}
           </div>
         ) : null}
-        <AgentResponseBlock result={agent.result} />
+        <OverviewIssueAgentResponse result={agent.result} />
         {agent.result ? (
-          <AgentFollowUpForm
-            disabled={running}
-            placeholder="Ask Codex to refine, inspect a likely cause, or turn the analysis into a fix plan."
-            onSubmit={(value) => agent.run(value)}
-          />
+          <form
+            className="grid gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!canFollowUp) return;
+              agent.run(overviewIssueFollowUpPrompt(followUp));
+              setFollowUp("");
+            }}
+          >
+            <label className="eyebrow-soft text-muted-foreground" htmlFor="overview-issue-agent-follow-up">
+              Follow up on this issue analysis
+            </label>
+            <textarea
+              id="overview-issue-agent-follow-up"
+              name="overview_issue_agent_follow_up"
+              value={followUp}
+              onChange={(event) => setFollowUp(event.target.value)}
+              placeholder="Ask Codex to refine, inspect a likely cause, or turn the analysis into a fix plan."
+              disabled={running}
+              className="min-h-24 resize-y rounded-md border border-input bg-background px-3 py-2 text-body-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <div className="flex justify-end">
+              <Button type="submit" size="sm" disabled={!canFollowUp}>
+                {running ? <Square size={13} className="fill-current" /> : <Send size={15} />}
+                Send follow-up
+              </Button>
+            </div>
+          </form>
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+function OverviewIssueAgentResponse({ result }: { result: AgentTurnResult | null }) {
+  if (!result) return null;
+  return (
+    <section className="panel grid gap-3" aria-label="Overview issue agent response">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="secondary">Codex</Badge>
+        <span className="mono text-caption text-muted-foreground">
+          thread {shortAgentId(result.app_server_thread_id)}
+        </span>
+        {result.app_server_turn_id ? (
+          <span className="mono text-caption text-muted-foreground">
+            turn {shortAgentId(result.app_server_turn_id)}
+          </span>
+        ) : null}
+      </div>
+      <div className="whitespace-pre-wrap break-words text-body-sm leading-relaxed">
+        {result.response_text}
+      </div>
+    </section>
   );
 }
 
@@ -238,6 +301,20 @@ function overviewIssuePrompt(taskContext: string) {
     "# Response",
     "Return concise plain text. Separate direct observations from likely causes and next actions.",
   ].join("\n");
+}
+
+function overviewIssueFollowUpPrompt(value: string) {
+  return [
+    "# Follow-up",
+    value,
+    "",
+    "# Response",
+    "Continue the overview issue analysis. Keep the answer specific to the dashboard warnings and errors already in this conversation.",
+  ].join("\n");
+}
+
+function shortAgentId(value: string) {
+  return value.length > 10 ? value.slice(0, 8) : value;
 }
 
 function overviewIssueContext(data: OverviewPayload) {
