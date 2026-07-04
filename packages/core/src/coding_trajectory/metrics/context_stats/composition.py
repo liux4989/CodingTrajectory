@@ -28,6 +28,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
 )
 from coding_trajectory.ingestion.models import EventType, Item, SessionGraph
 from coding_trajectory.metrics.models import ContextCategoryFlat
+from coding_trajectory.token_counter import session_scoped
 
 
 @dataclass
@@ -96,6 +97,7 @@ _OUTPUT_FAMILY_LABELS = {
 }
 
 
+@session_scoped
 def build_context_composition(
     session_graph: SessionGraph,
     *,

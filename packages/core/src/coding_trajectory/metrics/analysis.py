@@ -55,6 +55,7 @@ from coding_trajectory.metrics.models import (
 )
 from coding_trajectory.metrics.context_stats._common import runtime_stats
 from coding_trajectory.metrics.model_catalog import get_model_context_window
+from coding_trajectory.token_counter import session_scoped
 
 
 def build_session_graph_metrics(
@@ -401,6 +402,7 @@ def _turn_execution_seconds(turn: TurnMetrics) -> int | None:
     return max(round((turn.completed_at - turn.started_at).total_seconds()), 0)
 
 
+@session_scoped
 def build_session_graph_tool_usage(
     session_graph: SessionGraph,
 ) -> dict[str, Any]:
@@ -446,6 +448,7 @@ def build_session_graph_tool_usage(
     ).model_dump(mode="json")
 
 
+@session_scoped
 def build_session_graph_stats_token_usage(
     session_graph: SessionGraph,
 ) -> dict[str, Any]:

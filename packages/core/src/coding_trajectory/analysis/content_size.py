@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from coding_trajectory.ingestion.models import Item
+from coding_trajectory.token_counter import get_current_counter
 
 
 ContentSizeConfidence = Literal[
@@ -37,7 +38,7 @@ def visible_text_size(text: str, *, reported_tokens: int | None = None) -> Conte
         return ContentSize(chars=0, tokens=0, confidence="no_visible_content")
     return ContentSize(
         chars=len(text),
-        tokens=max(1, (len(text) + 3) // 4),
+        tokens=max(get_current_counter().count(text), 1),
         confidence="visible_content_estimate",
     )
 
