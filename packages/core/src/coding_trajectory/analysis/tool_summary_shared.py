@@ -34,6 +34,7 @@ VENDOR_TOOL_CONCEPT: dict[str, str] = {
     "TodoWrite": TODO_LIST,
     "TodoRead": TODO_LIST,
     "Task": SUBAGENT_TASK,
+    "Agent": SUBAGENT_TASK,
     "read_file": READ_FILE,
     "read_many_files": READ_FILE,
     "replace": EDIT_FILE,

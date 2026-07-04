@@ -482,40 +482,45 @@ def _add_tool_item(
     input_size = item_input_size(item)
     output_size = item_output_size(item)
     allocated_usage = allocated_usage_by_item.get(item.item_id)
+    # Tool-use input args (the command, file path, search query, etc.) are part
+    # of the resident tool_use block in every API request, so they are sized
+    # alongside the output for every concept — not just edits/coordination.
+    # Previously non-edit tools counted output only, undercounting Bash commands
+    # and other input-heavy tool calls by their full argument size.
+    tokens = input_size.tokens + output_size.tokens
+    chars = input_size.chars + output_size.chars
 
     if concept in _CONTEXT_CONCEPTS:
         files[concept].add(
-            tokens=output_size.tokens,
-            chars=output_size.chars,
+            tokens=tokens,
+            chars=chars,
             allocated_usage=allocated_usage,
         )
         return
     if concept in _OUTPUT_CONCEPT_LABELS:
         output[concept].add(
-            tokens=output_size.tokens,
-            chars=output_size.chars,
+            tokens=tokens,
+            chars=chars,
             allocated_usage=allocated_usage,
         )
         return
     if concept in _CODE_CHANGE_CONCEPTS:
-        key = concept.lower()
-        agent[key].add(
-            tokens=input_size.tokens + output_size.tokens,
-            chars=input_size.chars + output_size.chars,
+        agent[concept.lower()].add(
+            tokens=tokens,
+            chars=chars,
             allocated_usage=allocated_usage,
         )
         return
     if concept in _COORDINATION_CONCEPTS:
-        key = concept.lower()
-        agent[key].add(
-            tokens=input_size.tokens + output_size.tokens,
-            chars=input_size.chars + output_size.chars,
+        agent[concept.lower()].add(
+            tokens=tokens,
+            chars=chars,
             allocated_usage=allocated_usage,
         )
         return
     output[_output_family_key(summary, concept)].add(
-        tokens=output_size.tokens,
-        chars=output_size.chars,
+        tokens=tokens,
+        chars=chars,
         allocated_usage=allocated_usage,
     )
 
