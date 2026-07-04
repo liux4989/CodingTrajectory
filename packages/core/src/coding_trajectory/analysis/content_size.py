@@ -58,7 +58,13 @@ def item_input_size(item: Item) -> ContentSize:
 
 def item_output_size(item: Item) -> ContentSize:
     text = item_output_text(item)
-    return visible_text_size(text, reported_tokens=reported_token_count(text))
+    # Size the actual resident text. Do NOT honor "Original token count: N"
+    # here: Codex emits that marker only when it truncates the output, and N is
+    # the PRE-truncation count, so honoring it overcounts (~6M tokens across
+    # 81 Codex sessions). In Claude Code the marker is content coincidence, not
+    # a real count. `reported_token_count` is still used for the separate
+    # `output_original_tokens` stat in analysis.py.
+    return visible_text_size(text)
 
 
 def reported_token_count(text: str) -> int | None:
