@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Iterable
 from uuid import UUID
 
@@ -30,6 +31,7 @@ from coding_trajectory.ingestion.models import (
     ContextUsageObservation,
     EventType,
     Item,
+    Session,
     SessionGraph,
 )
 from coding_trajectory.metrics.models import ContextCategoryFlat
@@ -111,6 +113,10 @@ def build_context_composition(
 ) -> list[ContextCategoryFlat]:
     allocated_usage_by_item = allocated_usage_by_item or {}
     allocated_usage_by_context_source = allocated_usage_by_context_source or {}
+    boundaries = {
+        session.session_id: _eviction_boundary(session)
+        for session in session_graph.sessions
+    }
     starting = _starting_context(
         session_graph,
         allocated_usage_by_context_source=allocated_usage_by_context_source,
@@ -118,17 +124,27 @@ def build_context_composition(
     user_input = _user_input(
         session_graph,
         allocated_usage_by_item=allocated_usage_by_item,
+        boundaries=boundaries,
     )
     agent_work = _agent_work(
         session_graph,
         allocated_usage_by_item=allocated_usage_by_item,
+        boundaries=boundaries,
     )
-    observed_total = starting[0].plus(user_input[0]).plus(agent_work[0]).tokens
+    evicted = user_input[2].plus(agent_work[2])
     categories = [
         _category("starting_context", "Starting context", starting[0], starting[1]),
         _category("user_input", "User input", user_input[0], user_input[1]),
         _category("agent_work", "Agent work", agent_work[0], agent_work[1]),
     ]
+    if evicted.items:
+        # Pre-compaction content the API evicted is not resident in the final
+        # context window, so it carries 0 visible tokens; but its historically
+        # billed usage must still reconcile to the stats attribution, so the
+        # allocated usage is retained on a separate (non-anchored) category.
+        categories.append(
+            _category("compacted_history", "Compacted history", evicted, [])
+        )
     _anchor_composition_to_used_input(categories, session_graph)
     observed_total = sum(category.tokens for category in categories)
     _set_percent(categories, observed_total)
@@ -172,7 +188,14 @@ def _anchor_composition_to_used_input(
         None,
     )
     base_tokens = starting.tokens if starting is not None else 0
-    conversation = [category for category in categories if category.key != "starting_context"]
+    # ``compacted_history`` carries evicted (non-resident) content with 0 visible
+    # tokens; exclude it from the scaled conversation so the anchor only rescales
+    # resident user-input and agent-work categories.
+    conversation = [
+        category
+        for category in categories
+        if category.key not in ("starting_context", "compacted_history")
+    ]
     conversation_visible = sum(category.tokens for category in conversation)
     if conversation_visible <= 0:
         return
@@ -200,6 +223,32 @@ def _latest_context_usage_observation(
         for observation in session.context_usage
     ]
     return max(observations, key=lambda item: item.timestamp, default=None)
+
+
+# Claude Code compaction is a full eviction: nearly all pre-boundary content is
+# dropped (only a few preserved messages survive), so the boundary timestamp is
+# a sound signal to exclude pre-boundary items from the (final-window)
+# composition. Codex's ``context_compacted`` is a *sliding window* — only the
+# oldest few messages are evicted — so it is intentionally not treated as a
+# full-eviction boundary: timestamp-based exclusion would over-exclude the
+# surviving recent messages.
+_COMPACTION_EVICTING_KINDS = frozenset({"claude_compact_boundary"})
+
+
+def _eviction_boundary(session: Session) -> datetime | None:
+    """Timestamp of the last full-eviction compaction boundary, or None."""
+    boundary: datetime | None = None
+    for observation in session.runtime_observations:
+        if observation.kind not in _COMPACTION_EVICTING_KINDS:
+            continue
+        if boundary is None or observation.timestamp > boundary:
+            boundary = observation.timestamp
+    return boundary
+
+
+def _is_resident(timestamp: datetime, boundary: datetime | None) -> bool:
+    """Whether a timestamped item survives the last compaction boundary."""
+    return boundary is None or timestamp >= boundary
 
 
 def _starting_context(
@@ -240,15 +289,24 @@ def _user_input(
     session_graph: SessionGraph,
     *,
     allocated_usage_by_item: dict[UUID, dict[str, int]],
-) -> tuple[_Measure, list[ContextCategoryFlat]]:
+    boundaries: dict[UUID, datetime | None],
+) -> tuple[_Measure, list[ContextCategoryFlat], _Measure]:
     buckets: dict[str, _Measure] = defaultdict(_Measure)
+    evicted = _Measure()
     prompt_index = 0
     for session in session_graph.sessions:
+        boundary = boundaries.get(session.session_id)
         for event in session.events:
             if event.type != EventType.USER_PROMPT_SUBMITTED:
                 continue
             text = event.payload.get("text")
             if not isinstance(text, str) or not text:
+                continue
+            allocated_usage = allocated_usage_by_item.get(event.event_id)
+            if not _is_resident(event.timestamp, boundary):
+                evicted = evicted.plus(
+                    _Measure(items=1, allocated_usage=allocated_usage)
+                )
                 continue
             key = (
                 "user_initial_request"
@@ -259,7 +317,7 @@ def _user_input(
             buckets[key].add(
                 tokens=size.tokens,
                 chars=size.chars,
-                allocated_usage=allocated_usage_by_item.get(event.event_id),
+                allocated_usage=allocated_usage,
             )
             prompt_index += 1
     labels = {
@@ -271,28 +329,34 @@ def _user_input(
         for key in labels
         if buckets[key].items
     ]
-    return _sum(buckets.values()), children
+    return _sum(buckets.values()), children, evicted
 
 
 def _agent_work(
     session_graph: SessionGraph,
     *,
     allocated_usage_by_item: dict[UUID, dict[str, int]],
-) -> tuple[_Measure, list[ContextCategoryFlat]]:
+    boundaries: dict[UUID, datetime | None],
+) -> tuple[_Measure, list[ContextCategoryFlat], _Measure]:
     files: dict[str, _Measure] = defaultdict(_Measure)
     agent: dict[str, _Measure] = defaultdict(_Measure)
     output: dict[str, _Measure] = defaultdict(_Measure)
+    evicted = _Measure()
     has_agent_message_items = any(
         item.kind == "agent_message"
+        and _is_resident(item.started_at, boundaries.get(item.session_id))
         for session in session_graph.sessions
         for turn in session.turns
         for item in turn.items
     )
 
     for session in session_graph.sessions:
+        boundary = boundaries.get(session.session_id)
         if not has_agent_message_items:
             for event in session.events:
                 if event.type != EventType.LLM_RESPONSE:
+                    continue
+                if not _is_resident(event.timestamp, boundary):
                     continue
                 text = event.payload.get("text")
                 if not isinstance(text, str) or not text:
@@ -302,6 +366,14 @@ def _agent_work(
 
         for turn in session.turns:
             for item in turn.items:
+                if not _is_resident(item.started_at, boundary):
+                    evicted = evicted.plus(
+                        _Measure(
+                            items=1,
+                            allocated_usage=allocated_usage_by_item.get(item.item_id),
+                        )
+                    )
+                    continue
                 if item.kind == "reasoning":
                     text = item.text or ""
                     size = visible_text_size(text)
@@ -392,7 +464,7 @@ def _agent_work(
         )
         if category is not None
     ]
-    return _measure_from_categories(children), children
+    return _measure_from_categories(children), children, evicted
 
 
 def _add_tool_item(

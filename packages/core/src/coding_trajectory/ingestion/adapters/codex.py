@@ -295,6 +295,19 @@ def _context_source_observation(
     )
 
 
+def _record_context_source(state: Any, observation: ContextSourceObservation) -> None:
+    """Append a context-source observation, deduplicating exact text repeats.
+
+    Codex re-injects the base/developer/AGENTS.md prompt blocks after a context
+    compaction, so the same block is captured again and would be sized twice in
+    the composition. Dedup by exact text keeps only the (resident) copy.
+    """
+    if observation.text in state.context_source_texts:
+        return
+    state.context_source_texts.add(observation.text)
+    state.context_sources.append(observation)
+
+
 class CodexAdapter(BaseAdapter):
     """Ingest Codex CLI JSONL rollout files from ~/.codex/sessions/."""
 
@@ -310,6 +323,9 @@ class CodexAdapter(BaseAdapter):
         context_sources: list[ContextSourceObservation] = field(default_factory=list)
         runtime_observations: list[RuntimeObservation] = field(default_factory=list)
         projected_turn_ids: set[str] = field(default_factory=set)
+        # Codex re-injects base/developer/AGENTS.md blocks after each compaction;
+        # track seen text so the duplicate (re-injected) copy is not sized twice.
+        context_source_texts: set[str] = field(default_factory=set)
 
     def ingest_file(self, path: Path) -> Session:
         self._reset_ingest_state()
@@ -428,13 +444,14 @@ class CodexAdapter(BaseAdapter):
                 base_instructions = payload.get("base_instructions")
                 base_text = base_instructions.get("text") if isinstance(base_instructions, dict) else None
                 if ts is not None and isinstance(base_text, str) and base_text:
-                    state.context_sources.append(
+                    _record_context_source(
+                        state,
                         _context_source_observation(
                             timestamp=ts,
                             block="base_instructions",
                             role="system",
                             text=base_text,
-                        )
+                        ),
                     )
                     transcript.append(
                         TranscriptRecord(
@@ -860,13 +877,14 @@ class CodexAdapter(BaseAdapter):
                                 if not isinstance(text, str) or not text:
                                     continue
                                 block_name = _codex_prompt_block_name(text, index)
-                                state.context_sources.append(
+                                _record_context_source(
+                                    state,
                                     _context_source_observation(
                                         timestamp=ts,
                                         block=block_name,
                                         role=message_role,
                                         text=text,
-                                    )
+                                    ),
                                 )
                                 transcript.append(
                                     TranscriptRecord(
@@ -896,13 +914,14 @@ class CodexAdapter(BaseAdapter):
                                 block_name = _codex_user_prompt_block_name(text)
                                 if block_name is None:
                                     continue
-                                state.context_sources.append(
+                                _record_context_source(
+                                    state,
                                     _context_source_observation(
                                         timestamp=ts,
                                         block=block_name,
                                         role=message_role,
                                         text=text,
-                                    )
+                                    ),
                                 )
                                 transcript.append(
                                     TranscriptRecord(

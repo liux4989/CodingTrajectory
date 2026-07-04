@@ -647,6 +647,47 @@ class ClaudeCodeAdapter(BaseAdapter):
             elif raw_type == "system":
                 base = _base_payload(record)
                 subtype = record.get("subtype")
+                if subtype == "compact_boundary":
+                    # Compaction evicts (almost) all pre-boundary conversation,
+                    # preserving only the few messages named in compactMetadata.
+                    # The boundary timestamp is the signal the composition layer
+                    # uses to exclude evicted (non-resident) items; the preserved
+                    # UUIDs and dropped-token counts are carried for future
+                    # per-item preserved-segment attribution.
+                    compact_meta = record.get("compactMetadata") or {}
+                    preserved = compact_meta.get("preservedMessages") or {}
+                    preserved_uuids = preserved.get("allUuids") or preserved.get("uuids") or []
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CLAUDE_CODE,
+                            role="runtime",
+                            kind="runtime",
+                            data={
+                                **base,
+                                "raw_type": "compact_boundary",
+                                "content": _as_non_empty_str(record.get("content")),
+                                "compact_metadata": compact_dict(
+                                    {
+                                        "trigger": _as_non_empty_str(compact_meta.get("trigger")),
+                                        "pre_tokens": _as_int_or_none(compact_meta.get("preTokens")),
+                                        "post_tokens": _as_int_or_none(compact_meta.get("postTokens")),
+                                        "cumulative_dropped_tokens": _as_int_or_none(
+                                            compact_meta.get("cumulativeDroppedTokens")
+                                        ),
+                                        "preserved_uuids": (
+                                            list(preserved_uuids)
+                                            if isinstance(preserved_uuids, list)
+                                            else []
+                                        ),
+                                    }
+                                ),
+                            },
+                            fidelity="synthetic",
+                        )
+                    )
+                    continue
                 if subtype in {"turn_duration", "local_command"}:
                     transcript.append(
                         TranscriptRecord(
