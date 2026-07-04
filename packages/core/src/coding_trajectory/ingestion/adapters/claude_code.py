@@ -574,13 +574,39 @@ class ClaudeCodeAdapter(BaseAdapter):
                 tool_uses = _tool_use_blocks(content)
                 text = _extract_text(content)
                 normalized_metrics = normalize_claude_usage(model=message.get("model"), usage=usage)
+                thinking_blocks = _extract_thinking(content)
                 vendor_data = compact_dict(
                     {
-                        "thinking": _extract_thinking(content) or None,
                         **normalized_metrics,
                         "stop_reason": stop_reason,
                     }
                 )
+
+                # Promote each thinking block to a first-class reasoning item.
+                # Thinking content is real resident context — it accumulates in
+                # the prompt cache and is counted in used_input_tokens — but
+                # stashing it only in vendor_data left it invisible to context
+                # composition sizing, so the observed composition undercounted
+                # the context window by roughly the accumulated thinking. Mirror
+                # the codex adapter's reasoning handling by emitting one
+                # reasoning transcript record per thinking block.
+                for thinking_text in thinking_blocks:
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=ts,
+                            vendor=Vendor.CLAUDE_CODE,
+                            role="assistant",
+                            kind="tool_call",
+                            data={
+                                **base,
+                                "tool_name": "reasoning",
+                                "tool_call_id": f"thinking:{len(transcript)}",
+                                "text": thinking_text,
+                                "item_kind": "reasoning",
+                            },
+                        )
+                    )
 
                 if text or vendor_data or not tool_uses:
                     transcript.append(
