@@ -91,6 +91,27 @@ class ExpensiveItem(BaseModel):
     estimated_cost: CostEvidence
 
 
+class CompactionEventRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: str
+    # Provider-native mechanism (``eviction_boundary`` for Claude Code,
+    # ``context_compacted`` for Codex); controls which delta fields render.
+    mechanism: str
+    trigger: str | None = None
+    pre_tokens: int | None = None
+    post_tokens: int | None = None
+    dropped_tokens: int | None = None
+
+
+class CompactionSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    count: int = 0
+    cumulative_dropped_tokens: int | None = None
+    events: list[CompactionEventRecord] = Field(default_factory=list)
+
+
 class CostEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -115,6 +136,7 @@ class ContextWindowProjection(BaseModel):
     provider_usage_buckets: list[ContextCategory]
     expensive_items: list[ExpensiveItem] = Field(default_factory=list)
     events: list[ContextEvent]
+    compaction: CompactionSummary | None = None
     warnings: list[str]
 
 
@@ -199,6 +221,8 @@ def build_projection(
     if turn_id and not any(event.turn_id == turn_id for event in events):
         raise SystemExit(f"turn not found in session overview: {turn_id}")
 
+    compaction = _project_compaction(stats)
+
     context = stats.get("context") or {}
     reported_context_window = model.get("context_window") or model.get(
         "context_window_tokens"
@@ -268,6 +292,7 @@ def build_projection(
         ),
         expensive_items=expensive_items,
         events=events,
+        compaction=compaction,
         warnings=_dedupe(warnings),
     )
 
@@ -347,6 +372,20 @@ def render_markdown(projection: ContextWindowProjection) -> str:
         summary = _one_line(event.summary or event.label, 74)
         lines.append(f"  {event.category:<20} {delta:>8}  {summary}")
 
+    if projection.compaction and projection.compaction.events:
+        lines.extend(["", "Compaction timeline"])
+        for index, event in enumerate(projection.compaction.events, start=1):
+            mechanism = event.mechanism or "-"
+            trigger = event.trigger or "-"
+            pre = _format_tokens(event.pre_tokens)
+            post = _format_tokens(event.post_tokens)
+            delta = f"{pre} -> {post}" if event.pre_tokens is not None and event.post_tokens is not None else "-"
+            dropped = _format_tokens(event.dropped_tokens) if event.dropped_tokens is not None else "-"
+            timestamp = _one_line(event.timestamp, 19)
+            lines.append(
+                f"  {index:>2}  {timestamp:<19} {mechanism:<18} {trigger:<10} {delta:>15} {dropped:>10}"
+            )
+
     if projection.warnings:
         lines.extend(["", "Warnings"])
         lines.extend(
@@ -359,6 +398,37 @@ def _category_sort_key(category: ContextCategory) -> tuple[float, int]:
     return (
         category.estimated_cost.value_usd if category.estimated_cost else 0.0,
         category.tokens.value,
+    )
+
+
+def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
+    """Lift the compaction timeline from ``ct session stats`` JSON.
+
+    ``stats`` carries ``compaction`` (count, cumulative dropped, last event,
+    and the full ``events`` list) when the session has compacted; the field is
+    absent or ``None`` otherwise.
+    """
+    compaction = stats.get("compaction")
+    if not isinstance(compaction, dict) or not compaction.get("count"):
+        return None
+    events = [
+        CompactionEventRecord(
+            timestamp=str(event.get("timestamp") or ""),
+            mechanism=str(event.get("mechanism") or ""),
+            trigger=_optional_text(event.get("trigger")),
+            pre_tokens=_optional_int(event.get("pre")),
+            post_tokens=_optional_int(event.get("post")),
+            dropped_tokens=_optional_int(event.get("dropped")),
+        )
+        for event in compaction.get("events") or []
+        if isinstance(event, dict) and event.get("timestamp")
+    ]
+    return CompactionSummary(
+        count=int(compaction.get("count") or 0),
+        cumulative_dropped_tokens=_optional_int(
+            compaction.get("cumulative_dropped")
+        ),
+        events=events,
     )
 
 

@@ -7,6 +7,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
@@ -98,6 +99,19 @@ def _as_int_or_none(value: object) -> int | None:
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     return None
+
+
+def _compact_meta(record: TranscriptRecord, key: str) -> Any:
+    """Read a field from a runtime transcript record's ``compact_metadata``.
+
+    Returns ``None`` when the record carries no compaction metadata (non-
+    ``compact_boundary`` records) or the field is absent, so non-compaction
+    runtime observations are unaffected.
+    """
+    metadata = record.data.get("compact_metadata")
+    if not isinstance(metadata, dict):
+        return None
+    return metadata.get(key)
 
 
 def _estimate_prompt_tokens(text: str | None) -> int:
@@ -418,6 +432,16 @@ class ClaudeCodeAdapter(BaseAdapter):
                 kind=f"claude_{record.data.get('raw_type')}",
                 duration_ms=record.data.get("duration_ms"),
                 reason=record.data.get("content") or record.data.get("subtype"),
+                # ``compact_metadata`` is only present on ``compact_boundary``
+                # records; pass its pre/post/dropped/trigger through so stats can
+                # surface how much context the compaction reclaimed. The fields
+                # are otherwise discarded here.
+                pre_tokens=_compact_meta(record, "pre_tokens"),
+                post_tokens=_compact_meta(record, "post_tokens"),
+                cumulative_dropped_tokens=_compact_meta(
+                    record, "cumulative_dropped_tokens"
+                ),
+                trigger=_compact_meta(record, "trigger"),
             )
             for record in transcript
             if record.kind == "runtime"

@@ -283,6 +283,50 @@ class ContextModelStatsFlat(BaseModel):
         return data
 
 
+class CompactionEventFlat(BaseModel):
+    timestamp: datetime
+    # Provider-native compaction mechanism, derived from the observation
+    # kind. ``eviction_boundary`` (Claude Code's ``claude_compact_boundary``)
+    # is a discrete eviction that carries pre/post/dropped/trigger metadata;
+    # ``context_compacted`` (Codex) is a sliding window that exposes none of
+    # those, so its event renders without the delta columns rather than as
+    # empty pre→post / dropped cells. Drives per-provider rendering.
+    mechanism: str
+    trigger: str | None = None
+    pre_tokens: int | None = None
+    post_tokens: int | None = None
+    dropped_tokens: int | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        return {key: value for key, value in data.items() if value is not None}
+
+
+class CompactionStatsFlat(BaseModel):
+    count: int = 0
+    # Claude Code reports dropped tokens cumulatively across compactions in a
+    # session, so the latest observation's value is the running total (not a
+    # per-event delta to be summed). ``None`` when no observation carries it
+    # (e.g. Codex's sliding-window ``context_compacted``).
+    cumulative_dropped_tokens: int | None = None
+    last: CompactionEventFlat | None = None
+    # Full per-event timeline (oldest first). Empty for sessions that never
+    # compacted; populated alongside ``last`` (which mirrors the final entry).
+    events: list[CompactionEventFlat] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("cumulative_dropped_tokens") is None:
+            data.pop("cumulative_dropped_tokens", None)
+        if data.get("last") is None:
+            data.pop("last", None)
+        if not data.get("events"):
+            data.pop("events", None)
+        return data
+
+
 class SessionContextStatsFlat(BaseModel):
     root_session_id: UUID
     vendor: str
@@ -292,9 +336,17 @@ class SessionContextStatsFlat(BaseModel):
     )
     provider_usage_buckets: list[ContextCategoryFlat] = Field(default_factory=list)
     runtime: RuntimeStatsFlat = Field(default_factory=RuntimeStatsFlat)
+    compaction: CompactionStatsFlat | None = None
     messages: MessageStatsFlat = Field(default_factory=MessageStatsFlat)
     usage: TokenUsage = Field(default_factory=TokenUsage)
     warnings: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("compaction") is None:
+            data.pop("compaction", None)
+        return data
 
 
 class TurnUsageCompactFlat(BaseModel):
@@ -320,6 +372,7 @@ class SessionUsageCompactFlat(BaseModel):
     runtime: RuntimeStatsFlat | None = None
     turns: list[TurnUsageCompactFlat] = Field(default_factory=list)
     total_usage: TokenUsage = Field(default_factory=TokenUsage)
+    compaction: CompactionStatsFlat | None = None
     warnings: list[str] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
@@ -327,6 +380,8 @@ class SessionUsageCompactFlat(BaseModel):
         data = handler(self)
         if data.get("total_usage"):
             data["total_usage"] = _usage_accounting_payload(data["total_usage"])
+        if data.get("compaction") is None:
+            data.pop("compaction", None)
         return data
 
 

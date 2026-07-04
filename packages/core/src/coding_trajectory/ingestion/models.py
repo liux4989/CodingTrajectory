@@ -143,6 +143,13 @@ class RuntimeObservation(BaseModel):
     time_to_first_token_ms:    int | None = None
     reason:                    str | None = None
     num_turns:                 int | None = None
+    # Compaction metadata. Only populated for evicting compaction boundaries
+    # (Claude Code's ``claude_compact_boundary``); Codex's ``context_compacted``
+    # is a sliding window with no pre/post delta, so these stay ``None``.
+    pre_tokens:                int | None = None
+    post_tokens:               int | None = None
+    cumulative_dropped_tokens: int | None = None
+    trigger:                   str | None = None
 
 
 class Event(BaseModel):

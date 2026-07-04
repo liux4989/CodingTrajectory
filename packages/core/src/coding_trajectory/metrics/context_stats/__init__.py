@@ -6,6 +6,7 @@ from uuid import UUID
 from coding_trajectory import debug
 from coding_trajectory.ingestion.models import ContextUsageObservation, SessionGraph
 from coding_trajectory.metrics.context_stats._common import (
+    compaction_stats,
     message_stats,
     percent,
     runtime_stats,
@@ -41,6 +42,7 @@ def build_session_graph_context_stats(
     vendor = next(iter(vendors))
     runtime = runtime_stats(session_graph)
     messages = message_stats(session_graph)
+    compaction = compaction_stats(session_graph)
     categories = build_context_composition(
         session_graph,
         allocated_usage_by_item=allocated_usage_by_item,
@@ -59,6 +61,7 @@ def build_session_graph_context_stats(
             vendor=vendor.value,
             context_window=ContextWindowStatsFlat(categories=categories),
             runtime=runtime,
+            compaction=compaction,
             messages=messages,
             warnings=[no_obs_message],
         ).model_dump(mode="json")
@@ -111,6 +114,7 @@ def build_session_graph_context_stats(
         ),
         provider_usage_buckets=provider_usage_buckets,
         runtime=runtime,
+        compaction=compaction,
         messages=messages,
         usage=token_usage_from_mapping(observation.usage),
         warnings=warnings,

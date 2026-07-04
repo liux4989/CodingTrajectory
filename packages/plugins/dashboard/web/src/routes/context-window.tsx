@@ -6,6 +6,7 @@ import { AlertTriangle, ArrowLeft, Eye, Lightbulb, Pin, PinOff, Play, Pause, Max
 import {
   analyzeSession,
   fetchContextWindow,
+  type CompactionSummary,
   type ContextCategory,
   type ContextEvent,
   type JobRecord,
@@ -482,6 +483,10 @@ export function ContextWindowRoute() {
           </div>
         </figure>
 
+        {payload.compaction && payload.compaction.events.length > 0 ? (
+          <CompactionTimeline compaction={payload.compaction} />
+        ) : null}
+
         <div className="context-window-layout">
           <section className="min-w-0" aria-labelledby="event-stream-title">
             <h2 id="event-stream-title" className="sr-only">Event stream</h2>
@@ -721,4 +726,95 @@ function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
       </div>
     </section>
   );
+}
+
+function CompactionTimeline({ compaction }: { compaction: CompactionSummary }) {
+  const totalDropped = compaction.cumulative_dropped_tokens ?? 0;
+  return (
+    <section
+      className="rounded-xl border border-border-soft bg-card px-4 py-3"
+      aria-labelledby="compaction-timeline-title"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="min-w-0">
+          <h2 id="compaction-timeline-title" className="m-0 font-display text-heading">
+            Compaction timeline
+          </h2>
+          <p className="m-0 mt-1 text-body-sm text-muted-foreground">
+            {compaction.count} compaction{compaction.count === 1 ? "" : "s"} evicted context
+            {totalDropped > 0 ? (
+              <span className="mono text-caption"> · {formatTokens(totalDropped)} tokens dropped</span>
+            ) : null}
+          </p>
+        </div>
+      </div>
+
+      <ol className="m-0 mt-3 grid list-none gap-2 p-0">
+        {compaction.events.map((event, index) => {
+          const pre = event.pre_tokens;
+          const post = event.post_tokens;
+          const dropped = event.dropped_tokens;
+          const hasDelta = pre != null && post != null;
+          const isSlidingWindow = event.mechanism === "context_compacted";
+          const timestampLabel = formatCompactionTimestamp(event.timestamp);
+          // ``context_compacted`` (Codex) is a sliding window that exposes no
+          // pre/post/dropped, so render the mechanism label instead of a bare
+          // ``-`` (which would read as missing data rather than "not exposed").
+          const deltaLabel = hasDelta
+            ? `${formatTokens(pre)} → ${formatTokens(post)}`
+            : dropped != null
+              ? `${formatTokens(dropped)} dropped`
+              : isSlidingWindow
+                ? "sliding window"
+                : "-";
+          return (
+            <li
+              key={`${event.timestamp}-${index}`}
+              className="event-row"
+              style={{ cursor: "default" }}
+            >
+              <span
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ background: "var(--color-category-unattributed)" }}
+              />
+              <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-caption text-foreground">
+                {event.trigger ?? "auto"}
+              </Badge>
+              {isSlidingWindow ? (
+                <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-caption text-muted-foreground">
+                  sliding
+                </Badge>
+              ) : null}
+              <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
+                <span className="mono text-caption text-muted-foreground">{timestampLabel}</span>
+              </span>
+              <span className="event-row-meta">
+                <span className="event-row-token mono text-body-sm font-medium">
+                  {deltaLabel}
+                </span>
+                {dropped != null && dropped > 0 ? (
+                  <span className="event-row-meter" aria-hidden="true">
+                    <span
+                      className="block h-full rounded-full"
+                      style={{
+                        width: "100%",
+                        background: "var(--color-category-unattributed)",
+                        opacity: 0.6,
+                      }}
+                    />
+                  </span>
+                ) : null}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
+function formatCompactionTimestamp(value: string) {
+  if (!value) return "-";
+  // Truncate to ``YYYY-MM-DD HH:MM`` (UTC) for compactness.
+  return value.slice(0, 16).replace("T", " ");
 }

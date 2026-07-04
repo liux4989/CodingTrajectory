@@ -75,6 +75,8 @@ def _overview_request_label(request: Any) -> str:
 
 
 def _overview_activity_label(activity: dict[str, Any]) -> str:
+    if "compaction" in activity:
+        return f"compaction: {activity.get('summary') or 'compaction'}"
     if "tool" in activity:
         tool = str(activity.get("tool") or "tool")
         count = activity.get("count")
@@ -113,6 +115,8 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
         header += f"  {role}, {session.get('vendor') or '-'}, {display_value(session.get('status')) or '-'}"
         if session.get("agent_name"):
             header += f", {session['agent_name']}"
+        if session.get("compactions"):
+            header += f", {session['compactions']} compactions"
         lines.append(header)
         if session.get("cwd"):
             lines.append(f"   cwd: {session['cwd']}")
@@ -170,6 +174,95 @@ def _render_context_category(
 
 def _format_optional_tokens(value: Any) -> str:
     return "-" if value is None else format_tokens(value)
+
+
+def _compaction_line(compaction: Any) -> str | None:
+    """Render a ``- Compactions:`` summary line, or ``None`` when absent.
+
+    Drops any sub-part the session graph could not observe: Codex compactions
+    (sliding window, no pre/post) render as a bare count; Claude Code
+    compactions add the cumulative dropped total and the last event's
+    pre→post delta and trigger.
+    """
+    if not isinstance(compaction, dict) or not compaction.get("count"):
+        return None
+    count = compaction.get("count") or 0
+    parts: list[str] = [f"{count} compaction{'s' if count != 1 else ''}"]
+    cumulative = compaction.get("cumulative_dropped_tokens")
+    if cumulative is not None:
+        parts.append(f"{format_tokens(cumulative)} tokens dropped")
+    last = compaction.get("last") or {}
+    delta_parts: list[str] = []
+    if last.get("pre_tokens") is not None and last.get("post_tokens") is not None:
+        delta_parts.append(
+            f"{format_tokens(last['pre_tokens'])} → {format_tokens(last['post_tokens'])}"
+        )
+    elif last.get("dropped_tokens") is not None:
+        delta_parts.append(f"{format_tokens(last['dropped_tokens'])} dropped")
+    if last.get("trigger"):
+        delta_parts.append(str(last["trigger"]))
+    detail = ", ".join(delta_parts)
+    body = ", ".join(parts)
+    if not detail:
+        return f"- Compactions: {body}"
+    return f"- Compactions: {body} (last: {detail})"
+
+
+def _should_render_compaction_timeline(compaction: Any) -> bool:
+    """Show the per-event table only when it adds information.
+
+    A single bare Codex compaction (no pre/post) renders as a useless one-row
+    table — the summary line already covers it. Show the table when there are
+    ≥2 events, or when any single event carries pre/post metadata.
+    """
+    if not isinstance(compaction, dict):
+        return False
+    events = compaction.get("events") or []
+    if not isinstance(events, list) or len(events) < 1:
+        return False
+    if len(events) >= 2:
+        return True
+    return any(
+        isinstance(event, dict) and event.get("pre_tokens") is not None
+        for event in events
+    )
+
+
+def _format_compaction_timestamp(value: Any) -> str:
+    if not value:
+        return "-"
+    text = str(value)
+    # Trim to ``YYYY-MM-DD HH:MM`` for column compactness.
+    return text[:16].replace("T", " ")
+
+
+def _render_compaction_timeline(lines: list[str], compaction: Any) -> None:
+    if not _should_render_compaction_timeline(compaction):
+        return
+    events = compaction.get("events") or []
+    lines.extend(["", "Compaction timeline", "```"])
+    lines.append(
+        f"{'#':>2}  {'Timestamp':<16} {'Mechanism':<18} {'Trigger':<10} "
+        f"{'Pre → Post':>15} {'Dropped':>10}"
+    )
+    for index, event in enumerate(events, start=1):
+        if not isinstance(event, dict):
+            continue
+        mechanism = event.get("mechanism") or "-"
+        trigger = event.get("trigger") or "-"
+        pre = event.get("pre_tokens")
+        post = event.get("post_tokens")
+        if pre is not None and post is not None:
+            delta = f"{format_tokens(pre)} → {format_tokens(post)}"
+        else:
+            delta = "-"
+        dropped = event.get("dropped_tokens")
+        dropped_label = format_tokens(dropped) if dropped is not None else "-"
+        lines.append(
+            f"{index:>2}  {_format_compaction_timestamp(event.get('timestamp')):<16} "
+            f"{mechanism:<18} {trigger:<10} {delta:>15} {dropped_label:>10}"
+        )
+    lines.append("```")
 
 
 def _format_allocated_usage(value: Any) -> str:
@@ -265,6 +358,10 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         lines[-1] += f", {runtime['interrupted_turns']} interrupted"
     if runtime.get("rollbacks"):
         lines[-1] += f", {runtime['rollbacks']} rolled back"
+    compaction_line = _compaction_line(payload.get("compaction"))
+    if compaction_line:
+        lines.append(compaction_line)
+    _render_compaction_timeline(lines, payload.get("compaction"))
     if runtime.get("average_time_to_first_token_ms") is not None:
         lines.append(
             f"- Average time to first token: "
@@ -276,13 +373,16 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         )
         lines.append(f"- Tool Success Rate: {success_rate}%")
     if messages:
-        lines.append(
+        messages_line = (
             f"- Messages: "
             f"{messages.get('user') or 0} user, "
             f"{messages.get('assistant') or 0} assistant, "
             f"{messages.get('tool_outputs') or 0} tool outputs, "
             f"{messages.get('reasoning_items') or 0} reasoning items"
         )
+        if messages.get("compacted_contexts"):
+            messages_line += f", {messages['compacted_contexts']} compacted"
+        lines.append(messages_line)
     return "\n".join(lines).rstrip()
 
 
@@ -295,6 +395,10 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
             f"  execution {format_duration(runtime.get('execution_seconds'))}  "
             f"wait {format_duration(runtime.get('wait_seconds'))}"
         )
+
+    compaction_line = _compaction_line(payload.get("compaction"))
+    if compaction_line:
+        lines.append(f"  {compaction_line}")
 
     turns = payload.get("turns") or []
     if turns:

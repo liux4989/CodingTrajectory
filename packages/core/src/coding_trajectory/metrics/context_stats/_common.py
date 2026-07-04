@@ -6,6 +6,8 @@ from typing import Any
 
 from coding_trajectory.ingestion.models import EventType, Session, SessionGraph
 from coding_trajectory.metrics.models import (
+    CompactionEventFlat,
+    CompactionStatsFlat,
     MessageStatsFlat,
     RuntimeStatsFlat,
     TokenUsage,
@@ -15,6 +17,25 @@ def root_session(session_graph: SessionGraph) -> Session:
         if session.session_id == session_graph.root_session_id:
             return session
     return session_graph.sessions[0]
+
+
+# Evicting-compaction observation kinds. Codex emits ``context_compacted`` (a
+# sliding window with no pre/post delta); Claude Code emits
+# ``claude_compact_boundary`` (a full eviction). Both count as a compaction for
+# stats — previously only Codex's kind was counted, so Claude Code sessions
+# reported 0 compactions despite showing a ``Compacted history`` composition row.
+_COMPACTION_KINDS = frozenset({"context_compacted", "claude_compact_boundary"})
+
+# Map provider observation kinds to a compaction mechanism label. Same concept,
+# different mechanisms: Claude Code's ``claude_compact_boundary`` is a discrete
+# eviction (preserved messages + dropped totals); Codex's ``context_compacted``
+# is a sliding window with no eviction metadata. The label drives per-provider
+# rendering so a bare Codex compaction doesn't show as empty pre→post / dropped
+# cells. Mirrored in ``analysis/session_graph_views.py`` for overview activities.
+_COMPACTION_MECHANISMS = {
+    "claude_compact_boundary": "eviction_boundary",
+    "context_compacted": "context_compacted",
+}
 
 
 def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
@@ -41,7 +62,7 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         1
         for session in session_graph.sessions
         for observation in session.runtime_observations
-        if observation.kind == "context_compacted"
+        if observation.kind in _COMPACTION_KINDS
     )
     runtime_observations = [
         observation
@@ -95,6 +116,63 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
     )
 
 
+def compaction_stats(session_graph: SessionGraph) -> CompactionStatsFlat | None:
+    """Aggregate compaction observations across a session graph.
+
+    Returns ``None`` when the session never compacted. Claude Code's
+    ``claude_compact_boundary`` carries pre/post/dropped/trigger metadata;
+    Codex's ``context_compacted`` does not, so those fields stay ``None``.
+    """
+    compactions = sorted(
+        (
+            observation
+            for session in session_graph.sessions
+            for observation in session.runtime_observations
+            if observation.kind in _COMPACTION_KINDS
+        ),
+        key=lambda observation: observation.timestamp,
+    )
+    if not compactions:
+        return None
+    # ``cumulative_dropped_tokens`` is cumulative (Claude Code reports the
+    # running total per compaction), so the latest non-None value is the total.
+    cumulative = next(
+        (observation.cumulative_dropped_tokens for observation in reversed(compactions)
+         if observation.cumulative_dropped_tokens is not None),
+        None,
+    )
+    events = [
+        _event_from_observation(observation)
+        for observation in compactions
+    ]
+    # ``last`` mirrors the final timeline entry; deriving it from ``events``
+    # keeps the two in sync instead of constructing the same object twice.
+    return CompactionStatsFlat(
+        count=len(compactions),
+        cumulative_dropped_tokens=cumulative,
+        last=events[-1],
+        events=events,
+    )
+
+
+def _event_from_observation(observation: Any) -> CompactionEventFlat:
+    pre = observation.pre_tokens
+    post = observation.post_tokens
+    dropped = (
+        pre - post
+        if pre is not None and post is not None
+        else observation.cumulative_dropped_tokens
+    )
+    return CompactionEventFlat(
+        timestamp=observation.timestamp,
+        mechanism=_COMPACTION_MECHANISMS.get(observation.kind, observation.kind),
+        trigger=observation.trigger,
+        pre_tokens=pre,
+        post_tokens=post,
+        dropped_tokens=dropped,
+    )
+
+
 def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:
     return MessageStatsFlat(
         user=sum(
@@ -130,7 +208,7 @@ def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:
             1
             for session in session_graph.sessions
             for observation in session.runtime_observations
-            if observation.kind == "context_compacted"
+            if observation.kind in _COMPACTION_KINDS
         ),
     )
 

@@ -334,6 +334,18 @@ def compact_request(request: Any) -> Any:
 def compact_activity(activity: Any) -> Any:
     if not isinstance(activity, dict):
         return activity
+    if "compaction" in activity:
+        return drop_none(
+            {
+                "compaction": activity.get("compaction"),
+                "mechanism": activity.get("mechanism"),
+                "summary": activity.get("summary"),
+                "trigger": activity.get("trigger"),
+                "pre": activity.get("pre_tokens"),
+                "post": activity.get("post_tokens"),
+                "dropped": activity.get("dropped_tokens"),
+            }
+        )
     if "tool" in activity:
         compact = {
             "tool": activity.get("tool"),
@@ -453,6 +465,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "status": session.get("status"),
                         "agent": session.get("agent_name"),
                         "cwd": session.get("cwd"),
+                        "compactions": session.get("compactions"),
                         "turns": [
                             drop_none(
                                 {
@@ -486,6 +499,7 @@ def compact_payload(method: str, payload: Any) -> Any:
 
     if method == "session.usage" and isinstance(payload, dict):
         runtime = payload.get("runtime") or {}
+        compaction = payload.get("compaction") or {}
         return drop_none(
             {
                 "id": payload.get("session_id"),
@@ -502,6 +516,53 @@ def compact_payload(method: str, payload: Any) -> Any:
                 or None,
                 "usage": compact_usage(payload.get("total_usage")),
                 "cost": payload.get("cost_usd"),
+                "compaction": drop_none(
+                    {
+                        "count": compaction.get("count"),
+                        "cumulative_dropped": compaction.get(
+                            "cumulative_dropped_tokens"
+                        ),
+                        "last": drop_none(
+                            {
+                                "mechanism": (compaction.get("last") or {}).get(
+                                    "mechanism"
+                                ),
+                                "timestamp": (compaction.get("last") or {}).get(
+                                    "timestamp"
+                                ),
+                                "trigger": (compaction.get("last") or {}).get(
+                                    "trigger"
+                                ),
+                                "pre": (compaction.get("last") or {}).get(
+                                    "pre_tokens"
+                                ),
+                                "post": (compaction.get("last") or {}).get(
+                                    "post_tokens"
+                                ),
+                                "dropped": (compaction.get("last") or {}).get(
+                                    "dropped_tokens"
+                                ),
+                            }
+                        )
+                        or None,
+                        "events": [
+                            drop_none(
+                                {
+                                    "mechanism": event.get("mechanism"),
+                                    "timestamp": event.get("timestamp"),
+                                    "trigger": event.get("trigger"),
+                                    "pre": event.get("pre_tokens"),
+                                    "post": event.get("post_tokens"),
+                                    "dropped": event.get("dropped_tokens"),
+                                }
+                            )
+                            for event in compaction.get("events") or []
+                            if isinstance(event, dict)
+                        ]
+                        or None,
+                    }
+                )
+                or None,
                 "turns": [
                     drop_none(
                         {
@@ -538,6 +599,7 @@ def compact_payload(method: str, payload: Any) -> Any:
         ctx = payload.get("context_window") or {}
         runtime = payload.get("runtime") or {}
         messages = payload.get("messages") or {}
+        compaction = payload.get("compaction") or {}
         return drop_none(
             {
                 "id": payload.get("root_session_id"),
@@ -584,6 +646,53 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "average_ttft_ms": runtime.get(
                             "average_time_to_first_token_ms"
                         ),
+                    }
+                )
+                or None,
+                "compaction": drop_none(
+                    {
+                        "count": compaction.get("count"),
+                        "cumulative_dropped": compaction.get(
+                            "cumulative_dropped_tokens"
+                        ),
+                        "last": drop_none(
+                            {
+                                "mechanism": (compaction.get("last") or {}).get(
+                                    "mechanism"
+                                ),
+                                "timestamp": (compaction.get("last") or {}).get(
+                                    "timestamp"
+                                ),
+                                "trigger": (compaction.get("last") or {}).get(
+                                    "trigger"
+                                ),
+                                "pre": (compaction.get("last") or {}).get(
+                                    "pre_tokens"
+                                ),
+                                "post": (compaction.get("last") or {}).get(
+                                    "post_tokens"
+                                ),
+                                "dropped": (compaction.get("last") or {}).get(
+                                    "dropped_tokens"
+                                ),
+                            }
+                        )
+                        or None,
+                        "events": [
+                            drop_none(
+                                {
+                                    "mechanism": event.get("mechanism"),
+                                    "timestamp": event.get("timestamp"),
+                                    "trigger": event.get("trigger"),
+                                    "pre": event.get("pre_tokens"),
+                                    "post": event.get("post_tokens"),
+                                    "dropped": event.get("dropped_tokens"),
+                                }
+                            )
+                            for event in compaction.get("events") or []
+                            if isinstance(event, dict)
+                        ]
+                        or None,
                     }
                 )
                 or None,

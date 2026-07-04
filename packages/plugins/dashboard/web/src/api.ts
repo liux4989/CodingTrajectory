@@ -106,6 +106,24 @@ export type ContextEvent = {
   terminal_visible: boolean;
 };
 
+export type CompactionEventRecord = {
+  timestamp: string;
+  // Provider-native mechanism: "eviction_boundary" (Claude Code) carries
+  // pre/post/dropped/trigger; "context_compacted" (Codex) does not, so its
+  // delta fields stay null and render without those columns.
+  mechanism: string;
+  trigger: string | null;
+  pre_tokens: number | null;
+  post_tokens: number | null;
+  dropped_tokens: number | null;
+};
+
+export type CompactionSummary = {
+  count: number;
+  cumulative_dropped_tokens: number | null;
+  events: CompactionEventRecord[];
+};
+
 export type ContextWindowPayload = {
   schema_version: 1;
   session_id: string;
@@ -118,6 +136,7 @@ export type ContextWindowPayload = {
   categories: ContextCategory[];
   provider_usage_buckets: ContextCategory[];
   events: ContextEvent[];
+  compaction: CompactionSummary | null;
   warnings: string[];
 };
 
