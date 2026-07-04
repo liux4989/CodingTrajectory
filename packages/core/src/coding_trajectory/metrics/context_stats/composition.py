@@ -26,7 +26,12 @@ from coding_trajectory.analysis.tool_summary_shared import (
     WEB_SEARCH,
     WRITE_FILE,
 )
-from coding_trajectory.ingestion.models import EventType, Item, SessionGraph
+from coding_trajectory.ingestion.models import (
+    ContextUsageObservation,
+    EventType,
+    Item,
+    SessionGraph,
+)
 from coding_trajectory.metrics.models import ContextCategoryFlat
 from coding_trajectory.token_counter import session_scoped
 
@@ -124,6 +129,8 @@ def build_context_composition(
         _category("user_input", "User input", user_input[0], user_input[1]),
         _category("agent_work", "Agent work", agent_work[0], agent_work[1]),
     ]
+    _anchor_composition_to_used_input(categories, session_graph)
+    observed_total = sum(category.tokens for category in categories)
     _set_percent(categories, observed_total)
     _assert_context_composition_usage_reconciles(
         categories,
@@ -131,6 +138,68 @@ def build_context_composition(
         allocated_usage_by_context_source,
     )
     return categories
+
+
+def _anchor_composition_to_used_input(
+    categories: list[ContextCategoryFlat],
+    session_graph: SessionGraph,
+) -> None:
+    """Scale the conversation portion so the composition sums to the real
+    ``used_input_tokens`` (the last API call's input).
+
+    The composition is otherwise a sum of visible-content token estimates; it
+    drifts from ``used_input_tokens`` as content accumulates (tokenizer error,
+    missing content). Anchoring keeps the starting-context prefix at its own
+    estimate (real ``reported_tokens`` for Claude Code's cached prefix, a
+    tokenizer estimate for Codex's observed system text) and partitions the
+    remaining real conversation total across the user-input and agent-work
+    categories by their visible-token proportions — so the composition
+    reconciles to the context window by construction. Falls back to the visible
+    estimates when there is no usage observation.
+
+    Proportions within the conversation are preserved; only the absolute scale
+    is anchored. For sessions whose visible content overcounts (e.g. thinking
+    the API stripped, so ``used_input`` is below the visible sum) the prefix
+    guard leaves the estimates rather than zeroing the conversation. For
+    undercounts (missing content) the missing total is attributed proportionally
+    — a best-effort split, not a true per-item attribution.
+    """
+    latest = _latest_context_usage_observation(session_graph)
+    if latest is None or not latest.used_input_tokens:
+        return
+    starting = next(
+        (category for category in categories if category.key == "starting_context"),
+        None,
+    )
+    base_tokens = starting.tokens if starting is not None else 0
+    conversation = [category for category in categories if category.key != "starting_context"]
+    conversation_visible = sum(category.tokens for category in conversation)
+    if conversation_visible <= 0:
+        return
+    conversation_real = latest.used_input_tokens - base_tokens
+    if conversation_real <= 0:
+        return
+    scale = conversation_real / conversation_visible
+    for category in conversation:
+        _scale_category_tokens(category, scale)
+
+
+def _scale_category_tokens(category: ContextCategoryFlat, scale: float) -> None:
+    if scale != 1.0:
+        category.tokens = max(round(category.tokens * scale), 0)
+    for child in category.children:
+        _scale_category_tokens(child, scale)
+
+
+def _latest_context_usage_observation(
+    session_graph: SessionGraph,
+) -> ContextUsageObservation | None:
+    observations = [
+        observation
+        for session in session_graph.sessions
+        for observation in session.context_usage
+    ]
+    return max(observations, key=lambda item: item.timestamp, default=None)
 
 
 def _starting_context(
