@@ -14,9 +14,11 @@ from coding_trajectory.ingestion.common import compact_dict, infer_tool_success,
 from coding_trajectory.ingestion.models import (
     ContextSourceObservation,
     ContextUsageObservation,
+    Event,
     RuntimeObservation,
     Session,
     ToolStatus,
+    Turn,
     Vendor,
 )
 from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
@@ -98,26 +100,84 @@ def _as_int_or_none(value: object) -> int | None:
     return None
 
 
+def _estimate_prompt_tokens(text: str | None) -> int:
+    """Rough char->token estimate mirroring ``visible_text_size`` for non-empty text.
+
+    Inlined here (rather than importing ``analysis.content_size``) to keep
+    ingestion from depending on the analysis layer.
+    """
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def _first_api_prompt_text(
+    *,
+    turns: list[Turn],
+    events: list[Event],
+    context_usage: list[ContextUsageObservation],
+) -> str | None:
+    """Return the user prompt text of the first turn that produced a usage observation.
+
+    The first API call's full input is the stable system-prompt + tools prefix
+    plus that call's user message, so isolating the prefix requires subtracting
+    the prompt that was actually sent. Local commands (e.g. ``/model``) emit
+    user-prompt events but never reach the API, so the prompt is resolved
+    through the turn that owns the first usage observation rather than by
+    timestamp order alone.
+    """
+    usage_event_ids = {
+        observation.source_event_id
+        for observation in context_usage
+        if observation.source_event_id is not None
+    }
+    if not usage_event_ids:
+        return None
+    event_by_id = {event.event_id: event for event in events}
+    for turn in sorted(turns, key=lambda item: item.sequence):
+        if not any(event_id in usage_event_ids for event_id in turn.event_ids):
+            continue
+        if turn.user_request_event_id is None:
+            return None
+        event = event_by_id.get(turn.user_request_event_id)
+        if event is None:
+            return None
+        text = event.payload.get("text")
+        return text if isinstance(text, str) else None
+    return None
+
+
 def _starting_context_sources(
     *,
     started_at: datetime,
     context_usage: list[ContextUsageObservation],
+    first_prompt_text: str | None = None,
 ) -> list[ContextSourceObservation]:
-    """Synthesize a starting-context source from the cached prompt prefix.
+    """Synthesize a starting-context source from the first API call's input.
 
     Claude Code JSONL never records the system prompt, tool definitions,
     AGENTS.md, skills, or MCP text — they are injected client-side at request
     time, so the observed context composition cannot measure them from visible
-    content. The first assistant turn's cached prefix (``cache_read`` +
-    ``cache_creation``, before any prior turns accumulate) is the best available
-    estimate of the stable starting-context size, so expose it as a single
-    ``base_system`` source with ``reported_tokens`` set.
+    content. The first assistant turn's full input (``used_input_tokens``) is
+    the stable system-prompt + tools prefix plus that turn's user message, so
+    subtract the visible-text estimate of the first prompt to isolate the
+    prefix. ``used_input_tokens`` is robust to a partially-warm cache: when
+    only part of the system prompt was already cached, ``cache_read`` +
+    ``cache_creation`` undercounts the prefix, but the full request total never
+    does. The cached-prefix sum is used only as a fallback when the used-input
+    total is unavailable.
     """
+    prompt_tokens = _estimate_prompt_tokens(first_prompt_text)
     for observation in context_usage:
         usage = observation.usage or {}
+        used_input = max(observation.used_input_tokens, 0)
         cached = _as_int_or_none(usage.get("cached_input_tokens")) or 0
         cache_creation = _as_int_or_none(usage.get("cache_creation_input_tokens")) or 0
-        estimate = cached + cache_creation
+        estimate = (
+            max(used_input - prompt_tokens, 0)
+            if used_input > 0
+            else cached + cache_creation
+        )
         if estimate <= 0:
             continue
         return [
@@ -126,7 +186,7 @@ def _starting_context_sources(
                 key="base_system",
                 label="System prompt & tools",
                 text="",
-                source="claude_cached_prefix_estimate",
+                source="claude_first_input_estimate",
                 reported_tokens=estimate,
             )
         ]
@@ -381,7 +441,11 @@ class ClaudeCodeAdapter(BaseAdapter):
             is not None
         ]
         context_sources = _starting_context_sources(
-            started_at=started_at, context_usage=context_usage
+            started_at=started_at,
+            context_usage=context_usage,
+            first_prompt_text=_first_api_prompt_text(
+                turns=turns, events=events, context_usage=context_usage
+            ),
         )
 
         return Session(
