@@ -98,6 +98,7 @@ class DashboardDataService:
             for item in sessions.get("items") or []
             if isinstance(item, dict)
         ]
+        _overview_attach_session_costs(session_items)
         vendor_counts: dict[str, int] = {}
         for item in project_items.values():
             for vendor in item.get("vendors") or []:
@@ -522,6 +523,46 @@ def _session_data_query_params(query: dict[str, list[str]]) -> dict[str, Any]:
     return params
 
 
+def _overview_attach_session_costs(session_items: list[dict[str, Any]]) -> None:
+    """Attach per-session estimated cost from ``session.model_usage``.
+
+    Mirrors ``model_usage._session_row`` cost derivation so the overview shares
+    the same pricing source as the model-usage route instead of reading a
+    ``cost_usd`` field that ``project.sessions`` usage never populates.
+    """
+    session_ids = [
+        str(item.get("id") or "")
+        for item in session_items
+        if item.get("id")
+    ]
+    if not session_ids:
+        return
+    payloads = model_usage_mod._model_usage_batch(_ct_json, session_ids)
+    for payload in payloads:
+        session_id = str(
+            payload.get("id") or payload.get("root_session_id") or ""
+        )
+        if not session_id:
+            continue
+        models = [
+            model_usage_mod._priced_model(row)
+            for row in payload.get("models") or []
+            if isinstance(row, dict)
+        ]
+        total = sum(_number(row["estimated_cost_usd"]) for row in models)
+        confidence = "missing_price"
+        if any(
+            (row.get("pricing") or {}).get("confidence") == "estimated"
+            for row in models
+        ):
+            confidence = "estimated"
+        for item in session_items:
+            if str(item.get("id") or "") == session_id:
+                item["cost_usd"] = round(float(total), 8)
+                item["pricing_confidence"] = confidence
+                break
+
+
 def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
     runtime_totals = {
         "execution_seconds": 0,
@@ -545,8 +586,10 @@ def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
         for key in runtime_totals:
             runtime_totals[key] += _number(runtime.get(key))
         usage_totals["processed_tokens"] += int(_number(usage.get("processed_tokens")))
-        if isinstance(usage, dict) and isinstance(usage.get("cost_usd"), int | float):
-            usage_totals["cost_usd"] += float(usage["cost_usd"])
+        cost_usd = item.get("cost_usd")
+        if isinstance(cost_usd, int | float):
+            usage_totals["cost_usd"] += float(cost_usd)
+        if item.get("pricing_confidence") == "estimated":
             usage_totals["known_cost_count"] += 1
         else:
             usage_totals["missing_cost_count"] += 1
@@ -567,8 +610,10 @@ def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
         stats["count"] += 1
         stats["execution_seconds"] += _number(runtime.get("execution_seconds"))
         stats["processed_tokens"] += int(_number(usage.get("processed_tokens")))
-        if isinstance(usage, dict) and isinstance(usage.get("cost_usd"), int | float):
-            stats["cost_usd"] += float(usage["cost_usd"])
+        cost_usd = item.get("cost_usd")
+        if isinstance(cost_usd, int | float):
+            stats["cost_usd"] += float(cost_usd)
+        if item.get("pricing_confidence") == "estimated":
             stats["known_cost_count"] += 1
         for vendor in item.get("vendors") or []:
             vendor_key = str(vendor)
