@@ -2,7 +2,7 @@ import * as React from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AlertTriangle, ArrowLeft, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ChevronRight, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square } from "lucide-react";
 import {
   analyzeSession,
   fetchContextWindow,
@@ -82,21 +82,55 @@ function evidenceLabel(evidence: TokenEvidence | null) {
   return `${formatTokens(evidence.value)} tokens`;
 }
 
-function groupHeader(event: ContextEvent, previous?: ContextEvent): string | null {
-  if (event.source === "subagent" && previous?.source !== "subagent") {
-    return "SUBAGENT'S SEPARATE CONTEXT WINDOW";
+function groupStartsHere(event: ContextEvent, previous?: ContextEvent): boolean {
+  if (event.source === "subagent" && previous?.source !== "subagent") return true;
+  if (event.group === "before_first_prompt" && (!previous || previous.group !== "before_first_prompt")) return true;
+  if (event.group === "post_turn" && (!previous || previous.group !== "post_turn")) return true;
+  if (event.group === "turn" && (!previous || previous.turn_id !== event.turn_id)) return true;
+  return false;
+}
+
+function turnGroupKey(event: ContextEvent): string {
+  if (event.source === "subagent") return "subagent";
+  if (event.group === "before_first_prompt") return "before_first_prompt";
+  if (event.group === "post_turn") return "post_turn";
+  return `turn:${event.turn_id ?? "none"}`;
+}
+
+function turnGroupLabel(event: ContextEvent): string {
+  if (event.source === "subagent") return "SUBAGENT'S SEPARATE CONTEXT WINDOW";
+  if (event.group === "before_first_prompt") return "BEFORE YOU TYPE ANYTHING";
+  if (event.source === "you") return "You";
+  return "Claude works";
+}
+
+type TurnGroup = {
+  key: string;
+  label: string;
+  isSubagent: boolean;
+  totalTokens: number;
+  events: Array<{ event: ContextEvent; index: number }>;
+};
+
+function buildTurnGroups(events: ContextEvent[]): TurnGroup[] {
+  const groups: TurnGroup[] = [];
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    const previous = events[i - 1];
+    if (groups.length === 0 || groupStartsHere(event, previous)) {
+      groups.push({
+        key: turnGroupKey(event),
+        label: turnGroupLabel(event),
+        isSubagent: event.source === "subagent",
+        totalTokens: 0,
+        events: [],
+      });
+    }
+    const current = groups[groups.length - 1];
+    current.events.push({ event, index: i });
+    if (event.tokens) current.totalTokens += event.tokens.value;
   }
-  if (event.group === "before_first_prompt" && (!previous || previous.group !== "before_first_prompt")) {
-    return "BEFORE YOU TYPE ANYTHING";
-  }
-  if (event.group === "post_turn" && (!previous || previous.group !== "post_turn")) {
-    return "CLAUDE WORKS";
-  }
-  if (event.group === "turn" && (!previous || previous.turn_id !== event.turn_id)) {
-    if (event.source === "you") return "you";
-    return "CLAUDE WORKS";
-  }
-  return null;
+  return groups;
 }
 
 function categoryLabel(category: string) {
@@ -164,6 +198,7 @@ export function ContextWindowRoute() {
   const [isFullscreen, setIsFullscreen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState("");
   const [activeCategories, setActiveCategories] = React.useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = React.useState<Set<string>>(new Set());
   const eventRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const events = query.data?.events ?? [];
 
@@ -182,6 +217,33 @@ export function ContextWindowRoute() {
       setSelectedId(filteredEvents[0].id);
     }
   }, [filteredEvents, selectedId]);
+
+  const turnGroups = React.useMemo(() => buildTurnGroups(filteredEvents), [filteredEvents]);
+
+  const activeGroupId = React.useMemo(() => {
+    if (!activeId) return null;
+    return turnGroups.find((g) => g.events.some((e) => e.event.id === activeId))?.key ?? null;
+  }, [turnGroups, activeId]);
+
+  // Auto-expand the turn whose event becomes inspected/playing so the list
+  // scrubber can never land on a hidden row.
+  React.useEffect(() => {
+    if (!activeGroupId || !collapsedGroups.has(activeGroupId)) return;
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      next.delete(activeGroupId);
+      return next;
+    });
+  }, [activeGroupId, collapsedGroups]);
+
+  function toggleGroup(key: string) {
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   React.useEffect(() => {
     if (!isPlaying) return;
