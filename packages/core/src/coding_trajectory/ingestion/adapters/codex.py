@@ -295,17 +295,24 @@ def _context_source_observation(
     )
 
 
-def _record_context_source(state: Any, observation: ContextSourceObservation) -> None:
-    """Append a context-source observation, deduplicating exact text repeats.
+def _record_context_source(
+    state: Any,
+    observation: ContextSourceObservation,
+    *,
+    block: str,
+    role: str,
+) -> None:
+    """Keep one observation per (role, block_name); first emission wins.
 
     Codex re-injects the base/developer/AGENTS.md prompt blocks after a context
-    compaction, so the same block is captured again and would be sized twice in
-    the composition. Dedup by exact text keeps only the (resident) copy.
+    compaction. Each re-injection shares the same (role, block_name) identity as
+    the resident prefix block, so per-block dedup collapses them. The first
+    emission is kept: the block is resident from first injection through end of
+    session (Codex re-attaches it after every compaction), so the earliest
+    timestamp is what makes the accounting attribute its per-call cost across
+    every API call that carried the block.
     """
-    if observation.text in state.context_source_texts:
-        return
-    state.context_source_texts.add(observation.text)
-    state.context_sources.append(observation)
+    state.context_source_by_block.setdefault((role, block), observation)
 
 
 class CodexAdapter(BaseAdapter):
@@ -320,12 +327,15 @@ class CodexAdapter(BaseAdapter):
         session_id: UUID = field(default_factory=uuid4)
         context_window_tokens: int | None = None
         context_usage: list[ContextUsageObservation] = field(default_factory=list)
-        context_sources: list[ContextSourceObservation] = field(default_factory=list)
         runtime_observations: list[RuntimeObservation] = field(default_factory=list)
         projected_turn_ids: set[str] = field(default_factory=set)
-        # Codex re-injects base/developer/AGENTS.md blocks after each compaction;
-        # track seen text so the duplicate (re-injected) copy is not sized twice.
-        context_source_texts: set[str] = field(default_factory=set)
+        # One resident slot per (role, block_name); first emission wins. Codex
+        # re-injects base/developer/AGENTS.md blocks after each compaction, so
+        # per-block dedup keeps only the first (resident-from-first-injection)
+        # copy — its timestamp drives per-call cost attribution.
+        context_source_by_block: dict[tuple[str, str], ContextSourceObservation] = field(
+            default_factory=dict
+        )
 
     def ingest_file(self, path: Path) -> Session:
         self._reset_ingest_state()
@@ -413,7 +423,7 @@ class CodexAdapter(BaseAdapter):
             events=events,
             turns=turns,
             context_usage=state.context_usage,
-            context_sources=state.context_sources,
+            context_sources=list(state.context_source_by_block.values()),
             runtime_observations=state.runtime_observations,
             extensions=extensions,
             status=session_status,
@@ -452,6 +462,8 @@ class CodexAdapter(BaseAdapter):
                             role="system",
                             text=base_text,
                         ),
+                        block="base_instructions",
+                        role="system",
                     )
                     transcript.append(
                         TranscriptRecord(
@@ -885,6 +897,8 @@ class CodexAdapter(BaseAdapter):
                                         role=message_role,
                                         text=text,
                                     ),
+                                    block=block_name,
+                                    role=message_role,
                                 )
                                 transcript.append(
                                     TranscriptRecord(
@@ -922,6 +936,8 @@ class CodexAdapter(BaseAdapter):
                                         role=message_role,
                                         text=text,
                                     ),
+                                    block=block_name,
+                                    role=message_role,
                                 )
                                 transcript.append(
                                     TranscriptRecord(
