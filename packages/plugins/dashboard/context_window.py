@@ -77,6 +77,10 @@ class ContextEvent(BaseModel):
     detail_ref: dict[str, str] = Field(default_factory=dict)
     terminal_visible: bool = True
     estimated_cost: CostEvidence | None = None
+    # Wall-clock gap (``runtime.wait_before_seconds``) preceding this turn; the
+    # prompt-cache TTL break is read off it together with ``re_read_tokens``.
+    idle_seconds: float | None = None
+    re_read_tokens: int | None = None
 
 
 class ExpensiveItem(BaseModel):
@@ -370,7 +374,11 @@ def render_markdown(projection: ContextWindowProjection) -> str:
             current_group = group
         delta = _format_delta(event.tokens.value) if event.tokens else "       -"
         summary = _one_line(event.summary or event.label, 74)
-        lines.append(f"  {event.category:<20} {delta:>8}  {summary}")
+        flag = _ttl_break_flag(event)
+        line = f"  {event.category:<20} {delta:>8}  {summary}"
+        if flag:
+            line += f"  {flag}"
+        lines.append(line)
 
     if projection.compaction and projection.compaction.events:
         lines.extend(["", "Compaction timeline"])
@@ -672,8 +680,8 @@ def _trajectory_events(
     provider: str,
     turn_id: str | None,
 ) -> list[ContextEvent]:
-    usage_by_turn = {
-        str(item.get("id")): item.get("usage") or {}
+    turn_meta = {
+        str(item.get("id")): item
         for item in usage.get("turns") or []
         if isinstance(item, dict) and item.get("id")
     }
@@ -692,6 +700,12 @@ def _trajectory_events(
                 continue
             current_turn_id = str(turn.get("id") or "")
             raw_tool_events = list(tool_events_by_turn.get(current_turn_id) or [])
+            turn_item = turn_meta.get(current_turn_id) or {}
+            turn_runtime = turn_item.get("runtime") or {}
+            turn_usage = turn_item.get("usage") or {}
+            idle_seconds = _optional_float(turn_runtime.get("wait_before_seconds"))
+            re_read_tokens = _optional_int(turn_usage.get("uncached_prompt_tokens"))
+            turn_start = len(events)
             request = turn.get("request") or {}
             request_text = _optional_text(request.get("text"))
             if request_text:
@@ -732,11 +746,14 @@ def _trajectory_events(
                     session_id=session_id,
                     turn_id=current_turn_id,
                     index=index,
-                    turn_usage=usage_by_turn.get(current_turn_id),
+                    turn_usage=turn_usage,
                 )
                 events.append(event)
             while raw_tool_events:
                 events.extend(raw_tool_events.pop(0))
+            for event in events[turn_start:]:
+                event.idle_seconds = idle_seconds
+                event.re_read_tokens = re_read_tokens
     if turn_id:
         events = [
             event
@@ -1432,6 +1449,23 @@ def _format_cost(value: float | None) -> str:
 
 def _format_delta(value: int) -> str:
     return f"+{_format_tokens(value)}"
+
+
+# Anthropic prompt-cache default TTL is 5 minutes; an idle gap beyond it
+# expires cached prefixes, forcing the prompt to be re-processed next turn.
+_TTL_BREAK_SECONDS = 300
+
+
+def _ttl_break_flag(event: ContextEvent) -> str | None:
+    idle = event.idle_seconds
+    re_read = event.re_read_tokens
+    if idle is None or idle <= _TTL_BREAK_SECONDS:
+        return None
+    if re_read is None or re_read <= 0:
+        return None
+    minutes = int(idle // 60)
+    duration = f"{minutes} min" if minutes >= 1 else f"{int(idle)} s"
+    return f"TTL break: {duration} idle → {_format_tokens(re_read)} re-read"
 
 
 def _group_label(event: ContextEvent) -> str:
