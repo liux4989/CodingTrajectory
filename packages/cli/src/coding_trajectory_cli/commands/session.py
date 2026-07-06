@@ -386,7 +386,9 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _render_session_usage_text(payload: dict[str, Any]) -> str:
+def _render_session_usage_text(
+    payload: dict[str, Any], args: argparse.Namespace | None = None
+) -> str:
     lines = ["# Session Usage", "", "```", "Total"]
     lines.append(f"  {render_usage_line(payload.get('total_usage') or {})}")
     runtime = payload.get("runtime") or {}
@@ -400,10 +402,13 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
     if compaction_line:
         lines.append(f"  {compaction_line}")
 
+    show_all = bool(getattr(args, "all_turns", False))
     turns = payload.get("turns") or []
-    if turns:
+    rendered_turns = [t for t in turns if show_all or _turn_has_usage(t)]
+    skipped = len(turns) - len(rendered_turns)
+    if rendered_turns:
         lines.extend(["", "Turns"])
-    for turn in turns:
+    for turn in rendered_turns:
         lines.append(f"  turn {turn.get('turn_id') or '-'}")
         lines.append(f"    {render_usage_line(turn.get('usage') or {})}")
         runtime = turn.get("runtime") or {}
@@ -419,9 +424,32 @@ def _render_session_usage_text(payload: dict[str, Any]) -> str:
                 )
             if timing_parts:
                 lines.append("    " + "  ".join(timing_parts))
+    if skipped:
+        lines.append(
+            f"  (skipped {skipped} turn(s) with no recorded token usage; "
+            f"use --all to show)"
+        )
 
     lines.append("```")
     return "\n".join(lines).rstrip()
+
+
+def _turn_has_usage(turn: dict[str, Any]) -> bool:
+    usage = turn.get("usage") or {}
+    if not usage:
+        return False
+    for key in (
+        "prompt_tokens",
+        "uncached_prompt_tokens",
+        "cached_prompt_tokens",
+        "cache_write_tokens",
+        "completion_tokens",
+        "reasoning_tokens",
+        "reported_total_tokens",
+    ):
+        if int(usage.get(key) or 0):
+            return True
+    return False
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -480,6 +508,13 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         metavar="TURN_ID",
         default=None,
         help="Limit usage analysis to one turn.",
+    )
+    session_usage.add_argument(
+        "--all",
+        dest="all_turns",
+        action="store_true",
+        default=False,
+        help="Include turns with no recorded token usage (default: hide them).",
     )
     add_output_flags(session_usage)
     add_params_flag(session_usage)

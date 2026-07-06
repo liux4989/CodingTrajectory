@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import inspect
 import json
 import sys
 import time
@@ -72,6 +73,11 @@ def _render_payload(args: argparse.Namespace, payload: Any) -> str:
 
     renderer = getattr(args, "_renderer", None)
     if callable(renderer):
+        try:
+            if len(inspect.signature(renderer).parameters) >= 2:
+                return renderer(payload, args)
+        except (TypeError, ValueError):
+            pass
         return renderer(payload)
 
     return json_text(compact_payload(method, payload)) if method else json_text(payload)
