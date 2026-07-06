@@ -610,7 +610,11 @@
   .context-window-layout li {
     min-inline-size: 0;
   }
-  .context-window-layout > section > ol {
+  /* The event stream scroll container is whichever direct child <section>
+   * holds the list — an <ol> for the empty state, or the Accordion
+   * (<div data-slot="accordion">) for the turn tree. */
+  .context-window-layout > section > ol,
+  .context-window-layout > section > [data-slot="accordion"] {
     flex: 1 1 auto;
     min-block-size: 0;
     overflow-y: auto;
@@ -621,16 +625,19 @@
     scrollbar-color: color-mix(in srgb, var(--foreground) 28%, transparent) var(--surface-subtle);
   }
   @supports not (scrollbar-color: auto) {
-    .context-window-layout > section > ol::-webkit-scrollbar {
+    .context-window-layout > section > ol::-webkit-scrollbar,
+    .context-window-layout > section > [data-slot="accordion"]::-webkit-scrollbar {
       width: 11px;
     }
-    .context-window-layout > section > ol::-webkit-scrollbar-thumb {
+    .context-window-layout > section > ol::-webkit-scrollbar-thumb,
+    .context-window-layout > section > [data-slot="accordion"]::-webkit-scrollbar-thumb {
       background: color-mix(in srgb, var(--foreground) 28%, transparent);
       border-radius: 999px;
       border: 2px solid transparent;
       background-clip: padding-box;
     }
-    .context-window-layout > section > ol::-webkit-scrollbar-track {
+    .context-window-layout > section > ol::-webkit-scrollbar-track,
+    .context-window-layout > section > [data-slot="accordion"]::-webkit-scrollbar-track {
       background: var(--surface-subtle);
       border-radius: 999px;
     }
