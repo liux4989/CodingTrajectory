@@ -2,7 +2,7 @@ import * as React from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AlertTriangle, ArrowLeft, ChevronRight, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square } from "lucide-react";
 import {
   analyzeSession,
   fetchContextWindow,
@@ -16,6 +16,7 @@ import {
 import { useJob } from "@/hooks/use-job";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/loading-state";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { StateBlock } from "@/components/state-block";
 import { cn } from "@/lib/utils";
@@ -198,7 +199,7 @@ export function ContextWindowRoute() {
   const [isFullscreen, setIsFullscreen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState("");
   const [activeCategories, setActiveCategories] = React.useState<Set<string>>(new Set());
-  const [collapsedGroups, setCollapsedGroups] = React.useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = React.useState<string[] | null>(null);
   const eventRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const events = query.data?.events ?? [];
 
@@ -220,30 +221,10 @@ export function ContextWindowRoute() {
 
   const turnGroups = React.useMemo(() => buildTurnGroups(filteredEvents), [filteredEvents]);
 
-  const activeGroupId = React.useMemo(() => {
-    if (!activeId) return null;
-    return turnGroups.find((g) => g.events.some((e) => e.event.id === activeId))?.key ?? null;
-  }, [turnGroups, activeId]);
-
-  // Auto-expand the turn whose event becomes inspected/playing so the list
-  // scrubber can never land on a hidden row.
-  React.useEffect(() => {
-    if (!activeGroupId || !collapsedGroups.has(activeGroupId)) return;
-    setCollapsedGroups((current) => {
-      const next = new Set(current);
-      next.delete(activeGroupId);
-      return next;
-    });
-  }, [activeGroupId, collapsedGroups]);
-
-  function toggleGroup(key: string) {
-    setCollapsedGroups((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
+  // Default to every turn expanded; once the user folds one, the explicit
+  // array takes over. Accordion `value` is always controlled so this works
+  // as a fall-untouched default.
+  const expandedValue = expandedGroups ?? turnGroups.map((group) => group.key);
 
   React.useEffect(() => {
     if (!isPlaying) return;
@@ -269,6 +250,21 @@ export function ContextWindowRoute() {
 
   const activeId = pinnedId ?? selectedId ?? filteredEvents[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
+
+  const activeGroupId = React.useMemo(
+    () => (activeId ? turnGroups.find((g) => g.events.some((e) => e.event.id === activeId))?.key ?? null : null),
+    [turnGroups, activeId],
+  );
+
+  // Auto-expand the turn whose event becomes inspected/playing so the list
+  // scrubber can never land on a hidden row.
+  React.useEffect(() => {
+    if (!activeGroupId) return;
+    setExpandedGroups((current) => {
+      if (!current || current.includes(activeGroupId)) return current;
+      return [...current, activeGroupId];
+    });
+  }, [activeGroupId]);
   const analysis = analysisJob.data;
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
 
@@ -557,98 +553,125 @@ export function ContextWindowRoute() {
                 No events match the current filters.
               </div>
             ) : (
-              <ol className="m-0 grid list-none gap-2 p-0">
-                {filteredEvents.map((event, index) => {
-                  const previous = filteredEvents[index - 1];
-                  const header = groupHeader(event, previous);
-                  const isSelected = event.id === selectedId;
-                  const isActive = event.id === activeId;
-                  const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
-                  const color = eventColor(event);
-                  const tokenPercent = totalUsedTokens > 0 && event.tokens
-                    ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
-                    : 0;
-                  const isSubagent = event.source === "subagent";
-                  const eventEvidence = evidenceByEventId.get(event.id) ?? [];
-                  const hasWarning = eventEvidence.some((item) => item.severity === "warning");
+              <Accordion
+                type="multiple"
+                value={expandedValue}
+                onValueChange={setExpandedGroups}
+                className="flex flex-col gap-2"
+              >
+                {turnGroups.map((group) => {
+                  const containsActive = activeGroupId === group.key;
+                  const hasWarning = group.events.some(({ event }) =>
+                    (evidenceByEventId.get(event.id) ?? []).some((item) => item.severity === "warning"),
+                  );
                   return (
-                    <React.Fragment key={event.id}>
-                      {header ? (
-                        <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
-                          <h4 className={cn(
-                            "eyebrow-soft text-muted-foreground",
-                            index > 0 && "mt-4",
-                          )}>
-                            {header}
-                          </h4>
-                        </li>
-                      ) : null}
-                      <li className={cn("list-none", isSubagent && "ml-4 border-l-2 border-border-subtle pl-4")}>
-                        <button
-                          ref={(node) => { eventRefs.current[index] = node; }}
-                          type="button"
-                          className="event-row"
-                          data-active={isActive || undefined}
-                          data-selected={isSelected || undefined}
-                          data-highlight={isCategoryHighlight || undefined}
-                          style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
-                          aria-pressed={isSelected}
-                          onFocus={() => setSelectedId(event.id)}
-                          onClick={() => setSelectedId(event.id)}
-                          onKeyDown={(eventKey) => {
-                            if (eventKey.key === "ArrowDown") {
-                              eventKey.preventDefault();
-                              moveFocus(index, 1);
-                            } else if (eventKey.key === "ArrowUp") {
-                              eventKey.preventDefault();
-                              moveFocus(index, -1);
-                            }
-                          }}
-                        >
-                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
-                          <Badge
-                            variant="outline"
-                            className="shrink-0 px-1.5 py-0 text-caption text-foreground"
-                            style={{ backgroundColor: categoryTint(color, 0.15), borderColor: categoryTint(color, 0.25) }}
-                          >
-                            {categoryLabel(event.category)}
-                          </Badge>
-                          <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
-                            {event.label}
-                          </span>
-                          <span className="event-row-meta">
-                            <span className="event-row-token mono text-body-sm font-medium">
-                              {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
-                            </span>
-                            {tokenPercent > 0 ? (
-                              <span className="event-row-meter">
-                                <span
-                                  className="block h-full rounded-full"
-                                  style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
-                                />
-                              </span>
-                            ) : null}
-                            {event.terminal_visible ? (
-                              <Eye size={14} className="text-muted-foreground" />
-                            ) : null}
-                            {eventEvidence.length > 0 ? (
-                              <span
-                                className={cn(
-                                  "inline-flex h-5 min-w-5 items-center justify-center rounded-md border px-1",
-                                  hasWarning ? "border-warning/45 bg-warning/10 text-warning" : "border-moss/40 bg-moss/10 text-moss",
-                                )}
-                                title={`${eventEvidence.length} analysis evidence ${eventEvidence.length === 1 ? "match" : "matches"}`}
-                              >
-                                {hasWarning ? <AlertTriangle size={13} /> : <Lightbulb size={13} />}
-                              </span>
-                            ) : null}
-                          </span>
-                        </button>
-                      </li>
-                    </React.Fragment>
+                    <AccordionItem
+                      key={group.key}
+                      value={group.key}
+                      className={cn(
+                        "border-b-0",
+                        group.isSubagent && "ml-4 border-l-2 border-border-subtle pl-3",
+                      )}
+                    >
+                      <AccordionTrigger
+                        className={cn(
+                          "items-center rounded-md px-2.5 py-2 text-caption font-normal hover:no-underline",
+                          containsActive && "border border-primary/50 bg-surface-emphasis",
+                        )}
+                      >
+                        <span className="eyebrow-soft min-w-0 flex-1 truncate text-left text-muted-foreground">
+                          {group.label}
+                        </span>
+                        {hasWarning ? <AlertTriangle size={12} className="shrink-0 text-warning" /> : null}
+                        <span className="hidden shrink-0 sm:inline mono text-caption text-muted-foreground">
+                          {formatTokens(group.totalTokens)}
+                        </span>
+                        <span className="hidden shrink-0 sm:inline text-caption text-muted-foreground/70">·</span>
+                        <span className="shrink-0 mono text-caption text-muted-foreground">{group.events.length}</span>
+                      </AccordionTrigger>
+                      <AccordionContent className="pt-0 pb-0">
+                        <ol className="m-0 mt-1.5 grid list-none gap-2 p-0">
+                          {group.events.map(({ event, index }) => {
+                            const isSelected = event.id === selectedId;
+                            const isActive = event.id === activeId;
+                            const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
+                            const color = eventColor(event);
+                            const tokenPercent = totalUsedTokens > 0 && event.tokens
+                              ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
+                              : 0;
+                            const eventEvidence = evidenceByEventId.get(event.id) ?? [];
+                            const eventHasWarning = eventEvidence.some((item) => item.severity === "warning");
+                            return (
+                              <li key={event.id} className="list-none">
+                                <button
+                                  ref={(node) => { eventRefs.current[index] = node; }}
+                                  type="button"
+                                  className="event-row"
+                                  data-active={isActive || undefined}
+                                  data-selected={isSelected || undefined}
+                                  data-highlight={isCategoryHighlight || undefined}
+                                  style={isCategoryHighlight ? { boxShadow: `inset 3px 0 0 0 ${color}` } : undefined}
+                                  aria-pressed={isSelected}
+                                  onFocus={() => setSelectedId(event.id)}
+                                  onClick={() => setSelectedId(event.id)}
+                                  onKeyDown={(eventKey) => {
+                                    if (eventKey.key === "ArrowDown") {
+                                      eventKey.preventDefault();
+                                      moveFocus(index, 1);
+                                    } else if (eventKey.key === "ArrowUp") {
+                                      eventKey.preventDefault();
+                                      moveFocus(index, -1);
+                                    }
+                                  }}
+                                >
+                                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
+                                  <Badge
+                                    variant="outline"
+                                    className="shrink-0 px-1.5 py-0 text-caption text-foreground"
+                                    style={{ backgroundColor: categoryTint(color, 0.15), borderColor: categoryTint(color, 0.25) }}
+                                  >
+                                    {categoryLabel(event.category)}
+                                  </Badge>
+                                  <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm">
+                                    {event.label}
+                                  </span>
+                                  <span className="event-row-meta">
+                                    <span className="event-row-token mono text-body-sm font-medium">
+                                      {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
+                                    </span>
+                                    {tokenPercent > 0 ? (
+                                      <span className="event-row-meter">
+                                        <span
+                                          className="block h-full rounded-full"
+                                          style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
+                                        />
+                                      </span>
+                                    ) : null}
+                                    {event.terminal_visible ? (
+                                      <Eye size={14} className="text-muted-foreground" />
+                                    ) : null}
+                                    {eventEvidence.length > 0 ? (
+                                      <span
+                                        className={cn(
+                                          "inline-flex h-5 min-w-5 items-center justify-center rounded-md border px-1",
+                                          eventHasWarning ? "border-warning/45 bg-warning/10 text-warning" : "border-moss/40 bg-moss/10 text-moss",
+                                        )}
+                                        title={`${eventEvidence.length} analysis evidence ${eventEvidence.length === 1 ? "match" : "matches"}`}
+                                      >
+                                        {eventHasWarning ? <AlertTriangle size={13} /> : <Lightbulb size={13} />}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ol>
+                      </AccordionContent>
+                    </AccordionItem>
                   );
                 })}
-              </ol>
+              </Accordion>
             )}
           </section>
 

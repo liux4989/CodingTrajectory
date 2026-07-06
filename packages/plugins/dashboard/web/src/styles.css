@@ -122,6 +122,8 @@
   --animate-rise-in: rise-in 420ms ease both;
   --animate-shimmer: skeleton-shimmer 1.8s ease-in-out infinite;
   --animate-toast-in: toast-in 300ms ease both;
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
 }
 
 /* Reduced-motion switch (see CSS best-practice guide §9 Accessibility).
@@ -738,6 +740,16 @@
 @keyframes toast-in {
   from { opacity: 0; translate: 0 0.5rem; }
   to { opacity: 1; translate: 0 0; }
+}
+
+@keyframes accordion-down {
+  from { height: 0; }
+  to { height: var(--radix-accordion-content-height); }
+}
+
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); }
+  to { height: 0; }
 }
 
 /* Skeleton: keep a slow breathing pulse for reduced-motion users so the
