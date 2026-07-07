@@ -568,7 +568,13 @@ def compact_payload(method: str, payload: Any) -> Any:
                 or None,
                 "effort_changes": drop_none(
                     {
-                        "count": effort_changes.get("count"),
+                        # ``count`` defaults to 0 (never None) so the block is
+                        # always emitted — even for sessions that never changed
+                        # effort. The key's presence is a capability marker: the
+                        # dashboard throws when it is absent (stale/incomplete ct
+                        # install) instead of silently falling back to the
+                        # cache-break heuristic.
+                        "count": effort_changes.get("count") or 0,
                         "events": [
                             drop_none(
                                 {

@@ -526,7 +526,23 @@ def _project_cache_breaks(
     session shows no cache accounting at all (no turn ever reported a cached
     footprint — e.g. third-party backends that don't implement prompt
     caching), since without caching there are no breaks.
+
+    ``effort_changes`` must be present in ``usage`` (core always emits it, even
+    as ``{"count": 0}`` when the session never changed effort) — its absence
+    means the installed ct is stale/incomplete and lacks the
+    effort_change-ingestion capability. Throw rather than silently falling back
+    to the pure heuristic, so a stale install is loud instead of producing
+    plausible-but-unconfirmed break labels.
     """
+    if "effort_changes" not in usage:
+        raise SystemExit(
+            "ct does not surface effort_changes in session.usage — the install "
+            "is stale or incomplete (Direction 1 effort-change ingestion is "
+            "missing). Reinstall ct editable and retry:\n"
+            "  uv tool install --force --editable packages/cli "
+            "--with-editable packages/core --with-editable "
+            "packages/plugins/code_time --with-editable packages/plugins/dashboard"
+        )
     turns = [t for t in (usage.get("turns") or []) if isinstance(t, dict)]
     if not turns:
         return None
