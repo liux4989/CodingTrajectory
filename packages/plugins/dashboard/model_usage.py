@@ -7,11 +7,6 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
-try:
-    from . import token_pricing
-except ImportError:
-    import token_pricing
-
 TOKEN_KEYS = (
     "prompt_tokens",
     "cached_prompt_tokens",
@@ -286,14 +281,14 @@ def _priced_model(row: dict[str, Any]) -> dict[str, Any]:
     provider = row.get("provider")
     model = row.get("model")
     usage = row.get("usage") or {}
-    estimate = token_pricing.estimate_cost(usage, model=model, provider=provider)
+    estimate = row.get("estimated_cost")
     return {
         "provider": provider,
         "model": model,
         "model_key": _model_key(provider, model),
         "turns": int(_number(row.get("turns"))),
         "usage": usage,
-        "estimated_cost_usd": estimate.amount_usd if estimate else 0.0,
+        "estimated_cost_usd": _estimate_value(estimate),
         "pricing": _pricing_payload(estimate),
     }
 
@@ -302,7 +297,7 @@ def _priced_turn(row: dict[str, Any], *, session_id: str) -> dict[str, Any]:
     provider = row.get("provider")
     model = row.get("model")
     usage = row.get("usage") or {}
-    estimate = token_pricing.estimate_cost(usage, model=model, provider=provider)
+    estimate = row.get("estimated_cost")
     return {
         "session_id": session_id,
         "turn_id": row.get("turn_id"),
@@ -313,9 +308,18 @@ def _priced_turn(row: dict[str, Any], *, session_id: str) -> dict[str, Any]:
         "model_key": _model_key(provider, model),
         "usage": usage,
         "context": row.get("context"),
-        "estimated_cost_usd": estimate.amount_usd if estimate else 0.0,
+        "estimated_cost_usd": _estimate_value(estimate),
         "pricing": _pricing_payload(estimate),
     }
+
+
+def _estimate_value(estimate: Any) -> float:
+    """``value_usd`` off a core-emitted cost-evidence dict, else 0."""
+    if isinstance(estimate, dict):
+        value = estimate.get("value_usd")
+        if value is not None:
+            return float(_number(value))
+    return 0.0
 
 
 def _model_rows(session_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -534,18 +538,21 @@ def _project_options(payload: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _pricing_payload(estimate: Any | None) -> dict[str, Any]:
-    if estimate is None:
+def _pricing_payload(estimate: Any) -> dict[str, Any]:
+    """Project a core-emitted cost-evidence dict to the ``pricing`` summary.
+
+    ``None``/non-dict means the model was unknown to the pricing catalog.
+    """
+    if not isinstance(estimate, dict):
         return {
             "confidence": "missing_price",
             "source": None,
             "effective_date": None,
         }
     return {
-        "confidence": "estimated",
-        "source": estimate.pricing_source,
-        "effective_date": estimate.pricing_effective_date,
-        "breakdown": estimate.breakdown.model_dump(mode="json"),
+        "confidence": estimate.get("confidence") or "estimated",
+        "source": estimate.get("source"),
+        "effective_date": estimate.get("effective_date"),
     }
 
 

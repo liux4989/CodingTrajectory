@@ -400,6 +400,7 @@ def compact_context_category(category: Any) -> Any:
             "label": category.get("label"),
             "tokens": category.get("tokens"),
             "usage": category.get("allocated_usage"),
+            "estimated_cost": category.get("estimated_cost"),
             "pct": category.get("percent"),
             "chars": category.get("observed_chars"),
             "items": category.get("items"),
@@ -515,7 +516,8 @@ def compact_payload(method: str, payload: Any) -> Any:
                 )
                 or None,
                 "usage": compact_usage(payload.get("total_usage")),
-                "cost": payload.get("cost_usd"),
+                "cost": evidence_value(payload.get("estimated_cost")),
+                "pricing": evidence_to_pricing(payload.get("estimated_cost")),
                 "compaction": drop_none(
                     {
                         "count": compaction.get("count"),
@@ -584,7 +586,11 @@ def compact_payload(method: str, payload: Any) -> Any:
                             )
                             or None,
                             "usage": compact_usage(turn.get("usage")),
-                            "cost": turn.get("cost_usd"),
+                            "cost": evidence_value(turn.get("estimated_cost")),
+                            "pricing": evidence_to_pricing(turn.get("estimated_cost")),
+                            "cache_break_waste_usd": turn.get(
+                                "cache_break_waste_usd"
+                            ),
                         }
                     )
                     for turn in payload.get("turns") or []
@@ -813,6 +819,26 @@ def format_cost(value: Any) -> str:
     except (TypeError, ValueError):
         return "-"
     return f"${cost:.4f}" if cost and cost < 0.01 else f"${cost:.2f}"
+
+
+def evidence_value(evidence: Any) -> Any:
+    """``value_usd`` off a cost-evidence dict, or ``None``."""
+    if not isinstance(evidence, dict):
+        return None
+    return evidence.get("value_usd")
+
+
+def evidence_to_pricing(evidence: Any) -> dict[str, Any] | None:
+    """Project a cost-evidence dict to the ``pricing`` summary shape."""
+    if not isinstance(evidence, dict):
+        return None
+    return drop_none(
+        {
+            "confidence": evidence.get("confidence"),
+            "source": evidence.get("source"),
+            "effective_date": evidence.get("effective_date"),
+        }
+    ) or None
 
 
 def render_usage_line(usage: dict[str, Any]) -> str:

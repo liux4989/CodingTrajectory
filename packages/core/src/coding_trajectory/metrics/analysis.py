@@ -54,7 +54,12 @@ from coding_trajectory.metrics.models import (
     TurnMetricsFlat,
 )
 from coding_trajectory.metrics.context_stats._common import compaction_stats, runtime_stats
-from coding_trajectory.metrics.model_catalog import get_model_context_window
+from coding_trajectory.metrics.pricing import (
+    _uses_net_input_convention,
+    cache_break_waste_usd,
+    cost_evidence_from_usage,
+    get_model_context_window,
+)
 from coding_trajectory.token_counter import session_scoped
 
 
@@ -147,11 +152,17 @@ def build_session_graph_usage(
                 )
             )
 
+    provider, model = _session_graph_pricing_context(full)
     return SessionUsageCompactFlat(
         session_id=full.root_session_id,
         runtime=runtime_stats(session_graph),
         turns=turns,
         total_usage=full.token_usage,
+        estimated_cost=cost_evidence_from_usage(
+            full.token_usage.model_dump(mode="json"),
+            model=model,
+            provider=provider,
+        ),
         compaction=compaction_stats(session_graph),
         warnings=full.warnings,
     ).model_dump(mode="json")
@@ -190,6 +201,11 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
                     context=_context_for_turn(source_session, turn.turn_id)
                     if source_session
                     else None,
+                    estimated_cost=cost_evidence_from_usage(
+                        turn.token_usage.model_dump(mode="json"),
+                        model=primary.model if primary else None,
+                        provider=primary.provider if primary else None,
+                    ),
                 )
             )
 
@@ -199,6 +215,11 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
             model=model,
             turns=len(model_turns.get((provider, model), set())),
             usage=usage,
+            estimated_cost=cost_evidence_from_usage(
+                usage.model_dump(mode="json"),
+                model=model,
+                provider=provider,
+            ),
         )
         for (provider, model), usage in sorted(
             model_usage.items(),
@@ -252,6 +273,18 @@ def _compact_turn_usage(
     execution_seconds: int | None,
     wait_before_seconds: int | None,
 ) -> TurnUsageCompactFlat:
+    provider, model = _turn_pricing_context(turn)
+    usage_dict = turn.token_usage.model_dump(mode="json")
+    cost = cost_evidence_from_usage(usage_dict, model=model, provider=provider)
+    # Re-read tokens the dashboard classifies cache breaks against = the turn's
+    # uncached prompt tokens. Precompute the waste here (pricing SoT) so the
+    # dashboard reads it instead of repricing.
+    re_read_tokens = int(usage_dict.get("uncached_prompt_tokens") or 0) or int(
+        usage_dict.get("prompt_tokens") or 0
+    )
+    waste = cache_break_waste_usd(
+        re_read_tokens, model=model, provider=provider
+    )
     return TurnUsageCompactFlat(
         turn_id=turn.turn_id,
         session_id=session_id,
@@ -261,7 +294,44 @@ def _compact_turn_usage(
             wait_before_seconds=wait_before_seconds,
         ),
         usage=turn.token_usage,
+        estimated_cost=cost,
+        cache_break_waste_usd=waste,
     )
+
+
+def _turn_pricing_context(turn: TurnMetrics) -> tuple[str | None, str | None]:
+    """Dominant ``(provider, model)`` for a turn — the pricing context."""
+    dominant = _dominant_group(_model_groups_for_turn(turn))
+    if dominant is None:
+        return None, None
+    return dominant.provider, dominant.model
+
+
+def _observations_pricing_context(
+    observations: list[TokenUsageObservation],
+) -> tuple[str | None, str | None]:
+    """Dominant ``(provider, model)`` across a turn's usage observations."""
+    if not observations:
+        return None, None
+    dominant = max(observations, key=lambda obs: obs.usage.total_tokens)
+    return dominant.provider, dominant.model
+
+
+def _session_graph_pricing_context(
+    full: SessionGraphMetrics,
+) -> tuple[str | None, str | None]:
+    """Dominant ``(provider, model)`` across the whole session graph — the
+    pricing context for the session-total cost estimate."""
+    totals: dict[tuple[str | None, str | None], int] = {}
+    for session in full.sessions:
+        for turn in session.turns:
+            for observation in turn.observations:
+                key = (observation.provider, observation.model)
+                totals[key] = totals.get(key, 0) + observation.usage.total_tokens
+    if not totals:
+        return None, None
+    provider, model = max(totals, key=lambda key: totals[key])
+    return provider, model
 
 
 def _turn_runtime(
@@ -424,12 +494,15 @@ def build_session_graph_tool_usage(
         }
         for turn in session.turns:
             turn_observations = _turn_usage_observations(session, turn)
+            provider, model = _observations_pricing_context(turn_observations)
             tool_items.extend(
                 _build_tool_items_for_turn(
                     turn,
                     session_id=session.session_id,
                     turn_observations=turn_observations,
                     allocated_real_token_cost_by_item=session_costs_by_item_id,
+                    pricing_provider=provider,
+                    pricing_model=model,
                 )
             )
 
@@ -883,6 +956,8 @@ def _build_tool_items_for_turn(
     session_id: UUID,
     turn_observations: list[TokenUsageObservation],
     allocated_real_token_cost_by_item: dict[UUID, AllocatedRealTokenCost] | None = None,
+    pricing_provider: str | None = None,
+    pricing_model: str | None = None,
 ) -> list[ToolItemFlat]:
     tool_entries = [item for item in turn.items if is_tool_shaped_item(item)]
     if not tool_entries:
@@ -927,6 +1002,11 @@ def _build_tool_items_for_turn(
             base.allocated_real_token_cost = (
                 allocated_real_token_cost_by_item or {}
             ).get(item.item_id)
+            base.estimated_cost = cost_evidence_from_usage(
+                _allocated_cost_usage_dict(base.allocated_real_token_cost),
+                model=pricing_model,
+                provider=pricing_provider,
+            )
             base.invoke_response_tokens = _build_invoke_response_tokens(
                 invoke_obs, count=count
             )
@@ -1067,12 +1147,6 @@ def _effective_input_token_total(
         - usage.cache_creation_input_tokens,
         0,
     )
-
-
-def _uses_net_input_convention(provider: str | None, model: str | None) -> bool:
-    if provider:
-        return provider.strip().lower() in {"anthropic", "claude", "claude-code"}
-    return "claude" in (model or "").lower()
 
 
 def _item_visible_token_weight(item: Any) -> int:

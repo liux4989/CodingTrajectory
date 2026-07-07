@@ -35,6 +35,7 @@ from coding_trajectory.ingestion.models import (
     SessionGraph,
 )
 from coding_trajectory.metrics.models import ContextCategoryFlat
+from coding_trajectory.metrics.pricing import cost_evidence_from_usage
 from coding_trajectory.token_counter import session_scoped
 
 
@@ -110,6 +111,8 @@ def build_context_composition(
     *,
     allocated_usage_by_item: dict[UUID, dict[str, int]] | None = None,
     allocated_usage_by_context_source: dict[str, dict[str, int]] | None = None,
+    pricing_model: str | None = None,
+    pricing_provider: str | None = None,
 ) -> list[ContextCategoryFlat]:
     allocated_usage_by_item = allocated_usage_by_item or {}
     allocated_usage_by_context_source = allocated_usage_by_context_source or {}
@@ -153,7 +156,34 @@ def build_context_composition(
         allocated_usage_by_item,
         allocated_usage_by_context_source,
     )
+    _attach_estimated_cost(
+        categories, model=pricing_model, provider=pricing_provider
+    )
     return categories
+
+
+def _attach_estimated_cost(
+    categories: list[ContextCategoryFlat],
+    *,
+    model: str | None,
+    provider: str | None,
+) -> None:
+    """Walk the composition tree and price each category's allocated usage.
+
+    Cost is the pricing SoT's estimate over the category's allocated usage
+    bucket; the dashboard reads it instead of repricing. Parent categories
+    inherit their children's allocated usage sum, so their cost reflects the
+    whole subtree.
+    """
+    for category in categories:
+        if category.allocated_usage:
+            category.estimated_cost = cost_evidence_from_usage(
+                category.allocated_usage, model=model, provider=provider
+            )
+        if category.children:
+            _attach_estimated_cost(
+                category.children, model=model, provider=provider
+            )
 
 
 def _anchor_composition_to_used_input(

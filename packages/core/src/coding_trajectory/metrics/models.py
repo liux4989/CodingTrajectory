@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, model_serializer
 from coding_trajectory.metrics.accounting import (
     usage_accounting_payload as _usage_accounting_payload,
 )
+from coding_trajectory.metrics.pricing import CostEvidenceFlat
 
 
 class TokenUsage(BaseModel):
@@ -177,6 +178,7 @@ class ContextCategoryFlat(BaseModel):
     label: str
     tokens: int = 0
     allocated_usage: dict[str, int] | None = None
+    estimated_cost: CostEvidenceFlat | None = None
     observed_chars: int | None = None
     items: int | None = None
     percent: float | None = None
@@ -191,6 +193,8 @@ class ContextCategoryFlat(BaseModel):
         data = handler(self)
         if data.get("allocated_usage") is None:
             data.pop("allocated_usage", None)
+        if data.get("estimated_cost") is None:
+            data.pop("estimated_cost", None)
         if data.get("observed_chars") is None:
             data.pop("observed_chars", None)
         if data.get("items") is None:
@@ -354,6 +358,8 @@ class TurnUsageCompactFlat(BaseModel):
     session_id: UUID | None = None
     runtime: TurnRuntimeFlat | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
+    estimated_cost: CostEvidenceFlat | None = None
+    cache_break_waste_usd: float | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -364,6 +370,10 @@ class TurnUsageCompactFlat(BaseModel):
             data.pop("runtime", None)
         if data.get("usage"):
             data["usage"] = _usage_accounting_payload(data["usage"])
+        if data.get("estimated_cost") is None:
+            data.pop("estimated_cost", None)
+        if data.get("cache_break_waste_usd") is None:
+            data.pop("cache_break_waste_usd", None)
         return data
 
 
@@ -372,6 +382,7 @@ class SessionUsageCompactFlat(BaseModel):
     runtime: RuntimeStatsFlat | None = None
     turns: list[TurnUsageCompactFlat] = Field(default_factory=list)
     total_usage: TokenUsage = Field(default_factory=TokenUsage)
+    estimated_cost: CostEvidenceFlat | None = None
     compaction: CompactionStatsFlat | None = None
     warnings: list[str] = Field(default_factory=list)
 
@@ -380,6 +391,8 @@ class SessionUsageCompactFlat(BaseModel):
         data = handler(self)
         if data.get("total_usage"):
             data["total_usage"] = _usage_accounting_payload(data["total_usage"])
+        if data.get("estimated_cost") is None:
+            data.pop("estimated_cost", None)
         if data.get("compaction") is None:
             data.pop("compaction", None)
         return data
@@ -405,12 +418,15 @@ class ModelUsageModelFlat(BaseModel):
     model: str | None = None
     turns: int = 0
     usage: TokenUsage = Field(default_factory=TokenUsage)
+    estimated_cost: CostEvidenceFlat | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
         if data.get("usage"):
             data["usage"] = _usage_accounting_payload(data["usage"])
+        if data.get("estimated_cost") is None:
+            data.pop("estimated_cost", None)
         return data
 
 
@@ -432,6 +448,7 @@ class ModelUsageTurnFlat(BaseModel):
     usage: TokenUsage = Field(default_factory=TokenUsage)
     models: list[ModelUsageModelFlat] = Field(default_factory=list)
     context: ModelUsageContextFlat | None = None
+    estimated_cost: CostEvidenceFlat | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -440,6 +457,8 @@ class ModelUsageTurnFlat(BaseModel):
             data["usage"] = _usage_accounting_payload(data["usage"])
         if data.get("context") == {}:
             data.pop("context", None)
+        if data.get("estimated_cost") is None:
+            data.pop("estimated_cost", None)
         return data
 
 
@@ -568,6 +587,7 @@ class ToolItemFlat(BaseModel):
     output_truncated: bool = False
     token_attribution: ToolTokenAttribution | None = None
     allocated_real_token_cost: AllocatedRealTokenCost | None = None
+    estimated_cost: CostEvidenceFlat | None = None
     invoke_response_tokens: InvokeResponseTokens | None = None
     read_after_result: ReadAfterResult | None = None
 
@@ -582,6 +602,7 @@ class ToolItemFlat(BaseModel):
         for key in (
             "token_attribution",
             "allocated_real_token_cost",
+            "estimated_cost",
             "invoke_response_tokens",
             "read_after_result",
         ):

@@ -12,6 +12,7 @@ from coding_trajectory_cli._shared import (
     add_session_source,
     add_turn_window_flags,
     display_value,
+    format_cost,
     format_duration,
     format_percent,
     format_tokens,
@@ -391,6 +392,12 @@ def _render_session_usage_text(
 ) -> str:
     lines = ["# Session Usage", "", "```", "Total"]
     lines.append(f"  {render_usage_line(payload.get('total_usage') or {})}")
+    total_cost = payload.get("estimated_cost") or {}
+    if total_cost.get("value_usd") is not None:
+        lines.append(
+            f"  cost {format_cost(total_cost.get('value_usd'))} "
+            f"({total_cost.get('confidence', 'estimated')})"
+        )
     runtime = payload.get("runtime") or {}
     if runtime:
         lines.append(
@@ -411,6 +418,12 @@ def _render_session_usage_text(
     for turn in rendered_turns:
         lines.append(f"  turn {turn.get('turn_id') or '-'}")
         lines.append(f"    {render_usage_line(turn.get('usage') or {})}")
+        turn_cost = turn.get("estimated_cost") or {}
+        if turn_cost.get("value_usd") is not None:
+            lines.append(
+                f"    cost {format_cost(turn_cost.get('value_usd'))} "
+                f"({turn_cost.get('confidence', 'estimated')})"
+            )
         runtime = turn.get("runtime") or {}
         if runtime:
             timing_parts = []

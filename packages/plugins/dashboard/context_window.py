@@ -15,11 +15,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-try:
-    from . import token_pricing
-except ImportError:
-    import token_pricing
-
 
 @dataclass(frozen=True)
 class _VisibleTextSize:
@@ -234,25 +229,15 @@ def build_projection(
     vendor = str(stats.get("vendor") or _overview_vendor(overview) or "unknown")
     model = stats.get("model") or {}
     model_name = _optional_text(model.get("name"))
-    categories = _project_categories(stats, model=model_name, provider=vendor)
-    provider_usage_buckets = _project_provider_usage_buckets(
-        stats,
-        model=model_name,
-        provider=vendor,
-    )
-    expensive_items = _project_expensive_items(
-        tool_usage,
-        model=model_name,
-        provider=vendor,
-    )
+    categories = _project_categories(stats)
+    provider_usage_buckets = _project_provider_usage_buckets(stats)
+    expensive_items = _project_expensive_items(tool_usage)
     events = [
         *_category_events(categories),
         *_trajectory_events(
             overview,
             usage,
             tool_usage,
-            model=model_name,
-            provider=vendor,
             turn_id=turn_id,
         ),
     ]
@@ -262,36 +247,23 @@ def build_projection(
         raise SystemExit(f"turn not found in session overview: {turn_id}")
 
     compaction = _project_compaction(stats)
-    cache_breaks = _project_cache_breaks(
-        usage, vendor=vendor, model=model_name, compaction=compaction
-    )
+    cache_breaks = _project_cache_breaks(usage, vendor=vendor, compaction=compaction)
 
     context = stats.get("context") or {}
     reported_context_window = model.get("context_window") or model.get(
         "context_window_tokens"
     )
-    catalog_context_window = token_pricing.get_model_context_window(
-        model_name,
-        provider=vendor,
-    )
-    context_window = reported_context_window or catalog_context_window
+    # Core resolves the context window in ``session.stats`` (reported value or
+    # the merged static/live model catalog) — the dashboard reads it directly.
+    context_window = reported_context_window
     used_tokens = _optional_int(context.get("used") or context.get("used_tokens"))
     used_percent = _optional_float(context.get("pct") or context.get("used_percent"))
     if used_percent is None and used_tokens is not None and context_window:
         used_percent = round((used_tokens / context_window) * 100, 1)
-    usage_summary = usage.get("total_usage") or usage.get("usage") or {}
-    cost_not_reported = any(
-        "cost not reported in session log" in str(warning)
-        for warning in usage.get("warnings") or []
-    )
-    reported_cost = _optional_float(usage_summary.get("cost"))
-    estimated_cost = None
-    if reported_cost is None or cost_not_reported:
-        estimated_cost = token_pricing.estimate_cost(
-            usage_summary,
-            model=model_name,
-            provider=vendor,
-        )
+    # Session-total cost is the pricing SoT's estimate, emitted by
+    # ``session.usage`` as ``cost`` + ``pricing`` (source/effective_date).
+    reported_cost = _optional_float(usage.get("cost"))
+    pricing = usage.get("pricing") or {}
     return ContextWindowProjection(
         session_id=str(stats.get("id") or session_id),
         vendor=vendor,
@@ -299,11 +271,7 @@ def build_projection(
         context_window_tokens=_token_evidence(
             context_window,
             confidence="structural",
-            source=(
-                "ct session stats:model.context_window"
-                if reported_context_window
-                else token_pricing.MODELS_DEV_SOURCE
-            ),
+            source="ct session stats:model.context_window",
         ),
         used_tokens=_token_evidence(
             used_tokens,
@@ -314,17 +282,11 @@ def build_projection(
         token_cost=(
             CostEvidence(
                 value_usd=reported_cost,
-                confidence="reported",
-                source="session log",
-            )
-            if reported_cost is not None and not cost_not_reported
-            else CostEvidence(
-                value_usd=estimated_cost.amount_usd,
                 confidence="estimated",
-                source=estimated_cost.pricing_source,
-                effective_date=estimated_cost.pricing_effective_date,
+                source=str(pricing.get("source") or "ct session usage:cost"),
+                effective_date=pricing.get("effective_date"),
             )
-            if estimated_cost
+            if reported_cost is not None
             else None
         ),
         categories=sorted(categories, key=_category_sort_key, reverse=True),
@@ -535,7 +497,6 @@ def _project_cache_breaks(
     usage: dict[str, Any],
     *,
     vendor: str,
-    model: str | None,
     compaction: CompactionSummary | None = None,
 ) -> CacheBreakSummary | None:
     """Classify per-turn cache re-reads into TTL vs effort-switch breaks.
@@ -584,9 +545,10 @@ def _project_cache_breaks(
         )
         if break_type is None:
             continue
-        waste = token_pricing.cache_break_waste_usd(
-            re_read, model=model, provider=vendor
-        )
+        # Per-turn waste is precomputed by core (pricing SoT) off the turn's
+        # uncached re-read tokens; the dashboard only classifies which turns
+        # are breaks.
+        waste = _optional_float(turn.get("cache_break_waste_usd"))
         records.append(
             CacheBreakRecord(
                 turn_id=turn_id,
@@ -702,12 +664,7 @@ def _post_compaction_turn_ids(
     return skip
 
 
-def _project_categories(
-    stats: dict[str, Any],
-    *,
-    model: str | None,
-    provider: str,
-) -> list[ContextCategory]:
+def _project_categories(stats: dict[str, Any]) -> list[ContextCategory]:
     context = stats.get("context") or {}
     leaves = list(_category_leaves(context.get("categories") or []))
     projected: list[ContextCategory] = []
@@ -720,7 +677,6 @@ def _project_categories(
         confidence = _confidence(
             category.get("confidence"), fallback="estimated_tokens"
         )
-        allocated_usage = _category_usage(category)
         projected.append(
             ContextCategory(
                 id=f"category:{source_key}:{index}",
@@ -733,10 +689,8 @@ def _project_categories(
                     source=f"ct session stats:context.categories.{source_key}",
                 ),
                 percent=_optional_float(category.get("pct")),
-                estimated_cost=_cost_evidence_from_usage(
-                    allocated_usage,
-                    model=model,
-                    provider=provider,
+                estimated_cost=_cost_evidence_from_estimate(
+                    category.get("estimated_cost")
                 ),
             )
         )
@@ -745,9 +699,6 @@ def _project_categories(
 
 def _project_provider_usage_buckets(
     stats: dict[str, Any],
-    *,
-    model: str | None,
-    provider: str,
 ) -> list[ContextCategory]:
     projected: list[ContextCategory] = []
     for index, category in enumerate(stats.get("provider_usage_buckets") or []):
@@ -757,7 +708,6 @@ def _project_provider_usage_buckets(
         if not isinstance(tokens, int) or isinstance(tokens, bool):
             continue
         source_key = str(category.get("key") or f"provider_bucket_{index}")
-        allocated_usage = _category_usage(category)
         projected.append(
             ContextCategory(
                 id=f"provider:{source_key}:{index}",
@@ -775,10 +725,8 @@ def _project_provider_usage_buckets(
                     ),
                 ),
                 percent=_optional_float(category.get("pct")),
-                estimated_cost=_cost_evidence_from_usage(
-                    allocated_usage,
-                    model=model,
-                    provider=provider,
+                estimated_cost=_cost_evidence_from_estimate(
+                    category.get("estimated_cost")
                 ),
             )
         )
@@ -787,9 +735,6 @@ def _project_provider_usage_buckets(
 
 def _project_expensive_items(
     tool_usage: dict[str, Any],
-    *,
-    model: str | None,
-    provider: str,
 ) -> list[ExpensiveItem]:
     items: list[ExpensiveItem] = []
     for index, item in enumerate(tool_usage.get("tool_items") or []):
@@ -799,10 +744,10 @@ def _project_expensive_items(
         if not isinstance(real_cost, dict):
             continue
         usage = _usage_dict(real_cost)
-        estimate = _cost_evidence_from_usage(usage, model=model, provider=provider)
+        estimate = _cost_evidence_from_estimate(item.get("estimated_cost"))
         if estimate is None:
             continue
-        events = _tool_item_events(item, index=index, model=model, provider=provider)
+        events = _tool_item_events(item, index=index)
         event = events[0] if events else None
         category = (
             event.category
@@ -842,23 +787,6 @@ def _category_leaves(categories: Iterable[Any]) -> Iterable[dict[str, Any]]:
             yield from _category_leaves(children)
         else:
             yield category
-
-
-def _category_usage(category: dict[str, Any]) -> dict[str, int]:
-    for key in ("allocated_usage", "usage", "real_tokens"):
-        usage = _usage_dict(category.get(key))
-        if usage.get("processed_tokens", 0) > 0 or any(
-            usage.get(token_key, 0)
-            for token_key in (
-                "uncached_prompt_tokens",
-                "cached_prompt_tokens",
-                "cache_write_tokens",
-                "completion_tokens",
-                "reasoning_tokens",
-            )
-        ):
-            return usage
-    return {}
 
 
 _STARTING_CONTEXT_KEYS = {
@@ -938,8 +866,6 @@ def _trajectory_events(
     usage: dict[str, Any],
     tool_usage: dict[str, Any],
     *,
-    model: str | None,
-    provider: str,
     turn_id: str | None,
 ) -> list[ContextEvent]:
     turn_meta = {
@@ -947,11 +873,7 @@ def _trajectory_events(
         for item in usage.get("turns") or []
         if isinstance(item, dict) and item.get("id")
     }
-    tool_events_by_turn = _tool_events_by_turn(
-        tool_usage,
-        model=model,
-        provider=provider,
-    )
+    tool_events_by_turn = _tool_events_by_turn(tool_usage)
     events: list[ContextEvent] = []
     for session in overview.get("sessions") or []:
         if not isinstance(session, dict):
@@ -1027,9 +949,6 @@ def _trajectory_events(
 
 def _tool_events_by_turn(
     tool_usage: dict[str, Any],
-    *,
-    model: str | None,
-    provider: str,
 ) -> dict[str, list[list[ContextEvent]]]:
     by_turn: dict[str, list[list[ContextEvent]]] = {}
     for index, item in enumerate(tool_usage.get("tool_items") or []):
@@ -1039,7 +958,7 @@ def _tool_events_by_turn(
         if turn_id is None:
             continue
         by_turn.setdefault(turn_id, []).append(
-            _tool_item_events(item, index=index, model=model, provider=provider)
+            _tool_item_events(item, index=index)
         )
     return by_turn
 
@@ -1048,8 +967,6 @@ def _tool_item_events(
     item: dict[str, Any],
     *,
     index: int,
-    model: str | None,
-    provider: str,
 ) -> list[ContextEvent]:
     item_id = str(item.get("item_id") or f"tool_item_{index}")
     tool = str(item.get("tool_name") or "Tool")
@@ -1093,11 +1010,7 @@ def _tool_item_events(
             detail_ref[detail_key] = str(value)
     if real_cost.get("allocation_method"):
         detail_ref["allocated_token_method"] = str(real_cost["allocation_method"])
-    estimated_cost = _cost_evidence_from_usage(
-        _usage_dict(real_cost),
-        model=model,
-        provider=provider,
-    )
+    estimated_cost = _cost_evidence_from_estimate(item.get("estimated_cost"))
     if estimated_cost:
         detail_ref["estimated_cost_usd"] = str(estimated_cost.value_usd)
     status = _optional_text(item.get("status"))
@@ -1557,36 +1470,18 @@ def _usage_dict(value: Any) -> dict[str, int]:
     }
 
 
-def _cost_evidence_from_usage(
-    usage: dict[str, int],
-    *,
-    model: str | None,
-    provider: str,
-) -> CostEvidence | None:
-    if not any(
-        usage.get(key, 0)
-        for key in (
-            "prompt_tokens",
-            "uncached_prompt_tokens",
-            "cached_prompt_tokens",
-            "cache_write_tokens",
-            "completion_tokens",
-            "reasoning_tokens",
-        )
-    ):
-        return None
-    estimate = token_pricing.estimate_cost(
-        usage,
-        model=model,
-        provider=provider,
-    )
-    if estimate is None:
+def _cost_evidence_from_estimate(estimate: Any) -> CostEvidence | None:
+    """Project a core-emitted ``estimated_cost`` dict to the dashboard's
+    ``CostEvidence``. ``None`` when the model was unknown to the pricing
+    catalog (no rule matched) — cost is omitted rather than reported as 0.
+    """
+    if not isinstance(estimate, dict) or estimate.get("value_usd") is None:
         return None
     return CostEvidence(
-        value_usd=estimate.amount_usd,
-        confidence="estimated",
-        source=estimate.pricing_source,
-        effective_date=estimate.pricing_effective_date,
+        value_usd=estimate.get("value_usd"),
+        confidence=estimate.get("confidence") or "estimated",
+        source=str(estimate.get("source") or "ct pricing"),
+        effective_date=estimate.get("effective_date"),
     )
 
 

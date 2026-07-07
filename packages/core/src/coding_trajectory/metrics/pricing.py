@@ -1,4 +1,18 @@
-"""Dashboard-owned token pricing and context metadata."""
+"""Single source of truth for model pricing and context-window resolution.
+
+Owns per-model USD pricing (``estimate_cost``), prompt-cache break waste
+(``cache_break_waste_usd``), and context-window resolution
+(``get_model_context_window``). The dashboard plugin and any other consumer
+read cost off the ``ct`` JSON this module populates; no pricing math lives in
+the plugin anymore.
+
+Context-window resolution tiers: the Claude Code alias suffix
+(e.g. ``glm-5.2[1m]`` -> 1_000_000), then a curated static map (offline-safe,
+used by ingestion), then the live https://models.dev catalog (24h disk cache,
+gated by ``CT_DISABLE_LIVE_PRICING`` so the ingestion hot path can stay
+offline). Pricing is always the live catalog (with the OpenAI standard rules
+as a static fallback) since static per-model rates are too coarse.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +23,17 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Final, Literal
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    model_serializer,
+    model_validator,
+)
 
 TOKENS_PER_MILLION = 1_000_000
 MODELS_DEV_SOURCE = "https://models.dev/api.json"
@@ -31,8 +51,74 @@ _THRESHOLD_OVERRIDES = {
     "gpt-5.5": 272_000,
 }
 
+# Disable live models.dev fetches (offline ingestion / sandboxed runs). When
+# set, only the static curated context-window map and OpenAI standard price
+# rules are used.
+_DISABLE_LIVE_ENV = "CT_DISABLE_LIVE_PRICING"
+_LEGACY_DISABLE_LIVE_ENV = "CT_DASHBOARD_DISABLE_LIVE_PRICING"
 
 OPENAI_STANDARD_PRICE_RULES: dict[str, "PriceRule"] = {}
+
+# ---------------------------------------------------------------------------
+# Static context-window catalog (offline fallback, curated from models.dev)
+# ---------------------------------------------------------------------------
+
+# Claude Code model-alias context suffix, e.g. "glm-5.2[1m]" -> 1_000_000.
+_ALIAS_WINDOW_RE = re.compile(
+    r"\[(?P<size>\d+(?:\.\d+)?)\s*(?P<unit>[km])\]$", re.IGNORECASE
+)
+
+_PROVIDER_PREFIXES: Final[tuple[str, ...]] = (
+    "anthropic/",
+    "openai/",
+    "z-ai/",
+    "zai/",
+    "zai-org/",
+    "zhipu/",
+    "moonshot/",
+    "minimax/",
+    "anthropic.",
+)
+
+_VARIANT_SUFFIX_RE = re.compile(
+    r"(?:-(?:thinking|think|fast|latest|free|highspeed|flex|turbo|lightning|reasoning-distilled))+$"
+)
+_DATE_SUFFIX_RE = re.compile(r"-\d{8}$|-\d{4}-\d{2}-\d{2}$")
+
+# Curated from https://models.dev (Anthropic-native / Zhipu-native entries).
+# Values are the model's max input context in tokens.
+_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    # --- Claude (Anthropic) ---
+    "claude-3-haiku": 200_000,
+    "claude-3-sonnet": 200_000,
+    "claude-3-opus": 200_000,
+    "claude-3-5-haiku": 200_000,
+    "claude-3-5-sonnet": 200_000,
+    "claude-3-7-sonnet": 200_000,
+    "claude-opus-4-0": 200_000,
+    "claude-opus-4-1": 200_000,
+    "claude-opus-4-5": 200_000,
+    "claude-sonnet-4-0": 200_000,
+    "claude-sonnet-4-5": 200_000,
+    "claude-haiku-4-5": 200_000,
+    "claude-opus-4-6": 1_000_000,
+    "claude-opus-4-7": 1_000_000,
+    "claude-opus-4-8": 1_000_000,
+    "claude-sonnet-4-6": 1_000_000,
+    "claude-sonnet-5": 1_000_000,
+    "claude-fable-5": 1_000_000,
+    # --- GLM (Zhipu) ---
+    "glm-4.5": 131_072,
+    "glm-4.6": 204_800,
+    "glm-4.7": 204_800,
+    "glm-5": 204_800,
+    "glm-5.1": 200_000,
+    "glm-5.2": 1_000_000,
+    # --- Kimi (Moonshot) ---
+    "kimi-k2.7-code": 262_144,
+    # --- MiniMax ---
+    "minimax-m3": 512_000,
+}
 
 
 class TokenUsage(BaseModel):
@@ -79,6 +165,59 @@ class CostEstimate(BaseModel):
     pricing_effective_date: str
     model: str
     breakdown: CostBreakdown = Field(default_factory=CostBreakdown)
+
+
+class CostEvidenceFlat(BaseModel):
+    """USD cost attribution attached next to a usage bucket.
+
+    Core (the pricing single source of truth) populates this; the dashboard
+    and other consumers read it off the ``ct`` JSON instead of repricing.
+    """
+
+    value_usd: float = Field(ge=0)
+    confidence: Literal["reported", "estimated"] = "estimated"
+    source: str | None = None
+    effective_date: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        return {key: value for key, value in data.items() if value is not None}
+
+
+def cost_evidence_from_usage(
+    usage: dict[str, Any] | None,
+    *,
+    model: str | None,
+    provider: str | None,
+) -> CostEvidenceFlat | None:
+    """Estimated USD cost over a usage bucket, sourced from the pricing SoT.
+
+    Returns ``None`` when the model is unknown to the pricing catalog (no rule
+    matches) or the usage bucket is empty, so callers omit cost rather than
+    report a misleading 0. Shared by ``analysis`` and ``composition``.
+    """
+    if not usage or not any(
+        usage.get(key, 0)
+        for key in (
+            "prompt_tokens",
+            "uncached_prompt_tokens",
+            "cached_prompt_tokens",
+            "cache_write_tokens",
+            "completion_tokens",
+            "reasoning_tokens",
+        )
+    ):
+        return None
+    estimate = estimate_cost(usage, model=model, provider=provider)
+    if estimate is None:
+        return None
+    return CostEvidenceFlat(
+        value_usd=estimate.amount_usd,
+        confidence="estimated",
+        source=estimate.pricing_source,
+        effective_date=estimate.pricing_effective_date or None,
+    )
 
 
 @dataclass(frozen=True)
@@ -230,9 +369,24 @@ def get_model_context_window(
     provider: str | None = None,
     now: datetime | None = None,
 ) -> int | None:
+    """Resolve a model's context window (tokens).
+
+    Tiers: Claude Code alias suffix (``glm-5.2[1m]``), then the curated static
+    map (offline-safe), then the live models.dev catalog (24h disk cache,
+    skipped when ``CT_DISABLE_LIVE_PRICING`` is set). Unknown models return
+    ``None``.
+    """
+    if not model:
+        return None
+    alias_window = _parse_alias_window(model)
+    if alias_window is not None:
+        return alias_window
     normalized_model = _normalize_model_name(model)
     if normalized_model is None:
         return None
+    static_window = _MODEL_CONTEXT_WINDOWS.get(normalized_model)
+    if static_window is not None:
+        return static_window
     artifact = _load_models_dev_cache(now=now or datetime.now(UTC), refresh=True)
     if artifact is None:
         return None
@@ -309,10 +463,14 @@ def _threshold_rate(
     return threshold if above_threshold and threshold is not None else default
 
 
-def _uses_net_input_convention(provider: str | None, model: str) -> bool:
+def _uses_net_input_convention(provider: str | None, model: str | None) -> bool:
+    """Anthropic reports cached/cache-creation tokens *on top of* the input
+    total; OpenAI/Codex report input net of cache. Drives whether the input
+    bucket is split before pricing. Single copy — ``analysis.py`` reuses it.
+    """
     if provider:
         return provider.strip().lower() in {"anthropic", "claude", "claude-code"}
-    return "claude" in model
+    return "claude" in (model or "").lower()
 
 
 def _price(tokens: int, rate_per_mtok: float | None) -> float:
@@ -431,7 +589,7 @@ def _read_models_dev_cache(*, now: datetime) -> ModelsDevCacheArtifact | None:
 
 def _refresh_models_dev_cache(*, now: datetime) -> ModelsDevCacheArtifact | None:
     request = Request(
-        MODELS_DEV_SOURCE, headers={"User-Agent": "coding-trajectory-dashboard/1.0"}
+        MODELS_DEV_SOURCE, headers={"User-Agent": "coding-trajectory/1.0"}
     )
     try:
         with urlopen(request, timeout=_MODELS_DEV_TIMEOUT_SECONDS) as response:
@@ -450,11 +608,10 @@ def _refresh_models_dev_cache(*, now: datetime) -> ModelsDevCacheArtifact | None
 
 
 def _should_refresh_live_pricing() -> bool:
-    return os.environ.get("CT_DASHBOARD_DISABLE_LIVE_PRICING") not in {
-        "1",
-        "true",
-        "TRUE",
-    }
+    return not any(
+        os.environ.get(name) in {"1", "true", "TRUE"}
+        for name in (_DISABLE_LIVE_ENV, _LEGACY_DISABLE_LIVE_ENV)
+    )
 
 
 def _models_dev_cache_path() -> Path:
@@ -463,7 +620,6 @@ def _models_dev_cache_path() -> Path:
     return (
         base
         / "coding-trajectory"
-        / "dashboard"
         / "model-pricing"
         / f"models-dev-v{_MODELS_DEV_CACHE_VERSION}.json"
     )
@@ -555,13 +711,47 @@ def _normalize_provider(provider: str | None) -> str | None:
     }.get(normalized, normalized)
 
 
+def _parse_alias_window(model: str) -> int | None:
+    match = _ALIAS_WINDOW_RE.search(model.strip())
+    if not match:
+        return None
+    size = float(match.group("size"))
+    unit = match.group("unit").lower()
+    return int(size * (1_000 if unit == "k" else 1_000_000))
+
+
 def _normalize_model_name(model: str | None) -> str | None:
+    """Canonical model id: strip provider prefixes, alias suffix, variant and
+    date suffixes, and region/deployment markers. Single copy reused by both
+    pricing-rule lookup and context-window resolution.
+    """
     if not model:
         return None
-    normalized = model.strip().lower()
-    normalized = normalized.removeprefix("openai/").removeprefix("anthropic.")
-    if "." in normalized and "claude-" in normalized:
-        normalized = normalized[normalized.find("claude-") :]
-    normalized = re.sub(r"-\d{8}$", "", normalized)
-    normalized = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", normalized)
-    return normalized
+    name = model.strip().lower()
+    for prefix in _PROVIDER_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    if "claude-" in name:
+        name = name[name.find("claude-") :]
+    name = _ALIAS_WINDOW_RE.sub("", name)
+    name = name.split("@", 1)[0]
+    name = name.split(":", 1)[0]
+    name = _VARIANT_SUFFIX_RE.sub("", name)
+    name = _DATE_SUFFIX_RE.sub("", name)
+    name = name.strip("-")
+    return name or None
+
+
+__all__ = [
+    "MODELS_DEV_SOURCE",
+    "TokenUsage",
+    "CostBreakdown",
+    "CostEstimate",
+    "CostEvidenceFlat",
+    "PriceRule",
+    "estimate_cost",
+    "cache_break_waste_usd",
+    "cost_evidence_from_usage",
+    "get_model_context_window",
+]

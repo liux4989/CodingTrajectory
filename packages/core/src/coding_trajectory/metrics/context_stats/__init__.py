@@ -15,7 +15,7 @@ from coding_trajectory.metrics.context_stats._common import (
 from coding_trajectory.metrics.context_stats.composition import (
     build_context_composition,
 )
-from coding_trajectory.metrics.model_catalog import get_model_context_window
+from coding_trajectory.metrics.pricing import get_model_context_window
 from coding_trajectory.metrics.models import (
     ContextCategoryFlat,
     ContextModelStatsFlat,
@@ -43,12 +43,15 @@ def build_session_graph_context_stats(
     runtime = runtime_stats(session_graph)
     messages = message_stats(session_graph)
     compaction = compaction_stats(session_graph)
+    observation = _latest_context_usage(session_graph)
     categories = build_context_composition(
         session_graph,
         allocated_usage_by_item=allocated_usage_by_item,
         allocated_usage_by_context_source=allocated_usage_by_context_source,
+        pricing_model=observation.model if observation else None,
+        pricing_provider=(observation.provider if observation else None)
+        or vendor.value,
     )
-    observation = _latest_context_usage(session_graph)
     if observation is None:
         no_obs_message = f"No {vendor.value} context usage observation found; provider context usage is unavailable."
         debug.warn(
