@@ -23,6 +23,10 @@ class TokenUsage(BaseModel):
     total_tokens: int = 0
     processed_tokens: int = 0
     reported_total_tokens: int | None = None
+    # Vendor-reported USD cost for this usage bucket (e.g. Pi's ``cost.total``
+    # from its jsonl logs). ``None`` when the vendor doesn't report cost, in
+    # which case downstream consumers fall back to the pricing SoT's estimate.
+    cost_usd: float | None = None
     total_confidence: Literal[
         "reported_consistent",
         "reported_missing",
@@ -47,7 +51,7 @@ class TokenUsage(BaseModel):
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         _ = handler
-        data: dict[str, int | str | None] = {
+        data: dict[str, int | str | float | None] = {
             "prompt_tokens": self.input_tokens,
             "cached_prompt_tokens": self.cached_input_tokens,
             "cache_write_tokens": self.cache_creation_input_tokens,
@@ -59,6 +63,8 @@ class TokenUsage(BaseModel):
         }
         if self.reported_total_tokens is not None:
             data["reported_total_tokens"] = self.reported_total_tokens
+        if self.cost_usd is not None:
+            data["cost_usd"] = round(self.cost_usd, 8)
         return data
 
     def plus(self, other: "TokenUsage") -> "TokenUsage":
@@ -77,6 +83,7 @@ class TokenUsage(BaseModel):
                 self.reported_total_tokens,
                 other.reported_total_tokens,
             ),
+            cost_usd=_optional_sum(self.cost_usd, other.cost_usd),
             total_confidence=_combine_total_confidence(
                 self.total_confidence,
                 other.total_confidence,
@@ -84,7 +91,7 @@ class TokenUsage(BaseModel):
         )
 
 
-def _optional_sum(left: int | None, right: int | None) -> int | None:
+def _optional_sum(left: int | float | None, right: int | float | None) -> int | float | None:
     if left is None and right is None:
         return None
     return (left or 0) + (right or 0)

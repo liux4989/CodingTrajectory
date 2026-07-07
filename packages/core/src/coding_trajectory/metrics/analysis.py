@@ -1434,6 +1434,9 @@ def _token_usage_from_mapping(
         reported_total_tokens=(
             reported_total_tokens if reported_total_tokens > 0 else None
         ),
+        cost_usd=_as_float_or_none(
+            value.get("cost_usd") or value.get("costUsd")
+        ),
         total_confidence=total_confidence,
     )
 
@@ -1523,3 +1526,9 @@ def _unique(values: list[str]) -> list[str]:
 
 def _as_int(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _as_float_or_none(value: Any) -> float | None:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    return None

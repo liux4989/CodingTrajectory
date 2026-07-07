@@ -260,8 +260,11 @@ def build_projection(
     used_percent = _optional_float(context.get("pct") or context.get("used_percent"))
     if used_percent is None and used_tokens is not None and context_window:
         used_percent = round((used_tokens / context_window) * 100, 1)
-    # Session-total cost is the pricing SoT's estimate, emitted by
-    # ``session.usage`` as ``cost`` + ``pricing`` (source/effective_date).
+    # Session-total cost is read from ``session.usage``: ``cost`` (value) +
+    # ``pricing`` (confidence/source/effective_date). Core prefers a
+    # vendor-reported cost (e.g. Pi's ``cost.total``) over the pricing SoT's
+    # estimate, so ``pricing.confidence`` distinguishes ``reported`` vs
+    # ``estimated`` here.
     reported_cost = _optional_float(usage.get("cost"))
     pricing = usage.get("pricing") or {}
     return ContextWindowProjection(
@@ -282,7 +285,7 @@ def build_projection(
         token_cost=(
             CostEvidence(
                 value_usd=reported_cost,
-                confidence="estimated",
+                confidence=str(pricing.get("confidence") or "estimated"),
                 source=str(pricing.get("source") or "ct session usage:cost"),
                 effective_date=pricing.get("effective_date"),
             )

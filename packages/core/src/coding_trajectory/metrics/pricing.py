@@ -191,13 +191,25 @@ def cost_evidence_from_usage(
     model: str | None,
     provider: str | None,
 ) -> CostEvidenceFlat | None:
-    """Estimated USD cost over a usage bucket, sourced from the pricing SoT.
+    """USD cost over a usage bucket, sourced from the pricing SoT.
 
-    Returns ``None`` when the model is unknown to the pricing catalog (no rule
-    matches) or the usage bucket is empty, so callers omit cost rather than
-    report a misleading 0. Shared by ``analysis`` and ``composition``.
+    Prefers a vendor-reported cost (``usage["cost_usd"]`` — e.g. Pi's
+    ``cost.total`` from its jsonl logs) over the pricing catalog's estimate,
+    so sessions whose logs carry real cost are billed at that cost rather
+    than an estimate. Returns ``None`` when neither is available (unknown
+    model + no reported cost), so callers omit cost rather than report a
+    misleading 0. Shared by ``analysis`` and ``composition``.
     """
-    if not usage or not any(
+    if not usage:
+        return None
+    reported = usage.get("cost_usd")
+    if isinstance(reported, int | float) and not isinstance(reported, bool):
+        return CostEvidenceFlat(
+            value_usd=round(float(reported), 8),
+            confidence="reported",
+            source="session log",
+        )
+    if not any(
         usage.get(key, 0)
         for key in (
             "prompt_tokens",
