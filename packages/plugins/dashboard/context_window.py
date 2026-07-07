@@ -10,6 +10,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -116,6 +117,40 @@ class CompactionSummary(BaseModel):
     events: list[CompactionEventRecord] = Field(default_factory=list)
 
 
+class CacheBreakRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str
+    # ttl_confirmed: idle gap exceeds the vendor's prompt-cache TTL max
+    #   (OpenAI >=600s, Anthropic >=300s) — cache evicted by age.
+    # ttl_likely: idle in the ambiguous band (OpenAI 300–600s); could be TTL
+    #   but not certain.
+    # effort_switch: cache collapsed to <= floor*1.5 while still warm (<300s,
+    #   cannot be TTL) — a structural cache-key change (reasoning effort, model,
+    #   or system prompt). Inferred from floor proximity until per-turn effort
+    #   is threaded through core (Direction 1); a future ``effort_change``
+    #   field will confirm the switch once that lands.
+    type: Literal["ttl_confirmed", "ttl_likely", "effort_switch"]
+    idle_seconds: float
+    re_read_tokens: int
+    cached_after_tokens: int | None = None
+    est_cost_usd: float | None = None
+
+
+class CacheBreakSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    count: int = 0
+    # Effort-independent static prefix that survives cache misses; the value
+    # cached prefixes collapse toward on a break. ``None`` only when no turn
+    # in the session reported a cached footprint (no cache accounting at all).
+    floor_tokens: int | None = None
+    total_re_read_tokens: int = 0
+    estimated_waste_usd: float | None = None
+    by_type: dict[str, int] = Field(default_factory=dict)
+    events: list[CacheBreakRecord] = Field(default_factory=list)
+
+
 class CostEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -141,6 +176,7 @@ class ContextWindowProjection(BaseModel):
     expensive_items: list[ExpensiveItem] = Field(default_factory=list)
     events: list[ContextEvent]
     compaction: CompactionSummary | None = None
+    cache_breaks: CacheBreakSummary | None = None
     warnings: list[str]
 
 
@@ -226,6 +262,9 @@ def build_projection(
         raise SystemExit(f"turn not found in session overview: {turn_id}")
 
     compaction = _project_compaction(stats)
+    cache_breaks = _project_cache_breaks(
+        usage, vendor=vendor, model=model_name, compaction=compaction
+    )
 
     context = stats.get("context") or {}
     reported_context_window = model.get("context_window") or model.get(
@@ -297,6 +336,7 @@ def build_projection(
         expensive_items=expensive_items,
         events=events,
         compaction=compaction,
+        cache_breaks=cache_breaks,
         warnings=_dedupe(warnings),
     )
 
@@ -321,16 +361,23 @@ def render_markdown(projection: ContextWindowProjection) -> str:
         f"Provider: {projection.vendor}",
         f"Model: {projection.model or '-'} ({context_label} context)",
         f"Used: {used_label}{percent_label}, {len(projection.events)} events",
-        (
-            f"Token cost: ${projection.token_cost.value_usd:.4f} "
-            f"({projection.token_cost.confidence}, {projection.token_cost.source}"
-            f"{', ' + projection.token_cost.effective_date if projection.token_cost.effective_date else ''})"
-            if projection.token_cost
-            else "Token cost: unavailable"
-        ),
-        "",
-        "Composition",
     ]
+    teaser = _cache_breaks_teaser(projection.cache_breaks)
+    if teaser:
+        lines.append(teaser)
+    lines.extend(
+        [
+            (
+                f"Token cost: ${projection.token_cost.value_usd:.4f} "
+                f"({projection.token_cost.confidence}, {projection.token_cost.source}"
+                f"{', ' + projection.token_cost.effective_date if projection.token_cost.effective_date else ''})"
+                if projection.token_cost
+                else "Token cost: unavailable"
+            ),
+            "",
+            "Composition",
+        ]
+    )
     for category in sorted(
         projection.categories,
         key=_category_sort_key,
@@ -366,19 +413,63 @@ def render_markdown(projection: ContextWindowProjection) -> str:
                 f"{item.category:<10} {_one_line(item.label + ': ' + item.summary, 72)}"
             )
 
+    breaks_by_turn = {
+        record.turn_id: record
+        for record in (
+            projection.cache_breaks.events if projection.cache_breaks else []
+        )
+    }
     current_group: tuple[str, str | None] | None = None
     for event in projection.events:
         group = (event.group, event.turn_id)
-        if group != current_group:
+        is_turn_start = group != current_group
+        current_group = group
+        if is_turn_start:
             lines.extend(["", _group_label(event)])
-            current_group = group
         delta = _format_delta(event.tokens.value) if event.tokens else "       -"
         summary = _one_line(event.summary or event.label, 74)
-        flag = _ttl_break_flag(event)
+        # Show the break flag once per turn, on its first (user_input) event.
+        flag = (
+            _cache_break_flag(breaks_by_turn.get(event.turn_id))
+            if is_turn_start
+            else None
+        )
         line = f"  {event.category:<20} {delta:>8}  {summary}"
         if flag:
             line += f"  {flag}"
         lines.append(line)
+
+    if projection.cache_breaks and projection.cache_breaks.events:
+        cb = projection.cache_breaks
+        lines.extend(["", "Cache breaks"])
+        floor_label = (
+            _format_tokens(cb.floor_tokens) if cb.floor_tokens is not None else "-"
+        )
+        lines.append(
+            f"  floor: {floor_label} tokens (effort-independent static prefix)"
+        )
+        lines.append(
+            f"   #  {'turn':<10}  {'type':<15}  {'idle':>7}  "
+            f"{'re-read':>9}  {'est. cost':>11}"
+        )
+        for index, record in enumerate(cb.events, start=1):
+            lines.append(
+                f"  {index:>2}  {record.turn_id[:10]:<10}  {record.type:<15}  "
+                f"{_format_idle(record.idle_seconds):>7}  "
+                f"{_format_tokens(record.re_read_tokens):>9}  "
+                f"{_format_cost(record.est_cost_usd):>11}"
+            )
+        type_summary = ", ".join(
+            f"{cb.by_type.get(key, 0)} {key}"
+            for key in ("ttl_confirmed", "ttl_likely", "effort_switch")
+            if cb.by_type.get(key)
+        )
+        lines.append(
+            f"  total: {cb.count} breaks · "
+            f"{_format_tokens(cb.total_re_read_tokens)} re-read tokens · "
+            f"{_format_cost(cb.estimated_waste_usd)} wasted"
+            + (f" — {type_summary}" if type_summary else "")
+        )
 
     if projection.compaction and projection.compaction.events:
         lines.extend(["", "Compaction timeline"])
@@ -438,6 +529,177 @@ def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
         ),
         events=events,
     )
+
+
+def _project_cache_breaks(
+    usage: dict[str, Any],
+    *,
+    vendor: str,
+    model: str | None,
+    compaction: CompactionSummary | None = None,
+) -> CacheBreakSummary | None:
+    """Classify per-turn cache re-reads into TTL vs effort-switch breaks.
+
+    Reads ``runtime.wait_before_seconds`` (inter-turn idle gap) and the cached
+    / uncached prompt split off each turn's usage. A re-read with no idle gap
+    (the first turn) is a cold start, not a break, and is skipped. Turns whose
+    start immediately follows a compaction event are also skipped: their
+    re-read reprocesses the compacted context, which is a compaction
+    signature, not an effort/TTL cache break. Returns ``None`` when the
+    session shows no cache accounting at all (no turn ever reported a cached
+    footprint — e.g. third-party backends that don't implement prompt
+    caching), since without caching there are no breaks.
+    """
+    turns = [t for t in (usage.get("turns") or []) if isinstance(t, dict)]
+    if not turns:
+        return None
+
+    cached_values = [
+        _usage_token(t.get("usage"), "cached_prompt") or 0 for t in turns
+    ]
+    if not any(value > 0 for value in cached_values):
+        return None
+
+    floor = min(value for value in cached_values if value > 0)
+    skip_turns = _post_compaction_turn_ids(usage, compaction)
+    ttl_confirmed_s, ttl_likely_min_s = _vendor_ttl_thresholds(vendor)
+    records: list[CacheBreakRecord] = []
+    for turn in turns:
+        turn_id = str(turn.get("id") or "")
+        if turn_id in skip_turns:
+            continue
+        runtime = turn.get("runtime") or {}
+        turn_usage = turn.get("usage") or {}
+        idle = _optional_float(runtime.get("wait_before_seconds"))
+        re_read = _usage_token(turn_usage, "uncached_prompt") or 0
+        if idle is None or re_read <= 0:
+            continue
+        cached_after = _usage_token(turn_usage, "cached_prompt")
+        break_type = _classify_cache_break(
+            idle=idle,
+            cached_after=cached_after,
+            floor=floor,
+            ttl_confirmed_s=ttl_confirmed_s,
+            ttl_likely_min_s=ttl_likely_min_s,
+        )
+        if break_type is None:
+            continue
+        waste = token_pricing.cache_break_waste_usd(
+            re_read, model=model, provider=vendor
+        )
+        records.append(
+            CacheBreakRecord(
+                turn_id=turn_id,
+                type=break_type,
+                idle_seconds=idle,
+                re_read_tokens=re_read,
+                cached_after_tokens=cached_after,
+                est_cost_usd=waste,
+            )
+        )
+    if not records:
+        return None
+    by_type: dict[str, int] = {}
+    total_re_read = 0
+    total_waste = 0.0
+    has_waste = False
+    for record in records:
+        by_type[record.type] = by_type.get(record.type, 0) + 1
+        total_re_read += record.re_read_tokens
+        if record.est_cost_usd is not None:
+            total_waste += record.est_cost_usd
+            has_waste = True
+    return CacheBreakSummary(
+        count=len(records),
+        floor_tokens=floor,
+        total_re_read_tokens=total_re_read,
+        estimated_waste_usd=round(total_waste, 4) if has_waste else None,
+        by_type=by_type,
+        events=records,
+    )
+
+
+def _vendor_ttl_thresholds(vendor: str) -> tuple[float, float]:
+    """Return ``(confirmed_seconds, likely_min_seconds)`` for prompt-cache TTL.
+
+    OpenAI's automatic prompt cache TTL is 5–10 min, so >=600s is confirmed
+    and the 300–600s band is ambiguous (``ttl_likely``). Anthropic's explicit
+    ``cache_control`` TTL is 5 min, so >=300s is confirmed. Other vendors fall
+    back to the conservative 300s threshold.
+    """
+    normalized = (vendor or "").strip().lower()
+    if normalized in {"anthropic", "claude", "claude-code", "claude_code"}:
+        return (300.0, 300.0)
+    if normalized in {"openai", "codex", "codex_cli", "openai-codex"}:
+        return (600.0, 300.0)
+    return (300.0, 300.0)
+
+
+def _classify_cache_break(
+    *,
+    idle: float,
+    cached_after: int | None,
+    floor: int,
+    ttl_confirmed_s: float,
+    ttl_likely_min_s: float,
+) -> str | None:
+    if idle >= ttl_confirmed_s:
+        return "ttl_confirmed"
+    if idle >= ttl_likely_min_s:
+        return "ttl_likely"
+    # Still warm (below TTL) yet the cached footprint collapsed to near the
+    # effort-independent floor → the cache key itself changed (effort / model /
+    # system prompt), not an age eviction.
+    if cached_after is not None and cached_after <= floor * 1.5:
+        return "effort_switch"
+    return None
+
+
+def _parse_iso_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _post_compaction_turn_ids(
+    usage: dict[str, Any],
+    compaction: CompactionSummary | None,
+) -> set[str]:
+    """Turn ids whose start immediately follows a compaction event.
+
+    Such turns re-read the freshly compacted context — a compaction signature,
+    not an effort/TTL cache break — so the classifier skips them.
+    """
+    if compaction is None or not compaction.events:
+        return set()
+    compaction_ts = [
+        ts
+        for ts in (_parse_iso_timestamp(event.timestamp) for event in compaction.events)
+        if ts is not None
+    ]
+    if not compaction_ts:
+        return set()
+    starts: list[tuple[datetime, str]] = []
+    for turn in usage.get("turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        runtime = turn.get("runtime") or {}
+        start = _parse_iso_timestamp(runtime.get("start") or runtime.get("started_at"))
+        if start is not None and turn.get("id"):
+            starts.append((start, str(turn.get("id"))))
+    if not starts:
+        return set()
+    starts.sort()
+    skip: set[str] = set()
+    for comp_ts in compaction_ts:
+        for start, turn_id in starts:
+            if start >= comp_ts:
+                skip.add(turn_id)
+                break
+    return skip
 
 
 def _project_categories(
@@ -704,7 +966,7 @@ def _trajectory_events(
             turn_runtime = turn_item.get("runtime") or {}
             turn_usage = turn_item.get("usage") or {}
             idle_seconds = _optional_float(turn_runtime.get("wait_before_seconds"))
-            re_read_tokens = _optional_int(turn_usage.get("uncached_prompt_tokens"))
+            re_read_tokens = _usage_token(turn_usage, "uncached_prompt")
             turn_start = len(events)
             request = turn.get("request") or {}
             request_text = _optional_text(request.get("text"))
@@ -1429,6 +1691,19 @@ def _optional_int(value: Any) -> int | None:
     return None
 
 
+def _usage_token(usage: dict[str, Any] | None, short_key: str) -> int | None:
+    """Read a usage token by short key (``cached_prompt``) with long-form
+    (``cached_prompt_tokens``) fallback. ``ct session usage`` emits the short
+    form; ``allocated_real_token_cost`` from tool usage emits the long form.
+    """
+    if not isinstance(usage, dict):
+        return None
+    raw = usage.get(short_key)
+    if raw is None:
+        raw = usage.get(f"{short_key}_tokens")
+    return _optional_int(raw)
+
+
 def _format_tokens(value: int | None) -> str:
     if value is None:
         return "-"
@@ -1451,21 +1726,43 @@ def _format_delta(value: int) -> str:
     return f"+{_format_tokens(value)}"
 
 
-# Anthropic prompt-cache default TTL is 5 minutes; an idle gap beyond it
-# expires cached prefixes, forcing the prompt to be re-processed next turn.
-_TTL_BREAK_SECONDS = 300
+def _format_idle(seconds: float) -> str:
+    if seconds >= 60:
+        return f"{seconds / 60:.1f}m"
+    return f"{int(seconds)}s"
 
 
-def _ttl_break_flag(event: ContextEvent) -> str | None:
-    idle = event.idle_seconds
-    re_read = event.re_read_tokens
-    if idle is None or idle <= _TTL_BREAK_SECONDS:
+def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
+    if record is None:
         return None
-    if re_read is None or re_read <= 0:
+    icon = {"ttl_confirmed": "⏳", "ttl_likely": "⏳", "effort_switch": "⚡"}[
+        record.type
+    ]
+    label = {
+        "ttl_confirmed": "TTL break",
+        "ttl_likely": "TTL break?",
+        "effort_switch": "effort-switch",
+    }[record.type]
+    return (
+        f"{icon} {label}: {_format_idle(record.idle_seconds)} idle → "
+        f"{_format_tokens(record.re_read_tokens)} re-read"
+    )
+
+
+def _cache_breaks_teaser(summary: CacheBreakSummary | None) -> str | None:
+    if summary is None or summary.count == 0:
         return None
-    minutes = int(idle // 60)
-    duration = f"{minutes} min" if minutes >= 1 else f"{int(idle)} s"
-    return f"TTL break: {duration} idle → {_format_tokens(re_read)} re-read"
+    type_summary = ", ".join(
+        f"{summary.by_type.get(key, 0)} {key}"
+        for key in ("ttl_confirmed", "ttl_likely", "effort_switch")
+        if summary.by_type.get(key)
+    )
+    line = (
+        f"Cache breaks: {summary.count} "
+        f"({_format_tokens(summary.total_re_read_tokens)} re-read, "
+        f"{_format_cost(summary.estimated_waste_usd)} wasted)"
+    )
+    return f"{line} — {type_summary}" if type_summary else line
 
 
 def _group_label(event: ContextEvent) -> str:

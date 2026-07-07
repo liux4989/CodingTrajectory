@@ -188,6 +188,42 @@ def estimate_cost(
     )
 
 
+def cache_break_waste_usd(
+    tokens: int,
+    *,
+    model: str | None,
+    provider: str | None = None,
+    now: datetime | None = None,
+) -> float | None:
+    """Extra cost paid because ``tokens`` were re-processed uncached instead of
+    served from the prompt cache — ``(uncached_rate - cached_rate) × tokens``.
+
+    The waste, not the gross re-read cost: tokens that *would* have been cheap
+    (cached) are billed at the full input rate because the cache missed. Returns
+    ``None`` when the model lacks a separate cached rate (cache not priced
+    apart, e.g. some Pro tiers) so no break cost is attributed.
+    """
+    if tokens <= 0:
+        return None
+    normalized_model = _normalize_model_name(model)
+    if normalized_model is None:
+        return None
+    rules = _load_live_price_rules(now=now or datetime.now(UTC))
+    rule = _lookup_price_rule(rules, provider=provider, model=normalized_model)
+    if rule is None:
+        rule = _lookup_price_rule(
+            _openai_standard_price_rules(),
+            provider=provider,
+            model=normalized_model,
+        )
+    if rule is None or rule.cached_input_per_mtok is None:
+        return None
+    # Single-break re-reads sit well below the >200k tiered threshold, so the
+    # default (below-threshold) rates are the right estimate here.
+    delta_rate = rule.input_per_mtok - rule.cached_input_per_mtok
+    return _round_usd((tokens / TOKENS_PER_MILLION) * delta_rate)
+
+
 def get_model_context_window(
     model: str | None,
     *,
