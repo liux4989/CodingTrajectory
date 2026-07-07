@@ -44,6 +44,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CLAUDE_DIR = Path.home() / ".claude" / "projects"
 _TEAMMATE_MESSAGE_RE = re.compile(r"<teammate-message(?P<attrs>[^>]*)>(?P<body>.*?)</teammate-message>", re.DOTALL)
 _TEAMMATE_ATTR_RE = re.compile(r'(\w+)="(.*?)"')
+# Claude Code logs an ``/effort`` switch as a ``<local-command-stdout>Set effort
+# level to <LEVEL> ...`` user record. The level word (``max``, ``ultracode``,
+# ``high`` ...) is the resolved effort in effect from that turn onward.
+_CLAUDE_EFFORT_STDOUT_RE = re.compile(r"Set effort level to (\w+)")
 
 _CLAUDE_FILE_TOOL_NAMES: frozenset[str] = frozenset({
     "Read", "Edit", "MultiEdit", "Write", "View", "NotebookEdit",
@@ -298,6 +302,51 @@ def _extract_image_blocks(content: str | list | None) -> list[dict]:
     ]
 
 
+def _effort_change_observations(records: list[dict]) -> list[RuntimeObservation]:
+    """Detect reasoning-effort change-points from ``/effort`` slash commands.
+
+    Claude Code logs an effort switch as a two-record sequence: a
+    ``<command-name>/effort</command-name>`` user record followed by a
+    ``<local-command-stdout>Set effort level to <LEVEL> ...`` user record. The
+    stdout record carries the resolved level (``max``, ``ultracode``,
+    ``high`` ...). Unlike Codex's per-turn ``turn_context.effort`` — where the
+    first turn establishes a baseline with no change — Claude Code only logs
+    effort when the user *switches* it, so the first observation marks a change
+    from an unknown baseline (``effort_from=None``); a no-op re-set to the same
+    level emits nothing.
+    """
+    observations: list[RuntimeObservation] = []
+    prev_effort: str | None = None
+    for record in records:
+        if record.get("type") != "user":
+            continue
+        message = record.get("message")
+        if not isinstance(message, dict):
+            continue
+        text = _extract_text(message.get("content"))
+        if not text:
+            continue
+        match = _CLAUDE_EFFORT_STDOUT_RE.search(text)
+        if match is None:
+            continue
+        level = match.group(1)
+        if prev_effort is not None and level == prev_effort:
+            continue
+        ts = parse_timestamp(record.get("timestamp"))
+        if ts is None:
+            continue
+        observations.append(
+            RuntimeObservation(
+                timestamp=ts,
+                kind="effort_changed",
+                effort_from=prev_effort,
+                effort_to=level,
+            )
+        )
+        prev_effort = level
+    return observations
+
+
 def _extract_thinking(content: list | None) -> list[str]:
     if not isinstance(content, list):
         return []
@@ -446,6 +495,10 @@ class ClaudeCodeAdapter(BaseAdapter):
             for record in transcript
             if record.kind == "runtime"
         ]
+        # Effort change-points are not in the transcript (the ``/effort`` command
+        # and its ``<local-command-stdout>`` echo are user records, not runtime
+        # records), so scan the raw records directly and append alongside.
+        runtime_observations.extend(_effort_change_observations(records))
         context_usage = [
             observation
             for record in transcript
