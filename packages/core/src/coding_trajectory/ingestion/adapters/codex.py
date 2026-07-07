@@ -329,6 +329,10 @@ class CodexAdapter(BaseAdapter):
         context_usage: list[ContextUsageObservation] = field(default_factory=list)
         runtime_observations: list[RuntimeObservation] = field(default_factory=list)
         projected_turn_ids: set[str] = field(default_factory=set)
+        # Most recent reasoning effort seen on a turn_context record (real
+        # string only). Drives effort_changed observation emission: a new turn
+        # whose effort differs from this baseline marks a cache-key change-point.
+        prev_effort: str | None = None
         # One resident slot per (role, block_name); first emission wins. Codex
         # re-injects base/developer/AGENTS.md blocks after each compaction, so
         # per-block dedup keeps only the first (resident-from-first-injection)
@@ -485,6 +489,28 @@ class CodexAdapter(BaseAdapter):
 
             if outer_type == "turn_context":
                 state.turn_context = payload
+                # Detect reasoning-effort change-points. Codex emits a fresh
+                # turn_context per turn carrying the active ``effort``; a value
+                # differing from the prior turn's marks a cache-key change (the
+                # warm prefix is served from a different effort-bucket cache).
+                effort = _as_non_empty_str(payload.get("effort"))
+                if (
+                    effort is not None
+                    and state.prev_effort is not None
+                    and effort != state.prev_effort
+                    and ts is not None
+                ):
+                    state.runtime_observations.append(
+                        RuntimeObservation(
+                            timestamp=ts,
+                            kind="effort_changed",
+                            turn_id_raw=_as_non_empty_str(payload.get("turn_id")),
+                            effort_from=state.prev_effort,
+                            effort_to=effort,
+                        )
+                    )
+                if effort is not None:
+                    state.prev_effort = effort
                 continue
 
             if ts is None:

@@ -150,6 +150,11 @@ class RuntimeObservation(BaseModel):
     post_tokens:               int | None = None
     cumulative_dropped_tokens: int | None = None
     trigger:                   str | None = None
+    # Effort-change metadata. Populated only for ``effort_changed`` observations
+    # — emitted when a turn's reasoning effort differs from the prior turn's
+    # (Codex ``turn_context.effort``); both ends are real strings.
+    effort_from:               str | None = None
+    effort_to:                 str | None = None
 
 
 class Event(BaseModel):
