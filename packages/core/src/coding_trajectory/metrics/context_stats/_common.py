@@ -8,6 +8,8 @@ from coding_trajectory.ingestion.models import EventType, Session, SessionGraph
 from coding_trajectory.metrics.models import (
     CompactionEventFlat,
     CompactionStatsFlat,
+    EffortChangeEventFlat,
+    EffortChangeStatsFlat,
     MessageStatsFlat,
     RuntimeStatsFlat,
     TokenUsage,
@@ -171,6 +173,37 @@ def _event_from_observation(observation: Any) -> CompactionEventFlat:
         post_tokens=post,
         dropped_tokens=dropped,
     )
+
+
+def effort_change_stats(session_graph: SessionGraph) -> EffortChangeStatsFlat | None:
+    """Aggregate reasoning-effort change observations across a session graph.
+
+    Returns ``None`` when no effort change was observed. Codex emits
+    ``effort_changed`` per turn whose ``effort`` differs from the prior turn
+    (``effort_from`` always set); Claude Code emits it on each ``/effort``
+    switch (``effort_from`` is ``None`` on the first, whose baseline is
+    unknown). The ``timestamp`` marks the turn using the new effort.
+    """
+    changes = sorted(
+        (
+            observation
+            for session in session_graph.sessions
+            for observation in session.runtime_observations
+            if observation.kind == "effort_changed"
+        ),
+        key=lambda observation: observation.timestamp,
+    )
+    if not changes:
+        return None
+    events = [
+        EffortChangeEventFlat(
+            timestamp=observation.timestamp,
+            effort_from=observation.effort_from,
+            effort_to=observation.effort_to,
+        )
+        for observation in changes
+    ]
+    return EffortChangeStatsFlat(count=len(changes), events=events)
 
 
 def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:

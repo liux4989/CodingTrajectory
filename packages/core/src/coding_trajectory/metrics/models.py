@@ -338,6 +338,33 @@ class CompactionStatsFlat(BaseModel):
         return data
 
 
+class EffortChangeEventFlat(BaseModel):
+    timestamp: datetime
+    # Prior effort level. Codex emits ``effort_changed`` per turn whose effort
+    # differs from the prior turn, so this is always set there; Claude Code emits
+    # it on each ``/effort`` switch, so the first observation's baseline is
+    # unknown (``None``). ``effort_to`` is always the resolved new level.
+    effort_from: str | None = None
+    effort_to: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        return {key: value for key, value in data.items() if value is not None}
+
+
+class EffortChangeStatsFlat(BaseModel):
+    count: int = 0
+    events: list[EffortChangeEventFlat] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if not data.get("events"):
+            data.pop("events", None)
+        return data
+
+
 class SessionContextStatsFlat(BaseModel):
     root_session_id: UUID
     vendor: str
@@ -391,6 +418,7 @@ class SessionUsageCompactFlat(BaseModel):
     total_usage: TokenUsage = Field(default_factory=TokenUsage)
     estimated_cost: CostEvidenceFlat | None = None
     compaction: CompactionStatsFlat | None = None
+    effort_changes: EffortChangeStatsFlat | None = None
     warnings: list[str] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
@@ -402,6 +430,8 @@ class SessionUsageCompactFlat(BaseModel):
             data.pop("estimated_cost", None)
         if data.get("compaction") is None:
             data.pop("compaction", None)
+        if data.get("effort_changes") is None:
+            data.pop("effort_changes", None)
         return data
 
 

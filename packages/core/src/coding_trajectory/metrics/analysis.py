@@ -53,7 +53,7 @@ from coding_trajectory.metrics.models import (
     TurnMetrics,
     TurnMetricsFlat,
 )
-from coding_trajectory.metrics.context_stats._common import compaction_stats, runtime_stats
+from coding_trajectory.metrics.context_stats._common import compaction_stats, effort_change_stats, runtime_stats
 from coding_trajectory.metrics.pricing import (
     _uses_net_input_convention,
     cache_break_waste_usd,
@@ -164,6 +164,7 @@ def build_session_graph_usage(
             provider=provider,
         ),
         compaction=compaction_stats(session_graph),
+        effort_changes=effort_change_stats(session_graph),
         warnings=full.warnings,
     ).model_dump(mode="json")
 

@@ -501,6 +501,7 @@ def compact_payload(method: str, payload: Any) -> Any:
     if method == "session.usage" and isinstance(payload, dict):
         runtime = payload.get("runtime") or {}
         compaction = payload.get("compaction") or {}
+        effort_changes = payload.get("effort_changes") or {}
         return drop_none(
             {
                 "id": payload.get("session_id"),
@@ -559,6 +560,24 @@ def compact_payload(method: str, payload: Any) -> Any:
                                 }
                             )
                             for event in compaction.get("events") or []
+                            if isinstance(event, dict)
+                        ]
+                        or None,
+                    }
+                )
+                or None,
+                "effort_changes": drop_none(
+                    {
+                        "count": effort_changes.get("count"),
+                        "events": [
+                            drop_none(
+                                {
+                                    "timestamp": event.get("timestamp"),
+                                    "from": event.get("effort_from"),
+                                    "to": event.get("effort_to"),
+                                }
+                            )
+                            for event in effort_changes.get("events") or []
                             if isinstance(event, dict)
                         ]
                         or None,
