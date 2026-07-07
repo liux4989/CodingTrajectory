@@ -22,6 +22,10 @@ packages/*/web/dist/
 # uv
 uv.lock
 
+# Node
+node_modules/
+bun.lock
+
 # Qoder
 .qoder/
 
