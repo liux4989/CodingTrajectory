@@ -290,7 +290,7 @@ def build_projection(
         token_cost=(
             CostEvidence(
                 value_usd=reported_cost,
-                confidence="estimated",
+                confidence=str(pricing.get("confidence") or "estimated"),
                 source=str(pricing.get("source") or "ct session usage:cost"),
                 effective_date=pricing.get("effective_date"),
             )
