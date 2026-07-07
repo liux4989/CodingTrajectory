@@ -120,16 +120,24 @@ class CacheBreakRecord(BaseModel):
     #   (OpenAI >=600s, Anthropic >=300s) — cache evicted by age.
     # ttl_likely: idle in the ambiguous band (OpenAI 300–600s); could be TTL
     #   but not certain.
-    # effort_switch: cache collapsed to <= floor*1.5 while still warm (<300s,
-    #   cannot be TTL) — a structural cache-key change (reasoning effort, model,
-    #   or system prompt). Inferred from floor proximity until per-turn effort
-    #   is threaded through core (Direction 1); a future ``effort_change``
-    #   field will confirm the switch once that lands.
+    # effort_switch: cache collapsed (or was re-read) because the cache key
+    #   changed — reasoning effort, model, or system prompt. Inferred from a
+    #   warm floor-collapse when no effort change is observed; *confirmed* when
+    #   ``effort_to`` is set (a real effort_changed observation aligned to this
+    #   turn — Direction 1). A confirmed change overrides the idle/TTL
+    #   heuristic: effort switch is the avoidable structural cause even when
+    #   the idle gap was also long.
     type: Literal["ttl_confirmed", "ttl_likely", "effort_switch"]
     idle_seconds: float
     re_read_tokens: int
     cached_after_tokens: int | None = None
     est_cost_usd: float | None = None
+    # Populated only for a confirmed effort_switch — the resolved effort levels
+    # from the aligned ``effort_changed`` observation. ``effort_from`` is ``None``
+    # on Claude Code's first ``/effort`` switch (baseline unknown); always set
+    # for Codex (per-turn effort, first turn establishes the baseline).
+    effort_from: str | None = None
+    effort_to: str | None = None
 
 
 class CacheBreakSummary(BaseModel):
@@ -260,11 +268,8 @@ def build_projection(
     used_percent = _optional_float(context.get("pct") or context.get("used_percent"))
     if used_percent is None and used_tokens is not None and context_window:
         used_percent = round((used_tokens / context_window) * 100, 1)
-    # Session-total cost is read from ``session.usage``: ``cost`` (value) +
-    # ``pricing`` (confidence/source/effective_date). Core prefers a
-    # vendor-reported cost (e.g. Pi's ``cost.total``) over the pricing SoT's
-    # estimate, so ``pricing.confidence`` distinguishes ``reported`` vs
-    # ``estimated`` here.
+    # Session-total cost is the pricing SoT's estimate, emitted by
+    # ``session.usage`` as ``cost`` + ``pricing`` (source/effective_date).
     reported_cost = _optional_float(usage.get("cost"))
     pricing = usage.get("pricing") or {}
     return ContextWindowProjection(
@@ -285,7 +290,7 @@ def build_projection(
         token_cost=(
             CostEvidence(
                 value_usd=reported_cost,
-                confidence=str(pricing.get("confidence") or "estimated"),
+                confidence="estimated",
                 source=str(pricing.get("source") or "ct session usage:cost"),
                 effective_date=pricing.get("effective_date"),
             )
@@ -415,14 +420,22 @@ def render_markdown(projection: ContextWindowProjection) -> str:
         )
         lines.append(
             f"   #  {'turn':<10}  {'type':<15}  {'idle':>7}  "
-            f"{'re-read':>9}  {'est. cost':>11}"
+            f"{'re-read':>9}  {'est. cost':>11}  effort"
         )
         for index, record in enumerate(cb.events, start=1):
+            if record.effort_to:
+                effort = (
+                    f"{record.effort_from}→{record.effort_to}"
+                    if record.effort_from
+                    else f"→{record.effort_to}"
+                )
+            else:
+                effort = "-"
             lines.append(
                 f"  {index:>2}  {record.turn_id[:10]:<10}  {record.type:<15}  "
                 f"{_format_idle(record.idle_seconds):>7}  "
                 f"{_format_tokens(record.re_read_tokens):>9}  "
-                f"{_format_cost(record.est_cost_usd):>11}"
+                f"{_format_cost(record.est_cost_usd):>11}  {effort}"
             )
         type_summary = ", ".join(
             f"{cb.by_type.get(key, 0)} {key}"
@@ -526,6 +539,7 @@ def _project_cache_breaks(
 
     floor = min(value for value in cached_values if value > 0)
     skip_turns = _post_compaction_turn_ids(usage, compaction)
+    effort_change_by_turn = _effort_changed_turns(usage)
     ttl_confirmed_s, ttl_likely_min_s = _vendor_ttl_thresholds(vendor)
     records: list[CacheBreakRecord] = []
     for turn in turns:
@@ -539,15 +553,26 @@ def _project_cache_breaks(
         if idle is None or re_read <= 0:
             continue
         cached_after = _usage_token(turn_usage, "cached_prompt")
-        break_type = _classify_cache_break(
-            idle=idle,
-            cached_after=cached_after,
-            floor=floor,
-            ttl_confirmed_s=ttl_confirmed_s,
-            ttl_likely_min_s=ttl_likely_min_s,
-        )
-        if break_type is None:
-            continue
+        # A confirmed effort_changed observation aligned to this turn overrides
+        # the idle/TTL heuristic: an effort switch is the avoidable structural
+        # cause of the re-read even when the idle gap was also long, and it
+        # applies whenever there was a re-read (not only on a floor-collapse).
+        confirmed = effort_change_by_turn.get(turn_id)
+        if confirmed is not None:
+            break_type = "effort_switch"
+            effort_from, effort_to = confirmed
+        else:
+            break_type = _classify_cache_break(
+                idle=idle,
+                cached_after=cached_after,
+                floor=floor,
+                ttl_confirmed_s=ttl_confirmed_s,
+                ttl_likely_min_s=ttl_likely_min_s,
+            )
+            if break_type is None:
+                continue
+            effort_from = None
+            effort_to = None
         # Per-turn waste is precomputed by core (pricing SoT) off the turn's
         # uncached re-read tokens; the dashboard only classifies which turns
         # are breaks.
@@ -560,6 +585,8 @@ def _project_cache_breaks(
                 re_read_tokens=re_read,
                 cached_after_tokens=cached_after,
                 est_cost_usd=waste,
+                effort_from=effort_from,
+                effort_to=effort_to,
             )
         )
     if not records:
@@ -665,6 +692,57 @@ def _post_compaction_turn_ids(
                 skip.add(turn_id)
                 break
     return skip
+
+
+def _effort_changed_turns(
+    usage: dict[str, Any],
+) -> dict[str, tuple[str | None, str | None]]:
+    """Map each ``effort_changed`` observation to the turn that first uses the
+    new effort — the first turn starting at or after the observation's
+    timestamp that actually re-processed tokens (``uncached_prompt > 0``).
+
+    Skipping zero-usage turns matters for Claude Code: ``/effort`` lands on its
+    own no-model-call turn(s), and the effort-caused re-read surfaces on the
+    next turn with usage (the cache rebuild under the new key). For Codex the
+    observation is on the turn_context of the collapse turn itself, which has a
+    re-read, so it maps to the same turn. Returns ``turn_id ->
+    (effort_from, effort_to)``; ``effort_from`` is ``None`` on Claude Code's
+    first ``/effort`` switch (baseline unknown). Earlier change wins
+    (``setdefault``).
+    """
+    block = usage.get("effort_changes") or {}
+    events = [e for e in (block.get("events") or []) if isinstance(e, dict)]
+    if not events:
+        return {}
+    change_ts: list[tuple[datetime, str | None, str | None]] = []
+    for event in events:
+        ts = _parse_iso_timestamp(event.get("timestamp"))
+        if ts is None:
+            continue
+        change_ts.append((ts, event.get("from"), event.get("to")))
+    if not change_ts:
+        return {}
+    # Candidate turns: those with a real re-read (uncached_prompt > 0), sorted
+    # by start. A turn without a re-read cannot be an effort-caused break.
+    candidates: list[tuple[datetime, str]] = []
+    for turn in usage.get("turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        runtime = turn.get("runtime") or {}
+        start = _parse_iso_timestamp(runtime.get("start") or runtime.get("started_at"))
+        re_read = _usage_token(turn.get("usage"), "uncached_prompt") or 0
+        if start is not None and re_read > 0 and turn.get("id"):
+            candidates.append((start, str(turn.get("id"))))
+    if not candidates:
+        return {}
+    candidates.sort()
+    mapping: dict[str, tuple[str | None, str | None]] = {}
+    for ts, effort_from, effort_to in change_ts:
+        for start, turn_id in candidates:
+            if start >= ts:
+                mapping.setdefault(turn_id, (effort_from, effort_to))
+                break
+    return mapping
 
 
 def _project_categories(stats: dict[str, Any]) -> list[ContextCategory]:
@@ -1641,10 +1719,18 @@ def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
         "ttl_likely": "TTL break?",
         "effort_switch": "effort-switch",
     }[record.type]
-    return (
+    base = (
         f"{icon} {label}: {_format_idle(record.idle_seconds)} idle → "
         f"{_format_tokens(record.re_read_tokens)} re-read"
     )
+    if record.effort_to:
+        change = (
+            f"{record.effort_from}→{record.effort_to}"
+            if record.effort_from
+            else f"→{record.effort_to}"
+        )
+        return f"{base} ({change} confirmed)"
+    return base
 
 
 def _cache_breaks_teaser(summary: CacheBreakSummary | None) -> str | None:
@@ -1655,12 +1741,17 @@ def _cache_breaks_teaser(summary: CacheBreakSummary | None) -> str | None:
         for key in ("ttl_confirmed", "ttl_likely", "effort_switch")
         if summary.by_type.get(key)
     )
+    confirmed = sum(1 for event in summary.events if event.effort_to)
     line = (
         f"Cache breaks: {summary.count} "
         f"({_format_tokens(summary.total_re_read_tokens)} re-read, "
         f"{_format_cost(summary.estimated_waste_usd)} wasted)"
     )
-    return f"{line} — {type_summary}" if type_summary else line
+    if type_summary:
+        line = f"{line} — {type_summary}"
+    if confirmed:
+        line = f"{line} ({confirmed} confirmed)"
+    return line
 
 
 def _group_label(event: ContextEvent) -> str:
