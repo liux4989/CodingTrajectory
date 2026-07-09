@@ -26,6 +26,7 @@ from coding_trajectory.ingestion.models import (
     Turn,
     is_tool_shaped_item,
 )
+from coding_trajectory.ingestion.indexes import build_session_graph_index, ordered_sessions
 from coding_trajectory.metrics.models import (
     AllocatedRealTokenCost,
     AttributionPolicy,
@@ -54,6 +55,7 @@ from coding_trajectory.metrics.models import (
     TurnMetricsFlat,
 )
 from coding_trajectory.metrics.context_stats._common import compaction_stats, effort_change_stats, runtime_stats
+from coding_trajectory.metrics.accounting import usage_accounting_payload
 from coding_trajectory.metrics.pricing import (
     _uses_net_input_convention,
     cache_break_waste_usd,
@@ -135,25 +137,67 @@ def build_session_graph_usage(
 ) -> dict[str, Any]:
     """Return compact turn-level token usage accounting."""
     full = _build_full_metrics(session_graph)
+    index = build_session_graph_index(session_graph)
     multi_session = len(full.sessions) > 1
+    session_metrics_by_id = {session.session_id: session for session in full.sessions}
     turns: list[TurnUsageCompactFlat] = []
+    session_sections: list[dict[str, Any]] = []
 
-    for session in full.sessions:
-        for index, turn in enumerate(session.turns):
+    for source_session in ordered_sessions(index):
+        session = session_metrics_by_id.get(source_session.session_id)
+        if session is None:
+            continue
+        session_turns: list[TurnUsageCompactFlat] = []
+        for turn_index, turn in enumerate(session.turns):
             if turn_id is not None and str(turn.turn_id) != turn_id:
                 continue
-            previous_turn = session.turns[index - 1] if index > 0 else None
-            turns.append(
-                _compact_turn_usage(
-                    turn,
-                    session_id=session.session_id if multi_session else None,
-                    execution_seconds=_turn_execution_seconds(turn),
-                    wait_before_seconds=_turn_wait_before_seconds(previous_turn, turn),
-                )
+            previous_turn = session.turns[turn_index - 1] if turn_index > 0 else None
+            compact_turn = _compact_turn_usage(
+                turn,
+                session_id=session.session_id if multi_session else None,
+                execution_seconds=_turn_execution_seconds(turn),
+                wait_before_seconds=_turn_wait_before_seconds(previous_turn, turn),
             )
+            turns.append(compact_turn)
+            session_turns.append(compact_turn)
+
+        if turn_id is not None and not session_turns:
+            continue
+
+        provider, model = _session_pricing_context(session)
+        session_usage = session.token_usage
+        single = _single_session_graph(session_graph, source_session)
+        estimated_cost = cost_evidence_from_usage(
+            session_usage.model_dump(mode="json"),
+            model=model,
+            provider=provider,
+        )
+        section = {
+            "session_id": str(session.session_id),
+            "role": _session_role(source_session, session_graph=session_graph, index=index),
+            "relationship": index.incoming_edge_type.get(source_session.session_id),
+            "parent_session_id": (
+                str(index.parent[source_session.session_id])
+                if index.parent.get(source_session.session_id)
+                else None
+            ),
+            "agent_name": source_session.agent_name,
+            "title": _session_title(source_session),
+            "runtime": runtime_stats(single).model_dump(mode="json"),
+            "compaction": _optional_model_dump(compaction_stats(single)),
+            "effort_changes": _optional_model_dump(effort_change_stats(single)),
+            "turns": [turn.model_dump(mode="json") for turn in session_turns],
+            "total_usage": _token_usage_payload(session_usage),
+            "estimated_cost": (
+                estimated_cost.model_dump(mode="json")
+                if session_usage.total_tokens and estimated_cost is not None
+                else None
+            ),
+        }
+        session_sections.append(section)
 
     provider, model = _session_graph_pricing_context(full)
-    return SessionUsageCompactFlat(
+    payload = SessionUsageCompactFlat(
         session_id=full.root_session_id,
         runtime=runtime_stats(session_graph),
         turns=turns,
@@ -167,6 +211,11 @@ def build_session_graph_usage(
         effort_changes=effort_change_stats(session_graph),
         warnings=full.warnings,
     ).model_dump(mode="json")
+    payload["scope"] = "session_graph"
+    payload["graph_total_usage"] = payload.get("total_usage")
+    payload["graph_runtime"] = payload.get("runtime")
+    payload["sessions"] = session_sections
+    return payload
 
 
 def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, Any]:
@@ -333,6 +382,69 @@ def _session_graph_pricing_context(
         return None, None
     provider, model = max(totals, key=lambda key: totals[key])
     return provider, model
+
+
+def _session_pricing_context(
+    session: SessionMetrics,
+) -> tuple[str | None, str | None]:
+    """Dominant ``(provider, model)`` across one session."""
+    totals: dict[tuple[str | None, str | None], int] = {}
+    for turn in session.turns:
+        for observation in turn.observations:
+            key = (observation.provider, observation.model)
+            totals[key] = totals.get(key, 0) + observation.usage.total_tokens
+    if not totals:
+        return None, None
+    provider, model = max(totals, key=lambda key: totals[key])
+    return provider, model
+
+
+def _single_session_graph(
+    source_graph: SessionGraph,
+    session: Session,
+) -> SessionGraph:
+    return SessionGraph(
+        root_session_id=session.session_id,
+        project_identifier=source_graph.project_identifier,
+        sessions=[session],
+    )
+
+
+def _token_usage_payload(usage: TokenUsage) -> dict[str, int]:
+    return usage_accounting_payload(
+        {
+            "input_tokens": usage.input_tokens,
+            "cached_input_tokens": usage.cached_input_tokens,
+            "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+            "output_tokens": usage.output_tokens,
+            "reasoning_output_tokens": usage.reasoning_output_tokens,
+            "processed_tokens": usage.processed_token_total(),
+            "reported_total_tokens": usage.reported_total_tokens,
+            "total_tokens": usage.total_tokens,
+        }
+    )
+
+
+def _optional_model_dump(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return value.model_dump(mode="json")
+
+
+def _session_role(
+    session: Session,
+    *,
+    session_graph: SessionGraph,
+    index: Any,
+) -> str:
+    if session.session_id == session_graph.root_session_id:
+        return "main"
+    relationship = index.incoming_edge_type.get(session.session_id)
+    if relationship in {"spawned_subagent", "sidechain_of"} and index.parent.get(
+        session.session_id
+    ):
+        return "subagent"
+    return relationship or "member"
 
 
 def _turn_runtime(

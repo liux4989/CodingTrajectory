@@ -292,6 +292,14 @@ def _format_allocated_usage(value: Any) -> str:
 
 
 def _render_session_stats_text(payload: dict[str, Any]) -> str:
+    session_sections = [
+        session
+        for session in payload.get("sessions") or []
+        if isinstance(session, dict)
+    ]
+    if len(session_sections) > 1:
+        return _render_session_stats_sections(payload, session_sections)
+
     model = payload.get("model") or {}
     context_window = payload.get("context_window") or {}
     runtime = payload.get("runtime") or {}
@@ -387,9 +395,88 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip()
 
 
+def _render_session_stats_sections(
+    payload: dict[str, Any],
+    session_sections: list[dict[str, Any]],
+) -> str:
+    lines = ["# Session Stats", "", "Session context sections"]
+    for section in session_sections:
+        model = section.get("model") or {}
+        context_window = section.get("context_window") or {}
+        runtime = section.get("runtime") or {}
+        billed_token_usage = section.get("billed_token_usage") or {}
+        model_name = model.get("name") or "-"
+        context_tokens = model.get("context_window_tokens")
+        lines.extend(
+            [
+                "",
+                f"## {_session_section_label(section)}",
+                f"Model: {model_name} ({format_tokens(context_tokens)} context)",
+                "",
+                "```",
+                f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
+                f"{'Billed Unc/Cache/Create/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
+                f"{'Share':>8}",
+            ]
+        )
+        for category in context_window.get("categories") or []:
+            if isinstance(category, dict):
+                _render_context_category(lines, category, include_allocated_usage=True)
+        lines.append("```")
+        used_tokens = context_window.get("used_tokens") or (
+            section.get("usage") or {}
+        ).get("prompt_tokens")
+        used_percent = context_window.get("used_percent")
+        lines.append(
+            f"- Context window: {format_tokens(used_tokens)} tokens "
+            f"{format_percent(used_percent)} of context window"
+        )
+        if billed_token_usage:
+            lines.append(
+                f"- Billed tokens: {render_usage_line(billed_token_usage)}"
+            )
+        lines.append(
+            "- Runtime: "
+            f"{runtime.get('turns') or 0} turns, "
+            f"{runtime.get('items') or 0} items, "
+            f"{runtime.get('tool_calls') or 0} tool calls"
+        )
+
+    graph_context = payload.get("context_window") or {}
+    graph_runtime = payload.get("runtime") or {}
+    graph_billed = payload.get("billed_token_usage") or {}
+    lines.extend(["", "Graph aggregate", ""])
+    lines.append(
+        f"- Aggregate context composition: {format_tokens(graph_context.get('used_tokens'))} "
+        f"tokens {format_percent(graph_context.get('used_percent'))}"
+    )
+    if graph_billed:
+        lines.append(
+            f"- Aggregate billed tokens: {render_usage_line(graph_billed)}"
+        )
+    lines.append(
+        "- Graph runtime: "
+        f"{graph_runtime.get('turns') or 0} turns, "
+        f"{graph_runtime.get('items') or 0} items, "
+        f"{graph_runtime.get('tool_calls') or 0} tool calls, "
+        f"{graph_runtime.get('subagent_sessions') or 0} subagent sessions"
+    )
+    for warning in payload.get("warnings") or []:
+        lines.append(f"- Warning: {warning}")
+    return "\n".join(lines).rstrip()
+
+
 def _render_session_usage_text(
     payload: dict[str, Any], args: argparse.Namespace | None = None
 ) -> str:
+    session_sections = [
+        session
+        for session in payload.get("sessions") or []
+        if isinstance(session, dict)
+    ]
+    if len(session_sections) > 1:
+        return _render_session_usage_sections(payload, args, session_sections)
+
     lines = ["# Session Usage", "", "```", "Total"]
     lines.append(f"  {render_usage_line(payload.get('total_usage') or {})}")
     total_cost = payload.get("estimated_cost") or {}
@@ -445,6 +532,80 @@ def _render_session_usage_text(
 
     lines.append("```")
     return "\n".join(lines).rstrip()
+
+
+def _render_session_usage_sections(
+    payload: dict[str, Any],
+    args: argparse.Namespace | None,
+    session_sections: list[dict[str, Any]],
+) -> str:
+    lines = ["# Session Usage", "", "```", "Graph total"]
+    lines.append(f"  {render_usage_line(payload.get('total_usage') or {})}")
+    total_cost = payload.get("estimated_cost") or {}
+    if total_cost.get("value_usd") is not None:
+        lines.append(
+            f"  cost {format_cost(total_cost.get('value_usd'))} "
+            f"({total_cost.get('confidence', 'estimated')})"
+        )
+    runtime = payload.get("runtime") or {}
+    if runtime:
+        lines.append(
+            f"  execution {format_duration(runtime.get('execution_seconds'))}  "
+            f"wait {format_duration(runtime.get('wait_seconds'))}"
+        )
+    lines.append("```")
+
+    show_all = bool(getattr(args, "all_turns", False))
+    for section in session_sections:
+        lines.extend(["", f"## {_session_section_label(section)}", "", "```"])
+        lines.append("Total")
+        lines.append(f"  {render_usage_line(section.get('total_usage') or {})}")
+        section_cost = section.get("estimated_cost") or {}
+        if section_cost.get("value_usd") is not None:
+            lines.append(
+                f"  cost {format_cost(section_cost.get('value_usd'))} "
+                f"({section_cost.get('confidence', 'estimated')})"
+            )
+        section_runtime = section.get("runtime") or {}
+        if section_runtime:
+            lines.append(
+                f"  execution {format_duration(section_runtime.get('execution_seconds'))}  "
+                f"wait {format_duration(section_runtime.get('wait_seconds'))}"
+            )
+        turns = section.get("turns") or []
+        rendered_turns = [t for t in turns if show_all or _turn_has_usage(t)]
+        skipped = len(turns) - len(rendered_turns)
+        if rendered_turns:
+            lines.extend(["", "Turns"])
+        for turn in rendered_turns:
+            lines.append(f"  turn {turn.get('turn_id') or '-'}")
+            lines.append(f"    {render_usage_line(turn.get('usage') or {})}")
+            turn_cost = turn.get("estimated_cost") or {}
+            if turn_cost.get("value_usd") is not None:
+                lines.append(
+                    f"    cost {format_cost(turn_cost.get('value_usd'))} "
+                    f"({turn_cost.get('confidence', 'estimated')})"
+                )
+        if skipped:
+            lines.append(
+                f"  (skipped {skipped} turn(s) with no recorded token usage; "
+                f"use --all to show)"
+            )
+        lines.append("```")
+
+    return "\n".join(lines).rstrip()
+
+
+def _session_section_label(section: dict[str, Any]) -> str:
+    role = str(section.get("role") or section.get("relationship") or "session")
+    session_id = str(section.get("session_id") or section.get("root_session_id") or "-")
+    label = (
+        section.get("title")
+        or section.get("agent_name")
+        or section.get("relationship")
+        or role
+    )
+    return f"{role}: {label} ({session_id[:8]})"
 
 
 def _turn_has_usage(turn: dict[str, Any]) -> bool:

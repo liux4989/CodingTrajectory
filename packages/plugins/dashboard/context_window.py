@@ -154,6 +154,19 @@ class CacheBreakSummary(BaseModel):
     events: list[CacheBreakRecord] = Field(default_factory=list)
 
 
+class ContextSessionSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    role: str
+    label: str
+    relationship: str | None = None
+    parent_session_id: str | None = None
+    used_tokens: TokenEvidence | None = None
+    used_percent: float | None = None
+    token_cost: CostEvidence | None = None
+
+
 class CostEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -168,6 +181,7 @@ class ContextWindowProjection(BaseModel):
 
     schema_version: Literal[1] = 1
     session_id: str
+    active_session_id: str
     vendor: str
     model: str | None = None
     context_window_tokens: TokenEvidence | None = None
@@ -176,6 +190,7 @@ class ContextWindowProjection(BaseModel):
     token_cost: CostEvidence | None = None
     categories: list[ContextCategory]
     provider_usage_buckets: list[ContextCategory]
+    session_sections: list[ContextSessionSection] = Field(default_factory=list)
     expensive_items: list[ExpensiveItem] = Field(default_factory=list)
     events: list[ContextEvent]
     compaction: CompactionSummary | None = None
@@ -234,30 +249,42 @@ def build_projection(
         ct_json=run,
     )
 
-    vendor = str(stats.get("vendor") or _overview_vendor(overview) or "unknown")
-    model = stats.get("model") or {}
+    selected_stats = _selected_session_stats(stats, session_id)
+    active_session_id = str(
+        selected_stats.get("session_id") or selected_stats.get("id") or session_id
+    )
+    selected_usage = _selected_session_usage(usage, active_session_id)
+    session_sections = _project_session_sections(stats, usage)
+
+    vendor = str(selected_stats.get("vendor") or stats.get("vendor") or _overview_vendor(overview) or "unknown")
+    model = selected_stats.get("model") or {}
     model_name = _optional_text(model.get("name"))
-    categories = _project_categories(stats)
-    provider_usage_buckets = _project_provider_usage_buckets(stats)
-    expensive_items = _project_expensive_items(tool_usage)
+    categories = _project_categories(selected_stats)
+    provider_usage_buckets = _project_provider_usage_buckets(selected_stats)
+    expensive_items = _project_expensive_items(tool_usage, session_id=active_session_id)
     events = [
         *_category_events(categories),
         *_trajectory_events(
             overview,
-            usage,
+            selected_usage,
             tool_usage,
             turn_id=turn_id,
+            session_id=active_session_id,
         ),
     ]
-    warnings = [str(item) for item in stats.get("warnings") or []]
+    warnings = [str(item) for item in selected_stats.get("warnings") or stats.get("warnings") or []]
+    if len(session_sections) > 1:
+        warnings.append(
+            "This session id resolves to a session graph; context-window values are scoped to the active session, not the graph aggregate."
+        )
     warnings.extend(_projection_warnings(events))
     if turn_id and not any(event.turn_id == turn_id for event in events):
         raise SystemExit(f"turn not found in session overview: {turn_id}")
 
-    compaction = _project_compaction(stats)
-    cache_breaks = _project_cache_breaks(usage, vendor=vendor, compaction=compaction)
+    compaction = _project_compaction(selected_stats)
+    cache_breaks = _project_cache_breaks(selected_usage, vendor=vendor, compaction=compaction)
 
-    context = stats.get("context") or {}
+    context = selected_stats.get("context") or {}
     reported_context_window = model.get("context_window") or model.get(
         "context_window_tokens"
     )
@@ -270,10 +297,11 @@ def build_projection(
         used_percent = round((used_tokens / context_window) * 100, 1)
     # Session-total cost is the pricing SoT's estimate, emitted by
     # ``session.usage`` as ``cost`` + ``pricing`` (source/effective_date).
-    reported_cost = _optional_float(usage.get("cost"))
-    pricing = usage.get("pricing") or {}
+    reported_cost = _optional_float(selected_usage.get("cost"))
+    pricing = selected_usage.get("pricing") or {}
     return ContextWindowProjection(
         session_id=str(stats.get("id") or session_id),
+        active_session_id=active_session_id,
         vendor=vendor,
         model=model_name,
         context_window_tokens=_token_evidence(
@@ -303,6 +331,7 @@ def build_projection(
             key=_category_sort_key,
             reverse=True,
         ),
+        session_sections=session_sections,
         expensive_items=expensive_items,
         events=events,
         compaction=compaction,
@@ -469,6 +498,86 @@ def render_markdown(projection: ContextWindowProjection) -> str:
             f"  - {_one_line(warning, 110)}" for warning in projection.warnings
         )
     return "\n".join(lines)
+
+
+def _selected_session_stats(stats: dict[str, Any], session_id: str) -> dict[str, Any]:
+    sessions = [item for item in stats.get("sessions") or [] if isinstance(item, dict)]
+    if not sessions:
+        return stats
+    for item in sessions:
+        if session_id in {str(item.get("id")), str(item.get("session_id"))}:
+            return item
+    for item in sessions:
+        if item.get("role") == "main":
+            return item
+    return sessions[0]
+
+
+def _selected_session_usage(usage: dict[str, Any], session_id: str) -> dict[str, Any]:
+    sessions = [item for item in usage.get("sessions") or [] if isinstance(item, dict)]
+    if not sessions:
+        return usage
+    for item in sessions:
+        if session_id in {str(item.get("id")), str(item.get("session_id"))}:
+            return item
+    for item in sessions:
+        if item.get("role") == "main":
+            return item
+    return sessions[0]
+
+
+def _project_session_sections(
+    stats: dict[str, Any],
+    usage: dict[str, Any],
+) -> list[ContextSessionSection]:
+    usage_by_id = {
+        str(item.get("id") or item.get("session_id")): item
+        for item in usage.get("sessions") or []
+        if isinstance(item, dict)
+    }
+    sections: list[ContextSessionSection] = []
+    for item in stats.get("sessions") or []:
+        if not isinstance(item, dict):
+            continue
+        session_id = str(item.get("session_id") or item.get("id") or "")
+        if not session_id:
+            continue
+        usage_item = usage_by_id.get(session_id) or usage_by_id.get(str(item.get("id"))) or {}
+        context = item.get("context") or {}
+        pricing = usage_item.get("pricing") or {}
+        cost = _optional_float(usage_item.get("cost"))
+        sections.append(
+            ContextSessionSection(
+                session_id=session_id,
+                role=str(item.get("role") or item.get("relationship") or "session"),
+                label=str(
+                    item.get("title")
+                    or item.get("agent_name")
+                    or item.get("relationship")
+                    or item.get("role")
+                    or session_id[:8]
+                ),
+                relationship=_optional_text(item.get("relationship")),
+                parent_session_id=_optional_text(item.get("parent")),
+                used_tokens=_token_evidence(
+                    _optional_int(context.get("used")),
+                    confidence="exact_usage",
+                    source="ct session stats:sessions[].context.used",
+                ),
+                used_percent=_optional_float(context.get("pct")),
+                token_cost=(
+                    CostEvidence(
+                        value_usd=cost,
+                        confidence=str(pricing.get("confidence") or "estimated"),
+                        source=str(pricing.get("source") or "ct session usage:cost"),
+                        effective_date=pricing.get("effective_date"),
+                    )
+                    if cost is not None
+                    else None
+                ),
+            )
+        )
+    return sections
 
 
 def _category_sort_key(category: ContextCategory) -> tuple[float, int]:
@@ -832,10 +941,14 @@ def _project_provider_usage_buckets(
 
 def _project_expensive_items(
     tool_usage: dict[str, Any],
+    *,
+    session_id: str | None = None,
 ) -> list[ExpensiveItem]:
     items: list[ExpensiveItem] = []
     for index, item in enumerate(tool_usage.get("tool_items") or []):
         if not isinstance(item, dict):
+            continue
+        if session_id and str(item.get("session_id") or "") != session_id:
             continue
         real_cost = item.get("allocated_real_token_cost")
         if not isinstance(real_cost, dict):
@@ -964,18 +1077,21 @@ def _trajectory_events(
     tool_usage: dict[str, Any],
     *,
     turn_id: str | None,
+    session_id: str | None = None,
 ) -> list[ContextEvent]:
     turn_meta = {
         str(item.get("id")): item
         for item in usage.get("turns") or []
         if isinstance(item, dict) and item.get("id")
     }
-    tool_events_by_turn = _tool_events_by_turn(tool_usage)
+    tool_events_by_turn = _tool_events_by_turn(tool_usage, session_id=session_id)
     events: list[ContextEvent] = []
     for session in overview.get("sessions") or []:
         if not isinstance(session, dict):
             continue
-        session_id = str(session.get("id") or overview.get("id") or "")
+        current_session_id = str(session.get("id") or overview.get("id") or "")
+        if session_id and current_session_id != session_id:
+            continue
         for turn in session.get("turns") or []:
             if not isinstance(turn, dict):
                 continue
@@ -1006,7 +1122,7 @@ def _trajectory_events(
                         source="ct session overview:request.text",
                         confidence="exact_text",
                         detail_ref={
-                            "session_id": session_id,
+                            "session_id": current_session_id,
                             "turn_id": current_turn_id,
                         },
                     )
@@ -1024,7 +1140,7 @@ def _trajectory_events(
                     continue
                 event = _activity_event(
                     activity,
-                    session_id=session_id,
+                    session_id=current_session_id,
                     turn_id=current_turn_id,
                     index=index,
                     turn_usage=turn_usage,
@@ -1046,10 +1162,14 @@ def _trajectory_events(
 
 def _tool_events_by_turn(
     tool_usage: dict[str, Any],
+    *,
+    session_id: str | None = None,
 ) -> dict[str, list[list[ContextEvent]]]:
     by_turn: dict[str, list[list[ContextEvent]]] = {}
     for index, item in enumerate(tool_usage.get("tool_items") or []):
         if not isinstance(item, dict):
+            continue
+        if session_id and str(item.get("session_id") or "") != session_id:
             continue
         turn_id = _optional_text(item.get("turn_id"))
         if turn_id is None:

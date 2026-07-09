@@ -13,6 +13,7 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - Canonical means agent-agnostic facts and stable references reconstructed from logs, not raw vendor JSONL and not UI-specific interpretation.
 - `SessionGraph` is a structural aggregate over canonical sessions. Its identity is the root session id, and it may derive graph structure such as membership, edges, and summary metadata.
 - Replay/UI-oriented interpretations such as sections, operations, roles, and workflow-specific labels should live in a projection or enrichment layer, not the core hierarchy.
+- Metric and context-window projections must be session-scoped first and graph-scoped second. A graph aggregate may expose totals, but it must not present child-agent turns, starting context, or provider context windows as if they belonged to the root session. Multi-session responses must expose explicit per-session sections alongside any graph totals.
 
 # Ingestion Transcript Layer
 - Each vendor adapter keeps vendor-specific parsing local, then emits a small transcript record stream: user message, assistant message, tool call, tool result, usage/runtime, and task completion.

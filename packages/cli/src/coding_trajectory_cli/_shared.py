@@ -415,6 +415,214 @@ def compact_context_category(category: Any) -> Any:
     )
 
 
+def compact_usage_turn(turn: Any) -> Any:
+    if not isinstance(turn, dict):
+        return turn
+    return drop_none(
+        {
+            "id": turn.get("turn_id"),
+            "session": turn.get("session_id"),
+            "runtime": drop_none(
+                {
+                    "start": (turn.get("runtime") or {}).get("started_at"),
+                    "end": (turn.get("runtime") or {}).get("ended_at"),
+                    "execution_seconds": (turn.get("runtime") or {}).get(
+                        "execution_seconds"
+                    ),
+                    "wait_before_seconds": (turn.get("runtime") or {}).get(
+                        "wait_before_seconds"
+                    ),
+                }
+            )
+            or None,
+            "usage": compact_usage(turn.get("usage")),
+            "cost": evidence_value(turn.get("estimated_cost")),
+            "pricing": evidence_to_pricing(turn.get("estimated_cost")),
+            "cache_break_waste_usd": turn.get("cache_break_waste_usd"),
+        }
+    )
+
+
+def compact_usage_session(session: Any) -> Any:
+    if not isinstance(session, dict):
+        return session
+    runtime = session.get("runtime") or {}
+    effort_changes = session.get("effort_changes") or {}
+    return drop_none(
+        {
+            "id": session.get("session_id"),
+            "role": session.get("role"),
+            "relationship": session.get("relationship"),
+            "parent": session.get("parent_session_id"),
+            "agent_name": session.get("agent_name"),
+            "title": session.get("title"),
+            "runtime": drop_none(
+                {
+                    "status": runtime.get("status"),
+                    "start": runtime.get("started_at"),
+                    "end": runtime.get("ended_at"),
+                    "execution_seconds": runtime.get("execution_seconds"),
+                    "wait_seconds": runtime.get("wait_seconds"),
+                    "turns": runtime.get("turns"),
+                    "items": runtime.get("items"),
+                    "tools": runtime.get("tool_calls"),
+                    "failed_tools": runtime.get("failed_tool_calls") or None,
+                }
+            )
+            or None,
+            "usage": compact_usage(session.get("total_usage")),
+            "cost": evidence_value(session.get("estimated_cost")),
+            "pricing": evidence_to_pricing(session.get("estimated_cost")),
+            "effort_changes": drop_none(
+                {
+                    "count": effort_changes.get("count") or 0,
+                    "events": [
+                        drop_none(
+                            {
+                                "timestamp": event.get("timestamp"),
+                                "from": event.get("effort_from"),
+                                "to": event.get("effort_to"),
+                            }
+                        )
+                        for event in effort_changes.get("events") or []
+                        if isinstance(event, dict)
+                    ]
+                    or None,
+                }
+            ),
+            "turns": [
+                compact_usage_turn(turn)
+                for turn in session.get("turns") or []
+                if isinstance(turn, dict)
+            ],
+        }
+    )
+
+
+def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    model = payload.get("model") or {}
+    ctx = payload.get("context_window") or {}
+    runtime = payload.get("runtime") or {}
+    messages = payload.get("messages") or {}
+    compaction = payload.get("compaction") or {}
+    return drop_none(
+        {
+            "id": payload.get("root_session_id") or payload.get("session_id"),
+            "session_id": payload.get("session_id"),
+            "role": payload.get("role"),
+            "relationship": payload.get("relationship"),
+            "parent": payload.get("parent_session_id"),
+            "agent_name": payload.get("agent_name"),
+            "title": payload.get("title"),
+            "vendor": payload.get("vendor"),
+            "model": drop_none(
+                {
+                    "name": model.get("name"),
+                    "context_window": model.get("context_window_tokens"),
+                }
+            )
+            or None,
+            "context": drop_none(
+                {
+                    "used": ctx.get("used_tokens"),
+                    "pct": ctx.get("used_percent"),
+                    "categories": [
+                        compact_context_category(item)
+                        for item in ctx.get("categories") or []
+                    ]
+                    or None,
+                }
+            )
+            or None,
+            "provider_usage_buckets": [
+                compact_context_category(item)
+                for item in payload.get("provider_usage_buckets") or []
+            ]
+            or None,
+            "runtime": drop_none(
+                {
+                    "status": runtime.get("status"),
+                    "start": runtime.get("started_at"),
+                    "end": runtime.get("ended_at"),
+                    "execution_seconds": runtime.get("execution_seconds"),
+                    "wait_seconds": runtime.get("wait_seconds"),
+                    "turns": runtime.get("turns"),
+                    "items": runtime.get("items"),
+                    "tools": runtime.get("tool_calls"),
+                    "failed_tools": runtime.get("failed_tool_calls") or None,
+                    "subagents": runtime.get("subagent_sessions"),
+                    "compactions": runtime.get("compactions"),
+                    "interrupted_turns": runtime.get("interrupted_turns") or None,
+                    "rollbacks": runtime.get("rollbacks") or None,
+                    "average_ttft_ms": runtime.get("average_time_to_first_token_ms"),
+                }
+            )
+            or None,
+            "compaction": drop_none(
+                {
+                    "count": compaction.get("count"),
+                    "cumulative_dropped": compaction.get(
+                        "cumulative_dropped_tokens"
+                    ),
+                    "last": drop_none(
+                        {
+                            "mechanism": (compaction.get("last") or {}).get(
+                                "mechanism"
+                            ),
+                            "timestamp": (compaction.get("last") or {}).get(
+                                "timestamp"
+                            ),
+                            "trigger": (compaction.get("last") or {}).get(
+                                "trigger"
+                            ),
+                            "pre": (compaction.get("last") or {}).get("pre_tokens"),
+                            "post": (compaction.get("last") or {}).get(
+                                "post_tokens"
+                            ),
+                            "dropped": (compaction.get("last") or {}).get(
+                                "dropped_tokens"
+                            ),
+                        }
+                    )
+                    or None,
+                    "events": [
+                        drop_none(
+                            {
+                                "mechanism": event.get("mechanism"),
+                                "timestamp": event.get("timestamp"),
+                                "trigger": event.get("trigger"),
+                                "pre": event.get("pre_tokens"),
+                                "post": event.get("post_tokens"),
+                                "dropped": event.get("dropped_tokens"),
+                            }
+                        )
+                        for event in compaction.get("events") or []
+                        if isinstance(event, dict)
+                    ]
+                    or None,
+                }
+            )
+            or None,
+            "messages": drop_none(
+                {
+                    "user": messages.get("user"),
+                    "assistant": messages.get("assistant"),
+                    "developer": messages.get("developer"),
+                    "tools": messages.get("tool_outputs"),
+                    "reasoning": messages.get("reasoning_items"),
+                    "compacted": messages.get("compacted_contexts"),
+                }
+            )
+            or None,
+            "usage": compact_usage(payload.get("usage"), include_cost=False),
+            "billed_token_usage": compact_usage(
+                payload.get("billed_token_usage"), include_cost=False
+            ),
+            "warnings": payload.get("warnings") or None,
+        }
+    )
+
+
 def compact_payload(method: str, payload: Any) -> Any:
     if method == "project.list" and isinstance(payload, dict):
         items = payload.get("items") or {}
@@ -505,6 +713,7 @@ def compact_payload(method: str, payload: Any) -> Any:
         return drop_none(
             {
                 "id": payload.get("session_id"),
+                "scope": payload.get("scope"),
                 "extra_billing": payload.get("extra_billing"),
                 "runtime": drop_none(
                     {
@@ -517,6 +726,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                 )
                 or None,
                 "usage": compact_usage(payload.get("total_usage")),
+                "graph_usage": compact_usage(payload.get("graph_total_usage")),
                 "cost": evidence_value(payload.get("estimated_cost")),
                 "pricing": evidence_to_pricing(payload.get("estimated_cost")),
                 "compaction": drop_none(
@@ -591,160 +801,36 @@ def compact_payload(method: str, payload: Any) -> Any:
                 )
                 or None,
                 "turns": [
-                    drop_none(
-                        {
-                            "id": turn.get("turn_id"),
-                            "session": turn.get("session_id"),
-                            "runtime": drop_none(
-                                {
-                                    "start": (turn.get("runtime") or {}).get(
-                                        "started_at"
-                                    ),
-                                    "end": (turn.get("runtime") or {}).get("ended_at"),
-                                    "execution_seconds": (
-                                        turn.get("runtime") or {}
-                                    ).get("execution_seconds"),
-                                    "wait_before_seconds": (
-                                        turn.get("runtime") or {}
-                                    ).get("wait_before_seconds"),
-                                }
-                            )
-                            or None,
-                            "usage": compact_usage(turn.get("usage")),
-                            "cost": evidence_value(turn.get("estimated_cost")),
-                            "pricing": evidence_to_pricing(turn.get("estimated_cost")),
-                            "cache_break_waste_usd": turn.get(
-                                "cache_break_waste_usd"
-                            ),
-                        }
-                    )
+                    compact_usage_turn(turn)
                     for turn in payload.get("turns") or []
                     if isinstance(turn, dict)
                 ],
+                "sessions": [
+                    compact_usage_session(session)
+                    for session in payload.get("sessions") or []
+                    if isinstance(session, dict)
+                ]
+                or None,
                 "warnings": payload.get("warnings") or None,
             }
         )
 
     if method == "session.stats" and isinstance(payload, dict):
-        model = payload.get("model") or {}
-        ctx = payload.get("context_window") or {}
-        runtime = payload.get("runtime") or {}
-        messages = payload.get("messages") or {}
-        compaction = payload.get("compaction") or {}
-        return drop_none(
-            {
-                "id": payload.get("root_session_id"),
-                "vendor": payload.get("vendor"),
-                "model": drop_none(
-                    {
-                        "name": model.get("name"),
-                        "context_window": model.get("context_window_tokens"),
-                    }
-                )
-                or None,
-                "context": drop_none(
-                    {
-                        "used": ctx.get("used_tokens"),
-                        "pct": ctx.get("used_percent"),
-                        "categories": [
-                            compact_context_category(item)
-                            for item in ctx.get("categories") or []
-                        ]
-                        or None,
-                    }
-                )
-                or None,
-                "provider_usage_buckets": [
-                    compact_context_category(item)
-                    for item in payload.get("provider_usage_buckets") or []
-                ]
-                or None,
-                "runtime": drop_none(
-                    {
-                        "status": runtime.get("status"),
-                        "start": runtime.get("started_at"),
-                        "end": runtime.get("ended_at"),
-                        "execution_seconds": runtime.get("execution_seconds"),
-                        "wait_seconds": runtime.get("wait_seconds"),
-                        "turns": runtime.get("turns"),
-                        "items": runtime.get("items"),
-                        "tools": runtime.get("tool_calls"),
-                        "failed_tools": runtime.get("failed_tool_calls") or None,
-                        "subagents": runtime.get("subagent_sessions"),
-                        "compactions": runtime.get("compactions"),
-                        "interrupted_turns": runtime.get("interrupted_turns") or None,
-                        "rollbacks": runtime.get("rollbacks") or None,
-                        "average_ttft_ms": runtime.get(
-                            "average_time_to_first_token_ms"
-                        ),
-                    }
-                )
-                or None,
-                "compaction": drop_none(
-                    {
-                        "count": compaction.get("count"),
-                        "cumulative_dropped": compaction.get(
-                            "cumulative_dropped_tokens"
-                        ),
-                        "last": drop_none(
-                            {
-                                "mechanism": (compaction.get("last") or {}).get(
-                                    "mechanism"
-                                ),
-                                "timestamp": (compaction.get("last") or {}).get(
-                                    "timestamp"
-                                ),
-                                "trigger": (compaction.get("last") or {}).get(
-                                    "trigger"
-                                ),
-                                "pre": (compaction.get("last") or {}).get(
-                                    "pre_tokens"
-                                ),
-                                "post": (compaction.get("last") or {}).get(
-                                    "post_tokens"
-                                ),
-                                "dropped": (compaction.get("last") or {}).get(
-                                    "dropped_tokens"
-                                ),
-                            }
-                        )
-                        or None,
-                        "events": [
-                            drop_none(
-                                {
-                                    "mechanism": event.get("mechanism"),
-                                    "timestamp": event.get("timestamp"),
-                                    "trigger": event.get("trigger"),
-                                    "pre": event.get("pre_tokens"),
-                                    "post": event.get("post_tokens"),
-                                    "dropped": event.get("dropped_tokens"),
-                                }
-                            )
-                            for event in compaction.get("events") or []
-                            if isinstance(event, dict)
-                        ]
-                        or None,
-                    }
-                )
-                or None,
-                "messages": drop_none(
-                    {
-                        "user": messages.get("user"),
-                        "assistant": messages.get("assistant"),
-                        "developer": messages.get("developer"),
-                        "tools": messages.get("tool_outputs"),
-                        "reasoning": messages.get("reasoning_items"),
-                        "compacted": messages.get("compacted_contexts"),
-                    }
-                )
-                or None,
-                "usage": compact_usage(payload.get("usage"), include_cost=False),
-                "billed_token_usage": compact_usage(
-                    payload.get("billed_token_usage"), include_cost=False
-                ),
-                "warnings": payload.get("warnings") or None,
-            }
-        )
+        compact = compact_stats_payload(payload)
+        if payload.get("scope"):
+            compact["scope"] = payload.get("scope")
+        if payload.get("graph_context_window"):
+            compact["graph_context"] = compact.get("context")
+        if payload.get("graph_billed_token_usage"):
+            compact["graph_billed_token_usage"] = compact_usage(
+                payload.get("graph_billed_token_usage"), include_cost=False
+            )
+        compact["sessions"] = [
+            compact_stats_payload(session)
+            for session in payload.get("sessions") or []
+            if isinstance(session, dict)
+        ] or None
+        return drop_none(compact)
 
     if method == "session.events" and isinstance(payload, dict):
         return drop_none(

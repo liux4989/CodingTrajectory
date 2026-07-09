@@ -127,6 +127,7 @@ export type CompactionSummary = {
 export type ContextWindowPayload = {
   schema_version: 1;
   session_id: string;
+  active_session_id: string;
   vendor: string;
   model: string | null;
   context_window_tokens: TokenEvidence | null;
@@ -135,6 +136,16 @@ export type ContextWindowPayload = {
   token_cost: CostEvidence | null;
   categories: ContextCategory[];
   provider_usage_buckets: ContextCategory[];
+  session_sections: Array<{
+    session_id: string;
+    role: string;
+    label: string;
+    relationship: string | null;
+    parent_session_id: string | null;
+    used_tokens: TokenEvidence | null;
+    used_percent: number | null;
+    token_cost: CostEvidence | null;
+  }>;
   events: ContextEvent[];
   compaction: CompactionSummary | null;
   warnings: string[];

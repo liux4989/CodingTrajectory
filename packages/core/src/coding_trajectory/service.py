@@ -31,6 +31,7 @@ from coding_trajectory.ingestion.models import (
     SessionGraph,
     Turn,
 )
+from coding_trajectory.ingestion.indexes import build_session_graph_index, ordered_sessions
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 
 
@@ -877,10 +878,78 @@ def _handle_session_stats(
     )
     if stats_usage.get("billed_token_usage"):
         result["billed_token_usage"] = stats_usage["billed_token_usage"]
+    result["scope"] = "session_graph"
+    result["graph_context_window"] = result.get("context_window")
+    result["graph_provider_usage_buckets"] = result.get("provider_usage_buckets")
+    result["graph_billed_token_usage"] = result.get("billed_token_usage")
+    result["sessions"] = _session_stats_sections(
+        session_graph,
+        build_session_graph_context_stats=build_session_graph_context_stats,
+        build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
+    )
     return _public_output_for_session_graph(
         session_graph,
         result,
     )
+
+
+def _session_stats_sections(
+    session_graph: SessionGraph,
+    *,
+    build_session_graph_context_stats: Callable[..., dict[str, Any]],
+    build_session_graph_stats_token_usage: Callable[[SessionGraph], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    index = build_session_graph_index(session_graph)
+    sections: list[dict[str, Any]] = []
+    for session in ordered_sessions(index):
+        single = _single_session_graph(session_graph, session)
+        stats_usage = build_session_graph_stats_token_usage(single)
+        section = build_session_graph_context_stats(
+            single,
+            allocated_usage_by_item=stats_usage["allocated_usage_by_item"],
+            allocated_usage_by_context_source=stats_usage[
+                "allocated_usage_by_context_source"
+            ],
+        )
+        if stats_usage.get("billed_token_usage"):
+            section["billed_token_usage"] = stats_usage["billed_token_usage"]
+        section.update(
+            prune_nones(
+                {
+                    "session_id": str(session.session_id),
+                    "role": _session_role(session, session_graph=session_graph, index=index),
+                    "relationship": index.incoming_edge_type.get(session.session_id),
+                    "parent_session_id": (
+                        str(index.parent[session.session_id])
+                        if index.parent.get(session.session_id)
+                        else None
+                    ),
+                    "agent_name": session.agent_name,
+                    "title": _session_title(session),
+                }
+            )
+        )
+        sections.append(section)
+    return sections
+
+
+def _single_session_graph(source_graph: SessionGraph, session: Session) -> SessionGraph:
+    return SessionGraph(
+        root_session_id=session.session_id,
+        project_identifier=source_graph.project_identifier,
+        sessions=[session],
+    )
+
+
+def _session_role(session: Session, *, session_graph: SessionGraph, index: Any) -> str:
+    if session.session_id == session_graph.root_session_id:
+        return "main"
+    relationship = index.incoming_edge_type.get(session.session_id)
+    if relationship in {"spawned_subagent", "sidechain_of"} and index.parent.get(
+        session.session_id
+    ):
+        return "subagent"
+    return relationship or "member"
 
 
 def _handle_session_turn_usage(

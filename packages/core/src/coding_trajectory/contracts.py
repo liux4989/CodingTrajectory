@@ -110,20 +110,29 @@ class SessionOverviewResponse(ContractModel):
 
 class SessionStatsResponse(ContractModel):
     root_session_id: str | None = None
+    scope: str | None = None
     model: dict[str, Any] = Field(default_factory=dict)
     context_window: dict[str, Any] = Field(default_factory=dict)
+    graph_context_window: dict[str, Any] | None = None
     runtime: dict[str, Any] = Field(default_factory=dict)
     messages: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, Any] = Field(default_factory=dict)
     billed_token_usage: dict[str, Any] | None = None
+    graph_billed_token_usage: dict[str, Any] | None = None
     provider_usage_buckets: list[dict[str, Any]] = Field(default_factory=list)
+    graph_provider_usage_buckets: list[dict[str, Any]] | None = None
+    sessions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SessionUsageResponse(ContractModel):
     session_id: str
+    scope: str | None = None
     total_usage: dict[str, Any]
+    graph_total_usage: dict[str, Any] | None = None
+    graph_runtime: dict[str, Any] | None = None
     runtime: dict[str, Any] = Field(default_factory=dict)
     turns: list[dict[str, Any]] = Field(default_factory=list)
+    sessions: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -191,22 +200,29 @@ class PublicSessionOverviewResponse(ContractModel):
 
 class PublicSessionStatsResponse(ContractModel):
     id: str
+    scope: str | None = None
     vendor: str | None = None
     model: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
+    graph_context: dict[str, Any] | None = None
     provider_usage_buckets: list[dict[str, Any]] | None = None
     runtime: dict[str, Any] | None = None
     messages: dict[str, Any] | None = None
     usage: dict[str, Any] | None = None
     billed_token_usage: dict[str, Any] | None = None
+    graph_billed_token_usage: dict[str, Any] | None = None
+    sessions: list[dict[str, Any]] | None = None
     warnings: list[str] | None = None
 
 
 class PublicSessionUsageResponse(ContractModel):
     id: str
+    scope: str | None = None
     runtime: dict[str, Any] | None = None
     usage: dict[str, Any]
+    graph_usage: dict[str, Any] | None = None
     turns: list[dict[str, Any]] = Field(default_factory=list)
+    sessions: list[dict[str, Any]] | None = None
     warnings: list[str] | None = None
 
 

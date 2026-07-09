@@ -419,6 +419,50 @@ export function ContextWindowRoute() {
 
         {analysis ? <SessionAnalysisPanel analysis={analysis} /> : null}
 
+        {payload.session_sections.length > 1 ? (
+          <section className="rounded-lg border border-border-soft bg-card p-4" aria-label="Session graph context scopes">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="m-0 font-display text-heading">Session graph scopes</h2>
+                <p className="m-0 mt-1 text-caption text-muted-foreground">
+                  Context composition below is scoped to the active session window.
+                </p>
+              </div>
+              <Badge variant="outline" className="px-2 text-caption">
+                Active {payload.active_session_id.slice(0, 8)}
+              </Badge>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-3">
+              {payload.session_sections.map((section) => {
+                const isActiveScope = section.session_id === payload.active_session_id;
+                return (
+                  <div
+                    key={section.session_id}
+                    className={cn(
+                      "rounded-md border border-border-soft bg-surface-subtle p-3",
+                      isActiveScope && "border-primary/60 bg-surface-emphasis",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <Badge variant={isActiveScope ? "default" : "secondary"} className="px-1.5 py-0 text-caption">
+                        {section.role}
+                      </Badge>
+                      <span className="mono text-caption text-muted-foreground">{section.session_id.slice(0, 8)}</span>
+                    </div>
+                    <p className="m-0 mt-2 truncate text-body-sm font-medium text-foreground" title={section.label}>
+                      {section.label}
+                    </p>
+                    <p className="m-0 mt-1 mono text-caption text-muted-foreground">
+                      {formatTokens(section.used_tokens?.value)} tokens
+                      {section.used_percent != null ? ` · ${section.used_percent.toFixed(1)}%` : ""}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+
         <figure className="m-0">
           <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
             <figcaption className="m-0 text-body-sm text-muted-foreground">
