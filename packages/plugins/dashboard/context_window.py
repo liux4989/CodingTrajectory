@@ -588,11 +588,18 @@ def _category_sort_key(category: ContextCategory) -> tuple[float, int]:
 
 
 def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
-    """Lift the compaction timeline from ``ct session stats`` JSON.
+    """Lift the compaction timeline from ``ct session stats`` or ``session.usage`` JSON.
 
     ``stats`` carries ``compaction`` (count, cumulative dropped, last event,
     and the full ``events`` list) when the session has compacted; the field is
     absent or ``None`` otherwise.
+
+    Form-agnostic: the CLI display path (``compact_stats_payload`` /
+    ``compact_payload``) renames ``cumulative_dropped_tokens`` ->
+    ``cumulative_dropped``, ``pre_tokens`` -> ``pre``, etc. The raw
+    ``ct api call session.usage`` / ``session.stats`` api emits the long
+    names. Read both so this works on either form - the cache-breaks
+    aggregate calls this on raw-api ``session.usage`` data.
     """
     compaction = stats.get("compaction")
     if not isinstance(compaction, dict) or not compaction.get("count"):
@@ -602,9 +609,15 @@ def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
             timestamp=str(event.get("timestamp") or ""),
             mechanism=str(event.get("mechanism") or ""),
             trigger=_optional_text(event.get("trigger")),
-            pre_tokens=_optional_int(event.get("pre")),
-            post_tokens=_optional_int(event.get("post")),
-            dropped_tokens=_optional_int(event.get("dropped")),
+            pre_tokens=_optional_int(
+                event.get("pre") or event.get("pre_tokens")
+            ),
+            post_tokens=_optional_int(
+                event.get("post") or event.get("post_tokens")
+            ),
+            dropped_tokens=_optional_int(
+                event.get("dropped") or event.get("dropped_tokens")
+            ),
         )
         for event in compaction.get("events") or []
         if isinstance(event, dict) and event.get("timestamp")
@@ -613,6 +626,7 @@ def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
         count=int(compaction.get("count") or 0),
         cumulative_dropped_tokens=_optional_int(
             compaction.get("cumulative_dropped")
+            or compaction.get("cumulative_dropped_tokens")
         ),
         events=events,
     )
