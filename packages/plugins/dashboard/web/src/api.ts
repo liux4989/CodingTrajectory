@@ -124,12 +124,11 @@ export type CompactionSummary = {
   events: CompactionEventRecord[];
 };
 
-// A single per-turn prompt-cache re-read, classified by cause.
+// A measured reduction in cache-hit tokens across a turn boundary, classified
+// only when a supported cause is observed.
 // - ttl_confirmed: idle gap >= vendor TTL max (OpenAI >=600s, Anthropic >=300s)
 // - ttl_likely: idle in the ambiguous OpenAI 300-600s band
-// - effort_switch: cache key changed (reasoning effort / model / system prompt).
-//   Inferred from a warm floor-collapse when no effort change was observed;
-//   *confirmed* when effort_to is set (a real effort_changed observation).
+// - effort_switch: an observed reasoning-effort change aligns with the loss.
 export type CacheBreakRecord = {
   turn_id: string;
   type: "ttl_confirmed" | "ttl_likely" | "effort_switch";
@@ -145,10 +144,6 @@ export type CacheBreakRecord = {
 
 export type CacheBreakSummary = {
   count: number;
-  // Effort-independent static prefix that survives cache misses; cached
-  // prefixes collapse toward it on a break. Null when no turn reported a
-  // cached footprint (no cache accounting at all -> no breaks).
-  floor_tokens: number | null;
   total_re_read_tokens: number;
   estimated_waste_usd: number | null;
   by_type: Record<string, number>;

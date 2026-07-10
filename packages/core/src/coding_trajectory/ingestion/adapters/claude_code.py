@@ -499,9 +499,32 @@ class ClaudeCodeAdapter(BaseAdapter):
         # and its ``<local-command-stdout>`` echo are user records, not runtime
         # records), so scan the raw records directly and append alongside.
         runtime_observations.extend(_effort_change_observations(records))
+        # A Claude Code ``uuid`` identifies one local stream event, whereas
+        # ``message.id`` identifies the provider response.  One response is
+        # recorded as several stream events (thinking, text, tool-use, final
+        # state), each repeating the same final usage block.  Preserve every
+        # event in the transcript, but retain usage once per provider response
+        # so billed accounting does not charge the same request repeatedly.
+        usage_records_by_response_id: dict[str, TranscriptRecord] = {}
+        usage_records_without_response_id: list[TranscriptRecord] = []
+        for record in transcript:
+            vendor_data = record.data.get("vendor_data", {})
+            if not isinstance(vendor_data, dict):
+                continue
+            response_id = vendor_data.get("provider_response_id")
+            if isinstance(response_id, str) and response_id:
+                # The final stream event is the most complete observation and
+                # remains associated with the turn that owns the response.
+                usage_records_by_response_id[response_id] = record
+            else:
+                usage_records_without_response_id.append(record)
+
         context_usage = [
             observation
-            for record in transcript
+            for record in [
+                *usage_records_by_response_id.values(),
+                *usage_records_without_response_id,
+            ]
             if (
                 observation := context_usage_observation(
                     timestamp=record.timestamp,
@@ -655,6 +678,7 @@ class ClaudeCodeAdapter(BaseAdapter):
                 vendor_data = compact_dict(
                     {
                         **normalized_metrics,
+                        "provider_response_id": message.get("id"),
                         "stop_reason": stop_reason,
                     }
                 )

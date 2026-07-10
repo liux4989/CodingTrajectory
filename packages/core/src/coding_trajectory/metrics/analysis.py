@@ -154,6 +154,7 @@ def build_session_graph_usage(
             previous_turn = session.turns[turn_index - 1] if turn_index > 0 else None
             compact_turn = _compact_turn_usage(
                 turn,
+                previous_turn=previous_turn,
                 session_id=session.session_id if multi_session else None,
                 execution_seconds=_turn_execution_seconds(turn),
                 wait_before_seconds=_turn_wait_before_seconds(previous_turn, turn),
@@ -319,6 +320,7 @@ def build_session_graph_runtime(session_graph: SessionGraph) -> dict[str, Any]:
 def _compact_turn_usage(
     turn: TurnMetrics,
     *,
+    previous_turn: TurnMetrics | None,
     session_id: UUID | None,
     execution_seconds: int | None,
     wait_before_seconds: int | None,
@@ -326,19 +328,16 @@ def _compact_turn_usage(
     provider, model = _turn_pricing_context(turn)
     usage_dict = turn.token_usage.model_dump(mode="json")
     cost = cost_evidence_from_usage(usage_dict, model=model, provider=provider)
-    # The cache-break re-read is the FIRST model call's uncached prompt - the
-    # call that re-reads previously-cached content after the cache key changed
-    # (effort switch) or expired (TTL). Later calls in the turn re-warm the
-    # cache, so their uncached is new-content delta, not break re-read. Using the
-    # turn-total ``uncached_prompt_tokens`` would overstate the break by summing
-    # every call (codex turns can have dozens of calls). Per-call observations
-    # carry an explicit uncached subset (codex); fall back to the turn total
-    # when they don't (Anthropic - one call per turn, total == first call).
-    re_read_tokens = _first_call_uncached_prompt(turn) or int(
-        usage_dict.get("uncached_prompt_tokens") or 0
-    ) or int(usage_dict.get("prompt_tokens") or 0)
+    first_call = _first_call_usage(turn)
+    previous_last_call = _last_call_usage(previous_turn)
+    re_read_tokens = first_call.uncached_input_tokens if first_call else None
+    cache_boundary_loss_tokens = (
+        max(previous_last_call.cached_input_tokens - first_call.cached_input_tokens, 0)
+        if first_call is not None and previous_last_call is not None
+        else None
+    )
     waste = cache_break_waste_usd(
-        re_read_tokens, model=model, provider=provider
+        cache_boundary_loss_tokens or 0, model=model, provider=provider
     )
     return TurnUsageCompactFlat(
         turn_id=turn.turn_id,
@@ -351,27 +350,26 @@ def _compact_turn_usage(
         usage=turn.token_usage,
         estimated_cost=cost,
         cache_break_waste_usd=waste,
-        cache_break_re_read_tokens=_first_call_uncached_prompt(turn),
-    )
-
-
-def _first_call_uncached_prompt(turn: TurnMetrics) -> int | None:
-    """Uncached prompt tokens on the turn's first model call (the cache-break
-    re-read), or ``None`` when no per-call observation carries an explicit
-    uncached subset. Sorted by timestamp so the break call (turn start) wins
-    even if observations were appended out of order.
-    """
-    candidates = sorted(
-        (
-            observation
-            for observation in turn.observations
-            if observation.usage.uncached_input_tokens is not None
+        cache_break_re_read_tokens=re_read_tokens,
+        cache_boundary_loss_tokens=cache_boundary_loss_tokens,
+        cache_first_call_cached_tokens=(
+            first_call.cached_input_tokens if first_call is not None else None
         ),
-        key=lambda observation: observation.timestamp,
     )
-    if not candidates:
+
+
+def _first_call_usage(turn: TurnMetrics) -> TokenUsage | None:
+    """Usage on the turn's first provider call."""
+    observation = min(turn.observations, key=lambda item: item.timestamp, default=None)
+    return observation.usage if observation else None
+
+
+def _last_call_usage(turn: TurnMetrics | None) -> TokenUsage | None:
+    """Usage on a prior turn's final provider call."""
+    if turn is None:
         return None
-    return candidates[0].usage.uncached_input_tokens
+    observation = max(turn.observations, key=lambda item: item.timestamp, default=None)
+    return observation.usage if observation else None
 
 
 def _turn_pricing_context(turn: TurnMetrics) -> tuple[str | None, str | None]:

@@ -409,15 +409,12 @@ class TurnUsageCompactFlat(BaseModel):
     usage: TokenUsage = Field(default_factory=TokenUsage)
     estimated_cost: CostEvidenceFlat | None = None
     cache_break_waste_usd: float | None = None
-    # Re-read tokens attributable to a cache break on this turn = the FIRST
-    # model call's uncached prompt (the call that re-reads previously-cached
-    # content after the cache key changed / expired). Distinct from the turn's
-    # total ``uncached_prompt_tokens`` (which sums every call in the turn -
-    # later calls re-warm the cache, so their uncached is just new-content
-    # delta, not break re-read). ``None`` when no per-call observation carries
-    # an explicit uncached subset (e.g. Anthropic, one call per turn) - the
-    # dashboard then falls back to the turn total, which is correct there.
+    # Uncached input on the first provider call, retained as diagnostic evidence.
     cache_break_re_read_tokens: int | None = None
+    # Cache-hit reduction at the boundary from the prior turn's final provider
+    # call to this turn's first call. This is request evidence, not cache size.
+    cache_boundary_loss_tokens: int | None = None
+    cache_first_call_cached_tokens: int | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -434,6 +431,10 @@ class TurnUsageCompactFlat(BaseModel):
             data.pop("cache_break_waste_usd", None)
         if data.get("cache_break_re_read_tokens") is None:
             data.pop("cache_break_re_read_tokens", None)
+        if data.get("cache_boundary_loss_tokens") is None:
+            data.pop("cache_boundary_loss_tokens", None)
+        if data.get("cache_first_call_cached_tokens") is None:
+            data.pop("cache_first_call_cached_tokens", None)
         return data
 
 

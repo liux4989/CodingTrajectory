@@ -26,8 +26,8 @@ export function formatIdleSeconds(seconds: number | null | undefined) {
 
 export type CacheBreakType = "ttl_confirmed" | "ttl_likely" | "effort_switch";
 
-// effort_switch is the avoidable, actionable cause (amber); TTL breaks are an
-// unavoidable age eviction (neutral). ttl_likely softens with a "?".
+// Effort changes are actionable (amber); TTL breaks are age evictions
+// (neutral). ``ttl_likely`` remains explicitly tentative.
 export type CacheBreakTone = {
   icon: React.ReactNode;
   label: string;
@@ -36,12 +36,9 @@ export type CacheBreakTone = {
 
 export function cacheBreakTone(type: CacheBreakType, effortFrom: string | null, effortTo: string | null): CacheBreakTone {
   if (type === "effort_switch") {
-    const confirmed = Boolean(effortTo);
     return {
       icon: <Zap size={12} />,
-      label: confirmed
-        ? `effort switch${effortFrom ? ` ${effortFrom}->${effortTo}` : `->${effortTo}`}`
-        : "effort switch?",
+      label: `effort change${effortFrom ? ` ${effortFrom}->${effortTo}` : effortTo ? `->${effortTo}` : ""}`,
       className: "border-warning/45 bg-warning/10 text-warning",
     };
   }

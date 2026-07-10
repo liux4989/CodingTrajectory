@@ -653,7 +653,7 @@ export function ContextWindowRoute() {
                               "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0 text-caption",
                               breakTone.className,
                             )}
-                            title={`${breakTone.label}: ${formatIdleSeconds(breakRecord.idle_seconds)} idle -> ${formatTokens(breakRecord.re_read_tokens)} re-read${breakRecord.est_cost_usd != null ? ` (${formatCostUsd(breakRecord.est_cost_usd)} wasted)` : ""}`}
+                            title={`${breakTone.label}: ${formatIdleSeconds(breakRecord.idle_seconds)} idle -> ${formatTokens(breakRecord.re_read_tokens)} cache-hit loss${breakRecord.est_cost_usd != null ? ` (${formatCostUsd(breakRecord.est_cost_usd)} estimated premium)` : ""}`}
                           >
                             {breakTone.icon}
                             <span className="hidden sm:inline">{breakTone.label}</span>
@@ -1004,10 +1004,10 @@ function CacheBreaksPanel({ cacheBreaks }: { cacheBreaks: CacheBreakSummary }) {
             Cache breaks
           </h2>
           <p className="m-0 mt-1 text-body-sm text-muted-foreground">
-            {cacheBreaks.count} turn{cacheBreaks.count === 1 ? "" : "s"} re-read context
-            <span className="mono text-caption"> · {formatTokens(cacheBreaks.total_re_read_tokens)} re-read tokens</span>
+            {cacheBreaks.count} turn{cacheBreaks.count === 1 ? "" : "s"} with measured cache-hit loss
+            <span className="mono text-caption"> · {formatTokens(cacheBreaks.total_re_read_tokens)} affected tokens</span>
             {cacheBreaks.estimated_waste_usd != null ? (
-              <span className="mono text-caption"> · {formatCostUsd(cacheBreaks.estimated_waste_usd)} wasted</span>
+              <span className="mono text-caption"> · {formatCostUsd(cacheBreaks.estimated_waste_usd)} estimated premium</span>
             ) : null}
             {typeSummary ? <span className="mono text-caption"> · {typeSummary}</span> : null}
             {confirmedCount > 0 ? (
@@ -1015,11 +1015,6 @@ function CacheBreaksPanel({ cacheBreaks }: { cacheBreaks: CacheBreakSummary }) {
             ) : null}
           </p>
         </div>
-        {cacheBreaks.floor_tokens != null ? (
-          <p className="m-0 mono text-caption text-muted-foreground">
-            floor: {formatTokens(cacheBreaks.floor_tokens)} tokens
-          </p>
-        ) : null}
       </div>
 
       <ol className="m-0 mt-3 grid list-none gap-2 p-0">

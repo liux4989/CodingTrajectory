@@ -87,6 +87,11 @@ def normalize_claude_usage(*, model: Any, usage: Any) -> dict[str, Any]:
     usage_payload = compact_dict(
         {
             "input_tokens": input_tokens,
+            # Claude Code uses Anthropic's schema, where ``input_tokens`` is
+            # already the uncached portion of this individual provider call.
+            # Preserve that fact so a multi-call turn can charge a cache break
+            # to its first call rather than to the turn-wide input sum.
+            "uncached_input_tokens": input_tokens,
             "cached_input_tokens": cache_read,
             "cache_creation_input_tokens": cache_creation,
             "cache_creation_1h_input_tokens": _as_int_or_none(

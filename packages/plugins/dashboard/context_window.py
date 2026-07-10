@@ -120,13 +120,9 @@ class CacheBreakRecord(BaseModel):
     #   (OpenAI >=600s, Anthropic >=300s) — cache evicted by age.
     # ttl_likely: idle in the ambiguous band (OpenAI 300–600s); could be TTL
     #   but not certain.
-    # effort_switch: cache collapsed (or was re-read) because the cache key
-    #   changed — reasoning effort, model, or system prompt. Inferred from a
-    #   warm floor-collapse when no effort change is observed; *confirmed* when
-    #   ``effort_to`` is set (a real effort_changed observation aligned to this
-    #   turn — Direction 1). A confirmed change overrides the idle/TTL
-    #   heuristic: effort switch is the avoidable structural cause even when
-    #   the idle gap was also long.
+    # effort_switch: an observed effort change aligns with an observed drop in
+    #   cache-hit tokens across the turn boundary. It overrides TTL when both
+    #   align with the same measured cache loss.
     type: Literal["ttl_confirmed", "ttl_likely", "effort_switch"]
     idle_seconds: float
     re_read_tokens: int
@@ -441,12 +437,6 @@ def render_markdown(projection: ContextWindowProjection) -> str:
     if projection.cache_breaks and projection.cache_breaks.events:
         cb = projection.cache_breaks
         lines.extend(["", "Cache breaks"])
-        floor_label = (
-            _format_tokens(cb.floor_tokens) if cb.floor_tokens is not None else "-"
-        )
-        lines.append(
-            f"  floor: {floor_label} tokens (effort-independent static prefix)"
-        )
         lines.append(
             f"   #  {'turn':<10}  {'type':<15}  {'idle':>7}  "
             f"{'re-read':>9}  {'est. cost':>11}  effort"
@@ -639,17 +629,12 @@ def _project_cache_breaks(
     compaction: CompactionSummary | None = None,
     require_effort_changes: bool = True,
 ) -> CacheBreakSummary | None:
-    """Classify per-turn cache re-reads into TTL vs effort-switch breaks.
+    """Classify measured turn-boundary cache losses into supported causes.
 
-    Reads ``runtime.wait_before_seconds`` (inter-turn idle gap) and the cached
-    / uncached prompt split off each turn's usage. A re-read with no idle gap
-    (the first turn) is a cold start, not a break, and is skipped. Turns whose
-    start immediately follows a compaction event are also skipped: their
-    re-read reprocesses the compacted context, which is a compaction
-    signature, not an effort/TTL cache break. Returns ``None`` when the
-    session shows no cache accounting at all (no turn ever reported a cached
-    footprint — e.g. third-party backends that don't implement prompt
-    caching), since without caching there are no breaks.
+    A row needs both an observed cache-hit reduction from the prior turn's
+    final request to this turn's first request and either an aligned effort
+    change or a TTL-sized idle gap. Post-compaction turns are skipped because
+    their loss is a compaction signature, not an effort/TTL cache break.
 
     ``effort_changes`` must be present in ``usage`` (core always emits it, even
     as ``{"count": 0}`` when the session never changed effort) — its absence
@@ -671,13 +656,6 @@ def _project_cache_breaks(
     if not turns:
         return None
 
-    cached_values = [
-        _usage_token(t.get("usage"), "cached_prompt") or 0 for t in turns
-    ]
-    if not any(value > 0 for value in cached_values):
-        return None
-
-    floor = min(value for value in cached_values if value > 0)
     skip_turns = _post_compaction_turn_ids(usage, compaction)
     effort_change_by_turn = _effort_changed_turns(usage)
     ttl_confirmed_s, ttl_likely_min_s = _vendor_ttl_thresholds(vendor)
@@ -687,35 +665,31 @@ def _project_cache_breaks(
         if turn_id in skip_turns:
             continue
         runtime = turn.get("runtime") or {}
-        turn_usage = turn.get("usage") or {}
         idle = _optional_float(runtime.get("wait_before_seconds"))
-        re_read = _usage_token(turn_usage, "uncached_prompt") or 0
+        re_read = _optional_int(turn.get("cache_boundary_loss_tokens")) or 0
         if idle is None or re_read <= 0:
             continue
-        cached_after = _usage_token(turn_usage, "cached_prompt")
-        # A confirmed effort_changed observation aligned to this turn overrides
-        # the idle/TTL heuristic: an effort switch is the avoidable structural
-        # cause of the re-read even when the idle gap was also long, and it
-        # applies whenever there was a re-read (not only on a floor-collapse).
+        cached_after = _optional_int(turn.get("cache_first_call_cached_tokens"))
+        # A confirmed effort change overrides TTL when both align with the same
+        # observed boundary loss.
         confirmed = effort_change_by_turn.get(turn_id)
         if confirmed is not None:
             break_type = "effort_switch"
             effort_from, effort_to = confirmed
         else:
-            break_type = _classify_cache_break(
-                idle=idle,
-                cached_after=cached_after,
-                floor=floor,
-                ttl_confirmed_s=ttl_confirmed_s,
-                ttl_likely_min_s=ttl_likely_min_s,
+            break_type = (
+                "ttl_confirmed"
+                if idle >= ttl_confirmed_s
+                else "ttl_likely"
+                if idle >= ttl_likely_min_s
+                else None
             )
             if break_type is None:
                 continue
             effort_from = None
             effort_to = None
-        # Per-turn waste is precomputed by core (pricing SoT) off the turn's
-        # uncached re-read tokens; the dashboard only classifies which turns
-        # are breaks.
+        # Core prices the observable boundary cache-hit loss; the dashboard
+        # only assigns a supported cause to that measured gap.
         waste = _optional_float(turn.get("cache_break_waste_usd"))
         records.append(
             CacheBreakRecord(
@@ -743,7 +717,7 @@ def _project_cache_breaks(
             has_waste = True
     return CacheBreakSummary(
         count=len(records),
-        floor_tokens=floor,
+        floor_tokens=None,
         total_re_read_tokens=total_re_read,
         estimated_waste_usd=round(total_waste, 4) if has_waste else None,
         by_type=by_type,
@@ -765,26 +739,6 @@ def _vendor_ttl_thresholds(vendor: str) -> tuple[float, float]:
     if normalized in {"openai", "codex", "codex_cli", "openai-codex"}:
         return (600.0, 300.0)
     return (300.0, 300.0)
-
-
-def _classify_cache_break(
-    *,
-    idle: float,
-    cached_after: int | None,
-    floor: int,
-    ttl_confirmed_s: float,
-    ttl_likely_min_s: float,
-) -> str | None:
-    if idle >= ttl_confirmed_s:
-        return "ttl_confirmed"
-    if idle >= ttl_likely_min_s:
-        return "ttl_likely"
-    # Still warm (below TTL) yet the cached footprint collapsed to near the
-    # effort-independent floor → the cache key itself changed (effort / model /
-    # system prompt), not an age eviction.
-    if cached_after is not None and cached_after <= floor * 1.5:
-        return "effort_switch"
-    return None
 
 
 def _parse_iso_timestamp(value: Any) -> datetime | None:
@@ -883,6 +837,11 @@ def _effort_changed_turns(
     candidates.sort()
     mapping: dict[str, tuple[str | None, str | None]] = {}
     for ts, effort_from, effort_to in change_ts:
+        # An initial ``/effort`` before the session's first provider request
+        # configures that request; it has no already-warm, in-session prefix
+        # to invalidate and must not be reported as a cache break.
+        if not any(start < ts for start, _turn_id in candidates):
+            continue
         for start, turn_id in candidates:
             if start >= ts:
                 mapping.setdefault(turn_id, (effort_from, effort_to))
