@@ -23,6 +23,15 @@ class TokenUsage(BaseModel):
     total_tokens: int = 0
     processed_tokens: int = 0
     reported_total_tokens: int | None = None
+    # The uncached prompt subset (input re-processed without a cache hit). Vendors
+    # differ: OpenAI/codex report ``input_tokens`` as the TOTAL (cached + uncached)
+    # and ``cached_input_tokens`` as the cached subset, so uncached = input -
+    # cached; Anthropic/pi report ``input_tokens`` as already-uncached. Codex
+    # ingestion sets this explicitly (input - cached); anthropic/pi leave it
+    # ``None`` so downstream falls back to ``input_tokens`` (correct for them).
+    # Carrying it avoids the ``or input_tokens`` fallback that overstated codex
+    # re-reads by the full prompt instead of the uncached subset.
+    uncached_input_tokens: int | None = None
     # Vendor-reported USD cost for this usage bucket (e.g. Pi's ``cost.total``
     # from its jsonl logs). ``None`` when the vendor doesn't report cost, in
     # which case downstream consumers fall back to the pricing SoT's estimate.
@@ -61,6 +70,8 @@ class TokenUsage(BaseModel):
             "prompt_completion_tokens": self.prompt_completion_tokens(),
             "total_confidence": self.total_confidence,
         }
+        if self.uncached_input_tokens is not None:
+            data["uncached_prompt_tokens"] = self.uncached_input_tokens
         if self.reported_total_tokens is not None:
             data["reported_total_tokens"] = self.reported_total_tokens
         if self.cost_usd is not None:
@@ -79,6 +90,10 @@ class TokenUsage(BaseModel):
             total_tokens=self.total_tokens + other.total_tokens,
             processed_tokens=self.processed_token_total()
             + other.processed_token_total(),
+            uncached_input_tokens=_optional_sum(
+                self.uncached_input_tokens,
+                other.uncached_input_tokens,
+            ),
             reported_total_tokens=_optional_sum(
                 self.reported_total_tokens,
                 other.reported_total_tokens,

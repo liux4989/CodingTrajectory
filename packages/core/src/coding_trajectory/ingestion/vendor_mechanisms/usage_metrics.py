@@ -31,12 +31,21 @@ def normalize_codex_token_count(
 ) -> dict[str, Any]:
     """Return normalized usage facts from a Codex token_count event."""
     info_map = info if isinstance(info, dict) else {}
+    # Codex (OpenAI schema) reports ``input_tokens`` as the TOTAL prompt
+    # (cached + uncached) and ``cached_input_tokens`` as the cached subset.
+    # Anthropic-schema paths store ``input_tokens`` as already-uncached, so the
+    # ``or input_tokens`` fallback in ``usage_accounting_payload`` is correct for
+    # them - but for codex it would label the whole prompt as uncached, overstating
+    # cache-break re-reads. Inject the true uncached subset (input - cached) here
+    # so it is carried through ``TokenUsage`` instead of falling back.
+    last_token_usage = _with_uncached_subset(_dict_or_none(info_map.get("last_token_usage")))
+    total_token_usage = _with_uncached_subset(_dict_or_none(info_map.get("total_token_usage")))
     metrics = NormalizedUsageMetrics(
         model=_as_str(info_map.get("model"))
         or _as_str(info_map.get("model_name"))
         or _as_str(model),
-        last_token_usage=_dict_or_none(info_map.get("last_token_usage")),
-        total_token_usage=_dict_or_none(info_map.get("total_token_usage")),
+        last_token_usage=last_token_usage,
+        total_token_usage=total_token_usage,
         model_context_window=_as_int_or_none(info_map.get("model_context_window")),
     )
     return compact_dict(
@@ -44,6 +53,24 @@ def normalize_codex_token_count(
             "metrics": metrics.model_dump(exclude_none=True),
         }
     )
+
+
+def _with_uncached_subset(usage: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Inject ``uncached_input_tokens = input - cached`` into an OpenAI-schema
+    usage dict (where ``input_tokens`` is the total). Leaves Anthropic-schema
+    dicts untouched (they lack ``cached_input_tokens`` or already carry uncached).
+    """
+    if not isinstance(usage, dict):
+        return usage
+    if usage.get("uncached_input_tokens") is not None:
+        return usage
+    input_tokens = _as_int_or_none(usage.get("input_tokens"))
+    cached_input_tokens = _as_int_or_none(usage.get("cached_input_tokens"))
+    if input_tokens is None or cached_input_tokens is None:
+        return usage
+    enriched = dict(usage)
+    enriched["uncached_input_tokens"] = max(input_tokens - cached_input_tokens, 0)
+    return enriched
 
 
 def normalize_claude_usage(*, model: Any, usage: Any) -> dict[str, Any]:

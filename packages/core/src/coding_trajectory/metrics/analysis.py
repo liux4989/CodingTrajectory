@@ -1527,6 +1527,7 @@ def _token_usage_from_mapping(
     reported_total_tokens = _as_int(
         value.get("total_tokens") or value.get("totalTokens")
     )
+    uncached_raw = value.get("uncached_input_tokens") or value.get("uncachedInputTokens")
     total_tokens, processed_tokens, total_confidence = _normalized_total_tokens(
         provider=provider,
         input_tokens=input_tokens,
@@ -1546,6 +1547,11 @@ def _token_usage_from_mapping(
         processed_tokens=processed_tokens,
         reported_total_tokens=(
             reported_total_tokens if reported_total_tokens > 0 else None
+        ),
+        uncached_input_tokens=(
+            uncached_raw
+            if isinstance(uncached_raw, int) and not isinstance(uncached_raw, bool)
+            else None
         ),
         cost_usd=_as_float_or_none(
             value.get("cost_usd") or value.get("costUsd")
