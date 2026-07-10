@@ -2,10 +2,12 @@ import * as React from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AlertTriangle, ArrowLeft, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Eye, Hourglass, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square, Zap } from "lucide-react";
 import {
   analyzeSession,
   fetchContextWindow,
+  type CacheBreakRecord,
+  type CacheBreakSummary,
   type CompactionSummary,
   type ContextCategory,
   type ContextEvent,
@@ -64,6 +66,45 @@ function formatTokens(value: number | null | undefined) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return String(value);
+}
+
+function formatCostUsd(value: number | null | undefined) {
+  if (value == null) return "-";
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(2)}`;
+}
+
+function formatIdleSeconds(seconds: number | null | undefined) {
+  if (seconds == null) return "-";
+  if (seconds >= 60) return `${(seconds / 60).toFixed(1)}m`;
+  return `${Math.round(seconds)}s`;
+}
+
+// effort_switch is the avoidable, actionable cause (amber); TTL breaks are an
+// unavoidable age eviction (neutral). ttl_likely softens with a "?".
+type CacheBreakTone = {
+  icon: React.ReactNode;
+  label: string;
+  className: string;
+};
+
+function cacheBreakTone(record: CacheBreakRecord): CacheBreakTone {
+  if (record.type === "effort_switch") {
+    const confirmed = Boolean(record.effort_to);
+    return {
+      icon: <Zap size={12} />,
+      label: confirmed
+        ? `effort switch${record.effort_from ? ` ${record.effort_from}→${record.effort_to}` : `→${record.effort_to}`}`
+        : "effort switch?",
+      className: "border-warning/45 bg-warning/10 text-warning",
+    };
+  }
+  const confirmed = record.type === "ttl_confirmed";
+  return {
+    icon: <Hourglass size={12} />,
+    label: confirmed ? "TTL break" : "TTL break?",
+    className: "border-border-soft bg-surface-emphasis text-muted-foreground",
+  };
 }
 
 function readStoredJobId(storageKey: string) {
@@ -297,6 +338,16 @@ export function ContextWindowRoute() {
     }));
   }, [query.data?.categories, query.data?.context_window_tokens?.value]);
   const remainingPct = Math.max(100 - (query.data?.used_percent ?? 0), 0);
+
+  // turn_id -> break record, so the turn accordion header can flag the break
+  // that landed on it (mirrors the markdown per-turn cache-break flag).
+  const breaksByTurnId = React.useMemo(() => {
+    const next = new Map<string, CacheBreakRecord>();
+    for (const record of query.data?.cache_breaks?.events ?? []) {
+      next.set(record.turn_id, record);
+    }
+    return next;
+  }, [query.data?.cache_breaks]);
 
   const playbackIndex = filteredEvents.findIndex((e) => e.id === activeId);
   const playbackPct = filteredEvents.length > 0
@@ -585,6 +636,10 @@ export function ContextWindowRoute() {
           </div>
         </figure>
 
+        {payload.cache_breaks && payload.cache_breaks.count > 0 ? (
+          <CacheBreaksPanel cacheBreaks={payload.cache_breaks} />
+        ) : null}
+
         {payload.compaction && payload.compaction.events.length > 0 ? (
           <CompactionTimeline compaction={payload.compaction} />
         ) : null}
@@ -608,6 +663,10 @@ export function ContextWindowRoute() {
                   const hasWarning = group.events.some(({ event }) =>
                     (evidenceByEventId.get(event.id) ?? []).some((item) => item.severity === "warning"),
                   );
+                  const breakRecord = group.events[0]?.event.turn_id
+                    ? breaksByTurnId.get(group.events[0].event.turn_id) ?? null
+                    : null;
+                  const breakTone = breakRecord ? cacheBreakTone(breakRecord) : null;
                   return (
                     <AccordionItem
                       key={group.key}
@@ -627,6 +686,19 @@ export function ContextWindowRoute() {
                           {group.label}
                         </span>
                         {hasWarning ? <AlertTriangle size={12} className="shrink-0 text-warning" /> : null}
+                        {breakRecord && breakTone ? (
+                          <span
+                            className={cn(
+                              "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0 text-caption",
+                              breakTone.className,
+                            )}
+                            title={`${breakTone.label}: ${formatIdleSeconds(breakRecord.idle_seconds)} idle -> ${formatTokens(breakRecord.re_read_tokens)} re-read${breakRecord.est_cost_usd != null ? ` (${formatCostUsd(breakRecord.est_cost_usd)} wasted)` : ""}`}
+                          >
+                            {breakTone.icon}
+                            <span className="hidden sm:inline">{breakTone.label}</span>
+                            <span className="mono">{formatTokens(breakRecord.re_read_tokens)}</span>
+                          </span>
+                        ) : null}
                         <span className="hidden shrink-0 sm:inline mono text-caption text-muted-foreground">
                           {formatTokens(group.totalTokens)}
                         </span>
@@ -946,4 +1018,96 @@ function formatCompactionTimestamp(value: string) {
   if (!value) return "-";
   // Truncate to ``YYYY-MM-DD HH:MM`` (UTC) for compactness.
   return value.slice(0, 16).replace("T", " ");
+}
+
+const CACHE_BREAK_TYPE_ORDER: CacheBreakRecord["type"][] = [
+  "effort_switch",
+  "ttl_confirmed",
+  "ttl_likely",
+];
+
+function CacheBreaksPanel({ cacheBreaks }: { cacheBreaks: CacheBreakSummary }) {
+  const confirmedCount = cacheBreaks.events.filter((record) => record.effort_to).length;
+  const typeSummary = CACHE_BREAK_TYPE_ORDER
+    .filter((key) => cacheBreaks.by_type[key])
+    .map((key) => `${cacheBreaks.by_type[key]} ${key}`)
+    .join(", ");
+  return (
+    <section
+      className="rounded-xl border border-border-soft bg-card px-4 py-3"
+      aria-labelledby="cache-breaks-title"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="min-w-0">
+          <h2 id="cache-breaks-title" className="m-0 font-display text-heading">
+            Cache breaks
+          </h2>
+          <p className="m-0 mt-1 text-body-sm text-muted-foreground">
+            {cacheBreaks.count} turn{cacheBreaks.count === 1 ? "" : "s"} re-read context
+            <span className="mono text-caption"> · {formatTokens(cacheBreaks.total_re_read_tokens)} re-read tokens</span>
+            {cacheBreaks.estimated_waste_usd != null ? (
+              <span className="mono text-caption"> · {formatCostUsd(cacheBreaks.estimated_waste_usd)} wasted</span>
+            ) : null}
+            {typeSummary ? <span className="mono text-caption"> · {typeSummary}</span> : null}
+            {confirmedCount > 0 ? (
+              <span className="mono text-caption"> · {confirmedCount} confirmed</span>
+            ) : null}
+          </p>
+        </div>
+        {cacheBreaks.floor_tokens != null ? (
+          <p className="m-0 mono text-caption text-muted-foreground">
+            floor: {formatTokens(cacheBreaks.floor_tokens)} tokens
+          </p>
+        ) : null}
+      </div>
+
+      <ol className="m-0 mt-3 grid list-none gap-2 p-0">
+        {cacheBreaks.events.map((record, index) => {
+          const tone = cacheBreakTone(record);
+          const effort = record.effort_to
+            ? record.effort_from
+              ? `${record.effort_from}->${record.effort_to}`
+              : `->${record.effort_to}`
+            : null;
+          return (
+            <li
+              key={`${record.turn_id}-${index}`}
+              className="event-row"
+              style={{ cursor: "default" }}
+            >
+              <span
+                className={cn(
+                  "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md border px-1",
+                  tone.className,
+                )}
+                title={tone.label}
+              >
+                {tone.icon}
+              </span>
+              <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-caption text-foreground">
+                {tone.label}
+              </Badge>
+              <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm text-muted-foreground">
+                <span className="mono text-caption">turn {record.turn_id.slice(0, 10)}</span>
+                {effort ? <span className="mono text-caption text-warning"> · {effort}</span> : null}
+              </span>
+              <span className="event-row-meta">
+                <span className="event-row-token mono text-body-sm font-medium">
+                  {formatTokens(record.re_read_tokens)}
+                </span>
+                <span className="mono text-caption text-muted-foreground">
+                  {formatIdleSeconds(record.idle_seconds)} idle
+                </span>
+                {record.est_cost_usd != null ? (
+                  <span className="mono text-caption text-muted-foreground">
+                    {formatCostUsd(record.est_cost_usd)}
+                  </span>
+                ) : null}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
 }
