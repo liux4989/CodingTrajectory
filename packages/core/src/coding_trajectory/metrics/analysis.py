@@ -326,12 +326,17 @@ def _compact_turn_usage(
     provider, model = _turn_pricing_context(turn)
     usage_dict = turn.token_usage.model_dump(mode="json")
     cost = cost_evidence_from_usage(usage_dict, model=model, provider=provider)
-    # Re-read tokens the dashboard classifies cache breaks against = the turn's
-    # uncached prompt tokens. Precompute the waste here (pricing SoT) so the
-    # dashboard reads it instead of repricing.
-    re_read_tokens = int(usage_dict.get("uncached_prompt_tokens") or 0) or int(
-        usage_dict.get("prompt_tokens") or 0
-    )
+    # The cache-break re-read is the FIRST model call's uncached prompt - the
+    # call that re-reads previously-cached content after the cache key changed
+    # (effort switch) or expired (TTL). Later calls in the turn re-warm the
+    # cache, so their uncached is new-content delta, not break re-read. Using the
+    # turn-total ``uncached_prompt_tokens`` would overstate the break by summing
+    # every call (codex turns can have dozens of calls). Per-call observations
+    # carry an explicit uncached subset (codex); fall back to the turn total
+    # when they don't (Anthropic - one call per turn, total == first call).
+    re_read_tokens = _first_call_uncached_prompt(turn) or int(
+        usage_dict.get("uncached_prompt_tokens") or 0
+    ) or int(usage_dict.get("prompt_tokens") or 0)
     waste = cache_break_waste_usd(
         re_read_tokens, model=model, provider=provider
     )
@@ -346,7 +351,27 @@ def _compact_turn_usage(
         usage=turn.token_usage,
         estimated_cost=cost,
         cache_break_waste_usd=waste,
+        cache_break_re_read_tokens=_first_call_uncached_prompt(turn),
     )
+
+
+def _first_call_uncached_prompt(turn: TurnMetrics) -> int | None:
+    """Uncached prompt tokens on the turn's first model call (the cache-break
+    re-read), or ``None`` when no per-call observation carries an explicit
+    uncached subset. Sorted by timestamp so the break call (turn start) wins
+    even if observations were appended out of order.
+    """
+    candidates = sorted(
+        (
+            observation
+            for observation in turn.observations
+            if observation.usage.uncached_input_tokens is not None
+        ),
+        key=lambda observation: observation.timestamp,
+    )
+    if not candidates:
+        return None
+    return candidates[0].usage.uncached_input_tokens
 
 
 def _turn_pricing_context(turn: TurnMetrics) -> tuple[str | None, str | None]:
