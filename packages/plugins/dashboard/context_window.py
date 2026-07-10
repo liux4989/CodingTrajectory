@@ -623,6 +623,7 @@ def _project_cache_breaks(
     *,
     vendor: str,
     compaction: CompactionSummary | None = None,
+    require_effort_changes: bool = True,
 ) -> CacheBreakSummary | None:
     """Classify per-turn cache re-reads into TTL vs effort-switch breaks.
 
@@ -643,7 +644,7 @@ def _project_cache_breaks(
     to the pure heuristic, so a stale install is loud instead of producing
     plausible-but-unconfirmed break labels.
     """
-    if "effort_changes" not in usage:
+    if require_effort_changes and "effort_changes" not in usage:
         raise SystemExit(
             "ct does not surface effort_changes in session.usage — the install "
             "is stale or incomplete (Direction 1 effort-change ingestion is "

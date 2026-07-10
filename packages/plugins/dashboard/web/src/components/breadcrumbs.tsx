@@ -8,6 +8,7 @@ type Crumb = { key: string; label: string; to: string };
 const LABEL_FNS: Record<string, (params: Record<string, unknown>) => string> = {
   "/": () => "Overview",
   "/model-usage": () => "Model usage",
+  "/cache-breaks": () => "Cache breaks",
   "/error-collection": () => "Errors",
   "/sessions": () => "Sessions",
   "/cleanup": () => "Cleanup",

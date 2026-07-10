@@ -36,13 +36,18 @@ class DashboardWorkManager:
         self._lock = threading.Lock()
 
     def get_or_compute(
-        self, key: tuple[Any, ...], factory: Callable[[], dict[str, Any]]
+        self,
+        key: tuple[Any, ...],
+        factory: Callable[[], dict[str, Any]],
+        *,
+        ttl_seconds: float | None = None,
     ) -> dict[str, Any]:
         while True:
             now = time.monotonic()
+            ttl = self._ttl_seconds if ttl_seconds is None else ttl_seconds
             with self._lock:
                 entry = self._entries.get(key)
-                if entry and now - entry.created_at < self._ttl_seconds:
+                if entry and now - entry.created_at < ttl:
                     return entry.value
                 work = self._in_flight.get(key)
                 if work is None:

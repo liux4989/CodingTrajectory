@@ -2,7 +2,7 @@ import * as React from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AlertTriangle, ArrowLeft, Eye, Hourglass, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square, Zap } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square } from "lucide-react";
 import {
   analyzeSession,
   fetchContextWindow,
@@ -15,6 +15,12 @@ import {
   type SessionAnalysis,
   type TokenEvidence,
 } from "@/api";
+import {
+  cacheBreakTone,
+  formatCostUsd,
+  formatIdleSeconds,
+  formatTokens,
+} from "@/lib/cache-breaks";
 import { useJob } from "@/hooks/use-job";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/loading-state";
@@ -61,57 +67,12 @@ function categoryTint(color: string, alpha: number) {
   return `color-mix(in srgb, ${color} ${alpha * 100}%, transparent)`;
 }
 
-function formatTokens(value: number | null | undefined) {
-  if (value == null) return "-";
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return String(value);
-}
-
-function formatCostUsd(value: number | null | undefined) {
-  if (value == null) return "-";
-  if (value < 0.01) return `$${value.toFixed(4)}`;
-  return `$${value.toFixed(2)}`;
-}
-
-function formatIdleSeconds(seconds: number | null | undefined) {
-  if (seconds == null) return "-";
-  if (seconds >= 60) return `${(seconds / 60).toFixed(1)}m`;
-  return `${Math.round(seconds)}s`;
-}
-
-// effort_switch is the avoidable, actionable cause (amber); TTL breaks are an
-// unavoidable age eviction (neutral). ttl_likely softens with a "?".
-type CacheBreakTone = {
-  icon: React.ReactNode;
-  label: string;
-  className: string;
-};
-
-function cacheBreakTone(record: CacheBreakRecord): CacheBreakTone {
-  if (record.type === "effort_switch") {
-    const confirmed = Boolean(record.effort_to);
-    return {
-      icon: <Zap size={12} />,
-      label: confirmed
-        ? `effort switch${record.effort_from ? ` ${record.effort_from}→${record.effort_to}` : `→${record.effort_to}`}`
-        : "effort switch?",
-      className: "border-warning/45 bg-warning/10 text-warning",
-    };
-  }
-  const confirmed = record.type === "ttl_confirmed";
-  return {
-    icon: <Hourglass size={12} />,
-    label: confirmed ? "TTL break" : "TTL break?",
-    className: "border-border-soft bg-surface-emphasis text-muted-foreground",
-  };
-}
-
 function readStoredJobId(storageKey: string) {
   if (typeof window === "undefined") return null;
   const value = window.sessionStorage.getItem(storageKey);
   return value?.trim() || null;
 }
+
 
 function writeStoredJobId(storageKey: string, jobId: string | null) {
   if (typeof window === "undefined") return;
@@ -666,7 +627,7 @@ export function ContextWindowRoute() {
                   const breakRecord = group.events[0]?.event.turn_id
                     ? breaksByTurnId.get(group.events[0].event.turn_id) ?? null
                     : null;
-                  const breakTone = breakRecord ? cacheBreakTone(breakRecord) : null;
+                  const breakTone = breakRecord ? cacheBreakTone(breakRecord.type, breakRecord.effort_from, breakRecord.effort_to) : null;
                   return (
                     <AccordionItem
                       key={group.key}
@@ -1063,7 +1024,7 @@ function CacheBreaksPanel({ cacheBreaks }: { cacheBreaks: CacheBreakSummary }) {
 
       <ol className="m-0 mt-3 grid list-none gap-2 p-0">
         {cacheBreaks.events.map((record, index) => {
-          const tone = cacheBreakTone(record);
+          const tone = cacheBreakTone(record.type, record.effort_from, record.effort_to);
           const effort = record.effort_to
             ? record.effort_from
               ? `${record.effort_from}->${record.effort_to}`

@@ -166,6 +166,8 @@ def _handler_for(
                     payload = service.model_usage(query)
                 elif path == "/api/error-collection":
                     payload = service.error_collection(query)
+                elif path == "/api/cache-breaks":
+                    payload = service.cache_breaks(query)
                 elif path == "/api/vendors":
                     payload = service.vendors(query)
                 elif path == "/api/cleanup/project/preview":

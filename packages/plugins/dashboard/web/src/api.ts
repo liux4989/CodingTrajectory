@@ -155,6 +155,68 @@ export type CacheBreakSummary = {
   events: CacheBreakRecord[];
 };
 
+// A cache break enriched with the session it landed on, for the aggregate
+// cache-breaks page (cross-session collection).
+export type AggregateCacheBreak = CacheBreakRecord & {
+  session_id: string;
+  project: string;
+  vendor: string;
+  title: string | null;
+  started_at: string | null;
+  turn_index: number | null;
+  // Turn start (the cache-rebuild turn); day-bucketed for the time series.
+  timestamp: string | null;
+};
+
+export type CacheBreakTypeCount = {
+  effort_switch: number;
+  ttl_confirmed: number;
+  ttl_likely: number;
+};
+
+export type CacheBreakSessionRow = {
+  session_id: string;
+  project: string;
+  vendor: string;
+  title: string | null;
+  started_at: string | null;
+  breaks: number;
+  re_read_tokens: number;
+  waste_usd: number;
+  has_waste: boolean;
+  confirmed: number;
+  by_type: Partial<CacheBreakTypeCount>;
+};
+
+export type CacheBreakGroupRow = {
+  breaks: number;
+  re_read_tokens: number;
+  waste_usd: number;
+  has_waste: boolean;
+};
+
+export type CacheBreaksPayload = {
+  schema_version: 1;
+  filters: { since_days: number; project_name: string | null };
+  project_options: ProjectItem[];
+  summary: {
+    sessions_with_breaks: number;
+    total_breaks: number;
+    by_type: CacheBreakTypeCount;
+    total_re_read_tokens: number;
+    estimated_waste_usd: number | null;
+    confirmed_effort_switches: number;
+    affected_projects: number;
+    avg_break_cost_usd: number | null;
+  };
+  top_sessions: CacheBreakSessionRow[];
+  by_vendor: Array<CacheBreakGroupRow & { vendor: string }>;
+  by_project: Array<CacheBreakGroupRow & { project: string }>;
+  time_buckets: Array<CacheBreakGroupRow & { bucket: string; by_type: Partial<CacheBreakTypeCount> }>;
+  breaks: AggregateCacheBreak[];
+  warnings: string[];
+};
+
 export type ContextWindowPayload = {
   schema_version: 1;
   session_id: string;
@@ -666,6 +728,13 @@ export async function fetchErrorCollection(params: { sinceDays?: number; project
   search.set("since_days", String(params.sinceDays ?? 7));
   if (params.projectName) search.set("project_name", params.projectName);
   return fetchJson<ErrorCollectionPayload>(`/api/error-collection?${search}`);
+}
+
+export async function fetchCacheBreaks(params: { sinceDays?: number; projectName?: string | null }) {
+  const search = new URLSearchParams();
+  search.set("since_days", String(params.sinceDays ?? 7));
+  if (params.projectName) search.set("project_name", params.projectName);
+  return fetchJson<CacheBreaksPayload>(`/api/cache-breaks?${search}`);
 }
 
 export async function refreshDashboardData() {

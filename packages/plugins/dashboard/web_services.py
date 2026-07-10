@@ -12,6 +12,7 @@ from typing import Any
 try:
     from . import agent_task as agent_task_mod
     from .agent_sessions import AgentSessionStore
+    from . import cache_breaks as cache_breaks_mod
     from . import cleanup as cleanup_mod
     from .codex_app_server import CodexAppServerManager, close_active_app_servers
     from . import context_window as context_window_mod
@@ -23,6 +24,7 @@ try:
 except ImportError:
     import agent_task as agent_task_mod
     from agent_sessions import AgentSessionStore
+    import cache_breaks as cache_breaks_mod
     import cleanup as cleanup_mod
     from codex_app_server import CodexAppServerManager, close_active_app_servers
     import context_window as context_window_mod
@@ -227,6 +229,22 @@ class DashboardDataService:
                 since_days=since_days,
                 project_name=project_name,
             ),
+        )
+
+    def cache_breaks(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        since_days = _int(query, "since_days", 7)
+        project_name = _first(query, "project_name")
+        # The aggregate fans out one ``ct session usage`` subprocess per session;
+        # cache it longer than the default 12s so the date-range filter doesn't
+        # rebuild on every view. Concurrent misses coalesce in the work manager.
+        return self._work.get_or_compute(
+            ("cache_breaks", since_days, project_name),
+            lambda: cache_breaks_mod.build_projection(
+                ct_json=_ct_json,
+                since_days=since_days,
+                project_name=project_name,
+            ),
+            ttl_seconds=300,
         )
 
     def session_analysis(self, body: dict[str, Any]) -> dict[str, Any]:
