@@ -185,7 +185,7 @@ def build_session_graph_usage(
             "title": _session_title(source_session),
             "runtime": runtime_stats(single).model_dump(mode="json"),
             "compaction": _optional_model_dump(compaction_stats(single)),
-            "effort_changes": _optional_model_dump(effort_change_stats(single)),
+            "effort_changes": effort_change_stats(single).model_dump(mode="json"),
             "turns": [turn.model_dump(mode="json") for turn in session_turns],
             "total_usage": _token_usage_payload(session_usage),
             "estimated_cost": (

@@ -175,14 +175,18 @@ def _event_from_observation(observation: Any) -> CompactionEventFlat:
     )
 
 
-def effort_change_stats(session_graph: SessionGraph) -> EffortChangeStatsFlat | None:
+def effort_change_stats(session_graph: SessionGraph) -> EffortChangeStatsFlat:
     """Aggregate reasoning-effort change observations across a session graph.
 
-    Returns ``None`` when no effort change was observed. Codex emits
-    ``effort_changed`` per turn whose ``effort`` differs from the prior turn
-    (``effort_from`` always set); Claude Code emits it on each ``/effort``
-    switch (``effort_from`` is ``None`` on the first, whose baseline is
-    unknown). The ``timestamp`` marks the turn using the new effort.
+    Always returns a stats object (``count=0`` when no change was observed) so
+    the ``session.usage`` api always emits the ``effort_changes`` key - its
+    presence is the capability marker that distinguishes a fresh ct (always
+    emits, even ``{"count": 0}``) from a stale install that lacks effort-change
+    ingestion entirely (key absent). Codex emits ``effort_changed`` per turn
+    whose ``effort`` differs from the prior turn (``effort_from`` always set);
+    Claude Code emits it on each ``/effort`` switch (``effort_from`` is ``None``
+    on the first, whose baseline is unknown). The ``timestamp`` marks the turn
+    using the new effort.
     """
     changes = sorted(
         (
@@ -194,7 +198,7 @@ def effort_change_stats(session_graph: SessionGraph) -> EffortChangeStatsFlat | 
         key=lambda observation: observation.timestamp,
     )
     if not changes:
-        return None
+        return EffortChangeStatsFlat(count=0)
     events = [
         EffortChangeEventFlat(
             timestamp=observation.timestamp,

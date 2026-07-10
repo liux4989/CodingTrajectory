@@ -234,9 +234,9 @@ class DashboardDataService:
     def cache_breaks(self, query: dict[str, list[str]]) -> dict[str, Any]:
         since_days = _int(query, "since_days", 7)
         project_name = _first(query, "project_name")
-        # The aggregate fans out one ``ct session usage`` subprocess per session;
-        # cache it longer than the default 12s so the date-range filter doesn't
-        # rebuild on every view. Concurrent misses coalesce in the work manager.
+        # One batched ``ct api call session.usage`` fetches all sessions at
+        # once (no per-session subprocess fan-out), so the default cache TTL is
+        # enough; concurrent misses coalesce in the work manager.
         return self._work.get_or_compute(
             ("cache_breaks", since_days, project_name),
             lambda: cache_breaks_mod.build_projection(
@@ -244,7 +244,6 @@ class DashboardDataService:
                 since_days=since_days,
                 project_name=project_name,
             ),
-            ttl_seconds=300,
         )
 
     def session_analysis(self, body: dict[str, Any]) -> dict[str, Any]:

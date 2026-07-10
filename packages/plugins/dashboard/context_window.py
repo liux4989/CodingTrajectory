@@ -669,7 +669,7 @@ def _project_cache_breaks(
     ttl_confirmed_s, ttl_likely_min_s = _vendor_ttl_thresholds(vendor)
     records: list[CacheBreakRecord] = []
     for turn in turns:
-        turn_id = str(turn.get("id") or "")
+        turn_id = str(turn.get("id") or turn.get("turn_id") or "")
         if turn_id in skip_turns:
             continue
         runtime = turn.get("runtime") or {}
@@ -806,8 +806,8 @@ def _post_compaction_turn_ids(
             continue
         runtime = turn.get("runtime") or {}
         start = _parse_iso_timestamp(runtime.get("start") or runtime.get("started_at"))
-        if start is not None and turn.get("id"):
-            starts.append((start, str(turn.get("id"))))
+        if start is not None and (turn.get("id") or turn.get("turn_id")):
+            starts.append((start, str(turn.get("id") or turn.get("turn_id"))))
     if not starts:
         return set()
     starts.sort()
@@ -845,7 +845,12 @@ def _effort_changed_turns(
         ts = _parse_iso_timestamp(event.get("timestamp"))
         if ts is None:
             continue
-        change_ts.append((ts, event.get("from"), event.get("to")))
+        # Form-agnostic: the CLI reshapes to ``from``/``to``; the raw api emits
+        # ``effort_from``/``effort_to``. Read both so this works on either form.
+        change_ts.append(
+            (ts, event.get("from") or event.get("effort_from"),
+             event.get("to") or event.get("effort_to"))
+        )
     if not change_ts:
         return {}
     # Candidate turns: those with a real re-read (uncached_prompt > 0), sorted
@@ -857,8 +862,8 @@ def _effort_changed_turns(
         runtime = turn.get("runtime") or {}
         start = _parse_iso_timestamp(runtime.get("start") or runtime.get("started_at"))
         re_read = _usage_token(turn.get("usage"), "uncached_prompt") or 0
-        if start is not None and re_read > 0 and turn.get("id"):
-            candidates.append((start, str(turn.get("id"))))
+        if start is not None and re_read > 0 and (turn.get("id") or turn.get("turn_id")):
+            candidates.append((start, str(turn.get("id") or turn.get("turn_id"))))
     if not candidates:
         return {}
     candidates.sort()

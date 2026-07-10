@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from pydantic import BaseModel, Field
@@ -18,7 +17,11 @@ except ImportError:
 # per-session context-window view and this aggregate. The classifier
 # (``_project_cache_breaks`` + its helpers) classifies a re-read into
 # ttl_confirmed / ttl_likely / effort_switch; we reuse it verbatim per session
-# rather than re-deriving the heuristic here.
+# rather than re-deriving the heuristic here. It is form-agnostic: it reads
+# both the CLI display form (``id``, ``start``, short usage keys) and the raw
+# ``ct api call session.usage`` form (``turn_id``, ``started_at``, long usage
+# keys) - so this aggregate uses the fast batched api call directly, with no
+# dependency on the CLI's display-layer reshaping.
 classify_cache_breaks = context_window_mod._project_cache_breaks
 project_compaction = context_window_mod._project_compaction
 select_session_usage = context_window_mod._selected_session_usage
@@ -55,12 +58,12 @@ def build_projection(
             if item.get("root_session_id") or item.get("id")
         ],
     )
-    # ``ct session usage`` (CLI) always emits ``effort_changes`` (even
-    # ``{"count": 0}``); its absence on every fetched session means the
-    # installed ct is stale and lacks the effort_change-ingestion capability.
-    # We don't raise (the per-session page does that loudly on drill-through);
-    # instead a warning is emitted below and breaks are shown without
-    # confirmed effort-switch attribution.
+    # Core's ``session.usage`` api always emits ``effort_changes`` (even
+    # ``{"count": 0}``) now that ``effort_change_stats`` returns an empty stats
+    # object rather than None. Its absence on every fetched session therefore
+    # means the installed ct is stale and lacks the effort_change-ingestion
+    # capability. We don't raise (the per-session page does that loudly on
+    # drill-through); a warning is emitted below instead.
     any_effort_changes = any(
         "effort_changes" in payload for payload in usage_by_session.values()
     )
@@ -261,20 +264,24 @@ def _enrich_breaks(
     session_meta: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """Attach session metadata + a per-break timestamp/turn index to each
-    classified break. The timestamp comes from the turn's ``runtime.start``
-    (the cache-rebuild turn), bucketed to a day for the time series.
+    classified break. The timestamp comes from the turn's ``runtime`` start
+    (the cache-rebuild turn), bucketed to a day for the time series. Reads
+    both the api form (``turn_id``/``started_at``) and the CLI form
+    (``id``/``start``).
     """
     turn_meta: dict[str, dict[str, Any]] = {}
     for index, turn in enumerate(usage.get("turns") or []):
         if not isinstance(turn, dict):
             continue
-        turn_id = str(turn.get("id") or "")
+        turn_id = str(turn.get("id") or turn.get("turn_id") or "")
         if not turn_id:
             continue
         runtime = turn.get("runtime") or {}
         turn_meta[turn_id] = {
             "index": index,
-            "timestamp": _optional_text(runtime.get("start")),
+            "timestamp": _optional_text(
+                runtime.get("start") or runtime.get("started_at")
+            ),
         }
     enriched: list[dict[str, Any]] = []
     for record in summary.events:
@@ -336,35 +343,44 @@ def _usage_batch(
     ct_json: Callable[[list[str]], dict[str, Any]],
     session_ids: list[str],
 ) -> dict[str, dict[str, Any]]:
-    """Fetch ``ct session usage`` (CLI) per session in parallel.
+    """Fetch ``ct api call session.usage`` for all sessions in one batched call.
 
-    The CLI is the only complete source: the batched ``ct api call
-    session.usage`` method omits turn ids (claude sessions), returns
-    ``effort_changes.events`` with ``effort_to`` instead of ``to``, and uses
-    ``runtime.started_at`` instead of ``start`` - all of which break the
-    classifier's turn alignment and the per-break timestamp. Each call is a
-    separate subprocess (~0.2s), so they are fanned out across threads.
+    Core's ``session.usage`` api is the single source of truth: it emits turn
+    ids, ``wait_before_seconds``, the cached/uncached prompt split,
+    ``cache_break_waste_usd``, ``compaction``, and ``effort_changes`` (always,
+    even ``{"count": 0}``). The classifier is form-agnostic (reads both the
+    api's ``turn_id``/``started_at``/long keys and the CLI's ``id``/``start``/
+    short keys), so this uses the fast batched api call rather than fanning out
+    one ``ct session usage`` subprocess per session.
     """
     if not session_ids:
         return {}
-
-    def fetch(session_id: str) -> tuple[str, dict[str, Any] | None]:
-        try:
-            payload = ct_json(
-                ["session", "usage", "--global-scope", "--output", "json", session_id]
-            )
-        except Exception:
-            return session_id, None
-        if not isinstance(payload, dict):
-            return session_id, None
-        return session_id, payload
-
+    requests = [
+        {
+            "id": session_id,
+            "method": "session.usage",
+            "params": {"session_id": session_id},
+        }
+        for session_id in session_ids
+    ]
+    payload = ct_json(
+        [
+            "api",
+            "batch",
+            "--global-scope",
+            "--requests",
+            json.dumps(requests),
+        ]
+    )
     rows: dict[str, dict[str, Any]] = {}
-    workers = min(16, max(1, len(session_ids)))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for session_id, payload in pool.map(fetch, session_ids):
-            if payload is not None:
-                rows[session_id] = payload
+    for item in payload.get("items") or []:
+        if not isinstance(item, dict) or not item.get("ok"):
+            continue
+        result = item.get("result")
+        if isinstance(result, dict):
+            session_id = str(result.get("session_id") or item.get("id") or "")
+            if session_id:
+                rows[session_id] = result
     return rows
 
 
