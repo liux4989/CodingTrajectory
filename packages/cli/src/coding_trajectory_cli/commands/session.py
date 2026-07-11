@@ -485,6 +485,7 @@ def _render_session_usage_text(
             f"  cost {format_cost(total_cost.get('value_usd'))} "
             f"({total_cost.get('confidence', 'estimated')})"
         )
+    _append_model_usage(lines, payload.get("models"), indent="  ")
     runtime = payload.get("runtime") or {}
     if runtime:
         lines.append(
@@ -547,6 +548,7 @@ def _render_session_usage_sections(
             f"  cost {format_cost(total_cost.get('value_usd'))} "
             f"({total_cost.get('confidence', 'estimated')})"
         )
+    _append_model_usage(lines, payload.get("models"), indent="  ")
     runtime = payload.get("runtime") or {}
     if runtime:
         lines.append(
@@ -566,6 +568,7 @@ def _render_session_usage_sections(
                 f"  cost {format_cost(section_cost.get('value_usd'))} "
                 f"({section_cost.get('confidence', 'estimated')})"
             )
+        _append_model_usage(lines, section.get("models"), indent="  ")
         section_runtime = section.get("runtime") or {}
         if section_runtime:
             lines.append(
@@ -594,6 +597,24 @@ def _render_session_usage_sections(
         lines.append("```")
 
     return "\n".join(lines).rstrip()
+
+
+def _append_model_usage(
+    lines: list[str], models: Any, *, indent: str
+) -> None:
+    rows = [row for row in models or [] if isinstance(row, dict)]
+    if not rows:
+        return
+    lines.append(f"{indent}Usage by model")
+    for row in rows:
+        label = row.get("model") or "unknown model"
+        if row.get("provider"):
+            label = f"{row['provider']}/{label}"
+        detail = render_usage_line(row.get("usage") or {})
+        estimate = row.get("estimated_cost") or {}
+        if estimate.get("value_usd") is not None:
+            detail += f"  cost {format_cost(estimate['value_usd'])}"
+        lines.append(f"{indent}  {label}: {detail}")
 
 
 def _session_section_label(section: dict[str, Any]) -> str:

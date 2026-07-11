@@ -473,6 +473,7 @@ def compact_usage_session(session: Any) -> Any:
             "usage": compact_usage(session.get("total_usage")),
             "cost": evidence_value(session.get("estimated_cost")),
             "pricing": evidence_to_pricing(session.get("estimated_cost")),
+            "models": compact_usage_models(session.get("models")),
             "effort_changes": drop_none(
                 {
                     "count": effort_changes.get("count") or 0,
@@ -497,6 +498,26 @@ def compact_usage_session(session: Any) -> Any:
             ],
         }
     )
+
+
+def compact_usage_models(models: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(models, list):
+        return None
+    rows = [
+        drop_none(
+            {
+                "provider": model.get("provider"),
+                "model": model.get("model"),
+                "turns": model.get("turns"),
+                "usage": compact_usage(model.get("usage")),
+                "cost": evidence_value(model.get("estimated_cost")),
+                "pricing": evidence_to_pricing(model.get("estimated_cost")),
+            }
+        )
+        for model in models
+        if isinstance(model, dict)
+    ]
+    return rows or None
 
 
 def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -729,6 +750,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                 "graph_usage": compact_usage(payload.get("graph_total_usage")),
                 "cost": evidence_value(payload.get("estimated_cost")),
                 "pricing": evidence_to_pricing(payload.get("estimated_cost")),
+                "models": compact_usage_models(payload.get("models")),
                 "compaction": drop_none(
                     {
                         "count": compaction.get("count"),

@@ -57,6 +57,7 @@ from coding_trajectory.metrics.models import (
 from coding_trajectory.metrics.context_stats._common import compaction_stats, effort_change_stats, runtime_stats
 from coding_trajectory.metrics.accounting import usage_accounting_payload
 from coding_trajectory.metrics.pricing import (
+    CostEvidenceFlat,
     _uses_net_input_convention,
     cache_break_waste_usd,
     cost_evidence_from_usage,
@@ -165,14 +166,10 @@ def build_session_graph_usage(
         if turn_id is not None and not session_turns:
             continue
 
-        provider, model = _session_pricing_context(session)
         session_usage = session.token_usage
         single = _single_session_graph(session_graph, source_session)
-        estimated_cost = cost_evidence_from_usage(
-            session_usage.model_dump(mode="json"),
-            model=model,
-            provider=provider,
-        )
+        model_breakdown = _model_usage_breakdown(session.turns)
+        estimated_cost = _aggregate_model_cost(model_breakdown)
         section = {
             "session_id": str(session.session_id),
             "role": _session_role(source_session, session_graph=session_graph, index=index),
@@ -189,6 +186,7 @@ def build_session_graph_usage(
             "effort_changes": effort_change_stats(single).model_dump(mode="json"),
             "turns": [turn.model_dump(mode="json") for turn in session_turns],
             "total_usage": _token_usage_payload(session_usage),
+            "models": [row.model_dump(mode="json") for row in model_breakdown],
             "estimated_cost": (
                 estimated_cost.model_dump(mode="json")
                 if session_usage.total_tokens and estimated_cost is not None
@@ -197,17 +195,15 @@ def build_session_graph_usage(
         }
         session_sections.append(section)
 
-    provider, model = _session_graph_pricing_context(full)
+    graph_model_breakdown = _model_usage_breakdown(
+        turn for session in full.sessions for turn in session.turns
+    )
     payload = SessionUsageCompactFlat(
         session_id=full.root_session_id,
         runtime=runtime_stats(session_graph),
         turns=turns,
         total_usage=full.token_usage,
-        estimated_cost=cost_evidence_from_usage(
-            full.token_usage.model_dump(mode="json"),
-            model=model,
-            provider=provider,
-        ),
+        estimated_cost=_aggregate_model_cost(graph_model_breakdown),
         compaction=compaction_stats(session_graph),
         effort_changes=effort_change_stats(session_graph),
         warnings=full.warnings,
@@ -215,6 +211,9 @@ def build_session_graph_usage(
     payload["scope"] = "session_graph"
     payload["graph_total_usage"] = payload.get("total_usage")
     payload["graph_runtime"] = payload.get("runtime")
+    payload["models"] = [
+        row.model_dump(mode="json") for row in graph_model_breakdown
+    ]
     payload["sessions"] = session_sections
     return payload
 
@@ -326,8 +325,7 @@ def _compact_turn_usage(
     wait_before_seconds: int | None,
 ) -> TurnUsageCompactFlat:
     provider, model = _turn_pricing_context(turn)
-    usage_dict = turn.token_usage.model_dump(mode="json")
-    cost = cost_evidence_from_usage(usage_dict, model=model, provider=provider)
+    cost = _aggregate_model_cost(_model_usage_breakdown([turn]))
     first_call = _first_call_usage(turn)
     previous_last_call = _last_call_usage(previous_turn)
     re_read_tokens = first_call.uncached_input_tokens if first_call else None
@@ -390,38 +388,6 @@ def _observations_pricing_context(
     return dominant.provider, dominant.model
 
 
-def _session_graph_pricing_context(
-    full: SessionGraphMetrics,
-) -> tuple[str | None, str | None]:
-    """Dominant ``(provider, model)`` across the whole session graph — the
-    pricing context for the session-total cost estimate."""
-    totals: dict[tuple[str | None, str | None], int] = {}
-    for session in full.sessions:
-        for turn in session.turns:
-            for observation in turn.observations:
-                key = (observation.provider, observation.model)
-                totals[key] = totals.get(key, 0) + observation.usage.total_tokens
-    if not totals:
-        return None, None
-    provider, model = max(totals, key=lambda key: totals[key])
-    return provider, model
-
-
-def _session_pricing_context(
-    session: SessionMetrics,
-) -> tuple[str | None, str | None]:
-    """Dominant ``(provider, model)`` across one session."""
-    totals: dict[tuple[str | None, str | None], int] = {}
-    for turn in session.turns:
-        for observation in turn.observations:
-            key = (observation.provider, observation.model)
-            totals[key] = totals.get(key, 0) + observation.usage.total_tokens
-    if not totals:
-        return None, None
-    provider, model = max(totals, key=lambda key: totals[key])
-    return provider, model
-
-
 def _single_session_graph(
     source_graph: SessionGraph,
     session: Session,
@@ -433,10 +399,11 @@ def _single_session_graph(
     )
 
 
-def _token_usage_payload(usage: TokenUsage) -> dict[str, int]:
+def _token_usage_payload(usage: TokenUsage) -> dict[str, Any]:
     return usage_accounting_payload(
         {
             "input_tokens": usage.input_tokens,
+            "uncached_input_tokens": usage.uncached_input_tokens,
             "cached_input_tokens": usage.cached_input_tokens,
             "cache_creation_input_tokens": usage.cache_creation_input_tokens,
             "output_tokens": usage.output_tokens,
@@ -499,6 +466,56 @@ def _model_groups_for_turn(turn: TurnMetrics) -> list[ModelUsageModelFlat]:
             reverse=True,
         )
     ]
+
+
+def _model_usage_breakdown(
+    turns: Iterable[TurnMetrics],
+) -> list[ModelUsageModelFlat]:
+    grouped: dict[tuple[str | None, str | None], TokenUsage] = {}
+    model_turns: dict[tuple[str | None, str | None], set[UUID]] = {}
+    for turn in turns:
+        for group in _model_groups_for_turn(turn):
+            key = (group.provider, group.model)
+            grouped[key] = grouped.get(key, TokenUsage()).plus(group.usage)
+            model_turns.setdefault(key, set()).add(turn.turn_id)
+    return [
+        ModelUsageModelFlat(
+            provider=provider,
+            model=model,
+            turns=len(model_turns.get((provider, model), set())),
+            usage=usage,
+            estimated_cost=cost_evidence_from_usage(
+                usage.model_dump(mode="json"),
+                model=model,
+                provider=provider,
+            ),
+        )
+        for (provider, model), usage in sorted(
+            grouped.items(),
+            key=lambda item: item[1].total_tokens,
+            reverse=True,
+        )
+    ]
+
+
+def _aggregate_model_cost(
+    models: Iterable[ModelUsageModelFlat],
+) -> CostEvidenceFlat | None:
+    rows = list(models)
+    if not rows or any(row.estimated_cost is None for row in rows):
+        return None
+    estimates = [row.estimated_cost for row in rows if row.estimated_cost is not None]
+    effective_dates = {item.effective_date for item in estimates}
+    return CostEvidenceFlat(
+        value_usd=round(sum(item.value_usd for item in estimates), 8),
+        confidence=(
+            "reported"
+            if all(item.confidence == "reported" for item in estimates)
+            else "estimated"
+        ),
+        source="model-attributed aggregate",
+        effective_date=(effective_dates.pop() if len(effective_dates) == 1 else None),
+    )
 
 
 def _dominant_group(
