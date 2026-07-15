@@ -16,6 +16,7 @@ try:
     from . import cleanup as cleanup_mod
     from .codex_app_server import CodexAppServerManager, close_active_app_servers
     from . import context_window as context_window_mod
+    from . import evaluation as evaluation_mod
     from . import error_collection as error_collection_mod
     from . import model_usage as model_usage_mod
     from . import session_analysis as session_analysis_mod
@@ -28,6 +29,7 @@ except ImportError:
     import cleanup as cleanup_mod
     from codex_app_server import CodexAppServerManager, close_active_app_servers
     import context_window as context_window_mod
+    import evaluation as evaluation_mod
     import error_collection as error_collection_mod
     import model_usage as model_usage_mod
     import session_analysis as session_analysis_mod
@@ -44,6 +46,12 @@ class DashboardDataService:
         self._agent_sessions = AgentSessionStore(
             cwd=_repo_root(),
             app_server=self._app_server,
+        )
+        self._evaluation_store = evaluation_mod.EvaluationStore()
+        self._evaluations = evaluation_mod.EvaluationService(
+            ct_json=_ct_json,
+            app_server=self._app_server,
+            store=self._evaluation_store,
         )
 
     def shutdown(self) -> None:
@@ -276,6 +284,69 @@ class DashboardDataService:
             "job_id": job_id,
             "operation_key": operation_key,
             "reused": reused,
+        }
+
+    def start_evaluation(
+        self,
+        *,
+        scope_type: evaluation_mod.ScopeType,
+        scope_id: str,
+    ) -> dict[str, Any]:
+        scope_id = scope_id.strip()
+        if not scope_id:
+            raise ValueError(f"{scope_type}_id is required")
+        operation_key = (
+            f"session-evaluation:{evaluation_mod.EVALUATOR_VERSION}:"
+            f"{scope_type}:{scope_id}"
+        )
+        job_id, created = self._runner.submit_once(
+            operation_key,
+            "session-evaluation",
+            self._evaluations.evaluate,
+            scope_type=scope_type,
+            scope_id=scope_id,
+        )
+        return {
+            "status": "pending",
+            "job_id": job_id,
+            "operation_key": operation_key,
+            "reused": not created,
+        }
+
+    def evaluation(self, evaluation_id: str) -> dict[str, Any]:
+        artifact = self._evaluation_store.get(evaluation_id)
+        if artifact is None:
+            raise ValueError("evaluation_not_found")
+        return artifact.model_dump(mode="json")
+
+    def evaluation_list(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        scope_id = _first(query, "scope_id")
+        if not scope_id:
+            raise ValueError("scope_id is required")
+        scope_type = _first(query, "scope_type") or "session"
+        if scope_type not in {"turn", "session"}:
+            raise ValueError("scope_type must be turn or session")
+        artifacts = self._evaluation_store.find(
+            scope_type=scope_type,
+            scope_id=scope_id,
+        )
+        return {
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+            "items": [
+                {
+                    "evaluation_id": artifact.identity.evaluation_id,
+                    "created_at": artifact.identity.created_at,
+                    "title": artifact.title,
+                    "category": (
+                        artifact.category.primary if artifact.category else None
+                    ),
+                    "resolution": artifact.aggregate.resolution,
+                    "rubric_score": artifact.aggregate.rubric_score,
+                    "evidence_coverage": artifact.aggregate.evidence_coverage,
+                }
+                for artifact in artifacts
+            ],
         }
 
     def create_agent_session(self, body: dict[str, Any]) -> dict[str, Any]:

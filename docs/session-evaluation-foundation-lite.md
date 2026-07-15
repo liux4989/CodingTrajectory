@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 1 implementation design. This document implements the contracts in [`session-evaluation-high-level-design.md`](session-evaluation-high-level-design.md) without committing to the scaling and replay features in [`session-evaluation-full.md`](session-evaluation-full.md).
+Foundation implemented on 2026-07-15. The backend and CLI slice described below is available; the 20-to-30-session cohort gates remain pending. This document implements the contracts in [`session-evaluation-high-level-design.md`](session-evaluation-high-level-design.md) without committing to the scaling and replay features in [`session-evaluation-full.md`](session-evaluation-full.md).
 
 ## Objective
 
@@ -25,6 +25,49 @@ The canonical `ct api` service remains the source of truth for normalized sessio
 The dashboard already owns one `CodexAppServerManager`, async `job_id` handling, ephemeral app-server threads, read-only evaluator execution, and strict structured output. Phase 1 extends those patterns rather than introducing a second agent runtime.
 
 The first implementation lives in the dashboard plugin because that is where app-server lifecycle and long-running analysis jobs already exist. Evaluation artifacts remain derived records; they do not modify canonical session fields. Promotion to core service contracts is deferred until the Phase 1 schema is validated.
+
+## Implemented Foundation
+
+The Phase 1 backend lives in `packages/plugins/dashboard/evaluation.py` and provides:
+
+- Strict Pydantic contracts for evidence, rubric compilation, semantic and executable criterion results, aggregation, identity, and persisted artifacts.
+- Bounded evidence construction from canonical `session.overview` and `session.items` API projections, including stable evidence IDs and a source fingerprint.
+- Deterministic eligibility classification before rubric compilation.
+- One fresh structured app-server turn for retrospective category and rubric compilation, followed by a second fresh turn for semantic judgment.
+- An allowlisted argument-array validation plan and controlled runner that refuses replay unless the recorded final revision matches the current clean checkout.
+- Immutable JSON artifacts and scope indexes under `~/.coding-trajectory/evaluations/v1/` by default, configurable through `CT_EVALUATION_ROOT`.
+- Session and turn support through the dashboard CLI and asynchronous HTTP jobs.
+
+Run a session evaluation with:
+
+```text
+uv run ct plugin dashboard session evaluate SESSION_ID
+```
+
+Run a turn evaluation by resolving it through its session graph:
+
+```text
+uv run ct plugin dashboard session evaluate SESSION_ID --turn TURN_ID
+```
+
+The implemented HTTP surface is:
+
+```text
+POST /api/evaluations/sessions/{session_id}
+POST /api/evaluations/turns/{turn_id}
+GET  /api/evaluations/{evaluation_id}
+GET  /api/evaluations?scope_type=session&scope_id=...
+```
+
+No evaluation endpoint modifies canonical session data.
+
+## First Recent-Session Run
+
+The first end-to-end run evaluated completed Codex session `019f6546-cf79-7863-9a8e-a5dc74ab512d`, a three-turn CodingTrajectory session covering metrics-plugin design, standalone web-plugin construction, and live data connection and validation.
+
+The run persisted evaluation `eval_d48ffba65507323876e1d349` with primary category `repository_engineering`, difficulty `hard`, resolution `judged_resolved`, rubric score `1.0`, and evidence coverage `1.0`. All semantic pass references resolved to evidence IDs in the stored manifest. Three safe validation commands were proposed but recorded as `not_run` because the current checkout was dirty, so the historical final revision could not be replayed honestly. An unchanged rerun reused the immutable artifact.
+
+This single run validates the end-to-end mechanism, strict structured-output path, evidence references, checkout refusal, aggregation, persistence, and reuse. It does not satisfy the cohort acceptance gates below.
 
 ## Phase 1 Components
 

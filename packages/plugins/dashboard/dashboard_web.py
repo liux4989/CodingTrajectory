@@ -168,6 +168,13 @@ def _handler_for(
                     payload = service.error_collection(query)
                 elif path == "/api/cache-breaks":
                     payload = service.cache_breaks(query)
+                elif path == "/api/evaluations":
+                    payload = service.evaluation_list(query)
+                elif path.startswith("/api/evaluations/"):
+                    evaluation_id = path[len("/api/evaluations/") :].strip("/")
+                    if not evaluation_id:
+                        raise ValueError("evaluation_id is required")
+                    payload = service.evaluation(evaluation_id)
                 elif path == "/api/vendors":
                     payload = service.vendors(query)
                 elif path == "/api/cleanup/project/preview":
@@ -212,6 +219,16 @@ def _handler_for(
                 return service.apply_session_cleanup(body), HTTPStatus.OK
             if path == "/api/sessions/analysis":
                 return service.session_analysis(body), HTTPStatus.ACCEPTED
+            evaluation_scope = _evaluation_scope(path)
+            if evaluation_scope:
+                scope_type, scope_id = evaluation_scope
+                return (
+                    service.start_evaluation(
+                        scope_type=scope_type,
+                        scope_id=scope_id,
+                    ),
+                    HTTPStatus.ACCEPTED,
+                )
             session_id = _session_analysis_id(path)
             if session_id:
                 return (
@@ -322,6 +339,18 @@ def _session_analysis_id(path: str) -> str | None:
         return None
     session_id = path[len(prefix) : -len(suffix)].strip("/")
     return session_id or None
+
+
+def _evaluation_scope(path: str) -> tuple[str, str] | None:
+    prefix = "/api/evaluations/"
+    if not path.startswith(prefix):
+        return None
+    suffix = path[len(prefix) :].strip("/")
+    parts = suffix.split("/", 1)
+    if len(parts) != 2 or parts[0] not in {"turns", "sessions"} or not parts[1]:
+        return None
+    scope_type = "turn" if parts[0] == "turns" else "session"
+    return scope_type, parts[1]
 
 
 def _agent_session_id(path: str) -> str | None:

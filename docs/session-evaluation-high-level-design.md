@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposal. This document defines the product and architecture contract. The lightweight implementation is specified in [`session-evaluation-foundation-lite.md`](session-evaluation-foundation-lite.md), and the production system is specified in [`session-evaluation-full.md`](session-evaluation-full.md).
+Active architecture contract. The Phase 1 backend and CLI foundation is implemented and has completed its first recent-session evaluation; cohort validation is still pending. The lightweight implementation and current run record are specified in [`session-evaluation-foundation-lite.md`](session-evaluation-foundation-lite.md), and the production system is specified in [`session-evaluation-full.md`](session-evaluation-full.md).
 
 ## Purpose
 

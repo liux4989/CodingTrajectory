@@ -10,9 +10,11 @@ import sys
 try:
     from . import cleanup as cleanup_mod
     from . import context_window as context_window_mod
+    from . import evaluation as evaluation_mod
 except ImportError:
     import cleanup as cleanup_mod
     import context_window as context_window_mod
+    import evaluation as evaluation_mod
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,6 +77,13 @@ def _build_root_parser() -> argparse.ArgumentParser:
         choices=("markdown", "json"),
         default="markdown",
     )
+    session_evaluate = sub.add_parser(
+        "session evaluate",
+        help="Run the lightweight session or turn evaluator.",
+    )
+    session_evaluate.add_argument("session_id")
+    session_evaluate.add_argument("--turn", dest="turn_id", default=None)
+    session_evaluate.add_argument("--output", choices=("text", "json"), default="text")
     return parser
 
 
@@ -115,7 +124,8 @@ def _session_list_parser() -> argparse.ArgumentParser:
         epilog=(
             "SUBCOMMANDS\n"
             "  cleanup          Clean orphaned or low-value session logs.\n"
-            "  context-window   Inspect context composition and trajectory events."
+            "  context-window   Inspect context composition and trajectory events.\n"
+            "  evaluate         Run the lightweight session or turn evaluator."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -149,6 +159,8 @@ def _handle_session_command(args: list[str]) -> int:
         return _session_cleanup(parsed)
     if args and args[0] == "context-window":
         return context_window_mod.main(args[1:])
+    if args and args[0] == "evaluate":
+        return evaluation_mod.main(args[1:])
     return _ct_passthrough(["project", "sessions", *args])
 
 
@@ -164,6 +176,7 @@ def _root_entry_text() -> str:
             "  ct plugin dashboard session [ct project sessions flags]",
             "  ct plugin dashboard session cleanup [flags]",
             "  ct plugin dashboard session context-window SESSION_ID [flags]",
+            "  ct plugin dashboard session evaluate SESSION_ID [flags]",
             "",
             "Web:  Overview-first UI with explicit routes for browsing and cleanup.",
         ]

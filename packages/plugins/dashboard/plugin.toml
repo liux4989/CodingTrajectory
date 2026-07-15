@@ -39,3 +39,7 @@ summary = "Clean orphaned or low-value session logs."
 [[tools]]
 name = "session/context-window"
 summary = "Inspect session context composition and trajectory events."
+
+[[tools]]
+name = "session/evaluate"
+summary = "Run the lightweight session or turn evaluator."
