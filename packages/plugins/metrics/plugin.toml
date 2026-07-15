@@ -1,0 +1,17 @@
+name = "metrics"
+description = "Compare canonical token, cost, and execution metrics across coding sessions."
+entry = "metrics.py"
+
+[requires]
+"project.list" = 1
+"project.sessions" = 1
+"session.usage" = 1
+"session.model_usage" = 1
+
+[[tools]]
+name = "."
+summary = "Show metrics plugin entry information."
+
+[[tools]]
+name = "web"
+summary = "Run the metrics comparison web application."
