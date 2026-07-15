@@ -25,7 +25,7 @@ export function AppShell() {
               <span className="block truncate text-xs text-muted-foreground">Canonical session comparisons</span>
             </span>
           </Link>
-          <Badge variant="outline" className="hidden sm:inline-flex">Phase 1 shell</Badge>
+          <Badge variant="outline" className="hidden sm:inline-flex">Live cohort</Badge>
           <nav className="flex w-full flex-wrap gap-1 sm:ml-auto sm:w-auto" aria-label="Metric categories">
             {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
               <Link
@@ -46,7 +46,7 @@ export function AppShell() {
       </main>
       <footer className="mx-auto max-w-[96rem] px-4 pb-8 sm:px-6 lg:px-8">
         <Separator />
-        <p className="mt-4 text-xs text-muted-foreground">Metrics remain unavailable until supported by canonical ct service evidence.</p>
+        <p className="mt-4 text-xs text-muted-foreground">All visible totals are projected from versioned ct service contracts; unavailable evidence remains explicit.</p>
       </footer>
     </div>
   );

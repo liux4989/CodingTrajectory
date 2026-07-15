@@ -15,3 +15,7 @@ summary = "Show metrics plugin entry information."
 [[tools]]
 name = "web"
 summary = "Run the metrics comparison web application."
+
+[[tools]]
+name = "validate"
+summary = "Reconcile projected graph metrics against direct ct service output."

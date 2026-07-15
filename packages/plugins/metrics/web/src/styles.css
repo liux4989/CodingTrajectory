@@ -141,3 +141,10 @@
     animation: none;
   }
 }
+
+@supports (content-visibility: auto) {
+  .content-section {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 36rem;
+  }
+}

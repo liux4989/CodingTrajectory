@@ -1,5 +1,6 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Navigate, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 
 import { AppShell } from "@/components/app-shell";
@@ -11,6 +12,7 @@ const LazyCategoryPage = React.lazy(() => import("@/routes/category-page").then(
 
 const CATEGORY_CONFIG = {
   tokens: {
+    category: "tokens",
     title: "Token Usage",
     description: "Compare canonical processed-token volume while preserving provider buckets, model attribution, graph boundaries, and telemetry coverage.",
     modes: [
@@ -19,17 +21,12 @@ const CATEGORY_CONFIG = {
       { value: "cache-hit-rate", label: "Cache Hit Rate" },
       { value: "input-output", label: "Input vs Output" },
     ],
-    highlights: [
-      { label: "Processed tokens", detail: "Canonical cohort total" },
-      { label: "Median per graph", detail: "Eligible session graphs only" },
-      { label: "Cache hit rate", detail: "Shown with telemetry coverage" },
-      { label: "Output / input", detail: "Completion and reasoning remain visible" },
-    ],
     explanation: "Processed tokens use the canonical core accounting result. Prompt, cached prompt, cache write, completion, and reasoning buckets stay separate where evidence exists.",
     caveat: "More token processing is not a model-quality score. Missing provider telemetry is excluded from the relevant calculation and reported through coverage.",
     endpoint: "/api/tokens",
   },
   cost: {
+    category: "cost",
     title: "Cost",
     description: "Compare supported USD evidence without repricing models or silently turning unavailable cost into zero.",
     modes: [
@@ -37,17 +34,12 @@ const CATEGORY_CONFIG = {
       { value: "distribution", label: "Distribution" },
       { value: "total", label: "Total Cost" },
     ],
-    highlights: [
-      { label: "Supported cost", detail: "Reported and estimated evidence" },
-      { label: "Median per graph", detail: "Priced session graphs only" },
-      { label: "Reported coverage", detail: "Direct provider evidence" },
-      { label: "Estimated coverage", detail: "Core-supported estimates" },
-    ],
     explanation: "The plugin accepts core-emitted cost values and their evidence labels. It does not download price tables, select aliases, or multiply token totals in TypeScript.",
     caveat: "Reported, estimated, and unavailable values remain distinguishable. Unpriced graphs stay visible but do not enter numeric distributions.",
     endpoint: "/api/cost",
   },
   execution: {
+    category: "execution",
     title: "Execution Time",
     description: "Compare active execution, measurable wait time, and interaction complexity without collapsing them into an ambiguous runtime score.",
     modes: [
@@ -55,12 +47,6 @@ const CATEGORY_CONFIG = {
       { value: "distribution", label: "Distribution" },
       { value: "active-wait", label: "Active vs Wait" },
       { value: "turns", label: "Turns" },
-    ],
-    highlights: [
-      { label: "Active execution", detail: "Sum of measurable turn durations" },
-      { label: "Median active time", detail: "Eligible session graphs only" },
-      { label: "Median wait time", detail: "Kept separate from active time" },
-      { label: "Median turns", detail: "Workflow complexity indicator" },
     ],
     explanation: "Active execution is the sum of measurable turn execution durations. Wait time is measured between turns and stays separate from active work.",
     caveat: "Graph-level time is attributed to a model only for single-model graphs. Mixed-model graphs remain grouped as Mixed models.",
@@ -143,6 +129,15 @@ function ExecutionRoute() {
 }
 
 const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute, tokensRoute, costRoute, executionRoute]) });
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -152,6 +147,8 @@ declare module "@tanstack/react-router" {
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
   </React.StrictMode>,
 );
