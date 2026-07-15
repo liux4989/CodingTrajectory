@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "method": "session.model_usage",
+  "assertions": [
+    {"path": "$.root_session_id", "expected": "019f17b8-d311-77f0-a163-e20701d5a150", "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.usage.processed_tokens", "expected": 79182, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.models[0].provider", "expected": "openai", "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.models[0].model", "expected": "gpt-5.5", "source_refs": ["source/parent.jsonl:3"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.models[0].estimated_cost.value_usd", "expected": 0.079969, "source_refs": ["source/parent.jsonl:5", "../../../pricing/pinned-model-prices.json"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.dominant_model.basis", "expected": "total_tokens", "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"}
+  ]
+}

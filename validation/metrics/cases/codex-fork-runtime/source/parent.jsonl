@@ -1,0 +1,6 @@
+{"timestamp":"2026-06-30T08:51:06.978Z","type":"session_meta","payload":{"id":"019f17b8-d311-77f0-a163-e20701d5a150","cwd":"/baseline/codex-project","timestamp":"2026-06-30T08:50:16.490Z","model_provider":"openai"}}
+{"timestamp":"2026-06-30T08:51:06.978Z","type":"event_msg","payload":{"type":"task_started","turn_id":"019f17b9-983a-7502-ad7a-e4c62d3f014f","model_context_window":258400}}
+{"timestamp":"2026-06-30T08:51:06.984Z","type":"turn_context","payload":{"turn_id":"019f17b9-983a-7502-ad7a-e4c62d3f014f","model":"gpt-5.5","effort":"low"}}
+{"timestamp":"2026-06-30T08:51:06.987Z","type":"event_msg","payload":{"type":"user_message","message":"[sanitized baseline prompt]"}}
+{"timestamp":"2026-06-30T08:52:55.740Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":459186,"cached_input_tokens":367872,"output_tokens":4155,"reasoning_output_tokens":259,"total_tokens":463341},"last_token_usage":{"input_tokens":78203,"cached_input_tokens":75648,"output_tokens":937,"reasoning_output_tokens":42,"total_tokens":79140},"model_context_window":258400}}}
+{"timestamp":"2026-06-30T08:52:55.745Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"019f17b9-983a-7502-ad7a-e4c62d3f014f","last_agent_message":"[sanitized baseline response]","duration_ms":108802,"time_to_first_token_ms":3392}}

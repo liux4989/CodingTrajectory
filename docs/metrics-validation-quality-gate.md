@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed design. This document defines the quality gate before implementation.
+Implemented on 2026-07-15. The recurring gate, path-aware wrapper, pinned pricing input, and first active Codex CLI, Claude Code, and Pi evidence cohort live under `validation/metrics/`.
 
 ## Purpose
 
@@ -65,7 +65,7 @@ One historical graph may satisfy several dimensions. The manifest must state exa
 
 Recurring validation must be portable and must not depend on a developer's live `~/.codex`, `~/.claude`, or `~/.pi` directories. Each approved case becomes a committed, sanitized evidence bundle.
 
-Proposed layout:
+Implemented layout:
 
 ```text
 validation/metrics/
@@ -88,7 +88,7 @@ scripts/
   check-metrics-quality-gate.sh
 ```
 
-The implementation may adjust filenames, but the separation between source evidence, expected projections, provenance, and audit reasoning is required.
+Expected files contain source-linked JSON-path assertions for stable public facts instead of copying whole presentation payloads. This keeps the separation between source evidence, expected projections, provenance, and audit reasoning while producing the smallest useful failure path.
 
 ### Provenance
 
@@ -195,7 +195,7 @@ An updated market price is not a metric regression. Updating the pinned pricing 
 
 ## Recurring Gate
 
-The primary command is proposed as:
+The primary command is:
 
 ```text
 uv run python scripts/validate-metrics-baselines.py
@@ -224,7 +224,7 @@ Required invariants include:
 
 ## Automatic Trigger
 
-`scripts/check-metrics-quality-gate.sh` will inspect the changed paths and run the baseline verifier whenever a commit changes metric-sensitive code.
+`scripts/check-metrics-quality-gate.sh` inspects the changed paths and runs the baseline verifier whenever a commit changes metric-sensitive code. With no arguments it evaluates the worktree, including untracked files; git diff arguments may be passed for commit or CI ranges.
 
 Initial trigger paths:
 
@@ -286,32 +286,33 @@ candidate -> audited -> active -> superseded or retired
 
 Only active cases participate in the required gate. Superseded cases remain available when they document an old provider format that is still useful for migration history. A case is retired only when the corresponding input format is no longer supported or its evidence cannot be retained safely.
 
+## Implemented Baseline Cohort
+
+| Case | Provider | Primary boundaries |
+| --- | --- | --- |
+| `codex-fork-runtime` | Codex CLI | Two-session fork graph, cached/uncached/reasoning usage, provider runtime, pinned estimated cost |
+| `claude-stream-cache` | Claude Code | Repeated stream events for one provider response, cache reads, successful tool lifecycle, pinned estimated cost |
+| `pi-reported-cost` | Pi | Five provider calls, four successful tools, cached usage, provider-reported cost |
+
+Each case has committed sanitized JSONL, SHA-256 provenance, source-only arithmetic in `audit.md`, and source-linked assertions for `session.overview`, `session.stats`, `session.usage`, and `session.model_usage`.
+
 ## Rollout Plan
 
 ### Phase 1: Baseline inventory
 
-- Identify candidate Codex CLI, Claude Code, and Pi historical graphs.
-- Build the behavior-coverage matrix.
-- Decide which raw logs can be sanitized and committed safely.
+- Completed for the first active cohort.
 
 ### Phase 2: Independent audit
 
-- Produce sanitized evidence bundles.
-- Perform source-only reconstruction.
-- Resolve discrepancies before creating expected JSON.
-- Complete second review and activate the first cases.
+- Source arithmetic and artifact cross-checks are completed for the first active cohort. An independent human or separate-agent sign-off remains an explicit governance follow-up; the provenance reviewer currently records the implementation cross-check rather than organizational approval. Future additions follow the same provenance, arithmetic, and review workflow.
 
 ### Phase 3: Validator
 
-- Add the Pydantic artifact models.
-- Implement the standalone verifier and invariant checks.
-- Add terminal and JSON reports.
+- Completed in `scripts/validate-metrics-baselines.py`.
 
 ### Phase 4: Change-aware gate
 
-- Add the path-trigger wrapper.
-- Document the required command in the repository agent instructions.
-- Add CI invocation later if the repository adopts CI for validation scripts.
+- The path-trigger wrapper and repository agent instruction are implemented. CI invocation remains optional if the repository later adopts CI for validation scripts.
 
 ## Acceptance Criteria
 

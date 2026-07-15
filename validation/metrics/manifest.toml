@@ -1,0 +1,29 @@
+schema_version = 1
+pricing_artifact = "pricing/pinned-model-prices.json"
+
+[[cases]]
+id = "codex-fork-runtime"
+status = "active"
+provider = "codex_cli"
+entrypoint_id = "019f17b8-d311-77f0-a163-e20701d5a150"
+source_files = ["cases/codex-fork-runtime/source/parent.jsonl", "cases/codex-fork-runtime/source/fork.jsonl"]
+expected_files = ["cases/codex-fork-runtime/expected/session-overview.json", "cases/codex-fork-runtime/expected/session-stats.json", "cases/codex-fork-runtime/expected/session-usage.json", "cases/codex-fork-runtime/expected/session-model-usage.json"]
+coverage = ["provider:codex_cli", "graph:multi-session", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration", "relationship:fork"]
+
+[[cases]]
+id = "claude-stream-cache"
+status = "active"
+provider = "claude_code"
+entrypoint_id = "49852109-2333-42d2-8abb-bd55d812ee2d"
+source_files = ["cases/claude-stream-cache/source/session.jsonl"]
+expected_files = ["cases/claude-stream-cache/expected/session-overview.json", "cases/claude-stream-cache/expected/session-stats.json", "cases/claude-stream-cache/expected/session-usage.json", "cases/claude-stream-cache/expected/session-model-usage.json"]
+coverage = ["provider:claude_code", "graph:single-session", "tokens:uncached-input", "tokens:cached-input", "stream:response-dedup", "tool:success"]
+
+[[cases]]
+id = "pi-reported-cost"
+status = "active"
+provider = "pi"
+entrypoint_id = "019f1862-7c7e-7b61-b0f2-be002e4d5922"
+source_files = ["cases/pi-reported-cost/source/session.jsonl"]
+expected_files = ["cases/pi-reported-cost/expected/session-overview.json", "cases/pi-reported-cost/expected/session-stats.json", "cases/pi-reported-cost/expected/session-usage.json", "cases/pi-reported-cost/expected/session-model-usage.json"]
+coverage = ["provider:pi", "graph:single-session", "tokens:cached-input", "cost:provider-reported", "tool:success", "model:single"]

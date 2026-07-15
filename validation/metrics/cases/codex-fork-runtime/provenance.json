@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "case_id": "codex-fork-runtime",
+  "status": "active",
+  "provider": "codex_cli",
+  "adapter_family": "CodexAdapter",
+  "original_source_sha256": [
+    "0f7fd78b23e0a9d28e8c85d9b1316d265999a85bfe58f9c6de5a7b887b69b3f1",
+    "6b598c06442ee3de2983455fb4eab99417d21fc5f0859ad6aa72bf14d15fd671"
+  ],
+  "committed_source_sha256": {
+    "cases/codex-fork-runtime/source/parent.jsonl": "b1f657895a7625e4eb59f0fd072c10f9f8d2065565dc9cffb3b957f8aa4a1364",
+    "cases/codex-fork-runtime/source/fork.jsonl": "dd6b0544cd5a32c81181974282e9773853a1cd95357c90217bb0a79963a2f103"
+  },
+  "sanitization_version": "metrics-baseline-v1",
+  "entrypoint_id": "019f17b8-d311-77f0-a163-e20701d5a150",
+  "coverage": ["provider:codex_cli", "graph:multi-session", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration", "relationship:fork"],
+  "expected_schema_versions": {
+    "session.overview": 1,
+    "session.stats": 1,
+    "session.usage": 1,
+    "session.model_usage": 1
+  },
+  "pricing_artifact_version": "2026-07-15-baseline-v1",
+  "audit_date": "2026-07-15",
+  "auditor": "Codex source-evidence arithmetic pass",
+  "reviewer": "Codex artifact and projection cross-check",
+  "last_contract_migration": null
+}

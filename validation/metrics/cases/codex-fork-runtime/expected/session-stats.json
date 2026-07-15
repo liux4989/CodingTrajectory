@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "method": "session.stats",
+  "assertions": [
+    {"path": "$.runtime.turns", "expected": 2, "source_refs": ["source/parent.jsonl:2", "source/fork.jsonl:2"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.runtime.subagents", "expected": 1, "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.runtime.execution_seconds", "expected": 110, "source_refs": ["source/parent.jsonl:6", "source/fork.jsonl:5"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.runtime.average_ttft_ms", "expected": 3392, "source_refs": ["source/parent.jsonl:6"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.model.name", "expected": "gpt-5.5", "source_refs": ["source/parent.jsonl:3"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.billed_token_usage.processed", "expected": 79182, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"}
+  ]
+}

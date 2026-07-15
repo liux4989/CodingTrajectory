@@ -1,0 +1,7 @@
+{"schema_version":1,"method":"session.usage","assertions":[
+  {"path":"$.usage.uncached_prompt","expected":35117,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.usage.cached_prompt","expected":43328,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.usage.completion","expected":370,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.usage.processed","expected":78815,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.cost","expected":0.06205708,"source_refs":["source/session.jsonl:2","source/session.jsonl:5","../../../pricing/pinned-model-prices.json"],"audit_ref":"audit.md#usage-arithmetic"}
+]}

@@ -1,0 +1,8 @@
+{"schema_version":1,"method":"session.usage","assertions":[
+  {"path":"$.usage.uncached_prompt","expected":4203,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.usage.cached_prompt","expected":14464,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.usage.completion","expected":267,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.usage.processed","expected":18934,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.cost","expected":0.01081964,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#reported-cost"},
+  {"path":"$.pricing.confidence","expected":"reported","source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#reported-cost"}
+]}

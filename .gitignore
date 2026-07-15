@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.artifacts/
 .pytest_cache/
 .ruff_cache/
 packages/*/web/dist/

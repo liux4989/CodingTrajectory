@@ -1,0 +1,7 @@
+{"schema_version":1,"method":"session.overview","assertions":[
+  {"path":"$.id","expected":"49852109-2333-42d2-8abb-bd55d812ee2d","source_refs":["source/session.jsonl:1"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.sessions[0].vendor","expected":"claude_code","source_refs":["source/session.jsonl:1"],"audit_ref":"audit.md#selection"},
+  {"path":"$.sessions[0].status","expected":"completed","source_refs":["source/session.jsonl:5"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.sessions[0].turns[0].status","expected":"completed","source_refs":["source/session.jsonl:1","source/session.jsonl:5"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.sessions[0].turns[0].activity[0].tool","expected":"WebSearch","source_refs":["source/session.jsonl:3"],"audit_ref":"audit.md#lifecycle"}
+]}

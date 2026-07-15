@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "claude-stream-cache",
+  "status": "active",
+  "provider": "claude_code",
+  "adapter_family": "ClaudeCodeAdapter",
+  "original_source_sha256": ["6093583073cc7c33f497ce3927f92111246ec790df005c095ba0348a5ecf650e"],
+  "committed_source_sha256": {"cases/claude-stream-cache/source/session.jsonl": "890da922f5ff22a68a39cfaf026708ca04e06811f11d59275f594902909452d9"},
+  "sanitization_version": "metrics-baseline-v1",
+  "entrypoint_id": "49852109-2333-42d2-8abb-bd55d812ee2d",
+  "coverage": ["provider:claude_code", "graph:single-session", "tokens:uncached-input", "tokens:cached-input", "stream:response-dedup", "tool:success"],
+  "expected_schema_versions": {"session.overview": 1, "session.stats": 1, "session.usage": 1, "session.model_usage": 1},
+  "pricing_artifact_version": "2026-07-15-baseline-v1",
+  "audit_date": "2026-07-15",
+  "auditor": "Codex source-evidence arithmetic pass",
+  "reviewer": "Codex artifact and projection cross-check",
+  "last_contract_migration": null
+}

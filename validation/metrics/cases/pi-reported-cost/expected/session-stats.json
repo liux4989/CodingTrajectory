@@ -1,0 +1,8 @@
+{"schema_version":1,"method":"session.stats","assertions":[
+  {"path":"$.runtime.turns","expected":1,"source_refs":["source/session.jsonl:4","source/session.jsonl:13"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.runtime.tools","expected":4,"source_refs":["source/session.jsonl:5-12"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.runtime.execution_seconds","expected":91,"source_refs":["source/session.jsonl:4","source/session.jsonl:13"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.messages.assistant","expected":5,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.model.name","expected":"glm-5.2","source_refs":["source/session.jsonl:2"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.billed_token_usage.processed","expected":17282,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#usage-arithmetic"}
+]}

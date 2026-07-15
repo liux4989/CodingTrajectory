@@ -1,0 +1,7 @@
+{"schema_version":1,"method":"session.overview","assertions":[
+  {"path":"$.id","expected":"019f1862-7c7e-7b61-b0f2-be002e4d5922","source_refs":["source/session.jsonl:1"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.sessions[0].vendor","expected":"pi","source_refs":["source/session.jsonl:1"],"audit_ref":"audit.md#selection"},
+  {"path":"$.sessions[0].status","expected":"completed","source_refs":["source/session.jsonl:13"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.sessions[0].turns[0].status","expected":"completed","source_refs":["source/session.jsonl:4","source/session.jsonl:13"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.sessions[0].turns[0].activity[0].count","expected":4,"source_refs":["source/session.jsonl:5-12"],"audit_ref":"audit.md#lifecycle"}
+]}

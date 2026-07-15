@@ -1,0 +1,5 @@
+{"timestamp":"2026-06-30T10:16:45.820Z","type":"session_meta","payload":{"id":"019f1808-018a-73b2-bfc0-216a4eb5ef13","forked_from_id":"019f17b8-d311-77f0-a163-e20701d5a150","cwd":"/baseline/codex-project","timestamp":"2026-06-30T10:16:45.730Z","model_provider":"openai"}}
+{"timestamp":"2026-06-30T10:19:16.799Z","type":"event_msg","payload":{"type":"task_started","turn_id":"019f180a-4fbc-7353-aea5-b42631711f32","model_context_window":258400}}
+{"timestamp":"2026-06-30T10:19:16.809Z","type":"turn_context","payload":{"turn_id":"019f180a-4fbc-7353-aea5-b42631711f32","model":"gpt-5.5","effort":"low"}}
+{"timestamp":"2026-06-30T10:19:16.817Z","type":"event_msg","payload":{"type":"user_message","message":"[sanitized fork prompt]"}}
+{"timestamp":"2026-06-30T10:19:17.626Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"019f180a-4fbc-7353-aea5-b42631711f32","last_agent_message":"[sanitized fork response]","duration_ms":827}}

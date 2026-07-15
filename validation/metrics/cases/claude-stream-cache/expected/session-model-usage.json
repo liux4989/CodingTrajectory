@@ -1,0 +1,7 @@
+{"schema_version":1,"method":"session.model_usage","assertions":[
+  {"path":"$.root_session_id","expected":"49852109-2333-42d2-8abb-bd55d812ee2d","source_refs":["source/session.jsonl:1"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.usage.processed_tokens","expected":78815,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.models[0].provider","expected":"anthropic","source_refs":["source/session.jsonl:2"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.models[0].model","expected":"glm-5.2","source_refs":["source/session.jsonl:2"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.models[0].estimated_cost.value_usd","expected":0.06205708,"source_refs":["source/session.jsonl:2","source/session.jsonl:5","../../../pricing/pinned-model-prices.json"],"audit_ref":"audit.md#usage-arithmetic"}
+]}

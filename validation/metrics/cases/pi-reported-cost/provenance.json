@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "pi-reported-cost",
+  "status": "active",
+  "provider": "pi",
+  "adapter_family": "PiAdapter",
+  "original_source_sha256": ["76f7a14d748c79fe6affb47e5e9454889b95b2a2c8f3615dbc708364a4930e03"],
+  "committed_source_sha256": {"cases/pi-reported-cost/source/session.jsonl": "2dab956f227cc57ab3519fcee965ea1d820fe7e5066b72dacb037ac70d5e9fde"},
+  "sanitization_version": "metrics-baseline-v1",
+  "entrypoint_id": "019f1862-7c7e-7b61-b0f2-be002e4d5922",
+  "coverage": ["provider:pi", "graph:single-session", "tokens:cached-input", "cost:provider-reported", "tool:success", "model:single"],
+  "expected_schema_versions": {"session.overview": 1, "session.stats": 1, "session.usage": 1, "session.model_usage": 1},
+  "pricing_artifact_version": "2026-07-15-baseline-v1",
+  "audit_date": "2026-07-15",
+  "auditor": "Codex source-evidence arithmetic pass",
+  "reviewer": "Codex artifact and projection cross-check",
+  "last_contract_migration": null
+}

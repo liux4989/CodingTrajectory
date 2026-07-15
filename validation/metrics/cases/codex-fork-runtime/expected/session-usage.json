@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "method": "session.usage",
+  "assertions": [
+    {"path": "$.usage.uncached_prompt", "expected": 2555, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.usage.cached_prompt", "expected": 75648, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.usage.completion", "expected": 937, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.usage.reasoning", "expected": 42, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.usage.processed", "expected": 79182, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.cost", "expected": 0.079969, "source_refs": ["source/parent.jsonl:5", "../../../pricing/pinned-model-prices.json"], "audit_ref": "audit.md#usage-arithmetic"}
+  ]
+}
