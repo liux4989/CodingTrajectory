@@ -2,7 +2,7 @@
 
 ## Status
 
-Active architecture contract. The Phase 1 backend and CLI foundation is implemented and has completed its first recent-session evaluation; cohort validation is still pending. The lightweight implementation and current run record are specified in [`session-evaluation-foundation-lite.md`](session-evaluation-foundation-lite.md), and the production system is specified in [`session-evaluation-full.md`](session-evaluation-full.md).
+Active architecture contract. The strict v2 Phase 1 backend and CLI foundation is implemented and has completed its first reduced-context turn evaluation; cohort validation is still pending. The lightweight implementation and current run record are specified in [`session-evaluation-foundation-lite.md`](session-evaluation-foundation-lite.md), and the production system is specified in [`session-evaluation-full.md`](session-evaluation-full.md).
 
 ## Purpose
 
@@ -65,6 +65,8 @@ Task category and evaluation mechanism are separate concepts. The system has two
 ### Semantic Trajectory Evaluation
 
 An independent evaluator analyzes the observable trajectory against a frozen rubric. It considers the request, requirement changes, visible reasoning, inspected evidence, changed artifacts, validation attempts, user corrections, and final response.
+
+The evaluator does not receive the full raw vendor log. CT reconstructs the canonical session graph, freezes a compact task contract, and selects criterion-relevant evidence records. The initial judge pass is response-first; when a criterion remains `unknown`, the judge may request one bounded expansion by canonical evidence kind and turn ID. CT validates and resolves that request without granting raw-log or unrestricted checkout access.
 
 Semantic evaluation is necessary for requirement coverage, architecture, causal explanations, scope discipline, and other criteria that cannot be reduced to a deterministic command. It returns `pass`, `partial`, `fail`, or `unknown` with evidence references and confidence.
 
@@ -141,10 +143,11 @@ Human feedback is optional. Explicit or inferred corrections enrich an evaluatio
 ```text
 Canonical ct session graph
   -> evaluation eligibility
-  -> task category and title
-  -> task-specific frozen rubric
-  -> normalized evidence bundle
-      -> semantic evaluator through Codex app-server
+  -> compact task contract
+  -> task category and task-specific frozen rubric through Codex app-server
+  -> criterion-focused evidence bundle
+      -> semantic evaluator through a fresh Codex app-server turn
+      -> optional single bounded evidence expansion
       -> executable verifier through controlled runner
   -> criterion result aggregation
   -> turn or session evaluation artifact
@@ -152,6 +155,8 @@ Canonical ct session graph
 ```
 
 The canonical core remains the source of truth for sessions, turns, items, usage, and tool evidence. Evaluation is a versioned derived analysis. The dashboard server owns evaluation jobs and Codex app-server lifecycle. Raw app-server thread IDs do not become evaluation identities.
+
+CT owns scheduling, evidence budgets, expansion authorization, executable safety, aggregation, and persistence. Codex app-server owns the semantic reasoning turn. The system does not implement a second general-purpose agent loop, and production evaluation does not depend on implicit skill discovery.
 
 ## Difficulty and Model Performance
 

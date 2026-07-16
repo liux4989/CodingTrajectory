@@ -22,6 +22,14 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - A shared transcript projector owns the `Session -> Turn -> Item` reconstruction rules, including turn starts, tool-call/result pairing, and final-answer fallback behavior.
 - Provider-specific payloads remain in transcript `data` and canonical `vendor_data` only when they are useful to CT; unused raw log properties are skipped instead of modeled.
 
+# Evaluation Projection Layer
+- Raw vendor logs are reconstruction and audit inputs, not default evaluator context.
+- Evaluation starts from canonical `session.overview` and `session.items` projections and builds a versioned task contract plus bounded evidence records with stable evidence IDs.
+- Rubric compilation receives requests, material requirement changes, compact turn structure, repository instructions, and validation authority without receiving the full outcome trajectory.
+- Semantic judgment receives the final response and criterion-relevant observable evidence. It may request one bounded expansion by canonical evidence kind and turn ID; CT resolves the request and never grants unrestricted raw-log or checkout access.
+- Executable verification and final aggregation remain deterministic CT-owned operations outside the evaluator agent.
+- Evaluation artifacts record evidence selection, expansion, evaluator versions, and source fingerprints so reduced context does not weaken provenance.
+
 # Infrastructural layer
 - Discover : discocer all agent logs
 

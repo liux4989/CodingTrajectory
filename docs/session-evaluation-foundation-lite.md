@@ -33,9 +33,12 @@ The Phase 1 backend lives in `packages/plugins/dashboard/evaluation.py` and prov
 - Strict Pydantic contracts for evidence, rubric compilation, semantic and executable criterion results, aggregation, identity, and persisted artifacts.
 - Bounded evidence construction from canonical `session.overview` and `session.items` API projections, including stable evidence IDs and a source fingerprint.
 - Deterministic eligibility classification before rubric compilation.
-- One fresh structured app-server turn for retrospective category and rubric compilation, followed by a second fresh turn for semantic judgment.
+- A compact task contract for retrospective category and rubric compilation, separated from outcome evidence.
+- A response-first semantic evidence selection capped independently from the retained audit manifest.
+- One optional CT-controlled evidence-expansion round for `unknown` criteria, selected by canonical evidence kind and turn ID without raw-log access.
+- One fresh structured app-server turn for rubric compilation and one fresh turn per semantic pass; CT does not implement a second agent loop or depend on implicit skill discovery.
 - An allowlisted argument-array validation plan and controlled runner that refuses replay unless the recorded final revision matches the current clean checkout.
-- Immutable JSON artifacts and scope indexes under `~/.coding-trajectory/evaluations/v1/` by default, configurable through `CT_EVALUATION_ROOT`.
+- Strict v2-only JSON artifacts and scope indexes under `~/.coding-trajectory/evaluations/v2/` by default, configurable through `CT_EVALUATION_ROOT`.
 - Session and turn support through the dashboard CLI and asynchronous HTTP jobs.
 
 Run a session evaluation with:
@@ -61,13 +64,13 @@ GET  /api/evaluations?scope_type=session&scope_id=...
 
 No evaluation endpoint modifies canonical session data.
 
-## First Recent-Session Run
+## First Reduced-Context Turn Run
 
-The first end-to-end run evaluated completed Codex session `019f6546-cf79-7863-9a8e-a5dc74ab512d`, a three-turn CodingTrajectory session covering metrics-plugin design, standalone web-plugin construction, and live data connection and validation.
+The v2-only evaluator was validated on completed Codex turn `1a39e929-0b74-5b62-8ccd-1a65f83b54d3` from session `019f6594-8531-70f1-891f-6825f72eeec2`, the turn that originally implemented the lite foundation. The persisted evaluation is `eval_0c104a4fcdb20124c196bee6` under the v2 store.
 
-The run persisted evaluation `eval_d48ffba65507323876e1d349` with primary category `repository_engineering`, difficulty `hard`, resolution `judged_resolved`, rubric score `1.0`, and evidence coverage `1.0`. All semantic pass references resolved to evidence IDs in the stored manifest. Three safe validation commands were proposed but recorded as `not_run` because the current checkout was dirty, so the historical final revision could not be replayed honestly. An unchanged rerun reused the immutable artifact.
+The retained canonical audit manifest contained 12 evidence records and 12,548 evidence characters rather than the raw Codex log. The rubric compiler input was 5,717 characters. The response-first semantic judge input was 21,282 characters including instructions, rubric, JSON structure, and selected evidence. The run returned `judged_resolved` with all five criteria passing, rubric score `1.0`, and evidence coverage `1.0`. No expansion was requested; executable proof remained unavailable because the historical checkout could not be replayed from the current dirty source state.
 
-This single run validates the end-to-end mechanism, strict structured-output path, evidence references, checkout refusal, aggregation, persistence, and reuse. It does not satisfy the cohort acceptance gates below.
+This turn run validates the strict v2 schema, reduced compiler context, response-first semantic selection, direct validation recognition, evidence references, immutable v2 persistence, and turn-scope execution. It does not validate a second semantic pass because the first pass had sufficient evidence, and it does not satisfy the cohort acceptance gates.
 
 ## Phase 1 Components
 
@@ -84,6 +87,8 @@ EvaluationService
 ```
 
 `EvaluationService` is the coordinator. It owns state transitions and invokes components; it does not duplicate canonical session reconstruction.
+
+The implemented v2 evaluator keeps the full retained evidence manifest capped at 80,000 characters for provenance, caps the compiler task contract at 24,000 evidence characters, caps the initial semantic selection at 30,000 evidence characters, and caps one expansion at 16,000 evidence characters. Prompt and schema overhead are recorded separately through each app-server invocation's input character count.
 
 ## Domain Contracts
 
@@ -186,6 +191,8 @@ Every included item receives an evidence ID and source reference. Oversized comm
 
 Phase 1 may use one structured Codex app-server turn to produce title, eligibility confirmation, category, difficulty estimate, and draft rubric. The response schema must be strict and versioned.
 
+The compiler receives a compact task contract containing the requests, bounded turn structure, applicable repository instructions, and sanitized validation authority. It does not receive the full outcome evidence manifest. This prevents duplicated context and reduces outcome leakage into retrospective rubric construction.
+
 Rubric compilation follows these rules:
 
 1. The requested outcome determines category.
@@ -213,11 +220,13 @@ effort          fixed evaluator effort for the cohort
 outputSchema    SemanticEvaluationResult schema
 ```
 
-The prompt contains the frozen rubric and bounded evidence package. It instructs the evaluator to judge only supported observable evidence, identify contradictions, use `unknown` when evidence is insufficient, and return evidence IDs for every pass or fail.
+The initial prompt contains the frozen rubric and a response-first evidence selection: requests, recent agent response evidence, checkout identity, compact turn summaries, validation and artifact evidence, tool summaries, and repository instructions within a separate semantic budget. It instructs the evaluator to judge only supported observable evidence, identify contradictions, use `unknown` when evidence is insufficient, and return evidence IDs for every pass or fail.
+
+For an `unknown` criterion the evaluator may request missing evidence using a criterion ID, one to three canonical evidence kinds, and optional turn IDs. CT accepts requests only for unknown criteria, selects unseen canonical evidence within the expansion budget, and runs one final fresh semantic turn. The final pass cannot trigger another expansion. If no matching evidence exists or the budget is exhausted, the result remains `unknown`; the evaluator never falls back to the full raw log.
 
 The semantic evaluator does not choose the final session resolution. It returns criterion results to the aggregator.
 
-Phase 1 uses one judge pass. A second judge, ensemble, adjudication, and model calibration belong to Phase 2.
+Phase 1 uses one judge with at most one evidence-expansion pass. A second independent judge, ensemble, adjudication, and model calibration belong to Phase 2.
 
 ## Lite Executable Verification
 
@@ -317,7 +326,7 @@ The session evaluator judges its own rubric. Child-turn scores are diagnostic in
 
 ## Storage and API Shape
 
-Phase 1 uses a dashboard-owned `EvaluationStore` with a configurable root and a proposed default under `~/.coding-trajectory/evaluations/v1/`. Each evaluation is an immutable JSON artifact keyed by evaluation ID, with a small index from canonical scope ID to available evaluation versions.
+Phase 1 uses a dashboard-owned `EvaluationStore` with a configurable root and a default under `~/.coding-trajectory/evaluations/v2/`. Each evaluation is a strict schema-v2 immutable JSON artifact keyed by evaluation ID, with a schema-v2 index from canonical scope ID to available evaluation versions. The implementation does not read or migrate v1 artifacts.
 
 The store retains:
 

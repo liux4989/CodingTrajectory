@@ -33,6 +33,16 @@ TaskCategory = Literal[
 CriterionMechanism = Literal["semantic", "executable", "both", "human_optional"]
 CriterionState = Literal["pass", "partial", "fail", "unknown", "not_applicable"]
 ExecutableState = Literal["pass", "fail", "error", "timeout", "not_run"]
+EvidenceKind = Literal[
+    "request",
+    "turn_summary",
+    "agent_message",
+    "tool_summary",
+    "validation",
+    "artifact",
+    "repository_instruction",
+    "checkout",
+]
 Resolution = Literal[
     "verified_resolved",
     "judged_resolved",
@@ -42,15 +52,18 @@ Resolution = Literal[
     "not_applicable",
 ]
 
-SCHEMA_VERSION = 1
-RUBRIC_VERSION = "session-evaluation-rubric-v1"
-EVALUATOR_VERSION = "session-evaluation-lite-v1"
+SCHEMA_VERSION = 2
+RUBRIC_VERSION = "session-evaluation-rubric-v2"
+EVALUATOR_VERSION = "session-evaluation-lite-v2"
 EVALUATOR_MODEL = "gpt-5.4"
 EVALUATOR_EFFORT = "low"
 MAX_EVIDENCE_CHARS = 80_000
 MAX_SELECTED_TURNS = 20
 MAX_SELECTED_ITEMS = 160
 MAX_VALIDATIONS = 4
+MAX_COMPILER_CHARS = 24_000
+MAX_SEMANTIC_CHARS = 30_000
+MAX_EXPANSION_CHARS = 16_000
 
 
 class StrictModel(BaseModel):
@@ -89,16 +102,7 @@ class CheckoutState(StrictModel):
 
 class EvidenceRecord(StrictModel):
     evidence_id: str
-    kind: Literal[
-        "request",
-        "turn_summary",
-        "agent_message",
-        "tool_summary",
-        "validation",
-        "artifact",
-        "repository_instruction",
-        "checkout",
-    ]
+    kind: EvidenceKind
     source_ref: str
     content: str
     turn_id: str | None = None
@@ -106,7 +110,7 @@ class EvidenceRecord(StrictModel):
 
 
 class EvaluationInput(StrictModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     scope_type: ScopeType
     scope_id: str
     session_id: str
@@ -114,6 +118,17 @@ class EvaluationInput(StrictModel):
     selected_turn_ids: list[str]
     omitted_turn_count: int = 0
     checkout: CheckoutState
+    evidence: list[EvidenceRecord]
+
+
+class TaskContract(StrictModel):
+    schema_version: Literal[2] = 2
+    scope_type: ScopeType
+    scope_id: str
+    session_id: str
+    project_path: str | None = None
+    selected_turn_ids: list[str]
+    omitted_turn_count: int = 0
     evidence: list[EvidenceRecord]
 
 
@@ -148,7 +163,7 @@ class ValidationSpecification(StrictModel):
 
 
 class RubricCompilation(StrictModel):
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     title: str
     eligibility_agrees: bool
     eligibility_reason: str
@@ -160,7 +175,7 @@ class RubricCompilation(StrictModel):
 
 
 class FrozenRubric(StrictModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     rubric_version: str
     revision: int = 1
     origin: Literal["retrospective", "prospective"]
@@ -177,11 +192,28 @@ class SemanticCriterionResult(StrictModel):
     reason: str
 
 
+class EvidenceRequest(StrictModel):
+    criterion_id: str
+    evidence_kinds: list[EvidenceKind] = Field(min_length=1, max_length=3)
+    turn_ids: list[str]
+    reason: str
+
+
 class SemanticEvaluation(StrictModel):
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     criterion_results: list[SemanticCriterionResult]
     contradictions: list[str]
     summary: str
+    evidence_requests: list[EvidenceRequest] = Field(max_length=4)
+
+
+class SemanticEvidenceSelection(StrictModel):
+    schema_version: Literal[2] = 2
+    initial_evidence_ids: list[str]
+    initial_chars: int
+    expansion_requests: list[EvidenceRequest]
+    expanded_evidence_ids: list[str]
+    expanded_chars: int
 
 
 class ExecutableRunResult(StrictModel):
@@ -221,6 +253,7 @@ class EvaluationAggregate(StrictModel):
 class AppServerInvocation(StrictModel):
     thread_id: str
     turn_id: str | None = None
+    input_chars: int
 
 
 class EvaluationIdentity(StrictModel):
@@ -234,27 +267,29 @@ class EvaluationIdentity(StrictModel):
 
 
 class EvaluationArtifact(StrictModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     identity: EvaluationIdentity
     eligibility: EligibilityResult
     title: str
-    category: CategoryResult | None = None
-    difficulty: DifficultyEstimate | None = None
-    rubric: FrozenRubric | None = None
+    category: CategoryResult | None
+    difficulty: DifficultyEstimate | None
+    rubric: FrozenRubric | None
     input: EvaluationInput
-    turn_contributions: list[TurnContribution] = Field(default_factory=list)
-    validation_plan: list[ValidationSpecification] = Field(default_factory=list)
-    semantic_evaluation: SemanticEvaluation | None = None
-    executable_results: list[ExecutableRunResult] = Field(default_factory=list)
+    task_contract: TaskContract | None
+    semantic_evidence: SemanticEvidenceSelection | None
+    turn_contributions: list[TurnContribution]
+    validation_plan: list[ValidationSpecification]
+    semantic_evaluation: SemanticEvaluation | None
+    executable_results: list[ExecutableRunResult]
     aggregate: EvaluationAggregate
-    compiler_invocation: AppServerInvocation | None = None
-    evaluator_invocation: AppServerInvocation | None = None
+    compiler_invocation: AppServerInvocation | None
+    evaluator_invocations: list[AppServerInvocation]
     evaluator_model: str
     evaluator_effort: str
 
 
 class EvaluationIndex(StrictModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     scope_type: ScopeType
     scope_id: str
     evaluation_ids: list[str]
@@ -284,7 +319,10 @@ class EvaluationInputBuilder:
             omitted_turn_count = 0
         else:
             turns, omitted_turn_count = _bounded_turns(all_turns)
-        selected_item_ids, item_to_turn = _selected_item_ids(turns)
+        selected_item_ids, item_to_turn = _selected_item_ids(
+            turns,
+            include_all=scope_type == "turn",
+        )
         items = self._call(
             "session.items",
             {"item_ids": selected_item_ids[:MAX_SELECTED_ITEMS]},
@@ -373,7 +411,7 @@ def _bounded_turns(turns: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
 
 
 def _selected_item_ids(
-    turns: list[dict[str, Any]],
+    turns: list[dict[str, Any]], *, include_all: bool = False
 ) -> tuple[list[str], dict[str, str]]:
     selected: list[str] = []
     item_to_turn: dict[str, str] = {}
@@ -397,7 +435,11 @@ def _selected_item_ids(
             for item_id in activity.get("item_ids") or []
             if _clean_text(item_id)
         ]
-        candidates = [*item_ids[:2], *activity_tool_ids[-10:], *item_ids[-8:]]
+        candidates = (
+            [*item_ids, *activity_tool_ids]
+            if include_all
+            else [*item_ids[:2], *activity_tool_ids[-10:], *item_ids[-8:]]
+        )
         for item_id in candidates:
             item_to_turn[item_id] = turn_id
             if item_id not in selected:
@@ -620,6 +662,8 @@ def _looks_like_validation(value: str) -> bool:
             " ruff check",
             "compileall",
             "diff --check",
+            "metrics-quality-gate",
+            "validate-metrics-baselines",
             " validate",
             "validation",
             "typecheck",
@@ -718,6 +762,148 @@ def _cap_evidence(records: list[EvidenceRecord]) -> list[EvidenceRecord]:
     return kept
 
 
+def _build_task_contract(evaluation_input: EvaluationInput) -> TaskContract:
+    request_limit = 4_000 if evaluation_input.scope_type == "turn" else 700
+    summary_limit = 1_500 if evaluation_input.scope_type == "turn" else 400
+    requests = [
+        record.model_copy(update={"content": _truncate(record.content, request_limit)})
+        for record in evaluation_input.evidence
+        if record.kind == "request"
+    ]
+    turn_summaries = [
+        record.model_copy(update={"content": _truncate(record.content, summary_limit)})
+        for record in evaluation_input.evidence
+        if record.kind == "turn_summary"
+    ]
+    instructions = [
+        record.model_copy(update={"content": _truncate(record.content, 3_000)})
+        for record in evaluation_input.evidence
+        if record.kind == "repository_instruction"
+    ]
+    validations = [
+        record.model_copy(update={"content": _validation_authority(record.content)})
+        for record in evaluation_input.evidence
+        if record.kind == "validation"
+    ][-6:]
+    evidence = _within_budget(
+        [*requests, *turn_summaries, *instructions, *validations],
+        MAX_COMPILER_CHARS,
+    )
+    return TaskContract(
+        scope_type=evaluation_input.scope_type,
+        scope_id=evaluation_input.scope_id,
+        session_id=evaluation_input.session_id,
+        project_path=evaluation_input.project_path,
+        selected_turn_ids=evaluation_input.selected_turn_ids,
+        omitted_turn_count=evaluation_input.omitted_turn_count,
+        evidence=evidence,
+    )
+
+
+def _validation_authority(content: str) -> str:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return _truncate(content, 1_500)
+    if not isinstance(payload, dict):
+        return _truncate(content, 1_500)
+    allowed = {
+        key: payload[key]
+        for key in ["tool_name", "tool_input", "command", "path", "operation"]
+        if key in payload
+    }
+    return _truncate(
+        json.dumps(allowed, ensure_ascii=False, sort_keys=True),
+        1_500,
+    )
+
+
+def _initial_semantic_evidence(
+    evaluation_input: EvaluationInput,
+) -> list[EvidenceRecord]:
+    records = evaluation_input.evidence
+    candidates = [
+        *_edge_records(records, kind="request", first=1, last=5),
+        *_edge_records(records, kind="agent_message", first=0, last=6),
+        *_edge_records(records, kind="checkout", first=1, last=0),
+        *_edge_records(records, kind="turn_summary", first=1, last=6),
+        *_edge_records(records, kind="validation", first=0, last=8),
+        *_edge_records(records, kind="artifact", first=0, last=8),
+        *_edge_records(records, kind="tool_summary", first=0, last=4),
+        *_edge_records(records, kind="repository_instruction", first=0, last=2),
+    ]
+    return _within_budget(candidates, MAX_SEMANTIC_CHARS)
+
+
+def _expanded_semantic_evidence(
+    evaluation_input: EvaluationInput,
+    *,
+    selected: list[EvidenceRecord],
+    semantic: SemanticEvaluation,
+) -> list[EvidenceRecord]:
+    unknown = {
+        result.criterion_id
+        for result in semantic.criterion_results
+        if result.result == "unknown"
+    }
+    requests = [
+        request
+        for request in semantic.evidence_requests
+        if request.criterion_id in unknown
+    ]
+    if not requests:
+        return []
+    selected_ids = {record.evidence_id for record in selected}
+    candidates: list[EvidenceRecord] = []
+    for request in requests:
+        requested_turns = set(request.turn_ids)
+        for record in evaluation_input.evidence:
+            if record.evidence_id in selected_ids or record in candidates:
+                continue
+            if record.kind not in request.evidence_kinds:
+                continue
+            if requested_turns and record.turn_id not in requested_turns:
+                continue
+            candidates.append(record)
+    return _within_budget(candidates, MAX_EXPANSION_CHARS)
+
+
+def _edge_records(
+    records: list[EvidenceRecord],
+    *,
+    kind: EvidenceKind,
+    first: int,
+    last: int,
+) -> list[EvidenceRecord]:
+    matches = [record for record in records if record.kind == kind]
+    selected = [*matches[:first], *(matches[-last:] if last else [])]
+    return _deduplicate_records(selected)
+
+
+def _within_budget(
+    records: list[EvidenceRecord], limit: int
+) -> list[EvidenceRecord]:
+    kept: list[EvidenceRecord] = []
+    total = 0
+    for record in _deduplicate_records(records):
+        if total + len(record.content) > limit:
+            continue
+        kept.append(record)
+        total += len(record.content)
+    return kept
+
+
+def _deduplicate_records(records: list[EvidenceRecord]) -> list[EvidenceRecord]:
+    kept: list[EvidenceRecord] = []
+    seen: set[str] = set()
+    for record in records:
+        if record.evidence_id in seen:
+            continue
+        seen.add(record.evidence_id)
+        kept.append(record)
+    return kept
+
+
 class EvaluationEligibility:
     _LOW_VALUE = re.compile(
         r"^(?:ok(?:ay)?|thanks?|status\??|wait|continue waiting|what is the status)[.! ]*$",
@@ -775,24 +961,26 @@ class RubricCompiler:
     def compile(
         self,
         *,
-        evaluation_input: EvaluationInput,
+        task_contract: TaskContract,
         eligibility: EligibilityResult,
         cwd: Path,
     ) -> tuple[RubricCompilation, AppServerInvocation]:
         client = self._app_server or CodexAppServerClient()
+        prompt = _compiler_prompt(task_contract, eligibility)
         result = client.run_turn(
             cwd=cwd,
-            user_text=_compiler_prompt(evaluation_input, eligibility),
+            user_text=prompt,
             output_schema=RubricCompilation.model_json_schema(),
             ephemeral=True,
             model=self._model,
             effort=self._effort,
         )
         compilation = RubricCompilation.model_validate(result.parse_json())
-        _validate_compilation(compilation, evaluation_input)
+        _validate_compilation(compilation, task_contract)
         return compilation, AppServerInvocation(
             thread_id=result.thread_id,
             turn_id=result.turn_id,
+            input_chars=len(prompt),
         )
 
 
@@ -811,24 +999,33 @@ class SemanticEvaluator:
     def evaluate(
         self,
         *,
-        evaluation_input: EvaluationInput,
+        scope_type: ScopeType,
+        evidence: list[EvidenceRecord],
         rubric: FrozenRubric,
         cwd: Path,
+        expansion_round: bool = False,
     ) -> tuple[SemanticEvaluation, AppServerInvocation]:
         client = self._app_server or CodexAppServerClient()
+        prompt = _semantic_prompt(
+            scope_type=scope_type,
+            evidence=evidence,
+            rubric=rubric,
+            expansion_round=expansion_round,
+        )
         result = client.run_turn(
             cwd=cwd,
-            user_text=_semantic_prompt(evaluation_input, rubric),
+            user_text=prompt,
             output_schema=SemanticEvaluation.model_json_schema(),
             ephemeral=True,
             model=self._model,
             effort=self._effort,
         )
         evaluation = SemanticEvaluation.model_validate(result.parse_json())
-        _validate_semantic_evaluation(evaluation, rubric, evaluation_input)
+        _validate_semantic_evaluation(evaluation, rubric, evidence)
         return evaluation, AppServerInvocation(
             thread_id=result.thread_id,
             turn_id=result.turn_id,
+            input_chars=len(prompt),
         )
 
 
@@ -1059,7 +1256,7 @@ class EvaluationStore:
         self.root = (
             root
             or (Path(configured).expanduser() if configured else None)
-            or Path("~/.coding-trajectory/evaluations/v1").expanduser()
+            or Path("~/.coding-trajectory/evaluations/v2").expanduser()
         )
 
     def get(self, evaluation_id: str) -> EvaluationArtifact | None:
@@ -1183,8 +1380,19 @@ class EvaluationService:
                 identity=identity,
                 eligibility=eligibility,
                 title="Not applicable",
+                category=None,
+                difficulty=None,
+                rubric=None,
                 input=evaluation_input,
+                task_contract=None,
+                semantic_evidence=None,
+                turn_contributions=[],
+                validation_plan=[],
+                semantic_evaluation=None,
+                executable_results=[],
                 aggregate=aggregate,
+                compiler_invocation=None,
+                evaluator_invocations=[],
                 evaluator_model=self.model,
                 evaluator_effort=self.effort,
             )
@@ -1192,8 +1400,9 @@ class EvaluationService:
             return artifact
 
         cwd = _evaluation_cwd(evaluation_input)
+        task_contract = _build_task_contract(evaluation_input)
         compilation, compiler_invocation = self._compiler.compile(
-            evaluation_input=evaluation_input,
+            task_contract=task_contract,
             eligibility=eligibility,
             cwd=cwd,
         )
@@ -1204,10 +1413,39 @@ class EvaluationService:
             frozen_at=_now(),
             criteria=compilation.criteria,
         )
+        initial_evidence = _initial_semantic_evidence(evaluation_input)
         semantic, evaluator_invocation = self._semantic.evaluate(
-            evaluation_input=evaluation_input,
+            scope_type=evaluation_input.scope_type,
+            evidence=initial_evidence,
             rubric=rubric,
             cwd=cwd,
+        )
+        evaluator_invocations = [evaluator_invocation]
+        expanded_evidence = _expanded_semantic_evidence(
+            evaluation_input,
+            selected=initial_evidence,
+            semantic=semantic,
+        )
+        expansion_requests = list(semantic.evidence_requests)
+        if expanded_evidence:
+            semantic, evaluator_invocation = self._semantic.evaluate(
+                scope_type=evaluation_input.scope_type,
+                evidence=[*initial_evidence, *expanded_evidence],
+                rubric=rubric,
+                cwd=cwd,
+                expansion_round=True,
+            )
+            evaluator_invocations.append(evaluator_invocation)
+        semantic_evidence = SemanticEvidenceSelection(
+            initial_evidence_ids=[
+                record.evidence_id for record in initial_evidence
+            ],
+            initial_chars=sum(len(record.content) for record in initial_evidence),
+            expansion_requests=expansion_requests,
+            expanded_evidence_ids=[
+                record.evidence_id for record in expanded_evidence
+            ],
+            expanded_chars=sum(len(record.content) for record in expanded_evidence),
         )
         validation_plan = self._plan_builder.build(
             proposals=compilation.proposed_validations,
@@ -1232,13 +1470,15 @@ class EvaluationService:
             difficulty=compilation.difficulty,
             rubric=rubric,
             input=evaluation_input,
+            task_contract=task_contract,
+            semantic_evidence=semantic_evidence,
             turn_contributions=compilation.turn_contributions,
             validation_plan=validation_plan,
             semantic_evaluation=semantic,
             executable_results=executable_results,
             aggregate=aggregate,
             compiler_invocation=compiler_invocation,
-            evaluator_invocation=evaluator_invocation,
+            evaluator_invocations=evaluator_invocations,
             evaluator_model=self.model,
             evaluator_effort=self.effort,
         )
@@ -1247,14 +1487,14 @@ class EvaluationService:
 
 
 def _compiler_prompt(
-    evaluation_input: EvaluationInput, eligibility: EligibilityResult
+    task_contract: TaskContract, eligibility: EligibilityResult
 ) -> str:
     return "\n".join(
         [
             "You are compiling a retrospective coding-session evaluation rubric.",
-            "Use only the bounded evidence package below. Do not inspect the checkout, call tools, or infer missing facts.",
+            "Use only the compact task contract below. Do not inspect the checkout, call tools, or infer missing facts.",
             "Classify the requested outcome, not the techniques used. A turn cannot use mixed as its primary category.",
-            "Produce 2 to 6 concrete criteria. Freeze requirements from the requests and material follow-ups before judging outcomes.",
+            "Produce 2 to 6 concrete criteria. Freeze requirements from requests, material follow-ups, and repository instructions without judging the result.",
             "Use executable or both only for a named observable postcondition supported by recorded validation or repository instructions.",
             "Proposed validations must be argument arrays, network-free, read-only or local builds, and cite evidence IDs that contain the command authority.",
             "For session scope, include every selected turn exactly once as critical, supporting, exploratory, or superseded.",
@@ -1263,28 +1503,44 @@ def _compiler_prompt(
             "Eligibility classifier:",
             eligibility.model_dump_json(indent=2),
             "",
-            "Bounded evidence package:",
-            evaluation_input.model_dump_json(indent=2),
+            "Compact task contract:",
+            task_contract.model_dump_json(indent=2),
         ]
     )
 
 
 def _semantic_prompt(
-    evaluation_input: EvaluationInput, rubric: FrozenRubric
+    *,
+    scope_type: ScopeType,
+    evidence: list[EvidenceRecord],
+    rubric: FrozenRubric,
+    expansion_round: bool,
 ) -> str:
     criteria = [
         criterion
         for criterion in rubric.criteria
         if criterion.mechanism in {"semantic", "both"}
     ]
-    return "\n".join(
+    instructions = [
+        "You are the independent semantic judge for a coding-session evaluation.",
+        "Judge only the frozen rubric and selected observable evidence below. Do not inspect the checkout or call tools.",
+        "Return one result for every semantic or both criterion and no result for executable-only or human-optional criteria.",
+        "Every pass or fail must cite at least one valid evidence_id. Use unknown when evidence is insufficient.",
+        "Treat final-answer claims as claims, not proof. Identify contradictions explicitly. Do not choose the final resolution.",
+    ]
+    if expansion_round:
+        instructions.append(
+            "This is the only evidence-expansion round. Make the best bounded judgment and leave evidence_requests empty."
+        )
+    else:
+        instructions.append(
+            "For an unknown criterion only, request missing evidence by kind and optional turn IDs. Do not request raw logs or unrestricted repository access."
+        )
+    instructions.extend(
         [
-            "You are the independent semantic judge for a coding-session evaluation.",
-            "Judge only the frozen rubric and bounded observable evidence below. Do not inspect the checkout or call tools.",
-            "Return one result for every semantic or both criterion and no result for executable-only or human-optional criteria.",
-            "Every pass or fail must cite at least one valid evidence_id. Use unknown when evidence is insufficient.",
-            "Treat final-answer claims as claims, not proof. Identify contradictions explicitly. Do not choose the final session resolution.",
             "Return JSON matching the supplied schema.",
+            "",
+            f"Evaluation scope: {scope_type}",
             "",
             "Frozen semantic criteria:",
             json.dumps(
@@ -1293,25 +1549,30 @@ def _semantic_prompt(
                 indent=2,
             ),
             "",
-            "Bounded evidence package:",
-            evaluation_input.model_dump_json(indent=2),
+            "Selected evidence records:",
+            json.dumps(
+                [record.model_dump(mode="json") for record in evidence],
+                ensure_ascii=False,
+                indent=2,
+            ),
         ]
     )
+    return "\n".join(instructions)
 
 
 def _validate_compilation(
-    compilation: RubricCompilation, evaluation_input: EvaluationInput
+    compilation: RubricCompilation, task_contract: TaskContract
 ) -> None:
     criterion_ids = [criterion.criterion_id for criterion in compilation.criteria]
     if len(criterion_ids) != len(set(criterion_ids)):
         raise ValueError("rubric compiler returned duplicate criterion IDs")
-    if evaluation_input.scope_type == "turn" and compilation.category.primary == "mixed":
+    if task_contract.scope_type == "turn" and compilation.category.primary == "mixed":
         raise ValueError("turn evaluation cannot use mixed as its primary category")
-    selected_turn_ids = set(evaluation_input.selected_turn_ids)
+    selected_turn_ids = set(task_contract.selected_turn_ids)
     contribution_ids = {
         contribution.turn_id for contribution in compilation.turn_contributions
     }
-    if evaluation_input.scope_type == "session":
+    if task_contract.scope_type == "session":
         if contribution_ids != selected_turn_ids:
             raise ValueError(
                 "session rubric must classify every selected turn contribution exactly once"
@@ -1319,12 +1580,16 @@ def _validate_compilation(
     elif compilation.turn_contributions:
         if contribution_ids != selected_turn_ids:
             raise ValueError("turn contribution must reference the selected turn")
+    evidence_ids = {record.evidence_id for record in task_contract.evidence}
+    for validation in compilation.proposed_validations:
+        if not set(validation.source_evidence_ids).issubset(evidence_ids):
+            raise ValueError("proposed validation must cite compact task-contract evidence")
 
 
 def _validate_semantic_evaluation(
     semantic: SemanticEvaluation,
     rubric: FrozenRubric,
-    evaluation_input: EvaluationInput,
+    evidence: list[EvidenceRecord],
 ) -> None:
     expected = {
         criterion.criterion_id
@@ -1336,7 +1601,7 @@ def _validate_semantic_evaluation(
         raise ValueError(
             "semantic evaluator must return exactly one result for each semantic criterion"
         )
-    evidence_ids = {record.evidence_id for record in evaluation_input.evidence}
+    evidence_ids = {record.evidence_id for record in evidence}
     for result in semantic.criterion_results:
         if not set(result.evidence_ids).issubset(evidence_ids):
             raise ValueError(
@@ -1346,6 +1611,14 @@ def _validate_semantic_evaluation(
             raise ValueError(
                 f"semantic {result.result} requires evidence: {result.criterion_id}"
             )
+    unknown = {
+        result.criterion_id
+        for result in semantic.criterion_results
+        if result.result == "unknown"
+    }
+    for request in semantic.evidence_requests:
+        if request.criterion_id not in unknown:
+            raise ValueError("evidence expansion may only target unknown criteria")
 
 
 def _safe_validation_argv(argv: list[str]) -> bool:
@@ -1485,6 +1758,7 @@ def _identity(
             scope_type,
             scope_id,
             source_fingerprint,
+            str(SCHEMA_VERSION),
             RUBRIC_VERSION,
             EVALUATOR_VERSION,
             EVALUATOR_MODEL,
