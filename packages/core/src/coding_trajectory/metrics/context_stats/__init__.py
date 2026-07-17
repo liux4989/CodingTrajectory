@@ -13,6 +13,7 @@ from coding_trajectory.metrics.context_stats._common import (
     token_usage_from_mapping,
 )
 from coding_trajectory.metrics.context_stats.composition import (
+    AnchorOutcome,
     build_context_composition,
 )
 from coding_trajectory.metrics.pricing import get_model_context_window
@@ -44,7 +45,7 @@ def build_session_graph_context_stats(
     messages = message_stats(session_graph)
     compaction = compaction_stats(session_graph)
     observation = _latest_context_usage(session_graph)
-    categories = build_context_composition(
+    categories, anchor_outcome = build_context_composition(
         session_graph,
         allocated_usage_by_item=allocated_usage_by_item,
         allocated_usage_by_context_source=allocated_usage_by_context_source,
@@ -86,12 +87,9 @@ def build_session_graph_context_stats(
         )
         for category in observation.categories
     ]
-    warnings = [
-        (
-            "Context composition measures observed canonical content and is not scaled to the "
-            "provider-reported active context window."
-        )
-    ]
+    warnings: list[str] = []
+    if anchor_outcome != AnchorOutcome.ANCHORED:
+        warnings.append(_anchor_outcome_warning(anchor_outcome))
     if provider_usage_buckets:
         warnings.append(
             "Provider usage buckets are reported separately from semantic context composition."
@@ -133,6 +131,30 @@ def _latest_context_usage(
         for observation in session.context_usage
     ]
     return max(observations, key=lambda item: item.timestamp) if observations else None
+
+
+_ANCHOR_OUTCOME_WARNINGS = {
+    AnchorOutcome.OVERCOUNT: (
+        "Context composition overcounts the provider-reported used_input_tokens "
+        "(e.g. reasoning the API stripped); observed estimates were retained "
+        "without scaling to the active context window."
+    ),
+    AnchorOutcome.NO_CONVERSATION: (
+        "Context composition has no resident conversation to scale to the "
+        "provider-reported used_input_tokens; starting-context estimate only."
+    ),
+    AnchorOutcome.NO_USAGE: (
+        "No usable provider used_input_tokens to anchor the context composition; "
+        "observed estimates only, not reconciled to the active context window."
+    ),
+}
+
+
+def _anchor_outcome_warning(outcome: AnchorOutcome) -> str:
+    return _ANCHOR_OUTCOME_WARNINGS.get(
+        outcome,
+        "Context composition did not reconcile to the provider-reported active context window.",
+    )
 
 
 __all__ = [

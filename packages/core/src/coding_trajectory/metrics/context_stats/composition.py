@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Iterable
 from uuid import UUID
 
@@ -37,6 +38,19 @@ from coding_trajectory.ingestion.models import (
 from coding_trajectory.metrics.models import ContextCategoryFlat
 from coding_trajectory.metrics.pricing import cost_evidence_from_usage
 from coding_trajectory.token_counter import session_scoped
+
+
+class AnchorOutcome(Enum):
+    """Whether the composition was anchored to the provider's used_input_tokens."""
+
+    ANCHORED = "anchored"
+    # ``used_input_tokens`` is missing/zero: nothing to anchor to.
+    NO_USAGE = "no_usage"
+    # No resident conversation (only the starting-context prefix): nothing to scale.
+    NO_CONVERSATION = "no_conversation"
+    # Provider ``used_input`` is below the starting prefix: visible content
+    # overcounts (e.g. reasoning the API stripped), so estimates are retained.
+    OVERCOUNT = "overcount"
 
 
 @dataclass
@@ -113,7 +127,7 @@ def build_context_composition(
     allocated_usage_by_context_source: dict[str, dict[str, int]] | None = None,
     pricing_model: str | None = None,
     pricing_provider: str | None = None,
-) -> list[ContextCategoryFlat]:
+) -> tuple[list[ContextCategoryFlat], AnchorOutcome]:
     allocated_usage_by_item = allocated_usage_by_item or {}
     allocated_usage_by_context_source = allocated_usage_by_context_source or {}
     boundaries = {
@@ -148,7 +162,7 @@ def build_context_composition(
         categories.append(
             _category("compacted_history", "Compacted history", evicted, [])
         )
-    _anchor_composition_to_used_input(categories, session_graph)
+    anchor_outcome = _anchor_composition_to_used_input(categories, session_graph)
     observed_total = sum(category.tokens for category in categories)
     _set_percent(categories, observed_total)
     _assert_context_composition_usage_reconciles(
@@ -159,7 +173,7 @@ def build_context_composition(
     _attach_estimated_cost(
         categories, model=pricing_model, provider=pricing_provider
     )
-    return categories
+    return categories, anchor_outcome
 
 
 def _attach_estimated_cost(
@@ -189,7 +203,7 @@ def _attach_estimated_cost(
 def _anchor_composition_to_used_input(
     categories: list[ContextCategoryFlat],
     session_graph: SessionGraph,
-) -> None:
+) -> AnchorOutcome:
     """Scale the conversation portion so the composition sums to the real
     ``used_input_tokens`` (the last API call's input).
 
@@ -212,7 +226,7 @@ def _anchor_composition_to_used_input(
     """
     latest = _latest_context_usage_observation(session_graph)
     if latest is None or not latest.used_input_tokens:
-        return
+        return AnchorOutcome.NO_USAGE
     starting = next(
         (category for category in categories if category.key == "starting_context"),
         None,
@@ -228,13 +242,14 @@ def _anchor_composition_to_used_input(
     ]
     conversation_visible = sum(category.tokens for category in conversation)
     if conversation_visible <= 0:
-        return
+        return AnchorOutcome.NO_CONVERSATION
     conversation_real = latest.used_input_tokens - base_tokens
     if conversation_real <= 0:
-        return
+        return AnchorOutcome.OVERCOUNT
     scale = conversation_real / conversation_visible
     for category in conversation:
         _scale_category_tokens(category, scale)
+    return AnchorOutcome.ANCHORED
 
 
 def _scale_category_tokens(category: ContextCategoryFlat, scale: float) -> None:
