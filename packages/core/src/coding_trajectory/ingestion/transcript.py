@@ -32,6 +32,7 @@ from coding_trajectory.ingestion.models import (
 
 TranscriptKind = Literal[
     "user_message",
+    "turn_started",
     "assistant_message",
     "tool_call",
     "tool_result",
@@ -39,6 +40,13 @@ TranscriptKind = Literal[
     "task_complete",
     "runtime",
 ]
+
+
+def _non_empty_str(value: Any) -> str | None:
+    """Return ``value`` when it is a non-empty string, else ``None``."""
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 TranscriptRole = Literal["user", "assistant", "tool", "runtime"]
 TranscriptFidelity = Literal["observed", "synthetic", "lossy"]
@@ -89,11 +97,53 @@ class TranscriptProjector:
         self.item_sequence = 0
         self.current_turn_has_final_answer = False
         self.current_user_request_text: str | None = None
+        # Vendor turn_id of the currently open turn (set when a turn is opened by
+        # a ``turn_started`` boundary). ``None`` for turns opened by a user
+        # message on vendors that do not emit lifecycle boundaries.
+        self._current_vendor_turn_id: str | None = None
+        # Turn_ids that terminate (``task_complete``/``turn_aborted``) in THIS
+        # file. Used to skip inherited/orphan ``turn_started`` markers carried
+        # into a forked continuation window from its source - their matching
+        # completion lives in another file and would otherwise spawn empty
+        # spurious turns. ``None`` when no terminals are observed.
+        self._completable_turn_ids: set[str] | None = None
+        # When the transcript has no user messages (e.g. a Codex forked
+        # subagent continuation window whose turns are inter-agent-triggered),
+        # bracket turns with task_started/task_complete lifecycle boundaries
+        # instead of user messages. Files with at least one user message keep
+        # the original user_message-based grouping unchanged.
+        self._use_lifecycle_turns: bool = False
 
     def project(self) -> list[Turn]:
+        # Codex delimits turns with task_started/task_complete lifecycle events
+        # rather than user messages. A forked continuation window inherits
+        # boundary markers from its source whose matching completion lives in
+        # another file. Pre-compute the set of vendor turn_ids that terminate in
+        # THIS file so inherited task_started markers can be skipped instead of
+        # spawning empty spurious turns.
+        completable: set[str] = set()
+        has_user_message = False
+        for record in self.records:
+            if record.kind == "task_complete":
+                terminal_id = _non_empty_str(record.data.get("turn_id_raw"))
+                if terminal_id is not None:
+                    completable.add(terminal_id)
+            elif record.kind == "user_message":
+                has_user_message = True
+        self._completable_turn_ids = completable or None
+        # Only switch to lifecycle-bracketed turns when there is no user message
+        # to group by - i.e. inter-agent-triggered continuation windows. Files
+        # with user messages keep the original user_message-based grouping.
+        self._use_lifecycle_turns = not has_user_message
+
         for record in self.records:
             if record.kind == "user_message":
                 self._handle_user_message(record)
+            elif record.kind == "turn_started":
+                if self._use_lifecycle_turns:
+                    self._handle_turn_started(record)
+                else:
+                    self._append_turn_event_id(record.record_id)
             elif record.kind == "assistant_message":
                 self._handle_assistant_message(record)
             elif record.kind == "tool_call":
@@ -140,6 +190,41 @@ class TranscriptProjector:
         self.current_turn_has_final_answer = False
         text = record.data.get("text")
         self.current_user_request_text = text if isinstance(text, str) else None
+
+    def _handle_turn_started(self, record: TranscriptRecord) -> None:
+        vendor_turn_id = _non_empty_str(record.data.get("turn_id_raw"))
+        # Skip inherited/orphan turn-start markers whose completion lives in
+        # another file (forked continuation windows carry these from the fork
+        # source). Only open a turn when it completes in this file. A live
+        # in-flight turn whose task_complete has not been written yet is also
+        # skipped, mirroring the prior user_message-based behavior where the
+        # in-flight turn was not reconstructed until it terminated.
+        if (
+            self._completable_turn_ids is not None
+            and vendor_turn_id is not None
+            and vendor_turn_id not in self._completable_turn_ids
+        ):
+            if self.current_turn is not None:
+                self._append_turn_event_id(record.record_id)
+            return
+        if self.current_turn is not None:
+            # A new turn began before the prior terminated: close the prior as
+            # interrupted (its terminal event was not observed in this file).
+            self._flush_turn(
+                record.timestamp, status=self.default_previous_turn_status
+            )
+        self.current_turn = Turn(
+            session_id=self.session_id,
+            sequence=self.turn_sequence,
+            started_at=record.timestamp,
+            user_request_event_id=None,
+            event_ids=[record.record_id],
+        )
+        self.turn_sequence += 1
+        self.item_sequence = 0
+        self.current_turn_has_final_answer = False
+        self.current_user_request_text = None
+        self._current_vendor_turn_id = vendor_turn_id
 
     def _handle_assistant_message(self, record: TranscriptRecord) -> None:
         if self.current_turn is None:
@@ -253,6 +338,17 @@ class TranscriptProjector:
 
     def _handle_task_complete(self, record: TranscriptRecord) -> None:
         if self.current_turn is None:
+            return
+        terminal_turn_id = _non_empty_str(record.data.get("turn_id_raw"))
+        # In lifecycle mode (no user messages) bracket turns by vendor turn_id:
+        # a terminal event for a different turn_id is an inherited/orphan marker
+        # (forked continuation window) and must not close an unrelated turn.
+        if (
+            self._use_lifecycle_turns
+            and terminal_turn_id is not None
+            and self._current_vendor_turn_id is not None
+            and terminal_turn_id != self._current_vendor_turn_id
+        ):
             return
         self._append_turn_event_id(record.record_id)
         text = record.data.get("text")
@@ -409,6 +505,7 @@ class TranscriptProjector:
         self.item_sequence = 0
         self.current_turn_has_final_answer = False
         self.current_user_request_text = None
+        self._current_vendor_turn_id = None
 
     def _append_turn_event_id(self, event_id: UUID) -> None:
         if self.current_turn is None:

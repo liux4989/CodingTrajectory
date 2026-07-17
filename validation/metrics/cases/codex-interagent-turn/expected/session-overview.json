@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "method": "session.overview",
+  "assertions": [
+    {"path": "$.id", "expected": "019f17c0-0000-7000-8000-000000000001", "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.sessions[0].relationship.role", "expected": "main", "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.sessions[0].relationship.forks[0]", "expected": "019f17c0-0000-7000-8000-000000000002", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.sessions[1].relationship.type", "expected": "forked_from", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.sessions[0].turns[0].status", "expected": "completed", "source_refs": ["source/parent.jsonl:6"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.sessions[1].turns[0].status", "expected": "completed", "source_refs": ["source/fork.jsonl:10"], "audit_ref": "audit.md#inter-agent-triggered-turns"},
+    {"path": "$.sessions[1].turns[1].status", "expected": "completed", "source_refs": ["source/fork.jsonl:16"], "audit_ref": "audit.md#inter-agent-triggered-turns"}
+  ]
+}

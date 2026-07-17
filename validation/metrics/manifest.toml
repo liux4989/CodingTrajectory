@@ -27,3 +27,12 @@ entrypoint_id = "019f1862-7c7e-7b61-b0f2-be002e4d5922"
 source_files = ["cases/pi-reported-cost/source/session.jsonl"]
 expected_files = ["cases/pi-reported-cost/expected/session-overview.json", "cases/pi-reported-cost/expected/session-stats.json", "cases/pi-reported-cost/expected/session-usage.json", "cases/pi-reported-cost/expected/session-model-usage.json"]
 coverage = ["provider:pi", "graph:single-session", "tokens:cached-input", "cost:provider-reported", "tool:success", "model:single"]
+
+[[cases]]
+id = "codex-interagent-turn"
+status = "active"
+provider = "codex_cli"
+entrypoint_id = "019f17c0-0000-7000-8000-000000000001"
+source_files = ["cases/codex-interagent-turn/source/parent.jsonl", "cases/codex-interagent-turn/source/fork.jsonl"]
+expected_files = ["cases/codex-interagent-turn/expected/session-overview.json", "cases/codex-interagent-turn/expected/session-stats.json", "cases/codex-interagent-turn/expected/session-usage.json", "cases/codex-interagent-turn/expected/session-model-usage.json"]
+coverage = ["provider:codex_cli", "graph:multi-session", "relationship:fork", "turn:inter-agent-triggered", "turn:orphan-marker-skip", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration"]

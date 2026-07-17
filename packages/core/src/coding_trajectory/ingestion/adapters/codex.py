@@ -696,7 +696,7 @@ class CodexAdapter(BaseAdapter):
                             timestamp=ts,
                             vendor=Vendor.CODEX_CLI,
                             role="runtime",
-                            kind="runtime",
+                            kind="turn_started",
                             data={
                                 "turn_id_raw": turn_id,
                                 "raw_type": "task_started",

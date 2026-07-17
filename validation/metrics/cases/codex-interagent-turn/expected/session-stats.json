@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "method": "session.stats",
+  "assertions": [
+    {"path": "$.runtime.turns", "expected": 3, "source_refs": ["source/parent.jsonl:2", "source/fork.jsonl:5", "source/fork.jsonl:11"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.runtime.subagents", "expected": 1, "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.runtime.execution_seconds", "expected": 199, "source_refs": ["source/parent.jsonl:2", "source/parent.jsonl:6", "source/fork.jsonl:5", "source/fork.jsonl:10", "source/fork.jsonl:11", "source/fork.jsonl:16"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.runtime.tools", "expected": 2, "source_refs": ["source/fork.jsonl:7", "source/fork.jsonl:13"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.runtime.average_ttft_ms", "expected": 2297, "source_refs": ["source/parent.jsonl:6", "source/fork.jsonl:10", "source/fork.jsonl:16"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.sessions[1].relationship", "expected": "forked_from", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.sessions[1].runtime.turns", "expected": 2, "source_refs": ["source/fork.jsonl:5", "source/fork.jsonl:10", "source/fork.jsonl:11", "source/fork.jsonl:16"], "audit_ref": "audit.md#inter-agent-triggered-turns"},
+    {"path": "$.sessions[1].runtime.items", "expected": 4, "source_refs": ["source/fork.jsonl:7", "source/fork.jsonl:8", "source/fork.jsonl:13", "source/fork.jsonl:14"], "audit_ref": "audit.md#inter-agent-triggered-turns"},
+    {"path": "$.sessions[1].runtime.tools", "expected": 2, "source_refs": ["source/fork.jsonl:7", "source/fork.jsonl:13"], "audit_ref": "audit.md#inter-agent-triggered-turns"},
+    {"path": "$.model.name", "expected": "gpt-5.5", "source_refs": ["source/parent.jsonl:3"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.billed_token_usage.processed", "expected": 4753, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"}
+  ]
+}

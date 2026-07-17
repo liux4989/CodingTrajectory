@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "case_id": "codex-interagent-turn",
+  "status": "active",
+  "provider": "codex_cli",
+  "adapter_family": "CodexAdapter",
+  "original_source_sha256": [
+    "564cef11ef4bad5420c46d4ee71b839ae53da92e7fe2d0c78229ef4647478057",
+    "af5ab921b34acf07d0a92907e286ae901b8a1ee50469b3e5efe5762193a3b14d"
+  ],
+  "committed_source_sha256": {
+    "cases/codex-interagent-turn/source/parent.jsonl": "564cef11ef4bad5420c46d4ee71b839ae53da92e7fe2d0c78229ef4647478057",
+    "cases/codex-interagent-turn/source/fork.jsonl": "af5ab921b34acf07d0a92907e286ae901b8a1ee50469b3e5efe5762193a3b14d"
+  },
+  "sanitization_version": "metrics-baseline-v1",
+  "entrypoint_id": "019f17c0-0000-7000-8000-000000000001",
+  "coverage": ["provider:codex_cli", "graph:multi-session", "relationship:fork", "turn:inter-agent-triggered", "turn:orphan-marker-skip", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration"],
+  "expected_schema_versions": {
+    "session.overview": 1,
+    "session.stats": 1,
+    "session.usage": 1,
+    "session.model_usage": 1
+  },
+  "pricing_artifact_version": "2026-07-15-baseline-v1",
+  "audit_date": "2026-07-18",
+  "auditor": "Codex source-evidence arithmetic pass",
+  "reviewer": "Codex turn-lifecycle projection cross-check",
+  "last_contract_migration": null
+}
