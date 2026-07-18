@@ -79,6 +79,10 @@ class CodexExtensions(BaseModel):
     spawn_depth:        int | None = None
     spawn_agent_nickname: str | None = None
     spawn_agent_role:   str | None = None
+    # child session id -> spawn tool-call call_id, captured from
+    # sub_agent_activity{kind:started} events in THIS session's log. Backs the
+    # forked_from edge origin for children spawned here.
+    spawn_links:        dict[str, str] = Field(default_factory=dict)
 
 
 class PiExtensions(BaseModel):

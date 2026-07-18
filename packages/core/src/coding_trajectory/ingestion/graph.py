@@ -144,7 +144,7 @@ def _build_edge(parent: Session | None, child: Session) -> SessionEdge | None:
     if parent is None:
         return None
 
-    origin = _find_edge_origin(parent)
+    origin = _find_edge_origin(parent, child.session_id)
     edge_type = (
         "forked_from"
         if _is_codex_fork(child)
@@ -174,7 +174,19 @@ def _build_edge(parent: Session | None, child: Session) -> SessionEdge | None:
     )
 
 
-def _find_edge_origin(session: Session) -> _EdgeOrigin | None:
+def _find_edge_origin(
+    session: Session, child_session_id: UUID | None = None
+) -> _EdgeOrigin | None:
+    # Prefer the real spawn call: codex sub_agent_activity{kind:started} links
+    # the child's agent_thread_id to the spawn tool-call call_id, recorded on
+    # the parent's codex extensions. Resolve that call to its turn/item so the
+    # edge provenance reflects the actual spawn, not the parent's last tool call.
+    spawn_call_id = _spawn_call_id_for(session, child_session_id)
+    if spawn_call_id is not None:
+        origin = _find_tool_call_by_call_id(session, spawn_call_id)
+        if origin is not None:
+            return origin
+
     tool_events = [
         event
         for event in session.events
@@ -193,6 +205,36 @@ def _find_edge_origin(session: Session) -> _EdgeOrigin | None:
             tool_name=_event_tool_name(event),
         )
 
+    return None
+
+
+def _spawn_call_id_for(session: Session, child_session_id: UUID | None) -> str | None:
+    """Return the spawn tool-call call_id recorded for ``child_session_id``."""
+    if child_session_id is None:
+        return None
+    extensions = session.extensions
+    if not extensions or not extensions.codex:
+        return None
+    return extensions.codex.spawn_links.get(str(child_session_id))
+
+
+def _find_tool_call_by_call_id(
+    session: Session, call_id: str
+) -> _EdgeOrigin | None:
+    """Resolve a tool call by its provider call_id to its turn/item origin."""
+    item_index = _build_item_event_index(session)
+    for event in session.events:
+        if event.type != EventType.TOOL_CALL_REQUESTED:
+            continue
+        if event.payload.get("tool_call_id") != call_id:
+            continue
+        turn, item = item_index.get(event.event_id, (None, None))
+        return _EdgeOrigin(
+            event_id=event.event_id,
+            turn_id=turn.turn_id if turn else None,
+            item_id=item.item_id if item else None,
+            tool_name=_event_tool_name(event),
+        )
     return None
 
 

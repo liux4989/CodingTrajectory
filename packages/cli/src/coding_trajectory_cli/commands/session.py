@@ -109,34 +109,78 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
         "",
     ]
 
+    by_id = {
+        str(session.get("session_id")): session
+        for session in sessions
+        if session.get("session_id")
+    }
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    roots: list[dict[str, Any]] = []
     for session in sessions:
         relationship = session.get("relationship") or {}
-        role = relationship.get("role") or relationship.get("relationship") or "session"
-        header = f"- session `{session.get('session_id') or '-'}`"
-        header += f"  {role}, {session.get('vendor') or '-'}, {display_value(session.get('status')) or '-'}"
-        if session.get("agent_name"):
-            header += f", {session['agent_name']}"
-        if session.get("compactions"):
-            header += f", {session['compactions']} compactions"
-        lines.append(header)
-        if session.get("cwd"):
-            lines.append(f"   cwd: {session['cwd']}")
+        parent_id = relationship.get("parent_session_id") or relationship.get("parent")
+        if parent_id and str(parent_id) in by_id:
+            children_by_parent.setdefault(str(parent_id), []).append(session)
+        else:
+            roots.append(session)
+    # Stable child ordering by started_at/session_id when available.
+    for kids in children_by_parent.values():
+        kids.sort(
+            key=lambda s: (s.get("started_at") or "", str(s.get("session_id") or ""))
+        )
 
-        turns = session.get("turns") or []
-        for turn in turns:
-            lines.append(
-                f"  - turn {turn.get('turn_id') or '-'}  "
-                f"{display_value(turn.get('status')) or '-'}  {_overview_request_label(turn.get('user_request'))}"
-            )
-
-            activities = turn.get("activity") or []
-            if turn.get("teammate_summary"):
-                activities = [{"teammate_summary": turn.get("teammate_summary")}]
-            for activity in activities:
-                if isinstance(activity, dict):
-                    lines.append(f"    - {_overview_activity_label(activity)}")
+    if roots:
+        for root in roots:
+            _render_session_tree_node(root, children_by_parent, depth=0, lines=lines)
+    else:  # no parent linkage resolved - fall back to flat rendering
+        for session in sessions:
+            _render_session_tree_node(session, {}, depth=0, lines=lines)
 
     return "\n".join(lines).rstrip()
+
+
+def _render_session_tree_node(
+    session: dict[str, Any],
+    children_by_parent: dict[str, list[dict[str, Any]]],
+    *,
+    depth: int,
+    lines: list[str],
+) -> None:
+    indent = "  " * depth
+    relationship = session.get("relationship") or {}
+    role = relationship.get("role") or relationship.get("relationship") or "session"
+    header = f"{indent}- session `{session.get('session_id') or '-'}`"
+    if depth > 0:
+        header += f"  {role}"
+    else:
+        header += f"  {role}"
+    header += f", {session.get('vendor') or '-'}, {display_value(session.get('status')) or '-'}"
+    if session.get("agent_name"):
+        header += f", {session['agent_name']}"
+    if depth > 0:
+        header += f", depth {depth}"
+    if session.get("compactions"):
+        header += f", {session['compactions']} compactions"
+    lines.append(header)
+    if session.get("cwd"):
+        lines.append(f"{indent}   cwd: {session['cwd']}")
+
+    turns = session.get("turns") or []
+    for turn in turns:
+        lines.append(
+            f"{indent}  - turn {turn.get('turn_id') or '-'}  "
+            f"{display_value(turn.get('status')) or '-'}  {_overview_request_label(turn.get('user_request'))}"
+        )
+
+        activities = turn.get("activity") or []
+        if turn.get("teammate_summary"):
+            activities = [{"teammate_summary": turn.get("teammate_summary")}]
+        for activity in activities:
+            if isinstance(activity, dict):
+                lines.append(f"{indent}    - {_overview_activity_label(activity)}")
+
+    for child in children_by_parent.get(str(session.get("session_id")), []):
+        _render_session_tree_node(child, children_by_parent, depth=depth + 1, lines=lines)
 
 
 def _render_context_category(
@@ -400,6 +444,7 @@ def _render_session_stats_sections(
     session_sections: list[dict[str, Any]],
 ) -> str:
     lines = ["# Session Stats", "", "Session context sections"]
+    name_by_id, depth_by_id = _section_label_maps(session_sections)
     for section in session_sections:
         model = section.get("model") or {}
         context_window = section.get("context_window") or {}
@@ -410,7 +455,7 @@ def _render_session_stats_sections(
         lines.extend(
             [
                 "",
-                f"## {_session_section_label(section)}",
+                f"## {_session_section_label(section, name_by_id=name_by_id, depth_by_id=depth_by_id)}",
                 f"Model: {model_name} ({format_tokens(context_tokens)} context)",
                 "",
                 "```",
@@ -558,8 +603,16 @@ def _render_session_usage_sections(
     lines.append("```")
 
     show_all = bool(getattr(args, "all_turns", False))
+    name_by_id, depth_by_id = _section_label_maps(session_sections)
     for section in session_sections:
-        lines.extend(["", f"## {_session_section_label(section)}", "", "```"])
+        lines.extend(
+            [
+                "",
+                f"## {_session_section_label(section, name_by_id=name_by_id, depth_by_id=depth_by_id)}",
+                "",
+                "```",
+            ]
+        )
         lines.append("Total")
         lines.append(f"  {render_usage_line(section.get('total_usage') or {})}")
         section_cost = section.get("estimated_cost") or {}
@@ -617,7 +670,53 @@ def _append_model_usage(
         lines.append(f"{indent}  {label}: {detail}")
 
 
-def _session_section_label(section: dict[str, Any]) -> str:
+def _section_label_maps(
+    sections: list[dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, int]]:
+    """Precompute parent display-name and depth per session for section labels."""
+    name_by_id = {
+        str(section.get("session_id")): (
+            section.get("agent_name") or section.get("title") or str(section.get("session_id"))[:8]
+        )
+        for section in sections
+        if section.get("session_id")
+    }
+
+    def depth_of(section: dict[str, Any]) -> int:
+        seen: set[str] = set()
+        depth = 0
+        current = section
+        while True:
+            parent_id = str(
+                current.get("parent") or current.get("parent_session_id") or ""
+            ) or None
+            if not parent_id or parent_id in seen or parent_id not in name_by_id:
+                break
+            seen.add(parent_id)
+            depth += 1
+            parent_section = next(
+                (s for s in sections if str(s.get("session_id")) == parent_id),
+                None,
+            )
+            if parent_section is None:
+                break
+            current = parent_section
+        return depth
+
+    depth_by_id = {
+        str(section.get("session_id")): depth_of(section)
+        for section in sections
+        if section.get("session_id")
+    }
+    return name_by_id, depth_by_id
+
+
+def _session_section_label(
+    section: dict[str, Any],
+    *,
+    name_by_id: dict[str, str] | None = None,
+    depth_by_id: dict[str, int] | None = None,
+) -> str:
     role = str(section.get("role") or section.get("relationship") or "session")
     session_id = str(section.get("session_id") or section.get("root_session_id") or "-")
     label = (
@@ -626,7 +725,19 @@ def _session_section_label(section: dict[str, Any]) -> str:
         or section.get("relationship")
         or role
     )
-    return f"{role}: {label} ({session_id[:8]})"
+    text = f"{role}: {label} ({session_id[:8]})"
+    parent_id = str(
+        section.get("parent") or section.get("parent_session_id") or ""
+    ) or None
+    if parent_id and name_by_id:
+        parent_label = name_by_id.get(parent_id)
+        if parent_label:
+            text += f" <- {parent_label}"
+    if depth_by_id:
+        depth = depth_by_id.get(str(section.get("session_id")))
+        if depth:
+            text += f" [depth {depth}]"
+    return text
 
 
 def _turn_has_usage(turn: dict[str, Any]) -> bool:

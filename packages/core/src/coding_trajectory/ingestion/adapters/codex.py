@@ -340,6 +340,10 @@ class CodexAdapter(BaseAdapter):
         context_source_by_block: dict[tuple[str, str], ContextSourceObservation] = field(
             default_factory=dict
         )
+        # child agent_thread_id -> spawn tool-call call_id, captured from
+        # sub_agent_activity{kind:started} events. Backs the forked_from edge
+        # origin with the real spawn call instead of the parent's last tool call.
+        spawn_links: dict[str, str] = field(default_factory=dict)
 
     def ingest_file(self, path: Path) -> Session:
         self._reset_ingest_state()
@@ -407,6 +411,8 @@ class CodexAdapter(BaseAdapter):
         parent_session_id = codex_parent_session_id(mechanism)
         events = events_from_transcript(session_id=state.session_id, records=transcript)
         extensions = codex_extensions(mechanism)
+        if extensions.codex is not None and state.spawn_links:
+            extensions.codex.spawn_links = dict(state.spawn_links)
 
         turns = project_transcript(
             session_id=state.session_id,
@@ -414,6 +420,7 @@ class CodexAdapter(BaseAdapter):
             records=transcript,
             active_status=TurnStatus.RUNNING if _is_source_active(source) else TurnStatus.INCOMPLETE,
             default_previous_turn_status=TurnStatus.INTERRUPTED,
+            is_fork=mechanism.forked_from_id is not None,
         )
         session_status = _derive_session_status(turns)
 
@@ -706,6 +713,18 @@ class CodexAdapter(BaseAdapter):
                             fidelity="synthetic",
                         )
                     )
+
+                elif inner_type == "sub_agent_activity":
+                    # kind=started carries the spawned child's agent_thread_id
+                    # (== child session id) and event_id (== spawn tool-call
+                    # call_id). Record the link so the forked_from edge origin
+                    # can resolve to the real spawn call, not the parent's last
+                    # tool call.
+                    if payload.get("kind") == "started":
+                        child_id = _as_non_empty_str(payload.get("agent_thread_id"))
+                        spawn_call_id = _as_non_empty_str(payload.get("event_id"))
+                        if child_id and spawn_call_id and child_id not in state.spawn_links:
+                            state.spawn_links[child_id] = spawn_call_id
 
             elif outer_type == "response_item":
                 inner_type = payload.get("type", "")

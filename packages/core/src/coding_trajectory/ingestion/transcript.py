@@ -84,6 +84,7 @@ class TranscriptProjector:
         records: list[TranscriptRecord],
         active_status: TurnStatus | None = None,
         default_previous_turn_status: TurnStatus = TurnStatus.COMPLETED,
+        is_fork: bool = False,
     ) -> None:
         self.session_id = session_id
         self.vendor = vendor
@@ -113,6 +114,20 @@ class TranscriptProjector:
         # instead of user messages. Files with at least one user message keep
         # the original user_message-based grouping unchanged.
         self._use_lifecycle_turns: bool = False
+        # Vendor turn_ids that carry a user_message in this file. Used by the
+        # mixed-file lifecycle reconstruction below to avoid opening a duplicate
+        # lifecycle turn for a turn that a user_message will open itself.
+        self._turn_ids_with_user_message: set[str] = set()
+        # A forked continuation window can be a MIXED file: it inherits the
+        # source's recent turns (which carry user_messages) AND continues with
+        # its own inter-agent-triggered turns (task_started/task_complete, no
+        # user_message). The user_message-based grouping reconstructs the
+        # inherited turns but drops the fork's own lifecycle turns (they have
+        # no user_message to open them), so spawn calls inside them go
+        # unattributed. When set, reconstruct those lifecycle turns in the gaps
+        # where no user-message turn is open.
+        self._reconstruct_lifecycle_turns: bool = False
+        self._is_fork: bool = is_fork
 
     def project(self) -> list[Turn]:
         # Codex delimits turns with task_started/task_complete lifecycle events
@@ -123,6 +138,8 @@ class TranscriptProjector:
         # spawning empty spurious turns.
         completable: set[str] = set()
         has_user_message = False
+        has_turn_started = False
+        turn_ids_with_user_message: set[str] = set()
         for record in self.records:
             if record.kind == "task_complete":
                 terminal_id = _non_empty_str(record.data.get("turn_id_raw"))
@@ -130,11 +147,23 @@ class TranscriptProjector:
                     completable.add(terminal_id)
             elif record.kind == "user_message":
                 has_user_message = True
+                user_turn_id = _non_empty_str(record.data.get("turn_id_raw"))
+                if user_turn_id is not None:
+                    turn_ids_with_user_message.add(user_turn_id)
+            elif record.kind == "turn_started":
+                has_turn_started = True
         self._completable_turn_ids = completable or None
         # Only switch to lifecycle-bracketed turns when there is no user message
         # to group by - i.e. inter-agent-triggered continuation windows. Files
         # with user messages keep the original user_message-based grouping.
         self._use_lifecycle_turns = not has_user_message
+        self._turn_ids_with_user_message = turn_ids_with_user_message
+        # Mixed forked windows (inherited user_message turns + own lifecycle
+        # turns) reconstruct their own lifecycle turns in user_message mode so
+        # they - and the spawn calls inside them - are not dropped.
+        self._reconstruct_lifecycle_turns = (
+            self._is_fork and has_user_message and has_turn_started
+        )
 
         for record in self.records:
             if record.kind == "user_message":
@@ -142,6 +171,11 @@ class TranscriptProjector:
             elif record.kind == "turn_started":
                 if self._use_lifecycle_turns:
                     self._handle_turn_started(record)
+                elif (
+                    self._reconstruct_lifecycle_turns
+                    and self.current_turn is None
+                ):
+                    self._maybe_open_lifecycle_turn(record)
                 else:
                     self._append_turn_event_id(record.record_id)
             elif record.kind == "assistant_message":
@@ -213,6 +247,41 @@ class TranscriptProjector:
             self._flush_turn(
                 record.timestamp, status=self.default_previous_turn_status
             )
+        self.current_turn = Turn(
+            session_id=self.session_id,
+            sequence=self.turn_sequence,
+            started_at=record.timestamp,
+            user_request_event_id=None,
+            event_ids=[record.record_id],
+        )
+        self.turn_sequence += 1
+        self.item_sequence = 0
+        self.current_turn_has_final_answer = False
+        self.current_user_request_text = None
+        self._current_vendor_turn_id = vendor_turn_id
+
+    def _maybe_open_lifecycle_turn(self, record: TranscriptRecord) -> None:
+        """Open a lifecycle turn for a fork's own inter-agent turn in a mixed
+        (user_message + lifecycle) file, when no user-message turn is open.
+
+        Skips inherited orphan markers (their completion lives in another file)
+        and turn_ids that carry a user_message - those are opened by their
+        user_message, so opening here would duplicate them. Used so spawn calls
+        inside the fork's own lifecycle turns are turn-attributed instead of
+        dropped.
+        """
+        vendor_turn_id = _non_empty_str(record.data.get("turn_id_raw"))
+        if (
+            self._completable_turn_ids is not None
+            and vendor_turn_id is not None
+            and vendor_turn_id not in self._completable_turn_ids
+        ):
+            return
+        if (
+            vendor_turn_id is not None
+            and vendor_turn_id in self._turn_ids_with_user_message
+        ):
+            return
         self.current_turn = Turn(
             session_id=self.session_id,
             sequence=self.turn_sequence,
@@ -340,13 +409,15 @@ class TranscriptProjector:
         if self.current_turn is None:
             return
         terminal_turn_id = _non_empty_str(record.data.get("turn_id_raw"))
-        # In lifecycle mode (no user messages) bracket turns by vendor turn_id:
-        # a terminal event for a different turn_id is an inherited/orphan marker
-        # (forked continuation window) and must not close an unrelated turn.
+        # When the open turn was opened by a lifecycle boundary (vendor turn_id
+        # known), a terminal event for a different turn_id is an inherited/orphan
+        # marker (forked continuation window) and must not close an unrelated
+        # turn. Applies in lifecycle mode and to lifecycle turns reconstructed
+        # within user-message files. User-message turns keep no vendor turn_id,
+        # so they are unaffected (preserving prior user_message-mode behavior).
         if (
-            self._use_lifecycle_turns
+            self._current_vendor_turn_id is not None
             and terminal_turn_id is not None
-            and self._current_vendor_turn_id is not None
             and terminal_turn_id != self._current_vendor_turn_id
         ):
             return
@@ -525,6 +596,7 @@ def project_transcript(
     records: list[TranscriptRecord],
     active_status: TurnStatus | None = None,
     default_previous_turn_status: TurnStatus = TurnStatus.COMPLETED,
+    is_fork: bool = False,
 ) -> list[Turn]:
     return TranscriptProjector(
         session_id=session_id,
@@ -532,6 +604,7 @@ def project_transcript(
         records=records,
         active_status=active_status,
         default_previous_turn_status=default_previous_turn_status,
+        is_fork=is_fork,
     ).project()
 
 
