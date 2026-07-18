@@ -16,6 +16,7 @@ from coding_trajectory.discovery import (
     discover_store_from_file,
     discover_store_from_files,
     format_discovery_sources,
+    locate_session_files,
 )
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.ingestion.common import (
@@ -562,6 +563,19 @@ def resolve_store(
         bulk_paths = _resolve_bulk_cached_paths(bulk_ids, cache)
         if bulk_paths is not None:
             return _build_store_targeted(bulk_paths, cache)
+
+    if entrypoint_id:
+        try:
+            located = locate_session_files(
+                session_id=_parse_user_id(entrypoint_id),
+                current_dir=current_dir,
+                global_scope=True,
+                agent_vendor=params.get("agent_vendor"),
+            )
+        except ValueError:
+            located = []
+        if located:
+            return _build_store_targeted([str(p) for p in located], cache)
 
     return _build_store_full(
         global_scope=global_scope,

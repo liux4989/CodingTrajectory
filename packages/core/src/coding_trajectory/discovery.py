@@ -1103,6 +1103,82 @@ def discover_store_from_files(paths: list[Path]) -> DiscoveryResult:
     return DiscoveryResult(store=DocumentStore.from_session_graphs(session_graphs), sources=sources)
 
 
+def locate_session_files(
+    *,
+    session_id: UUID,
+    current_dir: Path,
+    global_scope: bool = False,
+    project_name: str | None = None,
+    since_days: int | None = None,
+    modified_since: datetime | None = None,
+    agent_vendor: str | None = None,
+) -> list[Path]:
+    """Locate every log file in a session graph via header-only scan.
+
+    Scans candidate headers (no transcript projection) to map session ids to
+    source files, then returns the target file plus its parent chain and any
+    descendant forks so :func:`discover_store_from_files` can ingest them with
+    fork trimming. Returns an empty list when the session is not in scope.
+    """
+    current_dir = current_dir.resolve()
+    scoped_project = project_name or (None if global_scope else current_dir.name)
+    scoped_project_key = normalize_project_key(scoped_project) if scoped_project else None
+    modified_since = _modified_since(since_days, modified_since=modified_since)
+
+    file_by_session: dict[UUID, tuple[Path, UUID | None]] = {}
+    for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(agent_vendor):
+        for path in _candidate_files(
+            vendor,
+            base_dir,
+            pattern,
+            current_dir=current_dir,
+            scoped_project=scoped_project,
+            scoped_project_key=scoped_project_key,
+            modified_since=modified_since,
+        ):
+            adapter = adapter_cls()
+            try:
+                header = adapter.scan_header(path)
+            except Exception:
+                continue
+            if header is None:
+                continue
+            file_by_session.setdefault(
+                header.session_id, (path, header.parent_session_id)
+            )
+
+    if session_id not in file_by_session:
+        return []
+
+    # Walk parent links up to the graph root.
+    root = session_id
+    seen: set[UUID] = set()
+    while root in file_by_session and root not in seen:
+        seen.add(root)
+        parent = file_by_session[root][1]
+        if parent is None or parent not in file_by_session:
+            break
+        root = parent
+
+    # Collect the whole connected component: the root plus all descendants.
+    children: dict[UUID, list[UUID]] = {}
+    for sid, (_path, parent) in file_by_session.items():
+        if parent is not None and parent in file_by_session:
+            children.setdefault(parent, []).append(sid)
+
+    component: list[Path] = []
+    stack = [root]
+    visited: set[UUID] = set()
+    while stack:
+        sid = stack.pop()
+        if sid in visited:
+            continue
+        visited.add(sid)
+        component.append(file_by_session[sid][0])
+        stack.extend(children.get(sid, []))
+    return component
+
+
 def format_discovery_sources(sources: list[DiscoverySource]) -> str:
     if not sources:
         return ""
