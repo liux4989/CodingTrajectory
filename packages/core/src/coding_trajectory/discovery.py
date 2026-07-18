@@ -103,6 +103,51 @@ def _selected_vendor_configs(agent_vendor: str | None) -> list[tuple[Vendor, typ
     return [config for config in configs if config[0].value == agent_vendor]
 
 
+def _ingest_sessions(
+    candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
+) -> list[tuple[Vendor, Path, Session]]:
+    """Ingest candidate files in two passes so forked files can drop the
+    inherited-history segment they re-materialize.
+
+    Pass 1 lightly scans each file's turn-starting ids (and parent link). Pass 2
+    ingests each file, handing a forked file's adapter its parent's turn-id set
+    so it can cut the inherited copy (avoids double-counting turns/tokens and
+    re-emitting inherited spawn edges). Vendors without turn-start ids are inert.
+    """
+    started_turn_ids_by_session: dict[UUID, set[str]] = {}
+    parent_session_by_path: dict[Path, UUID | None] = {}
+    for _vendor, adapter_cls, path in candidates:
+        adapter = adapter_cls()
+        header = adapter.scan_header(path)
+        if header is None:
+            parent_session_by_path[path] = None
+            continue
+        started = adapter.scan_started_turn_ids(path)
+        if started is not None:
+            started_turn_ids_by_session[header.session_id] = started
+        parent_session_by_path[path] = header.parent_session_id
+
+    ingested: list[tuple[Vendor, Path, Session]] = []
+    for vendor, adapter_cls, path in candidates:
+        adapter = adapter_cls()
+        parent_session_id = parent_session_by_path.get(path)
+        parent_started = (
+            started_turn_ids_by_session.get(parent_session_id)
+            if parent_session_id is not None
+            else None
+        )
+        try:
+            session = stabilize_session(
+                adapter.ingest_file(path, parent_started_turn_ids=parent_started),
+                vendor=vendor,
+                source=path,
+            )
+        except Exception:
+            continue
+        ingested.append((vendor, path, session))
+    return ingested
+
+
 def discover_store(
     *,
     current_dir: Path,
@@ -120,6 +165,9 @@ def discover_store(
     sessions_by_project: dict[str, list[Session]] = {}
     path_session_meta: list[tuple[Vendor, Path, UUID]] = []
 
+    # Collect candidate files per vendor and ingest via the shared two-pass
+    # helper so forked files drop their re-materialized inherited history.
+    candidates: list[tuple[Vendor, type[BaseAdapter], Path]] = []
     for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(agent_vendor):
         for path in _candidate_files(
             vendor,
@@ -130,27 +178,24 @@ def discover_store(
             scoped_project_key=scoped_project_key,
             modified_since=modified_since,
         ):
-            adapter = adapter_cls()
-            try:
-                session = stabilize_session(adapter.ingest_file(path), vendor=vendor, source=path)
-            except Exception:
+            candidates.append((vendor, adapter_cls, path))
+
+    for vendor, path, session in _ingest_sessions(candidates):
+        project_identifier = infer_project_identifier(session, path, fallback=scoped_project)
+        if project_identifier is None:
+            if scoped_project is None:
+                project_identifier = f"unknown-{vendor.value}"
+            else:
                 continue
 
-            project_identifier = infer_project_identifier(session, path, fallback=scoped_project)
-            if project_identifier is None:
-                if scoped_project is None:
-                    project_identifier = f"unknown-{vendor.value}"
-                else:
-                    continue
+        key = normalize_project_key(project_identifier)
+        if not key:
+            continue
+        if scoped_project_key and key != scoped_project_key:
+            continue
 
-            key = normalize_project_key(project_identifier)
-            if not key:
-                continue
-            if scoped_project_key and key != scoped_project_key:
-                continue
-
-            sessions_by_project.setdefault(project_identifier, []).append(session)
-            path_session_meta.append((vendor, path, session.session_id))
+        sessions_by_project.setdefault(project_identifier, []).append(session)
+        path_session_meta.append((vendor, path, session.session_id))
 
     if not sessions_by_project:
         raise DocumentError(f"no matching coding-agent logs found for {current_dir}")
@@ -1021,25 +1066,22 @@ def discover_store_from_files(paths: list[Path]) -> DiscoveryResult:
     sessions_by_project: dict[str, list[Session]] = {}
     path_session_meta: list[tuple[Vendor, Path, UUID]] = []
 
+    candidates: list[tuple[Vendor, type[BaseAdapter], Path]] = []
     for raw_path in paths:
         path = raw_path.resolve()
         if not path.exists():
             continue
-
         for vendor, adapter_cls, _base_dir, _pattern in _matching_vendor_configs(path):
-            adapter = adapter_cls()
-            try:
-                session = stabilize_session(adapter.ingest_file(path), vendor=vendor, source=path)
-            except Exception:
-                continue
-
-            project_identifier = infer_project_identifier(session, path, fallback=path.stem)
-            if not project_identifier:
-                project_identifier = path.stem
-
-            sessions_by_project.setdefault(project_identifier, []).append(session)
-            path_session_meta.append((vendor, path, session.session_id))
+            candidates.append((vendor, adapter_cls, path))
             break
+
+    for vendor, path, session in _ingest_sessions(candidates):
+        project_identifier = infer_project_identifier(session, path, fallback=path.stem)
+        if not project_identifier:
+            project_identifier = path.stem
+
+        sessions_by_project.setdefault(project_identifier, []).append(session)
+        path_session_meta.append((vendor, path, session.session_id))
 
     if not sessions_by_project:
         raise DocumentError(f"no valid log files found for paths: {[str(path) for path in paths]}")

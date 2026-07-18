@@ -46,7 +46,9 @@ class BaseAdapter(ABC):
     def _load_records(self, path: Path) -> list[dict]:
         return list(self._iter_records(path))
 
-    def ingest_file(self, path: Path) -> Session:
+    def ingest_file(
+        self, path: Path, *, parent_started_turn_ids: set[str] | None = None
+    ) -> Session:
         self._reset_ingest_state()
         records = self._load_records(path)
         return self._build_session(path, records)
@@ -59,6 +61,14 @@ class BaseAdapter(ABC):
 
     def ingest(self, source: Path) -> Session:
         return self.ingest_file(source)
+
+    def scan_started_turn_ids(self, source: Path) -> set[str] | None:
+        """Return the set of vendor turn_ids that begin a turn in this file, or
+        ``None`` when the vendor has no such concept. Used by multi-file
+        discovery to give a forked file's adapter the parent's turn-id set so it
+        can drop the inherited-history segment it re-materializes.
+        """
+        return None
 
     @abstractmethod
     def _build_session(self, source: Path, records: list[dict]) -> Session:

@@ -225,6 +225,58 @@ def _is_source_active(source: Path | None, *, active_seconds: int = 300) -> bool
         return False
 
 
+def _session_forked_from_id(records: list[dict]) -> str | None:
+    for record in records:
+        if record.get("type") != "session_meta":
+            continue
+        ffid = record.get("payload", {}).get("forked_from_id") if isinstance(record.get("payload"), dict) else None
+        return _extract_uuid_text(ffid)
+    return None
+
+
+def _cut_inherited_records(
+    records: list[dict], parent_started_turn_ids: set[str] | None
+) -> list[dict]:
+    """Drop the inherited-history segment a forked rollout re-materializes.
+
+    A forked continuation window copies the source's recent turns verbatim
+    (including their ``task_started``/``task_complete``/``token_count``/
+    ``sub_agent_activity`` records). Re-projecting that copy double-counts
+    turns/tokens and re-emits inherited spawn edges. The fork's own turns begin
+    at the first ``task_started`` whose ``turn_id`` is absent from the parent's
+    raw ``task_started`` set (validated: a clean cut for every fork - all
+    preceding turns are inherited, all from here are own, and no ``spawn_agent``
+    call lands in the dropped segment).
+
+    The leading ``session_meta`` record(s) are always kept (they are the fork's
+    own). When the parent set is unavailable (single-file ingestion) or the file
+    is not a fork, records are returned unchanged.
+    """
+    if parent_started_turn_ids is None:
+        return records
+    if _session_forked_from_id(records) is None:
+        return records
+    leading = 0
+    for record in records:
+        if record.get("type") == "session_meta":
+            leading += 1
+            continue
+        break
+    first_foreign = None
+    for index in range(leading, len(records)):
+        payload = records[index].get("payload") or {}
+        if payload.get("type") != "task_started":
+            continue
+        turn_id = payload.get("turn_id")
+        if isinstance(turn_id, str) and turn_id not in parent_started_turn_ids:
+            first_foreign = index
+            break
+    if first_foreign is None:
+        # Fork has no own turns (inherited only): keep just its session_meta.
+        return records[:leading]
+    return records[:leading] + records[first_foreign:]
+
+
 def _derive_session_status(turns: list) -> SessionStatus:
     if any(turn.status == TurnStatus.RUNNING for turn in turns):
         return SessionStatus.ACTIVE
@@ -350,12 +402,26 @@ class CodexAdapter(BaseAdapter):
         # origin with the real spawn call instead of the parent's last tool call.
         spawn_links: dict[str, str] = field(default_factory=dict)
 
-    def ingest_file(self, path: Path) -> Session:
+    def ingest_file(
+        self,
+        path: Path,
+        *,
+        parent_started_turn_ids: set[str] | None = None,
+    ) -> Session:
         self._reset_ingest_state()
         records = self._load_records(path)
+        records = _cut_inherited_records(records, parent_started_turn_ids)
         state = self._ParseState()
         transcript = self._build_transcript(records, state)
         return self._build_session(path, transcript, state)
+
+    def scan_started_turn_ids(self, source: Path) -> set[str] | None:
+        started: set[str] = set()
+        for record in self._iter_records(source):
+            payload = record.get("payload") or {}
+            if payload.get("type") == "task_started" and isinstance(payload.get("turn_id"), str):
+                started.add(payload["turn_id"])
+        return started
 
     def scan_header(self, source: Path) -> SessionHeader | None:
         header: SessionHeader | None = None
@@ -425,7 +491,11 @@ class CodexAdapter(BaseAdapter):
             records=transcript,
             active_status=TurnStatus.RUNNING if _is_source_active(source) else TurnStatus.INCOMPLETE,
             default_previous_turn_status=TurnStatus.INTERRUPTED,
-            is_fork=mechanism.forked_from_id is not None,
+            # Codex's authoritative turn delimiter is the task_started/task_complete
+            # lifecycle boundary; user_message is an in-turn item. Prefer lifecycle
+            # mode so turns (incl. compaction-only turns) project correctly and
+            # spawn calls are turn-attributed.
+            prefer_lifecycle=True,
         )
         session_status = _derive_session_status(turns)
 
