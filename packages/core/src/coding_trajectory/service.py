@@ -896,11 +896,12 @@ def _handle_session_stats(
     result["graph_context_window"] = result.get("context_window")
     result["graph_provider_usage_buckets"] = result.get("provider_usage_buckets")
     result["graph_billed_token_usage"] = result.get("billed_token_usage")
-    result["sessions"] = _session_stats_sections(
-        session_graph,
-        build_session_graph_context_stats=build_session_graph_context_stats,
-        build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
-    )
+    if len(session_graph.sessions) > 1:
+        result["sessions"] = _session_stats_sections(
+            session_graph,
+            build_session_graph_context_stats=build_session_graph_context_stats,
+            build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
+        )
     return _public_output_for_session_graph(
         session_graph,
         result,
