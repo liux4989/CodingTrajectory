@@ -16,12 +16,13 @@ except ImportError:
 # Re-export so the classifier is the single source of truth for both the
 # per-session context-window view and this aggregate. The classifier
 # (``_project_cache_breaks`` + its helpers) classifies a re-read into
-# ttl_confirmed / ttl_likely / effort_switch; we reuse it verbatim per session
-# rather than re-deriving the heuristic here. It is form-agnostic: it reads
-# both the CLI display form (``id``, ``start``, short usage keys) and the raw
-# ``ct api call session.usage`` form (``turn_id``, ``started_at``, long usage
-# keys) - so this aggregate uses the fast batched api call directly, with no
-# dependency on the CLI's display-layer reshaping.
+# ttl_confirmed / ttl_likely / effort_switch / model_switch / unattributed; we
+# reuse it verbatim per session rather than re-deriving the heuristic here. It
+# is form-agnostic: it reads both the CLI display form (``id``, ``start``,
+# short usage keys) and the raw ``ct api call session.usage`` form
+# (``turn_id``, ``started_at``, long usage keys) - so this aggregate uses the
+# fast batched api call directly, with no dependency on the CLI's
+# display-layer reshaping.
 classify_cache_breaks = context_window_mod._project_cache_breaks
 project_compaction = context_window_mod._project_compaction
 select_session_usage = context_window_mod._selected_session_usage
@@ -172,6 +173,7 @@ def _projection_payload(
             "total_breaks": len(breaks),
             "by_type": {
                 "effort_switch": by_type.get("effort_switch", 0),
+                "model_switch": by_type.get("model_switch", 0),
                 "ttl_confirmed": by_type.get("ttl_confirmed", 0),
                 "ttl_likely": by_type.get("ttl_likely", 0),
                 "unattributed": by_type.get("unattributed", 0),

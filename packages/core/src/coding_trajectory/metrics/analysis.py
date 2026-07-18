@@ -359,6 +359,8 @@ def _compact_turn_usage(
         ),
         cache_intra_turn_loss_tokens=intra_turn_loss_tokens,
         cache_intra_turn_waste_usd=intra_turn_waste,
+        provider=provider,
+        model=model,
     )
 
 

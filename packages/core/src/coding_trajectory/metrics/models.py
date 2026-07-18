@@ -423,6 +423,11 @@ class TurnUsageCompactFlat(BaseModel):
     # boundary loss can't see. Priced into ``cache_intra_turn_waste_usd``.
     cache_intra_turn_loss_tokens: int | None = None
     cache_intra_turn_waste_usd: float | None = None
+    # Dominant (provider, model) for the turn — the pricing/cache-key context.
+    # Exposed so downstream classifiers can detect a model switch across the
+    # turn boundary (a cache-key change that re-bills the prefix).
+    provider: str | None = None
+    model: str | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -447,6 +452,10 @@ class TurnUsageCompactFlat(BaseModel):
             data.pop("cache_intra_turn_loss_tokens", None)
         if data.get("cache_intra_turn_waste_usd") is None:
             data.pop("cache_intra_turn_waste_usd", None)
+        if data.get("provider") is None:
+            data.pop("provider", None)
+        if data.get("model") is None:
+            data.pop("model", None)
         return data
 
 

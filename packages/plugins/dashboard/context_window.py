@@ -123,13 +123,18 @@ class CacheBreakRecord(BaseModel):
     # effort_switch: an observed effort change aligns with an observed drop in
     #   cache-hit tokens across the turn boundary. It overrides TTL when both
     #   align with the same measured cache loss.
+    # model_switch: the dominant (provider, model) changed across the turn
+    #   boundary, so the prefix was re-processed under a new cache key.
     # unattributed: a measured cache-hit loss (boundary or intra-turn) with no
-    #   aligned effort change and no TTL-sized idle gap. Surfaced instead of
-    #   dropped so the miss is visible - the cause (e.g. a mid-turn cache
-    #   invalidation, a cold start, or a backend that doesn't couple cache to
-    #   effort like glm-5.2) is simply unknown.
+    #   aligned effort change, no model switch, and no TTL-sized idle gap.
+    #   Surfaced instead of dropped so the miss is visible - the cause (e.g. a
+    #   mid-turn cache invalidation, a cold start, a backend that doesn't couple
+    #   cache to effort like glm-5.2, tool reorder/removal, nondeterministic
+    #   enumeration, system-prompt churn, or a proxy dropping session affinity)
+    #   is simply unknown.
     type: Literal[
-        "ttl_confirmed", "ttl_likely", "effort_switch", "unattributed"
+        "ttl_confirmed", "ttl_likely", "effort_switch", "model_switch", "unattributed"
+
     ]
     idle_seconds: float
     re_read_tokens: int
@@ -141,6 +146,11 @@ class CacheBreakRecord(BaseModel):
     # for Codex (per-turn effort, first turn establishes the baseline).
     effort_from: str | None = None
     effort_to: str | None = None
+    # Populated only for a model_switch — the dominant model identities that
+    # bracket the cache-key change. Either may be ``None`` on the first turn
+    # after a reset where the prior context is unknown.
+    model_from: str | None = None
+    model_to: str | None = None
 
 
 class CacheBreakSummary(BaseModel):
@@ -446,7 +456,7 @@ def render_markdown(projection: ContextWindowProjection) -> str:
         lines.extend(["", "Cache breaks"])
         lines.append(
             f"   #  {'turn':<10}  {'type':<15}  {'idle':>7}  "
-            f"{'re-read':>9}  {'est. cost':>11}  effort"
+            f"{'re-read':>9}  {'est. cost':>11}  cause"
         )
         for index, record in enumerate(cb.events, start=1):
             if record.effort_to:
@@ -454,6 +464,12 @@ def render_markdown(projection: ContextWindowProjection) -> str:
                     f"{record.effort_from}→{record.effort_to}"
                     if record.effort_from
                     else f"→{record.effort_to}"
+                )
+            elif record.model_to:
+                effort = (
+                    f"{record.model_from}→{record.model_to}"
+                    if record.model_from
+                    else f"→{record.model_to}"
                 )
             else:
                 effort = "-"
@@ -466,10 +482,9 @@ def render_markdown(projection: ContextWindowProjection) -> str:
         type_summary = ", ".join(
             f"{cb.by_type.get(key, 0)} {key}"
             for key in (
-                "ttl_confirmed",
-                "ttl_likely",
-                "effort_switch",
-                "unattributed",
+                "effort_switch", "model_switch",
+                "ttl_confirmed", "ttl_likely", "unattributed",
+
             )
             if cb.by_type.get(key)
         )
@@ -634,6 +649,24 @@ def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
     )
 
 
+def _turn_model_key(turn: dict[str, Any]) -> str | None:
+    """Stable ``provider/model`` identity for a turn, for cache-key-change
+    detection. Reads the ``provider``/``model`` fields core emits per turn in
+    ``session.usage``. Returns ``None`` when either is absent (stale/CLI form),
+    in which case model-switch attribution is skipped for that turn."""
+    provider = _optional_text(turn.get("provider"))
+    model = _optional_text(turn.get("model"))
+    if not provider or not model:
+        return None
+    return f"{provider}/{model}"
+
+
+# Per-turn miss count at or below this is cache-breakpoint granularity noise.
+# Applied only to ``unattributed`` (the no-cause bucket); the attributed types
+# already require a confirming observation so ``re_read > 0`` suffices.
+NOISE_FLOOR_TOKENS = 1024
+
+
 def _project_cache_breaks(
     usage: dict[str, Any],
     *,
@@ -672,6 +705,7 @@ def _project_cache_breaks(
     effort_change_by_turn = _effort_changed_turns(usage)
     ttl_confirmed_s, ttl_likely_min_s = _vendor_ttl_thresholds(vendor)
     records: list[CacheBreakRecord] = []
+    prev_model_key: str | None = None
     for turn in turns:
         turn_id = str(turn.get("id") or turn.get("turn_id") or "")
         if turn_id in skip_turns:
@@ -679,15 +713,33 @@ def _project_cache_breaks(
         runtime = turn.get("runtime") or {}
         idle = _optional_float(runtime.get("wait_before_seconds"))
         re_read = _optional_int(turn.get("cache_boundary_loss_tokens")) or 0
+        model_key = _turn_model_key(turn)
         if idle is None or re_read <= 0:
+            prev_model_key = model_key or prev_model_key
             continue
         cached_after = _optional_int(turn.get("cache_first_call_cached_tokens"))
-        # A confirmed effort change overrides TTL when both align with the same
-        # observed boundary loss.
+        # Cause attribution, strongest first. A confirmed effort change
+        # overrides everything (an observed fact, not a heuristic). A model
+        # switch overrides TTL: a new cache key re-bills the whole prefix
+        # regardless of idle. TTL applies when nothing else explains the loss.
+        # Anything left is ``unattributed`` — the bad-behavior bucket — filtered
+        # by a noise floor so breakpoint-granularity churn does not drown the signal.
         confirmed = effort_change_by_turn.get(turn_id)
         if confirmed is not None:
             break_type = "effort_switch"
             effort_from, effort_to = confirmed
+            model_from = None
+            model_to = None
+        elif (
+            prev_model_key is not None
+            and model_key is not None
+            and model_key != prev_model_key
+        ):
+            break_type = "model_switch"
+            effort_from = None
+            effort_to = None
+            model_from = prev_model_key
+            model_to = model_key
         else:
             break_type = (
                 "ttl_confirmed"
@@ -697,13 +749,23 @@ def _project_cache_breaks(
                 else None
             )
             if break_type is None:
-                # A measured boundary loss with no aligned effort change and no
-                # TTL-sized idle - surface it as ``unattributed`` rather than
-                # dropping the miss (e.g. glm-5.2, whose idle is ~0 by
-                # construction and which doesn't couple cache to effort).
+                # A measured boundary loss with no aligned effort change, no model
+                # switch, and no TTL-sized idle - surface it as ``unattributed``
+                # rather than dropping the miss. Covers glm-5.2 (idle ~0 by
+                # construction, cache not coupled to effort) and the bad-behavior
+                # class (tool reorder/removal, nondeterministic enumeration,
+                # system-prompt churn, proxy session-affinity loss). Filter
+                # breakpoint-granularity noise so the signal stays meaningful.
+                if re_read <= NOISE_FLOOR_TOKENS:
+                    prev_model_key = model_key or prev_model_key
+                    continue
+
                 break_type = "unattributed"
             effort_from = None
             effort_to = None
+            model_from = None
+            model_to = None
+        prev_model_key = model_key or prev_model_key
         # Core prices the observable boundary cache-hit loss; the dashboard
         # only assigns a supported cause to that measured gap.
         waste = _optional_float(turn.get("cache_break_waste_usd"))
@@ -717,6 +779,8 @@ def _project_cache_breaks(
                 est_cost_usd=waste,
                 effort_from=effort_from,
                 effort_to=effort_to,
+                model_from=model_from,
+                model_to=model_to,
             )
         )
     # Intra-turn collapses: a cache-hit drop between two provider calls *inside*
@@ -1877,13 +1941,17 @@ def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
         "ttl_confirmed": "⏳",
         "ttl_likely": "⏳",
         "effort_switch": "⚡",
+        "model_switch": "🔄",
+
         "unattributed": "❓",
     }[record.type]
     label = {
         "ttl_confirmed": "TTL break",
         "ttl_likely": "TTL break?",
         "effort_switch": "effort-switch",
+        "model_switch": "model-switch",
         "unattributed": "cache miss",
+
     }[record.type]
     base = (
         f"{icon} {label}: {_format_idle(record.idle_seconds)} idle → "
@@ -1896,6 +1964,13 @@ def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
             else f"→{record.effort_to}"
         )
         return f"{base} ({change} confirmed)"
+    if record.model_to:
+        change = (
+            f"{record.model_from}→{record.model_to}"
+            if record.model_from
+            else f"→{record.model_to}"
+        )
+        return f"{base} ({change})"
     return base
 
 
@@ -1905,10 +1980,9 @@ def _cache_breaks_teaser(summary: CacheBreakSummary | None) -> str | None:
     type_summary = ", ".join(
         f"{summary.by_type.get(key, 0)} {key}"
         for key in (
-            "ttl_confirmed",
-            "ttl_likely",
-            "effort_switch",
-            "unattributed",
+            "effort_switch", "model_switch",
+            "ttl_confirmed", "ttl_likely", "unattributed",
+
         )
         if summary.by_type.get(key)
     )
