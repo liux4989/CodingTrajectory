@@ -333,6 +333,11 @@ class CodexAdapter(BaseAdapter):
         # string only). Drives effort_changed observation emission: a new turn
         # whose effort differs from this baseline marks a cache-key change-point.
         prev_effort: str | None = None
+        # Last cumulative ``total_token_usage`` seen on a Codex token_count
+        # event. Codex occasionally re-emits an identical snapshot (cumulative
+        # unchanged, last_token_usage repeated) for a non-billable repeat;
+        # tracking the prior lets us drop the stale copy before accounting.
+        prev_total_token_usage: dict[str, int] | None = None
         # One resident slot per (role, block_name); first emission wins. Codex
         # re-injects base/developer/AGENTS.md blocks after each compaction, so
         # per-block dedup keeps only the first (resident-from-first-injection)
@@ -590,6 +595,23 @@ class CodexAdapter(BaseAdapter):
 
                 elif inner_type == "token_count":
                     info = payload.get("info")
+                    # Codex occasionally re-emits a token_count snapshot whose
+                    # cumulative ``total_token_usage`` is byte-identical to the
+                    # prior event's (a stale re-emission, not a new model call);
+                    # its ``last_token_usage`` repeats too, so counting it would
+                    # double-charge the call. Drop it before any accounting.
+                    total_usage = (
+                        info.get("total_token_usage")
+                        if isinstance(info, dict)
+                        else None
+                    )
+                    if (
+                        isinstance(total_usage, dict)
+                        and total_usage == state.prev_total_token_usage
+                    ):
+                        continue
+                    if isinstance(total_usage, dict):
+                        state.prev_total_token_usage = total_usage
                     normalized_metrics = normalize_codex_token_count(
                         model=state.turn_context.get("model"),
                         info=info,
