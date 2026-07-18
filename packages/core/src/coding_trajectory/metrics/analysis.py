@@ -337,6 +337,10 @@ def _compact_turn_usage(
     waste = cache_break_waste_usd(
         cache_boundary_loss_tokens or 0, model=model, provider=provider
     )
+    intra_turn_loss_tokens = _intra_turn_cache_loss(turn)
+    intra_turn_waste = cache_break_waste_usd(
+        intra_turn_loss_tokens or 0, model=model, provider=provider
+    )
     return TurnUsageCompactFlat(
         turn_id=turn.turn_id,
         session_id=session_id,
@@ -353,7 +357,28 @@ def _compact_turn_usage(
         cache_first_call_cached_tokens=(
             first_call.cached_input_tokens if first_call is not None else None
         ),
+        cache_intra_turn_loss_tokens=intra_turn_loss_tokens,
+        cache_intra_turn_waste_usd=intra_turn_waste,
     )
+
+
+def _intra_turn_cache_loss(turn: TurnMetrics) -> int | None:
+    """Largest single cache-hit drop between consecutive provider calls within a
+    turn - ``max(prev.cached_input_tokens - cur.cached_input_tokens, 0)`` over
+    adjacent observations ordered by timestamp. Catches mid-turn collapses (a
+    cache invalidation between two assistant calls in the same turn) that the
+    inter-turn boundary loss can't see. Returns ``None`` when the turn has fewer
+    than two observations (nothing to compare).
+    """
+    observations = sorted(turn.observations, key=lambda item: item.timestamp)
+    if len(observations) < 2:
+        return None
+    max_loss = 0
+    for prev, cur in zip(observations, observations[1:]):
+        loss = max(prev.usage.cached_input_tokens - cur.usage.cached_input_tokens, 0)
+        if loss > max_loss:
+            max_loss = loss
+    return max_loss or None
 
 
 def _first_call_usage(turn: TurnMetrics) -> TokenUsage | None:

@@ -439,6 +439,11 @@ def compact_usage_turn(turn: Any) -> Any:
             "cost": evidence_value(turn.get("estimated_cost")),
             "pricing": evidence_to_pricing(turn.get("estimated_cost")),
             "cache_break_waste_usd": turn.get("cache_break_waste_usd"),
+            "cache_break_re_read_tokens": turn.get("cache_break_re_read_tokens"),
+            "cache_boundary_loss_tokens": turn.get("cache_boundary_loss_tokens"),
+            "cache_first_call_cached_tokens": turn.get("cache_first_call_cached_tokens"),
+            "cache_intra_turn_loss_tokens": turn.get("cache_intra_turn_loss_tokens"),
+            "cache_intra_turn_waste_usd": turn.get("cache_intra_turn_waste_usd"),
         }
     )
 

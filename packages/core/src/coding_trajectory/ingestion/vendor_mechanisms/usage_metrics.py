@@ -126,6 +126,13 @@ def normalize_pi_usage(
     output_tokens = _as_int_or_none(usage_map.get("output")) or 0
     normalized_usage = {
         "input_tokens": input_tokens,
+        # Pi (Anthropic-schema) reports ``input`` as the already-uncached portion
+        # of this individual provider call - mirror that into
+        # ``uncached_input_tokens`` so per-turn re-read evidence
+        # (``cache_break_re_read_tokens``) populates instead of staying ``None``.
+        # The session aggregate is unchanged because the prior
+        # ``or input_tokens`` fallback produced the same value.
+        "uncached_input_tokens": input_tokens,
         "cached_input_tokens": cache_read,
         "cache_creation_input_tokens": cache_write,
         "output_tokens": output_tokens,

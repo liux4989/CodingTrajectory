@@ -123,7 +123,14 @@ class CacheBreakRecord(BaseModel):
     # effort_switch: an observed effort change aligns with an observed drop in
     #   cache-hit tokens across the turn boundary. It overrides TTL when both
     #   align with the same measured cache loss.
-    type: Literal["ttl_confirmed", "ttl_likely", "effort_switch"]
+    # unattributed: a measured cache-hit loss (boundary or intra-turn) with no
+    #   aligned effort change and no TTL-sized idle gap. Surfaced instead of
+    #   dropped so the miss is visible - the cause (e.g. a mid-turn cache
+    #   invalidation, a cold start, or a backend that doesn't couple cache to
+    #   effort like glm-5.2) is simply unknown.
+    type: Literal[
+        "ttl_confirmed", "ttl_likely", "effort_switch", "unattributed"
+    ]
     idle_seconds: float
     re_read_tokens: int
     cached_after_tokens: int | None = None
@@ -458,7 +465,12 @@ def render_markdown(projection: ContextWindowProjection) -> str:
             )
         type_summary = ", ".join(
             f"{cb.by_type.get(key, 0)} {key}"
-            for key in ("ttl_confirmed", "ttl_likely", "effort_switch")
+            for key in (
+                "ttl_confirmed",
+                "ttl_likely",
+                "effort_switch",
+                "unattributed",
+            )
             if cb.by_type.get(key)
         )
         lines.append(
@@ -685,7 +697,11 @@ def _project_cache_breaks(
                 else None
             )
             if break_type is None:
-                continue
+                # A measured boundary loss with no aligned effort change and no
+                # TTL-sized idle - surface it as ``unattributed`` rather than
+                # dropping the miss (e.g. glm-5.2, whose idle is ~0 by
+                # construction and which doesn't couple cache to effort).
+                break_type = "unattributed"
             effort_from = None
             effort_to = None
         # Core prices the observable boundary cache-hit loss; the dashboard
@@ -701,6 +717,37 @@ def _project_cache_breaks(
                 est_cost_usd=waste,
                 effort_from=effort_from,
                 effort_to=effort_to,
+            )
+        )
+    # Intra-turn collapses: a cache-hit drop between two provider calls *inside*
+    # the same turn (below the turn-boundary detector's resolution). Emit one
+    # ``unattributed`` record per turn whose largest intra-turn drop is > 0. This
+    # is independent of the inter-turn gate above (``idle``/``re_read``), so a
+    # turn with no boundary loss but a mid-turn invalidation still surfaces.
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        turn_id = str(turn.get("id") or turn.get("turn_id") or "")
+        if not turn_id or turn_id in skip_turns:
+            continue
+        intra_loss = _optional_int(turn.get("cache_intra_turn_loss_tokens")) or 0
+        if intra_loss <= 0:
+            continue
+        records.append(
+            CacheBreakRecord(
+                turn_id=turn_id,
+                type="unattributed",
+                # Intra-call gap; not TTL-driven. ``wait_before_seconds`` only
+                # covers the inter-turn think-time, so report the within-turn
+                # collapse with a zero idle marker.
+                idle_seconds=0.0,
+                re_read_tokens=intra_loss,
+                cached_after_tokens=None,
+                est_cost_usd=_optional_float(
+                    turn.get("cache_intra_turn_waste_usd")
+                ),
+                effort_from=None,
+                effort_to=None,
             )
         )
     if not records:
@@ -1826,13 +1873,17 @@ def _format_idle(seconds: float) -> str:
 def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
     if record is None:
         return None
-    icon = {"ttl_confirmed": "⏳", "ttl_likely": "⏳", "effort_switch": "⚡"}[
-        record.type
-    ]
+    icon = {
+        "ttl_confirmed": "⏳",
+        "ttl_likely": "⏳",
+        "effort_switch": "⚡",
+        "unattributed": "❓",
+    }[record.type]
     label = {
         "ttl_confirmed": "TTL break",
         "ttl_likely": "TTL break?",
         "effort_switch": "effort-switch",
+        "unattributed": "cache miss",
     }[record.type]
     base = (
         f"{icon} {label}: {_format_idle(record.idle_seconds)} idle → "
@@ -1853,7 +1904,12 @@ def _cache_breaks_teaser(summary: CacheBreakSummary | None) -> str | None:
         return None
     type_summary = ", ".join(
         f"{summary.by_type.get(key, 0)} {key}"
-        for key in ("ttl_confirmed", "ttl_likely", "effort_switch")
+        for key in (
+            "ttl_confirmed",
+            "ttl_likely",
+            "effort_switch",
+            "unattributed",
+        )
         if summary.by_type.get(key)
     )
     confirmed = sum(1 for event in summary.events if event.effort_to)

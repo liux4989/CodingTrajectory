@@ -27,8 +27,9 @@ class TokenUsage(BaseModel):
     # differ: OpenAI/codex report ``input_tokens`` as the TOTAL (cached + uncached)
     # and ``cached_input_tokens`` as the cached subset, so uncached = input -
     # cached; Anthropic/pi report ``input_tokens`` as already-uncached. Codex
-    # ingestion sets this explicitly (input - cached); anthropic/pi leave it
-    # ``None`` so downstream falls back to ``input_tokens`` (correct for them).
+    # ingestion sets this explicitly (input - cached); anthropic leaves it
+    # ``None`` (downstream falls back to ``input_tokens``, correct for them);
+    # pi sets it explicitly to ``input`` so per-turn re-read evidence populates.
     # Carrying it avoids the ``or input_tokens`` fallback that overstated codex
     # re-reads by the full prompt instead of the uncached subset.
     uncached_input_tokens: int | None = None
@@ -415,6 +416,13 @@ class TurnUsageCompactFlat(BaseModel):
     # call to this turn's first call. This is request evidence, not cache size.
     cache_boundary_loss_tokens: int | None = None
     cache_first_call_cached_tokens: int | None = None
+    # Largest single cache-hit drop between consecutive provider calls *within*
+    # this turn (max over adjacent observation pairs of
+    # ``prev.cached_input_tokens - cur.cached_input_tokens``). Catches intra-turn
+    # collapses (e.g. a mid-turn cache invalidation) that the inter-turn
+    # boundary loss can't see. Priced into ``cache_intra_turn_waste_usd``.
+    cache_intra_turn_loss_tokens: int | None = None
+    cache_intra_turn_waste_usd: float | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -435,6 +443,10 @@ class TurnUsageCompactFlat(BaseModel):
             data.pop("cache_boundary_loss_tokens", None)
         if data.get("cache_first_call_cached_tokens") is None:
             data.pop("cache_first_call_cached_tokens", None)
+        if data.get("cache_intra_turn_loss_tokens") is None:
+            data.pop("cache_intra_turn_loss_tokens", None)
+        if data.get("cache_intra_turn_waste_usd") is None:
+            data.pop("cache_intra_turn_waste_usd", None)
         return data
 
 

@@ -174,6 +174,7 @@ def _projection_payload(
                 "effort_switch": by_type.get("effort_switch", 0),
                 "ttl_confirmed": by_type.get("ttl_confirmed", 0),
                 "ttl_likely": by_type.get("ttl_likely", 0),
+                "unattributed": by_type.get("unattributed", 0),
             },
             "total_re_read_tokens": total_re_read,
             "estimated_waste_usd": round(total_waste, 4) if has_waste else None,
