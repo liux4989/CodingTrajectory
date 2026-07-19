@@ -253,6 +253,30 @@ def _compaction_line(compaction: Any) -> str | None:
     return f"- Compactions: {body} (last: {detail})"
 
 
+def _compaction_has_detail(compaction: Any) -> bool:
+    """Whether the compaction summary carries info beyond a bare count.
+
+    `session stats` already appends the compaction count to the Execution line,
+    so the standalone ``- Compactions:`` line is only worth emitting when it adds
+    dropped-token totals or a last-event delta (Claude Code). Codex
+    sliding-window compactions carry neither, so a count-only line would just
+    duplicate the Execution line.
+    """
+    if not isinstance(compaction, dict):
+        return False
+    if compaction.get("cumulative_dropped_tokens") is not None:
+        return True
+    last = compaction.get("last") or {}
+    return bool(
+        isinstance(last, dict)
+        and (
+            last.get("pre_tokens") is not None
+            or last.get("dropped_tokens") is not None
+            or last.get("trigger")
+        )
+    )
+
+
 def _should_render_compaction_timeline(compaction: Any) -> bool:
     """Show the per-event table only when it adds information.
 
@@ -411,10 +435,14 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         lines[-1] += f", {runtime['interrupted_turns']} interrupted"
     if runtime.get("rollbacks"):
         lines[-1] += f", {runtime['rollbacks']} rolled back"
-    compaction_line = _compaction_line(payload.get("compaction"))
-    if compaction_line:
-        lines.append(compaction_line)
-    _render_compaction_timeline(lines, payload.get("compaction"))
+    compaction = payload.get("compaction")
+    # The Execution line already carries the compaction count; only emit the
+    # standalone line when it adds detail (dropped totals / last delta).
+    if _compaction_has_detail(compaction):
+        compaction_line = _compaction_line(compaction)
+        if compaction_line:
+            lines.append(compaction_line)
+    _render_compaction_timeline(lines, compaction)
     if runtime.get("average_time_to_first_token_ms") is not None:
         lines.append(
             f"- Average time to first token: "

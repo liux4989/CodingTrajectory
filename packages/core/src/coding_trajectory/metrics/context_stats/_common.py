@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from coding_trajectory.analysis.request_lineage import is_low_value_turn
 from coding_trajectory.ingestion.models import EventType, Session, SessionGraph
 from coding_trajectory.metrics.models import (
     CompactionEventFlat,
@@ -94,7 +95,18 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         ended_at=ended,
         execution_seconds=execution_seconds,
         wait_seconds=wait_seconds,
-        turns=sum(len(session.turns) for session in session_graph.sessions),
+        # Exclude low-value turns (no items, e.g. a compaction-only lifecycle)
+        # so the count matches `session overview`, which filters them via
+        # is_low_value_turn. Codex wraps a context compaction in its own
+        # task_started/task_complete pair; the projector keeps that empty turn
+        # (so overview can attach the compaction as activity) but it is not a
+        # real executed turn.
+        turns=sum(
+            1
+            for session in session_graph.sessions
+            for turn in session.turns
+            if not is_low_value_turn(turn.items, None)
+        ),
         items=sum(len(turn.items) for session in session_graph.sessions for turn in session.turns),
         tool_calls=tool_calls,
         failed_tool_calls=failed_tool_calls,
