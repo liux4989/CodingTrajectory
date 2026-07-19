@@ -135,41 +135,58 @@ def compaction_stats(session_graph: SessionGraph) -> CompactionStatsFlat | None:
 
     Returns ``None`` when the session never compacted. Claude Code's
     ``claude_compact_boundary`` carries pre/post/dropped/trigger metadata;
-    Codex's ``context_compacted`` does not, so those fields stay ``None``.
+    Codex's ``context_compacted`` does not, so pre/post/dropped are derived
+    from the bracketing ``context_usage`` observations (per-call input token
+    count) instead of staying ``None``.
     """
-    compactions = sorted(
-        (
-            observation
-            for session in session_graph.sessions
-            for observation in session.runtime_observations
-            if observation.kind in _COMPACTION_KINDS
-        ),
-        key=lambda observation: observation.timestamp,
-    )
-    if not compactions:
+    # Pair each compaction with its own session's context_usage observations so
+    # Codex sliding-window compactions can derive pre/post from the per-call
+    # input token count before/after the eviction.
+    entries: list[tuple[Any, list[Any]]] = []
+    for session in session_graph.sessions:
+        context_obs = [
+            obs
+            for obs in sorted(session.context_usage, key=lambda o: o.timestamp)
+            if obs.used_input_tokens > 0
+        ]
+        for observation in session.runtime_observations:
+            if observation.kind in _COMPACTION_KINDS:
+                entries.append((observation, context_obs))
+    entries.sort(key=lambda entry: entry[0].timestamp)
+    if not entries:
         return None
     # ``cumulative_dropped_tokens`` is cumulative (Claude Code reports the
     # running total per compaction), so the latest non-None value is the total.
     cumulative = next(
-        (observation.cumulative_dropped_tokens for observation in reversed(compactions)
+        (observation.cumulative_dropped_tokens
+         for observation, _ in reversed(entries)
          if observation.cumulative_dropped_tokens is not None),
         None,
     )
     events = [
-        _event_from_observation(observation)
-        for observation in compactions
+        _event_from_observation(observation, context_obs)
+        for observation, context_obs in entries
     ]
+    # When no vendor-reported cumulative (Codex), derive it from per-event drops.
+    if cumulative is None:
+        cumulative = sum(
+            event.dropped_tokens for event in events
+            if event.dropped_tokens is not None
+        ) or None
     # ``last`` mirrors the final timeline entry; deriving it from ``events``
     # keeps the two in sync instead of constructing the same object twice.
     return CompactionStatsFlat(
-        count=len(compactions),
+        count=len(entries),
         cumulative_dropped_tokens=cumulative,
         last=events[-1],
         events=events,
     )
 
 
-def _event_from_observation(observation: Any) -> CompactionEventFlat:
+def _event_from_observation(
+    observation: Any,
+    context_observations: list[Any] | None = None,
+) -> CompactionEventFlat:
     pre = observation.pre_tokens
     post = observation.post_tokens
     dropped = (
@@ -177,6 +194,16 @@ def _event_from_observation(observation: Any) -> CompactionEventFlat:
         if pre is not None and post is not None
         else observation.cumulative_dropped_tokens
     )
+    # Codex sliding-window compactions carry no eviction metadata; derive
+    # pre/post from the bracketing context_usage observations (the per-call
+    # input token count). The last call before compaction is the
+    # pre-compaction context size; the first call after is the post size.
+    if pre is None and context_observations:
+        pre = _nearest_context_tokens(context_observations, observation.timestamp, before=True)
+    if post is None and context_observations:
+        post = _nearest_context_tokens(context_observations, observation.timestamp, before=False)
+    if dropped is None and pre is not None and post is not None:
+        dropped = max(pre - post, 0)
     return CompactionEventFlat(
         timestamp=observation.timestamp,
         mechanism=_COMPACTION_MECHANISMS.get(observation.kind, observation.kind),
@@ -185,6 +212,23 @@ def _event_from_observation(observation: Any) -> CompactionEventFlat:
         post_tokens=post,
         dropped_tokens=dropped,
     )
+
+
+def _nearest_context_tokens(
+    observations: list[Any],
+    timestamp: Any,
+    *,
+    before: bool,
+) -> int | None:
+    if before:
+        for observation in reversed(observations):
+            if observation.timestamp < timestamp:
+                return observation.used_input_tokens or None
+        return None
+    for observation in observations:
+        if observation.timestamp > timestamp:
+            return observation.used_input_tokens or None
+    return None
 
 
 def effort_change_stats(session_graph: SessionGraph) -> EffortChangeStatsFlat:

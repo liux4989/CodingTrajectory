@@ -315,9 +315,9 @@ class CompactionEventFlat(BaseModel):
     # Provider-native compaction mechanism, derived from the observation
     # kind. ``eviction_boundary`` (Claude Code's ``claude_compact_boundary``)
     # is a discrete eviction that carries pre/post/dropped/trigger metadata;
-    # ``context_compacted`` (Codex) is a sliding window that exposes none of
-    # those, so its event renders without the delta columns rather than as
-    # empty pre→post / dropped cells. Drives per-provider rendering.
+    # ``context_compacted`` (Codex) is a sliding window that carries none of
+    # those natively, so pre/post/dropped are derived from the bracketing
+    # context_usage observations (per-call input token count).
     mechanism: str
     trigger: str | None = None
     pre_tokens: int | None = None
