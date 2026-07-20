@@ -376,10 +376,13 @@ class IndexCache:
         stale_tids = set()
         for p in stale:
             stale_tids.add(self.path_to_session_graph.pop(p))
-        live_tids = set(self.path_to_session_graph.values())
-        for tid in stale_tids - live_tids:
+        # A tid is fully stale only if no live path still references it.
+        remove_tids = stale_tids - set(self.path_to_session_graph.values())
+        if remove_tids:
             self.session_to_session_graph = {
-                sid: t for sid, t in self.session_to_session_graph.items() if t != tid
+                sid: t
+                for sid, t in self.session_to_session_graph.items()
+                if t not in remove_tids
             }
 
 
