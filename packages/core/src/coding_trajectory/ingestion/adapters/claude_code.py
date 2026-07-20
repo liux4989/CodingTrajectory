@@ -512,30 +512,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             turn.team_state = build_turn_team_state(turn, team_input=team_input)
         started_at = min(record.timestamp for record in transcript)
         ended_at = max(record.timestamp for record in transcript)
-        runtime_observations = [
-            RuntimeObservation(
-                timestamp=record.timestamp,
-                kind=f"claude_{record.data.get('raw_type')}",
-                duration_ms=record.data.get("duration_ms"),
-                reason=record.data.get("content") or record.data.get("subtype"),
-                # ``compact_metadata`` is only present on ``compact_boundary``
-                # records; pass its pre/post/dropped/trigger through so stats can
-                # surface how much context the compaction reclaimed. The fields
-                # are otherwise discarded here.
-                pre_tokens=_compact_meta(record, "pre_tokens"),
-                post_tokens=_compact_meta(record, "post_tokens"),
-                cumulative_dropped_tokens=_compact_meta(
-                    record, "cumulative_dropped_tokens"
-                ),
-                trigger=_compact_meta(record, "trigger"),
-            )
-            for record in transcript
-            if record.kind == "runtime"
-        ]
-        # Effort change-points are not in the transcript (the ``/effort`` command
-        # and its ``<local-command-stdout>`` echo are user records, not runtime
-        # records), so scan the raw records directly and append alongside.
-        runtime_observations.extend(_effort_change_observations(records))
+        runtime_observations = self._build_runtime_observations(transcript, records)
         # A Claude Code ``uuid`` identifies one local stream event, whereas
         # ``message.id`` identifies the provider response.  One response is
         # recorded as several stream events (thinking, text, tool-use, final
@@ -601,6 +578,40 @@ class ClaudeCodeAdapter(BaseAdapter):
             runtime_observations=runtime_observations,
             extensions=extensions,
         )
+
+    def _build_runtime_observations(
+        self,
+        transcript: list[TranscriptRecord],
+        records: list[dict],
+    ) -> list[RuntimeObservation]:
+        """Build runtime observations from runtime-kind transcript records,
+        plus effort change-points scanned from the raw records.
+        """
+        runtime_observations = [
+            RuntimeObservation(
+                timestamp=record.timestamp,
+                kind=f"claude_{record.data.get('raw_type')}",
+                duration_ms=record.data.get("duration_ms"),
+                reason=record.data.get("content") or record.data.get("subtype"),
+                # ``compact_metadata`` is only present on ``compact_boundary``
+                # records; pass its pre/post/dropped/trigger through so stats can
+                # surface how much context the compaction reclaimed. The fields
+                # are otherwise discarded here.
+                pre_tokens=_compact_meta(record, "pre_tokens"),
+                post_tokens=_compact_meta(record, "post_tokens"),
+                cumulative_dropped_tokens=_compact_meta(
+                    record, "cumulative_dropped_tokens"
+                ),
+                trigger=_compact_meta(record, "trigger"),
+            )
+            for record in transcript
+            if record.kind == "runtime"
+        ]
+        # Effort change-points are not in the transcript (the ``/effort`` command
+        # and its ``<local-command-stdout>`` echo are user records, not runtime
+        # records), so scan the raw records directly and append alongside.
+        runtime_observations.extend(_effort_change_observations(records))
+        return runtime_observations
 
     def _first_session_id(self, records: list[dict]) -> UUID | None:
         for record in records:
