@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -582,623 +583,640 @@ class CodexAdapter(BaseAdapter):
             ts = parse_iso_timestamp(record.get("timestamp"))
 
             if outer_type == "session_meta":
-                if state.session_meta:
-                    continue
-                sid_str = payload.get("id")
-                if sid_str:
-                    try:
-                        state.session_id = UUID(sid_str)
-                    except ValueError:
-                        pass
-                state.session_meta = payload
-                base_instructions = payload.get("base_instructions")
-                base_text = (
-                    base_instructions.get("text")
-                    if isinstance(base_instructions, dict)
-                    else None
-                )
-                if ts is not None and isinstance(base_text, str) and base_text:
-                    _record_context_source(
-                        state,
-                        _context_source_observation(
-                            timestamp=ts,
-                            block="base_instructions",
-                            role="system",
-                            text=base_text,
-                        ),
-                        block="base_instructions",
-                        role="system",
-                    )
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="runtime",
-                            kind="runtime",
-                            data={
-                                "raw_type": "prompt_block",
-                                "prompt_role": "system",
-                                "prompt_block": "base_instructions",
-                                "text": base_text,
-                            },
-                            fidelity="synthetic",
-                        )
-                    )
+                self._handle_session_meta(payload, ts, state, transcript)
                 continue
 
             if outer_type == "turn_context":
-                state.turn_context = payload
-                # Detect reasoning-effort change-points. Codex emits a fresh
-                # turn_context per turn carrying the active ``effort``; a value
-                # differing from the prior turn's marks a cache-key change (the
-                # warm prefix is served from a different effort-bucket cache).
-                effort = _as_non_empty_str(payload.get("effort"))
-                if (
-                    effort is not None
-                    and state.prev_effort is not None
-                    and effort != state.prev_effort
-                    and ts is not None
-                ):
-                    state.runtime_observations.append(
-                        RuntimeObservation(
-                            timestamp=ts,
-                            kind="effort_changed",
-                            turn_id_raw=_as_non_empty_str(payload.get("turn_id")),
-                            effort_from=state.prev_effort,
-                            effort_to=effort,
-                        )
-                    )
-                if effort is not None:
-                    state.prev_effort = effort
+                self._handle_turn_context(payload, ts, state)
                 continue
 
             if ts is None:
                 continue
 
             if outer_type == "event_msg":
-                inner_type = payload.get("type", "")
-                turn_id = payload.get("turn_id") or state.turn_context.get("turn_id")
-
-                if inner_type == "user_message":
-                    turn_id_text = _as_non_empty_str(turn_id)
-                    starts_turn = (
-                        turn_id_text is None
-                        or turn_id_text not in state.projected_turn_ids
-                    )
-                    if turn_id_text is not None:
-                        state.projected_turn_ids.add(turn_id_text)
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="user",
-                            kind="user_message",
-                            data={
-                                "turn_id_raw": turn_id,
-                                "text": _extract_message_text(payload),
-                                "previous_turn_status": TurnStatus.INTERRUPTED.value,
-                                "starts_turn": starts_turn,
-                            },
-                        )
-                    )
-
-                elif inner_type == "agent_message":
-                    continue
-
-                elif inner_type == "task_complete":
-                    state.runtime_observations.append(
-                        RuntimeObservation(
-                            timestamp=ts,
-                            kind="turn_completed",
-                            turn_id_raw=_as_non_empty_str(payload.get("turn_id")),
-                            duration_ms=(
-                                payload.get("duration_ms")
-                                if isinstance(payload.get("duration_ms"), int)
-                                else None
-                            ),
-                            time_to_first_token_ms=(
-                                payload.get("time_to_first_token_ms")
-                                if isinstance(
-                                    payload.get("time_to_first_token_ms"), int
-                                )
-                                else None
-                            ),
-                        )
-                    )
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="runtime",
-                            kind="task_complete",
-                            data={
-                                "turn_id_raw": payload.get("turn_id"),
-                                "raw_type": "task_complete",
-                                "text": payload.get("last_agent_message"),
-                                "status": TurnStatus.COMPLETED.value,
-                            },
-                            fidelity="synthetic",
-                        )
-                    )
-
-                elif inner_type == "token_count":
-                    info = payload.get("info")
-                    # Codex occasionally re-emits a token_count snapshot whose
-                    # cumulative ``total_token_usage`` is byte-identical to the
-                    # prior event's (a stale re-emission, not a new model call);
-                    # its ``last_token_usage`` repeats too, so counting it would
-                    # double-charge the call. Drop it before any accounting.
-                    total_usage = (
-                        info.get("total_token_usage")
-                        if isinstance(info, dict)
-                        else None
-                    )
-                    if (
-                        isinstance(total_usage, dict)
-                        and total_usage == state.prev_total_token_usage
-                    ):
-                        continue
-                    if isinstance(total_usage, dict):
-                        state.prev_total_token_usage = total_usage
-                    normalized_metrics = normalize_codex_token_count(
-                        model=state.turn_context.get("model"),
-                        info=info,
-                    )
-                    usage_record = TranscriptRecord(
-                        sequence=len(transcript),
-                        timestamp=ts,
-                        vendor=Vendor.CODEX_CLI,
-                        role="runtime",
-                        kind="usage",
-                        data={
-                            "turn_id_raw": turn_id,
-                            "raw_type": "token_count",
-                            **normalized_metrics,
-                            "vendor_data": {
-                                "metrics": normalized_metrics.get("metrics"),
-                            }
-                            if normalized_metrics.get("metrics")
-                            else {},
-                        },
-                        fidelity="synthetic",
-                    )
-                    observation = context_usage_observation(
-                        timestamp=ts,
-                        source="codex_token_count",
-                        normalized=normalized_metrics,
-                        source_event_id=usage_record.record_id,
-                        provider="openai",
-                    )
-                    if observation is not None:
-                        if observation.context_window_tokens is None:
-                            observation.context_window_tokens = (
-                                state.context_window_tokens
-                            )
-                        state.context_usage.append(observation)
-                    transcript.append(usage_record)
-
-                elif inner_type == "context_compacted":
-                    state.runtime_observations.append(
-                        RuntimeObservation(timestamp=ts, kind="context_compacted")
-                    )
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="runtime",
-                            kind="runtime",
-                            data={
-                                "turn_id_raw": turn_id,
-                                "raw_type": "context_compacted",
-                            },
-                            fidelity="synthetic",
-                        )
-                    )
-
-                elif inner_type == "turn_aborted":
-                    state.runtime_observations.append(
-                        RuntimeObservation(
-                            timestamp=ts,
-                            kind="turn_aborted",
-                            turn_id_raw=_as_non_empty_str(payload.get("turn_id"))
-                            or turn_id,
-                            duration_ms=(
-                                payload.get("duration_ms")
-                                if isinstance(payload.get("duration_ms"), int)
-                                else None
-                            ),
-                            reason=_as_non_empty_str(payload.get("reason")),
-                        )
-                    )
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="runtime",
-                            kind="task_complete",
-                            data={
-                                "turn_id_raw": payload.get("turn_id") or turn_id,
-                                "raw_type": "turn_aborted",
-                                "status": TurnStatus.INTERRUPTED.value,
-                            },
-                            fidelity="synthetic",
-                        )
-                    )
-
-                elif inner_type == "thread_rolled_back":
-                    state.runtime_observations.append(
-                        RuntimeObservation(
-                            timestamp=ts,
-                            kind="thread_rolled_back",
-                            num_turns=(
-                                payload.get("num_turns")
-                                if isinstance(payload.get("num_turns"), int)
-                                else None
-                            ),
-                        )
-                    )
-
-                elif inner_type == "task_started":
-                    context_window = payload.get("model_context_window")
-                    if isinstance(context_window, int) and not isinstance(
-                        context_window, bool
-                    ):
-                        state.context_window_tokens = context_window
-                    state.runtime_observations.append(
-                        RuntimeObservation(
-                            timestamp=ts,
-                            kind="turn_started",
-                            turn_id_raw=_as_non_empty_str(payload.get("turn_id"))
-                            or turn_id,
-                            trace_id=_as_non_empty_str(payload.get("trace_id")),
-                        )
-                    )
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="runtime",
-                            kind="turn_started",
-                            data={
-                                "turn_id_raw": turn_id,
-                                "raw_type": "task_started",
-                                "model_context_window": payload.get(
-                                    "model_context_window"
-                                ),
-                                "collaboration_mode_kind": payload.get(
-                                    "collaboration_mode_kind"
-                                ),
-                            },
-                            fidelity="synthetic",
-                        )
-                    )
-
-                elif inner_type == "sub_agent_activity":
-                    # kind=started carries the spawned child's agent_thread_id
-                    # (== child session id) and event_id (== spawn tool-call
-                    # call_id). Record the link so the forked_from edge origin
-                    # can resolve to the real spawn call, not the parent's last
-                    # tool call.
-                    if payload.get("kind") == "started":
-                        child_id = _as_non_empty_str(payload.get("agent_thread_id"))
-                        spawn_call_id = _as_non_empty_str(payload.get("event_id"))
-                        if (
-                            child_id
-                            and spawn_call_id
-                            and child_id not in state.spawn_links
-                        ):
-                            state.spawn_links[child_id] = spawn_call_id
+                self._handle_event_msg(payload, ts, state, transcript)
 
             elif outer_type == "response_item":
-                inner_type = payload.get("type", "")
+                self._handle_response_item(payload, ts, state, transcript)
 
-                if inner_type == "function_call":
-                    tool_name = payload.get("name")
-                    tool_input = _parse_json_blob(payload.get("arguments"))
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="assistant",
-                            kind="tool_call",
-                            data={
-                                "tool_name": tool_name,
-                                "tool_call_id": payload.get("call_id"),
-                                "input": tool_input,
-                                "item_kind": _codex_item_kind(
-                                    tool_name=tool_name, inner_type=inner_type
-                                ),
-                            },
+        return transcript
+
+    def _handle_response_item(
+        self,
+        payload: dict,
+        ts: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Project a Codex ``response_item`` record into transcript facts."""
+        inner_type = payload.get("type", "")
+
+        if inner_type == "function_call":
+            tool_name = payload.get("name")
+            tool_input = _parse_json_blob(payload.get("arguments"))
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="assistant",
+                    kind="tool_call",
+                    data={
+                        "tool_name": tool_name,
+                        "tool_call_id": payload.get("call_id"),
+                        "input": tool_input,
+                        "item_kind": _codex_item_kind(
+                            tool_name=tool_name, inner_type=inner_type
+                        ),
+                    },
+                )
+            )
+
+        elif inner_type == "function_call_output":
+            raw_output = payload.get("output")
+            output = _parse_json_blob(raw_output)
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="tool",
+                    kind="tool_result",
+                    data={
+                        "tool_call_id": payload.get("call_id"),
+                        "exit_code": extract_exit_code(raw_output),
+                        "output": output,
+                        "status": _tool_result_status(payload, raw_output).value,
+                    },
+                )
+            )
+
+        elif inner_type == "custom_tool_call":
+            tool_name = payload.get("name")
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="assistant",
+                    kind="tool_call",
+                    data={
+                        "tool_name": tool_name,
+                        "tool_call_id": payload.get("call_id"),
+                        "input": _parse_json_blob(payload.get("input")),
+                        "item_kind": _codex_item_kind(
+                            tool_name=tool_name, inner_type=inner_type
+                        ),
+                    },
+                )
+            )
+
+        elif inner_type == "custom_tool_call_output":
+            raw_output = payload.get("output")
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="tool",
+                    kind="tool_result",
+                    data={
+                        "tool_name": payload.get("name"),
+                        "tool_call_id": payload.get("call_id"),
+                        "exit_code": extract_exit_code(raw_output),
+                        "output": _parse_json_blob(raw_output),
+                        "status": _tool_result_status(payload, raw_output).value,
+                    },
+                )
+            )
+
+        elif inner_type == "tool_search_call":
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="assistant",
+                    kind="tool_call",
+                    data={
+                        "tool_name": "tool_search",
+                        "tool_call_id": payload.get("call_id"),
+                        "input": payload.get("arguments"),
+                        "status": _tool_status(payload.get("status")).value,
+                        "item_kind": "tool_call",
+                    },
+                )
+            )
+
+        elif inner_type == "tool_search_output":
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="tool",
+                    kind="tool_result",
+                    data={
+                        "tool_name": "tool_search",
+                        "tool_call_id": payload.get("call_id"),
+                        "output": payload.get("tools"),
+                        "status": _tool_result_status(
+                            payload, payload.get("tools")
+                        ).value,
+                    },
+                )
+            )
+
+        elif inner_type == "web_search_call":
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="assistant",
+                    kind="tool_call",
+                    data={
+                        "tool_name": "web_search",
+                        "tool_call_id": f"web_search:{len(transcript)}",
+                        "input": payload.get("action"),
+                        "status": _tool_status(
+                            payload.get("status"),
+                            default=ToolStatus.COMPLETED,
+                        ).value,
+                        "item_kind": "tool_call",
+                    },
+                )
+            )
+
+        elif inner_type == "local_shell_call":
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="assistant",
+                    kind="tool_call",
+                    data={
+                        "tool_name": "local_shell",
+                        "tool_call_id": payload.get("call_id"),
+                        "input": payload.get("action"),
+                        "command": payload.get("action"),
+                        "status": _tool_status(payload.get("status")).value,
+                        "item_kind": "command_execution",
+                    },
+                )
+            )
+
+        elif inner_type == "image_generation_call":
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="assistant",
+                    kind="tool_call",
+                    data={
+                        "tool_name": "image_generation",
+                        "tool_call_id": payload.get("id"),
+                        "input": {"revised_prompt": payload.get("revised_prompt")},
+                        "output": payload.get("result"),
+                        "status": _tool_status(
+                            payload.get("status"),
+                            default=ToolStatus.COMPLETED,
+                        ).value,
+                        "item_kind": "tool_call",
+                    },
+                )
+            )
+
+        elif inner_type == "reasoning":
+            state.runtime_observations.append(
+                RuntimeObservation(timestamp=ts, kind="reasoning")
+            )
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="assistant",
+                    kind="tool_call",
+                    data={
+                        "tool_name": "reasoning",
+                        "tool_call_id": f"reasoning:{len(transcript)}",
+                        "text": payload.get("content") or payload.get("text"),
+                        "item_kind": "reasoning",
+                    },
+                )
+            )
+            return
+
+        elif inner_type == "message":
+            message_role = payload.get("role")
+            if message_role in {"developer", "system"}:
+                content = payload.get("content")
+                if isinstance(content, list):
+                    for index, item in enumerate(content):
+                        if not isinstance(item, dict):
+                            continue
+                        text = item.get("text")
+                        if not isinstance(text, str) or not text:
+                            continue
+                        block_name = _codex_prompt_block_name(text, index)
+                        _record_context_source(
+                            state,
+                            _context_source_observation(
+                                timestamp=ts,
+                                block=block_name,
+                                role=message_role,
+                                text=text,
+                            ),
+                            block=block_name,
+                            role=message_role,
                         )
-                    )
-
-                elif inner_type == "function_call_output":
-                    raw_output = payload.get("output")
-                    output = _parse_json_blob(raw_output)
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="tool",
-                            kind="tool_result",
-                            data={
-                                "tool_call_id": payload.get("call_id"),
-                                "exit_code": extract_exit_code(raw_output),
-                                "output": output,
-                                "status": _tool_result_status(
-                                    payload, raw_output
-                                ).value,
-                            },
-                        )
-                    )
-
-                elif inner_type == "custom_tool_call":
-                    tool_name = payload.get("name")
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="assistant",
-                            kind="tool_call",
-                            data={
-                                "tool_name": tool_name,
-                                "tool_call_id": payload.get("call_id"),
-                                "input": _parse_json_blob(payload.get("input")),
-                                "item_kind": _codex_item_kind(
-                                    tool_name=tool_name, inner_type=inner_type
-                                ),
-                            },
-                        )
-                    )
-
-                elif inner_type == "custom_tool_call_output":
-                    raw_output = payload.get("output")
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="tool",
-                            kind="tool_result",
-                            data={
-                                "tool_name": payload.get("name"),
-                                "tool_call_id": payload.get("call_id"),
-                                "exit_code": extract_exit_code(raw_output),
-                                "output": _parse_json_blob(raw_output),
-                                "status": _tool_result_status(
-                                    payload, raw_output
-                                ).value,
-                            },
-                        )
-                    )
-
-                elif inner_type == "tool_search_call":
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="assistant",
-                            kind="tool_call",
-                            data={
-                                "tool_name": "tool_search",
-                                "tool_call_id": payload.get("call_id"),
-                                "input": payload.get("arguments"),
-                                "status": _tool_status(payload.get("status")).value,
-                                "item_kind": "tool_call",
-                            },
-                        )
-                    )
-
-                elif inner_type == "tool_search_output":
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="tool",
-                            kind="tool_result",
-                            data={
-                                "tool_name": "tool_search",
-                                "tool_call_id": payload.get("call_id"),
-                                "output": payload.get("tools"),
-                                "status": _tool_result_status(
-                                    payload, payload.get("tools")
-                                ).value,
-                            },
-                        )
-                    )
-
-                elif inner_type == "web_search_call":
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="assistant",
-                            kind="tool_call",
-                            data={
-                                "tool_name": "web_search",
-                                "tool_call_id": f"web_search:{len(transcript)}",
-                                "input": payload.get("action"),
-                                "status": _tool_status(
-                                    payload.get("status"),
-                                    default=ToolStatus.COMPLETED,
-                                ).value,
-                                "item_kind": "tool_call",
-                            },
-                        )
-                    )
-
-                elif inner_type == "local_shell_call":
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="assistant",
-                            kind="tool_call",
-                            data={
-                                "tool_name": "local_shell",
-                                "tool_call_id": payload.get("call_id"),
-                                "input": payload.get("action"),
-                                "command": payload.get("action"),
-                                "status": _tool_status(payload.get("status")).value,
-                                "item_kind": "command_execution",
-                            },
-                        )
-                    )
-
-                elif inner_type == "image_generation_call":
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="assistant",
-                            kind="tool_call",
-                            data={
-                                "tool_name": "image_generation",
-                                "tool_call_id": payload.get("id"),
-                                "input": {
-                                    "revised_prompt": payload.get("revised_prompt")
-                                },
-                                "output": payload.get("result"),
-                                "status": _tool_status(
-                                    payload.get("status"),
-                                    default=ToolStatus.COMPLETED,
-                                ).value,
-                                "item_kind": "tool_call",
-                            },
-                        )
-                    )
-
-                elif inner_type == "reasoning":
-                    state.runtime_observations.append(
-                        RuntimeObservation(timestamp=ts, kind="reasoning")
-                    )
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CODEX_CLI,
-                            role="assistant",
-                            kind="tool_call",
-                            data={
-                                "tool_name": "reasoning",
-                                "tool_call_id": f"reasoning:{len(transcript)}",
-                                "text": payload.get("content") or payload.get("text"),
-                                "item_kind": "reasoning",
-                            },
-                        )
-                    )
-                    continue
-
-                elif inner_type == "message":
-                    message_role = payload.get("role")
-                    if message_role in {"developer", "system"}:
-                        content = payload.get("content")
-                        if isinstance(content, list):
-                            for index, item in enumerate(content):
-                                if not isinstance(item, dict):
-                                    continue
-                                text = item.get("text")
-                                if not isinstance(text, str) or not text:
-                                    continue
-                                block_name = _codex_prompt_block_name(text, index)
-                                _record_context_source(
-                                    state,
-                                    _context_source_observation(
-                                        timestamp=ts,
-                                        block=block_name,
-                                        role=message_role,
-                                        text=text,
-                                    ),
-                                    block=block_name,
-                                    role=message_role,
-                                )
-                                transcript.append(
-                                    TranscriptRecord(
-                                        sequence=len(transcript),
-                                        timestamp=ts,
-                                        vendor=Vendor.CODEX_CLI,
-                                        role="runtime",
-                                        kind="runtime",
-                                        data={
-                                            "raw_type": "prompt_block",
-                                            "prompt_role": message_role,
-                                            "prompt_block": block_name,
-                                            "text": text,
-                                        },
-                                        fidelity="synthetic",
-                                    )
-                                )
-                    elif message_role == "user":
-                        content = payload.get("content")
-                        if isinstance(content, list):
-                            for item in content:
-                                if not isinstance(item, dict):
-                                    continue
-                                text = item.get("text")
-                                if not isinstance(text, str) or not text:
-                                    continue
-                                block_name = _codex_user_prompt_block_name(text)
-                                if block_name is None:
-                                    continue
-                                _record_context_source(
-                                    state,
-                                    _context_source_observation(
-                                        timestamp=ts,
-                                        block=block_name,
-                                        role=message_role,
-                                        text=text,
-                                    ),
-                                    block=block_name,
-                                    role=message_role,
-                                )
-                                transcript.append(
-                                    TranscriptRecord(
-                                        sequence=len(transcript),
-                                        timestamp=ts,
-                                        vendor=Vendor.CODEX_CLI,
-                                        role="runtime",
-                                        kind="runtime",
-                                        data={
-                                            "raw_type": "prompt_block",
-                                            "prompt_role": message_role,
-                                            "prompt_block": block_name,
-                                            "text": text,
-                                        },
-                                        fidelity="synthetic",
-                                    )
-                                )
-                    elif message_role == "assistant":
-                        phase = payload.get("phase")
-                        text = _extract_response_text(payload)
                         transcript.append(
                             TranscriptRecord(
                                 sequence=len(transcript),
                                 timestamp=ts,
                                 vendor=Vendor.CODEX_CLI,
-                                role="assistant",
-                                kind="assistant_message",
+                                role="runtime",
+                                kind="runtime",
                                 data={
+                                    "raw_type": "prompt_block",
+                                    "prompt_role": message_role,
+                                    "prompt_block": block_name,
                                     "text": text,
-                                    "phase": phase,
                                 },
+                                fidelity="synthetic",
                             )
                         )
+            elif message_role == "user":
+                content = payload.get("content")
+                if isinstance(content, list):
+                    for item in content:
+                        if not isinstance(item, dict):
+                            continue
+                        text = item.get("text")
+                        if not isinstance(text, str) or not text:
+                            continue
+                        block_name = _codex_user_prompt_block_name(text)
+                        if block_name is None:
+                            continue
+                        _record_context_source(
+                            state,
+                            _context_source_observation(
+                                timestamp=ts,
+                                block=block_name,
+                                role=message_role,
+                                text=text,
+                            ),
+                            block=block_name,
+                            role=message_role,
+                        )
+                        transcript.append(
+                            TranscriptRecord(
+                                sequence=len(transcript),
+                                timestamp=ts,
+                                vendor=Vendor.CODEX_CLI,
+                                role="runtime",
+                                kind="runtime",
+                                data={
+                                    "raw_type": "prompt_block",
+                                    "prompt_role": message_role,
+                                    "prompt_block": block_name,
+                                    "text": text,
+                                },
+                                fidelity="synthetic",
+                            )
+                        )
+            elif message_role == "assistant":
+                phase = payload.get("phase")
+                text = _extract_response_text(payload)
+                transcript.append(
+                    TranscriptRecord(
+                        sequence=len(transcript),
+                        timestamp=ts,
+                        vendor=Vendor.CODEX_CLI,
+                        role="assistant",
+                        kind="assistant_message",
+                        data={
+                            "text": text,
+                            "phase": phase,
+                        },
+                    )
+                )
 
-        return transcript
+    def _handle_event_msg(
+        self,
+        payload: dict,
+        ts: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Project a Codex ``event_msg`` record into transcript facts."""
+        inner_type = payload.get("type", "")
+        turn_id = payload.get("turn_id") or state.turn_context.get("turn_id")
+
+        if inner_type == "user_message":
+            turn_id_text = _as_non_empty_str(turn_id)
+            starts_turn = (
+                turn_id_text is None or turn_id_text not in state.projected_turn_ids
+            )
+            if turn_id_text is not None:
+                state.projected_turn_ids.add(turn_id_text)
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="user",
+                    kind="user_message",
+                    data={
+                        "turn_id_raw": turn_id,
+                        "text": _extract_message_text(payload),
+                        "previous_turn_status": TurnStatus.INTERRUPTED.value,
+                        "starts_turn": starts_turn,
+                    },
+                )
+            )
+
+        elif inner_type == "agent_message":
+            return
+
+        elif inner_type == "task_complete":
+            state.runtime_observations.append(
+                RuntimeObservation(
+                    timestamp=ts,
+                    kind="turn_completed",
+                    turn_id_raw=_as_non_empty_str(payload.get("turn_id")),
+                    duration_ms=(
+                        payload.get("duration_ms")
+                        if isinstance(payload.get("duration_ms"), int)
+                        else None
+                    ),
+                    time_to_first_token_ms=(
+                        payload.get("time_to_first_token_ms")
+                        if isinstance(payload.get("time_to_first_token_ms"), int)
+                        else None
+                    ),
+                )
+            )
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="runtime",
+                    kind="task_complete",
+                    data={
+                        "turn_id_raw": payload.get("turn_id"),
+                        "raw_type": "task_complete",
+                        "text": payload.get("last_agent_message"),
+                        "status": TurnStatus.COMPLETED.value,
+                    },
+                    fidelity="synthetic",
+                )
+            )
+
+        elif inner_type == "token_count":
+            info = payload.get("info")
+            # Codex occasionally re-emits a token_count snapshot whose
+            # cumulative ``total_token_usage`` is byte-identical to the
+            # prior event's (a stale re-emission, not a new model call);
+            # its ``last_token_usage`` repeats too, so counting it would
+            # double-charge the call. Drop it before any accounting.
+            total_usage = (
+                info.get("total_token_usage") if isinstance(info, dict) else None
+            )
+            if (
+                isinstance(total_usage, dict)
+                and total_usage == state.prev_total_token_usage
+            ):
+                return
+            if isinstance(total_usage, dict):
+                state.prev_total_token_usage = total_usage
+            normalized_metrics = normalize_codex_token_count(
+                model=state.turn_context.get("model"),
+                info=info,
+            )
+            usage_record = TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=ts,
+                vendor=Vendor.CODEX_CLI,
+                role="runtime",
+                kind="usage",
+                data={
+                    "turn_id_raw": turn_id,
+                    "raw_type": "token_count",
+                    **normalized_metrics,
+                    "vendor_data": {
+                        "metrics": normalized_metrics.get("metrics"),
+                    }
+                    if normalized_metrics.get("metrics")
+                    else {},
+                },
+                fidelity="synthetic",
+            )
+            observation = context_usage_observation(
+                timestamp=ts,
+                source="codex_token_count",
+                normalized=normalized_metrics,
+                source_event_id=usage_record.record_id,
+                provider="openai",
+            )
+            if observation is not None:
+                if observation.context_window_tokens is None:
+                    observation.context_window_tokens = state.context_window_tokens
+                state.context_usage.append(observation)
+            transcript.append(usage_record)
+
+        elif inner_type == "context_compacted":
+            state.runtime_observations.append(
+                RuntimeObservation(timestamp=ts, kind="context_compacted")
+            )
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="runtime",
+                    kind="runtime",
+                    data={
+                        "turn_id_raw": turn_id,
+                        "raw_type": "context_compacted",
+                    },
+                    fidelity="synthetic",
+                )
+            )
+
+        elif inner_type == "turn_aborted":
+            state.runtime_observations.append(
+                RuntimeObservation(
+                    timestamp=ts,
+                    kind="turn_aborted",
+                    turn_id_raw=_as_non_empty_str(payload.get("turn_id")) or turn_id,
+                    duration_ms=(
+                        payload.get("duration_ms")
+                        if isinstance(payload.get("duration_ms"), int)
+                        else None
+                    ),
+                    reason=_as_non_empty_str(payload.get("reason")),
+                )
+            )
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="runtime",
+                    kind="task_complete",
+                    data={
+                        "turn_id_raw": payload.get("turn_id") or turn_id,
+                        "raw_type": "turn_aborted",
+                        "status": TurnStatus.INTERRUPTED.value,
+                    },
+                    fidelity="synthetic",
+                )
+            )
+
+        elif inner_type == "thread_rolled_back":
+            state.runtime_observations.append(
+                RuntimeObservation(
+                    timestamp=ts,
+                    kind="thread_rolled_back",
+                    num_turns=(
+                        payload.get("num_turns")
+                        if isinstance(payload.get("num_turns"), int)
+                        else None
+                    ),
+                )
+            )
+
+        elif inner_type == "task_started":
+            context_window = payload.get("model_context_window")
+            if isinstance(context_window, int) and not isinstance(context_window, bool):
+                state.context_window_tokens = context_window
+            state.runtime_observations.append(
+                RuntimeObservation(
+                    timestamp=ts,
+                    kind="turn_started",
+                    turn_id_raw=_as_non_empty_str(payload.get("turn_id")) or turn_id,
+                    trace_id=_as_non_empty_str(payload.get("trace_id")),
+                )
+            )
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="runtime",
+                    kind="turn_started",
+                    data={
+                        "turn_id_raw": turn_id,
+                        "raw_type": "task_started",
+                        "model_context_window": payload.get("model_context_window"),
+                        "collaboration_mode_kind": payload.get(
+                            "collaboration_mode_kind"
+                        ),
+                    },
+                    fidelity="synthetic",
+                )
+            )
+
+        elif inner_type == "sub_agent_activity":
+            # kind=started carries the spawned child's agent_thread_id
+            # (== child session id) and event_id (== spawn tool-call
+            # call_id). Record the link so the forked_from edge origin
+            # can resolve to the real spawn call, not the parent's last
+            # tool call.
+            if payload.get("kind") == "started":
+                child_id = _as_non_empty_str(payload.get("agent_thread_id"))
+                spawn_call_id = _as_non_empty_str(payload.get("event_id"))
+                if child_id and spawn_call_id and child_id not in state.spawn_links:
+                    state.spawn_links[child_id] = spawn_call_id
+
+    def _handle_session_meta(
+        self,
+        payload: dict,
+        ts: datetime | None,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Capture the first session_meta record and its base_instructions block."""
+        if state.session_meta:
+            return
+        sid_str = payload.get("id")
+        if sid_str:
+            try:
+                state.session_id = UUID(sid_str)
+            except ValueError:
+                pass
+        state.session_meta = payload
+        base_instructions = payload.get("base_instructions")
+        base_text = (
+            base_instructions.get("text")
+            if isinstance(base_instructions, dict)
+            else None
+        )
+        if ts is not None and isinstance(base_text, str) and base_text:
+            _record_context_source(
+                state,
+                _context_source_observation(
+                    timestamp=ts,
+                    block="base_instructions",
+                    role="system",
+                    text=base_text,
+                ),
+                block="base_instructions",
+                role="system",
+            )
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CODEX_CLI,
+                    role="runtime",
+                    kind="runtime",
+                    data={
+                        "raw_type": "prompt_block",
+                        "prompt_role": "system",
+                        "prompt_block": "base_instructions",
+                        "text": base_text,
+                    },
+                    fidelity="synthetic",
+                )
+            )
+
+    def _handle_turn_context(
+        self,
+        payload: dict,
+        ts: datetime | None,
+        state: _ParseState,
+    ) -> None:
+        """Record turn_context and detect reasoning-effort change-points.
+
+        Codex emits a fresh turn_context per turn carrying the active
+        ``effort``; a value differing from the prior turn's marks a cache-key
+        change (the warm prefix is served from a different effort-bucket cache).
+        """
+        state.turn_context = payload
+        effort = _as_non_empty_str(payload.get("effort"))
+        if (
+            effort is not None
+            and state.prev_effort is not None
+            and effort != state.prev_effort
+            and ts is not None
+        ):
+            state.runtime_observations.append(
+                RuntimeObservation(
+                    timestamp=ts,
+                    kind="effort_changed",
+                    turn_id_raw=_as_non_empty_str(payload.get("turn_id")),
+                    effort_from=state.prev_effort,
+                    effort_to=effort,
+                )
+            )
+        if effort is not None:
+            state.prev_effort = effort
 
     def ingest_codex_home(self, codex_dir: Path | None = None) -> list[Session]:
         """Ingest all rollout JSONL files under the Codex home directory."""
