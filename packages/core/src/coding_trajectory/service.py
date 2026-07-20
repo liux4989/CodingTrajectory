@@ -390,29 +390,30 @@ class IndexCache:
 
 def _resolve_session_graph(store: Any, raw_id: str | None) -> Any:
     """Resolve a session graph by a session entry point."""
-    if raw_id is not None:
-        resource_id = _parse_user_id(raw_id)
+    if raw_id is None:
+        session_graphs = list(store.session_graphs.values())
+        if len(session_graphs) == 1:
+            return session_graphs[0]
+        if not session_graphs:
+            raise ValueError("no session_graphs found in store")
+        raise ValueError(
+            "session_id is required when the store contains multiple session_graphs"
+        )
+
+    resource_id = _parse_user_id(raw_id)
+    # Try the entry point as a graph id, then a session id, then a turn id.
+    for resolve in (
+        lambda: store.get_session_graph(resource_id),
+        lambda: store.get_session_graph_for_session(
+            store.get_session(resource_id).session_id
+        ),
+        lambda: store.get_session_graph_for_turn(resource_id),
+    ):
         try:
-            return store.get_session_graph(resource_id)
+            return resolve()
         except ResourceNotFoundError:
-            try:
-                session = store.get_session(resource_id)
-                return store.get_session_graph_for_session(session.session_id)
-            except ResourceNotFoundError:
-                try:
-                    return store.get_session_graph_for_turn(resource_id)
-                except ResourceNotFoundError:
-                    raise ResourceNotFoundError(
-                        f"resource not found: {raw_id}"
-                    ) from None
-    session_graphs = list(store.session_graphs.values())
-    if len(session_graphs) == 1:
-        return session_graphs[0]
-    if not session_graphs:
-        raise ValueError("no session_graphs found in store")
-    raise ValueError(
-        "session_id is required when the store contains multiple session_graphs"
-    )
+            continue
+    raise ResourceNotFoundError(f"resource not found: {raw_id}")
 
 
 def _session_graph_entrypoint_id(params: dict[str, Any]) -> str | None:
@@ -1058,11 +1059,7 @@ def _handle_session_events(
             "matches": matches,
         }
 
-    entrypoint_id = (
-        params.get("session_id")
-        or params.get("root_session_id")
-        or params.get("turn_id")
-    )
+    entrypoint_id = _session_graph_entrypoint_id(params)
     session_graph = _resolve_session_graph(context.store, entrypoint_id)
     _cache_session_graph(context, session_graph)
 
