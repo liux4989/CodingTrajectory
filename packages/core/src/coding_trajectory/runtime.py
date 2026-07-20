@@ -25,9 +25,7 @@ def _entrypoint_ids_from_params(params: dict[str, Any]) -> list[str]:
             ids.append(value)
     session_ids = params.get("session_ids")
     if isinstance(session_ids, list):
-        ids.extend(
-            value for value in session_ids if isinstance(value, str) and value
-        )
+        ids.extend(value for value in session_ids if isinstance(value, str) and value)
     return ids
 
 
@@ -98,7 +96,7 @@ class ServiceRuntime:
         self._batch_store = resolve_store(
             {"session_ids": ids},
             log_file=None,
-            global_scope=True,
+            global_scope=self.global_scope,
             current_dir=self.current_dir,
             cache=self.cache,
         )
