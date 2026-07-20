@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationError
@@ -198,13 +199,14 @@ class DocumentStore:
             items=items,
         )
 
-    def get_session_graph(self, resource_id: UUID) -> SessionGraph:
+    def _lookup(self, mapping: dict[UUID, Any], resource_id: UUID, label: str) -> Any:
         try:
-            return self.session_graphs[resource_id]
+            return mapping[resource_id]
         except KeyError as exc:
-            raise ResourceNotFoundError(
-                f"session_graph not found: {resource_id}"
-            ) from exc
+            raise ResourceNotFoundError(f"{label} not found: {resource_id}") from exc
+
+    def get_session_graph(self, resource_id: UUID) -> SessionGraph:
+        return self._lookup(self.session_graphs, resource_id, "session_graph")
 
     def get_session_graph_for_session(self, session_id: UUID) -> SessionGraph:
         try:
@@ -220,28 +222,16 @@ class DocumentStore:
         return self.get_session_graph_for_session(turn.session_id)
 
     def get_session(self, resource_id: UUID) -> Session:
-        try:
-            return self.sessions[resource_id]
-        except KeyError as exc:
-            raise ResourceNotFoundError(f"session not found: {resource_id}") from exc
+        return self._lookup(self.sessions, resource_id, "session")
 
     def get_turn(self, resource_id: UUID) -> Turn:
-        try:
-            return self.turns[resource_id]
-        except KeyError as exc:
-            raise ResourceNotFoundError(f"turn not found: {resource_id}") from exc
+        return self._lookup(self.turns, resource_id, "turn")
 
     def get_event(self, resource_id: UUID) -> Event:
-        try:
-            return self.events[resource_id]
-        except KeyError as exc:
-            raise ResourceNotFoundError(f"event not found: {resource_id}") from exc
+        return self._lookup(self.events, resource_id, "event")
 
     def get_item(self, resource_id: UUID) -> Item:
-        try:
-            return self.items[resource_id]
-        except KeyError as exc:
-            raise ResourceNotFoundError(f"item not found: {resource_id}") from exc
+        return self._lookup(self.items, resource_id, "item")
 
 
 def _parse_item(raw: object) -> Item:
