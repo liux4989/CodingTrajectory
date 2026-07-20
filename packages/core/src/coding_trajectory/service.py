@@ -18,6 +18,7 @@ from coding_trajectory.discovery import (
     format_discovery_sources,
     locate_session_files,
 )
+from coding_trajectory import debug
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.ingestion.common import (
     format_datetime,
@@ -79,64 +80,17 @@ def _session_graph_title(session_graph: SessionGraph) -> str | None:
     return None
 
 
-def _public_session_id_for_session(session: Session) -> str:
-    return str(session.session_id)
+def _public_output_for_session_graph(_session_graph: SessionGraph, payload: Any) -> Any:
+    """Identity seam over canonical session-graph output.
 
-
-def _public_session_id_map(session_graph: SessionGraph) -> dict[str, str]:
-    return {
-        str(session.session_id): _public_session_id_for_session(session)
-        for session in session_graph.sessions
-    }
-
-
-def _public_session_id_value(raw_id: str, session_ids: dict[str, str]) -> str:
-    try:
-        normalized = str(UUID(raw_id))
-    except ValueError:
-        return raw_id
-    return session_ids.get(normalized, raw_id)
-
-
-def _render_public_session_ids(value: Any, session_ids: dict[str, str]) -> Any:
-    if isinstance(value, list):
-        return [_render_public_session_ids(item, session_ids) for item in value]
-
-    if not isinstance(value, dict):
-        return value
-
-    rendered: dict[str, Any] = {}
-    for key, item in value.items():
-        if key == "payload":
-            rendered[key] = item
-            continue
-        if key in {
-            "root_session_id",
-            "session_id",
-            "parent_session_id",
-            "agent_session_id",
-            "handoff_session_id",
-        }:
-            rendered[key] = (
-                _public_session_id_value(item, session_ids)
-                if isinstance(item, str)
-                else item
-            )
-            continue
-        if key in {"session_ids", "forked_session_ids"} and isinstance(item, list):
-            rendered[key] = [
-                _public_session_id_value(entry, session_ids)
-                if isinstance(entry, str)
-                else entry
-                for entry in item
-            ]
-            continue
-        rendered[key] = _render_public_session_ids(item, session_ids)
-    return rendered
-
-
-def _public_output_for_session_graph(session_graph: SessionGraph, payload: Any) -> Any:
-    return _render_public_session_ids(payload, _public_session_id_map(session_graph))
+    The recursive public/internal session-id remapping machinery that lived
+    here has been removed: it produced an identical payload in practice
+    (every session id in canonical output is already a canonical UUID string),
+    so the deep-copy walk was pure overhead. Kept as a no-op wrapper so the
+    session.* handlers read uniformly; inline at the call sites if it ever
+    needs to diverge.
+    """
+    return payload
 
 
 def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any]:
@@ -1049,7 +1003,12 @@ def _handle_session_events(
                     session_graph, serialize_event_detail(event)
                 )
                 matches.append(detail)
-            except (ResourceNotFoundError, ValueError):
+            except (ResourceNotFoundError, ValueError) as exc:
+                debug.warn(
+                    f"skipping unresolved event id {eid!r}: {exc}",
+                    code="session.events.event_id_unresolved",
+                    event_id=eid,
+                )
                 continue
         return {
             "root_session_id": root_session_id,
@@ -1110,7 +1069,12 @@ def _handle_session_items(
                         build_item_details(item, session_graph=session_graph),
                     )
                 )
-            except (ResourceNotFoundError, ValueError):
+            except (ResourceNotFoundError, ValueError) as exc:
+                debug.warn(
+                    f"skipping unresolved item id {item_id!r}: {exc}",
+                    code="session.items.item_id_unresolved",
+                    item_id=item_id,
+                )
                 continue
         return result
 
