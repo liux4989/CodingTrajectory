@@ -44,6 +44,21 @@ def session_title(session: Session) -> str | None:
     return None
 
 
+def session_graph_title(session_graph: SessionGraph) -> str | None:
+    """Return the first available title across the graph's sessions (root first)."""
+    by_id = {session.session_id: session for session in session_graph.sessions}
+    root = by_id.get(session_graph.root_session_id)
+    if root is not None:
+        title = session_title(root)
+        if title:
+            return title
+    for session in session_graph.sessions:
+        title = session_title(session)
+        if title:
+            return title
+    return None
+
+
 def single_session_graph(source_graph: SessionGraph, session: Session) -> SessionGraph:
     """Build a one-session graph view so a single session can be stat'd in isolation."""
     return SessionGraph(

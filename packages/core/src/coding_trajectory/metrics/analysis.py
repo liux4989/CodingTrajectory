@@ -15,6 +15,11 @@ from coding_trajectory.analysis.content_size import (
     reported_token_count,
     visible_text_size,
 )
+from coding_trajectory.analysis.session_stats import (
+    session_graph_title,
+    session_role,
+    session_title,
+)
 from coding_trajectory import debug
 from coding_trajectory.ingestion.models import (
     ContextUsageObservation,
@@ -179,7 +184,7 @@ def build_session_graph_usage(
         estimated_cost = _aggregate_model_cost(model_breakdown)
         section = {
             "session_id": str(session.session_id),
-            "role": _session_role(
+            "role": session_role(
                 source_session, session_graph=session_graph, index=index
             ),
             "relationship": index.incoming_edge_type.get(source_session.session_id),
@@ -189,7 +194,7 @@ def build_session_graph_usage(
                 else None
             ),
             "agent_name": source_session.agent_name,
-            "title": _session_title(source_session),
+            "title": session_title(source_session),
             "runtime": runtime_stats(single).model_dump(mode="json"),
             "compaction": _optional_model_dump(compaction_stats(single)),
             "effort_changes": effort_change_stats(single).model_dump(mode="json"),
@@ -290,7 +295,7 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
         root_session_id=session_graph.root_session_id,
         vendor=root_session.vendor.value if root_session else None,
         project=session_graph.project_identifier,
-        title=_session_graph_title(session_graph),
+        title=session_graph_title(session_graph),
         started_at=min(
             (session.started_at for session in session_graph.sessions),
             default=None,
@@ -455,22 +460,6 @@ def _optional_model_dump(value: Any) -> dict[str, Any] | None:
     return value.model_dump(mode="json")
 
 
-def _session_role(
-    session: Session,
-    *,
-    session_graph: SessionGraph,
-    index: Any,
-) -> str:
-    if session.session_id == session_graph.root_session_id:
-        return "main"
-    relationship = index.incoming_edge_type.get(session.session_id)
-    if relationship in {"spawned_subagent", "sidechain_of"} and index.parent.get(
-        session.session_id
-    ):
-        return "subagent"
-    return relationship or "member"
-
-
 def _turn_runtime(
     turn: TurnMetrics,
     *,
@@ -619,31 +608,6 @@ def _percent(numerator: int | None, denominator: int | None) -> float | None:
     if not numerator or not denominator:
         return None
     return round((numerator / denominator) * 100, 1)
-
-
-def _session_graph_title(session_graph: SessionGraph) -> str | None:
-    by_id = {session.session_id: session for session in session_graph.sessions}
-    root = by_id.get(session_graph.root_session_id)
-    if root is not None:
-        title = _session_title(root)
-        if title:
-            return title
-    for session in session_graph.sessions:
-        title = _session_title(session)
-        if title:
-            return title
-    return None
-
-
-def _session_title(session: Session) -> str | None:
-    extensions = session.extensions
-    if extensions and extensions.codex and extensions.codex.title:
-        return extensions.codex.title
-    if extensions and extensions.claude_code and extensions.claude_code.title:
-        return extensions.claude_code.title
-    if extensions and extensions.pi and extensions.pi.title:
-        return extensions.pi.title
-    return None
 
 
 def _turn_wait_before_seconds(

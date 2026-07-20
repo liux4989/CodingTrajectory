@@ -36,7 +36,7 @@ from coding_trajectory.ingestion.models import (
 )
 from coding_trajectory.analysis.session_stats import (
     build_session_stats_projection,
-    session_title,
+    session_graph_title,
 )
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 
@@ -54,20 +54,6 @@ def _optional_positive_int(params: dict[str, Any], key: str) -> int | None:
     if parsed < 1:
         raise ValueError(f"{key} must be a positive integer")
     return parsed
-
-
-def _session_graph_title(session_graph: SessionGraph) -> str | None:
-    by_id = {session.session_id: session for session in session_graph.sessions}
-    root = by_id.get(session_graph.root_session_id)
-    if root is not None:
-        title = session_title(root)
-        if title:
-            return title
-    for session in session_graph.sessions:
-        title = session_title(session)
-        if title:
-            return title
-    return None
 
 
 def _public_output_for_session_graph(_session_graph: SessionGraph, payload: Any) -> Any:
@@ -90,7 +76,7 @@ def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any
     return prune_nones(
         {
             "root_session_id": str(session_graph.root_session_id),
-            "title": _session_graph_title(session_graph),
+            "title": session_graph_title(session_graph),
             "vendors": vendors or None,
             "session_ids": [
                 str(session.session_id) for session in session_graph.sessions
@@ -615,7 +601,7 @@ def project_sessions_metadata(
         prune_nones(
             {
                 "root_session_id": str(graph.root_session_id),
-                "title": _session_graph_title(graph),
+                "title": session_graph_title(graph),
                 "vendors": sorted(
                     {
                         session.vendor.value
