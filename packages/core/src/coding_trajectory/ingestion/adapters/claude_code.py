@@ -716,86 +716,7 @@ class ClaudeCodeAdapter(BaseAdapter):
                         )
 
             elif raw_type == "assistant":
-                message = record.get("message", {})
-                content = message.get("content", [])
-                stop_reason = message.get("stop_reason")
-                usage = message.get("usage")
-                base = _base_payload(record)
-                tool_uses = _tool_use_blocks(content)
-                text = _extract_text(content)
-                normalized_metrics = normalize_claude_usage(
-                    model=message.get("model"), usage=usage
-                )
-                thinking_blocks = _extract_thinking(content)
-                vendor_data = compact_dict(
-                    {
-                        **normalized_metrics,
-                        "provider_response_id": message.get("id"),
-                        "stop_reason": stop_reason,
-                    }
-                )
-
-                # Promote each thinking block to a first-class reasoning item.
-                # Thinking content is real resident context — it accumulates in
-                # the prompt cache and is counted in used_input_tokens — but
-                # stashing it only in vendor_data left it invisible to context
-                # composition sizing, so the observed composition undercounted
-                # the context window by roughly the accumulated thinking. Mirror
-                # the codex adapter's reasoning handling by emitting one
-                # reasoning transcript record per thinking block.
-                for thinking_text in thinking_blocks:
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CLAUDE_CODE,
-                            role="assistant",
-                            kind="tool_call",
-                            data={
-                                **base,
-                                "tool_name": "reasoning",
-                                "tool_call_id": f"thinking:{len(transcript)}",
-                                "text": thinking_text,
-                                "item_kind": "reasoning",
-                            },
-                        )
-                    )
-
-                if text or vendor_data or not tool_uses:
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CLAUDE_CODE,
-                            role="assistant",
-                            kind="assistant_message",
-                            data={
-                                **base,
-                                "text": text,
-                                "vendor_data": vendor_data,
-                            },
-                        )
-                    )
-
-                for block in tool_uses:
-                    tool_id = block.get("id")
-                    tool_name = block.get("name")
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CLAUDE_CODE,
-                            role="assistant",
-                            kind="tool_call",
-                            data={
-                                **base,
-                                "tool_name": tool_name,
-                                "tool_call_id": tool_id,
-                                "input": block.get("input"),
-                                "item_kind": _claude_item_kind(tool_name),
-                            },
-                        )
-                    )
+                self._handle_assistant_record(record, ts, transcript)
 
             elif raw_type == "system":
                 base = _base_payload(record)
@@ -918,6 +839,99 @@ class ClaudeCodeAdapter(BaseAdapter):
                 continue
 
         return transcript, team_inputs
+
+    def _handle_assistant_record(
+        self,
+        record: dict,
+        ts: datetime,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Project a Claude Code ``assistant`` record into transcript facts.
+
+        Promotes each thinking block to a first-class reasoning item, emits
+        the assistant message (text + usage vendor_data), and one tool_call
+        record per tool_use block.
+        """
+        message = record.get("message", {})
+        content = message.get("content", [])
+        stop_reason = message.get("stop_reason")
+        usage = message.get("usage")
+        base = _base_payload(record)
+        tool_uses = _tool_use_blocks(content)
+        text = _extract_text(content)
+        normalized_metrics = normalize_claude_usage(
+            model=message.get("model"), usage=usage
+        )
+        thinking_blocks = _extract_thinking(content)
+        vendor_data = compact_dict(
+            {
+                **normalized_metrics,
+                "provider_response_id": message.get("id"),
+                "stop_reason": stop_reason,
+            }
+        )
+
+        # Promote each thinking block to a first-class reasoning item.
+        # Thinking content is real resident context — it accumulates in
+        # the prompt cache and is counted in used_input_tokens — but
+        # stashing it only in vendor_data left it invisible to context
+        # composition sizing, so the observed composition undercounted
+        # the context window by roughly the accumulated thinking. Mirror
+        # the codex adapter's reasoning handling by emitting one
+        # reasoning transcript record per thinking block.
+        for thinking_text in thinking_blocks:
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CLAUDE_CODE,
+                    role="assistant",
+                    kind="tool_call",
+                    data={
+                        **base,
+                        "tool_name": "reasoning",
+                        "tool_call_id": f"thinking:{len(transcript)}",
+                        "text": thinking_text,
+                        "item_kind": "reasoning",
+                    },
+                )
+            )
+
+        if text or vendor_data or not tool_uses:
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CLAUDE_CODE,
+                    role="assistant",
+                    kind="assistant_message",
+                    data={
+                        **base,
+                        "text": text,
+                        "vendor_data": vendor_data,
+                    },
+                )
+            )
+
+        for block in tool_uses:
+            tool_id = block.get("id")
+            tool_name = block.get("name")
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CLAUDE_CODE,
+                    role="assistant",
+                    kind="tool_call",
+                    data={
+                        **base,
+                        "tool_name": tool_name,
+                        "tool_call_id": tool_id,
+                        "input": block.get("input"),
+                        "item_kind": _claude_item_kind(tool_name),
+                    },
+                )
+            )
 
     def ingest_default(self) -> list[Session]:
         sessions: list[Session] = []
