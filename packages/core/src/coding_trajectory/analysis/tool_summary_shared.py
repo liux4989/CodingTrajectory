@@ -56,27 +56,66 @@ VENDOR_TOOL_CONCEPT: dict[str, str] = {
     "handoff_to": SESSION_HANDOFF,
 }
 
-SHELL_TOOL_NAMES: frozenset[str] = frozenset({
-    "bash",
-    "Bash",
-    "exec_command",
-    "run_shell_command",
-    "shell",
-    "write_stdin",
-})
+SHELL_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "bash",
+        "Bash",
+        "exec_command",
+        "run_shell_command",
+        "shell",
+        "write_stdin",
+    }
+)
 
-INFORMATIVE_HEADS: frozenset[str] = frozenset({
-    "cat", "bat", "head", "tail", "less", "more", "nl", "sed",
-    "rg", "grep", "ag", "ack", "rga",
-    "ls", "eza", "exa", "tree", "find", "fd",
-    "apply_patch", "applypatch",
-})
+INFORMATIVE_HEADS: frozenset[str] = frozenset(
+    {
+        "cat",
+        "bat",
+        "head",
+        "tail",
+        "less",
+        "more",
+        "nl",
+        "sed",
+        "rg",
+        "grep",
+        "ag",
+        "ack",
+        "rga",
+        "ls",
+        "eza",
+        "exa",
+        "tree",
+        "find",
+        "fd",
+        "apply_patch",
+        "applypatch",
+    }
+)
 
-GREP_FLAG_VALUE_OPTS: frozenset[str] = frozenset({
-    "-A", "-B", "-C", "-e", "-f", "-g", "--glob", "-m", "--max-count",
-    "-t", "--type", "--type-not", "-T", "-r", "--replace", "--include",
-    "--exclude", "--exclude-dir",
-})
+GREP_FLAG_VALUE_OPTS: frozenset[str] = frozenset(
+    {
+        "-A",
+        "-B",
+        "-C",
+        "-e",
+        "-f",
+        "-g",
+        "--glob",
+        "-m",
+        "--max-count",
+        "-t",
+        "--type",
+        "--type-not",
+        "-T",
+        "-r",
+        "--replace",
+        "--include",
+        "--exclude",
+        "--exclude-dir",
+    }
+)
+
 
 def first_str(data: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     for key in keys:

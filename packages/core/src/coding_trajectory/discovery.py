@@ -16,7 +16,14 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import normalize_project_key
-from coding_trajectory.ingestion.models import Event, Item, Session, SessionGraph, Turn, Vendor
+from coding_trajectory.ingestion.models import (
+    Event,
+    Item,
+    Session,
+    SessionGraph,
+    Turn,
+    Vendor,
+)
 from coding_trajectory.query import DocumentError, DocumentStore
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 
@@ -91,12 +98,19 @@ def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     home = Path.home()
     return [
         (Vendor.CODEX_CLI, CodexAdapter, home / ".codex" / "sessions", "*.jsonl"),
-        (Vendor.CLAUDE_CODE, ClaudeCodeAdapter, home / ".claude" / "projects", "*.jsonl"),
+        (
+            Vendor.CLAUDE_CODE,
+            ClaudeCodeAdapter,
+            home / ".claude" / "projects",
+            "*.jsonl",
+        ),
         (Vendor.PI, PiAdapter, home / ".pi" / "agent" / "sessions", "*.jsonl"),
     ]
 
 
-def _selected_vendor_configs(agent_vendor: str | None) -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
+def _selected_vendor_configs(
+    agent_vendor: str | None,
+) -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     configs = _vendor_configs()
     if agent_vendor is None:
         return configs
@@ -159,7 +173,9 @@ def discover_store(
 ) -> DiscoveryResult:
     current_dir = current_dir.resolve()
     scoped_project = project_name or (None if global_scope else current_dir.name)
-    scoped_project_key = normalize_project_key(scoped_project) if scoped_project else None
+    scoped_project_key = (
+        normalize_project_key(scoped_project) if scoped_project else None
+    )
     modified_since = _modified_since(since_days, modified_since=modified_since)
 
     sessions_by_project: dict[str, list[Session]] = {}
@@ -168,7 +184,9 @@ def discover_store(
     # Collect candidate files per vendor and ingest via the shared two-pass
     # helper so forked files drop their re-materialized inherited history.
     candidates: list[tuple[Vendor, type[BaseAdapter], Path]] = []
-    for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(agent_vendor):
+    for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(
+        agent_vendor
+    ):
         for path in _candidate_files(
             vendor,
             base_dir,
@@ -181,7 +199,9 @@ def discover_store(
             candidates.append((vendor, adapter_cls, path))
 
     for vendor, path, session in _ingest_sessions(candidates):
-        project_identifier = infer_project_identifier(session, path, fallback=scoped_project)
+        project_identifier = infer_project_identifier(
+            session, path, fallback=scoped_project
+        )
         if project_identifier is None:
             if scoped_project is None:
                 project_identifier = f"unknown-{vendor.value}"
@@ -202,7 +222,9 @@ def discover_store(
 
     session_graphs: list[SessionGraph] = []
     for project_identifier, sessions in sorted(sessions_by_project.items()):
-        session_graphs.extend(assemble_project_session_graphs(project_identifier, sessions))
+        session_graphs.extend(
+            assemble_project_session_graphs(project_identifier, sessions)
+        )
 
     session_to_root: dict[UUID, UUID] = {
         session.session_id: session_graph.root_session_id
@@ -210,11 +232,15 @@ def discover_store(
         for session in session_graph.sessions
     }
     sources = [
-        DiscoverySource(vendor=vendor, path=path, root_session_id=session_to_root.get(session_id))
+        DiscoverySource(
+            vendor=vendor, path=path, root_session_id=session_to_root.get(session_id)
+        )
         for vendor, path, session_id in path_session_meta
     ]
 
-    return DiscoveryResult(store=DocumentStore.from_session_graphs(session_graphs), sources=sources)
+    return DiscoveryResult(
+        store=DocumentStore.from_session_graphs(session_graphs), sources=sources
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,11 +264,18 @@ def discover_project_metadata(
     """Discover project/vendor metadata without building full session graphs."""
     current_dir = current_dir.resolve()
     scoped_project = project_name or (None if global_scope else current_dir.name)
-    scoped_project_key = normalize_project_key(scoped_project) if scoped_project else None
+    scoped_project_key = (
+        normalize_project_key(scoped_project) if scoped_project else None
+    )
     modified_since = _modified_since(since_days, modified_since=modified_since)
     items: list[ProjectDiscoveryItem] = []
 
-    selected_vendors = {vendor for vendor, _adapter_cls, _base_dir, _pattern in _selected_vendor_configs(agent_vendor)}
+    selected_vendors = {
+        vendor
+        for vendor, _adapter_cls, _base_dir, _pattern in _selected_vendor_configs(
+            agent_vendor
+        )
+    }
     if Vendor.CODEX_CLI in selected_vendors:
         items.extend(
             _codex_config_project_metadata(
@@ -294,7 +327,9 @@ def _metadata_item(
         return None
     if scoped_project_key and (
         project_path is None
-        or not _project_scope_matches_path(project_path, current_dir, scoped_project, scoped_project_key)
+        or not _project_scope_matches_path(
+            project_path, current_dir, scoped_project, scoped_project_key
+        )
     ):
         return None
 
@@ -427,13 +462,23 @@ def _pi_session_files(session_root: Path, *, custom_session_dir: bool) -> list[P
     if not session_root.is_dir():
         return []
     if custom_session_dir:
-        return sorted(path for path in session_root.iterdir() if path.is_file() and path.suffix == ".jsonl")
+        return sorted(
+            path
+            for path in session_root.iterdir()
+            if path.is_file() and path.suffix == ".jsonl"
+        )
 
     files: list[Path] = []
     for project_dir in sorted(session_root.iterdir()):
         if not project_dir.is_dir():
             continue
-        files.extend(sorted(path for path in project_dir.iterdir() if path.is_file() and path.suffix == ".jsonl"))
+        files.extend(
+            sorted(
+                path
+                for path in project_dir.iterdir()
+                if path.is_file() and path.suffix == ".jsonl"
+            )
+        )
     return files
 
 
@@ -569,7 +614,9 @@ def _normalize_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
-def _modified_since(since_days: int | None, *, modified_since: datetime | None = None) -> datetime | None:
+def _modified_since(
+    since_days: int | None, *, modified_since: datetime | None = None
+) -> datetime | None:
     if modified_since is not None:
         return modified_since.astimezone(timezone.utc)
     if since_days is None:
@@ -577,12 +624,16 @@ def _modified_since(since_days: int | None, *, modified_since: datetime | None =
     return datetime.now(timezone.utc) - timedelta(days=since_days)
 
 
-def _all_files(base_dir: Path, pattern: str, *, modified_since: datetime | None) -> list[Path]:
+def _all_files(
+    base_dir: Path, pattern: str, *, modified_since: datetime | None
+) -> list[Path]:
     if not base_dir.is_dir():
         return []
     return [
         path
-        for path in sorted(base_dir.rglob(pattern), key=lambda item: item.stat().st_mtime, reverse=True)
+        for path in sorted(
+            base_dir.rglob(pattern), key=lambda item: item.stat().st_mtime, reverse=True
+        )
         if _is_recent_enough(path, modified_since)
     ]
 
@@ -666,10 +717,7 @@ def _pi_candidate_files_direct(
     if custom_session_dir:
         # Custom session dir: all files are flat, need to parse each to check CWD
         paths = _all_files(scan_root, pattern, modified_since=modified_since)
-        return [
-            path for path in paths
-            if _pi_session_cwd_matches(path, current_dir)
-        ]
+        return [path for path in paths if _pi_session_cwd_matches(path, current_dir)]
 
     # Default structure: sessions are under <base>/<encoded-project>/
     for ancestor in _ancestor_dirs_up_to_project_marker(current_dir):
@@ -747,17 +795,23 @@ def _path_matches_project_scope(
     if vendor == Vendor.CLAUDE_CODE:
         project_path = _claude_project_path_from_source(path)
         if project_path is not None:
-            return _project_scope_matches_path(project_path, current_dir, scoped_project, scoped_project_key)
+            return _project_scope_matches_path(
+                project_path, current_dir, scoped_project, scoped_project_key
+            )
 
     if vendor == Vendor.PI:
         project_path = _pi_project_path_from_source(path)
         if project_path is not None:
-            return _project_scope_matches_path(project_path, current_dir, scoped_project, scoped_project_key)
+            return _project_scope_matches_path(
+                project_path, current_dir, scoped_project, scoped_project_key
+            )
 
     if vendor == Vendor.CODEX_CLI:
         project_path = _codex_project_path_from_source(path)
         if project_path is not None:
-            return _project_scope_matches_path(project_path, current_dir, scoped_project, scoped_project_key)
+            return _project_scope_matches_path(
+                project_path, current_dir, scoped_project, scoped_project_key
+            )
 
     path_token = _normalize_token(scoped_project_key)
     return any(_normalize_token(part) == path_token for part in path.parts)
@@ -784,7 +838,9 @@ def _project_scope_matches_path(
         return True
     if normalize_project_key(resolved.name) == scoped_project_key:
         return True
-    if scoped_project and normalize_project_key(scoped_project) == normalize_project_key(resolved.name):
+    if scoped_project and normalize_project_key(
+        scoped_project
+    ) == normalize_project_key(resolved.name):
         return True
     return False
 
@@ -835,8 +891,10 @@ def _codex_project_path_from_source(path: Path, *, max_records: int = 8) -> Path
     return None
 
 
-def infer_project_identifier(session: Session, source: Path, *, fallback: str | None) -> str | None:
-# For Claude Code the source path encodes the CWD authoritatively; event payloads
+def infer_project_identifier(
+    session: Session, source: Path, *, fallback: str | None
+) -> str | None:
+    # For Claude Code the source path encodes the CWD authoritatively; event payloads
     # can contain misleading cwds (e.g. when a session runs inside .claude/projects/).
     # Path structure: .claude/projects/<encoded-cwd>/<session-uuid>[/subagents]/file.jsonl
     if session.vendor == Vendor.CLAUDE_CODE:
@@ -892,7 +950,9 @@ def _extract_session_cwd(session: Session, source: Path | None = None) -> str | 
     return None
 
 
-def _matching_vendor_configs(path: Path) -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
+def _matching_vendor_configs(
+    path: Path,
+) -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     configs = _vendor_configs()
     matched = [
         config
@@ -902,14 +962,12 @@ def _matching_vendor_configs(path: Path) -> list[tuple[Vendor, type[BaseAdapter]
     return matched or configs
 
 
-
 def _path_matches_vendor_config(path: Path, *, base_dir: Path, pattern: str) -> bool:
     try:
         relative = path.resolve().relative_to(base_dir.resolve())
     except ValueError:
         return False
     return fnmatch.fnmatch(relative.name, pattern)
-
 
 
 def discover_store_from_file(path: Path) -> DiscoveryResult:
@@ -921,7 +979,9 @@ def discover_store_from_file(path: Path) -> DiscoveryResult:
     for vendor, adapter_cls, _base_dir, _pattern in _matching_vendor_configs(path):
         adapter = adapter_cls()
         try:
-            session = stabilize_session(adapter.ingest_file(path), vendor=vendor, source=path)
+            session = stabilize_session(
+                adapter.ingest_file(path), vendor=vendor, source=path
+            )
         except Exception:
             continue
 
@@ -932,7 +992,9 @@ def discover_store_from_file(path: Path) -> DiscoveryResult:
         session_graphs = assemble_project_session_graphs(project_identifier, [session])
         store = DocumentStore.from_session_graphs(session_graphs)
         root_session_id = session_graphs[0].root_session_id
-        source = DiscoverySource(vendor=vendor, path=path, root_session_id=root_session_id)
+        source = DiscoverySource(
+            vendor=vendor, path=path, root_session_id=root_session_id
+        )
         return DiscoveryResult(store=store, sources=[source])
 
     raise DocumentError(f"no adapter could parse log file: {path}")
@@ -961,11 +1023,15 @@ def discover_store_from_files(paths: list[Path]) -> DiscoveryResult:
         path_session_meta.append((vendor, path, session.session_id))
 
     if not sessions_by_project:
-        raise DocumentError(f"no valid log files found for paths: {[str(path) for path in paths]}")
+        raise DocumentError(
+            f"no valid log files found for paths: {[str(path) for path in paths]}"
+        )
 
     session_graphs: list[SessionGraph] = []
     for project_identifier, sessions in sorted(sessions_by_project.items()):
-        session_graphs.extend(assemble_project_session_graphs(project_identifier, sessions))
+        session_graphs.extend(
+            assemble_project_session_graphs(project_identifier, sessions)
+        )
 
     session_to_root: dict[UUID, UUID] = {
         session.session_id: session_graph.root_session_id
@@ -973,11 +1039,15 @@ def discover_store_from_files(paths: list[Path]) -> DiscoveryResult:
         for session in session_graph.sessions
     }
     sources = [
-        DiscoverySource(vendor=vendor, path=path, root_session_id=session_to_root.get(session_id))
+        DiscoverySource(
+            vendor=vendor, path=path, root_session_id=session_to_root.get(session_id)
+        )
         for vendor, path, session_id in path_session_meta
     ]
 
-    return DiscoveryResult(store=DocumentStore.from_session_graphs(session_graphs), sources=sources)
+    return DiscoveryResult(
+        store=DocumentStore.from_session_graphs(session_graphs), sources=sources
+    )
 
 
 def locate_session_files(
@@ -999,11 +1069,15 @@ def locate_session_files(
     """
     current_dir = current_dir.resolve()
     scoped_project = project_name or (None if global_scope else current_dir.name)
-    scoped_project_key = normalize_project_key(scoped_project) if scoped_project else None
+    scoped_project_key = (
+        normalize_project_key(scoped_project) if scoped_project else None
+    )
     modified_since = _modified_since(since_days, modified_since=modified_since)
 
     file_by_session: dict[UUID, tuple[Path, UUID | None]] = {}
-    for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(agent_vendor):
+    for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(
+        agent_vendor
+    ):
         for path in _candidate_files(
             vendor,
             base_dir,
@@ -1135,13 +1209,17 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
                         "item_id": stable_item_id,
                         "session_id": session.session_id,
                         "turn_id": stable_turn_id,
-                        "event_ids": [event_id_map.get(eid, eid) for eid in item.event_ids],
+                        "event_ids": [
+                            event_id_map.get(eid, eid) for eid in item.event_ids
+                        ],
                     }
                 )
             )
 
         user_req_eid = turn.user_request_event_id
-        stable_user_req_eid = event_id_map.get(user_req_eid, user_req_eid) if user_req_eid else None
+        stable_user_req_eid = (
+            event_id_map.get(user_req_eid, user_req_eid) if user_req_eid else None
+        )
 
         turns.append(
             turn.model_copy(

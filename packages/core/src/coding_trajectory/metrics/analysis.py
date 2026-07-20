@@ -26,7 +26,10 @@ from coding_trajectory.ingestion.models import (
     Turn,
     is_tool_shaped_item,
 )
-from coding_trajectory.ingestion.indexes import build_session_graph_index, ordered_sessions
+from coding_trajectory.ingestion.indexes import (
+    build_session_graph_index,
+    ordered_sessions,
+)
 from coding_trajectory.metrics.models import (
     AllocatedRealTokenCost,
     AttributionPolicy,
@@ -54,7 +57,11 @@ from coding_trajectory.metrics.models import (
     TurnMetrics,
     TurnMetricsFlat,
 )
-from coding_trajectory.metrics.context_stats._common import compaction_stats, effort_change_stats, runtime_stats
+from coding_trajectory.metrics.context_stats._common import (
+    compaction_stats,
+    effort_change_stats,
+    runtime_stats,
+)
 from coding_trajectory.metrics.accounting import usage_accounting_payload
 from coding_trajectory.metrics.pricing import (
     CostEvidenceFlat,
@@ -172,7 +179,9 @@ def build_session_graph_usage(
         estimated_cost = _aggregate_model_cost(model_breakdown)
         section = {
             "session_id": str(session.session_id),
-            "role": _session_role(source_session, session_graph=session_graph, index=index),
+            "role": _session_role(
+                source_session, session_graph=session_graph, index=index
+            ),
             "relationship": index.incoming_edge_type.get(source_session.session_id),
             "parent_session_id": (
                 str(index.parent[source_session.session_id])
@@ -211,9 +220,7 @@ def build_session_graph_usage(
     payload["scope"] = "session_graph"
     payload["graph_total_usage"] = payload.get("total_usage")
     payload["graph_runtime"] = payload.get("runtime")
-    payload["models"] = [
-        row.model_dump(mode="json") for row in graph_model_breakdown
-    ]
+    payload["models"] = [row.model_dump(mode="json") for row in graph_model_breakdown]
     payload["sessions"] = session_sections
     return payload
 
@@ -585,14 +592,18 @@ def _context_from_observations(
         return None
     final = ordered[-1]
     max_used = max((item.used_input_tokens for item in ordered), default=0)
-    context_window = final.context_window_tokens or next(
-        (
-            item.context_window_tokens
-            for item in reversed(ordered)
-            if item.context_window_tokens
-        ),
-        None,
-    ) or get_model_context_window(final.model, provider=final.provider)
+    context_window = (
+        final.context_window_tokens
+        or next(
+            (
+                item.context_window_tokens
+                for item in reversed(ordered)
+                if item.context_window_tokens
+            ),
+            None,
+        )
+        or get_model_context_window(final.model, provider=final.provider)
+    )
     return ModelUsageContextFlat(
         final_used_tokens=final.used_input_tokens or None,
         max_used_tokens=max_used or None,
@@ -1594,7 +1605,9 @@ def _token_usage_from_mapping(
     reported_total_tokens = _as_int(
         value.get("total_tokens") or value.get("totalTokens")
     )
-    uncached_raw = value.get("uncached_input_tokens") or value.get("uncachedInputTokens")
+    uncached_raw = value.get("uncached_input_tokens") or value.get(
+        "uncachedInputTokens"
+    )
     total_tokens, processed_tokens, total_confidence = _normalized_total_tokens(
         provider=provider,
         input_tokens=input_tokens,
@@ -1620,9 +1633,7 @@ def _token_usage_from_mapping(
             if isinstance(uncached_raw, int) and not isinstance(uncached_raw, bool)
             else None
         ),
-        cost_usd=_as_float_or_none(
-            value.get("cost_usd") or value.get("costUsd")
-        ),
+        cost_usd=_as_float_or_none(value.get("cost_usd") or value.get("costUsd")),
         total_confidence=total_confidence,
     )
 

@@ -27,7 +27,11 @@ from coding_trajectory.ingestion.models import (
     ToolStatus,
     Vendor,
 )
-from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
+from coding_trajectory.ingestion.transcript import (
+    TranscriptRecord,
+    events_from_transcript,
+    project_transcript,
+)
 from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
     CodexMultiAgentInput,
     CodexThreadSpawn,
@@ -44,14 +48,29 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
 _CODEX_FALLBACK_TITLE_MAX_LEN = 96
 
-_CODEX_FILE_TOOL_NAMES: frozenset[str] = frozenset({
-    "Read", "Edit", "MultiEdit", "Write", "View",
-    "read_file", "read_many_files", "replace", "write_file",
-    "edit_file", "create_file", "apply_patch",
-})
-_CODEX_PLAN_TOOL_NAMES: frozenset[str] = frozenset({
-    "TodoWrite", "TodoRead", "update_plan",
-})
+_CODEX_FILE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "Read",
+        "Edit",
+        "MultiEdit",
+        "Write",
+        "View",
+        "read_file",
+        "read_many_files",
+        "replace",
+        "write_file",
+        "edit_file",
+        "create_file",
+        "apply_patch",
+    }
+)
+_CODEX_PLAN_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "TodoWrite",
+        "TodoRead",
+        "update_plan",
+    }
+)
 
 
 def _codex_item_kind(*, tool_name: str | None, inner_type: str) -> str:
@@ -75,7 +94,9 @@ def _parse_json_blob(raw: Any) -> Any:
         return raw
 
 
-def _tool_status(value: Any, *, default: ToolStatus = ToolStatus.REQUESTED) -> ToolStatus:
+def _tool_status(
+    value: Any, *, default: ToolStatus = ToolStatus.REQUESTED
+) -> ToolStatus:
     if value == "completed":
         return ToolStatus.COMPLETED
     if value in {"failed", "declined"}:
@@ -147,8 +168,14 @@ def _extract_uuid_text(value: Any) -> str | None:
     return match.group(0) if match else raw
 
 
-def _codex_session_title(session_id: UUID, meta: dict[str, Any], index_path: Path = _DEFAULT_CODEX_SESSION_INDEX) -> str | None:
-    title = _as_non_empty_str(meta.get("title")) or _as_non_empty_str(meta.get("thread_name"))
+def _codex_session_title(
+    session_id: UUID,
+    meta: dict[str, Any],
+    index_path: Path = _DEFAULT_CODEX_SESSION_INDEX,
+) -> str | None:
+    title = _as_non_empty_str(meta.get("title")) or _as_non_empty_str(
+        meta.get("thread_name")
+    )
     if title is not None:
         return title
     if not index_path.is_file():
@@ -163,7 +190,9 @@ def _codex_session_title(session_id: UUID, meta: dict[str, Any], index_path: Pat
                     continue
                 if record.get("id") != str(session_id):
                     continue
-                return _as_non_empty_str(record.get("thread_name")) or _as_non_empty_str(record.get("title"))
+                return _as_non_empty_str(
+                    record.get("thread_name")
+                ) or _as_non_empty_str(record.get("title"))
     except OSError:
         return None
     return None
@@ -176,11 +205,15 @@ def _codex_fallback_title(value: Any) -> str | None:
     text = " ".join(text.split())
     if len(text) <= _CODEX_FALLBACK_TITLE_MAX_LEN:
         return text
-    return f"{text[:_CODEX_FALLBACK_TITLE_MAX_LEN - 3].rstrip()}..."
+    return f"{text[: _CODEX_FALLBACK_TITLE_MAX_LEN - 3].rstrip()}..."
 
 
-def _codex_multi_agent_input(meta: dict[str, Any], ctx: dict[str, Any], *, session_id: UUID) -> CodexMultiAgentInput:
-    sandbox_policy = ctx.get("sandbox_policy") if isinstance(ctx.get("sandbox_policy"), dict) else {}
+def _codex_multi_agent_input(
+    meta: dict[str, Any], ctx: dict[str, Any], *, session_id: UUID
+) -> CodexMultiAgentInput:
+    sandbox_policy = (
+        ctx.get("sandbox_policy") if isinstance(ctx.get("sandbox_policy"), dict) else {}
+    )
     source = meta.get("source")
     thread_spawn_raw = (
         _extract_nested_map(source, "subagent", "thread_spawn")
@@ -198,16 +231,23 @@ def _codex_multi_agent_input(meta: dict[str, Any], ctx: dict[str, Any], *, sessi
             if isinstance(collaboration_mode, dict)
             else _as_non_empty_str(collaboration_mode)
         ),
-        agent_nickname=_as_non_empty_str(meta.get("nickname")) or _as_non_empty_str(meta.get("agent_nickname")),
+        agent_nickname=_as_non_empty_str(meta.get("nickname"))
+        or _as_non_empty_str(meta.get("agent_nickname")),
         agent_role=_as_non_empty_str(meta.get("agent_role")) or source_name,
         cwd=_as_non_empty_str(meta.get("cwd")),
         title=_codex_session_title(session_id, meta),
         forked_from_id=_extract_uuid_text(meta.get("forked_from_id")),
         thread_spawn=(
             CodexThreadSpawn(
-                parent_thread_id=_extract_uuid_text(thread_spawn_raw.get("parent_thread_id")),
-                depth=thread_spawn_raw.get("depth") if isinstance(thread_spawn_raw.get("depth"), int) else None,
-                agent_nickname=_as_non_empty_str(thread_spawn_raw.get("agent_nickname")),
+                parent_thread_id=_extract_uuid_text(
+                    thread_spawn_raw.get("parent_thread_id")
+                ),
+                depth=thread_spawn_raw.get("depth")
+                if isinstance(thread_spawn_raw.get("depth"), int)
+                else None,
+                agent_nickname=_as_non_empty_str(
+                    thread_spawn_raw.get("agent_nickname")
+                ),
                 agent_role=_as_non_empty_str(thread_spawn_raw.get("agent_role")),
             )
             if thread_spawn_raw is not None
@@ -229,7 +269,11 @@ def _session_forked_from_id(records: list[dict]) -> str | None:
     for record in records:
         if record.get("type") != "session_meta":
             continue
-        ffid = record.get("payload", {}).get("forked_from_id") if isinstance(record.get("payload"), dict) else None
+        ffid = (
+            record.get("payload", {}).get("forked_from_id")
+            if isinstance(record.get("payload"), dict)
+            else None
+        )
         return _extract_uuid_text(ffid)
     return None
 
@@ -321,7 +365,11 @@ def _codex_context_source_key(*, block: str, role: str, text: str) -> str:
         return "skills"
     if "plugins_instructions" in block or "### available plugins" in haystack:
         return "mcp"
-    if "memory_summary" in haystack or "memory layout" in haystack or "## memory" in haystack:
+    if (
+        "memory_summary" in haystack
+        or "memory layout" in haystack
+        or "## memory" in haystack
+    ):
         return "memory"
     if "mcp" in haystack or "tools are grouped" in haystack:
         return "mcp"
@@ -394,8 +442,8 @@ class CodexAdapter(BaseAdapter):
         # re-injects base/developer/AGENTS.md blocks after each compaction, so
         # per-block dedup keeps only the first (resident-from-first-injection)
         # copy — its timestamp drives per-call cost attribution.
-        context_source_by_block: dict[tuple[str, str], ContextSourceObservation] = field(
-            default_factory=dict
+        context_source_by_block: dict[tuple[str, str], ContextSourceObservation] = (
+            field(default_factory=dict)
         )
         # child agent_thread_id -> spawn tool-call call_id, captured from
         # sub_agent_activity{kind:started} events. Backs the forked_from edge
@@ -419,7 +467,9 @@ class CodexAdapter(BaseAdapter):
         started: set[str] = set()
         for record in self._iter_records(source):
             payload = record.get("payload") or {}
-            if payload.get("type") == "task_started" and isinstance(payload.get("turn_id"), str):
+            if payload.get("type") == "task_started" and isinstance(
+                payload.get("turn_id"), str
+            ):
                 started.add(payload["turn_id"])
         return started
 
@@ -471,7 +521,9 @@ class CodexAdapter(BaseAdapter):
     ) -> Session:
         state = state or self._ParseState()
         if not transcript:
-            raise ValueError(f"CodexAdapter: no transcript records parsed from {source}")
+            raise ValueError(
+                f"CodexAdapter: no transcript records parsed from {source}"
+            )
         else:
             started_at = min(record.timestamp for record in transcript)
             ended_at = max(record.timestamp for record in transcript)
@@ -489,7 +541,9 @@ class CodexAdapter(BaseAdapter):
             session_id=state.session_id,
             vendor=Vendor.CODEX_CLI,
             records=transcript,
-            active_status=TurnStatus.RUNNING if _is_source_active(source) else TurnStatus.INCOMPLETE,
+            active_status=TurnStatus.RUNNING
+            if _is_source_active(source)
+            else TurnStatus.INCOMPLETE,
             default_previous_turn_status=TurnStatus.INTERRUPTED,
             # Codex's authoritative turn delimiter is the task_started/task_complete
             # lifecycle boundary; user_message is an in-turn item. Prefer lifecycle
@@ -538,7 +592,11 @@ class CodexAdapter(BaseAdapter):
                         pass
                 state.session_meta = payload
                 base_instructions = payload.get("base_instructions")
-                base_text = base_instructions.get("text") if isinstance(base_instructions, dict) else None
+                base_text = (
+                    base_instructions.get("text")
+                    if isinstance(base_instructions, dict)
+                    else None
+                )
                 if ts is not None and isinstance(base_text, str) and base_text:
                     _record_context_source(
                         state,
@@ -605,7 +663,8 @@ class CodexAdapter(BaseAdapter):
                 if inner_type == "user_message":
                     turn_id_text = _as_non_empty_str(turn_id)
                     starts_turn = (
-                        turn_id_text is None or turn_id_text not in state.projected_turn_ids
+                        turn_id_text is None
+                        or turn_id_text not in state.projected_turn_ids
                     )
                     if turn_id_text is not None:
                         state.projected_turn_ids.add(turn_id_text)
@@ -641,7 +700,9 @@ class CodexAdapter(BaseAdapter):
                             ),
                             time_to_first_token_ms=(
                                 payload.get("time_to_first_token_ms")
-                                if isinstance(payload.get("time_to_first_token_ms"), int)
+                                if isinstance(
+                                    payload.get("time_to_first_token_ms"), int
+                                )
                                 else None
                             ),
                         )
@@ -698,7 +759,9 @@ class CodexAdapter(BaseAdapter):
                             **normalized_metrics,
                             "vendor_data": {
                                 "metrics": normalized_metrics.get("metrics"),
-                            } if normalized_metrics.get("metrics") else {},
+                            }
+                            if normalized_metrics.get("metrics")
+                            else {},
                         },
                         fidelity="synthetic",
                     )
@@ -711,7 +774,9 @@ class CodexAdapter(BaseAdapter):
                     )
                     if observation is not None:
                         if observation.context_window_tokens is None:
-                            observation.context_window_tokens = state.context_window_tokens
+                            observation.context_window_tokens = (
+                                state.context_window_tokens
+                            )
                         state.context_usage.append(observation)
                     transcript.append(usage_record)
 
@@ -739,7 +804,8 @@ class CodexAdapter(BaseAdapter):
                         RuntimeObservation(
                             timestamp=ts,
                             kind="turn_aborted",
-                            turn_id_raw=_as_non_empty_str(payload.get("turn_id")) or turn_id,
+                            turn_id_raw=_as_non_empty_str(payload.get("turn_id"))
+                            or turn_id,
                             duration_ms=(
                                 payload.get("duration_ms")
                                 if isinstance(payload.get("duration_ms"), int)
@@ -779,13 +845,16 @@ class CodexAdapter(BaseAdapter):
 
                 elif inner_type == "task_started":
                     context_window = payload.get("model_context_window")
-                    if isinstance(context_window, int) and not isinstance(context_window, bool):
+                    if isinstance(context_window, int) and not isinstance(
+                        context_window, bool
+                    ):
                         state.context_window_tokens = context_window
                     state.runtime_observations.append(
                         RuntimeObservation(
                             timestamp=ts,
                             kind="turn_started",
-                            turn_id_raw=_as_non_empty_str(payload.get("turn_id")) or turn_id,
+                            turn_id_raw=_as_non_empty_str(payload.get("turn_id"))
+                            or turn_id,
                             trace_id=_as_non_empty_str(payload.get("trace_id")),
                         )
                     )
@@ -799,8 +868,12 @@ class CodexAdapter(BaseAdapter):
                             data={
                                 "turn_id_raw": turn_id,
                                 "raw_type": "task_started",
-                                "model_context_window": payload.get("model_context_window"),
-                                "collaboration_mode_kind": payload.get("collaboration_mode_kind"),
+                                "model_context_window": payload.get(
+                                    "model_context_window"
+                                ),
+                                "collaboration_mode_kind": payload.get(
+                                    "collaboration_mode_kind"
+                                ),
                             },
                             fidelity="synthetic",
                         )
@@ -815,7 +888,11 @@ class CodexAdapter(BaseAdapter):
                     if payload.get("kind") == "started":
                         child_id = _as_non_empty_str(payload.get("agent_thread_id"))
                         spawn_call_id = _as_non_empty_str(payload.get("event_id"))
-                        if child_id and spawn_call_id and child_id not in state.spawn_links:
+                        if (
+                            child_id
+                            and spawn_call_id
+                            and child_id not in state.spawn_links
+                        ):
                             state.spawn_links[child_id] = spawn_call_id
 
             elif outer_type == "response_item":
@@ -835,7 +912,9 @@ class CodexAdapter(BaseAdapter):
                                 "tool_name": tool_name,
                                 "tool_call_id": payload.get("call_id"),
                                 "input": tool_input,
-                                "item_kind": _codex_item_kind(tool_name=tool_name, inner_type=inner_type),
+                                "item_kind": _codex_item_kind(
+                                    tool_name=tool_name, inner_type=inner_type
+                                ),
                             },
                         )
                     )
@@ -854,7 +933,9 @@ class CodexAdapter(BaseAdapter):
                                 "tool_call_id": payload.get("call_id"),
                                 "exit_code": extract_exit_code(raw_output),
                                 "output": output,
-                                "status": _tool_result_status(payload, raw_output).value,
+                                "status": _tool_result_status(
+                                    payload, raw_output
+                                ).value,
                             },
                         )
                     )
@@ -872,7 +953,9 @@ class CodexAdapter(BaseAdapter):
                                 "tool_name": tool_name,
                                 "tool_call_id": payload.get("call_id"),
                                 "input": _parse_json_blob(payload.get("input")),
-                                "item_kind": _codex_item_kind(tool_name=tool_name, inner_type=inner_type),
+                                "item_kind": _codex_item_kind(
+                                    tool_name=tool_name, inner_type=inner_type
+                                ),
                             },
                         )
                     )
@@ -891,7 +974,9 @@ class CodexAdapter(BaseAdapter):
                                 "tool_call_id": payload.get("call_id"),
                                 "exit_code": extract_exit_code(raw_output),
                                 "output": _parse_json_blob(raw_output),
-                                "status": _tool_result_status(payload, raw_output).value,
+                                "status": _tool_result_status(
+                                    payload, raw_output
+                                ).value,
                             },
                         )
                     )
@@ -926,7 +1011,9 @@ class CodexAdapter(BaseAdapter):
                                 "tool_name": "tool_search",
                                 "tool_call_id": payload.get("call_id"),
                                 "output": payload.get("tools"),
-                                "status": _tool_result_status(payload, payload.get("tools")).value,
+                                "status": _tool_result_status(
+                                    payload, payload.get("tools")
+                                ).value,
                             },
                         )
                     )
@@ -982,7 +1069,9 @@ class CodexAdapter(BaseAdapter):
                             data={
                                 "tool_name": "image_generation",
                                 "tool_call_id": payload.get("id"),
-                                "input": {"revised_prompt": payload.get("revised_prompt")},
+                                "input": {
+                                    "revised_prompt": payload.get("revised_prompt")
+                                },
                                 "output": payload.get("result"),
                                 "status": _tool_status(
                                     payload.get("status"),

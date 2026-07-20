@@ -30,7 +30,13 @@ def build_flows(items: list[Item]) -> list[dict[str, Any]]:
         if isinstance(item, AgentMessageItem):
             text = (item.text or "").strip()
             if text:
-                result.append({"type": "assistant_response", "text": text, "item_id": str(item.item_id)})
+                result.append(
+                    {
+                        "type": "assistant_response",
+                        "text": text,
+                        "item_id": str(item.item_id),
+                    }
+                )
     return _group_consecutive_tool_calls(result)
 
 
@@ -81,26 +87,32 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
             str(item.get("name") or ""),
             _profile_name(item),
         )
-        return prune_nones({
-            "tool": item.get("name"),
-            "status": item.get("status"),
-            "count": item.get("count"),
-            profile.detail_list_key: item.get("descriptions"),
-            profile.detail_counts_key or "": item.get("description_counts"),
-            "item_ids": item.get("item_ids"),
-        })
+        return prune_nones(
+            {
+                "tool": item.get("name"),
+                "status": item.get("status"),
+                "count": item.get("count"),
+                profile.detail_list_key: item.get("descriptions"),
+                profile.detail_counts_key or "": item.get("description_counts"),
+                "item_ids": item.get("item_ids"),
+            }
+        )
 
     if item.get("type") == "tool_call":
         profile = tool_optimization_profile(
             str(item.get("name") or ""),
             _profile_name(item),
         )
-        return prune_nones({
-            "tool": item.get("name"),
-            "status": item.get("status"),
-            profile.detail_key: item.get("description"),
-            "item_ids": [item.get("item_id")] if isinstance(item.get("item_id"), str) else None,
-        })
+        return prune_nones(
+            {
+                "tool": item.get("name"),
+                "status": item.get("status"),
+                profile.detail_key: item.get("description"),
+                "item_ids": [item.get("item_id")]
+                if isinstance(item.get("item_id"), str)
+                else None,
+            }
+        )
 
     return item
 
@@ -133,7 +145,9 @@ def _merge_overview_tool_group(group: dict[str, Any], item: dict[str, Any]) -> N
         existing = []
         group[detail_key] = existing
     descriptions = _tool_descriptions(item)
-    existing.extend(description for description in descriptions if description not in existing)
+    existing.extend(
+        description for description in descriptions if description not in existing
+    )
     item_ids = group.get("item_ids")
     if isinstance(item_ids, list):
         incoming = item.get("item_id")
@@ -145,7 +159,11 @@ def _tool_descriptions(item: dict[str, Any]) -> list[str]:
     if item.get("type") == "tool_call_group":
         descriptions = item.get("descriptions")
         if isinstance(descriptions, list):
-            return [description for description in descriptions if isinstance(description, str) and description]
+            return [
+                description
+                for description in descriptions
+                if isinstance(description, str) and description
+            ]
         return []
     description = item.get("description")
     if isinstance(description, str) and description:
@@ -153,7 +171,9 @@ def _tool_descriptions(item: dict[str, Any]) -> list[str]:
     return []
 
 
-def _truncate_text(value: Any, *, limit: int = _OVERVIEW_TEXT_PREVIEW_LEN) -> str | None:
+def _truncate_text(
+    value: Any, *, limit: int = _OVERVIEW_TEXT_PREVIEW_LEN
+) -> str | None:
     text = truncate_text_preview(value, max_len=limit)
     if not text:
         return None
@@ -216,19 +236,23 @@ def _project_tool_run(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for item in items
         if isinstance(item.get("item_id"), str) and item.get("item_id")
     ]
-    description_counts = _description_counts(descriptions) if profile.dedupe_repeated_details else None
+    description_counts = (
+        _description_counts(descriptions) if profile.dedupe_repeated_details else None
+    )
     if profile.dedupe_repeated_details:
         descriptions = list(dict.fromkeys(descriptions))
-    grouped = prune_nones({
-        "type": "tool_call_group",
-        "name": items[0].get("name"),
-        "optimization_profile": _profile_name(items[0]),
-        "status": items[0].get("status"),
-        "count": len(items),
-        "descriptions": descriptions or None,
-        "description_counts": description_counts,
-        "item_ids": item_ids or None,
-    })
+    grouped = prune_nones(
+        {
+            "type": "tool_call_group",
+            "name": items[0].get("name"),
+            "optimization_profile": _profile_name(items[0]),
+            "status": items[0].get("status"),
+            "count": len(items),
+            "descriptions": descriptions or None,
+            "description_counts": description_counts,
+            "item_ids": item_ids or None,
+        }
+    )
     return [grouped]
 
 
@@ -243,5 +267,7 @@ def _description_counts(descriptions: list[str]) -> dict[str, int] | None:
     counts: dict[str, int] = {}
     for description in descriptions:
         counts[description] = counts.get(description, 0) + 1
-    repeated = {description: count for description, count in counts.items() if count > 1}
+    repeated = {
+        description: count for description, count in counts.items() if count > 1
+    }
     return repeated or None

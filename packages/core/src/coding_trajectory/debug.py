@@ -24,8 +24,8 @@ from typing import Any
 
 MAX_WARNINGS = 256
 
-_current_context: contextvars.ContextVar["DebugContext | None"] = contextvars.ContextVar(
-    "coding_trajectory.debug", default=None
+_current_context: contextvars.ContextVar["DebugContext | None"] = (
+    contextvars.ContextVar("coding_trajectory.debug", default=None)
 )
 
 
@@ -71,7 +71,9 @@ class DebugContext:
                 message=str(message),
                 code=code,
                 severity=severity,
-                context={key: value for key, value in context.items() if value is not None},
+                context={
+                    key: value for key, value in context.items() if value is not None
+                },
             )
         )
 

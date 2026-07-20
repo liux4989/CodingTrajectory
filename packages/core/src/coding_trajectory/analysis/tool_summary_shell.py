@@ -37,35 +37,120 @@ CommandFamily = Literal[
     "other",
 ]
 
-_TEST_TOKENS = frozenset({
-    "pytest", "jest", "vitest", "mocha", "rspec", "phpunit",
-    "unittest", "tox", "ctest", "test", "deno",
-})
-_BUILD_TOKENS = frozenset({
-    "tsc", "mypy", "ruff", "eslint", "flake8", "pylint", "black", "isort", "prettier",
-    "make", "cmake", "webpack", "rollup", "vite", "esbuild", "clippy",
-    "build", "compile", "lint", "typecheck", "check", "vet",
-})
-_PACKAGE_MANAGERS = frozenset({
-    "npm", "pnpm", "yarn", "bun", "pip", "pip3", "uv", "poetry", "pipenv",
-    "cargo", "gem", "bundle", "brew", "conda", "apt", "apt-get",
-})
-_DEPENDENCY_TOKENS = frozenset({
-    "install", "add", "ci", "sync", "get", "lock", "update", "upgrade", "remove",
-})
-_COMMAND_RUNNERS = frozenset({
-    "uv", "poetry", "pdm", "pipenv", "rye", "hatch",
-    "npx", "bunx", "pnpm", "yarn", "bun", "deno",
-})
+_TEST_TOKENS = frozenset(
+    {
+        "pytest",
+        "jest",
+        "vitest",
+        "mocha",
+        "rspec",
+        "phpunit",
+        "unittest",
+        "tox",
+        "ctest",
+        "test",
+        "deno",
+    }
+)
+_BUILD_TOKENS = frozenset(
+    {
+        "tsc",
+        "mypy",
+        "ruff",
+        "eslint",
+        "flake8",
+        "pylint",
+        "black",
+        "isort",
+        "prettier",
+        "make",
+        "cmake",
+        "webpack",
+        "rollup",
+        "vite",
+        "esbuild",
+        "clippy",
+        "build",
+        "compile",
+        "lint",
+        "typecheck",
+        "check",
+        "vet",
+    }
+)
+_PACKAGE_MANAGERS = frozenset(
+    {
+        "npm",
+        "pnpm",
+        "yarn",
+        "bun",
+        "pip",
+        "pip3",
+        "uv",
+        "poetry",
+        "pipenv",
+        "cargo",
+        "gem",
+        "bundle",
+        "brew",
+        "conda",
+        "apt",
+        "apt-get",
+    }
+)
+_DEPENDENCY_TOKENS = frozenset(
+    {
+        "install",
+        "add",
+        "ci",
+        "sync",
+        "get",
+        "lock",
+        "update",
+        "upgrade",
+        "remove",
+    }
+)
+_COMMAND_RUNNERS = frozenset(
+    {
+        "uv",
+        "poetry",
+        "pdm",
+        "pipenv",
+        "rye",
+        "hatch",
+        "npx",
+        "bunx",
+        "pnpm",
+        "yarn",
+        "bun",
+        "deno",
+    }
+)
 _RUNNER_SUBWORDS = frozenset({"run", "exec", "dlx", "tool", "task"})
 _CODE_FIX_TOKENS = frozenset({"fmt", "format", "fix", "fixer"})
 _DIAGNOSTIC_HEADS = frozenset(
     {"pwd", "date", "which", "where", "whoami", "uname", "env", "printenv"}
 )
-_EXTERNAL_HEADS = frozenset({
-    "curl", "wget", "http", "https", "wrangler", "aws", "gcloud", "az", "fly",
-    "flyctl", "vercel", "netlify", "ssh", "scp", "rsync",
-})
+_EXTERNAL_HEADS = frozenset(
+    {
+        "curl",
+        "wget",
+        "http",
+        "https",
+        "wrangler",
+        "aws",
+        "gcloud",
+        "az",
+        "fly",
+        "flyctl",
+        "vercel",
+        "netlify",
+        "ssh",
+        "scp",
+        "rsync",
+    }
+)
 _RUNTIME_TOKENS = frozenset(
     {"dev", "serve", "server", "start", "up", "runserver", "preview"}
 )
@@ -113,7 +198,9 @@ def classify_command_family(tool_input: Any) -> tuple[CommandFamily, str]:
         cmd = tool_input
     if not cmd:
         return "other", "command"
-    tokens = [os.path.basename(token.lower()) for token in safe_split(primary_stage(cmd))]
+    tokens = [
+        os.path.basename(token.lower()) for token in safe_split(primary_stage(cmd))
+    ]
     if not tokens:
         return "other", "command"
 
@@ -148,13 +235,21 @@ def classify_command_family(tool_input: Any) -> tuple[CommandFamily, str]:
 
 def command_head(tokens: list[str]) -> str:
     index = 0
-    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
+    while (
+        index < len(tokens)
+        and "=" in tokens[index]
+        and not tokens[index].startswith("-")
+    ):
         index += 1
     if index < len(tokens) and tokens[index] in _COMMAND_RUNNERS:
         index += 1
         while index < len(tokens) and tokens[index] in _RUNNER_SUBWORDS:
             index += 1
-    if index + 2 < len(tokens) and tokens[index] in {"python", "python3"} and tokens[index + 1] == "-m":
+    if (
+        index + 2 < len(tokens)
+        and tokens[index] in {"python", "python3"}
+        and tokens[index + 1] == "-m"
+    ):
         return tokens[index + 2]
     return tokens[index] if index < len(tokens) else "command"
 
@@ -191,7 +286,11 @@ def primary_command(cmd: str) -> str:
     if not tokens:
         return ""
     for token in tokens:
-        if "=" in token and not token.startswith("-") and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
+        if (
+            "=" in token
+            and not token.startswith("-")
+            and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token)
+        ):
             continue
         if token == "command":
             continue

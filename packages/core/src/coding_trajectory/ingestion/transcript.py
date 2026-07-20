@@ -48,6 +48,7 @@ def _non_empty_str(value: Any) -> str | None:
         return value
     return None
 
+
 TranscriptRole = Literal["user", "assistant", "tool", "runtime"]
 TranscriptFidelity = Literal["observed", "synthetic", "lossy"]
 TranscriptItemKind = Literal[
@@ -169,7 +170,9 @@ class TranscriptProjector:
         if self.current_turn is not None:
             status = self.active_status or TurnStatus.COMPLETED
             self._flush_turn(
-                self.records[-1].timestamp if self.records else self.current_turn.started_at,
+                self.records[-1].timestamp
+                if self.records
+                else self.current_turn.started_at,
                 status=status,
             )
 
@@ -184,7 +187,10 @@ class TranscriptProjector:
             return
 
         if self.current_turn is not None:
-            status = record.data.get("previous_turn_status") or self.default_previous_turn_status
+            status = (
+                record.data.get("previous_turn_status")
+                or self.default_previous_turn_status
+            )
             self._flush_turn(record.timestamp, status=TurnStatus(status))
 
         self.current_turn = Turn(
@@ -219,9 +225,7 @@ class TranscriptProjector:
         if self.current_turn is not None:
             # A new turn began before the prior terminated: close the prior as
             # interrupted (its terminal event was not observed in this file).
-            self._flush_turn(
-                record.timestamp, status=self.default_previous_turn_status
-            )
+            self._flush_turn(record.timestamp, status=self.default_previous_turn_status)
         self.current_turn = Turn(
             session_id=self.session_id,
             sequence=self.turn_sequence,
@@ -298,7 +302,9 @@ class TranscriptProjector:
                         completed_at=record.timestamp,
                         text=cleaned,
                         event_ids=[record.record_id],
-                        vendor_data=vendor_data if isinstance(vendor_data, dict) else {},
+                        vendor_data=vendor_data
+                        if isinstance(vendor_data, dict)
+                        else {},
                     )
                 )
             return
@@ -383,7 +389,11 @@ class TranscriptProjector:
             return
         self._append_turn_event_id(record.record_id)
         text = record.data.get("text")
-        if not self.current_turn_has_final_answer and isinstance(text, str) and text.strip():
+        if (
+            not self.current_turn_has_final_answer
+            and isinstance(text, str)
+            and text.strip()
+        ):
             self._append_or_merge_agent_message(
                 record.timestamp,
                 text=text.strip(),
@@ -417,7 +427,9 @@ class TranscriptProjector:
                     if event_id not in last.event_ids:
                         last.event_ids.append(event_id)
                 if vendor_data:
-                    last.vendor_data.update({k: v for k, v in vendor_data.items() if v is not None})
+                    last.vendor_data.update(
+                        {k: v for k, v in vendor_data.items() if v is not None}
+                    )
                 if started_at > (last.completed_at or last.started_at):
                     last.completed_at = started_at
                 return
@@ -454,7 +466,12 @@ class TranscriptProjector:
 
         if tool_call_id:
             for item in reversed(items):
-                if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
+                if item.kind not in {
+                    "tool_call",
+                    "command_execution",
+                    "file_change",
+                    "plan",
+                }:
                     continue
                 if getattr(item, "tool_call_id", None) != tool_call_id:
                     continue
@@ -524,7 +541,9 @@ class TranscriptProjector:
             if event_id not in item.event_ids:
                 item.event_ids.append(event_id)
         if vendor_data:
-            item.vendor_data.update({k: v for k, v in vendor_data.items() if v is not None})
+            item.vendor_data.update(
+                {k: v for k, v in vendor_data.items() if v is not None}
+            )
 
     def _flush_turn(self, ended_at: datetime, *, status: TurnStatus) -> None:
         if self.current_turn is None:
@@ -568,7 +587,9 @@ def project_transcript(
     ).project()
 
 
-def events_from_transcript(*, session_id: UUID, records: list[TranscriptRecord]) -> list[Event]:
+def events_from_transcript(
+    *, session_id: UUID, records: list[TranscriptRecord]
+) -> list[Event]:
     return [
         Event(
             event_id=record.record_id,

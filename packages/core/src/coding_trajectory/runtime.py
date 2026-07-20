@@ -29,7 +29,9 @@ def _entrypoint_ids(requests: list[dict[str, Any]]) -> list[str]:
                 ids.append(value)
         session_ids = params.get("session_ids")
         if isinstance(session_ids, list):
-            ids.extend(value for value in session_ids if isinstance(value, str) and value)
+            ids.extend(
+                value for value in session_ids if isinstance(value, str) and value
+            )
     return list(dict.fromkeys(ids))
 
 

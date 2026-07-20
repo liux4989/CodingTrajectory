@@ -7,7 +7,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from coding_trajectory.ingestion.common import normalize_project_key as _normalize_project_key
+from coding_trajectory.ingestion.common import (
+    normalize_project_key as _normalize_project_key,
+)
 from coding_trajectory.ingestion.models import (
     EventType,
     Item,
@@ -28,7 +30,9 @@ def decorate_sessions(sessions: list[Session]) -> list[Session]:
     return sessions
 
 
-def assemble_project_session_graphs(project_identifier: str, sessions: list[Session]) -> list[SessionGraph]:
+def assemble_project_session_graphs(
+    project_identifier: str, sessions: list[Session]
+) -> list[SessionGraph]:
     sessions = decorate_sessions(sessions)
     key = _normalize_project_key(project_identifier)
     components = _compute_connected_components(sessions)
@@ -36,10 +40,16 @@ def assemble_project_session_graphs(project_identifier: str, sessions: list[Sess
     session_graphs: list[SessionGraph] = []
     for component_sessions in components:
         root = _root_session(component_sessions)
-        root_session_id = root.session_id if root else min(
-            component_sessions, key=lambda s: (s.started_at, str(s.session_id))
-        ).session_id
-        normalized_sessions = sorted(component_sessions, key=lambda item: (item.started_at, str(item.session_id)))
+        root_session_id = (
+            root.session_id
+            if root
+            else min(
+                component_sessions, key=lambda s: (s.started_at, str(s.session_id))
+            ).session_id
+        )
+        normalized_sessions = sorted(
+            component_sessions, key=lambda item: (item.started_at, str(item.session_id))
+        )
         session_graphs.append(
             build_session_graph(
                 root_session_id=root_session_id,
@@ -68,7 +78,10 @@ def _compute_connected_components(sessions: list[Session]) -> list[list[Session]
             parent[ra] = rb
 
     for session in sessions:
-        if session.parent_session_id is not None and session.parent_session_id in session_map:
+        if (
+            session.parent_session_id is not None
+            and session.parent_session_id in session_map
+        ):
             union(session.session_id, session.parent_session_id)
 
     groups: dict[UUID, list[Session]] = {}
@@ -104,7 +117,9 @@ def build_session_graph_summary(sessions: list[Session]) -> SessionGraphSummary:
     started_at = min((session.started_at for session in sessions), default=None)
     ended_at = _max_datetime(session.ended_at for session in sessions)
     root_session = _root_session(sessions)
-    vendors = sorted({session.vendor for session in sessions}, key=lambda item: item.value)
+    vendors = sorted(
+        {session.vendor for session in sessions}, key=lambda item: item.value
+    )
 
     return SessionGraphSummary(
         root_session_id=root_session.session_id if root_session else None,
@@ -188,9 +203,7 @@ def _find_edge_origin(
             return origin
 
     tool_events = [
-        event
-        for event in session.events
-        if event.type == EventType.TOOL_CALL_REQUESTED
+        event for event in session.events if event.type == EventType.TOOL_CALL_REQUESTED
     ]
     if not tool_events:
         return None
@@ -218,9 +231,7 @@ def _spawn_call_id_for(session: Session, child_session_id: UUID | None) -> str |
     return extensions.codex.spawn_links.get(str(child_session_id))
 
 
-def _find_tool_call_by_call_id(
-    session: Session, call_id: str
-) -> _EdgeOrigin | None:
+def _find_tool_call_by_call_id(session: Session, call_id: str) -> _EdgeOrigin | None:
     """Resolve a tool call by its provider call_id to its turn/item origin."""
     item_index = _build_item_event_index(session)
     for event in session.events:
@@ -238,7 +249,9 @@ def _find_tool_call_by_call_id(
     return None
 
 
-def _build_item_event_index(session: Session) -> dict[UUID, tuple[Turn | None, Item | None]]:
+def _build_item_event_index(
+    session: Session,
+) -> dict[UUID, tuple[Turn | None, Item | None]]:
     index: dict[UUID, tuple[Turn | None, Item | None]] = {}
     for turn in session.turns:
         for event_id in turn.event_ids:
@@ -265,12 +278,16 @@ def _root_session(sessions: list[Session]) -> Session | None:
             is_sidechain=_is_sidechain(session),
         ):
             return session
-    return min(sessions, key=lambda item: (item.started_at, str(item.session_id)), default=None)
+    return min(
+        sessions, key=lambda item: (item.started_at, str(item.session_id)), default=None
+    )
 
 
 def _is_sidechain(session: Session) -> bool:
     extensions = session.extensions
-    return bool(extensions and extensions.claude_code and extensions.claude_code.is_sidechain)
+    return bool(
+        extensions and extensions.claude_code and extensions.claude_code.is_sidechain
+    )
 
 
 def _is_codex_fork(session: Session) -> bool:

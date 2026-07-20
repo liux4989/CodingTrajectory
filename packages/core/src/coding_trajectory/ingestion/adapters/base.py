@@ -71,8 +71,7 @@ class BaseAdapter(ABC):
         return None
 
     @abstractmethod
-    def _build_session(self, source: Path, records: list[dict]) -> Session:
-        ...
+    def _build_session(self, source: Path, records: list[dict]) -> Session: ...
 
     @abstractmethod
     def scan_header(self, source: Path) -> SessionHeader | None:

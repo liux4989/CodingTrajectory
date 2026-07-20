@@ -7,10 +7,23 @@ from typing import Any
 
 from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.ingestion.common import prune_nones
-from coding_trajectory.ingestion.indexes import SessionGraphIndex, build_session_graph_index, ordered_sessions
-from coding_trajectory.ingestion.models import AgentMessageItem, Session, SessionGraph, Turn
+from coding_trajectory.ingestion.indexes import (
+    SessionGraphIndex,
+    build_session_graph_index,
+    ordered_sessions,
+)
+from coding_trajectory.ingestion.models import (
+    AgentMessageItem,
+    Session,
+    SessionGraph,
+    Turn,
+)
 
-from coding_trajectory.analysis.request_lineage import effective_user_request, extract_user_request, is_low_value_turn
+from coding_trajectory.analysis.request_lineage import (
+    effective_user_request,
+    extract_user_request,
+    is_low_value_turn,
+)
 from coding_trajectory.analysis.teammate_summary import (
     MemberSessionCandidate,
     build_member_session_lookup,
@@ -117,7 +130,9 @@ def _apply_turn_window(
     return turns
 
 
-def _session_connection(session: Session, *, index: SessionGraphIndex) -> dict[str, Any]:
+def _session_connection(
+    session: Session, *, index: SessionGraphIndex
+) -> dict[str, Any]:
     parent = index.parent.get(session.session_id)
     edge_type = index.incoming_edge_type.get(session.session_id)
     forked_session_ids = [
@@ -126,15 +141,19 @@ def _session_connection(session: Session, *, index: SessionGraphIndex) -> dict[s
         if index.incoming_edge_type.get(child_id) == "forked_from"
     ]
     if parent is None and not edge_type:
-        return prune_nones({
-            "role": "main",
+        return prune_nones(
+            {
+                "role": "main",
+                "forked_session_ids": forked_session_ids or None,
+            }
+        )
+    return prune_nones(
+        {
+            "relationship": edge_type,
+            "parent_session_id": str(parent) if parent else None,
             "forked_session_ids": forked_session_ids or None,
-        })
-    return prune_nones({
-        "relationship": edge_type,
-        "parent_session_id": str(parent) if parent else None,
-        "forked_session_ids": forked_session_ids or None,
-    })
+        }
+    )
 
 
 def _include_session_in_overview(session: Session, *, index: SessionGraphIndex) -> bool:
@@ -151,19 +170,22 @@ def _session_narrative_node(
     turns = [
         turn_node
         for turn in session.turns
-        if (turn_node := _turn_narrative_node(turn, session=session, index=index)) is not None
+        if (turn_node := _turn_narrative_node(turn, session=session, index=index))
+        is not None
     ]
     turns = _apply_turn_window(turns, num_turns=num_turns, drop_turns=drop_turns)
 
-    return prune_nones({
-        "session_id": str(session.session_id),
-        "relationship": _session_connection(session, index=index),
-        "vendor": session.vendor.value,
-        "status": session.status,
-        "agent_name": session.agent_name,
-        "cwd": session.cwd,
-        "turns": turns,
-    })
+    return prune_nones(
+        {
+            "session_id": str(session.session_id),
+            "relationship": _session_connection(session, index=index),
+            "vendor": session.vendor.value,
+            "status": session.status,
+            "agent_name": session.agent_name,
+            "cwd": session.cwd,
+            "turns": turns,
+        }
+    )
 
 
 def _turn_narrative_node(
@@ -183,16 +205,20 @@ def _turn_narrative_node(
         if isinstance(item, AgentMessageItem) and item.text:
             assistant_responses.append(item.text)
 
-    return prune_nones({
-        "turn_id": str(turn.turn_id),
-        "status": turn.status,
-        "user_request": user_request,
-        "assistant_responses": assistant_responses or None,
-        "refs": {
-            "item_ids": item_ids or None,
-            "user_request_event_id": str(turn.user_request_event_id) if turn.user_request_event_id else None,
-        },
-    })
+    return prune_nones(
+        {
+            "turn_id": str(turn.turn_id),
+            "status": turn.status,
+            "user_request": user_request,
+            "assistant_responses": assistant_responses or None,
+            "refs": {
+                "item_ids": item_ids or None,
+                "user_request_event_id": str(turn.user_request_event_id)
+                if turn.user_request_event_id
+                else None,
+            },
+        }
+    )
 
 
 def _session_nav_node(
@@ -217,16 +243,20 @@ def _session_nav_node(
     if compaction_activities:
         turns = _attach_compaction_activities(turns, compaction_activities, session)
 
-    return prune_nones({
-        "session_id": str(session.session_id),
-        "relationship": _session_connection(session, index=index),
-        "vendor": session.vendor.value,
-        "status": session.status,
-        "agent_name": session.agent_name,
-        "cwd": session.cwd,
-        "compactions": len(compaction_activities) if compaction_activities else None,
-        "turns": turns,
-    })
+    return prune_nones(
+        {
+            "session_id": str(session.session_id),
+            "relationship": _session_connection(session, index=index),
+            "vendor": session.vendor.value,
+            "status": session.status,
+            "agent_name": session.agent_name,
+            "cwd": session.cwd,
+            "compactions": len(compaction_activities)
+            if compaction_activities
+            else None,
+            "turns": turns,
+        }
+    )
 
 
 def _compaction_activities_for_session(session: Session) -> list[dict[str, Any]]:
@@ -250,24 +280,31 @@ def _compaction_activities_for_session(session: Session) -> list[dict[str, Any]]
         if pre is not None and post is not None:
             delta = f"{_format_tokens(pre)} → {_format_tokens(post)}"
             dropped = pre - post
-            summary = f"{trigger or 'auto'}, {delta} ({_format_tokens(dropped)} dropped)"
+            summary = (
+                f"{trigger or 'auto'}, {delta} ({_format_tokens(dropped)} dropped)"
+            )
         elif observation.cumulative_dropped_tokens is not None:
             summary = f"{trigger or 'auto'}, {_format_tokens(observation.cumulative_dropped_tokens)} dropped"
         else:
             summary = trigger or "compaction"
-        activities.append({
-            "compaction": True,
-            "mechanism": _COMPACTION_MECHANISMS.get(observation.kind, observation.kind),
-            "timestamp": observation.timestamp,
-            "trigger": trigger,
-            "pre_tokens": pre,
-            "post_tokens": post,
-            "dropped_tokens": (
-                pre - post if pre is not None and post is not None
-                else observation.cumulative_dropped_tokens
-            ),
-            "summary": summary,
-        })
+        activities.append(
+            {
+                "compaction": True,
+                "mechanism": _COMPACTION_MECHANISMS.get(
+                    observation.kind, observation.kind
+                ),
+                "timestamp": observation.timestamp,
+                "trigger": trigger,
+                "pre_tokens": pre,
+                "post_tokens": post,
+                "dropped_tokens": (
+                    pre - post
+                    if pre is not None and post is not None
+                    else observation.cumulative_dropped_tokens
+                ),
+                "summary": summary,
+            }
+        )
     return activities
 
 
@@ -294,8 +331,10 @@ def _attach_compaction_activities(
     for turn in session.turns:
         turn_timing[str(turn.turn_id)] = (turn.started_at, turn.ended_at)
     turn_windows = [
-        (turn_timing.get(str(turn.get("turn_id") or "")) or (None, None),
-         str(turn.get("turn_id") or ""))
+        (
+            turn_timing.get(str(turn.get("turn_id") or "")) or (None, None),
+            str(turn.get("turn_id") or ""),
+        )
         for turn in turns
     ]
 
@@ -309,7 +348,9 @@ def _attach_compaction_activities(
         for turn in turns:
             if str(turn.get("turn_id") or "") == target_turn_id:
                 activity_list = turn.setdefault("activity", [])
-                activity_list.append({k: v for k, v in activity.items() if k != "timestamp"})
+                activity_list.append(
+                    {k: v for k, v in activity.items() if k != "timestamp"}
+                )
                 break
     return turns
 
@@ -416,22 +457,26 @@ def _turn_nav_node(
     if is_low_value_turn(turn.items, user_request):
         return None
     if is_teammate_turn(session, turn, user_request=user_request):
-        return prune_nones({
+        return prune_nones(
+            {
+                "turn_id": str(turn.turn_id),
+                "status": turn.status,
+                "user_request": visible_user_request,
+                "teammate_summary": build_teammate_summary(
+                    turn,
+                    user_request=user_request,
+                    member_session_lookup=member_session_lookup,
+                ),
+            }
+        )
+    return prune_nones(
+        {
             "turn_id": str(turn.turn_id),
             "status": turn.status,
-            "user_request": visible_user_request,
-            "teammate_summary": build_teammate_summary(
-                turn,
-                user_request=user_request,
-                member_session_lookup=member_session_lookup,
-            ),
-        })
-    return prune_nones({
-        "turn_id": str(turn.turn_id),
-        "status": turn.status,
-        "user_request": user_request,
-        "activity": build_overview_flows(turn.items),
-        "refs": {
-            "item_ids": [str(item.item_id) for item in turn.items],
-        },
-    })
+            "user_request": user_request,
+            "activity": build_overview_flows(turn.items),
+            "refs": {
+                "item_ids": [str(item.item_id) for item in turn.items],
+            },
+        }
+    )

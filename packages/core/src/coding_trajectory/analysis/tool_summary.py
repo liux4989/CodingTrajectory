@@ -38,7 +38,11 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
     if not tool_name:
         return None
 
-    tool_input = item.command if item.kind == "command_execution" else getattr(item, "input", None)
+    tool_input = (
+        item.command
+        if item.kind == "command_execution"
+        else getattr(item, "input", None)
+    )
     concept, description, optimization_profile = _classify(tool_name, tool_input)
 
     result: dict[str, Any] = {"name": concept}
@@ -71,11 +75,18 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
         return None
 
     if concept in {READ_FILE, EDIT_FILE, WRITE_FILE}:
-        return short_path(first_str(tool_input, ("file_path", "path", "target_file", "absolute_path", "file")))
+        return short_path(
+            first_str(
+                tool_input,
+                ("file_path", "path", "target_file", "absolute_path", "file"),
+            )
+        )
 
     if concept == SEARCH_TEXT:
         pattern = first_str(tool_input, ("pattern", "query", "regex"))
-        scope = short_path(first_str(tool_input, ("path", "include", "include_pattern", "dir_path")))
+        scope = short_path(
+            first_str(tool_input, ("path", "include", "include_pattern", "dir_path"))
+        )
         if pattern and scope:
             return f"{pattern!r} within {scope}"
         if pattern:
@@ -83,7 +94,9 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
         return scope
 
     if concept == LIST_FILES:
-        return short_path(first_str(tool_input, ("path", "dir_path", "pattern", "directory")))
+        return short_path(
+            first_str(tool_input, ("path", "dir_path", "pattern", "directory"))
+        )
 
     if concept == WEB_FETCH:
         return first_str(tool_input, ("url", "uri"))
@@ -92,12 +105,16 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
         return first_str(tool_input, ("query", "q"))
 
     if concept == TODO_LIST:
-        todos = tool_input.get("todos") or tool_input.get("plan") or tool_input.get("items")
+        todos = (
+            tool_input.get("todos") or tool_input.get("plan") or tool_input.get("items")
+        )
         if isinstance(todos, list):
             return f"{len(todos)} item(s)"
         return None
 
     if concept == SUBAGENT_TASK:
-        return first_str(tool_input, ("subagent_type", "agent_type", "description", "prompt"))
+        return first_str(
+            tool_input, ("subagent_type", "agent_type", "description", "prompt")
+        )
 
     return None

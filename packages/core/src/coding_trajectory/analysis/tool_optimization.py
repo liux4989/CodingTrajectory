@@ -88,7 +88,9 @@ TOOL_OPTIMIZATION_PROFILES: tuple[ToolOptimizationProfile, ...] = (
     ToolOptimizationProfile(concept=EDIT_FILE, detail_key="path"),
     ToolOptimizationProfile(concept=WRITE_FILE, detail_key="path"),
     ToolOptimizationProfile(concept=RUN_COMMAND, detail_key="cmd"),
-    ToolOptimizationProfile(concept=RUN_COMMAND, profile="shell:command", detail_key="cmd"),
+    ToolOptimizationProfile(
+        concept=RUN_COMMAND, profile="shell:command", detail_key="cmd"
+    ),
     ToolOptimizationProfile(concept=TODO_LIST, detail_key="items"),
     ToolOptimizationProfile(concept=SUBAGENT_TASK, detail_key="task"),
     ToolOptimizationProfile(concept=SESSION_HANDOFF, detail_key="session"),
@@ -107,7 +109,9 @@ _PROFILE_BY_KEY = {
 _DEFAULT_PROFILE = ToolOptimizationProfile(concept="*", detail_key="target")
 
 
-def tool_optimization_profile(concept: str | None, profile: str | None = None) -> ToolOptimizationProfile:
+def tool_optimization_profile(
+    concept: str | None, profile: str | None = None
+) -> ToolOptimizationProfile:
     if not concept:
         return _DEFAULT_PROFILE
     if profile is not None:

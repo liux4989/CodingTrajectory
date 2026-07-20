@@ -11,7 +11,11 @@ from typing import Any
 from uuid import UUID
 
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
-from coding_trajectory.ingestion.common import compact_dict, infer_tool_success, parse_timestamp
+from coding_trajectory.ingestion.common import (
+    compact_dict,
+    infer_tool_success,
+    parse_timestamp,
+)
 from coding_trajectory.ingestion.models import (
     ContextSourceObservation,
     ContextUsageObservation,
@@ -22,7 +26,11 @@ from coding_trajectory.ingestion.models import (
     Turn,
     Vendor,
 )
-from coding_trajectory.ingestion.transcript import TranscriptRecord, events_from_transcript, project_transcript
+from coding_trajectory.ingestion.transcript import (
+    TranscriptRecord,
+    events_from_transcript,
+    project_transcript,
+)
 from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
     ClaudeSubagentInput,
     canonical_session_ids,
@@ -42,19 +50,31 @@ from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CLAUDE_DIR = Path.home() / ".claude" / "projects"
-_TEAMMATE_MESSAGE_RE = re.compile(r"<teammate-message(?P<attrs>[^>]*)>(?P<body>.*?)</teammate-message>", re.DOTALL)
+_TEAMMATE_MESSAGE_RE = re.compile(
+    r"<teammate-message(?P<attrs>[^>]*)>(?P<body>.*?)</teammate-message>", re.DOTALL
+)
 _TEAMMATE_ATTR_RE = re.compile(r'(\w+)="(.*?)"')
 # Claude Code logs an ``/effort`` switch as a ``<local-command-stdout>Set effort
 # level to <LEVEL> ...`` user record. The level word (``max``, ``ultracode``,
 # ``high`` ...) is the resolved effort in effect from that turn onward.
 _CLAUDE_EFFORT_STDOUT_RE = re.compile(r"Set effort level to (\w+)")
 
-_CLAUDE_FILE_TOOL_NAMES: frozenset[str] = frozenset({
-    "Read", "Edit", "MultiEdit", "Write", "View", "NotebookEdit",
-})
-_CLAUDE_PLAN_TOOL_NAMES: frozenset[str] = frozenset({
-    "TaskCreate", "TaskUpdate",
-})
+_CLAUDE_FILE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "Read",
+        "Edit",
+        "MultiEdit",
+        "Write",
+        "View",
+        "NotebookEdit",
+    }
+)
+_CLAUDE_PLAN_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "TaskCreate",
+        "TaskUpdate",
+    }
+)
 
 
 def _claude_item_kind(tool_name: str | None) -> str:
@@ -71,7 +91,10 @@ def _parse_team_messages(raw: str | None) -> list[ClaudeTeamMessage]:
 
     messages: list[ClaudeTeamMessage] = []
     for match in _TEAMMATE_MESSAGE_RE.finditer(raw):
-        attrs = {key: value for key, value in _TEAMMATE_ATTR_RE.findall(match.group("attrs") or "")}
+        attrs = {
+            key: value
+            for key, value in _TEAMMATE_ATTR_RE.findall(match.group("attrs") or "")
+        }
         body = (match.group("body") or "").strip()
         payload: dict | None = None
         if body.startswith("{") and body.endswith("}"):
@@ -231,9 +254,13 @@ def _read_subagent_meta(source: Path) -> dict[str, object]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def _subagent_input(source: Path, records: list[dict], raw_session_id: UUID) -> ClaudeSubagentInput:
+def _subagent_input(
+    source: Path, records: list[dict], raw_session_id: UUID
+) -> ClaudeSubagentInput:
     first = next((record for record in records if record.get("sessionId")), {})
-    title = next((_record_title(record) for record in records if _record_title(record)), None)
+    title = next(
+        (_record_title(record) for record in records if _record_title(record)), None
+    )
     is_subagent_file = source.parent.name == "subagents"
     parent_session_id: UUID | None = None
     if is_subagent_file:
@@ -251,7 +278,9 @@ def _subagent_input(source: Path, records: list[dict], raw_session_id: UUID) -> 
         if raw_type == "mode":
             mode = _as_non_empty_str(record.get("mode")) or mode
         elif raw_type == "permission-mode":
-            permission_mode = _as_non_empty_str(record.get("permissionMode")) or permission_mode
+            permission_mode = (
+                _as_non_empty_str(record.get("permissionMode")) or permission_mode
+            )
         elif raw_type == "last-prompt":
             last_prompt = _as_non_empty_str(record.get("lastPrompt")) or last_prompt
     if permission_mode is None:
@@ -270,8 +299,12 @@ def _subagent_input(source: Path, records: list[dict], raw_session_id: UUID) -> 
         parent_uuid=first.get("parentUuid"),
         request_id=first.get("uuid"),
         agent_name=first.get("agentId") or first.get("agentName") or first.get("slug"),
-        agent_role=meta.get("agentType") if isinstance(meta.get("agentType"), str) else None,
-        description=meta.get("description") if isinstance(meta.get("description"), str) else None,
+        agent_role=meta.get("agentType")
+        if isinstance(meta.get("agentType"), str)
+        else None,
+        description=meta.get("description")
+        if isinstance(meta.get("description"), str)
+        else None,
         title=title or _as_non_empty_str(meta.get("title")),
         tool_use_id=_as_non_empty_str(meta.get("toolUseId")),
         spawn_depth=_as_int_or_none(meta.get("spawnDepth")),
@@ -353,7 +386,9 @@ def _extract_thinking(content: list | None) -> list[str]:
     return [
         block.get("thinking", "")
         for block in content
-        if isinstance(block, dict) and block.get("type") == "thinking" and block.get("thinking")
+        if isinstance(block, dict)
+        and block.get("type") == "thinking"
+        and block.get("thinking")
     ]
 
 
@@ -464,7 +499,9 @@ class ClaudeCodeAdapter(BaseAdapter):
         session_id, parent_session_id = canonical_session_ids(mechanism)
         transcript, team_inputs = self._build_transcript(records)
         if not transcript:
-            raise ValueError(f"ClaudeCodeAdapter: no transcript records parsed from {source}")
+            raise ValueError(
+                f"ClaudeCodeAdapter: no transcript records parsed from {source}"
+            )
         events = events_from_transcript(session_id=session_id, records=transcript)
         turns = project_transcript(
             session_id=session_id,
@@ -551,7 +588,9 @@ class ClaudeCodeAdapter(BaseAdapter):
         return Session(
             session_id=session_id,
             vendor=self.vendor,
-            agent_name=extensions.claude_code.agent_name if extensions and extensions.claude_code else None,
+            agent_name=extensions.claude_code.agent_name
+            if extensions and extensions.claude_code
+            else None,
             started_at=started_at,
             ended_at=ended_at,
             parent_session_id=parent_session_id,
@@ -574,7 +613,9 @@ class ClaudeCodeAdapter(BaseAdapter):
                 continue
         return None
 
-    def _build_transcript(self, records: list[dict]) -> tuple[list[TranscriptRecord], list[ClaudeTeamStateInput]]:
+    def _build_transcript(
+        self, records: list[dict]
+    ) -> tuple[list[TranscriptRecord], list[ClaudeTeamStateInput]]:
         """Extract only CT-useful transcript facts from Claude Code JSONL records."""
         transcript: list[TranscriptRecord] = []
         team_inputs: list[ClaudeTeamStateInput] = []
@@ -621,9 +662,13 @@ class ClaudeCodeAdapter(BaseAdapter):
                 if _is_real_user_prompt(record):
                     text = _extract_text(content)
                     image_blocks = _extract_image_blocks(content)
-                    team_input = ClaudeTeamStateInput(messages=_parse_team_messages(text))
+                    team_input = ClaudeTeamStateInput(
+                        messages=_parse_team_messages(text)
+                    )
                     team_inputs.append(team_input)
-                    team_request_summary = high_value_teammate_request(team_input.messages)
+                    team_request_summary = high_value_teammate_request(
+                        team_input.messages
+                    )
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -652,9 +697,14 @@ class ClaudeCodeAdapter(BaseAdapter):
                                 kind="tool_result",
                                 data={
                                     **base,
-                                    "tool_call_id": block.get("tool_use_id") or block.get("toolUseID"),
-                                    "output": tool_use_result if tool_use_result is not None else block.get("content"),
-                                    "source_tool_assistant_uuid": record.get("sourceToolAssistantUUID"),
+                                    "tool_call_id": block.get("tool_use_id")
+                                    or block.get("toolUseID"),
+                                    "output": tool_use_result
+                                    if tool_use_result is not None
+                                    else block.get("content"),
+                                    "source_tool_assistant_uuid": record.get(
+                                        "sourceToolAssistantUUID"
+                                    ),
                                     "status": (
                                         ToolStatus.FAILED.value
                                         if block.get("is_error") or success is False
@@ -673,7 +723,9 @@ class ClaudeCodeAdapter(BaseAdapter):
                 base = _base_payload(record)
                 tool_uses = _tool_use_blocks(content)
                 text = _extract_text(content)
-                normalized_metrics = normalize_claude_usage(model=message.get("model"), usage=usage)
+                normalized_metrics = normalize_claude_usage(
+                    model=message.get("model"), usage=usage
+                )
                 thinking_blocks = _extract_thinking(content)
                 vendor_data = compact_dict(
                     {
@@ -757,7 +809,9 @@ class ClaudeCodeAdapter(BaseAdapter):
                     # per-item preserved-segment attribution.
                     compact_meta = record.get("compactMetadata") or {}
                     preserved = compact_meta.get("preservedMessages") or {}
-                    preserved_uuids = preserved.get("allUuids") or preserved.get("uuids") or []
+                    preserved_uuids = (
+                        preserved.get("allUuids") or preserved.get("uuids") or []
+                    )
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -771,9 +825,15 @@ class ClaudeCodeAdapter(BaseAdapter):
                                 "content": _as_non_empty_str(record.get("content")),
                                 "compact_metadata": compact_dict(
                                     {
-                                        "trigger": _as_non_empty_str(compact_meta.get("trigger")),
-                                        "pre_tokens": _as_int_or_none(compact_meta.get("preTokens")),
-                                        "post_tokens": _as_int_or_none(compact_meta.get("postTokens")),
+                                        "trigger": _as_non_empty_str(
+                                            compact_meta.get("trigger")
+                                        ),
+                                        "pre_tokens": _as_int_or_none(
+                                            compact_meta.get("preTokens")
+                                        ),
+                                        "post_tokens": _as_int_or_none(
+                                            compact_meta.get("postTokens")
+                                        ),
                                         "cumulative_dropped_tokens": _as_int_or_none(
                                             compact_meta.get("cumulativeDroppedTokens")
                                         ),
@@ -801,8 +861,12 @@ class ClaudeCodeAdapter(BaseAdapter):
                                 **base,
                                 "raw_type": "system",
                                 "subtype": subtype,
-                                "duration_ms": _as_int_or_none(record.get("durationMs")),
-                                "message_count": _as_int_or_none(record.get("messageCount")),
+                                "duration_ms": _as_int_or_none(
+                                    record.get("durationMs")
+                                ),
+                                "message_count": _as_int_or_none(
+                                    record.get("messageCount")
+                                ),
                                 "pending_background_agent_count": _as_int_or_none(
                                     record.get("pendingBackgroundAgentCount")
                                 ),
@@ -824,7 +888,8 @@ class ClaudeCodeAdapter(BaseAdapter):
                         data={
                             **base,
                             "raw_type": "attachment",
-                            "attachment_type": record.get("attachmentType") or record.get("subtype"),
+                            "attachment_type": record.get("attachmentType")
+                            or record.get("subtype"),
                             "name": _as_non_empty_str(record.get("name")),
                             "path": _as_non_empty_str(record.get("path")),
                             "content": record.get("content"),
@@ -860,5 +925,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             try:
                 sessions.append(self.ingest_file(jsonl_path))
             except Exception as exc:
-                logger.warning("ClaudeCodeAdapter: failed to ingest %s: %s", jsonl_path, exc)
+                logger.warning(
+                    "ClaudeCodeAdapter: failed to ingest %s: %s", jsonl_path, exc
+                )
         return sessions

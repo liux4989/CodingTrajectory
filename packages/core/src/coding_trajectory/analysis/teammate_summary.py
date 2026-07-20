@@ -12,8 +12,12 @@ from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.models import Session, Turn
 
 _TEAM_TASK_ID_RE = re.compile(r"Task\s*#?\s*(\d+)", re.IGNORECASE)
-_LEAD_ERROR_RE = re.compile(r"\b(error|failed|failure|exception|traceback)\b", re.IGNORECASE)
-_LEAD_CHECK_RESULT_RE = re.compile(r"\b(clean|passed|success|succeeded|no output|all solid)\b", re.IGNORECASE)
+_LEAD_ERROR_RE = re.compile(
+    r"\b(error|failed|failure|exception|traceback)\b", re.IGNORECASE
+)
+_LEAD_CHECK_RESULT_RE = re.compile(
+    r"\b(clean|passed|success|succeeded|no output|all solid)\b", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True)
@@ -23,7 +27,9 @@ class MemberSessionCandidate:
     ended_at: datetime | None
 
 
-def build_member_session_lookup(session_graph) -> dict[str, list[MemberSessionCandidate]]:
+def build_member_session_lookup(
+    session_graph,
+) -> dict[str, list[MemberSessionCandidate]]:
     lookup: dict[str, dict[str, MemberSessionCandidate]] = {}
     for session in session_graph.sessions:
         candidates: set[str] = set()
@@ -54,13 +60,19 @@ def build_member_session_lookup(session_graph) -> dict[str, list[MemberSessionCa
     return {
         key: sorted(
             session_map.values(),
-            key=lambda item: (item.started_at, item.ended_at or item.started_at, item.session_id),
+            key=lambda item: (
+                item.started_at,
+                item.ended_at or item.started_at,
+                item.session_id,
+            ),
         )
         for key, session_map in lookup.items()
     }
 
 
-def merge_teammate_turn_nodes(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+def merge_teammate_turn_nodes(
+    current: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
     current_summary = current.get("teammate_summary")
     incoming_summary = incoming.get("teammate_summary")
     if not isinstance(current_summary, dict) or not isinstance(incoming_summary, dict):
@@ -68,12 +80,24 @@ def merge_teammate_turn_nodes(current: dict[str, Any], incoming: dict[str, Any])
 
     merged_summary = dict(current_summary)
     merged_summary["lead_flow"] = [
-        *[item for item in current_summary.get("lead_flow", []) if isinstance(item, dict)],
-        *[item for item in incoming_summary.get("lead_flow", []) if isinstance(item, dict)],
+        *[
+            item
+            for item in current_summary.get("lead_flow", [])
+            if isinstance(item, dict)
+        ],
+        *[
+            item
+            for item in incoming_summary.get("lead_flow", [])
+            if isinstance(item, dict)
+        ],
     ]
     merged_summary["members"] = _merge_member_records(
         [item for item in current_summary.get("members", []) if isinstance(item, dict)],
-        [item for item in incoming_summary.get("members", []) if isinstance(item, dict)],
+        [
+            item
+            for item in incoming_summary.get("members", [])
+            if isinstance(item, dict)
+        ],
     )
     merged_summary["tasks"] = _merge_task_records(
         [item for item in current_summary.get("tasks", []) if isinstance(item, dict)],
@@ -81,7 +105,11 @@ def merge_teammate_turn_nodes(current: dict[str, Any], incoming: dict[str, Any])
     )
     merged_summary["item_ids"] = _merge_ordered_unique(
         [item for item in current_summary.get("item_ids", []) if isinstance(item, str)],
-        [item for item in incoming_summary.get("item_ids", []) if isinstance(item, str)],
+        [
+            item
+            for item in incoming_summary.get("item_ids", [])
+            if isinstance(item, str)
+        ],
     )
 
     merged = dict(current)
@@ -91,10 +119,14 @@ def merge_teammate_turn_nodes(current: dict[str, Any], incoming: dict[str, Any])
     return merged
 
 
-def is_teammate_turn(session: Session, turn: Turn, *, user_request: dict[str, Any] | None) -> bool:
+def is_teammate_turn(
+    session: Session, turn: Turn, *, user_request: dict[str, Any] | None
+) -> bool:
     if session.parent_session_id is not None:
         return False
-    return turn.team_state is not None and bool(turn.team_state.members or turn.team_state.tasks)
+    return turn.team_state is not None and bool(
+        turn.team_state.members or turn.team_state.tasks
+    )
 
 
 def build_teammate_summary(
@@ -127,7 +159,10 @@ def build_teammate_summary(
     return {
         "lead_flow": _build_lead_flow(turn, user_request=user_request),
         "members": members,
-        "tasks": [_project_teammate_task(task.model_dump(mode="json")) for task in turn.team_state.tasks],
+        "tasks": [
+            _project_teammate_task(task.model_dump(mode="json"))
+            for task in turn.team_state.tasks
+        ],
         "item_ids": [str(item.item_id) for item in turn.items],
     }
 
@@ -146,7 +181,9 @@ def _merge_ordered_unique(existing: list[str], incoming: list[str]) -> list[str]
     return merged
 
 
-def _merge_member_records(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _merge_member_records(
+    existing: list[dict[str, Any]], incoming: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     merge_keys: list[set[str]] = []
 
@@ -161,12 +198,24 @@ def _merge_member_records(existing: list[dict[str, Any]], incoming: list[dict[st
                 record.get("name") if isinstance(record.get("name"), str) else None,
             )
         )
-        record_session_id = record.get("session_id") if isinstance(record.get("session_id"), str) else None
+        record_session_id = (
+            record.get("session_id")
+            if isinstance(record.get("session_id"), str)
+            else None
+        )
 
         target_index: int | None = None
         for idx, current in enumerate(merged):
-            current_session_id = current.get("session_id") if isinstance(current.get("session_id"), str) else None
-            if record_session_id and current_session_id and record_session_id == current_session_id:
+            current_session_id = (
+                current.get("session_id")
+                if isinstance(current.get("session_id"), str)
+                else None
+            )
+            if (
+                record_session_id
+                and current_session_id
+                and record_session_id == current_session_id
+            ):
                 target_index = idx
                 break
             if record_keys and merge_keys[idx].intersection(record_keys):
@@ -188,7 +237,9 @@ def _merge_member_records(existing: list[dict[str, Any]], incoming: list[dict[st
     return merged
 
 
-def _merge_task_records(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _merge_task_records(
+    existing: list[dict[str, Any]], incoming: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for record in existing + incoming:
@@ -213,7 +264,9 @@ def _merge_task_records(existing: list[dict[str, Any]], incoming: list[dict[str,
     return [merged[task_id] for task_id in order]
 
 
-def _build_lead_flow(turn: Turn, *, user_request: dict[str, Any] | None) -> list[dict[str, Any]]:
+def _build_lead_flow(
+    turn: Turn, *, user_request: dict[str, Any] | None
+) -> list[dict[str, Any]]:
     flow: list[dict[str, Any]] = []
 
     if (
@@ -242,7 +295,9 @@ def _build_lead_flow(turn: Turn, *, user_request: dict[str, Any] | None) -> list
         if item.get("type") == "tool_call":
             flow.append({"type": "lead_tool_call", **_public_tool_flow_item(item)})
         elif item.get("type") == "tool_call_group":
-            flow.append({"type": "lead_tool_call_group", **_public_tool_flow_item(item)})
+            flow.append(
+                {"type": "lead_tool_call_group", **_public_tool_flow_item(item)}
+            )
         elif item.get("type") == "assistant_response":
             flow.extend(_build_lead_text_events(item["text"]))
 
@@ -262,7 +317,11 @@ def _build_lead_text_events(text: str) -> list[dict[str, Any]]:
     if not normalized:
         return []
 
-    if len(normalized) > 160 or "\n\n" in normalized or any(token in normalized for token in ("|", "- `", "**")):
+    if (
+        len(normalized) > 160
+        or "\n\n" in normalized
+        or any(token in normalized for token in ("|", "- `", "**"))
+    ):
         return [{"type": "lead_response", "agent_response": normalized}]
 
     events: list[dict[str, Any]] = []
@@ -332,9 +391,15 @@ def _resolve_member_session_id(
     turn_start = turn.started_at
     turn_end = turn.ended_at or turn.started_at
 
-    completed_before_turn = [item for item in candidates if item.ended_at is not None and item.ended_at <= turn_start]
+    completed_before_turn = [
+        item
+        for item in candidates
+        if item.ended_at is not None and item.ended_at <= turn_start
+    ]
     if completed_before_turn:
-        latest_end = max(item.ended_at for item in completed_before_turn if item.ended_at is not None)
+        latest_end = max(
+            item.ended_at for item in completed_before_turn if item.ended_at is not None
+        )
         latest = [item for item in completed_before_turn if item.ended_at == latest_end]
         if len(latest) == 1:
             return latest[0].session_id
@@ -342,15 +407,20 @@ def _resolve_member_session_id(
     active_during_turn = [
         item
         for item in candidates
-        if item.started_at <= turn_end and (item.ended_at is None or item.ended_at >= turn_start)
+        if item.started_at <= turn_end
+        and (item.ended_at is None or item.ended_at >= turn_start)
     ]
     if len(active_during_turn) == 1:
         return active_during_turn[0].session_id
 
-    spawned_in_turn = [item for item in candidates if turn_start <= item.started_at <= turn_end]
+    spawned_in_turn = [
+        item for item in candidates if turn_start <= item.started_at <= turn_end
+    ]
     if spawned_in_turn:
         earliest_start = min(item.started_at for item in spawned_in_turn)
-        earliest = [item for item in spawned_in_turn if item.started_at == earliest_start]
+        earliest = [
+            item for item in spawned_in_turn if item.started_at == earliest_start
+        ]
         if len(earliest) == 1:
             return earliest[0].session_id
 

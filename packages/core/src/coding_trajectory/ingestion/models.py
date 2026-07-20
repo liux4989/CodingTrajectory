@@ -12,36 +12,36 @@ from pydantic import BaseModel, Field
 
 class EventType(str, Enum):
     USER_PROMPT_SUBMITTED = "user.prompt.submitted"
-    TOOL_CALL_REQUESTED   = "tool.call.requested"
-    TOOL_CALL_SUCCEEDED   = "tool.call.succeeded"
-    TOOL_CALL_FAILED      = "tool.call.failed"
-    LLM_RESPONSE          = "llm.response"
-    VENDOR_RAW            = "vendor.raw"
+    TOOL_CALL_REQUESTED = "tool.call.requested"
+    TOOL_CALL_SUCCEEDED = "tool.call.succeeded"
+    TOOL_CALL_FAILED = "tool.call.failed"
+    LLM_RESPONSE = "llm.response"
+    VENDOR_RAW = "vendor.raw"
 
 
 class Vendor(str, Enum):
-    CODEX_CLI   = "codex_cli"
+    CODEX_CLI = "codex_cli"
     CLAUDE_CODE = "claude_code"
-    PI          = "pi"
+    PI = "pi"
 
 
 class ToolStatus(str, Enum):
-    REQUESTED   = "requested"
+    REQUESTED = "requested"
     IN_PROGRESS = "in_progress"
-    COMPLETED   = "completed"
-    FAILED      = "failed"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class TurnStatus(str, Enum):
-    RUNNING     = "running"
+    RUNNING = "running"
     INTERRUPTED = "interrupted"
-    COMPLETED   = "completed"
-    INCOMPLETE  = "incomplete"
+    COMPLETED = "completed"
+    INCOMPLETE = "incomplete"
 
 
 class SessionStatus(str, Enum):
-    ACTIVE     = "active"
-    COMPLETED  = "completed"
+    ACTIVE = "active"
+    COMPLETED = "completed"
     INCOMPLETE = "incomplete"
 
 
@@ -49,88 +49,90 @@ class SessionStatus(str, Enum):
 # Vendor-specific extension models (session-level metadata)
 # ---------------------------------------------------------------------------
 
+
 class ClaudeCodeExtensions(BaseModel):
-    team_name:      str | None = None
-    agent_name:     str | None = None
-    agent_role:     str | None = None
-    description:    str | None = None
-    title:          str | None = None
-    is_sidechain:   bool | None = None
+    team_name: str | None = None
+    agent_name: str | None = None
+    agent_role: str | None = None
+    description: str | None = None
+    title: str | None = None
+    is_sidechain: bool | None = None
     permission_mode: str | None = None
-    mode:           str | None = None
-    last_prompt:    str | None = None
-    parent_uuid:    str | None = None
-    request_id:     str | None = None
-    tool_use_id:    str | None = None
-    spawn_depth:    int | None = None
+    mode: str | None = None
+    last_prompt: str | None = None
+    parent_uuid: str | None = None
+    request_id: str | None = None
+    tool_use_id: str | None = None
+    spawn_depth: int | None = None
 
 
 class CodexExtensions(BaseModel):
-    sandbox_id:         str | None = None
-    sandbox_mode:       str | None = None
-    approval_policy:    str | None = None
-    agent_nickname:     str | None = None
-    agent_role:         str | None = None
+    sandbox_id: str | None = None
+    sandbox_mode: str | None = None
+    approval_policy: str | None = None
+    agent_nickname: str | None = None
+    agent_role: str | None = None
     collaboration_mode: str | None = None
-    cwd:                str | None = None
-    title:              str | None = None
-    forked_from_id:     str | None = None
+    cwd: str | None = None
+    title: str | None = None
+    forked_from_id: str | None = None
     spawn_parent_thread_id: str | None = None
-    spawn_depth:        int | None = None
+    spawn_depth: int | None = None
     spawn_agent_nickname: str | None = None
-    spawn_agent_role:   str | None = None
+    spawn_agent_role: str | None = None
     # child session id -> spawn tool-call call_id, captured from
     # sub_agent_activity{kind:started} events in THIS session's log. Backs the
     # forked_from edge origin for children spawned here.
-    spawn_links:        dict[str, str] = Field(default_factory=dict)
+    spawn_links: dict[str, str] = Field(default_factory=dict)
 
 
 class PiExtensions(BaseModel):
-    session_file:  str | None = None
-    cwd:           str | None = None
-    title:         str | None = None
-    provider:      str | None = None
-    model:         str | None = None
+    session_file: str | None = None
+    cwd: str | None = None
+    title: str | None = None
+    provider: str | None = None
+    model: str | None = None
     thinking_level: str | None = None
 
 
 class VendorExtensions(BaseModel):
     claude_code: ClaudeCodeExtensions | None = None
-    codex:       CodexExtensions | None = None
-    pi:          PiExtensions | None = None
+    codex: CodexExtensions | None = None
+    pi: PiExtensions | None = None
 
 
 # ---------------------------------------------------------------------------
 # Core canonical models
 # ---------------------------------------------------------------------------
 
+
 class ContextCategoryObservation(BaseModel):
-    key:        str
-    label:      str
-    tokens:     int
+    key: str
+    label: str
+    tokens: int
     confidence: str
-    source:     str | None = None
+    source: str | None = None
 
 
 class ContextUsageObservation(BaseModel):
-    source_event_id:       UUID | None = None
-    timestamp:             datetime
-    source:                str
-    model:                 str | None = None
-    provider:              str | None = None
+    source_event_id: UUID | None = None
+    timestamp: datetime
+    source: str
+    model: str | None = None
+    provider: str | None = None
     context_window_tokens: int | None = None
-    used_input_tokens:     int = 0
-    usage:                 dict[str, Any] = Field(default_factory=dict)
-    cumulative_usage:      dict[str, Any] | None = None
-    categories:            list[ContextCategoryObservation] = Field(default_factory=list)
+    used_input_tokens: int = 0
+    usage: dict[str, Any] = Field(default_factory=dict)
+    cumulative_usage: dict[str, Any] | None = None
+    categories: list[ContextCategoryObservation] = Field(default_factory=list)
 
 
 class ContextSourceObservation(BaseModel):
     timestamp: datetime
-    key:       str
-    label:     str
-    text:      str
-    source:    str
+    key: str
+    label: str
+    text: str
+    source: str
     # Vendor-reported token count for sources whose text is not captured in the
     # log (e.g. Claude Code's cached system-prompt prefix). When present and the
     # observed text is empty, composition and cost accounting use this in place
@@ -139,48 +141,48 @@ class ContextSourceObservation(BaseModel):
 
 
 class RuntimeObservation(BaseModel):
-    timestamp:                 datetime
-    kind:                      str
-    turn_id_raw:               str | None = None
-    trace_id:                  str | None = None
-    duration_ms:               int | None = None
-    time_to_first_token_ms:    int | None = None
-    reason:                    str | None = None
-    num_turns:                 int | None = None
+    timestamp: datetime
+    kind: str
+    turn_id_raw: str | None = None
+    trace_id: str | None = None
+    duration_ms: int | None = None
+    time_to_first_token_ms: int | None = None
+    reason: str | None = None
+    num_turns: int | None = None
     # Compaction metadata. Only populated for evicting compaction boundaries
     # (Claude Code's ``claude_compact_boundary``); Codex's ``context_compacted``
     # is a sliding window with no pre/post delta, so these stay ``None``.
-    pre_tokens:                int | None = None
-    post_tokens:               int | None = None
+    pre_tokens: int | None = None
+    post_tokens: int | None = None
     cumulative_dropped_tokens: int | None = None
-    trigger:                   str | None = None
+    trigger: str | None = None
     # Effort-change metadata. Populated only for ``effort_changed`` observations
     # — emitted when a turn's reasoning effort differs from the prior turn's
     # (Codex ``turn_context.effort``); both ends are real strings.
-    effort_from:               str | None = None
-    effort_to:                 str | None = None
+    effort_from: str | None = None
+    effort_to: str | None = None
 
 
 class Event(BaseModel):
-    event_id:      UUID = Field(default_factory=uuid4)
-    session_id:    UUID
-    timestamp:     datetime
-    type:          EventType
+    event_id: UUID = Field(default_factory=uuid4)
+    session_id: UUID
+    timestamp: datetime
+    type: EventType
     vendor_source: Vendor
-    actor:         str | None = None
-    payload:       dict[str, Any] = Field(default_factory=dict)
+    actor: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class ItemBase(BaseModel):
-    item_id:      UUID = Field(default_factory=uuid4)
-    session_id:   UUID
-    turn_id:      UUID
-    sequence:     int
-    started_at:   datetime
+    item_id: UUID = Field(default_factory=uuid4)
+    session_id: UUID
+    turn_id: UUID
+    sequence: int
+    started_at: datetime
     completed_at: datetime | None = None
-    status:       str | None = None
-    event_ids:    list[UUID] = Field(default_factory=list)
-    vendor_data:  dict[str, Any] = Field(default_factory=dict)
+    status: str | None = None
+    event_ids: list[UUID] = Field(default_factory=list)
+    vendor_data: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentMessageItem(ItemBase):
@@ -190,30 +192,30 @@ class AgentMessageItem(ItemBase):
 
 
 class ToolCallItem(ItemBase):
-    kind:         Literal["tool_call"] = "tool_call"
-    tool_name:    str | None = None
+    kind: Literal["tool_call"] = "tool_call"
+    tool_name: str | None = None
     tool_call_id: str | None = None
-    input:        Any = None
-    output:       Any = None
+    input: Any = None
+    output: Any = None
 
 
 class CommandExecutionItem(ItemBase):
-    kind:         Literal["command_execution"] = "command_execution"
-    tool_name:    str | None = None
+    kind: Literal["command_execution"] = "command_execution"
+    tool_name: str | None = None
     tool_call_id: str | None = None
-    command:      Any = None
-    exit_code:    int | None = None
-    output:       Any = None
+    command: Any = None
+    exit_code: int | None = None
+    output: Any = None
 
 
 class FileChangeItem(ItemBase):
-    kind:         Literal["file_change"] = "file_change"
-    tool_name:    str | None = None
+    kind: Literal["file_change"] = "file_change"
+    tool_name: str | None = None
     tool_call_id: str | None = None
-    path:         str | None = None
-    operation:    str | None = None
-    input:        Any = None
-    output:       Any = None
+    path: str | None = None
+    operation: str | None = None
+    input: Any = None
+    output: Any = None
 
 
 class ReasoningItem(ItemBase):
@@ -222,11 +224,11 @@ class ReasoningItem(ItemBase):
 
 
 class PlanItem(ItemBase):
-    kind:         Literal["plan"] = "plan"
-    tool_name:    str | None = None
+    kind: Literal["plan"] = "plan"
+    tool_name: str | None = None
     tool_call_id: str | None = None
-    input:        Any = None
-    output:       Any = None
+    input: Any = None
+    output: Any = None
 
 
 Item: TypeAlias = Annotated[
@@ -250,85 +252,92 @@ def is_tool_shaped_item(item: Item) -> bool:
 
 
 class TeamMemberState(BaseModel):
-    member_id:  str
+    member_id: str
     session_id: UUID | None = None
-    name:       str | None = None
-    color:      str | None = None
-    team_name:  str | None = None
+    name: str | None = None
+    color: str | None = None
+    team_name: str | None = None
     agent_type: str | None = None
-    summary:    str | None = None
+    summary: str | None = None
 
 
 class TeamTaskState(BaseModel):
-    task_id:         str
-    title:           str | None = None
-    status:          str | None = None
-    member_id:       str | None = None
-    summary:         str | None = None
-    blocked_by:      list[str] = Field(default_factory=list)
-    updated_fields:  list[str] = Field(default_factory=list)
+    task_id: str
+    title: str | None = None
+    status: str | None = None
+    member_id: str | None = None
+    summary: str | None = None
+    blocked_by: list[str] = Field(default_factory=list)
+    updated_fields: list[str] = Field(default_factory=list)
 
 
 class TeamTurnState(BaseModel):
     members: list[TeamMemberState] = Field(default_factory=list)
-    tasks:   list[TeamTaskState] = Field(default_factory=list)
+    tasks: list[TeamTaskState] = Field(default_factory=list)
 
 
 class Turn(BaseModel):
-    turn_id:               UUID = Field(default_factory=uuid4)
-    session_id:            UUID
-    sequence:              int
-    started_at:            datetime
-    ended_at:              datetime | None = None
-    user_request_event_id: UUID | None = None    # ref into Session.events
-    event_ids:             list[UUID] = Field(default_factory=list)
-    items:                 list[Item] = Field(default_factory=list)
-    team_state:            TeamTurnState | None = None
-    status:                TurnStatus = TurnStatus.COMPLETED
+    turn_id: UUID = Field(default_factory=uuid4)
+    session_id: UUID
+    sequence: int
+    started_at: datetime
+    ended_at: datetime | None = None
+    user_request_event_id: UUID | None = None  # ref into Session.events
+    event_ids: list[UUID] = Field(default_factory=list)
+    items: list[Item] = Field(default_factory=list)
+    team_state: TeamTurnState | None = None
+    status: TurnStatus = TurnStatus.COMPLETED
 
 
 class Session(BaseModel):
-    session_id:        UUID = Field(default_factory=uuid4)
-    vendor:            Vendor
-    agent_name:        str | None = None
-    started_at:        datetime
-    ended_at:          datetime | None = None
+    session_id: UUID = Field(default_factory=uuid4)
+    vendor: Vendor
+    agent_name: str | None = None
+    started_at: datetime
+    ended_at: datetime | None = None
     parent_session_id: UUID | None = None
-    cwd:               str | None = None
-    events:            list[Event] = Field(default_factory=list)
-    turns:             list[Turn] = Field(default_factory=list)
-    context_usage:     list[ContextUsageObservation] = Field(default_factory=list)
-    context_sources:   list[ContextSourceObservation] = Field(default_factory=list)
+    cwd: str | None = None
+    events: list[Event] = Field(default_factory=list)
+    turns: list[Turn] = Field(default_factory=list)
+    context_usage: list[ContextUsageObservation] = Field(default_factory=list)
+    context_sources: list[ContextSourceObservation] = Field(default_factory=list)
     runtime_observations: list[RuntimeObservation] = Field(default_factory=list)
-    extensions:        VendorExtensions | None = None
-    status:            SessionStatus = SessionStatus.COMPLETED
+    extensions: VendorExtensions | None = None
+    status: SessionStatus = SessionStatus.COMPLETED
 
 
 class SessionEdge(BaseModel):
-    type:               Literal["spawned_subagent", "sidechain_of", "forked_from", "handoff_to", "resumed_from", "teammate_of"]
-    source_session_id:  UUID
-    target_session_id:  UUID
-    source_turn_id:     UUID | None = None
-    source_item_id:     UUID | None = None
-    source_event_id:    UUID | None = None
-    provenance:         Literal["observed", "derived"] = "derived"
-    confidence:         Literal["high", "medium", "low"] = "medium"
+    type: Literal[
+        "spawned_subagent",
+        "sidechain_of",
+        "forked_from",
+        "handoff_to",
+        "resumed_from",
+        "teammate_of",
+    ]
+    source_session_id: UUID
+    target_session_id: UUID
+    source_turn_id: UUID | None = None
+    source_item_id: UUID | None = None
+    source_event_id: UUID | None = None
+    provenance: Literal["observed", "derived"] = "derived"
+    confidence: Literal["high", "medium", "low"] = "medium"
     evidence_event_ids: list[UUID] = Field(default_factory=list)
-    metadata:           dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class SessionGraphSummary(BaseModel):
     root_session_id: UUID | None = None
-    started_at:      datetime | None = None
-    ended_at:        datetime | None = None
-    session_count:   int = 0
-    turn_count:      int = 0
-    vendors:         list[Vendor] = Field(default_factory=list)
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    session_count: int = 0
+    turn_count: int = 0
+    vendors: list[Vendor] = Field(default_factory=list)
 
 
 class SessionGraph(BaseModel):
-    root_session_id:      UUID = Field(default_factory=uuid4)
+    root_session_id: UUID = Field(default_factory=uuid4)
     project_identifier: str | None = None
-    summary:            SessionGraphSummary | None = None
-    edges:              list[SessionEdge] = Field(default_factory=list)
-    sessions:           list[Session] = Field(default_factory=list)
+    summary: SessionGraphSummary | None = None
+    edges: list[SessionEdge] = Field(default_factory=list)
+    sessions: list[Session] = Field(default_factory=list)

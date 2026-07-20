@@ -32,7 +32,10 @@ from coding_trajectory.ingestion.models import (
     SessionGraph,
     Turn,
 )
-from coding_trajectory.ingestion.indexes import build_session_graph_index, ordered_sessions
+from coding_trajectory.ingestion.indexes import (
+    build_session_graph_index,
+    ordered_sessions,
+)
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 
 
@@ -666,7 +669,11 @@ def project_sessions_metadata(
                 "root_session_id": str(graph.root_session_id),
                 "title": _session_graph_title(graph),
                 "vendors": sorted(
-                    {session.vendor.value for session in graph.sessions if session.vendor}
+                    {
+                        session.vendor.value
+                        for session in graph.sessions
+                        if session.vendor
+                    }
                 )
                 or None,
                 "session_ids": [str(session.session_id) for session in graph.sessions],
@@ -895,7 +902,9 @@ def _session_stats_sections(
             prune_nones(
                 {
                     "session_id": str(session.session_id),
-                    "role": _session_role(session, session_graph=session_graph, index=index),
+                    "role": _session_role(
+                        session, session_graph=session_graph, index=index
+                    ),
                     "relationship": index.incoming_edge_type.get(session.session_id),
                     "parent_session_id": (
                         str(index.parent[session.session_id])

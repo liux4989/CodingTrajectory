@@ -170,9 +170,7 @@ def build_context_composition(
         allocated_usage_by_item,
         allocated_usage_by_context_source,
     )
-    _attach_estimated_cost(
-        categories, model=pricing_model, provider=pricing_provider
-    )
+    _attach_estimated_cost(categories, model=pricing_model, provider=pricing_provider)
     return categories, anchor_outcome
 
 
@@ -195,9 +193,7 @@ def _attach_estimated_cost(
                 category.allocated_usage, model=model, provider=provider
             )
         if category.children:
-            _attach_estimated_cost(
-                category.children, model=model, provider=provider
-            )
+            _attach_estimated_cost(category.children, model=model, provider=provider)
 
 
 def _anchor_composition_to_used_input(
@@ -652,9 +648,9 @@ def _assert_context_composition_usage_reconciles(
     actual = _sum_usage_values(
         category.allocated_usage or {} for category in categories
     )
-    assert (
-        actual == expected
-    ), "context composition allocated usage must reconcile to stats attribution"
+    assert actual == expected, (
+        "context composition allocated usage must reconcile to stats attribution"
+    )
 
 
 def _sum_usage_values(items: Iterable[dict[str, int]]) -> dict[str, int]:

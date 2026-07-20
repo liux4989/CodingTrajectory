@@ -15,6 +15,8 @@ from coding_trajectory.metrics.models import (
     RuntimeStatsFlat,
     TokenUsage,
 )
+
+
 def root_session(session_graph: SessionGraph) -> Session:
     for session in session_graph.sessions:
         if session.session_id == session_graph.root_session_id:
@@ -42,7 +44,9 @@ _COMPACTION_MECHANISMS = {
 
 
 def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
-    started = min((session.started_at for session in session_graph.sessions), default=None)
+    started = min(
+        (session.started_at for session in session_graph.sessions), default=None
+    )
     ended = max(
         (session.ended_at or session.started_at for session in session_graph.sessions),
         default=None,
@@ -107,15 +111,23 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
             for turn in session.turns
             if not is_low_value_turn(turn.items, None)
         ),
-        items=sum(len(turn.items) for session in session_graph.sessions for turn in session.turns),
+        items=sum(
+            len(turn.items)
+            for session in session_graph.sessions
+            for turn in session.turns
+        ),
         tool_calls=tool_calls,
         failed_tool_calls=failed_tool_calls,
         subagent_sessions=sum(
-            1 for session in session_graph.sessions if session.parent_session_id is not None
+            1
+            for session in session_graph.sessions
+            if session.parent_session_id is not None
         ),
         compactions=compactions,
         interrupted_turns=sum(
-            1 for observation in runtime_observations if observation.kind == "turn_aborted"
+            1
+            for observation in runtime_observations
+            if observation.kind == "turn_aborted"
         ),
         rollbacks=sum(
             observation.num_turns or 0
@@ -158,9 +170,11 @@ def compaction_stats(session_graph: SessionGraph) -> CompactionStatsFlat | None:
     # ``cumulative_dropped_tokens`` is cumulative (Claude Code reports the
     # running total per compaction), so the latest non-None value is the total.
     cumulative = next(
-        (observation.cumulative_dropped_tokens
-         for observation, _ in reversed(entries)
-         if observation.cumulative_dropped_tokens is not None),
+        (
+            observation.cumulative_dropped_tokens
+            for observation, _ in reversed(entries)
+            if observation.cumulative_dropped_tokens is not None
+        ),
         None,
     )
     events = [
@@ -169,10 +183,14 @@ def compaction_stats(session_graph: SessionGraph) -> CompactionStatsFlat | None:
     ]
     # When no vendor-reported cumulative (Codex), derive it from per-event drops.
     if cumulative is None:
-        cumulative = sum(
-            event.dropped_tokens for event in events
-            if event.dropped_tokens is not None
-        ) or None
+        cumulative = (
+            sum(
+                event.dropped_tokens
+                for event in events
+                if event.dropped_tokens is not None
+            )
+            or None
+        )
     # ``last`` mirrors the final timeline entry; deriving it from ``events``
     # keeps the two in sync instead of constructing the same object twice.
     return CompactionStatsFlat(
@@ -199,9 +217,13 @@ def _event_from_observation(
     # input token count). The last call before compaction is the
     # pre-compaction context size; the first call after is the post size.
     if pre is None and context_observations:
-        pre = _nearest_context_tokens(context_observations, observation.timestamp, before=True)
+        pre = _nearest_context_tokens(
+            context_observations, observation.timestamp, before=True
+        )
     if post is None and context_observations:
-        post = _nearest_context_tokens(context_observations, observation.timestamp, before=False)
+        post = _nearest_context_tokens(
+            context_observations, observation.timestamp, before=False
+        )
     if dropped is None and pre is not None and post is not None:
         dropped = max(pre - post, 0)
     return CompactionEventFlat(
@@ -315,12 +337,17 @@ def percent(value: int, denominator: int | None) -> float | None:
 def token_usage_from_mapping(value: dict[str, Any] | None) -> TokenUsage:
     if not isinstance(value, dict):
         return TokenUsage()
-    uncached_raw = value.get("uncached_input_tokens") or value.get("uncachedInputTokens")
+    uncached_raw = value.get("uncached_input_tokens") or value.get(
+        "uncachedInputTokens"
+    )
     return TokenUsage(
         input_tokens=_as_int(value.get("input_tokens") or value.get("inputTokens")),
-        cached_input_tokens=_as_int(value.get("cached_input_tokens") or value.get("cachedInputTokens")),
+        cached_input_tokens=_as_int(
+            value.get("cached_input_tokens") or value.get("cachedInputTokens")
+        ),
         cache_creation_input_tokens=_as_int(
-            value.get("cache_creation_input_tokens") or value.get("cacheCreationInputTokens")
+            value.get("cache_creation_input_tokens")
+            or value.get("cacheCreationInputTokens")
         ),
         output_tokens=_as_int(value.get("output_tokens") or value.get("outputTokens")),
         reasoning_output_tokens=_as_int(
@@ -352,7 +379,9 @@ def _turn_wait_seconds(session: Session) -> list[int]:
     previous_ended_at = None
     for turn in session.turns:
         if previous_ended_at is not None and turn.started_at is not None:
-            values.append(max(round((turn.started_at - previous_ended_at).total_seconds()), 0))
+            values.append(
+                max(round((turn.started_at - previous_ended_at).total_seconds()), 0)
+            )
         if turn.ended_at is not None:
             previous_ended_at = turn.ended_at
     return values

@@ -42,8 +42,12 @@ def append_agent_message(
                 if event_id not in last.event_ids:
                     last.event_ids.append(event_id)
             if vendor_data:
-                last.vendor_data.update({k: v for k, v in vendor_data.items() if v is not None})
-            if completed_at is not None and (last.completed_at is None or completed_at > last.completed_at):
+                last.vendor_data.update(
+                    {k: v for k, v in vendor_data.items() if v is not None}
+                )
+            if completed_at is not None and (
+                last.completed_at is None or completed_at > last.completed_at
+            ):
                 last.completed_at = completed_at
             return last
 
@@ -341,6 +345,7 @@ def _session_id_from_items(items: list[Item]):
     for item in items:
         return item.session_id
     from uuid import uuid4
+
     return uuid4()
 
 
@@ -348,6 +353,7 @@ def _turn_id_from_items(items: list[Item]):
     for item in items:
         return item.turn_id
     from uuid import uuid4
+
     return uuid4()
 
 
@@ -360,5 +366,6 @@ def _next_sequence(items: list[Item]) -> int:
 def _latest_timestamp(items: list[Item]) -> datetime:
     if not items:
         from datetime import datetime as _dt
+
         return _dt.now()
     return max(item.started_at for item in items)

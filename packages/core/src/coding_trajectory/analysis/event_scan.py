@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from coding_trajectory.analysis.projection_utils import match_filter, truncate_payload_strings
+from coding_trajectory.analysis.projection_utils import (
+    match_filter,
+    truncate_payload_strings,
+)
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.models import EventType, SessionGraph
 

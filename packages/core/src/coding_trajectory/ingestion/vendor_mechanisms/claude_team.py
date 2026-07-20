@@ -15,11 +15,13 @@ from coding_trajectory.ingestion.models import (
     Turn,
 )
 
-_NOISY_TEAMMATE_EVENT_TYPES: frozenset[str] = frozenset({
-    "idle_notification",
-    "teammate_terminated",
-    "shutdown_approved",
-})
+_NOISY_TEAMMATE_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "idle_notification",
+        "teammate_terminated",
+        "shutdown_approved",
+    }
+)
 
 
 class ClaudeTeamMessage(BaseModel):
@@ -45,7 +47,9 @@ def high_value_teammate_request(messages: list[ClaudeTeamMessage]) -> str | None
     return "\n".join(lines) if lines else None
 
 
-def build_turn_team_state(turn: Turn, *, team_input: ClaudeTeamStateInput) -> TeamTurnState | None:
+def build_turn_team_state(
+    turn: Turn, *, team_input: ClaudeTeamStateInput
+) -> TeamTurnState | None:
     members: dict[str, dict[str, object]] = {}
     tasks: dict[str, dict[str, object]] = {}
 
@@ -113,7 +117,7 @@ def _task_id_from_text(raw: str | None) -> str | None:
     index = lowered.find(marker)
     if index < 0:
         return None
-    suffix = raw[index + len(marker):].lstrip(" #")
+    suffix = raw[index + len(marker) :].lstrip(" #")
     digits = []
     for char in suffix:
         if not char.isdigit():
@@ -126,10 +130,15 @@ def _looks_completed(text: str | None) -> bool:
     if not text:
         return False
     lowered = text.lower()
-    return any(token in lowered for token in ("already completed", " complete", " completed", " done"))
+    return any(
+        token in lowered
+        for token in ("already completed", " complete", " completed", " done")
+    )
 
 
-def _merge_record(target: dict[str, dict[str, object]], key: str, patch: dict[str, object]) -> None:
+def _merge_record(
+    target: dict[str, dict[str, object]], key: str, patch: dict[str, object]
+) -> None:
     existing = target.get(key)
     if existing is None:
         target[key] = prune_nones(patch)
@@ -175,7 +184,9 @@ def _merge_tool_item(
         return
 
     if tool_name == "TaskCreate":
-        task_info = tool_output.get("task") if isinstance(tool_output.get("task"), dict) else {}
+        task_info = (
+            tool_output.get("task") if isinstance(tool_output.get("task"), dict) else {}
+        )
         task_id = task_info.get("id")
         if isinstance(task_id, (str, int)):
             task_id_str = str(task_id)
@@ -201,11 +212,13 @@ def _merge_tool_item(
                     "task_id": task_id_str,
                     "status": "updated",
                     "blocked_by": [
-                        str(value) for value in tool_input.get("addBlockedBy", [])
+                        str(value)
+                        for value in tool_input.get("addBlockedBy", [])
                         if isinstance(value, (str, int))
                     ],
                     "updated_fields": [
-                        str(value) for value in tool_output.get("updatedFields", [])
+                        str(value)
+                        for value in tool_output.get("updatedFields", [])
                         if isinstance(value, str)
                     ],
                 },

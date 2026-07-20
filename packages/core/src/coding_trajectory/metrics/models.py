@@ -107,7 +107,9 @@ class TokenUsage(BaseModel):
         )
 
 
-def _optional_sum(left: int | float | None, right: int | float | None) -> int | float | None:
+def _optional_sum(
+    left: int | float | None, right: int | float | None
+) -> int | float | None:
     if left is None and right is None:
         return None
     return (left or 0) + (right or 0)

@@ -38,8 +38,12 @@ def normalize_codex_token_count(
     # them - but for codex it would label the whole prompt as uncached, overstating
     # cache-break re-reads. Inject the true uncached subset (input - cached) here
     # so it is carried through ``TokenUsage`` instead of falling back.
-    last_token_usage = _with_uncached_subset(_dict_or_none(info_map.get("last_token_usage")))
-    total_token_usage = _with_uncached_subset(_dict_or_none(info_map.get("total_token_usage")))
+    last_token_usage = _with_uncached_subset(
+        _dict_or_none(info_map.get("last_token_usage"))
+    )
+    total_token_usage = _with_uncached_subset(
+        _dict_or_none(info_map.get("total_token_usage"))
+    )
     metrics = NormalizedUsageMetrics(
         model=_as_str(info_map.get("model"))
         or _as_str(info_map.get("model_name"))
@@ -106,7 +110,9 @@ def normalize_claude_usage(*, model: Any, usage: Any) -> dict[str, Any]:
             "service_tier": _as_str(usage_map.get("service_tier")),
             "speed": _as_str(usage_map.get("speed")),
             "inference_geo": _as_str(usage_map.get("inference_geo")),
-            "iterations": usage_map.get("iterations") if isinstance(usage_map.get("iterations"), list) else None,
+            "iterations": usage_map.get("iterations")
+            if isinstance(usage_map.get("iterations"), list)
+            else None,
         }
     )
     return _normalized_usage_metrics(

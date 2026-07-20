@@ -44,7 +44,11 @@ def visible_text_size(text: str, *, reported_tokens: int | None = None) -> Conte
 
 
 def item_input_text(item: Item) -> str:
-    value = item.command if item.kind == "command_execution" else getattr(item, "input", None)
+    value = (
+        item.command
+        if item.kind == "command_execution"
+        else getattr(item, "input", None)
+    )
     return _stringify(value)
 
 
@@ -73,7 +77,11 @@ def reported_token_count(text: str) -> int | None:
 
 
 def output_is_truncated(text: str) -> bool:
-    return "chars → session.events" in text or "chars → event.detail" in text or "tokens truncated" in text
+    return (
+        "chars → session.events" in text
+        or "chars → event.detail" in text
+        or "tokens truncated" in text
+    )
 
 
 def _stringify(value: Any) -> str:

@@ -30,5 +30,7 @@ def classify_edge_type(mechanism: RelationEdgeInput) -> str:
     return "sidechain_of"
 
 
-def is_root_session_candidate(*, parent_session_id_present: bool, is_sidechain: bool) -> bool:
+def is_root_session_candidate(
+    *, parent_session_id_present: bool, is_sidechain: bool
+) -> bool:
     return not parent_session_id_present and not is_sidechain

@@ -24,11 +24,16 @@ def truncation_marker(length: int, event_ids: list) -> str:
     return f"[{length:,} chars → session.events {ref}]"
 
 
-def truncate_with_ref(value: Any, event_ids: list, max_len: int = _ITEM_DETAIL_TRUNCATE_LEN) -> Any:
+def truncate_with_ref(
+    value: Any, event_ids: list, max_len: int = _ITEM_DETAIL_TRUNCATE_LEN
+) -> Any:
     if isinstance(value, str) and len(value) > max_len:
         return truncation_marker(len(value), event_ids)
     if isinstance(value, dict):
-        return {key: truncate_with_ref(child, event_ids, max_len) for key, child in value.items()}
+        return {
+            key: truncate_with_ref(child, event_ids, max_len)
+            for key, child in value.items()
+        }
     if isinstance(value, list):
         return [truncate_with_ref(child, event_ids, max_len) for child in value]
     return value
@@ -61,7 +66,9 @@ def resolve_path(obj: Any, path: str) -> Any:
 
 def match_filter(shape: dict[str, Any], expr: str) -> bool:
     if "=" not in expr:
-        raise ValueError(f"invalid filter expression {expr!r}: expected key=value, key=*, or key=!")
+        raise ValueError(
+            f"invalid filter expression {expr!r}: expected key=value, key=*, or key=!"
+        )
     key, _, value = expr.partition("=")
     resolved = resolve_path(shape, key)
     if value == "*":
@@ -71,13 +78,17 @@ def match_filter(shape: dict[str, Any], expr: str) -> bool:
     return str(resolved) == value
 
 
-def truncate_payload_strings(obj: Any, max_len: int = _EVENT_SCAN_PAYLOAD_PREVIEW_LEN) -> Any:
+def truncate_payload_strings(
+    obj: Any, max_len: int = _EVENT_SCAN_PAYLOAD_PREVIEW_LEN
+) -> Any:
     if isinstance(obj, str):
         if len(obj) > max_len:
             return f"[{len(obj):,} chars]"
         return obj
     if isinstance(obj, dict):
-        return {key: truncate_payload_strings(value, max_len) for key, value in obj.items()}
+        return {
+            key: truncate_payload_strings(value, max_len) for key, value in obj.items()
+        }
     if isinstance(obj, list):
         return [truncate_payload_strings(value, max_len) for value in obj]
     return obj

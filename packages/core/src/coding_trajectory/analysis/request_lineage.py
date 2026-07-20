@@ -6,25 +6,53 @@ from datetime import datetime
 import re
 from uuid import UUID
 
-from coding_trajectory.ingestion.indexes import SessionGraphIndex, event_for_turn_user_request, incoming_edge
+from coding_trajectory.ingestion.indexes import (
+    SessionGraphIndex,
+    event_for_turn_user_request,
+    incoming_edge,
+)
 from coding_trajectory.ingestion.models import Session, Turn
 
 _COMMAND_NAME_RE = re.compile(r"<command-name>(.*?)</command-name>", re.DOTALL)
 
-_LOW_VALUE_COMMANDS: frozenset[str] = frozenset({
-    "/clear", "/reset", "/new",
-    "/compact", "/context",
-    "/cost", "/usage", "/stats",
-    "/exit", "/quit",
-    "/help", "/release-notes",
-    "/config", "/settings",
-    "/model", "/fast", "/effort", "/vim",
-    "/theme", "/color", "/statusline", "/keybindings", "/terminal-setup",
-    "/login", "/logout",
-    "/status",
-    "/stickers", "/mobile", "/ios", "/android", "/upgrade", "/privacy-settings",
-    "/personality", "/debug-config",
-})
+_LOW_VALUE_COMMANDS: frozenset[str] = frozenset(
+    {
+        "/clear",
+        "/reset",
+        "/new",
+        "/compact",
+        "/context",
+        "/cost",
+        "/usage",
+        "/stats",
+        "/exit",
+        "/quit",
+        "/help",
+        "/release-notes",
+        "/config",
+        "/settings",
+        "/model",
+        "/fast",
+        "/effort",
+        "/vim",
+        "/theme",
+        "/color",
+        "/statusline",
+        "/keybindings",
+        "/terminal-setup",
+        "/login",
+        "/logout",
+        "/status",
+        "/stickers",
+        "/mobile",
+        "/ios",
+        "/android",
+        "/upgrade",
+        "/privacy-settings",
+        "/personality",
+        "/debug-config",
+    }
+)
 
 
 def extract_user_request(
@@ -38,8 +66,16 @@ def extract_user_request(
         return None
     team_request_summary = event.payload.get("team_request_summary")
     if isinstance(team_request_summary, str) and team_request_summary.strip():
-        source = "parent_agent" if session and session.parent_session_id is not None else "team_lead"
-        return {"type": "message", "source": source, "content": team_request_summary.strip()}
+        source = (
+            "parent_agent"
+            if session and session.parent_session_id is not None
+            else "team_lead"
+        )
+        return {
+            "type": "message",
+            "source": source,
+            "content": team_request_summary.strip(),
+        }
     for key in ("text", "message", "content"):
         value = event.payload.get(key)
         if isinstance(value, str) and value.strip():
@@ -53,7 +89,9 @@ def latest_human_user_request(
     *,
     before: datetime | None = None,
 ) -> dict[str, str] | None:
-    turns = sorted(session.turns, key=lambda item: (item.started_at, item.sequence), reverse=True)
+    turns = sorted(
+        session.turns, key=lambda item: (item.started_at, item.sequence), reverse=True
+    )
     for turn in turns:
         if before is not None and turn.started_at > before:
             continue
@@ -84,7 +122,9 @@ def resolve_originating_human_request(
         if edge is not None and edge.source_turn_id is not None:
             source_turn = index.turns_by_id.get(edge.source_turn_id)
             if source_turn is not None:
-                request = extract_user_request(index, source_turn, session=parent_session)
+                request = extract_user_request(
+                    index, source_turn, session=parent_session
+                )
                 if request and request.get("source") == "human_user":
                     return request
                 cutoff = source_turn.started_at
@@ -126,7 +166,11 @@ def is_low_value_turn(items: list, user_request: dict[str, str] | None) -> bool:
 def _parse_user_request_info(raw: str) -> dict[str, str] | None:
     match = _COMMAND_NAME_RE.search(raw)
     if match:
-        return {"type": "command", "source": "human_user", "content": match.group(1).strip()}
+        return {
+            "type": "command",
+            "source": "human_user",
+            "content": match.group(1).strip(),
+        }
     stripped = raw.strip()
     if not stripped:
         return None

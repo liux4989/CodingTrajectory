@@ -43,12 +43,16 @@ def extensions(mechanism: CodexMultiAgentInput) -> VendorExtensions:
             sandbox_mode=mechanism.sandbox_mode,
             approval_policy=mechanism.approval_policy,
             collaboration_mode=mechanism.collaboration_mode,
-            agent_nickname=mechanism.agent_nickname or (thread_spawn.agent_nickname if thread_spawn else None),
-            agent_role=mechanism.agent_role or (thread_spawn.agent_role if thread_spawn else None),
+            agent_nickname=mechanism.agent_nickname
+            or (thread_spawn.agent_nickname if thread_spawn else None),
+            agent_role=mechanism.agent_role
+            or (thread_spawn.agent_role if thread_spawn else None),
             cwd=mechanism.cwd,
             title=mechanism.title,
             forked_from_id=mechanism.forked_from_id,
-            spawn_parent_thread_id=thread_spawn.parent_thread_id if thread_spawn else None,
+            spawn_parent_thread_id=thread_spawn.parent_thread_id
+            if thread_spawn
+            else None,
             spawn_depth=thread_spawn.depth if thread_spawn else None,
             spawn_agent_nickname=thread_spawn.agent_nickname if thread_spawn else None,
             spawn_agent_role=thread_spawn.agent_role if thread_spawn else None,

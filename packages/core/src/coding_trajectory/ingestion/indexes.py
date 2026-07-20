@@ -6,7 +6,14 @@ from collections import defaultdict
 from dataclasses import dataclass
 from uuid import UUID
 
-from coding_trajectory.ingestion.models import Event, Item, Session, SessionGraph, SessionEdge, Turn
+from coding_trajectory.ingestion.models import (
+    Event,
+    Item,
+    Session,
+    SessionGraph,
+    SessionEdge,
+    Turn,
+)
 
 
 @dataclass(frozen=True)
@@ -68,7 +75,10 @@ def build_session_graph_index(session_graph: SessionGraph) -> SessionGraphIndex:
     for child_ids in children.values():
         child_ids.sort(key=str)
 
-    roots = sorted((session_id for session_id, parent_id in parent.items() if parent_id is None), key=str)
+    roots = sorted(
+        (session_id for session_id, parent_id in parent.items() if parent_id is None),
+        key=str,
+    )
     incoming_edge_type = {
         session.session_id: (
             incoming_edge_by_target[session.session_id].type
@@ -125,11 +135,19 @@ def incoming_edge(index: SessionGraphIndex, session_id: UUID) -> SessionEdge | N
 
 
 def events_for_item(index: SessionGraphIndex, item: Item) -> list[Event]:
-    return [index.events_by_id[event_id] for event_id in item.event_ids if event_id in index.events_by_id]
+    return [
+        index.events_by_id[event_id]
+        for event_id in item.event_ids
+        if event_id in index.events_by_id
+    ]
 
 
 def events_for_turn(index: SessionGraphIndex, turn: Turn) -> list[Event]:
-    return [index.events_by_id[event_id] for event_id in turn.event_ids if event_id in index.events_by_id]
+    return [
+        index.events_by_id[event_id]
+        for event_id in turn.event_ids
+        if event_id in index.events_by_id
+    ]
 
 
 def event_for_turn_user_request(index: SessionGraphIndex, turn: Turn) -> Event | None:

@@ -7,7 +7,11 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel
 
-from coding_trajectory.ingestion.models import ClaudeCodeExtensions, Vendor, VendorExtensions
+from coding_trajectory.ingestion.models import (
+    ClaudeCodeExtensions,
+    Vendor,
+    VendorExtensions,
+)
 
 
 class ClaudeSubagentInput(BaseModel):
