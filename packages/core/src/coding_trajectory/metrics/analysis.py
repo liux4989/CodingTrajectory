@@ -1441,27 +1441,18 @@ def _build_full_metrics(
         session_metrics.append(metrics)
         total = total.plus(metrics.token_usage)
         if not _session_has_usage(metrics) and session.context_usage:
-            message = f"no token usage metrics found for session {session.session_id}"
-            warnings.append(message)
-            debug.warn(
-                message,
+            _record_usage_warning(
+                warnings,
+                f"no token usage metrics found for session {session.session_id}",
                 code="usage.no_token_metrics",
-                severity="warning",
-                session_id=str(session.session_id),
-                vendor=session.vendor.value
-                if getattr(session.vendor, "value", None)
-                else None,
+                session=session,
             )
         for message in _usage_consistency_warnings(metrics):
-            warnings.append(message)
-            debug.warn(
+            _record_usage_warning(
+                warnings,
                 message,
                 code="usage.reported_total_inconsistent",
-                severity="warning",
-                session_id=str(session.session_id),
-                vendor=session.vendor.value
-                if getattr(session.vendor, "value", None)
-                else None,
+                session=session,
             )
 
     return SessionGraphMetrics(
@@ -1672,6 +1663,30 @@ def _usage_consistency_warnings(metrics: SessionMetrics) -> list[str]:
         f"{inconsistent} token usage observations had inconsistent reported "
         "totals; total_tokens was derived from processed token buckets"
     ]
+
+
+def _record_usage_warning(
+    warnings: list[str],
+    message: str,
+    *,
+    code: str,
+    session: Session,
+) -> None:
+    """Record a usage warning on both channels at once.
+
+    The payload ``warnings`` list carries a human-readable string for inline
+    rendering; ``debug.warn`` carries the structured (code/severity/context)
+    twin so ``ct doctor`` can aggregate it. Routing both through this helper
+    keeps the two representations in sync by construction.
+    """
+    warnings.append(message)
+    debug.warn(
+        message,
+        code=code,
+        severity="warning",
+        session_id=str(session.session_id),
+        vendor=session.vendor.value if getattr(session.vendor, "value", None) else None,
+    )
 
 
 def _unique(values: list[str]) -> list[str]:

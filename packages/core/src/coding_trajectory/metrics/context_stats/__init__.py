@@ -55,10 +55,12 @@ def build_session_graph_context_stats(
     )
     if observation is None:
         no_obs_message = f"No {vendor.value} context usage observation found; provider context usage is unavailable."
-        debug.warn(
+        warnings: list[str] = []
+        _record_context_warning(
+            warnings,
             no_obs_message,
             code="context.no_observation",
-            severity="warning",
+            vendor=vendor.value,
         )
         return SessionContextStatsFlat(
             root_session_id=session_graph.root_session_id,
@@ -67,7 +69,7 @@ def build_session_graph_context_stats(
             runtime=runtime,
             compaction=compaction,
             messages=messages,
-            warnings=[no_obs_message],
+            warnings=warnings,
         ).model_dump(mode="json")
 
     context_window = observation.context_window_tokens or get_model_context_window(
@@ -89,15 +91,26 @@ def build_session_graph_context_stats(
     ]
     warnings: list[str] = []
     if anchor_outcome != AnchorOutcome.ANCHORED:
-        warnings.append(_anchor_outcome_warning(anchor_outcome))
+        _record_context_warning(
+            warnings,
+            _anchor_outcome_warning(anchor_outcome),
+            code="context.composition_anchor",
+            vendor=vendor.value,
+        )
     if provider_usage_buckets:
-        warnings.append(
-            "Provider usage buckets are reported separately from semantic context composition."
+        _record_context_warning(
+            warnings,
+            "Provider usage buckets are reported separately from semantic context composition.",
+            code="context.provider_buckets_separate",
+            vendor=vendor.value,
         )
     if context_window_inferred:
-        warnings.append(
+        _record_context_warning(
+            warnings,
             f"Context window of {context_window} tokens inferred from a static model "
-            f"catalog; {vendor.value} logs do not report the model context window."
+            f"catalog; {vendor.value} logs do not report the model context window.",
+            code="context.window_inferred",
+            vendor=vendor.value,
         )
 
     return SessionContextStatsFlat(
@@ -155,6 +168,24 @@ def _anchor_outcome_warning(outcome: AnchorOutcome) -> str:
         outcome,
         "Context composition did not reconcile to the provider-reported active context window.",
     )
+
+
+def _record_context_warning(
+    warnings: list[str],
+    message: str,
+    *,
+    code: str,
+    vendor: str,
+) -> None:
+    """Record a context warning on both the payload list and ``debug.warn``.
+
+    Mirrors ``_record_usage_warning`` in the metrics analysis layer: the
+    payload ``warnings`` list drives inline rendering while ``debug.warn``
+    carries the structured (code/severity/context) twin so ``ct doctor`` can
+    aggregate it. Routing both through this helper keeps them in sync.
+    """
+    warnings.append(message)
+    debug.warn(message, code=code, severity="warning", vendor=vendor)
 
 
 __all__ = [

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from coding_trajectory import debug
 from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.common import normalize_project_key
@@ -119,7 +120,14 @@ def _ingest_sessions(
                 vendor=vendor,
                 source=path,
             )
-        except Exception:
+        except Exception as exc:
+            debug.warn(
+                f"failed to ingest {vendor.value} session log: {exc}",
+                code="discovery.ingest_failed",
+                severity="error",
+                vendor=vendor.value,
+                source=str(path),
+            )
             continue
         ingested.append((vendor, path, session))
     return ingested
@@ -712,7 +720,14 @@ def locate_session_files(
             adapter = adapter_cls()
             try:
                 header = adapter.scan_header(path)
-            except Exception:
+            except Exception as exc:
+                debug.warn(
+                    f"failed to scan session header for {vendor.value} log: {exc}",
+                    code="discovery.scan_header_failed",
+                    severity="warning",
+                    vendor=vendor.value,
+                    source=str(path),
+                )
                 continue
             if header is None:
                 continue
