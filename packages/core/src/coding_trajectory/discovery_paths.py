@@ -16,6 +16,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+from coding_trajectory.ingestion.common import normalize_project_key
+
 _PROJECT_MARKERS = (
     ".git",
     ".hg",
@@ -157,3 +159,24 @@ def _project_identifier_from_path(project_path: Path | None) -> str | None:
         return None
     name = project_path.name
     return name if name else None
+
+
+def _project_scope_matches_path(
+    project_path: Path,
+    current_dir: Path,
+    scoped_project: str | None,
+    scoped_project_key: str,
+) -> bool:
+    try:
+        resolved = project_path.resolve()
+    except OSError:
+        resolved = project_path
+    if resolved == current_dir:
+        return True
+    if normalize_project_key(resolved.name) == scoped_project_key:
+        return True
+    if scoped_project and normalize_project_key(
+        scoped_project
+    ) == normalize_project_key(resolved.name):
+        return True
+    return False
