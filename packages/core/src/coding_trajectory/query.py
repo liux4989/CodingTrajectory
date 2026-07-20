@@ -24,6 +24,34 @@ class ResourceNotFoundError(QueryError):
     """Raised when a requested resource is not present."""
 
 
+def _index_session_graph(
+    session_graph: SessionGraph,
+    *,
+    session_graphs: dict[UUID, SessionGraph],
+    session_to_root: dict[UUID, UUID],
+    sessions: dict[UUID, Session],
+    turns: dict[UUID, Turn],
+    events: dict[UUID, Event],
+    items: dict[UUID, Item],
+) -> None:
+    """Index a session graph and its sessions/turns/events/items in place.
+
+    Shared by :meth:`DocumentStore.from_session_graphs` and the
+    ``session_graph`` branch of :meth:`DocumentStore.from_data` so the
+    canonical indexing rules live in exactly one place.
+    """
+    session_graphs[session_graph.root_session_id] = session_graph
+    for session in session_graph.sessions:
+        session_to_root[session.session_id] = session_graph.root_session_id
+        sessions[session.session_id] = session
+        for turn in session.turns:
+            turns[turn.turn_id] = turn
+            for item in turn.items:
+                items[item.item_id] = item
+        for event in session.events:
+            events[event.event_id] = event
+
+
 @dataclass(slots=True)
 class DocumentStore:
     """Indexes canonical resources loaded from JSON."""
@@ -60,16 +88,15 @@ class DocumentStore:
         items: dict[UUID, Item] = {}
 
         for session_graph in session_graphs_list:
-            session_graphs[session_graph.root_session_id] = session_graph
-            for session in session_graph.sessions:
-                session_to_root[session.session_id] = session_graph.root_session_id
-                sessions[session.session_id] = session
-                for turn in session.turns:
-                    turns[turn.turn_id] = turn
-                    for item in turn.items:
-                        items[item.item_id] = item
-                for event in session.events:
-                    events[event.event_id] = event
+            _index_session_graph(
+                session_graph,
+                session_graphs=session_graphs,
+                session_to_root=session_to_root,
+                sessions=sessions,
+                turns=turns,
+                events=events,
+                items=items,
+            )
 
         return cls(
             session_graphs=session_graphs,
@@ -97,9 +124,15 @@ class DocumentStore:
         items: dict[UUID, Item] = {}
 
         def add_session_graph(session_graph: SessionGraph) -> None:
-            session_graphs[session_graph.root_session_id] = session_graph
-            for session in session_graph.sessions:
-                add_session(session, session_graph)
+            _index_session_graph(
+                session_graph,
+                session_graphs=session_graphs,
+                session_to_root=session_to_root,
+                sessions=sessions,
+                turns=turns,
+                events=events,
+                items=items,
+            )
 
         def add_session(
             session: Session, session_graph: SessionGraph | None = None
