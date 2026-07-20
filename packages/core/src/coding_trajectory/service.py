@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -698,6 +699,32 @@ def _cache_session_graph(context: ServiceContext, session_graph: SessionGraph) -
         )
 
 
+def _session_graph_handler(
+    build: Callable[[dict[str, Any], SessionGraph], Any],
+) -> ServiceHandler:
+    """Resolve + cache the session graph, then wrap the build result.
+
+    Every ``session.*`` projection follows the same preamble: resolve the
+    session graph from the entry-point id, cache its session->root mapping
+    for future targeted loads, build the projection, and pass it through
+    the public output seam. Centralizing that here lets each handler read
+    as pure projection logic. Cache-before-build is observably neutral
+    because no projection reads the index cache while building.
+    """
+
+    @wraps(build)
+    def wrapper(params: dict[str, Any], context: ServiceContext) -> Any:
+        session_graph = _resolve_session_graph(
+            context.store, _session_graph_entrypoint_id(params)
+        )
+        _cache_session_graph(context, session_graph)
+        return _public_output_for_session_graph(
+            session_graph, build(params, session_graph)
+        )
+
+    return wrapper
+
+
 def _handle_project_sessions(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
@@ -776,35 +803,26 @@ def _handle_project_logfile(
     }
 
 
+@_session_graph_handler
 def _handle_session_overview(
-    params: dict[str, Any], context: ServiceContext
-) -> dict[str, Any]:
+    params: dict[str, Any], session_graph: SessionGraph
+) -> Any:
     from coding_trajectory.analysis.projections import build_session_graph_overview
 
-    session_graph = _resolve_session_graph(
-        context.store, _session_graph_entrypoint_id(params)
-    )
-    result = build_session_graph_overview(
+    return build_session_graph_overview(
         session_graph,
         num_turns=_optional_positive_int(params, "num_turns"),
         drop_turns=_optional_positive_int(params, "drop_turns"),
     )
-    _cache_session_graph(context, session_graph)
-    return _public_output_for_session_graph(session_graph, result)
 
 
-def _handle_session_stats(
-    params: dict[str, Any], context: ServiceContext
-) -> dict[str, Any]:
+@_session_graph_handler
+def _handle_session_stats(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.metrics import (
         build_session_graph_context_stats,
         build_session_graph_stats_token_usage,
     )
 
-    session_graph = _resolve_session_graph(
-        context.store, _session_graph_entrypoint_id(params)
-    )
-    _cache_session_graph(context, session_graph)
     stats_usage = build_session_graph_stats_token_usage(session_graph)
     result = build_session_graph_context_stats(
         session_graph,
@@ -825,10 +843,7 @@ def _handle_session_stats(
             build_session_graph_context_stats=build_session_graph_context_stats,
             build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
         )
-    return _public_output_for_session_graph(
-        session_graph,
-        result,
-    )
+    return result
 
 
 def _session_stats_sections(
@@ -892,19 +907,13 @@ def _session_role(session: Session, *, session_graph: SessionGraph, index: Any) 
     return relationship or "member"
 
 
+@_session_graph_handler
 def _handle_session_turn_usage(
-    params: dict[str, Any],
-    context: ServiceContext,
-) -> dict[str, Any]:
+    params: dict[str, Any], session_graph: SessionGraph
+) -> Any:
     from coding_trajectory.metrics import build_session_graph_metrics
 
-    session_graph = _resolve_session_graph(
-        context.store, _session_graph_entrypoint_id(params)
-    )
-    _cache_session_graph(context, session_graph)
-    result = build_session_graph_metrics(
-        session_graph,
-    )
+    result = build_session_graph_metrics(session_graph)
     turn_id = str(params["turn_id"])
     turns = [
         {
@@ -920,66 +929,37 @@ def _handle_session_turn_usage(
         for turn in session["turns"]
         if str(turn["turn_id"]) == turn_id
     ]
-    return _public_output_for_session_graph(
-        session_graph,
-        {
-            "root_session_id": result["root_session_id"],
-            "token_usage": result["token_usage"],
-            "turns": turns,
-            "warnings": result.get("warnings") or [],
-        },
-    )
+    return {
+        "root_session_id": result["root_session_id"],
+        "token_usage": result["token_usage"],
+        "turns": turns,
+        "warnings": result.get("warnings") or [],
+    }
 
 
-def _handle_session_usage(
-    params: dict[str, Any], context: ServiceContext
-) -> dict[str, Any]:
+@_session_graph_handler
+def _handle_session_usage(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.metrics import build_session_graph_usage
 
-    session_graph = _resolve_session_graph(
-        context.store, _session_graph_entrypoint_id(params)
-    )
-    _cache_session_graph(context, session_graph)
-    return _public_output_for_session_graph(
-        session_graph,
-        build_session_graph_usage(
-            session_graph,
-            turn_id=params.get("turn_id"),
-        ),
-    )
+    return build_session_graph_usage(session_graph, turn_id=params.get("turn_id"))
 
 
+@_session_graph_handler
 def _handle_session_model_usage(
-    params: dict[str, Any], context: ServiceContext
-) -> dict[str, Any]:
+    params: dict[str, Any], session_graph: SessionGraph
+) -> Any:
     from coding_trajectory.metrics import build_session_graph_model_usage
 
-    session_graph = _resolve_session_graph(
-        context.store, _session_graph_entrypoint_id(params)
-    )
-    _cache_session_graph(context, session_graph)
-    return _public_output_for_session_graph(
-        session_graph,
-        build_session_graph_model_usage(session_graph),
-    )
+    return build_session_graph_model_usage(session_graph)
 
 
+@_session_graph_handler
 def _handle_session_tool_usage(
-    params: dict[str, Any],
-    context: ServiceContext,
-) -> dict[str, Any]:
+    params: dict[str, Any], session_graph: SessionGraph
+) -> Any:
     from coding_trajectory.metrics import build_session_graph_tool_usage
 
-    session_graph = _resolve_session_graph(
-        context.store, _session_graph_entrypoint_id(params)
-    )
-    _cache_session_graph(context, session_graph)
-    return _public_output_for_session_graph(
-        session_graph,
-        build_session_graph_tool_usage(
-            session_graph,
-        ),
-    )
+    return build_session_graph_tool_usage(session_graph)
 
 
 def _handle_session_events(
