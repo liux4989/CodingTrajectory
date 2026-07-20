@@ -747,6 +747,10 @@ def _cache_session_graph(context: ServiceContext, session_graph: SessionGraph) -
 def _handle_project_sessions(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
+    from coding_trajectory.analysis.session_graph_views import (
+        session_graph_has_visible_overview_content,
+    )
+
     session_graphs = resolve_collection(
         context.store,
         "session_graph",
@@ -758,6 +762,12 @@ def _handle_project_sessions(
     include = set(params.get("include") or [])
     items: list[dict[str, Any]] = []
     for graph in session_graphs:
+        # Match the visible-turn semantics of project_sessions_metadata /
+        # session.overview so the returned session set is the same whether
+        # or not the caller requests bulk runtime/usage summaries via
+        # ``include``.
+        if not session_graph_has_visible_overview_content(graph):
+            continue
         item = {
             **serialize_session_graph_detail(graph),
             "project": graph.project_identifier,
@@ -781,34 +791,19 @@ def _handle_project_sessions(
 def _handle_project_list(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
-    session_graphs = resolve_collection(
-        context.store,
-        "session_graph",
+    """Dispatch adapter for ``project.list``.
+
+    Production traffic is short-circuited in :meth:`ServiceRuntime.call` to
+    :func:`project_list_metadata` (which never builds a store). This handler
+    keeps ``dispatch("project.list", ...)`` consistent with that path by
+    delegating to the same canonical implementation, so the contract registry
+    and the handler registry agree.
+    """
+    return project_list_metadata(
+        params,
         global_scope=context.global_scope,
         current_dir=context.current_dir,
-        agent_vendor=params.get("agent_vendor"),
     )
-    projects: dict[str, dict[str, Any]] = {}
-    for graph in session_graphs:
-        if not graph.project_identifier or graph.project_identifier.startswith(
-            "unknown-"
-        ):
-            continue
-        project = projects.setdefault(
-            graph.project_identifier,
-            {"vendors": set(), "path": None},
-        )
-        for session in graph.sessions:
-            if session.vendor:
-                project["vendors"].add(session.vendor.value)
-            if project["path"] is None and session.cwd:
-                project["path"] = session.cwd
-    return {
-        "items": {
-            name: {"path": value["path"], "vendors": sorted(value["vendors"])}
-            for name, value in sorted(projects.items())
-        }
-    }
 
 
 def _handle_project_logfile(
