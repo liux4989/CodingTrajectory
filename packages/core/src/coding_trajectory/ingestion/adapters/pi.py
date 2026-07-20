@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -252,29 +253,14 @@ class PiAdapter(BaseAdapter):
         )
 
     def _build_transcript(self, records: list[dict]) -> list[TranscriptRecord]:
+        """Extract only CT-useful transcript facts from Pi JSONL records."""
         transcript: list[TranscriptRecord] = []
 
         for record in records:
-            entry_type = record.get("type", "")
-
-            if entry_type == "session":
-                self._current_cwd = record.get("cwd")
+            if self._handle_state_record(record):
                 continue
 
-            if entry_type == "model_change":
-                self._current_provider = record.get("provider")
-                self._current_model = record.get("modelId")
-                continue
-
-            if entry_type == "thinking_level_change":
-                self._current_thinking_level = record.get("thinkingLevel")
-                continue
-
-            if entry_type == "session_info":
-                self._session_title = record.get("name") or self._session_title
-                continue
-
-            if entry_type not in ("message",):
+            if record.get("type", "") != "message":
                 continue
 
             message = record.get("message")
@@ -287,162 +273,214 @@ class PiAdapter(BaseAdapter):
                 continue
 
             if role == "user":
-                content = message.get("content", [])
-                if _is_real_user_message(message):
-                    text = _content_text(content)
-                    if text and not self._session_title:
-                        self._session_title = " ".join(text.split()) or None
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.PI,
-                            role="user",
-                            kind="user_message",
-                            data={"text": text},
-                        )
-                    )
-
+                self._handle_user_message(message, ts, transcript)
             elif role == "assistant":
-                content = message.get("content") or []
-                text_parts = [
-                    block
-                    for block in content
-                    if isinstance(block, dict) and block.get("type") in ("text",)
-                ]
-                text = _content_text(text_parts)
-                thinking = _thinking_blocks(content)
-                usage = _parse_usage(message)
-                vendor_data: dict = {}
-                if thinking:
-                    vendor_data["thinking"] = thinking
-                if usage:
-                    normalized = normalize_pi_usage(
-                        provider=message.get("provider") or self._current_provider,
-                        model=message.get("model") or self._current_model,
-                        usage=usage,
-                    )
-                    vendor_data.update(normalized)
-                stop_reason = message.get("stopReason")
-                if stop_reason:
-                    vendor_data["stop_reason"] = stop_reason
-
-                tool_calls = _tool_calls_from_content(content)
-                transcript.append(
-                    TranscriptRecord(
-                        sequence=len(transcript),
-                        timestamp=ts,
-                        vendor=Vendor.PI,
-                        role="assistant",
-                        kind="assistant_message",
-                        data={
-                            "text": text,
-                            "vendor_data": {
-                                k: v for k, v in vendor_data.items() if v is not None
-                            },
-                        },
-                    )
-                )
-
-                for tc in tool_calls:
-                    tool_call_id = tc.get("id")
-                    tool_name = tc.get("name")
-                    if (
-                        tool_name == "bash"
-                        and isinstance(tool_call_id, str)
-                        and tool_call_id
-                    ):
-                        self._pending_bash_tool_call_ids.append(tool_call_id)
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.PI,
-                            role="assistant",
-                            kind="tool_call",
-                            data={
-                                "tool_name": tool_name,
-                                "tool_call_id": tool_call_id,
-                                "input": tc.get("arguments"),
-                                "item_kind": _pi_item_kind(tool_name),
-                            },
-                        )
-                    )
-
+                self._handle_assistant_message(message, ts, transcript)
             elif role == "toolResult":
-                output = message.get("content")
-                tool_name = message.get("toolName", "")
-                tool_call_id = message.get("toolCallId", "")
-                is_error = message.get("isError", False)
-                details = message.get("details")
-
-                exit_code = None
-                if tool_name == "bash" and isinstance(details, dict):
-                    exit_code = details.get("exitCode")
-                    if exit_code is None and isinstance(output, list):
-                        for block in output:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                exit_code = extract_exit_code(block.get("text", ""))
-                                break
-
-                success = infer_tool_success(output)
-                status = (
-                    ToolStatus.FAILED.value
-                    if (is_error or success is False)
-                    else ToolStatus.COMPLETED.value
-                )
-
-                transcript.append(
-                    TranscriptRecord(
-                        sequence=len(transcript),
-                        timestamp=ts,
-                        vendor=Vendor.PI,
-                        role="tool",
-                        kind="tool_result",
-                        data={
-                            "tool_call_id": tool_call_id,
-                            "tool_name": tool_name,
-                            "output": output,
-                            "exit_code": exit_code,
-                            "status": status,
-                        },
-                        fidelity="synthetic",
-                    )
-                )
-
+                self._handle_tool_result_message(message, ts, transcript)
             elif role == "bashExecution":
-                command = message.get("command", "")
-                output = message.get("output", "")
-                exit_code = message.get("exitCode")
-                text_content = f"$ {command}\n{output}"
-                if message.get("cancelled"):
-                    text_content = f"$ {command}\n[cancelled]\n{output}"
-                tool_call_id = (
-                    self._pending_bash_tool_call_ids.pop(0)
-                    if self._pending_bash_tool_call_ids
-                    else None
-                )
-                transcript.append(
-                    TranscriptRecord(
-                        sequence=len(transcript),
-                        timestamp=ts,
-                        vendor=Vendor.PI,
-                        role="tool",
-                        kind="tool_result",
-                        data={
-                            "tool_call_id": tool_call_id,
-                            "tool_name": "bash",
-                            "output": text_content,
-                            "exit_code": exit_code,
-                            "status": ToolStatus.FAILED.value
-                            if exit_code and exit_code != 0
-                            else ToolStatus.COMPLETED.value,
-                        },
-                        fidelity="synthetic",
-                    )
-                )
+                self._handle_bash_execution(message, ts, transcript)
 
         return transcript
+
+    def _handle_state_record(self, record: dict) -> bool:
+        """Apply a non-message session-state record; return True if handled.
+
+        Pi interleaves small state-setup records (session cwd, model change,
+        thinking-level change, session title) with message records. These mutate
+        adapter tracking state and emit no transcript records.
+        """
+        entry_type = record.get("type", "")
+        if entry_type == "session":
+            self._current_cwd = record.get("cwd")
+            return True
+        if entry_type == "model_change":
+            self._current_provider = record.get("provider")
+            self._current_model = record.get("modelId")
+            return True
+        if entry_type == "thinking_level_change":
+            self._current_thinking_level = record.get("thinkingLevel")
+            return True
+        if entry_type == "session_info":
+            self._session_title = record.get("name") or self._session_title
+            return True
+        return False
+
+    def _handle_user_message(
+        self,
+        message: dict,
+        ts: datetime,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Project a Pi user message into a user_message transcript record."""
+        content = message.get("content", [])
+        if _is_real_user_message(message):
+            text = _content_text(content)
+            if text and not self._session_title:
+                self._session_title = " ".join(text.split()) or None
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.PI,
+                    role="user",
+                    kind="user_message",
+                    data={"text": text},
+                )
+            )
+
+    def _handle_assistant_message(
+        self,
+        message: dict,
+        ts: datetime,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Project a Pi assistant message: text + usage vendor_data + tool calls."""
+        content = message.get("content") or []
+        text_parts = [
+            block
+            for block in content
+            if isinstance(block, dict) and block.get("type") in ("text",)
+        ]
+        text = _content_text(text_parts)
+        thinking = _thinking_blocks(content)
+        usage = _parse_usage(message)
+        vendor_data: dict = {}
+        if thinking:
+            vendor_data["thinking"] = thinking
+        if usage:
+            normalized = normalize_pi_usage(
+                provider=message.get("provider") or self._current_provider,
+                model=message.get("model") or self._current_model,
+                usage=usage,
+            )
+            vendor_data.update(normalized)
+        stop_reason = message.get("stopReason")
+        if stop_reason:
+            vendor_data["stop_reason"] = stop_reason
+
+        tool_calls = _tool_calls_from_content(content)
+        transcript.append(
+            TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=ts,
+                vendor=Vendor.PI,
+                role="assistant",
+                kind="assistant_message",
+                data={
+                    "text": text,
+                    "vendor_data": {
+                        k: v for k, v in vendor_data.items() if v is not None
+                    },
+                },
+            )
+        )
+
+        for tc in tool_calls:
+            tool_call_id = tc.get("id")
+            tool_name = tc.get("name")
+            if tool_name == "bash" and isinstance(tool_call_id, str) and tool_call_id:
+                self._pending_bash_tool_call_ids.append(tool_call_id)
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.PI,
+                    role="assistant",
+                    kind="tool_call",
+                    data={
+                        "tool_name": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "input": tc.get("arguments"),
+                        "item_kind": _pi_item_kind(tool_name),
+                    },
+                )
+            )
+
+    def _handle_tool_result_message(
+        self,
+        message: dict,
+        ts: datetime,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Project a Pi toolResult message into a tool_result transcript record."""
+        output = message.get("content")
+        tool_name = message.get("toolName", "")
+        tool_call_id = message.get("toolCallId", "")
+        is_error = message.get("isError", False)
+        details = message.get("details")
+
+        exit_code = None
+        if tool_name == "bash" and isinstance(details, dict):
+            exit_code = details.get("exitCode")
+            if exit_code is None and isinstance(output, list):
+                for block in output:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        exit_code = extract_exit_code(block.get("text", ""))
+                        break
+
+        success = infer_tool_success(output)
+        status = (
+            ToolStatus.FAILED.value
+            if (is_error or success is False)
+            else ToolStatus.COMPLETED.value
+        )
+
+        transcript.append(
+            TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=ts,
+                vendor=Vendor.PI,
+                role="tool",
+                kind="tool_result",
+                data={
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "output": output,
+                    "exit_code": exit_code,
+                    "status": status,
+                },
+                fidelity="synthetic",
+            )
+        )
+
+    def _handle_bash_execution(
+        self,
+        message: dict,
+        ts: datetime,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Project a Pi bashExecution message into a tool_result transcript record."""
+        command = message.get("command", "")
+        output = message.get("output", "")
+        exit_code = message.get("exitCode")
+        text_content = f"$ {command}\n{output}"
+        if message.get("cancelled"):
+            text_content = f"$ {command}\n[cancelled]\n{output}"
+        tool_call_id = (
+            self._pending_bash_tool_call_ids.pop(0)
+            if self._pending_bash_tool_call_ids
+            else None
+        )
+        transcript.append(
+            TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=ts,
+                vendor=Vendor.PI,
+                role="tool",
+                kind="tool_result",
+                data={
+                    "tool_call_id": tool_call_id,
+                    "tool_name": "bash",
+                    "output": text_content,
+                    "exit_code": exit_code,
+                    "status": ToolStatus.FAILED.value
+                    if exit_code and exit_code != 0
+                    else ToolStatus.COMPLETED.value,
+                },
+                fidelity="synthetic",
+            )
+        )
 
     def _session_id(self, source: Path, records: list[dict]) -> UUID:
         for record in records:
