@@ -40,10 +40,6 @@ def build_flows(items: list[Item]) -> list[dict[str, Any]]:
     return _group_consecutive_tool_calls(result)
 
 
-def build_compact_flows(items: list[Item]) -> list[dict[str, Any]]:
-    return [_compact_flow_item(item) for item in build_flows(items)]
-
-
 def build_overview_flows(items: list[Item]) -> list[dict[str, Any]]:
     return _compact_overview_items(build_flows(items))
 

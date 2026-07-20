@@ -61,6 +61,7 @@ def build_session_graph_context_stats(
             no_obs_message,
             code="context.no_observation",
             vendor=vendor.value,
+            severity="info",
         )
         return SessionContextStatsFlat(
             root_session_id=session_graph.root_session_id,
@@ -176,6 +177,7 @@ def _record_context_warning(
     *,
     code: str,
     vendor: str,
+    severity: str = "warning",
 ) -> None:
     """Record a context warning on both the payload list and ``debug.warn``.
 
@@ -183,9 +185,14 @@ def _record_context_warning(
     payload ``warnings`` list drives inline rendering while ``debug.warn``
     carries the structured (code/severity/context) twin so ``ct doctor`` can
     aggregate it. Routing both through this helper keeps them in sync.
+
+    ``severity`` defaults to ``warning`` (a genuine anomaly). Expected data
+    conditions - e.g. a session whose logs carry no context-usage observation
+    - pass ``info`` so ``ct doctor``'s warning aggregation surfaces only
+    anomalies while the inline payload still notes the condition.
     """
     warnings.append(message)
-    debug.warn(message, code=code, severity="warning", vendor=vendor)
+    debug.warn(message, code=code, severity=severity, vendor=vendor)
 
 
 __all__ = [

@@ -48,6 +48,7 @@ def _build_full_metrics(
                 f"no token usage metrics found for session {session.session_id}",
                 code="usage.no_token_metrics",
                 session=session,
+                severity="info",
             )
         for message in _usage_consistency_warnings(metrics):
             _record_usage_warning(
@@ -273,6 +274,7 @@ def _record_usage_warning(
     *,
     code: str,
     session: Session,
+    severity: str = "warning",
 ) -> None:
     """Record a usage warning on both channels at once.
 
@@ -280,12 +282,17 @@ def _record_usage_warning(
     rendering; ``debug.warn`` carries the structured (code/severity/context)
     twin so ``ct doctor`` can aggregate it. Routing both through this helper
     keeps the two representations in sync by construction.
+
+    ``severity`` defaults to ``warning`` (a genuine anomaly). Expected data
+    conditions - e.g. a session whose logs carry no token-usage records - pass
+    ``info`` so ``ct doctor``'s warning aggregation surfaces only anomalies
+    while the inline payload still notes the condition.
     """
     warnings.append(message)
     debug.warn(
         message,
         code=code,
-        severity="warning",
+        severity=severity,
         session_id=str(session.session_id),
         vendor=session.vendor.value if getattr(session.vendor, "value", None) else None,
     )

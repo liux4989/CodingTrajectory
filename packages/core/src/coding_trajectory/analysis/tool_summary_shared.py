@@ -125,14 +125,6 @@ def first_str(data: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def first_int(data: dict[str, Any], keys: tuple[str, ...]) -> int | None:
-    for key in keys:
-        value = data.get(key)
-        if isinstance(value, int):
-            return value
-    return None
-
-
 def short_path(path: str | None) -> str | None:
     if not path:
         return None

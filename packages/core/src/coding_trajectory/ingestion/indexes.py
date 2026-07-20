@@ -134,22 +134,6 @@ def incoming_edge(index: SessionGraphIndex, session_id: UUID) -> SessionEdge | N
     return index.incoming_edge_by_target.get(session_id)
 
 
-def events_for_item(index: SessionGraphIndex, item: Item) -> list[Event]:
-    return [
-        index.events_by_id[event_id]
-        for event_id in item.event_ids
-        if event_id in index.events_by_id
-    ]
-
-
-def events_for_turn(index: SessionGraphIndex, turn: Turn) -> list[Event]:
-    return [
-        index.events_by_id[event_id]
-        for event_id in turn.event_ids
-        if event_id in index.events_by_id
-    ]
-
-
 def event_for_turn_user_request(index: SessionGraphIndex, turn: Turn) -> Event | None:
     if turn.user_request_event_id is None:
         return None
