@@ -776,26 +776,32 @@ def format_discovery_sources(sources: list[DiscoverySource]) -> str:
     return "\n".join(lines)
 
 
+def _stable_uuid(vendor: Vendor, source: Path, **fields: object) -> UUID:
+    """Derive a deterministic UUID5 for a canonical resource.
+
+    ``sort_keys=True`` normalizes the JSON key order, so merging the common
+    ``vendor``/``source`` keys here with the per-resource ``fields`` produces a
+    byte-identical payload (and thus identical UUID) to the inline
+    ``uuid5(NAMESPACE_URL, json.dumps({...}, sort_keys=True, default=str))`` it
+    replaces.
+    """
+    payload = {"vendor": vendor.value, "source": str(source), **fields}
+    return uuid5(NAMESPACE_URL, json.dumps(payload, sort_keys=True, default=str))
+
+
 def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Session:
     # --- stabilize event IDs ---
     event_id_map: dict[object, object] = {}
     events: list[Event] = []
     for index, event in enumerate(session.events):
-        stable_event_id = uuid5(
-            NAMESPACE_URL,
-            json.dumps(
-                {
-                    "vendor": vendor.value,
-                    "source": str(source),
-                    "index": index,
-                    "timestamp": event.timestamp.isoformat(),
-                    "type": event.type.value,
-                    "actor": event.actor,
-                    "payload": event.payload,
-                },
-                sort_keys=True,
-                default=str,
-            ),
+        stable_event_id = _stable_uuid(
+            vendor,
+            source,
+            index=index,
+            timestamp=event.timestamp.isoformat(),
+            type=event.type.value,
+            actor=event.actor,
+            payload=event.payload,
         )
         event_id_map[event.event_id] = stable_event_id
         events.append(event.model_copy(update={"event_id": stable_event_id}))
@@ -804,41 +810,27 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
     turn_id_map: dict[object, object] = {}
     turns: list[Turn] = []
     for t_index, turn in enumerate(session.turns):
-        stable_turn_id = uuid5(
-            NAMESPACE_URL,
-            json.dumps(
-                {
-                    "vendor": vendor.value,
-                    "source": str(source),
-                    "turn_index": t_index,
-                    "session_id": str(session.session_id),
-                    "sequence": turn.sequence,
-                    "started_at": turn.started_at.isoformat(),
-                },
-                sort_keys=True,
-                default=str,
-            ),
+        stable_turn_id = _stable_uuid(
+            vendor,
+            source,
+            turn_index=t_index,
+            session_id=str(session.session_id),
+            sequence=turn.sequence,
+            started_at=turn.started_at.isoformat(),
         )
         turn_id_map[turn.turn_id] = stable_turn_id
 
         stable_items: list[Item] = []
         for i_index, item in enumerate(turn.items):
-            stable_item_id = uuid5(
-                NAMESPACE_URL,
-                json.dumps(
-                    {
-                        "vendor": vendor.value,
-                        "source": str(source),
-                        "turn_index": t_index,
-                        "item_index": i_index,
-                        "kind": item.kind,
-                        "sequence": item.sequence,
-                        "started_at": item.started_at.isoformat(),
-                        "tool_call_id": getattr(item, "tool_call_id", None),
-                    },
-                    sort_keys=True,
-                    default=str,
-                ),
+            stable_item_id = _stable_uuid(
+                vendor,
+                source,
+                turn_index=t_index,
+                item_index=i_index,
+                kind=item.kind,
+                sequence=item.sequence,
+                started_at=item.started_at.isoformat(),
+                tool_call_id=getattr(item, "tool_call_id", None),
             )
             stable_items.append(
                 item.model_copy(
