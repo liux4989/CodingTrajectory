@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from coding_trajectory.ingestion.models import Event, Item, Session, SessionGraph, Turn
 
@@ -40,7 +40,7 @@ class DocumentStore:
         source = Path(path)
 
         try:
-            raw = json.loads(source.read_text())
+            raw = json.loads(source.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
             raise DocumentError(f"input file not found: {source}") from exc
         except json.JSONDecodeError as exc:
@@ -196,5 +196,4 @@ class DocumentStore:
 
 
 def _parse_item(raw: object) -> Item:
-    from pydantic import TypeAdapter
     return TypeAdapter(Item).validate_python(raw)

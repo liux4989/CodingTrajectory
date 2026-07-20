@@ -152,43 +152,6 @@ def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any
     )
 
 
-def serialize_session_detail(session: Session) -> dict[str, Any]:
-    return prune_nones(
-        {
-            "session_id": str(session.session_id),
-            "status": session.status,
-            "turn_ids": [str(turn.turn_id) for turn in session.turns],
-            "event_ids": [str(event.event_id) for event in session.events],
-        }
-    )
-
-
-def serialize_turn_detail(turn: Turn) -> dict[str, Any]:
-    return prune_nones(
-        {
-            "turn_id": str(turn.turn_id),
-            "session_id": str(turn.session_id),
-            "status": turn.status,
-            "event_ids": [str(event_id) for event_id in turn.event_ids],
-            "item_ids": [str(item.item_id) for item in turn.items],
-        }
-    )
-
-
-def serialize_item_detail(item: Item) -> dict[str, Any]:
-    return prune_nones(
-        {
-            "item_id": str(item.item_id),
-            "session_id": str(item.session_id),
-            "turn_id": str(item.turn_id),
-            "kind": item.kind,
-            **item.model_dump(
-                mode="json", exclude={"item_id", "session_id", "turn_id", "kind"}
-            ),
-        }
-    )
-
-
 def serialize_event_detail(event: Event) -> dict[str, Any]:
     return prune_nones(
         {

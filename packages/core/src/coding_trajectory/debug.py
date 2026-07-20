@@ -104,7 +104,3 @@ def warn(
     if active is None:
         return
     active.warn(message, code=code, severity=severity, **context)
-
-
-def current() -> DebugContext | None:
-    return _current_context.get()
