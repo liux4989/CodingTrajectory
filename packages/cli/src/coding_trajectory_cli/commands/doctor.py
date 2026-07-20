@@ -31,6 +31,10 @@ _MARKDOWN_FAILURE_LIMIT = 10
 _MARKDOWN_WARNING_LIMIT = 10
 _MARKDOWN_TREND_LIMIT = 20
 _MARKDOWN_STALE_LIMIT = 20
+# A failure/warning/info group is "stale" when its most recent occurrence
+# falls outside this many days; stale groups sort after active ones so the
+# report surfaces currently-live issues first without dropping history.
+RECENCY_STALE_DAYS = 7
 _ENVIRONMENT_CHECK_ORDER = (
     "python_version",
     "cli_version",
@@ -338,7 +342,7 @@ def _aggregate_invocations(records: list[InvocationRecord]) -> dict[str, Any]:
     }
 
 
-def _aggregate_failures(records: list[InvocationRecord]) -> list[dict[str, Any]]:
+def _aggregate_failures(records: list[InvocationRecord], now: datetime) -> list[dict[str, Any]]:
     """Aggregate failure information."""
     groups: dict[tuple[str, str], list[InvocationRecord]] = defaultdict(list)
     for record in records:
@@ -349,6 +353,7 @@ def _aggregate_failures(records: list[InvocationRecord]) -> list[dict[str, Any]]
     result: list[dict[str, Any]] = []
     for (error, cmd), group_records in groups.items():
         most_recent = max(group_records, key=lambda record: record.ts)
+        days_since_last_seen = max(0, (now - most_recent.ts).days)
         result.append(
             {
                 "error": error,
@@ -360,14 +365,26 @@ def _aggregate_failures(records: list[InvocationRecord]) -> list[dict[str, Any]]
                     "session_id": most_recent.session_id,
                 },
                 "sample": most_recent.model_dump(mode="json"),
+                "days_since_last_seen": days_since_last_seen,
+                "stale": days_since_last_seen > RECENCY_STALE_DAYS,
             }
         )
 
-    return sorted(result, key=lambda item: (-item["count"], item["error"], item["cmd"]))
+    return sorted(
+        result,
+        key=lambda item: (item["stale"], -item["count"], item["error"], item["cmd"]),
+    )
 
 
-def _aggregate_warnings(records: list[InvocationRecord]) -> list[dict[str, Any]]:
-    """Aggregate warning information."""
+def _aggregate_warnings(records: list[InvocationRecord], now: datetime) -> list[dict[str, Any]]:
+    """Aggregate warning information.
+
+    Returns one group per warning ``code`` across all severities;
+    :func:`_doctor_handler` splits the result into anomaly groups
+    (``warnings``, carrying warning/error severity) and info-only groups
+    (``info``, expected data conditions) so the anomaly view surfaces only
+    genuine issues.
+    """
     groups: dict[str, list[tuple[InvocationRecord, InvocationWarning]]] = defaultdict(list)
 
     for record in records:
@@ -385,6 +402,7 @@ def _aggregate_warnings(records: list[InvocationRecord]) -> list[dict[str, Any]]
             severity_dist[warning.severity] += 1
             cmd_counts[record.cmd] += 1
 
+        days_since_last_seen = max(0, (now - most_recent_record.ts).days)
         result.append(
             {
                 "code": code,
@@ -394,10 +412,21 @@ def _aggregate_warnings(records: list[InvocationRecord]) -> list[dict[str, Any]]
                 "representative_message": most_recent_warning.message,
                 "sample_context": most_recent_warning.context,
                 "most_recent_ts": most_recent_record.ts.isoformat(),
+                "days_since_last_seen": days_since_last_seen,
+                "stale": days_since_last_seen > RECENCY_STALE_DAYS,
             }
         )
 
-    return sorted(result, key=lambda item: (-item["count"], item["code"]))
+    return sorted(
+        result,
+        key=lambda item: (item["stale"], -item["count"], item["code"]),
+    )
+
+
+def _is_anomaly_warning(group: dict[str, Any]) -> bool:
+    """A warning group is an anomaly if it carries any warning/error severity."""
+    sev = group.get("severity_dist", {})
+    return sev.get("warning", 0) > 0 or sev.get("error", 0) > 0
 
 
 def _latency_bucket_label(timestamp: datetime, since: TimeWindow) -> tuple[str, str]:
@@ -469,11 +498,45 @@ def _format_ms(value: float) -> str:
     return f"{rounded:.2f}".rstrip("0").rstrip(".")
 
 
+def _append_recency_summary(lines: list[str], groups: list[dict[str, Any]]) -> None:
+    """Emit a one-line active/stale split above a Failures/Warnings/Info block."""
+    active = sum(1 for group in groups if not group.get("stale"))
+    stale_count = len(groups) - active
+    if stale_count:
+        lines.append(f"{active} active, {stale_count} stale (not seen in {RECENCY_STALE_DAYS}d).")
+    else:
+        lines.append(f"{active} active.")
+    lines.append("")
+
+
+def _append_warning_block(lines: list[str], group: dict[str, Any]) -> None:
+    """Render one warning/info group: heading, count, severity, commands, message, recency."""
+    lines.append(
+        f"### {group['code']}" + (" [stale]" if group.get("stale") else "")
+    )
+    lines.append(f"- Count: {group['count']}")
+    if group["severity_dist"]:
+        severity_parts = [
+            f"{severity}: {count}" for severity, count in group["severity_dist"].items()
+        ]
+        lines.append(f"- Severity: {', '.join(severity_parts)}")
+    if group["top_commands"]:
+        commands = ", ".join(
+            f"{item['command']} ({item['count']})" for item in group["top_commands"]
+        )
+        lines.append(f"- Top commands: {commands}")
+    if group.get("representative_message"):
+        lines.append(f"- Message: {group['representative_message']}")
+    lines.append(f"- Last seen: {group['days_since_last_seen']} days ago")
+    lines.append("")
+
+
 def _render_markdown(
     env_checks: dict[str, dict[str, Any]],
     inv_summary: dict[str, Any],
     failures: list[dict[str, Any]],
     warnings: list[dict[str, Any]],
+    info: list[dict[str, Any]],
     latency_trends: dict[str, Any],
     stale: dict[str, Any],
     since: TimeWindow,
@@ -520,12 +583,16 @@ def _render_markdown(
     if failures:
         lines.append("## Failures")
         lines.append("")
+        _append_recency_summary(lines, failures)
         visible_failures = failures[:_MARKDOWN_FAILURE_LIMIT]
         if len(failures) > len(visible_failures):
             lines.append(f"Showing {len(visible_failures)} of {len(failures)} failure groups.")
             lines.append("")
         for failure in visible_failures:
-            lines.append(f"### {failure['error']} in `{failure['cmd']}`")
+            lines.append(
+                f"### {failure['error']} in `{failure['cmd']}`"
+                + (" [stale]" if failure.get("stale") else "")
+            )
             lines.append(f"- Count: {failure['count']}")
             recent = failure["most_recent"]
             lines.append(f"- Most recent: {recent['ts']}")
@@ -538,26 +605,24 @@ def _render_markdown(
     if warnings:
         lines.append("## Warnings")
         lines.append("")
+        _append_recency_summary(lines, warnings)
         visible_warnings = warnings[:_MARKDOWN_WARNING_LIMIT]
         if len(warnings) > len(visible_warnings):
             lines.append(f"Showing {len(visible_warnings)} of {len(warnings)} warning groups.")
             lines.append("")
         for warning in visible_warnings:
-            lines.append(f"### {warning['code']}")
-            lines.append(f"- Count: {warning['count']}")
-            if warning["severity_dist"]:
-                severity_parts = [
-                    f"{severity}: {count}" for severity, count in warning["severity_dist"].items()
-                ]
-                lines.append(f"- Severity: {', '.join(severity_parts)}")
-            if warning["top_commands"]:
-                commands = ", ".join(
-                    f"{item['command']} ({item['count']})" for item in warning["top_commands"]
-                )
-                lines.append(f"- Top commands: {commands}")
-            if warning.get("representative_message"):
-                lines.append(f"- Message: {warning['representative_message']}")
+            _append_warning_block(lines, warning)
+
+    if info:
+        lines.append("## Info")
+        lines.append("")
+        _append_recency_summary(lines, info)
+        visible_info = info[:_MARKDOWN_WARNING_LIMIT]
+        if len(info) > len(visible_info):
+            lines.append(f"Showing {len(visible_info)} of {len(info)} info groups.")
             lines.append("")
+        for item in visible_info:
+            _append_warning_block(lines, item)
 
     trend_entries = latency_trends["entries"]
     if trend_entries:
@@ -602,6 +667,7 @@ def _render_json(
     inv_summary: dict[str, Any],
     failures: list[dict[str, Any]],
     warnings: list[dict[str, Any]],
+    info: list[dict[str, Any]],
     latency_trends: dict[str, Any],
     stale: dict[str, Any],
     since: TimeWindow,
@@ -619,6 +685,7 @@ def _render_json(
         "invocation_summary": inv_summary,
         "failures": failures,
         "warnings": warnings,
+        "info": info,
         "latency_trends": latency_trends["entries"],
         "latency_trend_granularity": latency_trends["granularity"],
         "stale_state": stale["entries"],
@@ -655,18 +722,23 @@ def _doctor_handler(args: argparse.Namespace) -> CommandOutcome:
         **_vendor_root_checks(),
     }
 
+    now = datetime.now(timezone.utc)
     inv_summary = _aggregate_invocations(records)
-    failures = _aggregate_failures(records)
-    warnings = _aggregate_warnings(records)
+    failures = _aggregate_failures(records, now)
+    warning_groups = _aggregate_warnings(records, now)
+    warnings = [group for group in warning_groups if _is_anomaly_warning(group)]
+    info = [group for group in warning_groups if not _is_anomaly_warning(group)]
     latency_trends = _aggregate_latency_trends(records, since)
     stale = _check_stale_state(index_cache)
 
     if args.output_format == "json":
-        report = _render_json(env_checks, inv_summary, failures, warnings, latency_trends, stale, since)
+        report = _render_json(
+            env_checks, inv_summary, failures, warnings, info, latency_trends, stale, since
+        )
         print(json.dumps(report, indent=2))
     else:
         report = _render_markdown(
-            env_checks, inv_summary, failures, warnings, latency_trends, stale, since
+            env_checks, inv_summary, failures, warnings, info, latency_trends, stale, since
         )
         print(report)
 
