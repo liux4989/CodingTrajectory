@@ -441,6 +441,16 @@ def _agent_work(
                     allocated_usage_by_item=allocated_usage_by_item,
                 )
 
+    children = _assemble_agent_categories(files, agent, output)
+    return _measure_from_categories(children), children, evicted
+
+
+def _assemble_agent_categories(
+    files: dict[str, _Measure],
+    agent: dict[str, _Measure],
+    output: dict[str, _Measure],
+) -> list[ContextCategoryFlat]:
+    """Shape accumulated file/agent/output measures into the composition children tree."""
     file_children = [
         _category(
             _file_category_key(concept),
@@ -505,7 +515,7 @@ def _agent_work(
         )
         if category is not None
     ]
-    return _measure_from_categories(children), children, evicted
+    return children
 
 
 def _add_tool_item(
