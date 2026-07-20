@@ -17,21 +17,27 @@ from coding_trajectory.service import (
 )
 
 
+def _entrypoint_ids_from_params(params: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    for key in ("session_id", "root_session_id", "turn_id"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            ids.append(value)
+    session_ids = params.get("session_ids")
+    if isinstance(session_ids, list):
+        ids.extend(
+            value for value in session_ids if isinstance(value, str) and value
+        )
+    return ids
+
+
 def _entrypoint_ids(requests: list[dict[str, Any]]) -> list[str]:
     ids: list[str] = []
     for request in requests:
         params = request.get("params") or {}
         if not isinstance(params, dict):
             continue
-        for key in ("session_id", "root_session_id", "turn_id"):
-            value = params.get(key)
-            if isinstance(value, str) and value:
-                ids.append(value)
-        session_ids = params.get("session_ids")
-        if isinstance(session_ids, list):
-            ids.extend(
-                value for value in session_ids if isinstance(value, str) and value
-            )
+        ids.extend(_entrypoint_ids_from_params(params))
     return list(dict.fromkeys(ids))
 
 
@@ -153,7 +159,7 @@ class ServiceRuntime:
         return {"items": [self.execute(request) for request in requests]}
 
     def _store_for(self, params: dict[str, Any]) -> tuple[Any, str]:
-        if self._batch_store is not None and _entrypoint_ids([{"params": params}]):
+        if self._batch_store is not None and _entrypoint_ids_from_params(params):
             return self._batch_store
         key = _store_key(params, global_scope=self.global_scope)
         if key not in self._stores:
