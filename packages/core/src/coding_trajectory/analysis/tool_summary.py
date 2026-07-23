@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from coding_trajectory.analysis.tool_summary_shell import (
@@ -54,10 +55,67 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         family, command = classify_command_family(tool_input)
         result["command_family"] = family
         result["command"] = command
+    else:
+        result["breakdown"] = _other_output_breakdown(tool_name, tool_input)
     status = getattr(item, "status", None)
     if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
         result["status"] = "failed"
     return result
+
+
+def _other_output_breakdown(tool_name: str, tool_input: Any) -> str:
+    """Return a compact label for output outside the known tool taxonomy.
+
+    The desktop ``exec`` tool can orchestrate several shell commands in one
+    tool item. Its output is therefore attributable to the wrapper as a whole,
+    not to each nested command independently. Preserve the nested labels when
+    available so session stats can expose the expensive wrapper call without
+    inventing an inner-command token split.
+    """
+    if tool_name != "exec" or not isinstance(tool_input, str):
+        return f"tool: {tool_name}"
+
+    labels = re.findall(r"\[\s*[\"']([^\"']{1,96})[\"']\s*,", tool_input)
+    unique_labels = list(
+        dict.fromkeys(label.strip() for label in labels if label.strip())
+    )
+    if unique_labels:
+        shown = ", ".join(unique_labels[:4])
+        remaining = len(unique_labels) - 4
+        suffix = f", +{remaining} more" if remaining > 0 else ""
+        count_label = "command" if len(unique_labels) == 1 else "commands"
+        return f"exec ({len(unique_labels)} {count_label}): {shown}{suffix}"
+    commands = _embedded_exec_commands(tool_input)
+    if commands:
+        command_heads = [
+            classify_command_family({"cmd": command})[1] for command in commands
+        ]
+        unique_heads = list(dict.fromkeys(command_heads))
+        shown = ", ".join(unique_heads[:4])
+        remaining = len(unique_heads) - 4
+        suffix = f", +{remaining} more" if remaining > 0 else ""
+        count_label = "command" if len(unique_heads) == 1 else "commands"
+        return f"exec ({len(unique_heads)} {count_label}): {shown}{suffix}"
+    return "exec orchestration"
+
+
+def _embedded_exec_commands(value: str) -> list[str]:
+    commands: list[str] = []
+    for match in re.finditer(r"\bcmd\s*:\s*([\"'`])", value):
+        quote = match.group(1)
+        start = match.end()
+        cursor = start
+        while cursor < len(value):
+            if value[cursor] == "\\":
+                cursor += 2
+                continue
+            if value[cursor] == quote:
+                command = value[start:cursor].strip()
+                if command:
+                    commands.append(command)
+                break
+            cursor += 1
+    return commands
 
 
 def _classify(tool_name: str, tool_input: Any) -> tuple[str, str | None, str | None]:

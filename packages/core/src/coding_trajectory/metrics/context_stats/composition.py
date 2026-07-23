@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+import re
 from typing import Iterable
 from uuid import UUID
 
@@ -382,6 +383,7 @@ def _agent_work(
     files: dict[str, _Measure] = defaultdict(_Measure)
     agent: dict[str, _Measure] = defaultdict(_Measure)
     output: dict[str, _Measure] = defaultdict(_Measure)
+    other_output: dict[str, _Measure] = defaultdict(_Measure)
     evicted = _Measure()
     has_agent_message_items = any(
         item.kind == "agent_message"
@@ -438,10 +440,11 @@ def _agent_work(
                     files=files,
                     agent=agent,
                     output=output,
+                    other_output=other_output,
                     allocated_usage_by_item=allocated_usage_by_item,
                 )
 
-    children = _assemble_agent_categories(files, agent, output)
+    children = _assemble_agent_categories(files, agent, output, other_output)
     return _measure_from_categories(children), children, evicted
 
 
@@ -449,6 +452,7 @@ def _assemble_agent_categories(
     files: dict[str, _Measure],
     agent: dict[str, _Measure],
     output: dict[str, _Measure],
+    other_output: dict[str, _Measure],
 ) -> list[ContextCategoryFlat]:
     """Shape accumulated file/agent/output measures into the composition children tree."""
     file_children = [
@@ -500,11 +504,26 @@ def _assemble_agent_categories(
         for concept, label in _OUTPUT_CONCEPT_LABELS.items()
         if output[concept].items
     ]
-    output_children.extend(
-        _category(f"output_{key}", label, output[key])
-        for key, label in _OUTPUT_FAMILY_LABELS.items()
-        if output[key].items
-    )
+    for key, label in _OUTPUT_FAMILY_LABELS.items():
+        if not output[key].items:
+            continue
+        if key != "other":
+            output_children.append(_category(f"output_{key}", label, output[key]))
+            continue
+        breakdown_children = [
+            _category(
+                f"output_other_{_category_key_part(breakdown)}",
+                breakdown,
+                measure,
+            )
+            for breakdown, measure in sorted(
+                other_output.items(), key=lambda item: (-item[1].tokens, item[0])
+            )
+            if measure.items
+        ]
+        output_children.append(
+            _category("output_other", label, output[key], breakdown_children)
+        )
 
     children = [
         category
@@ -524,6 +543,7 @@ def _add_tool_item(
     files: dict[str, _Measure],
     agent: dict[str, _Measure],
     output: dict[str, _Measure],
+    other_output: dict[str, _Measure],
     allocated_usage_by_item: dict[UUID, dict[str, int]],
 ) -> None:
     if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
@@ -569,11 +589,18 @@ def _add_tool_item(
             allocated_usage=allocated_usage,
         )
         return
-    output[_output_family_key(summary, concept)].add(
+    output_family = _output_family_key(summary, concept)
+    output[output_family].add(
         tokens=tokens,
         chars=chars,
         allocated_usage=allocated_usage,
     )
+    if output_family == "other":
+        other_output[_output_breakdown_key(summary, concept)].add(
+            tokens=tokens,
+            chars=chars,
+            allocated_usage=allocated_usage,
+        )
 
 
 def _file_category_key(concept: str) -> str:
@@ -591,6 +618,22 @@ def _output_family_key(summary: dict[str, object], concept: str) -> str:
         if isinstance(family, str) and family in _OUTPUT_FAMILY_LABELS
         else "other"
     )
+
+
+def _output_breakdown_key(summary: dict[str, object], concept: str) -> str:
+    if concept == RUN_COMMAND:
+        command = summary.get("command")
+        if isinstance(command, str) and command:
+            return command
+    breakdown = summary.get("breakdown")
+    if isinstance(breakdown, str) and breakdown:
+        return breakdown
+    return concept
+
+
+def _category_key_part(label: str) -> str:
+    value = re.sub(r"[^a-zA-Z0-9]+", "_", label).strip("_").lower()
+    return value[:96] or "unknown"
 
 
 def _parent(

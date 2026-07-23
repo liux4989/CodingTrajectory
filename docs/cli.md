@@ -84,6 +84,12 @@ Structured View
 5. `session usage [session_id] [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and costs reported by session logs
 6. `session items <session_id> [<item_id> ...]` — read all session items or the JSON evidence for specific items
 
+The `Other command output` row in `session stats` may contain nested children.
+Unclassified shell commands are grouped by normalized command name; an
+orchestrating `exec` tool is grouped as one wrapper with its contained command
+labels. Wrapper output is kept together because the source log does not expose
+an exact token split across its inner commands.
+
 `session usage` is intentionally turn-focused. It reports token buckets and any
 cost recorded by the source session log; core does not estimate missing prices
 from an external model catalog. External pricing enrichment belongs to the
