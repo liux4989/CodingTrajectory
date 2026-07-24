@@ -75,6 +75,7 @@ def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any
     )
     return prune_nones(
         {
+            "graph_id": str(session_graph.root_session_id),
             "root_session_id": str(session_graph.root_session_id),
             "title": session_graph_title(session_graph),
             "vendors": vendors or None,
@@ -600,6 +601,7 @@ def project_sessions_metadata(
     items = [
         prune_nones(
             {
+                "graph_id": str(graph.root_session_id),
                 "root_session_id": str(graph.root_session_id),
                 "title": session_graph_title(graph),
                 "vendors": sorted(
@@ -674,13 +676,13 @@ def _cache_session_graph(context: ServiceContext, session_graph: SessionGraph) -
         )
 
 
-def _session_graph_handler(
+def _graph_handler(
     build: Callable[[dict[str, Any], SessionGraph], Any],
 ) -> ServiceHandler:
-    """Resolve + cache the session graph, then wrap the build result.
+    """Resolve + cache the graph, then wrap the graph-level build result.
 
-    Every ``session.*`` projection follows the same preamble: resolve the
-    session graph from the entry-point id, cache its session->root mapping
+    Every ``graph.*`` projection follows the same preamble: resolve the
+    graph from the entry-point id, cache its session->root mapping
     for future targeted loads, build the projection, and pass it through
     the public output seam. Centralizing that here lets each handler read
     as pure projection logic. Cache-before-build is observably neutral
@@ -926,7 +928,7 @@ def _handle_session_tool_usage(
     return build_session_graph_tool_usage(session_graph)
 
 
-@_session_graph_handler
+@_graph_handler
 def _handle_graph_overview(
     params: dict[str, Any], session_graph: SessionGraph
 ) -> Any:
@@ -939,7 +941,7 @@ def _handle_graph_overview(
     )
 
 
-@_session_graph_handler
+@_graph_handler
 def _handle_graph_stats(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.metrics import (
         build_session_graph_context_stats,
@@ -964,7 +966,7 @@ def _handle_graph_stats(params: dict[str, Any], session_graph: SessionGraph) -> 
     )
 
 
-@_session_graph_handler
+@_graph_handler
 def _handle_graph_usage(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.metrics import build_session_graph_usage
 

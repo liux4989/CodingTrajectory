@@ -71,7 +71,7 @@ global project index.
 
 Structured View
 1. `project list [--agent-vendor VENDOR] [--output markdown|json]` — find project names
-2. `project sessions [project_name] [--agent-vendor VENDOR] [--output markdown|json]` — list graph roots for a project, get the session id to use as an entry point
+2. `project sessions [project_name] [--agent-vendor VENDOR] [--output markdown|json]` — list orchestration graphs for a project, get the graph/session id to use as an entry point
    - omit `project_name` to use the current directory
    - known agent vendors are `claude_code`, `codex_cli`, and `pi`
 3. `session overview [session_id] [--turns N] [--drop-turns K] [--output markdown|json]` — read one thread and identify relevant turns
@@ -84,7 +84,8 @@ Structured View
 5. `session usage [session_id] [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and costs reported by session logs
 6. `session items <session_id> [<item_id> ...]` — read all session items or the JSON evidence for specific items
 
-Graph-level inspection is explicit:
+Graph-level inspection is the orchestration surface. It is the parent of the
+individual `session` resource; there is no separate top-level workflow tree:
 
 1. `graph overview [session_id] [--turns N] [--drop-turns K] [--output markdown|json]` — inspect every connected thread and structural edge
 2. `graph stats [session_id] [--output markdown|json]` — inspect aggregate context and token statistics for the graph

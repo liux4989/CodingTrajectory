@@ -219,7 +219,7 @@ explicit collection of independent calls; shell pipelines and tools such as
 | `session.overview` | Narrative overview: hierarchy, activity keys, turn summaries |
 | `session.stats` | Provider usage plus common observed composition buckets and runtime statistics for one thread |
 | `session.usage` | Token usage and log-reported cost breakdown by turn for one thread |
-| `graph.overview` | All connected sessions plus structural edges |
+| `graph.overview` | Orchestration graph identity, capabilities, connected sessions, and structural edges |
 | `graph.stats` | Aggregate provider usage, composition, and runtime statistics |
 | `graph.usage` | Aggregate token usage and log-reported cost breakdown |
 | `session.tool_usage` | Tool invocation statistics and estimated visible-content token attribution |

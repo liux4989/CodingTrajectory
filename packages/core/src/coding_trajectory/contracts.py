@@ -89,6 +89,7 @@ class ProjectListResponse(ContractModel):
 
 
 class SessionGraphSummary(ContractModel):
+    graph_id: str | None = None
     root_session_id: str
     project: str | None = None
     title: str | None = None
@@ -109,8 +110,10 @@ class SessionOverviewResponse(ContractModel):
 
 
 class GraphOverviewResponse(ContractModel):
+    graph_id: str
     root_session_id: str
     project: str | None = None
+    graph: dict[str, Any] = Field(default_factory=dict)
     summary: dict[str, Any] | None = None
     sessions: list[dict[str, Any]] = Field(default_factory=list)
     edges: list[dict[str, Any]] = Field(default_factory=list)
@@ -187,6 +190,7 @@ class SessionItemsResponse(RootModel[list[dict[str, Any]]]):
 
 
 class PublicSessionGraphSummary(ContractModel):
+    graph_id: str | None = None
     id: str
     project: str | None = None
     title: str | None = None

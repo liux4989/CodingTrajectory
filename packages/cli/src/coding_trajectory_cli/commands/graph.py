@@ -39,7 +39,20 @@ def _graph_usage_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _render_graph_overview_text(payload: dict[str, Any]) -> str:
-    body = _render_session_overview_text(payload)
+    body = _render_session_overview_text(payload).replace(
+        "# Session `", "# Graph `", 1
+    )
+    orchestration = (payload.get("graph") or {}).get("orchestration") or {}
+    if orchestration:
+        kind = orchestration.get("kind") or "-"
+        versions = ", ".join(orchestration.get("multi_agent_versions") or []) or "-"
+        body = "\n".join(
+            [
+                body,
+                "",
+                f"Orchestration: `{kind}`; multi-agent versions: `{versions}`",
+            ]
+        )
     edges = payload.get("edges") or []
     lines = [body, "", "## Edges", ""]
     if not edges:
@@ -65,7 +78,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         "graph",
         prog="ct graph",
         usage="ct graph <command> [flags]",
-        help="Inspect a connected multi-session graph.",
+        help="Inspect an orchestration graph.",
         formatter_class=GhFormatter,
     )
     graph_sub = graph_parser.add_subparsers(dest="action", required=True)
@@ -73,7 +86,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     graph_overview = graph_sub.add_parser(
         "overview",
         prog="ct graph overview",
-        help="Show all sessions and structural edges in a graph.",
+        help="Show graph capabilities, sessions, and structural edges.",
         formatter_class=GhFormatter,
     )
     add_session_source(graph_overview)
