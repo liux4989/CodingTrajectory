@@ -150,6 +150,7 @@ class TurnMetrics(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    model_active_seconds: float | None = None
     observations: list[TokenUsageObservation] = Field(default_factory=list)
 
 
@@ -158,12 +159,16 @@ class SessionMetrics(BaseModel):
     vendor: str
     status: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
     turns: list[TurnMetrics] = Field(default_factory=list)
 
 
 class SessionGraphMetrics(BaseModel):
     root_session_id: UUID
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
     sessions: list[SessionMetrics] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -181,6 +186,8 @@ class TurnMetricsFlat(BaseModel):
     completed_at: datetime | None = None
     model: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
 
 
 class SessionMetricsFlat(BaseModel):
@@ -188,12 +195,16 @@ class SessionMetricsFlat(BaseModel):
     vendor: str
     status: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
     turns: list[TurnMetricsFlat] = Field(default_factory=list)
 
 
 class SessionGraphMetricsFlat(BaseModel):
     root_session_id: UUID
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
     sessions: list[SessionMetricsFlat] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -251,6 +262,8 @@ class RuntimeStatsFlat(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     execution_seconds: int | None = None
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
     wait_seconds: int | None = None
     turns: int = 0
     items: int = 0
@@ -270,6 +283,8 @@ class RuntimeStatsFlat(BaseModel):
             "started_at",
             "ended_at",
             "execution_seconds",
+            "model_active_seconds",
+            "processed_tokens_per_second",
             "wait_seconds",
         ):
             if data.get(key) is None:
@@ -281,6 +296,8 @@ class TurnRuntimeFlat(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     execution_seconds: int | None = None
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
     wait_before_seconds: int | None = None
 
     @model_serializer(mode="wrap")
@@ -505,6 +522,8 @@ class ModelUsageModelFlat(BaseModel):
     model: str | None = None
     turns: int = 0
     usage: TokenUsage = Field(default_factory=TokenUsage)
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
     estimated_cost: CostEvidenceFlat | None = None
 
     @model_serializer(mode="wrap")
@@ -512,6 +531,10 @@ class ModelUsageModelFlat(BaseModel):
         data = handler(self)
         if data.get("usage"):
             data["usage"] = _usage_accounting_payload(data["usage"])
+        if data.get("model_active_seconds") is None:
+            data.pop("model_active_seconds", None)
+        if data.get("processed_tokens_per_second") is None:
+            data.pop("processed_tokens_per_second", None)
         if data.get("estimated_cost") is None:
             data.pop("estimated_cost", None)
         return data
@@ -530,6 +553,8 @@ class ModelUsageTurnFlat(BaseModel):
     sequence: int
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
     provider: str | None = None
     model: str | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
@@ -542,6 +567,10 @@ class ModelUsageTurnFlat(BaseModel):
         data = handler(self)
         if data.get("usage"):
             data["usage"] = _usage_accounting_payload(data["usage"])
+        if data.get("model_active_seconds") is None:
+            data.pop("model_active_seconds", None)
+        if data.get("processed_tokens_per_second") is None:
+            data.pop("processed_tokens_per_second", None)
         if data.get("context") == {}:
             data.pop("context", None)
         if data.get("estimated_cost") is None:
@@ -557,6 +586,8 @@ class SessionGraphModelUsageFlat(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
     context: ModelUsageContextFlat | None = None
     models: list[ModelUsageModelFlat] = Field(default_factory=list)
     dominant_model: DominantModelFlat | None = None
@@ -568,6 +599,10 @@ class SessionGraphModelUsageFlat(BaseModel):
         data = handler(self)
         if data.get("usage"):
             data["usage"] = _usage_accounting_payload(data["usage"])
+        if data.get("model_active_seconds") is None:
+            data.pop("model_active_seconds", None)
+        if data.get("processed_tokens_per_second") is None:
+            data.pop("processed_tokens_per_second", None)
         if data.get("context") == {}:
             data.pop("context", None)
         if data.get("dominant_model") == {}:

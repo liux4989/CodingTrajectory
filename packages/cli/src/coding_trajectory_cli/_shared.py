@@ -429,6 +429,12 @@ def compact_usage_turn(turn: Any) -> Any:
                     "execution_seconds": (turn.get("runtime") or {}).get(
                         "execution_seconds"
                     ),
+                    "model_active_seconds": (turn.get("runtime") or {}).get(
+                        "model_active_seconds"
+                    ),
+                    "processed_tokens_per_second": (turn.get("runtime") or {}).get(
+                        "processed_tokens_per_second"
+                    ),
                     "wait_before_seconds": (turn.get("runtime") or {}).get(
                         "wait_before_seconds"
                     ),
@@ -467,6 +473,10 @@ def compact_usage_session(session: Any) -> Any:
                     "start": runtime.get("started_at"),
                     "end": runtime.get("ended_at"),
                     "execution_seconds": runtime.get("execution_seconds"),
+                    "model_active_seconds": runtime.get("model_active_seconds"),
+                    "processed_tokens_per_second": runtime.get(
+                        "processed_tokens_per_second"
+                    ),
                     "wait_seconds": runtime.get("wait_seconds"),
                     "turns": runtime.get("turns"),
                     "items": runtime.get("items"),
@@ -514,6 +524,10 @@ def compact_usage_models(models: Any) -> list[dict[str, Any]] | None:
                 "provider": model.get("provider"),
                 "model": model.get("model"),
                 "turns": model.get("turns"),
+                "model_active_seconds": model.get("model_active_seconds"),
+                "processed_tokens_per_second": model.get(
+                    "processed_tokens_per_second"
+                ),
                 "usage": compact_usage(model.get("usage")),
                 "cost": evidence_value(model.get("estimated_cost")),
                 "pricing": evidence_to_pricing(model.get("estimated_cost")),
@@ -571,6 +585,10 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
                     "start": runtime.get("started_at"),
                     "end": runtime.get("ended_at"),
                     "execution_seconds": runtime.get("execution_seconds"),
+                    "model_active_seconds": runtime.get("model_active_seconds"),
+                    "processed_tokens_per_second": runtime.get(
+                        "processed_tokens_per_second"
+                    ),
                     "wait_seconds": runtime.get("wait_seconds"),
                     "turns": runtime.get("turns"),
                     "items": runtime.get("items"),
@@ -747,6 +765,10 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "start": runtime.get("started_at"),
                         "end": runtime.get("ended_at"),
                         "execution_seconds": runtime.get("execution_seconds"),
+                        "model_active_seconds": runtime.get("model_active_seconds"),
+                        "processed_tokens_per_second": runtime.get(
+                            "processed_tokens_per_second"
+                        ),
                         "wait_seconds": runtime.get("wait_seconds"),
                     }
                 )

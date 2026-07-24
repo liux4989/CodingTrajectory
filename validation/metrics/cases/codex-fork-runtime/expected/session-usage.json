@@ -7,6 +7,8 @@
     {"path": "$.usage.completion", "expected": 937, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
     {"path": "$.usage.reasoning", "expected": 42, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
     {"path": "$.usage.processed", "expected": 79182, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.runtime.model_active_seconds", "expected": 108.767, "source_refs": ["source/parent.jsonl:2", "source/parent.jsonl:6"], "audit_ref": "audit.md#model-throughput"},
+    {"path": "$.runtime.processed_tokens_per_second", "expected": 727.997, "source_refs": ["source/parent.jsonl:5", "source/parent.jsonl:2", "source/parent.jsonl:6"], "audit_ref": "audit.md#model-throughput"},
     {"path": "$.cost", "expected": 0.079969, "source_refs": ["source/parent.jsonl:5", "../../../pricing/pinned-model-prices.json"], "audit_ref": "audit.md#usage-arithmetic"}
   ]
 }

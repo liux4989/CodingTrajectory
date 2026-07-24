@@ -1,4 +1,4 @@
-export type MetricFormat = "integer" | "tokens" | "percent" | "usd" | "duration" | "ratio";
+export type MetricFormat = "integer" | "tokens" | "percent" | "usd" | "duration" | "ratio" | "rate";
 
 export type CohortSummary = {
   since_days: number;
@@ -36,6 +36,7 @@ export type ComparisonRow = {
   graphs: number;
   turns: number;
   processed_tokens: number;
+  processed_tokens_per_second: number | null;
   cache_hit_rate: number | null;
   cost_usd: number | null;
   pricing_coverage: number;
@@ -52,6 +53,7 @@ export type SessionRow = {
   mixed_models: boolean;
   turns: number;
   processed_tokens: number | null;
+  processed_tokens_per_second: number | null;
   cost_usd: number | null;
   cost_confidence: string | null;
   active_seconds: number | null;

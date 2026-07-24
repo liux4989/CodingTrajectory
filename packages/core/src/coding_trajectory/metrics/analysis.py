@@ -73,6 +73,7 @@ from coding_trajectory.metrics.pricing import (
     cost_evidence_from_usage,
     get_model_context_window,
 )
+from coding_trajectory.metrics.throughput import processed_tokens_per_second
 from coding_trajectory.token_counter import session_scoped
 from coding_trajectory.metrics._build import (
     _build_full_metrics,
@@ -101,6 +102,11 @@ def build_session_graph_metrics(
                     completed_at=turn.completed_at,
                     model=model,
                     token_usage=turn.token_usage,
+                    model_active_seconds=turn.model_active_seconds,
+                    processed_tokens_per_second=processed_tokens_per_second(
+                        turn.token_usage.processed_token_total(),
+                        turn.model_active_seconds,
+                    ),
                 )
             )
         sessions_flat.append(
@@ -109,6 +115,8 @@ def build_session_graph_metrics(
                 vendor=session.vendor,
                 status=session.status,
                 token_usage=session.token_usage,
+                model_active_seconds=session.model_active_seconds,
+                processed_tokens_per_second=session.processed_tokens_per_second,
                 turns=turns_flat,
             )
         )
@@ -116,6 +124,8 @@ def build_session_graph_metrics(
     return SessionGraphMetricsFlat(
         root_session_id=full.root_session_id,
         token_usage=full.token_usage,
+        model_active_seconds=full.model_active_seconds,
+        processed_tokens_per_second=full.processed_tokens_per_second,
         sessions=sessions_flat,
         warnings=full.warnings,
     ).model_dump(mode="json")
@@ -198,7 +208,11 @@ def build_session_graph_usage(
             ),
             "agent_name": source_session.agent_name,
             "title": session_title(source_session),
-            "runtime": runtime_stats(single).model_dump(mode="json"),
+            "runtime": runtime_stats(
+                single,
+                processed_tokens=session_usage.processed_token_total(),
+                model_active_seconds=session.model_active_seconds,
+            ).model_dump(mode="json"),
             "compaction": _optional_model_dump(compaction_stats(single)),
             "effort_changes": effort_change_stats(single).model_dump(mode="json"),
             "turns": [turn.model_dump(mode="json") for turn in session_turns],
@@ -217,7 +231,11 @@ def build_session_graph_usage(
     )
     payload = SessionUsageCompactFlat(
         session_id=full.root_session_id,
-        runtime=runtime_stats(session_graph),
+        runtime=runtime_stats(
+            session_graph,
+            processed_tokens=full.token_usage.processed_token_total(),
+            model_active_seconds=full.model_active_seconds,
+        ),
         turns=turns,
         total_usage=full.token_usage,
         estimated_cost=_aggregate_model_cost(graph_model_breakdown),
@@ -239,18 +257,12 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
     sessions_by_id = {session.session_id: session for session in session_graph.sessions}
     root_session = sessions_by_id.get(session_graph.root_session_id)
     turns: list[ModelUsageTurnFlat] = []
-    model_usage: dict[tuple[str | None, str | None], TokenUsage] = {}
-    model_turns: dict[tuple[str | None, str | None], set[UUID]] = {}
 
     for session_metrics in full.sessions:
         source_session = sessions_by_id.get(session_metrics.session_id)
         for turn in session_metrics.turns:
             groups = _model_groups_for_turn(turn)
             primary = _dominant_group(groups)
-            for group in groups:
-                key = (group.provider, group.model)
-                model_usage[key] = model_usage.get(key, TokenUsage()).plus(group.usage)
-                model_turns.setdefault(key, set()).add(turn.turn_id)
             turns.append(
                 ModelUsageTurnFlat(
                     turn_id=turn.turn_id,
@@ -259,6 +271,17 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
                     sequence=turn.sequence,
                     started_at=turn.started_at,
                     completed_at=turn.completed_at,
+                    model_active_seconds=(
+                        turn.model_active_seconds if len(groups) == 1 else None
+                    ),
+                    processed_tokens_per_second=(
+                        processed_tokens_per_second(
+                            turn.token_usage.processed_token_total(),
+                            turn.model_active_seconds,
+                        )
+                        if len(groups) == 1
+                        else None
+                    ),
                     provider=primary.provider if primary else None,
                     model=primary.model if primary else None,
                     usage=turn.token_usage,
@@ -274,24 +297,9 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
                 )
             )
 
-    models = [
-        ModelUsageModelFlat(
-            provider=provider,
-            model=model,
-            turns=len(model_turns.get((provider, model), set())),
-            usage=usage,
-            estimated_cost=cost_evidence_from_usage(
-                usage.model_dump(mode="json"),
-                model=model,
-                provider=provider,
-            ),
-        )
-        for (provider, model), usage in sorted(
-            model_usage.items(),
-            key=lambda item: item[1].total_tokens,
-            reverse=True,
-        )
-    ]
+    models = _model_usage_breakdown(
+        turn for session in full.sessions for turn in session.turns
+    )
     dominant = _dominant_group(models)
 
     return SessionGraphModelUsageFlat(
@@ -312,6 +320,8 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
             default=None,
         ),
         usage=full.token_usage,
+        model_active_seconds=full.model_active_seconds,
+        processed_tokens_per_second=full.processed_tokens_per_second,
         context=_context_for_session_graph(session_graph),
         models=models,
         dominant_model=DominantModelFlat(
@@ -328,7 +338,12 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
 
 def build_session_graph_runtime(session_graph: SessionGraph) -> dict[str, Any]:
     """Return canonical runtime summary fields for one session graph."""
-    return runtime_stats(session_graph).model_dump(mode="json")
+    full = _build_full_metrics(session_graph)
+    return runtime_stats(
+        session_graph,
+        processed_tokens=full.token_usage.processed_token_total(),
+        model_active_seconds=full.model_active_seconds,
+    ).model_dump(mode="json")
 
 
 def _compact_turn_usage(
@@ -473,6 +488,11 @@ def _turn_runtime(
         started_at=turn.started_at,
         ended_at=turn.completed_at,
         execution_seconds=execution_seconds,
+        model_active_seconds=turn.model_active_seconds,
+        processed_tokens_per_second=processed_tokens_per_second(
+            turn.token_usage.processed_token_total(),
+            turn.model_active_seconds,
+        ),
         wait_before_seconds=wait_before_seconds,
     )
 
@@ -484,8 +504,22 @@ def _model_groups_for_turn(turn: TurnMetrics) -> list[ModelUsageModelFlat]:
         grouped[key] = grouped.get(key, TokenUsage()).plus(observation.usage)
     if not grouped and not _is_zero_usage(turn.token_usage):
         grouped[(None, None)] = turn.token_usage
+    single_model = len(grouped) == 1
     return [
-        ModelUsageModelFlat(provider=provider, model=model, turns=1, usage=usage)
+        ModelUsageModelFlat(
+            provider=provider,
+            model=model,
+            turns=1,
+            usage=usage,
+            model_active_seconds=(turn.model_active_seconds if single_model else None),
+            processed_tokens_per_second=(
+                processed_tokens_per_second(
+                    usage.processed_token_total(), turn.model_active_seconds
+                )
+                if single_model
+                else None
+            ),
+        )
         for (provider, model), usage in sorted(
             grouped.items(),
             key=lambda item: item[1].total_tokens,
@@ -497,19 +531,43 @@ def _model_groups_for_turn(turn: TurnMetrics) -> list[ModelUsageModelFlat]:
 def _model_usage_breakdown(
     turns: Iterable[TurnMetrics],
 ) -> list[ModelUsageModelFlat]:
+    turn_list = list(turns)
     grouped: dict[tuple[str | None, str | None], TokenUsage] = {}
     model_turns: dict[tuple[str | None, str | None], set[UUID]] = {}
-    for turn in turns:
-        for group in _model_groups_for_turn(turn):
+    active_seconds: dict[tuple[str | None, str | None], float] = {}
+    active_seconds_complete: dict[tuple[str | None, str | None], bool] = {}
+    for turn in turn_list:
+        groups = _model_groups_for_turn(turn)
+        for group in groups:
             key = (group.provider, group.model)
             grouped[key] = grouped.get(key, TokenUsage()).plus(group.usage)
             model_turns.setdefault(key, set()).add(turn.turn_id)
+            if group.model_active_seconds is None:
+                active_seconds_complete[key] = False
+            elif active_seconds_complete.get(key, True):
+                active_seconds[key] = active_seconds.get(key, 0.0) + (
+                    group.model_active_seconds
+                )
     return [
         ModelUsageModelFlat(
             provider=provider,
             model=model,
             turns=len(model_turns.get((provider, model), set())),
             usage=usage,
+            model_active_seconds=(
+                round(active_seconds[(provider, model)], 3)
+                if active_seconds_complete.get((provider, model), True)
+                and (provider, model) in active_seconds
+                else None
+            ),
+            processed_tokens_per_second=processed_tokens_per_second(
+                usage.processed_token_total(),
+                (
+                    active_seconds[(provider, model)]
+                    if active_seconds_complete.get((provider, model), True)
+                    else None
+                ),
+            ),
             estimated_cost=cost_evidence_from_usage(
                 usage.model_dump(mode="json"),
                 model=model,

@@ -15,6 +15,10 @@ from coding_trajectory.metrics.models import (
     RuntimeStatsFlat,
     TokenUsage,
 )
+from coding_trajectory.metrics.throughput import (
+    aggregate_model_active_seconds,
+    processed_tokens_per_second,
+)
 
 
 def root_session(session_graph: SessionGraph) -> Session:
@@ -42,8 +46,15 @@ _COMPACTION_MECHANISMS = {
     "context_compacted": "context_compacted",
 }
 
+_UNSET = object()
 
-def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
+
+def runtime_stats(
+    session_graph: SessionGraph,
+    *,
+    processed_tokens: int | None = None,
+    model_active_seconds: float | None | object = _UNSET,
+) -> RuntimeStatsFlat:
     started = min(
         (session.started_at for session in session_graph.sessions), default=None
     )
@@ -87,6 +98,13 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         for session in session_graph.sessions
         for value in _turn_wait_seconds(session)
     )
+    model_active = (
+        aggregate_model_active_seconds(
+            turn for session in session_graph.sessions for turn in session.turns
+        )
+        if model_active_seconds is _UNSET
+        else model_active_seconds
+    )
     first_token_durations = [
         observation.time_to_first_token_ms
         for observation in runtime_observations
@@ -98,6 +116,11 @@ def runtime_stats(session_graph: SessionGraph) -> RuntimeStatsFlat:
         started_at=started,
         ended_at=ended,
         execution_seconds=execution_seconds,
+        model_active_seconds=model_active,
+        processed_tokens_per_second=processed_tokens_per_second(
+            processed_tokens or 0,
+            model_active,
+        ),
         wait_seconds=wait_seconds,
         # Exclude low-value turns (no items, e.g. a compaction-only lifecycle)
         # so the count matches `session overview`, which filters them via

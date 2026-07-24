@@ -7,6 +7,8 @@
     {"path": "$.usage.completion", "expected": 230, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"},
     {"path": "$.usage.reasoning", "expected": 23, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"},
     {"path": "$.usage.processed", "expected": 4753, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.runtime.model_active_seconds", "expected": 198.167, "source_refs": ["source/parent.jsonl:2", "source/parent.jsonl:6", "source/fork.jsonl:5", "source/fork.jsonl:7-10", "source/fork.jsonl:11", "source/fork.jsonl:13-16"], "audit_ref": "audit.md#model-throughput"},
+    {"path": "$.runtime.processed_tokens_per_second", "expected": 23.985, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15", "source/parent.jsonl:2", "source/parent.jsonl:6", "source/fork.jsonl:5", "source/fork.jsonl:7-10", "source/fork.jsonl:11", "source/fork.jsonl:13-16"], "audit_ref": "audit.md#model-throughput"},
     {"path": "$.cost", "expected": 0.01209, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15", "../../../pricing/pinned-model-prices.json"], "audit_ref": "audit.md#usage-arithmetic"}
   ]
 }

@@ -5,6 +5,7 @@ export function formatMetricValue(value: number | null, format: MetricFormat, co
   if (format === "usd") return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: value < 0.01 ? 4 : 2 }).format(value);
   if (format === "percent") return `${value.toFixed(1)}%`;
   if (format === "ratio") return value.toFixed(3);
+  if (format === "rate") return `${value.toFixed(1)} tok/s`;
   if (format === "duration") return formatDuration(value);
   if (format === "tokens" || compact) return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
   return Math.round(value).toLocaleString();

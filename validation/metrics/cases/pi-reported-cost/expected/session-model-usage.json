@@ -3,6 +3,8 @@
   {"path":"$.usage.processed_tokens","expected":18934,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#usage-arithmetic"},
   {"path":"$.models[0].provider","expected":"opencode-go","source_refs":["source/session.jsonl:2"],"audit_ref":"audit.md#usage-arithmetic"},
   {"path":"$.models[0].model","expected":"glm-5.2","source_refs":["source/session.jsonl:2"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.models[0].model_active_seconds","expected":91.227,"source_refs":["source/session.jsonl:4","source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#model-throughput"},
+  {"path":"$.models[0].processed_tokens_per_second","expected":207.548,"source_refs":["source/session.jsonl:5,7,9,11,13","source/session.jsonl:4","source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#model-throughput"},
   {"path":"$.models[0].estimated_cost.value_usd","expected":0.01081964,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#reported-cost"},
   {"path":"$.models[0].estimated_cost.confidence","expected":"reported","source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#reported-cost"}
 ]}

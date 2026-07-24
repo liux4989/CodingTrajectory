@@ -6,6 +6,8 @@
     {"path": "$.usage.processed_tokens", "expected": 79182, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
     {"path": "$.models[0].provider", "expected": "openai", "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#usage-arithmetic"},
     {"path": "$.models[0].model", "expected": "gpt-5.5", "source_refs": ["source/parent.jsonl:3"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.models[0].model_active_seconds", "expected": 108.767, "source_refs": ["source/parent.jsonl:2", "source/parent.jsonl:6"], "audit_ref": "audit.md#model-throughput"},
+    {"path": "$.models[0].processed_tokens_per_second", "expected": 727.997, "source_refs": ["source/parent.jsonl:5", "source/parent.jsonl:2", "source/parent.jsonl:6"], "audit_ref": "audit.md#model-throughput"},
     {"path": "$.models[0].estimated_cost.value_usd", "expected": 0.079969, "source_refs": ["source/parent.jsonl:5", "../../../pricing/pinned-model-prices.json"], "audit_ref": "audit.md#usage-arithmetic"},
     {"path": "$.dominant_model.basis", "expected": "total_tokens", "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"}
   ]

@@ -81,6 +81,7 @@ class ComparisonRow(BaseModel):
     graphs: int
     turns: int
     processed_tokens: int
+    processed_tokens_per_second: float | None
     cache_hit_rate: float | None
     cost_usd: float | None
     pricing_coverage: int
@@ -97,6 +98,7 @@ class SessionRow(BaseModel):
     mixed_models: bool
     turns: int
     processed_tokens: int | None
+    processed_tokens_per_second: float | None
     cost_usd: float | None
     cost_confidence: str | None
     active_seconds: int | None
@@ -456,6 +458,11 @@ def _comparison_groups(graphs: tuple[GraphRecord, ...], *, execution: bool) -> l
             usage = model.get("usage") if isinstance(model.get("usage"), dict) else {}
             _add_usage(group["usage"], usage)
             group["processed_values"].append(_int(usage.get("processed_tokens")))
+            model_active = model.get("model_active_seconds")
+            if model_active is None:
+                group["model_rate_complete"] = False
+            else:
+                group["model_active_values"].append(float(model_active))
             group["cache_rates"].append(_cache_rate(usage))
             cost = _cost_value(model.get("estimated_cost"))
             if cost is not None:
@@ -488,6 +495,8 @@ def _group(
             "turns": 0,
             "usage": {token_key: 0 for token_key in TOKEN_KEYS},
             "processed_values": [],
+            "model_active_values": [],
+            "model_rate_complete": True,
             "cache_rates": [],
             "cost_values": [],
             "active_values": [],
@@ -563,6 +572,14 @@ def _comparison_row(group: dict[str, Any]) -> ComparisonRow:
         graphs=len(group["graph_ids"]),
         turns=group["turns"],
         processed_tokens=_int(group["usage"].get("processed_tokens")),
+        processed_tokens_per_second=(
+            _safe_div(
+                _int(group["usage"].get("processed_tokens")),
+                sum(group["model_active_values"]),
+            )
+            if group["model_rate_complete"] and group["model_active_values"]
+            else None
+        ),
         cache_hit_rate=_mean(rates) * 100 if rates else None,
         cost_usd=round(sum(costs), 8) if costs else None,
         pricing_coverage=len(costs),
@@ -582,6 +599,11 @@ def _session_rows(category: str, graphs: tuple[GraphRecord, ...]) -> list[Sessio
             mixed_models=len(_graph_model_keys(graph)) > 1,
             turns=_int(graph.runtime.get("turns")),
             processed_tokens=_optional_int(graph.usage.get("processed_tokens")),
+            processed_tokens_per_second=(
+                float(graph.runtime["processed_tokens_per_second"])
+                if graph.runtime.get("processed_tokens_per_second") is not None
+                else None
+            ),
             cost_usd=_cost_value(graph.cost),
             cost_confidence=_optional_str(graph.cost.get("confidence")) if graph.cost else None,
             active_seconds=_optional_int(graph.runtime.get("execution_seconds")),

@@ -28,6 +28,10 @@ from coding_trajectory.metrics.models import (
     TurnMetrics,
 )
 from coding_trajectory.metrics.pricing import _uses_net_input_convention
+from coding_trajectory.metrics.throughput import (
+    model_active_seconds,
+    processed_tokens_per_second,
+)
 
 
 def _build_full_metrics(
@@ -58,9 +62,16 @@ def _build_full_metrics(
                 session=session,
             )
 
+    all_turns = [turn for session in session_metrics for turn in session.turns]
+    graph_active_seconds = _usage_model_active_seconds(all_turns)
     return SessionGraphMetrics(
         root_session_id=session_graph.root_session_id,
         token_usage=total,
+        model_active_seconds=graph_active_seconds,
+        processed_tokens_per_second=processed_tokens_per_second(
+            total.processed_token_total(),
+            graph_active_seconds,
+        ),
         sessions=session_metrics,
         warnings=_unique(warnings),
     )
@@ -77,11 +88,17 @@ def _build_session_metrics(
         turn_metrics.append(metrics)
         session_total = session_total.plus(metrics.token_usage)
 
+    session_active_seconds = _usage_model_active_seconds(turn_metrics)
     return SessionMetrics(
         session_id=session.session_id,
         vendor=session.vendor.value,
         status=session.status.value,
         token_usage=session_total,
+        model_active_seconds=session_active_seconds,
+        processed_tokens_per_second=processed_tokens_per_second(
+            session_total.processed_token_total(),
+            session_active_seconds,
+        ),
         turns=turn_metrics,
     )
 
@@ -113,8 +130,21 @@ def _build_turn_metrics(
         started_at=turn.started_at,
         completed_at=turn.ended_at,
         token_usage=total,
+        model_active_seconds=model_active_seconds(turn),
         observations=observations,
     )
+
+
+def _usage_model_active_seconds(turns: list[TurnMetrics]) -> float | None:
+    """Sum active time only for turns with observed processed-token usage."""
+    values = [
+        turn.model_active_seconds
+        for turn in turns
+        if not _is_zero_usage(turn.token_usage)
+    ]
+    if not values or any(value is None for value in values):
+        return None
+    return round(sum(value for value in values if value is not None), 3)
 
 
 def _usage_from_context_observation(

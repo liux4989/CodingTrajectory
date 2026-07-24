@@ -3,5 +3,7 @@
   {"path":"$.usage.cached_prompt","expected":43328,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
   {"path":"$.usage.completion","expected":370,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
   {"path":"$.usage.processed","expected":78815,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
+  {"path":"$.runtime.model_active_seconds","expected":73.718,"source_refs":["source/session.jsonl:1","source/session.jsonl:3","source/session.jsonl:4","source/session.jsonl:5"],"audit_ref":"audit.md#model-throughput"},
+  {"path":"$.runtime.processed_tokens_per_second","expected":1069.142,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5","source/session.jsonl:1","source/session.jsonl:4"],"audit_ref":"audit.md#model-throughput"},
   {"path":"$.cost","expected":0.06205708,"source_refs":["source/session.jsonl:2","source/session.jsonl:5","../../../pricing/pinned-model-prices.json"],"audit_ref":"audit.md#usage-arithmetic"}
 ]}

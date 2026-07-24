@@ -14,6 +14,10 @@ Pinned cost is `35,117 * 1.4 / 1,000,000 + 43,328 * 0.26 / 1,000,000 + 370 * 4.4
 
 The user prompt begins one turn. The duplicated first provider response emits reasoning plus one `WebSearch` request, line 4 completes that tool, and response 2 completes the turn. The timestamps span 75 seconds after whole-second rounding.
 
+## Model throughput
+
+The turn spans `13:54:11.521Z` to `13:55:26.766Z` (`session.jsonl:1,5`) = `75.245` seconds. The completed tool interval is `13:54:39.054Z` to `13:54:40.581Z` (`session.jsonl:3,4`) = `1.527` seconds, leaving `73.718` model-active seconds. The deduplicated processed total is `78,815`, so the source-derived rate is `78,815 / 73.718 = 1,069.142 processed tokens/second`.
+
 ## Cross-check
 
 Assertions cover response de-duplication, cache accounting, one-turn status, tool lifecycle counts, model attribution, and pinned estimated cost.

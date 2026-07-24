@@ -27,6 +27,28 @@ reasoning tokens separately from the provider total.
 Cost should be computed from component buckets or provider-reported cost, not
 from one total multiplied by one rate.
 
+## Common model throughput
+
+`processed_tokens_per_second` is the canonical processed-token total divided
+by `model_active_seconds`:
+
+```text
+(uncached prompt + cached prompt + cache write + completion + reasoning)
+/ model-active seconds
+```
+
+`model_active_seconds` is derived from the turn boundary after subtracting the
+union of completed, observed tool intervals. It is a model-throughput
+denominator, not provider decoder-busy time. Turns with an unclosed tool
+interval are ineligible, and mixed-model turns do not assign their duration to
+the dominant model. A graph or session rate remains available when its full
+turn denominator is reconstructable.
+
+This metric intentionally excludes tool output tokens and tool monetary cost
+from its scope. A full turn-duration rate may still be useful diagnostically,
+but it must not be labeled as the common model-throughput rate because tool
+execution time remains in that denominator.
+
 ## Allocated item cost
 
 `session.tool_usage` exposes `item_real_token_costs` as a derived attribution

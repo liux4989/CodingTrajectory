@@ -49,6 +49,10 @@ Pinned cost (gpt-5.5: input 5.0, cached 0.5, output 30.0, reasoning 30.0 per 1M 
 
 `500 * 5.0 / 1,000,000 + 4000 * 0.5 / 1,000,000 + 230 * 30.0 / 1,000,000 + 23 * 30.0 / 1,000,000 = 0.0025 + 0.002 + 0.0069 + 0.00069 = 0.01209 USD`.
 
+## Model throughput
+
+The parent turn has `108.767` active seconds (`parent.jsonl:2,6`) and no tool interval. Fork turn 1 spans `60.000` seconds (`fork.jsonl:5,10`) and its observed tool interval is `0.100` seconds (`fork.jsonl:7,8`), leaving `59.900`. Fork turn 2 spans `30.000` seconds (`fork.jsonl:11,16`) and its observed tool interval is `0.500` seconds (`fork.jsonl:13,14`), leaving `29.500`. The graph denominator is therefore `108.767 + 59.900 + 29.500 = 198.167` model-active seconds. With `4,753` processed tokens, the source-derived common rate is `4,753 / 198.167 = 23.985 processed tokens/second`, including `23` reasoning tokens.
+
 ## Cross-check
 
 The expected artifacts assert the fork's 2-turn / 4-item reconstruction (the regression guard: 0 before the fix), the `forked_from` graph relation, the 3-turn / 199-second / 2297-ms-ttft graph runtime, the usage buckets, and the pinned cost. Presentation-only text and generated item identifiers are intentionally omitted.

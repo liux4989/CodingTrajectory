@@ -16,6 +16,7 @@ from coding_trajectory.metrics.context_stats.composition import (
     AnchorOutcome,
     build_context_composition,
 )
+from coding_trajectory.metrics._build import _build_full_metrics
 from coding_trajectory.metrics.pricing import get_model_context_window
 from coding_trajectory.metrics.models import (
     ContextCategoryFlat,
@@ -41,7 +42,12 @@ def build_session_graph_context_stats(
         )
 
     vendor = next(iter(vendors))
-    runtime = runtime_stats(session_graph)
+    full = _build_full_metrics(session_graph)
+    runtime = runtime_stats(
+        session_graph,
+        processed_tokens=full.token_usage.processed_token_total(),
+        model_active_seconds=full.model_active_seconds,
+    )
     messages = message_stats(session_graph)
     compaction = compaction_stats(session_graph)
     observation = _latest_context_usage(session_graph)
