@@ -73,6 +73,9 @@ class CodexExtensions(BaseModel):
     agent_nickname: str | None = None
     agent_role: str | None = None
     collaboration_mode: str | None = None
+    multi_agent_version: str | None = None
+    multi_agent_mode: str | None = None
+    agent_path: str | None = None
     cwd: str | None = None
     title: str | None = None
     forked_from_id: str | None = None

@@ -71,10 +71,10 @@ global project index.
 
 Structured View
 1. `project list [--agent-vendor VENDOR] [--output markdown|json]` — find project names
-2. `project sessions [project_name] [--agent-vendor VENDOR] [--output markdown|json]` — list sessions for a project, get the session id to use as an entry point
+2. `project sessions [project_name] [--agent-vendor VENDOR] [--output markdown|json]` — list graph roots for a project, get the session id to use as an entry point
    - omit `project_name` to use the current directory
    - known agent vendors are `claude_code`, `codex_cli`, and `pi`
-3. `session overview [session_id] [--turns N] [--drop-turns K] [--output markdown|json]` — read the compact session hierarchy, identify relevant turns
+3. `session overview [session_id] [--turns N] [--drop-turns K] [--output markdown|json]` — read one thread and identify relevant turns
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
@@ -84,7 +84,14 @@ Structured View
 5. `session usage [session_id] [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and costs reported by session logs
 6. `session items <session_id> [<item_id> ...]` — read all session items or the JSON evidence for specific items
 
-The `Other command output` row in `session stats` may contain nested children.
+Graph-level inspection is explicit:
+
+1. `graph overview [session_id] [--turns N] [--drop-turns K] [--output markdown|json]` — inspect every connected thread and structural edge
+2. `graph stats [session_id] [--output markdown|json]` — inspect aggregate context and token statistics for the graph
+3. `graph usage [session_id] [--turn TURN_ID] [--output markdown|json]` — inspect aggregate turn-level token usage for the graph
+
+The `Other command output` row in `session stats` is scoped to the selected
+thread. Use `graph stats` when child-agent or forked-thread totals are needed.
 Unclassified shell commands are grouped by normalized command name; an
 orchestrating `exec` tool is grouped as one wrapper with its contained command
 labels. Wrapper output is kept together because the source log does not expose

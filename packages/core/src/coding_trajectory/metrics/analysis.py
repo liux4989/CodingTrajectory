@@ -243,11 +243,18 @@ def build_session_graph_usage(
         effort_changes=effort_change_stats(session_graph),
         warnings=full.warnings,
     ).model_dump(mode="json")
-    payload["scope"] = "session_graph"
-    payload["graph_total_usage"] = payload.get("total_usage")
-    payload["graph_runtime"] = payload.get("runtime")
+    payload["scope"] = "session_graph" if multi_session else "session"
+    if multi_session:
+        payload["graph_total_usage"] = payload.get("total_usage")
+        payload["graph_runtime"] = payload.get("runtime")
+    else:
+        payload.pop("graph_total_usage", None)
+        payload.pop("graph_runtime", None)
     payload["models"] = [row.model_dump(mode="json") for row in graph_model_breakdown]
-    payload["sessions"] = session_sections
+    if multi_session:
+        payload["sessions"] = session_sections
+    else:
+        payload.pop("sessions", None)
     return payload
 
 

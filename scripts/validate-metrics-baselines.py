@@ -427,7 +427,10 @@ def invariant_differences(case: BaselineCase, surfaces: dict[str, Any]) -> tuple
                 )
             )
 
-    overview_sessions = surfaces["session.overview"].get("sessions") or []
+    # Graph structure is intentionally no longer part of the default session
+    # projection. Validate the multi-session invariant against the explicit
+    # graph surface instead.
+    overview_sessions = surfaces["graph.overview"].get("sessions") or []
     if "graph:multi-session" in case.coverage:
         checked += 1
         if len(overview_sessions) < 2:
@@ -464,6 +467,7 @@ def validate_case(case: BaselineCase, pricing_version: str) -> CaseReport:
             raise ValueError("committed source hashes do not match provenance")
         store = build_store(case)
         surfaces = {method: project_surface(store, case, method) for method in SURFACES}
+        surfaces["graph.overview"] = project_surface(store, case, "graph.overview")
         expected_methods: set[str] = set()
         for relative in case.expected_files:
             artifact = load_json_model(VALIDATION_ROOT / relative, ExpectedArtifact)

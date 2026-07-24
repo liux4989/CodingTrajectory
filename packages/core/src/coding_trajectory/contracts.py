@@ -108,6 +108,14 @@ class SessionOverviewResponse(ContractModel):
     sessions: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class GraphOverviewResponse(ContractModel):
+    root_session_id: str
+    project: str | None = None
+    summary: dict[str, Any] | None = None
+    sessions: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class SessionStatsResponse(ContractModel):
     root_session_id: str | None = None
     scope: str | None = None
@@ -304,12 +312,20 @@ SERVICE_CONTRACTS = {
             PublicSessionOverviewResponse,
         ),
         ServiceContract(
+            "graph.overview",
+            1,
+            SessionOverviewRequest,
+            GraphOverviewResponse,
+            GraphOverviewResponse,
+        ),
+        ServiceContract(
             "session.stats",
             1,
             SessionStatsRequest,
             SessionStatsResponse,
             PublicSessionStatsResponse,
         ),
+        ServiceContract("graph.stats", 1, SessionStatsRequest, SessionStatsResponse),
         ServiceContract(
             "session.turn_usage", 1, SessionTurnUsageRequest, SessionTurnUsageResponse
         ),
@@ -320,6 +336,7 @@ SERVICE_CONTRACTS = {
             SessionUsageResponse,
             PublicSessionUsageResponse,
         ),
+        ServiceContract("graph.usage", 1, SessionUsageRequest, SessionUsageResponse),
         ServiceContract(
             "session.model_usage",
             1,

@@ -139,6 +139,17 @@ def build_session_stats_projection(
     when a graph is collapsed), and attaches per-session sections when the
     graph holds more than one session. Mutates and returns ``stats_result``.
     """
+    if len(session_graph.sessions) == 1:
+        stats_result["scope"] = "session"
+        for key in (
+            "graph_context_window",
+            "graph_provider_usage_buckets",
+            "graph_billed_token_usage",
+            "sessions",
+        ):
+            stats_result.pop(key, None)
+        return stats_result
+
     stats_result["scope"] = "session_graph"
     stats_result["graph_context_window"] = stats_result.get("context_window")
     stats_result["graph_provider_usage_buckets"] = stats_result.get(

@@ -791,7 +791,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         "session",
         prog="ct session",
         usage="ct session <command> [flags]",
-        help="Analyze a session and its connected session tree.",
+        help="Analyze one coding-agent thread.",
         formatter_class=GhFormatter,
     )
     session_sub = session_parser.add_subparsers(dest="action", required=True)

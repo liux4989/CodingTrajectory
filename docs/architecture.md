@@ -143,7 +143,8 @@ coding-trajectory/
 │   │       ├── plugins.py                  # Plugin registry + dispatch
 │   │       └── commands/
 │   │           ├── project.py              # `ct project list|sessions`
-│   │           ├── session.py              # `ct session overview|stats|usage|items|events`
+│   │           ├── session.py              # `ct session ...` one-thread views
+│   │           ├── graph.py                # `ct graph ...` connected-graph views
 │   │           └── plugin.py               # `ct plugin list|<name>` (dispatch + index)
 │   └── plugins/                            # Built-in executable plugins
 │       ├── code_time/                      # `code-time` plugin
@@ -216,8 +217,11 @@ explicit collection of independent calls; shell pipelines and tools such as
 | `project.sessions` | List session graphs, optionally including bulk runtime and usage summaries |
 | `project.logfile` | List session graphs from an explicit log file |
 | `session.overview` | Narrative overview: hierarchy, activity keys, turn summaries |
-| `session.stats` | Provider usage plus common observed composition buckets and runtime statistics |
-| `session.usage` | Token usage and log-reported cost breakdown by turn |
+| `session.stats` | Provider usage plus common observed composition buckets and runtime statistics for one thread |
+| `session.usage` | Token usage and log-reported cost breakdown by turn for one thread |
+| `graph.overview` | All connected sessions plus structural edges |
+| `graph.stats` | Aggregate provider usage, composition, and runtime statistics |
+| `graph.usage` | Aggregate token usage and log-reported cost breakdown |
 | `session.tool_usage` | Tool invocation statistics and estimated visible-content token attribution |
 | `session.turn_usage` | Per-turn usage detail |
 | `session.items` | Enriched detail for one or more items |
@@ -307,9 +311,12 @@ uv sync                    # Install all workspace dependencies
 |---|---|
 | `uv run ct project list` | List discovered projects |
 | `uv run ct project sessions [PROJECT]` | List sessions for a project |
-| `uv run ct session overview [ID]` | Session hierarchy overview |
-| `uv run ct session stats [ID]` | Context window statistics |
-| `uv run ct session usage [ID]` | Token and log-reported cost breakdown |
+| `uv run ct session overview [ID]` | One-thread overview |
+| `uv run ct session stats [ID]` | One-thread context window statistics |
+| `uv run ct session usage [ID]` | One-thread token and log-reported cost breakdown |
+| `uv run ct graph overview [ID]` | Connected-session tree and structural edges |
+| `uv run ct graph stats [ID]` | Graph-wide context window statistics |
+| `uv run ct graph usage [ID]` | Graph-wide token and log-reported cost breakdown |
 | `uv run ct session items SESSION_ID [ITEM_ID ...]` | Session item detail (JSON) |
 | `uv run ct session events --params '{"event_ids": [...]}'` | Event detail (JSON) |
 | `uv run ct session events [ID] --type TYPE` | Filtered event search |

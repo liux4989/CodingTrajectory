@@ -12,6 +12,7 @@ from coding_trajectory.ingestion.models import CodexExtensions, VendorExtensions
 class CodexThreadSpawn(BaseModel):
     parent_thread_id: str | None = None
     depth: int | None = None
+    agent_path: str | None = None
     agent_nickname: str | None = None
     agent_role: str | None = None
 
@@ -21,6 +22,9 @@ class CodexMultiAgentInput(BaseModel):
     sandbox_mode: str | None = None
     approval_policy: str | None = None
     collaboration_mode: str | None = None
+    multi_agent_version: str | None = None
+    multi_agent_mode: str | None = None
+    agent_path: str | None = None
     agent_nickname: str | None = None
     agent_role: str | None = None
     cwd: str | None = None
@@ -43,6 +47,10 @@ def extensions(mechanism: CodexMultiAgentInput) -> VendorExtensions:
             sandbox_mode=mechanism.sandbox_mode,
             approval_policy=mechanism.approval_policy,
             collaboration_mode=mechanism.collaboration_mode,
+            multi_agent_version=mechanism.multi_agent_version,
+            multi_agent_mode=mechanism.multi_agent_mode,
+            agent_path=mechanism.agent_path
+            or (thread_spawn.agent_path if thread_spawn else None),
             agent_nickname=mechanism.agent_nickname
             or (thread_spawn.agent_nickname if thread_spawn else None),
             agent_role=mechanism.agent_role

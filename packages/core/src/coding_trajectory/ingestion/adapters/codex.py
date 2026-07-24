@@ -232,6 +232,18 @@ def _codex_multi_agent_input(
             if isinstance(collaboration_mode, dict)
             else _as_non_empty_str(collaboration_mode)
         ),
+        multi_agent_version=_as_non_empty_str(
+            ctx.get("multi_agent_version") or meta.get("multi_agent_version")
+        ),
+        multi_agent_mode=_as_non_empty_str(
+            ctx.get("multi_agent_mode") or meta.get("multi_agent_mode")
+        ),
+        agent_path=_as_non_empty_str(meta.get("agent_path"))
+        or (
+            _as_non_empty_str(thread_spawn_raw.get("agent_path"))
+            if thread_spawn_raw is not None
+            else None
+        ),
         agent_nickname=_as_non_empty_str(meta.get("nickname"))
         or _as_non_empty_str(meta.get("agent_nickname")),
         agent_role=_as_non_empty_str(meta.get("agent_role")) or source_name,
@@ -246,6 +258,7 @@ def _codex_multi_agent_input(
                 depth=thread_spawn_raw.get("depth")
                 if isinstance(thread_spawn_raw.get("depth"), int)
                 else None,
+                agent_path=_as_non_empty_str(thread_spawn_raw.get("agent_path")),
                 agent_nickname=_as_non_empty_str(
                     thread_spawn_raw.get("agent_nickname")
                 ),
@@ -434,6 +447,8 @@ class CodexAdapter(BaseAdapter):
         # string only). Drives effort_changed observation emission: a new turn
         # whose effort differs from this baseline marks a cache-key change-point.
         prev_effort: str | None = None
+        multi_agent_version: str | None = None
+        multi_agent_mode: str | None = None
         # Last cumulative ``total_token_usage`` seen on a Codex token_count
         # event. Codex occasionally re-emits an identical snapshot (cumulative
         # unchanged, last_token_usage repeated) for a non-billable repeat;
@@ -532,6 +547,10 @@ class CodexAdapter(BaseAdapter):
         meta = state.session_meta
         ctx = state.turn_context
         mechanism = _codex_multi_agent_input(meta, ctx, session_id=state.session_id)
+        if state.multi_agent_version is not None:
+            mechanism.multi_agent_version = state.multi_agent_version
+        if state.multi_agent_mode is not None:
+            mechanism.multi_agent_mode = state.multi_agent_mode
         parent_session_id = codex_parent_session_id(mechanism)
         events = events_from_transcript(session_id=state.session_id, records=transcript)
         extensions = codex_extensions(mechanism)
@@ -1199,6 +1218,12 @@ class CodexAdapter(BaseAdapter):
         change (the warm prefix is served from a different effort-bucket cache).
         """
         state.turn_context = payload
+        multi_agent_version = _as_non_empty_str(payload.get("multi_agent_version"))
+        if multi_agent_version is not None:
+            state.multi_agent_version = multi_agent_version
+        multi_agent_mode = _as_non_empty_str(payload.get("multi_agent_mode"))
+        if multi_agent_mode is not None:
+            state.multi_agent_mode = multi_agent_mode
         effort = _as_non_empty_str(payload.get("effort"))
         if (
             effort is not None

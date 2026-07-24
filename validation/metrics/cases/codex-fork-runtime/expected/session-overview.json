@@ -4,9 +4,7 @@
   "assertions": [
     {"path": "$.id", "expected": "019f17b8-d311-77f0-a163-e20701d5a150", "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
     {"path": "$.sessions[0].relationship.role", "expected": "main", "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
-    {"path": "$.sessions[0].relationship.forks[0]", "expected": "019f1808-018a-73b2-bfc0-216a4eb5ef13", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
-    {"path": "$.sessions[1].relationship.type", "expected": "forked_from", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
     {"path": "$.sessions[0].turns[0].status", "expected": "completed", "source_refs": ["source/parent.jsonl:6"], "audit_ref": "audit.md#graph-and-runtime"},
-    {"path": "$.sessions[1].turns[0].status", "expected": "completed", "source_refs": ["source/fork.jsonl:5"], "audit_ref": "audit.md#graph-and-runtime"}
+    {"path": "$.sessions[0].turns[0].status", "expected": "completed", "source_refs": ["source/parent.jsonl:6"], "audit_ref": "audit.md#graph-and-runtime"}
   ]
 }

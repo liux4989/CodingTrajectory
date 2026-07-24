@@ -700,6 +700,61 @@ def _session_graph_handler(
     return wrapper
 
 
+def _single_session_graph(
+    session_graph: SessionGraph, entrypoint_id: str | None
+) -> SessionGraph:
+    """Select one canonical session from a graph for ``session.*`` methods."""
+    from coding_trajectory.ingestion.indexes import build_session_graph_index
+
+    index = build_session_graph_index(session_graph)
+    selected: Session | None = None
+    if entrypoint_id:
+        resource_id = _parse_user_id(entrypoint_id)
+        selected = index.sessions_by_id.get(resource_id)
+        if selected is None:
+            turn = index.turns_by_id.get(resource_id)
+            if turn is not None:
+                selected = index.sessions_by_id.get(turn.session_id)
+    if selected is None:
+        selected = index.sessions_by_id.get(session_graph.root_session_id)
+    if selected is None:
+        selected = min(
+            session_graph.sessions,
+            key=lambda item: (item.started_at, str(item.session_id)),
+            default=None,
+        )
+    if selected is None:
+        raise ValueError("session_graph has no sessions")
+    return SessionGraph(
+        root_session_id=selected.session_id,
+        project_identifier=session_graph.project_identifier,
+        summary=None,
+        sessions=[selected],
+    )
+
+
+def _single_session_handler(
+    build: Callable[[dict[str, Any], SessionGraph], Any],
+) -> ServiceHandler:
+    """Resolve one thread while retaining the source graph for cache lookup."""
+
+    @wraps(build)
+    def wrapper(params: dict[str, Any], context: ServiceContext) -> Any:
+        session_graph = _resolve_session_graph(
+            context.store, _session_graph_entrypoint_id(params)
+        )
+        _cache_session_graph(context, session_graph)
+        selected_graph = _single_session_graph(
+            session_graph, _session_graph_entrypoint_id(params)
+        )
+        _cache_session_graph(context, selected_graph)
+        return _public_output_for_session_graph(
+            selected_graph, build(params, selected_graph)
+        )
+
+    return wrapper
+
+
 def _handle_project_sessions(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
@@ -778,7 +833,7 @@ def _handle_project_logfile(
     }
 
 
-@_session_graph_handler
+@_single_session_handler
 def _handle_session_overview(
     params: dict[str, Any], session_graph: SessionGraph
 ) -> Any:
@@ -791,7 +846,7 @@ def _handle_session_overview(
     )
 
 
-@_session_graph_handler
+@_single_session_handler
 def _handle_session_stats(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.metrics import (
         build_session_graph_context_stats,
@@ -816,7 +871,7 @@ def _handle_session_stats(params: dict[str, Any], session_graph: SessionGraph) -
     )
 
 
-@_session_graph_handler
+@_single_session_handler
 def _handle_session_turn_usage(
     params: dict[str, Any], session_graph: SessionGraph
 ) -> Any:
@@ -846,14 +901,14 @@ def _handle_session_turn_usage(
     }
 
 
-@_session_graph_handler
+@_single_session_handler
 def _handle_session_usage(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.metrics import build_session_graph_usage
 
     return build_session_graph_usage(session_graph, turn_id=params.get("turn_id"))
 
 
-@_session_graph_handler
+@_single_session_handler
 def _handle_session_model_usage(
     params: dict[str, Any], session_graph: SessionGraph
 ) -> Any:
@@ -862,13 +917,58 @@ def _handle_session_model_usage(
     return build_session_graph_model_usage(session_graph)
 
 
-@_session_graph_handler
+@_single_session_handler
 def _handle_session_tool_usage(
     params: dict[str, Any], session_graph: SessionGraph
 ) -> Any:
     from coding_trajectory.metrics import build_session_graph_tool_usage
 
     return build_session_graph_tool_usage(session_graph)
+
+
+@_session_graph_handler
+def _handle_graph_overview(
+    params: dict[str, Any], session_graph: SessionGraph
+) -> Any:
+    from coding_trajectory.analysis.graph_views import build_graph_overview
+
+    return build_graph_overview(
+        session_graph,
+        num_turns=_optional_positive_int(params, "num_turns"),
+        drop_turns=_optional_positive_int(params, "drop_turns"),
+    )
+
+
+@_session_graph_handler
+def _handle_graph_stats(params: dict[str, Any], session_graph: SessionGraph) -> Any:
+    from coding_trajectory.metrics import (
+        build_session_graph_context_stats,
+        build_session_graph_stats_token_usage,
+    )
+
+    stats_usage = build_session_graph_stats_token_usage(session_graph)
+    result = build_session_graph_context_stats(
+        session_graph,
+        allocated_usage_by_item=stats_usage["allocated_usage_by_item"],
+        allocated_usage_by_context_source=stats_usage[
+            "allocated_usage_by_context_source"
+        ],
+    )
+    if stats_usage.get("billed_token_usage"):
+        result["billed_token_usage"] = stats_usage["billed_token_usage"]
+    return build_session_stats_projection(
+        session_graph,
+        result,
+        build_session_graph_context_stats=build_session_graph_context_stats,
+        build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
+    )
+
+
+@_session_graph_handler
+def _handle_graph_usage(params: dict[str, Any], session_graph: SessionGraph) -> Any:
+    from coding_trajectory.metrics import build_session_graph_usage
+
+    return build_session_graph_usage(session_graph, turn_id=params.get("turn_id"))
 
 
 def _handle_session_events(
@@ -907,6 +1007,8 @@ def _handle_session_events(
 
     entrypoint_id = _session_graph_entrypoint_id(params)
     session_graph = _resolve_session_graph(context.store, entrypoint_id)
+    _cache_session_graph(context, session_graph)
+    session_graph = _single_session_graph(session_graph, entrypoint_id)
     _cache_session_graph(context, session_graph)
 
     event_type = params.get("type")
@@ -970,6 +1072,8 @@ def _handle_session_items(
     entrypoint_id = params.get("session_id") or params.get("root_session_id")
     session_graph = _resolve_session_graph(context.store, entrypoint_id)
     _cache_session_graph(context, session_graph)
+    session_graph = _single_session_graph(session_graph, entrypoint_id)
+    _cache_session_graph(context, session_graph)
 
     types_filter = set(params["types"]) if params.get("types") else None
     result = []
@@ -992,9 +1096,12 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "project.sessions": _handle_project_sessions,
     "project.logfile": _handle_project_logfile,
     "session.overview": _handle_session_overview,
+    "graph.overview": _handle_graph_overview,
     "session.stats": _handle_session_stats,
+    "graph.stats": _handle_graph_stats,
     "session.turn_usage": _handle_session_turn_usage,
     "session.usage": _handle_session_usage,
+    "graph.usage": _handle_graph_usage,
     "session.model_usage": _handle_session_model_usage,
     "session.tool_usage": _handle_session_tool_usage,
     "session.events": _handle_session_events,

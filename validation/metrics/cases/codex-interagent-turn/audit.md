@@ -32,6 +32,17 @@ Graph execution_seconds = 109 + 60 + 30 = **199**. The fork contributes 2 of the
 
 Time-to-first-token is averaged across the three completed-turn observations with a non-null ttft: parent 3,392 ms (`parent.jsonl:6`), fork turn 1 2,000 ms (`fork.jsonl:10`), fork turn 2 1,500 ms (`fork.jsonl:16`). The orphan terminal at `fork.jsonl:4` carries no `time_to_first_token_ms`, so it is excluded. Average = round((3392 + 2000 + 1500) / 3) = round(2297.33) = **2297**.
 
+## Session scope
+
+The `session.*` surfaces now select the entrypoint thread. For this case the
+entrypoint is the parent in `source/parent.jsonl:1`, so session metrics contain
+only its one completed turn: 109 rounded execution seconds, zero subagents and
+zero tools, 3,392 ms TTFT, 108.767 model-active seconds, and 1,110 processed
+tokens. Its uncached/cached/completion/reasoning buckets are 200/800/100/10,
+which produce 1,110 processed tokens and the pinned 0.0047 USD cost. The two
+inter-agent-triggered child turns remain graph evidence and are exposed by the
+explicit `graph.*` surfaces.
+
 ## Usage arithmetic
 
 Each `token_count` observation reports `last_token_usage` equal to `total_token_usage` (single observation per turn). Codex input includes cached input, so uncached input = `input_tokens - cached_input_tokens`, and the canonical processed total is `uncached + cached + completion + reasoning` (= `input + completion + reasoning` since cache_write is 0).

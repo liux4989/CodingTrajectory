@@ -2,10 +2,18 @@
 
 from coding_trajectory_cli.commands.api import register as register_api
 from coding_trajectory_cli.commands.doctor import register as register_doctor
+from coding_trajectory_cli.commands.graph import register as register_graph
 from coding_trajectory_cli.commands.plugin import dispatch_plugin_argv, register as register_plugin
 from coding_trajectory_cli.commands.project import register as register_project
 from coding_trajectory_cli.commands.session import register as register_session
 
-REGISTRARS = [register_project, register_session, register_api, register_doctor, register_plugin]
+REGISTRARS = [
+    register_project,
+    register_session,
+    register_graph,
+    register_api,
+    register_doctor,
+    register_plugin,
+]
 
 __all__ = ["REGISTRARS", "dispatch_plugin_argv"]
