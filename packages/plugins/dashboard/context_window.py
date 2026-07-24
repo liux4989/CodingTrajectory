@@ -903,8 +903,14 @@ def _effort_changed_turns(
     usage: dict[str, Any],
 ) -> dict[str, tuple[str | None, str | None]]:
     """Map each ``effort_changed`` observation to the turn that first uses the
-    new effort — the first turn starting at or after the observation's
-    timestamp that actually re-processed tokens (``uncached_prompt > 0``).
+    new effort.
+
+    Prefer a usage turn whose runtime contains the observation timestamp. This
+    matters for Codex, where ``turn_context`` can be written a few
+    milliseconds after the turn's lifecycle start even though it belongs to
+    that same turn. If no active turn contains the observation, fall back to
+    the first later turn that actually re-processed tokens
+    (``uncached_prompt > 0``).
 
     Skipping zero-usage turns matters for Claude Code: ``/effort`` lands on its
     own no-model-call turn(s), and the effort-caused re-read surfaces on the
@@ -934,15 +940,18 @@ def _effort_changed_turns(
         return {}
     # Candidate turns: those with a real re-read (uncached_prompt > 0), sorted
     # by start. A turn without a re-read cannot be an effort-caused break.
-    candidates: list[tuple[datetime, str]] = []
+    candidates: list[tuple[datetime, datetime | None, str]] = []
     for turn in usage.get("turns") or []:
         if not isinstance(turn, dict):
             continue
         runtime = turn.get("runtime") or {}
         start = _parse_iso_timestamp(runtime.get("start") or runtime.get("started_at"))
+        end = _parse_iso_timestamp(runtime.get("end") or runtime.get("ended_at"))
         re_read = _usage_token(turn.get("usage"), "uncached_prompt") or 0
         if start is not None and re_read > 0 and (turn.get("id") or turn.get("turn_id")):
-            candidates.append((start, str(turn.get("id") or turn.get("turn_id"))))
+            candidates.append(
+                (start, end, str(turn.get("id") or turn.get("turn_id")))
+            )
     if not candidates:
         return {}
     candidates.sort()
@@ -951,9 +960,20 @@ def _effort_changed_turns(
         # An initial ``/effort`` before the session's first provider request
         # configures that request; it has no already-warm, in-session prefix
         # to invalidate and must not be reported as a cache break.
-        if not any(start < ts for start, _turn_id in candidates):
+        if not any(start < ts for start, _end, _turn_id in candidates):
             continue
-        for start, turn_id in candidates:
+        containing_turn = next(
+            (
+                turn_id
+                for start, end, turn_id in candidates
+                if start <= ts and (end is None or ts <= end)
+            ),
+            None,
+        )
+        if containing_turn is not None:
+            mapping.setdefault(containing_turn, (effort_from, effort_to))
+            continue
+        for start, _end, turn_id in candidates:
             if start >= ts:
                 mapping.setdefault(turn_id, (effort_from, effort_to))
                 break
