@@ -225,7 +225,7 @@ def _compaction_line(compaction: Any) -> str | None:
     """Render a ``- Compactions:`` summary line, or ``None`` when absent.
 
     Drops any sub-part the session graph could not observe: Codex compactions
-    (sliding window, no pre/post) render as a bare count; Claude Code
+    (full eviction, no pre/post in the event) render as a bare count; Claude Code
     compactions add the cumulative dropped total and the last event's
     pre→post delta and trigger.
     """
@@ -259,7 +259,7 @@ def _compaction_has_detail(compaction: Any) -> bool:
     `session stats` already appends the compaction count to the Execution line,
     so the standalone ``- Compactions:`` line is only worth emitting when it adds
     dropped-token totals or a last-event delta (Claude Code). Codex
-    sliding-window compactions carry neither, so a count-only line would just
+    compactions carry neither in the event, so a count-only line would just
     duplicate the Execution line.
     """
     if not isinstance(compaction, dict):

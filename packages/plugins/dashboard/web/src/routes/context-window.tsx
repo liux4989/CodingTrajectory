@@ -917,17 +917,17 @@ function CompactionTimeline({ compaction }: { compaction: CompactionSummary }) {
           const post = event.post_tokens;
           const dropped = event.dropped_tokens;
           const hasDelta = pre != null && post != null;
-          const isSlidingWindow = event.mechanism === "context_compacted";
+          const isCodexCompaction = event.mechanism === "context_compacted";
           const timestampLabel = formatCompactionTimestamp(event.timestamp);
-          // ``context_compacted`` (Codex) is a sliding window that exposes no
+          // ``context_compacted`` (Codex) exposes no pre/post/dropped in the
           // pre/post/dropped, so render the mechanism label instead of a bare
           // ``-`` (which would read as missing data rather than "not exposed").
           const deltaLabel = hasDelta
             ? `${formatTokens(pre)} → ${formatTokens(post)}`
             : dropped != null
               ? `${formatTokens(dropped)} dropped`
-              : isSlidingWindow
-                ? "sliding window"
+              : isCodexCompaction
+                ? "context compacted"
                 : "-";
           return (
             <li

@@ -210,7 +210,7 @@ def _anchor_composition_to_used_input(
     estimate (real ``reported_tokens`` for Claude Code's cached prefix, a
     tokenizer estimate for Codex's observed system text) and partitions the
     remaining real conversation total across the user-input and agent-work
-    categories by their visible-token proportions — so the composition
+    categories by their visible-token proportions - so the composition
     reconciles to the context window by construction. Falls back to the visible
     estimates when there is no usage observation.
 
@@ -219,7 +219,7 @@ def _anchor_composition_to_used_input(
     the API stripped, so ``used_input`` is below the visible sum) the prefix
     guard leaves the estimates rather than zeroing the conversation. For
     undercounts (missing content) the missing total is attributed proportionally
-    — a best-effort split, not a true per-item attribution.
+    - a best-effort split, not a true per-item attribution.
     """
     latest = _latest_context_usage_observation(session_graph)
     if latest is None or not latest.used_input_tokens:
@@ -267,14 +267,15 @@ def _latest_context_usage_observation(
     return max(observations, key=lambda item: item.timestamp, default=None)
 
 
-# Claude Code compaction is a full eviction: nearly all pre-boundary content is
-# dropped (only a few preserved messages survive), so the boundary timestamp is
-# a sound signal to exclude pre-boundary items from the (final-window)
-# composition. Codex's ``context_compacted`` is a *sliding window* — only the
-# oldest few messages are evicted — so it is intentionally not treated as a
-# full-eviction boundary: timestamp-based exclusion would over-exclude the
-# surviving recent messages.
-_COMPACTION_EVICTING_KINDS = frozenset({"claude_compact_boundary"})
+# Both Claude Code and Codex compactions are full-history evictions. Claude
+# Code's ``claude_compact_boundary`` drops nearly all pre-boundary content
+# (only a few preserved messages survive). Codex's ``context_compacted``
+# replaces the entire conversation with a compact summary plus a small subset
+# of retained user messages; all tool calls, tool outputs, reasoning, and
+# assistant messages are evicted. In both cases the boundary timestamp is a
+# sound signal to exclude pre-boundary items from the (final-window)
+# composition.
+_COMPACTION_EVICTING_KINDS = frozenset({"claude_compact_boundary", "context_compacted"})
 
 
 def _eviction_boundary(session: Session) -> datetime | None:
@@ -555,7 +556,7 @@ def _add_tool_item(
     allocated_usage = allocated_usage_by_item.get(item.item_id)
     # Tool-use input args (the command, file path, search query, etc.) are part
     # of the resident tool_use block in every API request, so they are sized
-    # alongside the output for every concept — not just edits/coordination.
+    # alongside the output for every concept - not just edits/coordination.
     # Previously non-edit tools counted output only, undercounting Bash commands
     # and other input-heavy tool calls by their full argument size.
     tokens = input_size.tokens + output_size.tokens

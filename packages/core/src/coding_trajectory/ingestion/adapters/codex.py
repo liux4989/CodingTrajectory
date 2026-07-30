@@ -618,6 +618,9 @@ class CodexAdapter(BaseAdapter):
             elif outer_type == "response_item":
                 self._handle_response_item(payload, ts, state, transcript)
 
+            elif outer_type == "compacted":
+                self._handle_compacted(payload, ts, state, transcript)
+
         return transcript
 
     def _handle_response_item(
@@ -923,6 +926,49 @@ class CodexAdapter(BaseAdapter):
                         },
                     )
                 )
+
+    def _handle_compacted(
+        self,
+        payload: dict,
+        ts: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Project a Codex ``compacted`` rollout record.
+
+        Codex writes this record via ``replace_compacted_history`` after every
+        compaction (local, remote v1/v2, and token-budget). It carries the
+        replacement history, window chain metadata, and (for local compaction)
+        the summary text. The ``context_compacted`` event_msg already produces
+        the runtime observation that drives compaction counting and the
+        eviction boundary; this handler ensures the record is not silently
+        ignored and records the window metadata for future use.
+
+        The ``replacement_history`` items are intentionally NOT re-projected
+        here: they overlap with pre-compaction ``response_item`` records already
+        in the transcript, and the eviction boundary (driven by
+        ``context_compacted``) correctly marks those originals as evicted.
+        Re-projecting would double-count the surviving subset.
+        """
+        message = _as_non_empty_str(payload.get("message"))
+        window_number = payload.get("window_number")
+        window_id = _as_non_empty_str(payload.get("window_id"))
+        transcript.append(
+            TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=ts,
+                vendor=Vendor.CODEX_CLI,
+                role="runtime",
+                kind="runtime",
+                data={
+                    "raw_type": "compacted",
+                    "compaction_message": message,
+                    "window_number": window_number,
+                    "window_id": window_id,
+                },
+                fidelity="synthetic",
+            )
+        )
 
     def _handle_event_msg(
         self,

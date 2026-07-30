@@ -334,8 +334,8 @@ class CompactionEventFlat(BaseModel):
     # Provider-native compaction mechanism, derived from the observation
     # kind. ``eviction_boundary`` (Claude Code's ``claude_compact_boundary``)
     # is a discrete eviction that carries pre/post/dropped/trigger metadata;
-    # ``context_compacted`` (Codex) is a sliding window that carries none of
-    # those natively, so pre/post/dropped are derived from the bracketing
+    # ``context_compacted`` (Codex) carries none of those natively, so
+    # pre/post/dropped are derived from the bracketing
     # context_usage observations (per-call input token count).
     mechanism: str
     trigger: str | None = None
@@ -354,7 +354,7 @@ class CompactionStatsFlat(BaseModel):
     # Claude Code reports dropped tokens cumulatively across compactions in a
     # session, so the latest observation's value is the running total (not a
     # per-event delta to be summed). ``None`` when no observation carries it
-    # (e.g. Codex's sliding-window ``context_compacted``).
+    # (e.g. Codex's ``context_compacted``).
     cumulative_dropped_tokens: int | None = None
     last: CompactionEventFlat | None = None
     # Full per-event timeline (oldest first). Empty for sessions that never

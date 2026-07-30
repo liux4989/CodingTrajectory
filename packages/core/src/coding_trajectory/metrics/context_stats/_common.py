@@ -29,7 +29,7 @@ def root_session(session_graph: SessionGraph) -> Session:
 
 
 # Evicting-compaction observation kinds. Codex emits ``context_compacted`` (a
-# sliding window with no pre/post delta); Claude Code emits
+# full eviction with no pre/post delta in the event); Claude Code emits
 # ``claude_compact_boundary`` (a full eviction). Both count as a compaction for
 # stats — previously only Codex's kind was counted, so Claude Code sessions
 # reported 0 compactions despite showing a ``Compacted history`` composition row.
@@ -38,7 +38,7 @@ _COMPACTION_KINDS = frozenset({"context_compacted", "claude_compact_boundary"})
 # Map provider observation kinds to a compaction mechanism label. Same concept,
 # different mechanisms: Claude Code's ``claude_compact_boundary`` is a discrete
 # eviction (preserved messages + dropped totals); Codex's ``context_compacted``
-# is a sliding window with no eviction metadata. The label drives per-provider
+# carries no eviction metadata in the event. The label drives per-provider
 # rendering so a bare Codex compaction doesn't show as empty pre→post / dropped
 # cells. Mirrored in ``analysis/session_graph_views.py`` for overview activities.
 _COMPACTION_MECHANISMS = {
@@ -175,7 +175,7 @@ def compaction_stats(session_graph: SessionGraph) -> CompactionStatsFlat | None:
     count) instead of staying ``None``.
     """
     # Pair each compaction with its own session's context_usage observations so
-    # Codex sliding-window compactions can derive pre/post from the per-call
+    # Codex compactions can derive pre/post from the per-call
     # input token count before/after the eviction.
     entries: list[tuple[Any, list[Any]]] = []
     for session in session_graph.sessions:
@@ -235,7 +235,7 @@ def _event_from_observation(
         if pre is not None and post is not None
         else observation.cumulative_dropped_tokens
     )
-    # Codex sliding-window compactions carry no eviction metadata; derive
+    # Codex compactions carry no eviction metadata in the event; derive
     # pre/post from the bracketing context_usage observations (the per-call
     # input token count). The last call before compaction is the
     # pre-compaction context size; the first call after is the post size.

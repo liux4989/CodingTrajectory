@@ -34,8 +34,9 @@ from coding_trajectory.analysis.teammate_summary import (
 
 
 # Vendor-reported compaction observation kinds. Codex emits
-# ``context_compacted`` (sliding window, no pre/post delta); Claude Code emits
-# ``claude_compact_boundary`` (full eviction with pre/post/trigger metadata).
+# ``context_compacted`` (full eviction, no pre/post delta in the event); Claude
+# Code emits ``claude_compact_boundary`` (full eviction with pre/post/trigger
+# metadata).
 _COMPACTION_KINDS = frozenset({"context_compacted", "claude_compact_boundary"})
 
 # Map provider observation kinds to a compaction mechanism label, mirrored from
