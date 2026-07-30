@@ -502,6 +502,69 @@ class SessionUsageCompactFlat(BaseModel):
         return data
 
 
+class RequestUsageFlat(BaseModel):
+    usage_event_id: UUID | None = None
+    session_id: UUID
+    turn_id: UUID
+    sequence: int
+    timestamp: datetime
+    provider: str | None = None
+    model: str | None = None
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    context_used_tokens: int | None = None
+    context_window_tokens: int | None = None
+    context_growth_tokens: int | None = None
+    estimated_cost: CostEvidenceFlat | None = None
+    invokes_tool_item_ids: list[UUID] = Field(default_factory=list)
+    invokes_tool_call_ids: list[str] = Field(default_factory=list)
+    consumes_tool_item_ids: list[UUID] = Field(default_factory=list)
+    consumes_tool_call_ids: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("usage"):
+            data["usage"] = _usage_accounting_payload(data["usage"])
+        for key in (
+            "usage_event_id",
+            "provider",
+            "model",
+            "context_used_tokens",
+            "context_window_tokens",
+            "context_growth_tokens",
+            "estimated_cost",
+        ):
+            if data.get(key) is None:
+                data.pop(key, None)
+        for key in (
+            "invokes_tool_item_ids",
+            "invokes_tool_call_ids",
+            "consumes_tool_item_ids",
+            "consumes_tool_call_ids",
+        ):
+            if not data.get(key):
+                data.pop(key, None)
+        return data
+
+
+class SessionGraphRequestUsageFlat(BaseModel):
+    root_session_id: UUID
+    request_count: int = 0
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    estimated_cost: CostEvidenceFlat | None = None
+    requests: list[RequestUsageFlat] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("usage"):
+            data["usage"] = _usage_accounting_payload(data["usage"])
+        if data.get("estimated_cost") is None:
+            data.pop("estimated_cost", None)
+        return data
+
+
 class ModelUsageContextFlat(BaseModel):
     final_used_tokens: int | None = None
     max_used_tokens: int | None = None
@@ -686,7 +749,7 @@ class AllocatedRealTokenCost(BaseModel):
 
 
 class AttributionPolicy(BaseModel):
-    scope: Literal["tool_items", "all_items"] = "tool_items"
+    scope: Literal["tool_items", "turn_items", "all_items"] = "tool_items"
     cache: Literal["allocated_from_exact_usage"] = "allocated_from_exact_usage"
     usage_authority: Literal["session.usage"] = "session.usage"
     method: Literal["visible_content_plus_event_order"] = (
@@ -741,12 +804,15 @@ class ItemRealTokenCostFlat(BaseModel):
     kind: str
     visible_tokens: int = 0
     allocated_real_token_cost: AllocatedRealTokenCost | None = None
+    estimated_cost: CostEvidenceFlat | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
         if data.get("allocated_real_token_cost") is None:
             data.pop("allocated_real_token_cost", None)
+        if data.get("estimated_cost") is None:
+            data.pop("estimated_cost", None)
         return data
 
 

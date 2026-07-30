@@ -895,6 +895,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                             "type": item.get("type"),
                             "tool_call": item.get("tool_call"),
                             "llm": item.get("llm"),
+                            "usage": item.get("usage"),
                             "text": item.get("text"),
                             "payload": item.get("payload"),
                         }
@@ -910,6 +911,8 @@ def compact_payload(method: str, payload: Any) -> Any:
             drop_none(
                 {
                     "id": item.get("item_id"),
+                    "session": item.get("session_id"),
+                    "turn": item.get("turn_id"),
                     "kind": item.get("kind"),
                     "type": item.get("type"),
                     "operations": item.get("operations"),

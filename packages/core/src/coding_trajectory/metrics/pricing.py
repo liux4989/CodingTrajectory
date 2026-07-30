@@ -46,6 +46,10 @@ _MODELS_DEV_TIMEOUT_SECONDS = 5
 _MODELS_DEV_CACHE_VERSION = 1
 _LIVE_RULES_LOCK = threading.Lock()
 _LIVE_RULES_CACHE: tuple[datetime, dict[str, "PriceRule"]] | None = None
+_THRESHOLD_OVERRIDES = {
+    "gpt-5.4": 272_000,
+    "gpt-5.5": 272_000,
+}
 
 # Disable live models.dev fetches (offline ingestion / sandboxed runs). When
 # set, only the static curated context-window map and OpenAI standard price
@@ -186,6 +190,7 @@ def cost_evidence_from_usage(
     *,
     model: str | None,
     provider: str | None,
+    pricing_input_tokens: int | None = None,
 ) -> CostEvidenceFlat | None:
     """USD cost over a usage bucket, sourced from the pricing SoT.
 
@@ -217,7 +222,12 @@ def cost_evidence_from_usage(
         )
     ):
         return None
-    estimate = estimate_cost(usage, model=model, provider=provider)
+    estimate = estimate_cost(
+        usage,
+        model=model,
+        provider=provider,
+        pricing_input_tokens=pricing_input_tokens,
+    )
     if estimate is None:
         return None
     return CostEvidenceFlat(
@@ -236,8 +246,20 @@ class PriceRule:
     cached_input_per_mtok: float | None = None
     cache_creation_input_per_mtok: float | None = None
     reasoning_output_per_mtok: float | None = None
+    threshold_tokens: int | None = None
+    input_per_mtok_above_threshold: float | None = None
+    output_per_mtok_above_threshold: float | None = None
+    cached_input_per_mtok_above_threshold: float | None = None
+    cache_creation_input_per_mtok_above_threshold: float | None = None
     pricing_source: str = MODELS_DEV_SOURCE
     pricing_effective_date: str = ""
+
+
+class ModelsDevContextOver200KCost(BaseModel):
+    input: float | None = None
+    output: float | None = None
+    cache_read: float | None = None
+    cache_write: float | None = None
 
 
 class ModelsDevCost(BaseModel):
@@ -245,6 +267,7 @@ class ModelsDevCost(BaseModel):
     output: float | None = None
     cache_read: float | None = None
     cache_write: float | None = None
+    context_over_200k: ModelsDevContextOver200KCost | None = None
 
 
 class ModelsDevLimit(BaseModel):
@@ -295,6 +318,7 @@ def estimate_cost(
     model: str | None,
     provider: str | None = None,
     now: datetime | None = None,
+    pricing_input_tokens: int | None = None,
 ) -> CostEstimate | None:
     normalized_model = _normalize_model_name(model)
     if normalized_model is None:
@@ -310,7 +334,10 @@ def estimate_cost(
     if rule is None:
         return None
     breakdown = _estimate_usage(
-        TokenUsage.model_validate(usage or {}), rule, provider=provider
+        TokenUsage.model_validate(usage or {}),
+        rule,
+        provider=provider,
+        pricing_input_tokens=pricing_input_tokens,
     )
     amount = sum(breakdown.model_dump().values())
     return CostEstimate(
@@ -401,7 +428,36 @@ def _estimate_usage(
     rule: PriceRule,
     *,
     provider: str | None,
+    pricing_input_tokens: int | None = None,
 ) -> CostBreakdown:
+    tier_input_tokens = (
+        usage.input_tokens
+        if pricing_input_tokens is None
+        else max(pricing_input_tokens, 0)
+    )
+    above_threshold = (
+        rule.threshold_tokens is not None and tier_input_tokens > rule.threshold_tokens
+    )
+    input_rate = _threshold_rate(
+        above_threshold,
+        rule.input_per_mtok,
+        rule.input_per_mtok_above_threshold,
+    )
+    cached_rate = _threshold_rate(
+        above_threshold,
+        rule.cached_input_per_mtok,
+        rule.cached_input_per_mtok_above_threshold,
+    )
+    cache_creation_rate = _threshold_rate(
+        above_threshold,
+        rule.cache_creation_input_per_mtok,
+        rule.cache_creation_input_per_mtok_above_threshold,
+    )
+    output_rate = _threshold_rate(
+        above_threshold,
+        rule.output_per_mtok,
+        rule.output_per_mtok_above_threshold,
+    )
     standard_input_tokens = usage.input_tokens
     if not _uses_net_input_convention(provider, rule.model):
         standard_input_tokens = max(
@@ -411,21 +467,29 @@ def _estimate_usage(
             0,
         )
     return CostBreakdown(
-        input_usd=_price(standard_input_tokens, rule.input_per_mtok),
+        input_usd=_price(standard_input_tokens, input_rate),
         cached_input_usd=_price(
             usage.cached_input_tokens,
-            rule.cached_input_per_mtok,
+            cached_rate,
         ),
         cache_creation_input_usd=_price(
             usage.cache_creation_input_tokens,
-            rule.cache_creation_input_per_mtok,
+            cache_creation_rate,
         ),
-        output_usd=_price(usage.output_tokens, rule.output_per_mtok),
+        output_usd=_price(usage.output_tokens, output_rate),
         reasoning_output_usd=_price(
             usage.reasoning_output_tokens,
             rule.reasoning_output_per_mtok,
         ),
     )
+
+
+def _threshold_rate(
+    above_threshold: bool,
+    default: float | None,
+    threshold: float | None,
+) -> float | None:
+    return threshold if above_threshold and threshold is not None else default
 
 
 def _uses_net_input_convention(provider: str | None, model: str | None) -> bool:
@@ -623,12 +687,28 @@ def _model_to_price_rule(
     normalized_model = _normalize_model_name(model_id)
     if normalized_model is None:
         return None
+    threshold_cost = model.cost.context_over_200k
+    threshold_tokens = 200_000 if threshold_cost else None
+    threshold_tokens = _THRESHOLD_OVERRIDES.get(normalized_model, threshold_tokens)
     return PriceRule(
         model=normalized_model,
         input_per_mtok=model.cost.input,
         output_per_mtok=model.cost.output,
         cached_input_per_mtok=model.cost.cache_read,
         cache_creation_input_per_mtok=model.cost.cache_write,
+        threshold_tokens=threshold_tokens,
+        input_per_mtok_above_threshold=(
+            threshold_cost.input if threshold_cost else None
+        ),
+        output_per_mtok_above_threshold=(
+            threshold_cost.output if threshold_cost else None
+        ),
+        cached_input_per_mtok_above_threshold=(
+            threshold_cost.cache_read if threshold_cost else None
+        ),
+        cache_creation_input_per_mtok_above_threshold=(
+            threshold_cost.cache_write if threshold_cost else None
+        ),
         pricing_effective_date=pricing_date,
     )
 

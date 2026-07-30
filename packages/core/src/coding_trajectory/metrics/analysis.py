@@ -45,7 +45,9 @@ from coding_trajectory.metrics.models import (
     ModelUsageModelFlat,
     ModelUsageTurnFlat,
     ReadAfterResult,
+    RequestUsageFlat,
     SessionGraphModelUsageFlat,
+    SessionGraphRequestUsageFlat,
     SessionMetricsFlat,
     SessionUsageCompactFlat,
     ToolItemFlat,
@@ -168,6 +170,7 @@ def build_session_graph_usage(
     session_metrics_by_id = {session.session_id: session for session in full.sessions}
     turns: list[TurnUsageCompactFlat] = []
     session_sections: list[dict[str, Any]] = []
+    selected_graph_turns: list[TurnMetrics] = []
 
     for source_session in ordered_sessions(index):
         session = session_metrics_by_id.get(source_session.session_id)
@@ -177,6 +180,7 @@ def build_session_graph_usage(
         for turn_index, turn in enumerate(session.turns):
             if turn_id is not None and str(turn.turn_id) != turn_id:
                 continue
+            selected_graph_turns.append(turn)
             previous_turn = session.turns[turn_index - 1] if turn_index > 0 else None
             compact_turn = _compact_turn_usage(
                 turn,
@@ -191,9 +195,14 @@ def build_session_graph_usage(
         if turn_id is not None and not session_turns:
             continue
 
-        session_usage = session.token_usage
+        selected_session_turns = [
+            turn
+            for turn in session.turns
+            if turn_id is None or str(turn.turn_id) == turn_id
+        ]
+        session_usage = _sum_turn_usage(selected_session_turns)
         single = _single_session_graph(session_graph, source_session)
-        model_breakdown = _model_usage_breakdown(session.turns)
+        model_breakdown = _model_usage_breakdown(selected_session_turns)
         estimated_cost = _aggregate_model_cost(model_breakdown)
         section = {
             "session_id": str(session.session_id),
@@ -226,24 +235,25 @@ def build_session_graph_usage(
         }
         session_sections.append(section)
 
-    graph_model_breakdown = _model_usage_breakdown(
-        turn for session in full.sessions for turn in session.turns
-    )
+    selected_usage = _sum_turn_usage(selected_graph_turns)
+    graph_model_breakdown = _model_usage_breakdown(selected_graph_turns)
     payload = SessionUsageCompactFlat(
         session_id=full.root_session_id,
         runtime=runtime_stats(
             session_graph,
-            processed_tokens=full.token_usage.processed_token_total(),
+            processed_tokens=selected_usage.processed_token_total(),
             model_active_seconds=full.model_active_seconds,
         ),
         turns=turns,
-        total_usage=full.token_usage,
+        total_usage=selected_usage,
         estimated_cost=_aggregate_model_cost(graph_model_breakdown),
         compaction=compaction_stats(session_graph),
         effort_changes=effort_change_stats(session_graph),
         warnings=full.warnings,
     ).model_dump(mode="json")
     payload["scope"] = "session_graph" if multi_session else "session"
+    if turn_id is not None:
+        payload["selected_turn_id"] = turn_id
     if multi_session:
         payload["graph_total_usage"] = payload.get("total_usage")
         payload["graph_runtime"] = payload.get("runtime")
@@ -258,7 +268,11 @@ def build_session_graph_usage(
     return payload
 
 
-def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, Any]:
+def build_session_graph_model_usage(
+    session_graph: SessionGraph,
+    *,
+    turn_id: str | None = None,
+) -> dict[str, Any]:
     """Return provider/model usage facts at session and turn granularity."""
     full = _build_full_metrics(session_graph)
     sessions_by_id = {session.session_id: session for session in session_graph.sessions}
@@ -268,6 +282,8 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
     for session_metrics in full.sessions:
         source_session = sessions_by_id.get(session_metrics.session_id)
         for turn in session_metrics.turns:
+            if turn_id is not None and str(turn.turn_id) != turn_id:
+                continue
             groups = _model_groups_for_turn(turn)
             primary = _dominant_group(groups)
             turns.append(
@@ -296,18 +312,23 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
                     context=_context_for_turn(source_session, turn.turn_id)
                     if source_session
                     else None,
-                    estimated_cost=cost_evidence_from_usage(
-                        turn.token_usage.model_dump(mode="json"),
-                        model=primary.model if primary else None,
-                        provider=primary.provider if primary else None,
-                    ),
+                    estimated_cost=_aggregate_model_cost(groups),
                 )
             )
 
     models = _model_usage_breakdown(
-        turn for session in full.sessions for turn in session.turns
+        turn
+        for session in full.sessions
+        for turn in session.turns
+        if turn_id is None or str(turn.turn_id) == turn_id
     )
     dominant = _dominant_group(models)
+    selected_usage = _sum_turn_usage(
+        turn
+        for session in full.sessions
+        for turn in session.turns
+        if turn_id is None or str(turn.turn_id) == turn_id
+    )
 
     return SessionGraphModelUsageFlat(
         root_session_id=session_graph.root_session_id,
@@ -326,7 +347,7 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
             ),
             default=None,
         ),
-        usage=full.token_usage,
+        usage=selected_usage,
         model_active_seconds=full.model_active_seconds,
         processed_tokens_per_second=full.processed_tokens_per_second,
         context=_context_for_session_graph(session_graph),
@@ -339,6 +360,118 @@ def build_session_graph_model_usage(session_graph: SessionGraph) -> dict[str, An
         if dominant
         else None,
         turns=turns,
+        warnings=full.warnings,
+    ).model_dump(mode="json")
+
+
+def build_session_graph_request_usage(
+    session_graph: SessionGraph,
+    *,
+    turn_id: str | None = None,
+) -> dict[str, Any]:
+    """Return the exact provider-request usage ledger and causal tool links."""
+    full = _build_full_metrics(session_graph)
+    requests: list[RequestUsageFlat] = []
+
+    for session in session_graph.sessions:
+        context_by_event_id = {
+            item.source_event_id: item
+            for item in session.context_usage
+            if item.source_event_id is not None
+        }
+        for turn in sorted(session.turns, key=lambda item: item.sequence):
+            if turn_id is not None and str(turn.turn_id) != turn_id:
+                continue
+            observations = _turn_usage_observations(session, turn)
+            tool_items = sorted(
+                (item for item in turn.items if is_tool_shaped_item(item)),
+                key=lambda item: (item.started_at, item.sequence),
+            )
+            previous_timestamp = turn.started_at
+            previous_context_used: int | None = None
+            for sequence, observation in enumerate(observations, start=1):
+                context_observation = context_by_event_id.get(
+                    observation.source.event_id
+                )
+                context_used = (
+                    context_observation.used_input_tokens
+                    if context_observation is not None
+                    else None
+                )
+                context_window = (
+                    context_observation.context_window_tokens
+                    if context_observation is not None
+                    else None
+                ) or get_model_context_window(
+                    observation.model,
+                    provider=observation.provider,
+                )
+                invoked = [
+                    item
+                    for item in tool_items
+                    if previous_timestamp < item.started_at <= observation.timestamp
+                ]
+                consumed = [
+                    item
+                    for item in tool_items
+                    if item.completed_at is not None
+                    and previous_timestamp
+                    < item.completed_at
+                    <= observation.timestamp
+                ]
+                requests.append(
+                    RequestUsageFlat(
+                        usage_event_id=observation.source.event_id,
+                        session_id=session.session_id,
+                        turn_id=turn.turn_id,
+                        sequence=sequence,
+                        timestamp=observation.timestamp,
+                        provider=observation.provider,
+                        model=observation.model,
+                        usage=observation.usage,
+                        context_used_tokens=context_used,
+                        context_window_tokens=context_window,
+                        context_growth_tokens=(
+                            context_used - previous_context_used
+                            if context_used is not None
+                            and previous_context_used is not None
+                            else None
+                        ),
+                        estimated_cost=cost_evidence_from_usage(
+                            observation.usage.model_dump(mode="json"),
+                            model=observation.model,
+                            provider=observation.provider,
+                        ),
+                        invokes_tool_item_ids=[item.item_id for item in invoked],
+                        invokes_tool_call_ids=[
+                            item.tool_call_id
+                            for item in invoked
+                            if getattr(item, "tool_call_id", None)
+                        ],
+                        consumes_tool_item_ids=[item.item_id for item in consumed],
+                        consumes_tool_call_ids=[
+                            item.tool_call_id
+                            for item in consumed
+                            if getattr(item, "tool_call_id", None)
+                        ],
+                    )
+                )
+                previous_timestamp = observation.timestamp
+                if context_used is not None:
+                    previous_context_used = context_used
+
+    usage = TokenUsage()
+    for request in requests:
+        usage = usage.plus(request.usage)
+    return SessionGraphRequestUsageFlat(
+        root_session_id=full.root_session_id,
+        request_count=len(requests),
+        usage=usage,
+        estimated_cost=_aggregate_cost_evidence(
+            [request.estimated_cost for request in requests],
+            source="request-attributed aggregate",
+        ),
+        requests=requests,
         warnings=full.warnings,
     ).model_dump(mode="json")
 
@@ -442,16 +575,6 @@ def _turn_pricing_context(turn: TurnMetrics) -> tuple[str | None, str | None]:
     return dominant.provider, dominant.model
 
 
-def _observations_pricing_context(
-    observations: list[TokenUsageObservation],
-) -> tuple[str | None, str | None]:
-    """Dominant ``(provider, model)`` across a turn's usage observations."""
-    if not observations:
-        return None, None
-    dominant = max(observations, key=lambda obs: obs.usage.total_tokens)
-    return dominant.provider, dominant.model
-
-
 def _single_session_graph(
     source_graph: SessionGraph,
     session: Session,
@@ -506,9 +629,13 @@ def _turn_runtime(
 
 def _model_groups_for_turn(turn: TurnMetrics) -> list[ModelUsageModelFlat]:
     grouped: dict[tuple[str | None, str | None], TokenUsage] = {}
+    observations_by_model: dict[
+        tuple[str | None, str | None], list[TokenUsageObservation]
+    ] = {}
     for observation in turn.observations:
         key = (observation.provider, observation.model)
         grouped[key] = grouped.get(key, TokenUsage()).plus(observation.usage)
+        observations_by_model.setdefault(key, []).append(observation)
     if not grouped and not _is_zero_usage(turn.token_usage):
         grouped[(None, None)] = turn.token_usage
     single_model = len(grouped) == 1
@@ -525,6 +652,17 @@ def _model_groups_for_turn(turn: TurnMetrics) -> list[ModelUsageModelFlat]:
                 )
                 if single_model
                 else None
+            ),
+            estimated_cost=(
+                _aggregate_observation_cost(
+                    observations_by_model[(provider, model)]
+                )
+                if observations_by_model.get((provider, model))
+                else cost_evidence_from_usage(
+                    usage.model_dump(mode="json"),
+                    model=model,
+                    provider=provider,
+                )
             ),
         )
         for (provider, model), usage in sorted(
@@ -543,12 +681,16 @@ def _model_usage_breakdown(
     model_turns: dict[tuple[str | None, str | None], set[UUID]] = {}
     active_seconds: dict[tuple[str | None, str | None], float] = {}
     active_seconds_complete: dict[tuple[str | None, str | None], bool] = {}
+    model_costs: dict[
+        tuple[str | None, str | None], list[CostEvidenceFlat | None]
+    ] = {}
     for turn in turn_list:
         groups = _model_groups_for_turn(turn)
         for group in groups:
             key = (group.provider, group.model)
             grouped[key] = grouped.get(key, TokenUsage()).plus(group.usage)
             model_turns.setdefault(key, set()).add(turn.turn_id)
+            model_costs.setdefault(key, []).append(group.estimated_cost)
             if group.model_active_seconds is None:
                 active_seconds_complete[key] = False
             elif active_seconds_complete.get(key, True):
@@ -575,10 +717,9 @@ def _model_usage_breakdown(
                     else None
                 ),
             ),
-            estimated_cost=cost_evidence_from_usage(
-                usage.model_dump(mode="json"),
-                model=model,
-                provider=provider,
+            estimated_cost=_aggregate_cost_evidence(
+                model_costs.get((provider, model), []),
+                source="request-attributed model aggregate",
             ),
         )
         for (provider, model), usage in sorted(
@@ -593,9 +734,37 @@ def _aggregate_model_cost(
     models: Iterable[ModelUsageModelFlat],
 ) -> CostEvidenceFlat | None:
     rows = list(models)
-    if not rows or any(row.estimated_cost is None for row in rows):
+    return _aggregate_cost_evidence(
+        [row.estimated_cost for row in rows],
+        source="request-attributed aggregate",
+    )
+
+
+def _aggregate_observation_cost(
+    observations: Iterable[TokenUsageObservation],
+) -> CostEvidenceFlat | None:
+    return _aggregate_cost_evidence(
+        [
+            cost_evidence_from_usage(
+                observation.usage.model_dump(mode="json"),
+                model=observation.model,
+                provider=observation.provider,
+            )
+            for observation in observations
+        ],
+        source="request-attributed aggregate",
+    )
+
+
+def _aggregate_cost_evidence(
+    costs: Iterable[CostEvidenceFlat | None],
+    *,
+    source: str,
+) -> CostEvidenceFlat | None:
+    rows = list(costs)
+    if not rows or any(item is None for item in rows):
         return None
-    estimates = [row.estimated_cost for row in rows if row.estimated_cost is not None]
+    estimates = [item for item in rows if item is not None]
     effective_dates = {item.effective_date for item in estimates}
     return CostEvidenceFlat(
         value_usd=round(sum(item.value_usd for item in estimates), 8),
@@ -604,9 +773,16 @@ def _aggregate_model_cost(
             if all(item.confidence == "reported" for item in estimates)
             else "estimated"
         ),
-        source="model-attributed aggregate",
+        source=source,
         effective_date=(effective_dates.pop() if len(effective_dates) == 1 else None),
     )
+
+
+def _sum_turn_usage(turns: Iterable[TurnMetrics]) -> TokenUsage:
+    usage = TokenUsage()
+    for turn in turns:
+        usage = usage.plus(turn.token_usage)
+    return usage
 
 
 def _dominant_group(
@@ -699,33 +875,46 @@ def _turn_execution_seconds(turn: TurnMetrics) -> int | None:
 @session_scoped
 def build_session_graph_tool_usage(
     session_graph: SessionGraph,
+    *,
+    turn_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return tool usage plus cache-aware cost attribution over chronological items."""
+    """Return tool usage plus turn-stable cache-aware item attribution."""
     full = _build_full_metrics(session_graph)
 
     tool_items: list[ToolItemFlat] = []
     item_real_token_costs: list[ItemRealTokenCostFlat] = []
     for session in session_graph.sessions:
-        session_item_real_token_costs = _build_item_real_token_costs_for_session(
-            session
-        )
+        selected_turns = [
+            turn
+            for turn in session.turns
+            if turn_id is None or str(turn.turn_id) == turn_id
+        ]
+        selected_turn_ids = {turn.turn_id for turn in selected_turns}
+        session_item_real_token_costs = [
+            item
+            for item in _build_item_real_token_costs_for_session(session)
+            if item.turn_id in selected_turn_ids
+        ]
         item_real_token_costs.extend(session_item_real_token_costs)
         session_costs_by_item_id = {
             item.item_id: item.allocated_real_token_cost
             for item in session_item_real_token_costs
             if item.allocated_real_token_cost is not None
         }
-        for turn in session.turns:
+        session_estimated_costs_by_item_id = {
+            item.item_id: item.estimated_cost
+            for item in session_item_real_token_costs
+            if item.estimated_cost is not None
+        }
+        for turn in selected_turns:
             turn_observations = _turn_usage_observations(session, turn)
-            provider, model = _observations_pricing_context(turn_observations)
             tool_items.extend(
                 _build_tool_items_for_turn(
                     turn,
                     session_id=session.session_id,
                     turn_observations=turn_observations,
                     allocated_real_token_cost_by_item=session_costs_by_item_id,
-                    pricing_provider=provider,
-                    pricing_model=model,
+                    estimated_cost_by_item=session_estimated_costs_by_item_id,
                 )
             )
 
@@ -740,7 +929,7 @@ def build_session_graph_tool_usage(
         allocated_real_token_cost=_sum_item_real_token_costs(item_real_token_costs),
         item_real_token_costs=item_real_token_costs,
         tool_items=tool_items,
-        attribution_policy=AttributionPolicy(scope="all_items"),
+        attribution_policy=AttributionPolicy(scope="turn_items"),
         warnings=full.warnings,
     ).model_dump(mode="json")
 
@@ -946,9 +1135,13 @@ def _build_item_real_token_costs_for_session(
         return []
 
     allocated_costs: dict[UUID, AllocatedRealTokenCost] = {}
+    estimated_costs: dict[UUID, list[CostEvidenceFlat | None]] = {}
     for observation, turn_id in _session_usage_observations(session):
         present_entries = [
-            entry for entry in entries if entry.started_at <= observation.timestamp
+            entry
+            for entry in entries
+            if entry.turn_id == turn_id
+            and entry.started_at <= observation.timestamp
         ]
         if not present_entries:
             continue
@@ -957,14 +1150,23 @@ def _build_item_real_token_costs_for_session(
             for entry in present_entries
             if entry.output_eligible and (turn_id is None or entry.turn_id == turn_id)
         ]
-        for item_id, cost in _allocate_real_token_costs_for_entries(
+        observation_allocations = _allocate_real_token_costs_for_entries(
             present_entries,
             observation,
             output_entries=response_entries,
-        ).items():
+        )
+        for item_id, cost in observation_allocations.items():
             allocated_costs[item_id] = _add_allocated_real_token_cost(
                 allocated_costs.get(item_id),
                 cost,
+            )
+            estimated_costs.setdefault(item_id, []).append(
+                cost_evidence_from_usage(
+                    _allocated_cost_usage_dict(cost),
+                    model=observation.model,
+                    provider=observation.provider,
+                    pricing_input_tokens=observation.usage.input_tokens,
+                )
             )
 
     items = [
@@ -976,6 +1178,10 @@ def _build_item_real_token_costs_for_session(
             kind=entry.kind,
             visible_tokens=entry.visible_tokens,
             allocated_real_token_cost=allocated_costs.get(entry.item_id),
+            estimated_cost=_aggregate_cost_evidence(
+                estimated_costs.get(entry.item_id, []),
+                source="request-tier allocated aggregate",
+            ),
         )
         for entry in entries
     ]
@@ -1000,8 +1206,11 @@ def _sum_allocated_usage_for_present_observations(
     entries: list[_ItemCostEntry],
 ) -> dict[str, int]:
     total: dict[str, int] = {}
-    for observation, _turn_id in _session_usage_observations(session):
-        if not any(entry.started_at <= observation.timestamp for entry in entries):
+    for observation, turn_id in _session_usage_observations(session):
+        if not any(
+            entry.turn_id == turn_id and entry.started_at <= observation.timestamp
+            for entry in entries
+        ):
             continue
         total = _sum_usage_dicts(
             (
@@ -1179,8 +1388,7 @@ def _build_tool_items_for_turn(
     session_id: UUID,
     turn_observations: list[TokenUsageObservation],
     allocated_real_token_cost_by_item: dict[UUID, AllocatedRealTokenCost] | None = None,
-    pricing_provider: str | None = None,
-    pricing_model: str | None = None,
+    estimated_cost_by_item: dict[UUID, CostEvidenceFlat] | None = None,
 ) -> list[ToolItemFlat]:
     tool_entries = [item for item in turn.items if is_tool_shaped_item(item)]
     if not tool_entries:
@@ -1225,11 +1433,7 @@ def _build_tool_items_for_turn(
             base.allocated_real_token_cost = (
                 allocated_real_token_cost_by_item or {}
             ).get(item.item_id)
-            base.estimated_cost = cost_evidence_from_usage(
-                _allocated_cost_usage_dict(base.allocated_real_token_cost),
-                model=pricing_model,
-                provider=pricing_provider,
-            )
+            base.estimated_cost = (estimated_cost_by_item or {}).get(item.item_id)
             base.invoke_response_tokens = _build_invoke_response_tokens(
                 invoke_obs, count=count
             )

@@ -218,14 +218,15 @@ explicit collection of independent calls; shell pipelines and tools such as
 | `project.logfile` | List session graphs from an explicit log file |
 | `session.overview` | Narrative overview: hierarchy, activity keys, turn summaries |
 | `session.stats` | Provider usage plus common observed composition buckets and runtime statistics for one thread |
-| `session.usage` | Token usage and log-reported cost breakdown by turn for one thread |
+| `session.usage` | Token usage and request-summed cost breakdown by turn for one thread |
+| `session.request_usage` | Per-provider-request usage, pricing, context growth, and causal tool links |
 | `graph.overview` | Orchestration graph identity, capabilities, connected sessions, and structural edges |
 | `graph.stats` | Aggregate provider usage, composition, and runtime statistics |
 | `graph.usage` | Aggregate token usage and log-reported cost breakdown |
-| `session.tool_usage` | Tool invocation statistics and estimated visible-content token attribution |
+| `session.tool_usage` | Turn-scoped tool statistics and stable item token-cost allocation |
 | `session.turn_usage` | Per-turn usage detail |
-| `session.items` | Enriched detail for one or more items |
-| `session.events` | Event query: full JSON content by event IDs or filtered search by type with payload predicates |
+| `session.items` | Turn-filterable item detail with optional full-content expansion |
+| `session.events` | Turn-filterable event query, request-usage selection, and full tool-result dereferencing |
 
 ### Store Resolution
 

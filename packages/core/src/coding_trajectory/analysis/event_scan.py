@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from coding_trajectory.analysis.projection_utils import (
     match_filter,
@@ -17,16 +18,28 @@ def build_event_scan(
     *,
     event_type: str,
     filters: list[str] | None = None,
+    event_ids: set[UUID] | None = None,
 ) -> dict[str, Any]:
     valid_types = {event.value for event in EventType}
-    if event_type not in valid_types:
+    usage_alias = event_type == "usage"
+    if event_type not in valid_types and not usage_alias:
         valid = ", ".join(sorted(valid_types))
-        raise ValueError(f"unknown event type {event_type!r}. Valid types: {valid}")
+        raise ValueError(
+            f"unknown event type {event_type!r}. Valid types: usage, {valid}"
+        )
 
     matches: list[dict[str, Any]] = []
     for session in session_graph.sessions:
         for event in session.events:
-            if event.type.value != event_type:
+            if event_ids is not None and event.event_id not in event_ids:
+                continue
+            if usage_alias:
+                if (
+                    event.type != EventType.VENDOR_RAW
+                    or event.payload.get("transcript_kind") != "usage"
+                ):
+                    continue
+            elif event.type.value != event_type:
                 continue
             payload = event.payload
             if filters and not all(match_filter(payload, expr) for expr in filters):

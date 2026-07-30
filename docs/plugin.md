@@ -183,13 +183,14 @@ The default report is compact text. JSON preserves token evidence as an object
 with `value`, `confidence`, and `source`, so dashboards and agents do not need
 to infer whether a number is exact or estimated.
 
-The dashboard plugin also owns optional models.dev enrichment. It uses the
-catalog for model context limits and estimated token prices in this projection.
-Core metrics remain limited to values present in normalized session logs.
+Core owns optional models.dev enrichment and emits request-summed price
+evidence next to normalized usage. The dashboard consumes that evidence rather
+than repricing aggregate turn or session buckets.
 
 Plugin consumers may call `session.tool_usage` for estimated visible-content
-tool input/output attribution and event-order diagnostics. Those item estimates
-are cache-agnostic and must not replace observed session or turn usage totals.
+tool input/output attribution and event-order diagnostics. Allocated real-token
+cost is bounded to the containing turn and must not replace observed session or
+turn usage totals.
 
 Provider behavior remains explicit:
 

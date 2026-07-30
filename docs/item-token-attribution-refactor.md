@@ -40,7 +40,8 @@ The current safe boundary is:
 
 ### `session.turn_usage`
 
-Purpose: inspect real usage for one turn.
+Purpose: inspect real usage for one turn. Its top-level `token_usage` is scoped
+to the requested turn rather than repeating the full-session total.
 
 Keep this surface unchanged. It should remain the highest-confidence answer for
 the token cost of a user turn. It includes cache-aware token buckets exactly as
@@ -56,8 +57,8 @@ reported or normalized:
 
 ### `session.usage`
 
-Purpose: compact session and turn-level token accounting, plus cost only when
-the source session log reports it.
+Purpose: compact session and turn-level token accounting. Estimated cost is
+obtained by pricing each provider request and then summing the request ledger.
 
 Keep this surface unchanged. It should not expose item attribution because that
 would mix measured provider usage with estimated visible-content attribution.
@@ -292,8 +293,8 @@ Use real sessions rather than synthetic-only fixtures.
 
 Expected behavior:
 
-1. `session.usage` and `session.turn_usage` remain token-focused and do not
-   estimate missing prices in core.
+1. `session.usage` and `session.turn_usage` remain token-focused; any estimated
+   cost is the sum of independently priced provider requests.
 2. `session.stats` remains cache-aware.
 3. `session.tool_usage` includes token attribution only when evidence exists.
 4. Multi-tool responses are marked shared rather than duplicated as exact item
@@ -301,4 +302,4 @@ Expected behavior:
 5. Tool output token estimates prefer observed wrapper counts over rough text
    estimates.
 6. Item attribution metadata clearly states that cache reuse is allocated as a
-   separate bucket, not merged into uncached input or USD billing.
+   separate bucket and that allocation is bounded to the containing turn.

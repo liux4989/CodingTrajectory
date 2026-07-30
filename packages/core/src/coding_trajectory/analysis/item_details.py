@@ -24,7 +24,12 @@ from coding_trajectory.ingestion.models import (
 )
 
 
-def build_item_details(item: Item, *, session_graph: SessionGraph) -> dict[str, Any]:
+def build_item_details(
+    item: Item,
+    *,
+    session_graph: SessionGraph,
+    include_content: bool = False,
+) -> dict[str, Any]:
     concept = _classify_item(item)
     index = build_session_graph_index(session_graph)
 
@@ -36,10 +41,10 @@ def build_item_details(item: Item, *, session_graph: SessionGraph) -> dict[str, 
         shape = _reasoning_shape(item)
     elif isinstance(item, FileChangeItem):
         operations = [item.operation or (item.tool_name or "edit")]
-        shape = _file_change_shape(item)
+        shape = _file_change_shape(item, include_content=include_content)
     elif isinstance(item, CommandExecutionItem):
         operations = ["execute"]
-        shape = _command_execution_shape(item)
+        shape = _command_execution_shape(item, include_content=include_content)
     elif isinstance(item, PlanItem):
         if concept == ItemKind.PLAN_SUBAGENT:
             operations = ["spawn", "collect_result"]
@@ -49,15 +54,17 @@ def build_item_details(item: Item, *, session_graph: SessionGraph) -> dict[str, 
             shape = _session_handoff_shape(item, index=index)
         else:
             operations = ["update"]
-            shape = _plan_shape(item)
+            shape = _plan_shape(item, include_content=include_content)
     else:
         tool_name = item.tool_name if isinstance(item, ToolCallItem) else None
         operations = [tool_name] if tool_name else None
-        shape = _tool_call_shape(item)
+        shape = _tool_call_shape(item, include_content=include_content)
 
     return prune_nones(
         {
             "item_id": str(item.item_id),
+            "session_id": str(item.session_id),
+            "turn_id": str(item.turn_id),
             "kind": item.kind,
             "type": concept,
             "operations": operations or None,
@@ -103,8 +110,12 @@ def _reasoning_shape(item: ReasoningItem) -> dict[str, Any]:
     return prune_nones({"text": item.text})
 
 
-def _tool_call_shape(item: Item) -> dict[str, Any]:
-    return truncate_with_ref(
+def _tool_call_shape(
+    item: Item,
+    *,
+    include_content: bool = False,
+) -> dict[str, Any]:
+    return _maybe_truncate(
         prune_nones(
             {
                 "tool_name": getattr(item, "tool_name", None),
@@ -112,12 +123,17 @@ def _tool_call_shape(item: Item) -> dict[str, Any]:
                 "tool_output": getattr(item, "output", None),
             }
         ),
-        item.event_ids,
+        item,
+        include_content=include_content,
     )
 
 
-def _file_change_shape(item: FileChangeItem) -> dict[str, Any]:
-    return truncate_with_ref(
+def _file_change_shape(
+    item: FileChangeItem,
+    *,
+    include_content: bool = False,
+) -> dict[str, Any]:
+    return _maybe_truncate(
         prune_nones(
             {
                 "tool_name": item.tool_name,
@@ -127,12 +143,17 @@ def _file_change_shape(item: FileChangeItem) -> dict[str, Any]:
                 "tool_output": item.output,
             }
         ),
-        item.event_ids,
+        item,
+        include_content=include_content,
     )
 
 
-def _command_execution_shape(item: CommandExecutionItem) -> dict[str, Any]:
-    return truncate_with_ref(
+def _command_execution_shape(
+    item: CommandExecutionItem,
+    *,
+    include_content: bool = False,
+) -> dict[str, Any]:
+    return _maybe_truncate(
         prune_nones(
             {
                 "tool_name": item.tool_name,
@@ -141,12 +162,32 @@ def _command_execution_shape(item: CommandExecutionItem) -> dict[str, Any]:
                 "output": item.output,
             }
         ),
-        item.event_ids,
+        item,
+        include_content=include_content,
     )
 
 
-def _plan_shape(item: PlanItem) -> dict[str, Any]:
-    return _tool_call_shape(item)
+def _plan_shape(
+    item: PlanItem,
+    *,
+    include_content: bool = False,
+) -> dict[str, Any]:
+    return _tool_call_shape(item, include_content=include_content)
+
+
+def _maybe_truncate(
+    value: dict[str, Any],
+    item: Item,
+    *,
+    include_content: bool,
+) -> dict[str, Any]:
+    if include_content:
+        return value
+    return truncate_with_ref(
+        value,
+        item.event_ids,
+        item_ref=f"{item.session_id} {item.item_id}",
+    )
 
 
 def _lookup_target_session(

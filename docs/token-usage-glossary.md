@@ -27,6 +27,14 @@ reasoning tokens separately from the provider total.
 Cost should be computed from component buckets or provider-reported cost, not
 from one total multiplied by one rate.
 
+## Request pricing
+
+`session.request_usage` is the pricing authority. Each provider request is
+priced from its own prompt/cache/output buckets, including any pricing tier
+selected by that request's prompt size. Turn, model, and session costs sum
+those request estimates; they never apply a high-context threshold to an
+already-aggregated turn.
+
 ## Common model throughput
 
 `processed_tokens_per_second` is the canonical processed-token total divided
@@ -53,8 +61,11 @@ execution time remains in that denominator.
 
 `session.tool_usage` exposes `item_real_token_costs` as a derived attribution
 layer. The raw item chronology remains unchanged; each observed provider usage
-record is allocated across the items visible at that observation, weighted by
-visible item tokens. The allocated rows reconcile in glossary buckets
+record is allocated across the items visible in the same turn at that
+observation, weighted by visible item tokens. The turn boundary makes prior
+attribution stable as later turns arrive. The allocated rows reconcile in glossary buckets
 (`prompt_tokens`, `cached_prompt_tokens`, `processed_tokens`, and related
 fields), not in internal model field names such as `input_tokens` or
-`total_tokens`.
+`total_tokens`. Item `estimated_cost` prices each allocated slice using the
+source request's pricing tier; summing all item rows in a turn therefore
+reconciles to the request-ledger cost for that turn.

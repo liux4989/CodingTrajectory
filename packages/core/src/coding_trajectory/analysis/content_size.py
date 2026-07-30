@@ -79,6 +79,7 @@ def reported_token_count(text: str) -> int | None:
 def output_is_truncated(text: str) -> bool:
     return (
         "chars → session.events" in text
+        or "chars → session.items" in text
         or "chars → event.detail" in text
         or "tokens truncated" in text
     )

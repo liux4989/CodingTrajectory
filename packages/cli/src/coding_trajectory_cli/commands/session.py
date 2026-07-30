@@ -28,6 +28,7 @@ EVENT TYPES
   tool.call.succeeded      A tool call that succeeded
   tool.call.failed         A tool call that failed
   llm.response             An LLM response
+  usage                    Provider request-usage observation
   vendor.raw               A vendor-specific raw event
 
 FILTER SYNTAX
@@ -832,7 +833,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_usage = session_sub.add_parser(
         "usage",
         prog="ct session usage",
-        help="Show turn-level token usage and log-reported cost.",
+        help="Show turn-level token usage and request-summed cost.",
         formatter_class=GhFormatter,
     )
     add_session_source(session_usage)
@@ -859,6 +860,28 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _renderer=_render_session_usage_text,
     )
 
+    session_request_usage = session_sub.add_parser(
+        "request-usage",
+        prog="ct session request-usage",
+        help="Show exact provider-request usage, cost, and tool causality.",
+        formatter_class=GhFormatter,
+    )
+    add_session_source(session_request_usage)
+    session_request_usage.add_argument(
+        "--turn",
+        dest="turn_id",
+        metavar="TURN_ID",
+        default=None,
+        help="Limit request usage to one turn.",
+    )
+    add_output_flags(session_request_usage)
+    add_params_flag(session_request_usage)
+    session_request_usage.set_defaults(
+        _method="session.request_usage",
+        _params=_session_usage_params,
+        _default_output="json",
+    )
+
     session_events = session_sub.add_parser(
         "events",
         prog="ct session events",
@@ -869,6 +892,13 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     add_session_source(session_events)
     add_output_flags(session_events)
     add_params_flag(session_events)
+    session_events.add_argument(
+        "--turn",
+        dest="turn_id",
+        metavar="TURN_ID",
+        default=None,
+        help="Limit the event query to one turn.",
+    )
     session_events.add_argument(
         "--type",
         dest="event_type",
@@ -889,6 +919,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _params=lambda args: {
             **params_from_json(args),
             **({"session_id": args.session_id} if args.session_id else {}),
+            **({"turn_id": args.turn_id} if args.turn_id else {}),
             **({"type": args.event_type} if args.event_type else {}),
             **({"filters": args.filters} if args.filters is not None else {}),
         },
@@ -903,6 +934,19 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     session_items.add_argument("session_id", metavar="SESSION_ID")
     session_items.add_argument("resource_ids", metavar="ITEM_ID", nargs="*")
+    session_items.add_argument(
+        "--turn",
+        dest="turn_id",
+        metavar="TURN_ID",
+        default=None,
+        help="Limit the item query to one turn.",
+    )
+    session_items.add_argument(
+        "--include-content",
+        action="store_true",
+        default=False,
+        help="Return full item content instead of truncation references.",
+    )
     add_output_flags(session_items)
     add_params_flag(session_items)
     session_items.set_defaults(
@@ -911,6 +955,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
             **params_from_json(args),
             "session_id": args.session_id,
             **({"item_ids": args.resource_ids} if args.resource_ids else {}),
+            **({"turn_id": args.turn_id} if args.turn_id else {}),
+            **({"include_content": True} if args.include_content else {}),
         },
         _default_output="json",
     )

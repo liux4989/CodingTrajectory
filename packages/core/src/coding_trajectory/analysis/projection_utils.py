@@ -19,23 +19,47 @@ def truncate_text_preview(value: Any, *, max_len: int) -> str:
     return text[: max_len - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
 
 
-def truncation_marker(length: int, event_ids: list) -> str:
+def truncation_marker(
+    length: int,
+    event_ids: list,
+    *,
+    item_ref: str | None = None,
+) -> str:
+    if item_ref:
+        return f"[{length:,} chars → session.items {item_ref} --include-content]"
     ref = " | ".join(str(eid) for eid in event_ids)
     return f"[{length:,} chars → session.events {ref}]"
 
 
 def truncate_with_ref(
-    value: Any, event_ids: list, max_len: int = _ITEM_DETAIL_TRUNCATE_LEN
+    value: Any,
+    event_ids: list,
+    max_len: int = _ITEM_DETAIL_TRUNCATE_LEN,
+    *,
+    item_ref: str | None = None,
 ) -> Any:
     if isinstance(value, str) and len(value) > max_len:
-        return truncation_marker(len(value), event_ids)
+        return truncation_marker(len(value), event_ids, item_ref=item_ref)
     if isinstance(value, dict):
         return {
-            key: truncate_with_ref(child, event_ids, max_len)
+            key: truncate_with_ref(
+                child,
+                event_ids,
+                max_len,
+                item_ref=item_ref,
+            )
             for key, child in value.items()
         }
     if isinstance(value, list):
-        return [truncate_with_ref(child, event_ids, max_len) for child in value]
+        return [
+            truncate_with_ref(
+                child,
+                event_ids,
+                max_len,
+                item_ref=item_ref,
+            )
+            for child in value
+        ]
     return value
 
 

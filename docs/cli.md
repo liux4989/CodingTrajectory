@@ -81,8 +81,9 @@ Structured View
    - activity renders as grouped human labels with truncated assistant response previews
    - use `--output json` when you need full item ids for drill-down
 4. `session stats [session_id] [--output markdown|json]` — inspect session stats with compact context/token sections
-5. `session usage [session_id] [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and costs reported by session logs
-6. `session items <session_id> [<item_id> ...]` — read all session items or the JSON evidence for specific items
+5. `session usage [session_id] [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and request-summed costs
+6. `session request-usage [session_id] [--turn TURN_ID]` — inspect every provider request, its exact usage buckets, estimated cost, and causal tool links
+7. `session items <session_id> [<item_id> ...] [--turn TURN_ID] [--include-content]` — read scoped item evidence; expand large content without re-reading source logs
 
 Graph-level inspection is the orchestration surface. It is the parent of the
 individual `session` resource; there is no separate top-level workflow tree:
@@ -98,23 +99,25 @@ orchestrating `exec` tool is grouped as one wrapper with its contained command
 labels. Wrapper output is kept together because the source log does not expose
 an exact token split across its inner commands.
 
-`session usage` is intentionally turn-focused. It reports token buckets and any
-cost recorded by the source session log; core does not estimate missing prices
-from an external model catalog. External pricing enrichment belongs to the
-dashboard plugin. Results are grouped by turn without expanding paths, queries,
-commands, individual tool calls, derived efficiency, or explanatory semantics.
-Use `session overview`, `session items`, `session events`, or
-detail commands when you need hierarchy/navigation detail or causal drill-down.
+`session usage` is intentionally turn-focused. It reports provider token
+buckets and prices every recorded provider request independently before
+summing turn/session cost. This preserves per-request high-context pricing
+thresholds. `session request-usage` is the auditable ledger behind those
+rollups; use it when you need the request sequence or tool-result-to-next-request
+causality.
 
 Item-level tool token attribution is available through the
-`session.tool_usage` service method. It is an estimated diagnostic surface, is
-cache-agnostic, and does not replace the observed totals from `session usage`.
+`session.tool_usage` service method. It is an allocated diagnostic surface and
+does not replace the observed totals from `session usage`. Its real-token-cost
+rows are allocated only across items in the same turn, so later turns cannot
+rewrite an earlier turn's attribution.
 There is no dedicated core CLI command for this service method.
 
 
 Raw View
-1. `session events --params '{"event_ids": [...]}'` — resolve the full JSON content of one or more events
-2. `session events [session_id] --type TYPE [--filter KEY=VALUE]` — query raw JSON events by type, optionally narrowed by payload predicates
+1. `session events <session_id> --params '{"event_ids": [...]}'` — resolve the full JSON content of one or more events, including detached tool results
+2. `session events [session_id] [--turn TURN_ID] --type TYPE [--filter KEY=VALUE]` — query raw JSON events by type, optionally narrowed by turn and payload predicates
+   - `--type usage` selects provider request-usage observations
    - repeat `--filter` to combine predicates
    - `key=value` requires an exact payload-field match
    - `key=*` requires a payload field to exist

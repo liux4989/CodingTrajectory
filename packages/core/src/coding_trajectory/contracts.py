@@ -57,6 +57,10 @@ class SessionModelUsageRequest(SessionEntryRequest):
     pass
 
 
+class SessionRequestUsageRequest(SessionEntryRequest):
+    pass
+
+
 class SessionToolUsageRequest(SessionEntryRequest):
     pass
 
@@ -75,7 +79,9 @@ class SessionItemsRequest(ContractModel):
     item_ids: list[str] | None = None
     session_id: str | None = None
     root_session_id: str | None = None
+    turn_id: str | None = None
     types: list[str] | None = None
+    include_content: bool = False
 
 
 class ProjectSummary(ContractModel):
@@ -159,6 +165,15 @@ class SessionModelUsageResponse(ContractModel):
     models: list[dict[str, Any]] = Field(default_factory=list)
     dominant_model: dict[str, Any] | None = None
     turns: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SessionRequestUsageResponse(ContractModel):
+    root_session_id: str
+    request_count: int = 0
+    usage: dict[str, Any] = Field(default_factory=dict)
+    estimated_cost: dict[str, Any] | None = None
+    requests: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -347,6 +362,12 @@ SERVICE_CONTRACTS = {
             SessionModelUsageRequest,
             SessionModelUsageResponse,
             PublicSessionModelUsageResponse,
+        ),
+        ServiceContract(
+            "session.request_usage",
+            1,
+            SessionRequestUsageRequest,
+            SessionRequestUsageResponse,
         ),
         ServiceContract(
             "session.tool_usage", 1, SessionToolUsageRequest, SessionToolUsageResponse

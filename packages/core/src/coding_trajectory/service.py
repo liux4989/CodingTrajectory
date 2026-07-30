@@ -86,21 +86,33 @@ def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any
     )
 
 
-def serialize_event_detail(event: Event) -> dict[str, Any]:
+def serialize_event_detail(
+    event: Event,
+    *,
+    related_item: Item | None = None,
+) -> dict[str, Any]:
     return prune_nones(
         {
             "event_id": str(event.event_id),
             "session_id": str(event.session_id),
             "timestamp": format_datetime(event.timestamp),
             "type": event.type.value,
-            "tool_call": serialize_tool_call_detail(event),
+            "tool_call": serialize_tool_call_detail(
+                event,
+                related_item=related_item,
+            ),
             "llm": serialize_llm_detail(event),
+            "usage": serialize_usage_detail(event),
             "text": serialize_text_detail(event),
         }
     )
 
 
-def serialize_tool_call_detail(event: Event) -> dict[str, Any] | None:
+def serialize_tool_call_detail(
+    event: Event,
+    *,
+    related_item: Item | None = None,
+) -> dict[str, Any] | None:
     if event.type not in {
         EventType.TOOL_CALL_REQUESTED,
         EventType.TOOL_CALL_SUCCEEDED,
@@ -114,19 +126,65 @@ def serialize_tool_call_detail(event: Event) -> dict[str, Any] | None:
         EventType.TOOL_CALL_SUCCEEDED: "done",
         EventType.TOOL_CALL_FAILED: "failed",
     }
+    item_result = (
+        getattr(related_item, "output", None)
+        if related_item is not None
+        and event.type
+        in {
+            EventType.TOOL_CALL_SUCCEEDED,
+            EventType.TOOL_CALL_FAILED,
+        }
+        else None
+    )
+    result = next(
+        (
+            value
+            for value in (
+                payload.get("result"),
+                payload.get("tool_output"),
+                payload.get("tool_text"),
+                item_result,
+            )
+            if value is not None
+        ),
+        None,
+    )
     return (
         prune_nones(
             {
                 "tool_call_id": payload.get("tool_call_id"),
                 "tool_name": payload.get("tool_name"),
                 "input": payload.get("tool_args") or payload.get("input"),
-                "result": payload.get("result")
-                or payload.get("tool_output")
-                or payload.get("tool_text"),
+                "result": result,
                 "status": status_by_type.get(event.type),
             }
         )
         or None
+    )
+
+
+def serialize_usage_detail(event: Event) -> dict[str, Any] | None:
+    if (
+        event.type != EventType.VENDOR_RAW
+        or event.payload.get("transcript_kind") != "usage"
+    ):
+        return None
+    metrics = event.payload.get("metrics")
+    usage = (
+        metrics.get("usage") or metrics.get("last_token_usage")
+        if isinstance(metrics, dict)
+        else None
+    )
+    if not isinstance(usage, dict):
+        return None
+    return prune_nones(
+        {
+            "provider": (
+                metrics.get("provider") if isinstance(metrics, dict) else None
+            ),
+            "model": metrics.get("model") if isinstance(metrics, dict) else None,
+            **usage,
+        }
     )
 
 
@@ -897,7 +955,7 @@ def _handle_session_turn_usage(
     ]
     return {
         "root_session_id": result["root_session_id"],
-        "token_usage": result["token_usage"],
+        "token_usage": turns[0]["token_usage"] if turns else {},
         "turns": turns,
         "warnings": result.get("warnings") or [],
     }
@@ -916,7 +974,22 @@ def _handle_session_model_usage(
 ) -> Any:
     from coding_trajectory.metrics import build_session_graph_model_usage
 
-    return build_session_graph_model_usage(session_graph)
+    return build_session_graph_model_usage(
+        session_graph,
+        turn_id=params.get("turn_id"),
+    )
+
+
+@_single_session_handler
+def _handle_session_request_usage(
+    params: dict[str, Any], session_graph: SessionGraph
+) -> Any:
+    from coding_trajectory.metrics import build_session_graph_request_usage
+
+    return build_session_graph_request_usage(
+        session_graph,
+        turn_id=params.get("turn_id"),
+    )
 
 
 @_single_session_handler
@@ -925,7 +998,10 @@ def _handle_session_tool_usage(
 ) -> Any:
     from coding_trajectory.metrics import build_session_graph_tool_usage
 
-    return build_session_graph_tool_usage(session_graph)
+    return build_session_graph_tool_usage(
+        session_graph,
+        turn_id=params.get("turn_id"),
+    )
 
 
 @_graph_handler
@@ -979,6 +1055,7 @@ def _handle_session_events(
     from coding_trajectory.analysis.projections import build_event_scan
 
     event_ids = params.get("event_ids")
+    selected_turn_id = params.get("turn_id")
     if event_ids:
         matches: list[dict[str, Any]] = []
         root_session_id: str | None = None
@@ -988,10 +1065,28 @@ def _handle_session_events(
                 session_graph = context.store.get_session_graph_for_session(
                     event.session_id
                 )
+                selected_graph = _single_session_graph(
+                    session_graph,
+                    params.get("session_id")
+                    or params.get("root_session_id")
+                    or selected_turn_id
+                    or str(event.session_id),
+                )
+                allowed_event_ids = _event_ids_for_turn(
+                    selected_graph,
+                    selected_turn_id,
+                )
+                if (
+                    allowed_event_ids is not None
+                    and event.event_id not in allowed_event_ids
+                ):
+                    continue
                 if root_session_id is None:
-                    root_session_id = str(session_graph.root_session_id)
+                    root_session_id = str(selected_graph.root_session_id)
+                related_item = _item_for_event(selected_graph, event.event_id)
                 detail = _public_output_for_session_graph(
-                    session_graph, serialize_event_detail(event)
+                    selected_graph,
+                    serialize_event_detail(event, related_item=related_item),
                 )
                 matches.append(detail)
             except (ResourceNotFoundError, ValueError) as exc:
@@ -1012,12 +1107,18 @@ def _handle_session_events(
     _cache_session_graph(context, session_graph)
     session_graph = _single_session_graph(session_graph, entrypoint_id)
     _cache_session_graph(context, session_graph)
+    allowed_event_ids = _event_ids_for_turn(session_graph, selected_turn_id)
 
     event_type = params.get("type")
     if not event_type:
         all_events: list[dict[str, Any]] = []
         for session in session_graph.sessions:
             for event in session.events:
+                if (
+                    allowed_event_ids is not None
+                    and event.event_id not in allowed_event_ids
+                ):
+                    continue
                 detail = serialize_event_detail(event)
                 all_events.append(
                     _public_output_for_session_graph(session_graph, detail)
@@ -1035,6 +1136,7 @@ def _handle_session_events(
         session_graph,
         event_type=event_type,
         filters=params.get("filters") or [],
+        event_ids=allowed_event_ids,
     )
     limit = params.get("limit")
     if limit:
@@ -1048,6 +1150,8 @@ def _handle_session_items(
     from coding_trajectory.analysis.projections import build_item_details
 
     item_ids = params.get("item_ids")
+    selected_turn_id = params.get("turn_id")
+    include_content = bool(params.get("include_content"))
     if item_ids:
         result: list[dict[str, Any]] = []
         for item_id in item_ids:
@@ -1056,10 +1160,18 @@ def _handle_session_items(
                 session_graph = context.store.get_session_graph_for_session(
                     item.session_id
                 )
+                if selected_turn_id is not None and str(item.turn_id) != str(
+                    selected_turn_id
+                ):
+                    continue
                 result.append(
                     _public_output_for_session_graph(
                         session_graph,
-                        build_item_details(item, session_graph=session_graph),
+                        build_item_details(
+                            item,
+                            session_graph=session_graph,
+                            include_content=include_content,
+                        ),
                     )
                 )
             except (ResourceNotFoundError, ValueError) as exc:
@@ -1081,16 +1193,60 @@ def _handle_session_items(
     result = []
     for session in session_graph.sessions:
         for turn in session.turns:
+            if selected_turn_id is not None and str(turn.turn_id) != str(
+                selected_turn_id
+            ):
+                continue
             for item in turn.items:
                 if types_filter and item.kind not in types_filter:
                     continue
                 result.append(
                     _public_output_for_session_graph(
                         session_graph,
-                        build_item_details(item, session_graph=session_graph),
+                        build_item_details(
+                            item,
+                            session_graph=session_graph,
+                            include_content=include_content,
+                        ),
                     )
                 )
     return result
+
+
+def _event_ids_for_turn(
+    session_graph: SessionGraph,
+    turn_id: str | None,
+) -> set[UUID] | None:
+    if turn_id is None:
+        return None
+    parsed_turn_id = _parse_user_id(turn_id)
+    for session in session_graph.sessions:
+        for turn in session.turns:
+            if turn.turn_id != parsed_turn_id:
+                continue
+            return {
+                *turn.event_ids,
+                *(
+                    [turn.user_request_event_id]
+                    if turn.user_request_event_id is not None
+                    else []
+                ),
+                *(
+                    event_id
+                    for item in turn.items
+                    for event_id in item.event_ids
+                ),
+            }
+    raise ResourceNotFoundError(f"turn not found in selected session: {turn_id}")
+
+
+def _item_for_event(session_graph: SessionGraph, event_id: UUID) -> Item | None:
+    for session in session_graph.sessions:
+        for turn in session.turns:
+            for item in turn.items:
+                if event_id in item.event_ids:
+                    return item
+    return None
 
 
 SERVICE_HANDLERS: dict[str, ServiceHandler] = {
@@ -1105,6 +1261,7 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "session.usage": _handle_session_usage,
     "graph.usage": _handle_graph_usage,
     "session.model_usage": _handle_session_model_usage,
+    "session.request_usage": _handle_session_request_usage,
     "session.tool_usage": _handle_session_tool_usage,
     "session.events": _handle_session_events,
     "session.items": _handle_session_items,
