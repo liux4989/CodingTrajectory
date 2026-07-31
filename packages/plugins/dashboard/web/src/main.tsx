@@ -14,6 +14,13 @@ const ProjectDetailRoute = React.lazy(() => import("@/routes/projects").then((mo
 const SessionsRoute = React.lazy(() => import("@/routes/sessions").then((mod) => ({ default: mod.SessionsRoute })));
 const ContextWindowRoute = React.lazy(() => import("@/routes/context-window").then((mod) => ({ default: mod.ContextWindowRoute })));
 const ModelUsageRoute = React.lazy(() => import("@/routes/model-usage").then((mod) => ({ default: mod.ModelUsageRoute })));
+const TokenEfficiencyIndexRoute = React.lazy(() => import("@/routes/token-efficiency").then((mod) => ({ default: mod.TokenEfficiencyIndexRoute })));
+const TokenEfficiencyProjectRoute = React.lazy(() => import("@/routes/token-efficiency").then((mod) => ({ default: mod.TokenEfficiencyProjectRoute })));
+const TokenEfficiencyPatternsRoute = React.lazy(() => import("@/routes/token-efficiency").then((mod) => ({ default: mod.TokenEfficiencyPatternsRoute })));
+const TokenEfficiencyPatternDetailRoute = React.lazy(() => import("@/routes/token-efficiency").then((mod) => ({ default: mod.TokenEfficiencyPatternDetailRoute })));
+const TokenEfficiencyHotspotsRoute = React.lazy(() => import("@/routes/token-efficiency").then((mod) => ({ default: mod.TokenEfficiencyHotspotsRoute })));
+const TokenEfficiencyHotspotDetailRoute = React.lazy(() => import("@/routes/token-efficiency").then((mod) => ({ default: mod.TokenEfficiencyHotspotDetailRoute })));
+const TokenEfficiencyOutliersRoute = React.lazy(() => import("@/routes/token-efficiency").then((mod) => ({ default: mod.TokenEfficiencyOutliersRoute })));
 const CacheBreaksRoute = React.lazy(() => import("@/routes/cache-breaks").then((mod) => ({ default: mod.CacheBreaksRoute })));
 const ErrorCollectionRoute = React.lazy(() => import("@/routes/error-collection").then((mod) => ({ default: mod.ErrorCollectionRoute })));
 const CleanupRoute = React.lazy(() => import("@/routes/cleanup").then((mod) => ({ default: mod.CleanupRoute })));
@@ -92,6 +99,74 @@ const modelUsageRoute = createRoute({
   component: () => <RouteBoundary><ModelUsageRoute /></RouteBoundary>,
 });
 
+type TokenEfficiencySearch = {
+  grain: "daily" | "weekly" | undefined;
+  unit: "session" | "turn" | undefined;
+};
+
+function validateTokenEfficiencySearch(
+  search: Record<string, unknown>,
+): TokenEfficiencySearch {
+  return {
+    grain:
+      search.grain === "daily" || search.grain === "weekly"
+        ? search.grain
+        : undefined,
+    unit:
+      search.unit === "session" || search.unit === "turn"
+        ? search.unit
+        : undefined,
+  };
+}
+
+const tokenEfficiencyIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/token-efficiency",
+  component: () => <RouteBoundary><TokenEfficiencyIndexRoute /></RouteBoundary>,
+});
+
+const tokenEfficiencyProjectRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/token-efficiency/$projectName",
+  validateSearch: validateTokenEfficiencySearch,
+  component: () => <RouteBoundary><TokenEfficiencyProjectRoute /></RouteBoundary>,
+});
+
+const tokenEfficiencyPatternsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/token-efficiency/$projectName/patterns",
+  validateSearch: validateTokenEfficiencySearch,
+  component: () => <RouteBoundary><TokenEfficiencyPatternsRoute /></RouteBoundary>,
+});
+
+const tokenEfficiencyPatternDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/token-efficiency/$projectName/patterns/$patternKey",
+  validateSearch: validateTokenEfficiencySearch,
+  component: () => <RouteBoundary><TokenEfficiencyPatternDetailRoute /></RouteBoundary>,
+});
+
+const tokenEfficiencyHotspotsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/token-efficiency/$projectName/hotspots",
+  validateSearch: validateTokenEfficiencySearch,
+  component: () => <RouteBoundary><TokenEfficiencyHotspotsRoute /></RouteBoundary>,
+});
+
+const tokenEfficiencyHotspotDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/token-efficiency/$projectName/hotspots/$hotspotKey",
+  validateSearch: validateTokenEfficiencySearch,
+  component: () => <RouteBoundary><TokenEfficiencyHotspotDetailRoute /></RouteBoundary>,
+});
+
+const tokenEfficiencyOutliersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/token-efficiency/$projectName/outliers",
+  validateSearch: validateTokenEfficiencySearch,
+  component: () => <RouteBoundary><TokenEfficiencyOutliersRoute /></RouteBoundary>,
+});
+
 const cacheBreaksRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/cache-breaks",
@@ -123,6 +198,13 @@ const router = createRouter({
     sessionsRoute,
     contextWindowRoute,
     modelUsageRoute,
+    tokenEfficiencyIndexRoute,
+    tokenEfficiencyProjectRoute,
+    tokenEfficiencyPatternsRoute,
+    tokenEfficiencyPatternDetailRoute,
+    tokenEfficiencyHotspotsRoute,
+    tokenEfficiencyHotspotDetailRoute,
+    tokenEfficiencyOutliersRoute,
     cacheBreaksRoute,
     errorCollectionRoute,
     cleanupRoute,

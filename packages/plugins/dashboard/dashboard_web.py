@@ -164,6 +164,10 @@ def _handler_for(
                     payload = service.context_window(query)
                 elif path == "/api/model-usage":
                     payload = service.model_usage(query)
+                elif path == "/api/token-efficiency":
+                    payload = service.token_efficiency_index(query)
+                elif path == "/api/token-efficiency/project":
+                    payload = service.token_efficiency_project(query)
                 elif path == "/api/error-collection":
                     payload = service.error_collection(query)
                 elif path == "/api/cache-breaks":
@@ -203,6 +207,16 @@ def _handler_for(
         ) -> tuple[dict[str, Any], HTTPStatus]:
             if path == "/api/refresh":
                 return service.refresh(), HTTPStatus.OK
+            if path == "/api/token-efficiency":
+                return (
+                    service.start_token_efficiency_index(body),
+                    HTTPStatus.ACCEPTED,
+                )
+            if path == "/api/token-efficiency/project":
+                return (
+                    service.start_token_efficiency_project(body),
+                    HTTPStatus.ACCEPTED,
+                )
             if path == "/api/agent-sessions":
                 return service.create_agent_session(body), HTTPStatus.CREATED
             agent_session_id = _agent_session_turn_id(path)

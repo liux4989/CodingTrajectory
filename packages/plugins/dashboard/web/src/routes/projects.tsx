@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useParams, useSearch } from "@tanstack/react-router";
+import { Link, useParams, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   useReactTable,
@@ -10,7 +10,7 @@ import {
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import { FolderGit2 } from "lucide-react";
+import { FolderGit2, Gauge } from "lucide-react";
 import { fetchProjectDetail, type SessionItem } from "@/api";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { RouteHeader } from "@/components/route-header";
@@ -23,6 +23,7 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SessionLink } from "@/components/session-link";
 import { useDateRange } from "@/hooks/use-date-range";
 import { relativeTime } from "@/lib/relative-time";
+import { Button } from "@/components/ui/button";
 
 function sessionId(item: SessionItem) {
   return item.root_session_id ?? item.id ?? null;
@@ -103,6 +104,18 @@ export function ProjectDetailRoute() {
       <RouteHeader
         eyebrow="Project drill-down"
         title={projectName}
+        action={
+          <Button asChild variant="outline">
+            <Link
+              to="/token-efficiency/$projectName"
+              params={{ projectName }}
+              search={{ grain: "weekly", unit: "session" }}
+            >
+              <Gauge data-icon="inline-start" />
+              Token efficiency
+            </Link>
+          </Button>
+        }
       />
       <div className="flex flex-wrap items-center gap-2">
         <FolderGit2 size={16} className="text-muted-foreground" />

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -20,6 +21,7 @@ try:
     from . import error_collection as error_collection_mod
     from . import model_usage as model_usage_mod
     from . import session_analysis as session_analysis_mod
+    from . import token_efficiency as token_efficiency_mod
     from .jobs import JobRunner, JobStore
     from .work_manager import DashboardWorkManager
 except ImportError:
@@ -33,6 +35,7 @@ except ImportError:
     import error_collection as error_collection_mod
     import model_usage as model_usage_mod
     import session_analysis as session_analysis_mod
+    import token_efficiency as token_efficiency_mod
     from jobs import JobRunner, JobStore
     from work_manager import DashboardWorkManager
 
@@ -42,6 +45,7 @@ class DashboardDataService:
         self._work = DashboardWorkManager(cache_ttl_seconds)
         self._jobs = JobStore()
         self._runner = JobRunner(self._jobs)
+        self._token_efficiency_generation = 0
         self._app_server = CodexAppServerManager(cwd=_repo_root())
         self._agent_sessions = AgentSessionStore(
             cwd=_repo_root(),
@@ -62,6 +66,7 @@ class DashboardDataService:
 
     def refresh(self) -> dict[str, Any]:
         self._work.clear_all()
+        self._token_efficiency_generation += 1
         return {"status": "refreshed"}
 
     def overview(self, query: dict[str, list[str]]) -> dict[str, Any]:
@@ -226,6 +231,108 @@ class DashboardDataService:
                 model_key=model_key,
             ),
         )
+
+    def token_efficiency_index(
+        self,
+        query: dict[str, list[str]],
+        *,
+        generation: int | None = None,
+    ) -> dict[str, Any]:
+        since_days = min(_int(query, "since_days", 7), 30)
+        generation = (
+            self._token_efficiency_generation
+            if generation is None
+            else generation
+        )
+        return self._work.get_or_compute(
+            ("token_efficiency_index", since_days, generation),
+            lambda: token_efficiency_mod.build_index_projection(
+                ct_json=_ct_json_token_efficiency,
+                since_days=since_days,
+            ),
+            ttl_seconds=3_600,
+        )
+
+    def start_token_efficiency_index(
+        self, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        query = _body_query(body)
+        since_days = min(_int(query, "since_days", 7), 30)
+        generation = self._token_efficiency_generation
+        operation_key = (
+            f"token-efficiency-index:v1:{since_days}:g{generation}"
+        )
+        job_id, created = self._runner.submit_once(
+            operation_key,
+            "token-efficiency-index",
+            self.token_efficiency_index,
+            query,
+            generation=generation,
+        )
+        return {
+            "status": "pending",
+            "job_id": job_id,
+            "operation_key": operation_key,
+            "reused": not created,
+        }
+
+    def token_efficiency_project(
+        self,
+        query: dict[str, list[str]],
+        *,
+        generation: int | None = None,
+    ) -> dict[str, Any]:
+        project_name = _first(query, "project_name")
+        if not project_name:
+            raise ValueError("project_name is required")
+        since_days = min(_int(query, "since_days", 7), 30)
+        generation = (
+            self._token_efficiency_generation
+            if generation is None
+            else generation
+        )
+        return self._work.get_or_compute(
+            (
+                "token_efficiency_project",
+                project_name,
+                since_days,
+                generation,
+            ),
+            lambda: token_efficiency_mod.build_project_projection(
+                ct_json=_ct_json_token_efficiency,
+                project_name=project_name,
+                since_days=since_days,
+            ),
+            ttl_seconds=3_600,
+        )
+
+    def start_token_efficiency_project(
+        self, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        query = _body_query(body)
+        project_name = _first(query, "project_name")
+        if not project_name:
+            raise ValueError("project_name is required")
+        since_days = min(_int(query, "since_days", 7), 30)
+        generation = self._token_efficiency_generation
+        operation_key = (
+            "token-efficiency-project:v1:"
+            f"{_project_cache_key(project_name)}:{since_days}:"
+            f"g{generation}"
+        )
+        job_id, created = self._runner.submit_once(
+            operation_key,
+            "token-efficiency-project",
+            self.token_efficiency_project,
+            query,
+            generation=generation,
+        )
+        return {
+            "status": "pending",
+            "job_id": job_id,
+            "operation_key": operation_key,
+            "reused": not created,
+        }
 
     def error_collection(self, query: dict[str, list[str]]) -> dict[str, Any]:
         since_days = _int(query, "since_days", 7)
@@ -907,7 +1014,21 @@ def _query_key(query: dict[str, list[str]]) -> str:
     return json.dumps(normalized, sort_keys=True)
 
 
+def _project_cache_key(value: str) -> str:
+    return hashlib.sha256(value.casefold().encode()).hexdigest()[:20]
+
+
 def _ct_json(args: list[str]) -> dict[str, Any]:
+    return _run_ct_json(args, timeout_seconds=30)
+
+
+def _ct_json_token_efficiency(args: list[str]) -> dict[str, Any]:
+    return _run_ct_json(args, timeout_seconds=120)
+
+
+def _run_ct_json(
+    args: list[str], *, timeout_seconds: int
+) -> dict[str, Any]:
     ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
     if not ct:
         raise RuntimeError(
@@ -920,11 +1041,13 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
             check=False,
             text=True,
             capture_output=True,
-            timeout=30,
+            timeout=timeout_seconds,
             cwd=_repo_root(),
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"ct command timed out: {' '.join(command)}") from exc
+        raise RuntimeError(
+            f"ct command timed out after {timeout_seconds}s: {' '.join(command)}"
+        ) from exc
     if completed.returncode != 0:
         message = (
             completed.stderr.strip() or completed.stdout.strip() or "ct command failed"

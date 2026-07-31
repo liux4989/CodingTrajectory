@@ -7,6 +7,7 @@ import {
   Trash2,
   AlertTriangle,
   Cpu,
+  Gauge,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -59,6 +60,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           url: "/model-usage",
           icon: BarChart3,
           match: () => Boolean(matchRoute({ to: "/model-usage" })),
+        },
+        {
+          title: "Token efficiency",
+          url: "/token-efficiency",
+          icon: Gauge,
+          match: () => Boolean(matchRoute({ to: "/token-efficiency", fuzzy: true })),
         },
         {
           title: "Cache breaks",

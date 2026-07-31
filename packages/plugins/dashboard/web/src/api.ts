@@ -545,6 +545,188 @@ export type ModelUsagePayload = {
   warnings: Array<{ session_id: string; message: string }>;
 };
 
+export type TokenEfficiencyGrain = "daily" | "weekly";
+export type TokenEfficiencyUnit = "session" | "turn";
+
+export type TokenEfficiencyDistribution = {
+  count: number;
+  avg: number;
+  median: number;
+  p90: number;
+  p95: number;
+  max: number;
+};
+
+export type TokenEfficiencyPeriodSummary = {
+  bucket: string;
+  label: string;
+  is_complete: boolean;
+  started_at: string;
+  ended_at: string;
+  session_count: number;
+  turn_count: number;
+  total_prompt_tokens: number;
+  session_prompt: TokenEfficiencyDistribution;
+  turn_prompt: TokenEfficiencyDistribution;
+  pattern_prompt_tokens: number;
+  pattern_share: number;
+};
+
+export type TokenEfficiencyDelta = {
+  total_prompt_tokens_pct: number | null;
+  session_median_pct: number | null;
+  session_p90_pct: number | null;
+  turn_median_pct: number | null;
+  turn_p90_pct: number | null;
+};
+
+export type TokenEfficiencyPeriodComparison = {
+  grain: TokenEfficiencyGrain;
+  current: TokenEfficiencyPeriodSummary;
+  previous: TokenEfficiencyPeriodSummary | null;
+  deltas: TokenEfficiencyDelta;
+};
+
+export type TokenEfficiencyPatternMetrics = {
+  incidence_count: number;
+  incidence_rate: number;
+  calls: number;
+  total_prompt_tokens: number;
+  token_share: number;
+  zero_inclusive: {
+    session: TokenEfficiencyDistribution;
+    turn: TokenEfficiencyDistribution;
+  };
+  conditional: {
+    session: TokenEfficiencyDistribution;
+    turn: TokenEfficiencyDistribution;
+  };
+  indicators: {
+    repeated_read: number;
+    parallel_fanout: number;
+    truncated_output: number;
+  };
+};
+
+export type TokenEfficiencyPatternRow = {
+  key: string;
+  label: string;
+  kind: "exclusive" | "indicator";
+  current: TokenEfficiencyPatternMetrics;
+  previous: TokenEfficiencyPatternMetrics | null;
+  deltas: {
+    prompt_tokens_pct: number | null;
+    incidence_rate_points: number;
+    calls_pct: number | null;
+    session_median_pct?: number | null;
+    session_p90_pct?: number | null;
+    turn_median_pct?: number | null;
+    turn_p90_pct?: number | null;
+  };
+  contributors: TokenEfficiencyContributor[];
+};
+
+export type TokenEfficiencyContributor = {
+  session_id: string;
+  turn_id: string | null;
+  title: string | null;
+  prompt_tokens: number;
+  calls: number;
+  repeated_calls?: number;
+  pattern?: string | null;
+};
+
+export type TokenEfficiencyHotspotRow = {
+  key: string;
+  resource: string;
+  status: string;
+  sessions: number;
+  turns: number;
+  calls: number;
+  repeat_count: number;
+  enclosing_prompt_tokens: number;
+  largest_call_tokens: number;
+  largest_call_share: number;
+  broad_calls: number;
+  targeted_calls: number;
+  previous_enclosing_prompt_tokens: number;
+  delta_pct: number | null;
+  session: TokenEfficiencyDistribution;
+  turn: TokenEfficiencyDistribution;
+  contributors: TokenEfficiencyContributor[];
+};
+
+export type TokenEfficiencyOutlierRow = {
+  session_id: string;
+  turn_id: string;
+  title: string | null;
+  completed_at: string | null;
+  prompt_tokens: number;
+  session_share: number;
+  max_context_tokens: number | null;
+  primary_pattern: string | null;
+  reason_codes: string[];
+};
+
+export type TokenEfficiencyCoverage = {
+  root_graphs?: number;
+  sessions?: number;
+  turns?: number;
+  tool_items?: number;
+  attributed_tool_items?: number;
+  undated_tool_items?: number;
+  truncated_input_summaries?: number;
+  [key: string]: number | undefined;
+};
+
+export type TokenEfficiencyProjectIndexRow = {
+  project_name: string;
+  display_name: string;
+  root_graphs: number;
+  prompt_tokens: number;
+  graph_prompt: TokenEfficiencyDistribution;
+};
+
+export type TokenEfficiencyIndexPayload = {
+  schema_version: 1;
+  generated_at: string;
+  filters: { since_days: number };
+  attribution: Record<string, unknown>;
+  coverage: TokenEfficiencyCoverage;
+  warnings: string[];
+  project_options: ProjectItem[];
+  projects: TokenEfficiencyProjectIndexRow[];
+};
+
+export type TokenEfficiencyProjectPayload = {
+  schema_version: 1;
+  generated_at: string;
+  filters: {
+    since_days: number;
+    discovery_days: number;
+    project_name: string;
+  };
+  attribution: Record<string, unknown>;
+  coverage: TokenEfficiencyCoverage;
+  warnings: string[];
+  project: {
+    name: string;
+    display_name: string;
+    path?: string | null;
+  };
+  comparisons: {
+    daily: TokenEfficiencyPeriodComparison | null;
+    weekly: TokenEfficiencyPeriodComparison | null;
+  };
+  trends: {
+    daily: TokenEfficiencyPeriodSummary[];
+    weekly: TokenEfficiencyPeriodSummary[];
+  };
+  patterns: Record<TokenEfficiencyGrain, TokenEfficiencyPatternRow[]>;
+  hotspots: Record<TokenEfficiencyGrain, TokenEfficiencyHotspotRow[]>;
+  outliers: Record<TokenEfficiencyGrain, TokenEfficiencyOutlierRow[]>;
+};
+
 export type ErrorCollectionKind =
   | "abort_coding_session"
   | "abrupt_coding_mid_session"
@@ -698,8 +880,8 @@ type JobAccepted = {
   agent_session_id?: string;
 };
 
-export async function fetchJobStatus(jobId: string) {
-  return fetchJson<JobRecord>(`/api/jobs/${encodeURIComponent(jobId)}`);
+export async function fetchJobStatus(jobId: string, signal?: AbortSignal) {
+  return fetchJson<JobRecord>(`/api/jobs/${encodeURIComponent(jobId)}`, { signal });
 }
 
 export async function fetchCleanupPreview(kind: "project" | "session", params?: { sinceDays?: number }) {
@@ -716,6 +898,32 @@ export async function fetchModelUsage(params: { sinceDays?: number; projectName?
   if (params.projectName) search.set("project_name", params.projectName);
   if (params.modelKey) search.set("model_key", params.modelKey);
   return fetchJson<ModelUsagePayload>(`/api/model-usage?${search}`);
+}
+
+export async function fetchTokenEfficiencyIndex(params: {
+  sinceDays?: number;
+  signal?: AbortSignal;
+}) {
+  return startAndWaitForJob<TokenEfficiencyIndexPayload>(
+    "/api/token-efficiency",
+    { since_days: Math.min(params.sinceDays ?? 7, 30) },
+    params.signal,
+  );
+}
+
+export async function fetchTokenEfficiencyProject(params: {
+  projectName: string;
+  sinceDays?: number;
+  signal?: AbortSignal;
+}) {
+  return startAndWaitForJob<TokenEfficiencyProjectPayload>(
+    "/api/token-efficiency/project",
+    {
+      project_name: params.projectName,
+      since_days: Math.min(params.sinceDays ?? 7, 30),
+    },
+    params.signal,
+  );
 }
 
 export async function fetchErrorCollection(params: { sinceDays?: number; projectName?: string | null }) {
@@ -758,4 +966,47 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
   return payload as T;
+}
+
+async function waitForPoll(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    throw new DOMException("Request aborted", "AbortError");
+  }
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      window.clearTimeout(timeout);
+      reject(new DOMException("Request aborted", "AbortError"));
+    };
+    const timeout = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, 1_500);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function startAndWaitForJob<T>(
+  url: string,
+  filters: Record<string, string | number | boolean>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const accepted = await fetchJson<JobAccepted>(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filters }),
+    signal,
+  });
+  while (true) {
+    const job = await fetchJobStatus(accepted.job_id, signal);
+    if (job.status === "ready") {
+      if (!job.result) {
+        throw new Error("Dashboard collection completed without a result");
+      }
+      return job.result as unknown as T;
+    }
+    if (job.status === "error") {
+      throw new Error(job.error || "Dashboard collection failed");
+    }
+    await waitForPoll(signal);
+  }
 }
