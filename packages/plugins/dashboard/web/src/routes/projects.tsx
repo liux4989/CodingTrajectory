@@ -129,7 +129,7 @@ export function ProjectDetailRoute() {
       </div>
       <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, or id" />
       {detail.isPending ? <TableSkeleton rows={6} cols={4} /> : null}
-      {detail.isError ? <StateBlock title="Project detail failed" detail={detail.error.message} /> : null}
+      {detail.isError ? <StateBlock title="Project detail failed" detail={detail.error.message} onRetry={() => detail.refetch()} /> : null}
       {detail.data ? (
         <>
           <DataTable table={table} columnCount={columns.length} emptyMessage="No sessions found for this project." />

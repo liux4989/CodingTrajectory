@@ -154,7 +154,7 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
       </CardHeader>
       <CardContent>
         {preview.isPending ? <TableSkeleton rows={4} cols={3} /> : null}
-        {preview.isError ? <StateBlock title="Cleanup preview failed" detail={preview.error.message} /> : null}
+        {preview.isError ? <StateBlock title="Cleanup preview failed" detail={preview.error.message} onRetry={() => preview.refetch()} /> : null}
         {preview.data ? (
           <>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 max-[32rem]:flex-col max-[32rem]:items-stretch">
@@ -185,6 +185,7 @@ function CleanupPanel({ kind, title, description }: { kind: "project" | "session
               table={table}
               columnCount={columns.length}
               emptyMessage="No cleanup candidates."
+              emptyHint="No cleanup candidates in this period."
               className="max-h-96 bg-transparent"
             />
             <ReasonSummary title="Skipped reasons" reasons={preview.data.summary.skipped_reasons} />

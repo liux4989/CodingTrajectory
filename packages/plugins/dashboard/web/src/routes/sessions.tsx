@@ -76,7 +76,7 @@ export function SessionsRoute() {
   const [filter, setFilter] = React.useState("");
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const router = useRouter();
-  const sessions = useQuery({ queryKey: ["sessions"], queryFn: fetchSessions });
+  const sessions = useQuery({ queryKey: ["sessions"], queryFn: fetchSessions, placeholderData: (previous) => previous });
   const data = sessions.data?.items ?? [];
 
   const table = useReactTable({
@@ -102,13 +102,14 @@ export function SessionsRoute() {
       <RouteHeader eyebrow="Session stream" title="Recent session entry points, kept compact for triage." />
       <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, project, or id" />
       {sessions.isPending ? <TableSkeleton rows={6} cols={4} /> : null}
-      {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} /> : null}
+      {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} onRetry={() => sessions.refetch()} /> : null}
       {sessions.data ? (
         <>
           <DataTable
             table={table}
             columnCount={columns.length}
             emptyMessage="No sessions match the current filter."
+            emptyHint="Try adjusting the filter or expanding the date range."
             onRowClick={(item) => {
               const id = sessionId(item);
               if (id) router.navigate({ to: "/sessions/$sessionId/context-window", params: { sessionId: id } });

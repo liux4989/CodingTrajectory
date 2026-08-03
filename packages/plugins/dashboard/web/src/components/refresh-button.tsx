@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useQueryClient, useIsFetching } from "@tanstack/react-query";
 import { RefreshCcw } from "lucide-react";
+import { toast } from "sonner";
 import { motion } from "motion/react";
 import { refreshDashboardData } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -16,8 +17,9 @@ export function RefreshButton() {
     try {
       await refreshDashboardData();
       await client.invalidateQueries();
+      toast.success("Dashboard data refreshed");
     } catch (error) {
-      console.error("Dashboard refresh failed", error);
+      toast.error(`Refresh failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setIsRefreshing(false);
     }

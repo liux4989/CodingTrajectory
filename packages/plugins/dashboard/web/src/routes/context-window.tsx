@@ -1,8 +1,8 @@
 import * as React from "react";
-import { useParams, useRouter } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AlertTriangle, ArrowLeft, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square } from "lucide-react";
+import { AlertTriangle, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square } from "lucide-react";
 import {
   analyzeSession,
   fetchContextWindow,
@@ -180,13 +180,13 @@ function evidenceBadgeTone(severity: AnalysisEvidenceRef["severity"]) {
 
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
-  const router = useRouter();
   const analysisRefreshRef = React.useRef(false);
   const analysisStorageKey = `ct-dashboard-session-analysis:${sessionId}`;
   const [initialAnalysisJobId] = React.useState(() => readStoredJobId(analysisStorageKey));
   const query = useQuery({
     queryKey: ["context-window", sessionId],
     queryFn: () => fetchContextWindow(sessionId),
+    placeholderData: (previous) => previous,
   });
   const analysisJob = useJob<SessionAnalysis>({
     initialJobId: initialAnalysisJobId,
@@ -198,6 +198,7 @@ export function ContextWindowRoute() {
   const [pinnedId, setPinnedId] = React.useState<string | null>(null);
   const [hoveredCategory, setHoveredCategory] = React.useState<string | null>(null);
   const [isPlaying, setIsPlaying] = React.useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = React.useState(1);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState("");
   const [activeCategories, setActiveCategories] = React.useState<Set<string>>(new Set());
@@ -240,9 +241,9 @@ export function ContextWindowRoute() {
         }
         return filteredEvents[nextIndex].id;
       });
-    }, 800);
+    }, 800 / playbackSpeed);
     return () => clearInterval(interval);
-  }, [isPlaying, filteredEvents]);
+  }, [isPlaying, filteredEvents, playbackSpeed]);
 
   React.useEffect(() => {
     const handler = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -354,7 +355,7 @@ export function ContextWindowRoute() {
     return <LoadingState title="Loading context window" detail="Reading normalized session projections." />;
   }
   if (query.isError) {
-    return <StateBlock title="Context window failed" detail={query.error.message} />;
+    return <StateBlock title="Context window failed" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
 
   const payload = query.data;
@@ -370,14 +371,6 @@ export function ContextWindowRoute() {
     <div className="route-container w-full min-w-0 overflow-hidden pb-8">
       <div className="context-window-shell">
         <div className="context-window-topbar">
-          <button
-            type="button"
-            onClick={() => router.history.back()}
-            className="inline-flex cursor-pointer items-center gap-1.5 font-display text-caption font-extrabold text-primary"
-          >
-            <ArrowLeft size={14} /> Back
-          </button>
-
           <div className="context-window-title-row">
             <div className="min-w-0">
               <h1 className="m-0 font-display text-h1 leading-tight">
@@ -848,6 +841,25 @@ export function ContextWindowRoute() {
             <span className="w-16 text-right mono text-body-sm">
               {filteredEvents.length > 0 ? `${Math.max(playbackIndex, 0) + 1}/${filteredEvents.length}` : "-"}
             </span>
+            <div className="flex items-center gap-1 rounded-lg border border-border-soft p-0.5">
+              {[0.5, 1, 2].map((speed) => (
+                <button
+                  key={speed}
+                  type="button"
+                  onClick={() => setPlaybackSpeed(speed)}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-caption font-medium transition-colors",
+                    playbackSpeed === speed
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  aria-pressed={playbackSpeed === speed}
+                  aria-label={`Playback speed ${speed}x`}
+                >
+                  {speed}x
+                </button>
+              ))}
+            </div>
             <Button
               size="icon"
               variant="secondary"
@@ -942,7 +954,7 @@ function CompactionTimeline({ compaction }: { compaction: CompactionSummary }) {
               <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-caption text-foreground">
                 {event.trigger ?? "auto"}
               </Badge>
-              {isSlidingWindow ? (
+              {event.mechanism === "sliding_window" ? (
                 <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-caption text-muted-foreground">
                   sliding
                 </Badge>

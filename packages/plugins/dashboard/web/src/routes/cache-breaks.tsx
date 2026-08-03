@@ -7,6 +7,7 @@ import { MetricCard } from "@/components/metric-card";
 import { RouteHeader } from "@/components/route-header";
 import { shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
+import { LoadingShell } from "@/components/loading-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable } from "@/components/data-table";
@@ -17,7 +18,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { MetricSkeleton } from "@/components/ui/skeleton";
 import { useDateRange } from "@/hooks/use-date-range";
 import { HeaderLabel, FilterLabel } from "@/components/table-cells";
 import { cn } from "@/lib/utils";
@@ -58,18 +58,11 @@ export function CacheBreaksRoute() {
   };
 
   if (query.isPending) {
-    return (
-      <div className="route-container">
-        <RouteHeader eyebrow="Cache economics" title="Loading cache breaks" />
-        <section className="stat-grid">
-          {Array.from({ length: 4 }, (_, i) => <MetricSkeleton key={i} />)}
-        </section>
-      </div>
-    );
+    return <LoadingShell eyebrow="Cache economics" title="Loading cache breaks" variant="metrics" />;
   }
 
   if (query.isError) {
-    return <StateBlock title="Cache breaks unavailable" detail={query.error.message} />;
+    return <StateBlock title="Cache breaks unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
 
   const data = query.data;
@@ -396,7 +389,7 @@ function TopSessionsTable({ rows }: { rows: CacheBreakSessionRow[] }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <DataTable table={table} columnCount={sessionColumns.length} emptyMessage="No sessions with cache breaks." />
+        <DataTable table={table} columnCount={sessionColumns.length} emptyMessage="No sessions with cache breaks." emptyHint="No cache breaks recorded in this period." />
       </CardContent>
     </Card>
   );
@@ -491,7 +484,7 @@ function BreakTable({ rows }: { rows: AggregateCacheBreak[] }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <DataTable table={table} columnCount={breakColumns.length} emptyMessage="No cache breaks recorded." />
+        <DataTable table={table} columnCount={breakColumns.length} emptyMessage="No cache breaks recorded." emptyHint="No cache breaks recorded in this period." />
       </CardContent>
     </Card>
   );

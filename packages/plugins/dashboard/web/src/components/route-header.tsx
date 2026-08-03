@@ -26,7 +26,7 @@ export function RouteHeader({ eyebrow, title, action }: RouteHeaderProps) {
         </motion.p>
         <motion.h2
           variants={fadeSoft}
-          className="m-0 max-w-[18ch] font-display text-[clamp(2rem,5vw,5.25rem)] leading-tight tracking-tight text-wrap-balance"
+          className="m-0 max-w-[22ch] font-display text-[clamp(1.5rem,3.5vw,2.75rem)] leading-tight tracking-tight text-wrap-balance"
         >
           {title}
         </motion.h2>

@@ -10,7 +10,7 @@ import { useAgentTurn } from "@/hooks/use-agent-turn";
 import { useDateRange } from "@/hooks/use-date-range";
 import { formatElapsed } from "@/hooks/use-elapsed-timer";
 import { DataTable } from "@/components/data-table";
-import { MetricSkeleton } from "@/components/ui/skeleton";
+import { LoadingShell } from "@/components/loading-shell";
 import { RouteHeader } from "@/components/route-header";
 import { MetricCard } from "@/components/metric-card";
 import { StaggerGroup } from "@/components/stagger-group";
@@ -25,20 +25,14 @@ export function OverviewRoute() {
   const overview = useQuery({
     queryKey: ["overview", sinceDays],
     queryFn: () => fetchOverview({ sinceDays }),
+    placeholderData: (previous) => previous,
   });
 
   if (overview.isPending) {
-    return (
-      <div className="route-container">
-        <RouteHeader eyebrow="Operational scan" title="Loading dashboard data" />
-        <section className="stat-grid">
-          {Array.from({ length: 4 }, (_, i) => <MetricSkeleton key={i} />)}
-        </section>
-      </div>
-    );
+    return <LoadingShell eyebrow="Usage activity" title="Loading dashboard data" variant="metrics" />;
   }
 
-  if (overview.isError) return <StateBlock title="Dashboard unavailable" detail={overview.error.message} />;
+  if (overview.isError) return <StateBlock title="Dashboard unavailable" detail={overview.error.message} onRetry={() => overview.refetch()} />;
 
   const data = overview.data;
   const vendorEntries = Object.entries(data.projects.vendors);
@@ -432,6 +426,7 @@ function TopSessionsTable({ sessions, windowDays }: { sessions: TopSession[]; wi
       table={table}
       columnCount={columns.length}
       emptyMessage="No sessions with token usage in this window."
+      emptyHint="Try expanding the date range using the toggle in the header."
     />
   );
 }

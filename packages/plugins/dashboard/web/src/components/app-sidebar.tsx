@@ -6,7 +6,6 @@ import {
   MessageSquare,
   Trash2,
   AlertTriangle,
-  Cpu,
   Gauge,
   Zap,
   type LucideIcon,
@@ -14,7 +13,6 @@ import {
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -23,7 +21,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { cn } from "@/lib/utils";
 
 type NavItem = {
   title: string;
@@ -78,12 +75,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           url: "/error-collection",
           icon: AlertTriangle,
           match: () => Boolean(matchRoute({ to: "/error-collection" })),
-        },
-        {
-          title: "Context window",
-          url: "/sessions",
-          icon: Cpu,
-          match: () => Boolean(matchRoute({ to: "/sessions", fuzzy: true })),
         },
       ],
     },
@@ -156,18 +147,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </SidebarGroup>
         ))}
       </SidebarContent>
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton asChild tooltip="Overview">
-              <Link to="/" preload="intent" className={cn("text-muted-foreground")}>
-                <LayoutDashboard />
-                <span>Back to overview</span>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
     </Sidebar>
   );
 }

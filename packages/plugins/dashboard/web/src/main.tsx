@@ -7,6 +7,7 @@ import { AppShell } from "@/components/app-shell";
 import { StateBlock } from "@/components/state-block";
 import { Toaster } from "@/components/ui/sonner";
 import { DateRangeProvider } from "@/hooks/use-date-range";
+import { CommandPalette } from "@/components/command-palette";
 import "@/styles.css";
 
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
@@ -36,7 +37,7 @@ function RouteBoundary({ children }: { children: React.ReactNode }) {
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 15_000,
+      staleTime: 30_000,
       refetchOnWindowFocus: false,
     },
   },
@@ -47,9 +48,25 @@ const rootRoute = createRootRoute({
     <>
       <AppShell />
       <Toaster position="bottom-right" richColors />
+      <CommandPaletteTrigger />
     </>
   ),
 });
+
+function CommandPaletteTrigger() {
+  const [open, setOpen] = React.useState(false);
+  React.useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+  return <CommandPalette open={open} onOpenChange={setOpen} />;
+}
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,

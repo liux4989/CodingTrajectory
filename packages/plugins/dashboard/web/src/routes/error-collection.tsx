@@ -10,6 +10,7 @@ import {
   type ErrorCollectionPayload,
 } from "@/api";
 import { MetricCard } from "@/components/metric-card";
+import { LoadingShell } from "@/components/loading-shell";
 import { RouteHeader } from "@/components/route-header";
 import { shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
@@ -23,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { MetricSkeleton } from "@/components/ui/skeleton";
 import { useDateRange } from "@/hooks/use-date-range";
 import { HeaderLabel, FilterLabel } from "@/components/table-cells";
 
@@ -56,18 +56,11 @@ export function ErrorCollectionRoute() {
   };
 
   if (query.isPending) {
-    return (
-      <div className="route-container">
-        <RouteHeader eyebrow="Session quality" title="Loading error collection" />
-        <section className="stat-grid">
-          {Array.from({ length: 4 }, (_, i) => <MetricSkeleton key={i} />)}
-        </section>
-      </div>
-    );
+    return <LoadingShell eyebrow="Session quality" title="Loading error collection" variant="metrics" />;
   }
 
   if (query.isError) {
-    return <StateBlock title="Error collection unavailable" detail={query.error.message} />;
+    return <StateBlock title="Error collection unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
 
   const data = query.data;
@@ -296,6 +289,7 @@ function ErrorTable({ rows }: { rows: ErrorCollectionItem[] }) {
           table={table}
           columnCount={errorColumns.length}
           emptyMessage="No collected errors for this scope."
+          emptyHint="No errors collected in this period. Try expanding the date range."
         />
       </CardContent>
     </Card>

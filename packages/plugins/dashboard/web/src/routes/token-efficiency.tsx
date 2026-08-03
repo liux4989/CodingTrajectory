@@ -18,6 +18,7 @@ import {
 } from "@/api";
 import { MetricCard } from "@/components/metric-card";
 import { RouteHeader } from "@/components/route-header";
+import { LoadingShell } from "@/components/loading-shell";
 import { SessionLink } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { useDateRange } from "@/hooks/use-date-range";
@@ -171,6 +172,8 @@ function useEfficiencyProject(
         sinceDays,
         signal,
       }),
+    staleTime: 120_000,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -606,18 +609,15 @@ export function TokenEfficiencyIndexRoute() {
   const query = useQuery({
     queryKey: ["token-efficiency-index", sinceDays],
     queryFn: ({ signal }) => fetchTokenEfficiencyIndex({ sinceDays, signal }),
+    staleTime: 120_000,
+    placeholderData: (previous) => previous,
   });
 
   if (query.isPending) {
-    return (
-      <div className="route-container">
-        <RouteHeader eyebrow="Token efficiency" title="Project baselines" />
-        <TableSkeleton rows={7} cols={6} />
-      </div>
-    );
+    return <LoadingShell eyebrow="Token efficiency" title="Project baselines" variant="table" tableRows={7} tableCols={6} />;
   }
   if (query.isError) {
-    return <StateBlock title="Token efficiency unavailable" detail={query.error.message} />;
+    return <StateBlock title="Token efficiency unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
 
   const data = query.data;
@@ -742,7 +742,7 @@ export function TokenEfficiencyProjectRoute() {
 
   if (query.isPending) return <ProjectLoading projectName={projectName} />;
   if (query.isError) {
-    return <StateBlock title="Project efficiency unavailable" detail={query.error.message} />;
+    return <StateBlock title="Project efficiency unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
 
   const data = query.data;
@@ -966,7 +966,7 @@ export function TokenEfficiencyPatternsRoute() {
 
   if (query.isPending) return <ProjectLoading projectName={projectName} />;
   if (query.isError) {
-    return <StateBlock title="Pattern metrics unavailable" detail={query.error.message} />;
+    return <StateBlock title="Pattern metrics unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
   const data = query.data;
 
@@ -1087,7 +1087,7 @@ export function TokenEfficiencyPatternDetailRoute() {
 
   if (query.isPending) return <ProjectLoading projectName={projectName} />;
   if (query.isError) {
-    return <StateBlock title="Pattern detail unavailable" detail={query.error.message} />;
+    return <StateBlock title="Pattern detail unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
   const data = query.data;
   const pattern = data.patterns[grain].find((row) => row.key === patternKey);
@@ -1272,7 +1272,7 @@ export function TokenEfficiencyHotspotsRoute() {
 
   if (query.isPending) return <ProjectLoading projectName={projectName} />;
   if (query.isError) {
-    return <StateBlock title="Hotspot metrics unavailable" detail={query.error.message} />;
+    return <StateBlock title="Hotspot metrics unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
   const data = query.data;
 
@@ -1387,7 +1387,7 @@ export function TokenEfficiencyHotspotDetailRoute() {
 
   if (query.isPending) return <ProjectLoading projectName={projectName} />;
   if (query.isError) {
-    return <StateBlock title="Hotspot detail unavailable" detail={query.error.message} />;
+    return <StateBlock title="Hotspot detail unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
   const data = query.data;
   const hotspot = data.hotspots[grain].find((row) => row.key === hotspotKey);
@@ -1533,7 +1533,7 @@ export function TokenEfficiencyOutliersRoute() {
 
   if (query.isPending) return <ProjectLoading projectName={projectName} />;
   if (query.isError) {
-    return <StateBlock title="Outlier metrics unavailable" detail={query.error.message} />;
+    return <StateBlock title="Outlier metrics unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
   const data = query.data;
 

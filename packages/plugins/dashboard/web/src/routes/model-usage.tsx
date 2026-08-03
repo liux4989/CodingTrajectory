@@ -17,6 +17,7 @@ import { MetricCard } from "@/components/metric-card";
 import { RouteHeader } from "@/components/route-header";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
+import { LoadingShell } from "@/components/loading-shell";
 import { UsageTimelineChart } from "@/components/charts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { MetricSkeleton } from "@/components/ui/skeleton";
 import { FilterLabel, HeaderLabel, RightCell } from "@/components/table-cells";
 import { useDateRange } from "@/hooks/use-date-range";
 
@@ -95,18 +95,11 @@ export function ModelUsageRoute() {
   };
 
   if (query.isPending) {
-    return (
-      <div className="route-container">
-        <RouteHeader eyebrow="Model economics" title="Loading model usage" />
-        <section className="stat-grid">
-          {Array.from({ length: 4 }, (_, i) => <MetricSkeleton key={i} />)}
-        </section>
-      </div>
-    );
+    return <LoadingShell eyebrow="Model economics" title="Loading model usage" variant="metrics" />;
   }
 
   if (query.isError) {
-    return <StateBlock title="Model usage unavailable" detail={query.error.message} />;
+    return <StateBlock title="Model usage unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
 
   const data = query.data;
@@ -381,6 +374,8 @@ function OverviewModelTable({ data }: { data: ModelUsagePayload }) {
           table={table}
           columnCount={overviewModelColumns.length}
           emptyMessage="No model usage found for this scope."
+          emptyHint="Try selecting a different project or model filter."
+          showColumnToggle
         />
       </CardContent>
     </Card>
@@ -535,6 +530,8 @@ function ModelTable({ data, view }: { data: ModelUsagePayload; view: "cost" | "t
           table={table}
           columnCount={columns.length}
           emptyMessage="No model usage found for this scope."
+          emptyHint="Try selecting a different project or model filter."
+          showColumnToggle
         />
       </CardContent>
     </Card>
@@ -595,6 +592,7 @@ function OverviewSessionTable({ data }: { data: ModelUsagePayload }) {
           table={table}
           columnCount={overviewSessionColumns.length}
           emptyMessage="No sessions found for this scope."
+          emptyHint="Try selecting a different project or model filter."
         />
       </CardContent>
     </Card>
@@ -662,6 +660,7 @@ function TimeOverviewTable({ data }: { data: ModelUsagePayload }) {
           table={table}
           columnCount={timeOverviewModelColumns.length}
           emptyMessage="No model timing found for this scope."
+          emptyHint="Try selecting a different project or model filter."
         />
       </CardContent>
     </Card>
@@ -782,6 +781,7 @@ function SessionTable({ data, view }: { data: ModelUsagePayload; view: UsageView
           table={table}
           columnCount={columns.length}
           emptyMessage="No sessions found for this scope."
+          emptyHint="Try selecting a different project or model filter."
         />
       </CardContent>
     </Card>
@@ -875,6 +875,8 @@ function TurnTable({ data, view }: { data: ModelUsagePayload; view: "cost" | "to
           table={table}
           columnCount={columns.length}
           emptyMessage="No turns found for this scope."
+          emptyHint="Try selecting a different project or model filter."
+          showColumnToggle
         />
       </CardContent>
     </Card>
