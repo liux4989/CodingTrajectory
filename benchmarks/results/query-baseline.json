@@ -6,14 +6,8 @@
     "note": "largest graph on disk; 112 sessions, 213 turns, 19284 items, 76923 events"
   },
   "store_build": {
-    "targeted_warm_cache": {
-      "median_s": 16.3,
-      "store": { "graphs": 1, "sessions": 112, "turns": 213, "items": 19284, "events": 76923 }
-    },
-    "global_all_logs": {
-      "median_s": 59.7,
-      "store": { "graphs": 718, "sessions": 1189, "turns": 7209, "items": 146808, "events": 457278 }
-    }
+    "targeted_warm_cache": { "median_s": 16.3 },
+    "global_all_logs": { "median_s": 59.7 }
   },
   "projection_warm_store": {
     "before": {
@@ -21,78 +15,45 @@
       "session.tool_usage":    38.8,
       "session.items":         21.9,
       "graph.usage":            1.45,
-      "session.usage":          0.64,
       "session.request_usage":  0.81,
+      "session.usage":          0.64,
       "session.overview":       0.34,
       "session.events":         0.32,
       "session.model_usage":    0.31,
       "graph.overview":         0.06
     },
     "after": {
-      "session.stats":         50.0,
-      "session.tool_usage":    16.0,
-      "session.items":          0.26,
-      "graph.usage":            0.86,
-      "session.usage":          0.48,
-      "session.request_usage":  0.67,
+      "session.stats":         11.8,
+      "session.tool_usage":    14.5,
+      "session.items":          0.25,
+      "graph.usage":            0.90,
+      "session.request_usage":  0.69,
+      "session.usage":          0.31,
       "session.overview":       0.33,
       "session.events":         0.11,
       "session.model_usage":    0.16,
-      "graph.overview":         0.05
+      "graph.overview":         0.06
     },
     "speedup": {
-      "session.stats":        "3.1x",
-      "session.tool_usage":   "2.4x",
-      "session.items":        "84x"
+      "session.stats":        "13.3x",
+      "session.tool_usage":   "2.7x",
+      "session.items":        "88x"
     }
   },
   "optimizations_applied": [
-    {
-      "target": "_allocate_int sort-key precompute (DSU pattern)",
-      "file": "metrics/analysis.py",
-      "impact": "eliminated 83.5M lambda calls"
-    },
-    {
-      "target": "AllocatedRealTokenCost -> _CostAccum dataclass in hot loop",
-      "file": "metrics/analysis.py",
-      "impact": "eliminated ~34M pydantic instantiations; convert to pydantic only at output boundary"
-    },
-    {
-      "target": "present_entries O(n^2) filter -> bisect + sort once",
-      "file": "metrics/analysis.py",
-      "impact": "eliminated 16.9M redundant iterations per method"
-    },
-    {
-      "target": "output_weights precomputed at call sites",
-      "file": "metrics/analysis.py",
-      "impact": "eliminated UUID set creation + membership checks in _allocate_real_token_costs_for_entries (99M -> 78M uuid hashes)"
-    },
-    {
-      "target": "cost_evidence fast path (_estimate_cost_from_ints + _cost_evidence_from_accum)",
-      "file": "metrics/pricing.py",
-      "impact": "bypassed TokenUsage.model_validate + CostBreakdown/CostEstimate pydantic overhead for 2.4M cost estimates; memoized _normalize_model_name with lru_cache"
-    },
-    {
-      "target": "build_item_details lazy index build",
-      "file": "analysis/item_details.py",
-      "impact": "eliminated 5991 unnecessary build_session_graph_index calls (only needed for PLAN_SUBAGENT/SESSION_HANDOFF)"
-    },
-    {
-      "target": "_allocate_int_batch sparse path for zero-weight entries",
-      "file": "metrics/analysis.py",
-      "impact": "8x sort size reduction for output_weights allocations (12.5% non-zero)"
-    },
-    {
-      "target": "dict accumulation in-place mutation",
-      "file": "metrics/analysis.py",
-      "impact": "eliminated redundant dict[key]= reassignment when key exists (~19M uuid hashes saved)"
-    }
+    "_allocate_int DSU sort-key precompute (83.5M lambda calls eliminated)",
+    "AllocatedRealTokenCost -> _CostAccum dataclass in hot loop (~34M pydantic instantiations eliminated)",
+    "present_entries O(n^2) filter -> bisect + sort once",
+    "output_weights precomputed at call sites (UUID set/membership eliminated)",
+    "cost_evidence fast path _estimate_cost_from_ints + _cost_evidence_from_accum (bypasses pydantic for 2.4M calls); _normalize_model_name lru_cache",
+    "build_item_details lazy index build (5991 -> ~0 index builds)",
+    "numpy vectorized _allocate_int_batch (broadcasting + np.lexsort in C; 32s -> 3.8s)",
+    "precomputed numpy weight arrays per session/turn (no per-observation list comps)",
+    "index-based accumulation in build_session_graph_stats_token_usage (58M uuid.__hash__ + 39M dict.get eliminated)",
+    "vectorized turn-id output-eligibility mask via int-coded turn indices"
   ],
-  "remaining_bottleneck": {
-    "method": "session.stats",
-    "cost_s": 50.0,
-    "dominant_function": "_allocate_int_batch (24s tottime)",
-    "root_cause": "Pure-Python O(n log n) largest-remainder allocation, 30K calls with n~3233. Would need numpy or C extension for further speedup.",
-    "note": "session.tool_usage remaining 16s is split between _allocate_int_batch and _cost_evidence_from_accum (2.4M calls)"
+  "remaining_bottlenecks": {
+    "session.stats_11s": "per-element _CostAccum construction + accumulation loop (19.4M Python iterations, ~7s). Would need numpy-backed accumulation arrays to vectorize further.",
+    "session.tool_usage_15s": "_cost_evidence_from_accum (2.4M calls, ~8s) + _allocate_int_batch (~3s). Pricing lookup is now the dominant cost."
   }
 }

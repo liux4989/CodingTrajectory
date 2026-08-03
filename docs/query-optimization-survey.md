@@ -44,20 +44,20 @@ optionally cProfiles named methods. Writes `benchmarks/results/query-baseline.js
 Target: largest graph on disk (`019f6e1a…`, 112 sessions / 213 turns /
 19 284 items / 76 923 events).
 
-### Projection (warm store, single dispatch) — before vs after
+### Projection (warm store, single dispatch) - before vs after
 
 | method | before | after | speedup |
 |--------|--------|-------|---------|
-| `session.stats` | **157.0 s** | **50.0 s** | 3.1x |
-| `session.tool_usage` | **38.8 s** | **16.0 s** | 2.4x |
-| `session.items` {tool_call} | **21.9 s** | **0.26 s** | 84x |
-| `graph.usage` | 1.45 s | 0.86 s | 1.7x |
-| `session.request_usage` | 0.81 s | 0.67 s | 1.2x |
-| `session.usage` | 0.64 s | 0.48 s | 1.3x |
-| `session.overview` | 0.34 s | 0.33 s | — |
+| `session.stats` | **157.0 s** | **11.8 s** | 13.3x |
+| `session.tool_usage` | **38.8 s** | **14.5 s** | 2.7x |
+| `session.items` {tool_call} | **21.9 s** | **0.25 s** | 88x |
+| `graph.usage` | 1.45 s | 0.90 s | 1.6x |
+| `session.request_usage` | 0.81 s | 0.69 s | 1.2x |
+| `session.usage` | 0.64 s | 0.31 s | 2.1x |
+| `session.overview` | 0.34 s | 0.33 s | - |
 | `session.events` | 0.32 s | 0.11 s | 2.9x |
 | `session.model_usage` | 0.31 s | 0.16 s | 1.9x |
-| `graph.overview` | 0.06 s | 0.05 s | — |
+| `graph.overview` | 0.06 s | 0.06 s | - |
 
 ### Store build (unchanged)
 
@@ -127,15 +127,15 @@ builds (226M UUID hashes) per `session.items` call.**
   avoiding the redundant `dict[key]=` reassignment (and its UUID hash) when the
   key already exists.
 
-## 5. Remaining bottleneck
+## 5. Remaining bottlenecks
 
-`session.stats` at ~50s is dominated by `_allocate_int_batch` (~24s tottime):
-pure-Python O(n log n) largest-remainder allocation, 30K calls with n~3233.
-The sort (`sorted`) is ~7s; the list comprehensions (`raw`, `floors`, `keys`)
-are ~16s. Without numpy or a C extension, further speedup is limited.
+`session.stats` at ~12s is dominated by the per-element `_CostAccum` construction
++ accumulation loop (~7s, 19.4M Python iterations) and `_allocate_int_batch`
+(~3s numpy). Further vectorization would require numpy-backed accumulation
+arrays instead of per-element `_CostAccum` objects.
 
-`session.tool_usage` at ~16s is split between `_allocate_int_batch` and
-`_cost_evidence_from_accum` (2.4M calls).
+`session.tool_usage` at ~15s is dominated by `_cost_evidence_from_accum`
+(2.4M calls, ~8s) - the pricing lookup is now the bottleneck, not allocation.
 
 ## 6. Reproducing
 
