@@ -449,6 +449,8 @@ function TrendChart({
   const chartConfig = {
     median: { label: "Median", color: "var(--chart-1)" },
     p90: { label: "P90", color: "var(--chart-2)" },
+    p95: { label: "P95", color: "var(--chart-3)" },
+    max: { label: "Max", color: "var(--chart-3)" },
   } satisfies ChartConfig;
   const rows = summaries.map((summary) => {
     const distribution = distributionFor(summary, unit);
@@ -457,6 +459,8 @@ function TrendChart({
       label: summary.label,
       median: distribution.median,
       p90: distribution.p90,
+      p95: distribution.p95,
+      max: distribution.max,
     };
   });
 
@@ -469,7 +473,7 @@ function TrendChart({
           </h3>
         </CardTitle>
         <CardDescription>
-          Median and P90 prompt-token cost across completed {unit}s.
+          Median, P90, P95, and max prompt-token cost across completed {unit}s.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
@@ -478,7 +482,7 @@ function TrendChart({
             <ChartContainer
               config={chartConfig}
               className="h-[18rem] w-full"
-              aria-label={`${grain} ${unit} median and P90 prompt-token trend`}
+              aria-label={`${grain} ${unit} prompt-token distribution trend`}
             >
               <LineChart accessibilityLayer data={rows} margin={{ left: 8, right: 16 }}>
                 <CartesianGrid vertical={false} />
@@ -496,7 +500,7 @@ function TrendChart({
                       formatter={(value, name) => (
                         <div className="flex min-w-[9rem] items-center justify-between gap-3">
                           <span className="text-muted-foreground">
-                            {name === "p90" ? "P90" : "Median"}
+                            {chartConfig[String(name)]?.label ?? String(name)}
                           </span>
                           <span className="font-mono font-medium">
                             {formatExactTokens(Number(value))}
@@ -508,9 +512,20 @@ function TrendChart({
                 />
                 <Line
                   type="monotone"
-                  dataKey="median"
-                  stroke="var(--color-median)"
-                  strokeWidth={2}
+                  dataKey="max"
+                  stroke="var(--color-max)"
+                  strokeWidth={1}
+                  strokeDasharray="4 4"
+                  strokeOpacity={0.3}
+                  dot={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="p95"
+                  stroke="var(--color-p95)"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 4"
+                  strokeOpacity={0.5}
                   dot={false}
                 />
                 <Line
@@ -520,8 +535,33 @@ function TrendChart({
                   strokeWidth={2}
                   dot={false}
                 />
+                <Line
+                  type="monotone"
+                  dataKey="median"
+                  stroke="var(--color-median)"
+                  strokeWidth={2.5}
+                  dot={false}
+                />
               </LineChart>
             </ChartContainer>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="inline-block h-0.5 w-4 rounded" style={{ background: "var(--chart-1)" }} />
+                Median
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="inline-block h-0.5 w-4 rounded" style={{ background: "var(--chart-2)" }} />
+                P90
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="inline-block h-0.5 w-4 rounded border-t-2 border-dashed" style={{ borderColor: "var(--chart-3)", opacity: 0.5 }} />
+                P95
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="inline-block h-0.5 w-4 rounded border-t-2 border-dashed" style={{ borderColor: "var(--chart-3)", opacity: 0.3 }} />
+                Max
+              </span>
+            </div>
             <Table>
               <TableCaption>
                 Exact values for the {grain} {unit} trend chart.
@@ -531,6 +571,8 @@ function TrendChart({
                   <TableHead scope="col">Period</TableHead>
                   <TableHead scope="col" className="text-right">Median</TableHead>
                   <TableHead scope="col" className="text-right">P90</TableHead>
+                  <TableHead scope="col" className="text-right">P95</TableHead>
+                  <TableHead scope="col" className="text-right">Max</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -542,6 +584,12 @@ function TrendChart({
                     </TableCell>
                     <TableCell className="text-right font-mono">
                       {formatExactTokens(row.p90)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      {formatExactTokens(row.p95)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      {formatExactTokens(row.max)}
                     </TableCell>
                   </TableRow>
                 ))}

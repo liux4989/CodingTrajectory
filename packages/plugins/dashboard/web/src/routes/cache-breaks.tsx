@@ -1,8 +1,10 @@
 import * as React from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { getCoreRowModel, getSortedRowModel, getPaginationRowModel, useReactTable, type ColumnDef, type SortingState } from "@tanstack/react-table";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { fetchCacheBreaks, type AggregateCacheBreak, type CacheBreaksPayload, type CacheBreakSessionRow } from "@/api";
+import { DonutChart } from "@/components/charts";
 import { MetricCard } from "@/components/metric-card";
 import { RouteHeader } from "@/components/route-header";
 import { SectionTabs } from "@/components/section-tabs";
@@ -11,7 +13,10 @@ import { StateBlock } from "@/components/state-block";
 import { LoadingShell } from "@/components/loading-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { DataTable } from "@/components/data-table";
+import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import {
   Select,
   SelectContent,
@@ -20,7 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDateRange } from "@/hooks/use-date-range";
-import { HeaderLabel, FilterLabel } from "@/components/table-cells";
+import { FilterLabel } from "@/components/table-cells";
 import { cn } from "@/lib/utils";
 import {
   cacheBreakTone,
@@ -127,7 +132,7 @@ export function CacheBreaksRoute() {
               label: "Trend",
               content: (
                 <>
-                  <ByTypeStrip data={data} />
+                  <ByTypeDonut data={data} />
                   <DailyBreaksChart data={data} />
                 </>
               ),
@@ -165,6 +170,7 @@ function SummaryCards({ data }: { data: CacheBreaksPayload }) {
         label="Cache breaks"
         value={s.total_breaks}
         detail={`${s.sessions_with_breaks.toLocaleString()} session${s.sessions_with_breaks === 1 ? "" : "s"} · ${s.affected_projects.toLocaleString()} project${s.affected_projects === 1 ? "" : "s"}`}
+        sparklineEntries={data.time_buckets.map(b => ({ label: b.bucket.slice(5), value: b.breaks }))}
       />
       <MetricCard
         label="Re-read tokens"
@@ -186,46 +192,67 @@ function SummaryCards({ data }: { data: CacheBreaksPayload }) {
   );
 }
 
-function ByTypeStrip({ data }: { data: CacheBreaksPayload }) {
+function ByTypeDonut({ data }: { data: CacheBreaksPayload }) {
   const types: CacheBreakType[] = ["effort_switch", "ttl_confirmed", "ttl_likely"];
   const total = data.summary.total_breaks || 1;
+  const chartData = types.map((type) => ({
+    label: cacheBreakTone(type, null, null).label,
+    value: data.summary.by_type[type] ?? 0,
+    color: TYPE_BAR_COLOR[type],
+  }));
   return (
-    <section className="grid min-w-0 grid-cols-3 gap-4 max-lg:grid-cols-1">
-      {types.map((type) => {
-        const count = data.summary.by_type[type] ?? 0;
-        const tone = cacheBreakTone(type, null, null);
-        return (
-          <Card key={type} className="min-w-0">
-            <CardContent className="flex items-center gap-3 pt-6">
-              <span
-                className={cn(
-                  "inline-flex size-8 shrink-0 items-center justify-center rounded-md border",
-                  tone.className,
-                )}
-              >
-                {tone.icon}
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="title-card">Breaks by Type</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <DonutChart
+          data={chartData}
+          centerLabel={data.summary.total_breaks.toLocaleString()}
+          centerSubLabel="breaks"
+          ariaLabel="Cache breaks by type"
+        />
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
+          {types.map((type) => {
+            const count = data.summary.by_type[type] ?? 0;
+            return (
+              <span key={type} className="inline-flex items-center gap-1.5">
+                <span
+                  className="inline-block h-2 w-2 rounded-[2px]"
+                  style={{ background: TYPE_BAR_COLOR[type] }}
+                />
+                {cacheBreakTone(type, null, null).label}
+                <span className="mono">
+                  {count.toLocaleString()} ({Math.round((count / total) * 100)}%)
+                </span>
               </span>
-              <div className="min-w-0">
-                <p className="m-0 text-muted-foreground">{tone.label}</p>
-                <p className="m-0 metric-hero">{count.toLocaleString()}</p>
-                <p className="m-0 mono text-caption text-muted-foreground">
-                  {Math.round((count / total) * 100)}% of breaks
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })}
-    </section>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
 function DailyBreaksChart({ data }: { data: CacheBreaksPayload }) {
   const buckets = data.time_buckets;
   if (buckets.length < 2) return null;
-  const maxValue = Math.max(...buckets.map((b) => Math.max(b.breaks, b.re_read_tokens > 0 ? 1 : 0)), 1);
-  // Normalize bar height by break count; waste shown in the tooltip.
-  const maxBreaks = Math.max(...buckets.map((b) => b.breaks), 1);
+
+  const chartData = buckets.map((b) => ({
+    bucket: b.bucket.slice(5),
+    effort_switch: b.by_type.effort_switch ?? 0,
+    ttl_confirmed: b.by_type.ttl_confirmed ?? 0,
+    ttl_likely: b.by_type.ttl_likely ?? 0,
+    re_read: b.re_read_tokens,
+    waste: b.waste_usd,
+  }));
+
+  const chartConfig = {
+    effort_switch: { label: "Effort Switch", color: "var(--warning)" },
+    ttl_confirmed: { label: "TTL Confirmed", color: "color-mix(in srgb, var(--foreground) 45%, transparent)" },
+    ttl_likely: { label: "TTL Likely", color: "color-mix(in srgb, var(--foreground) 22%, transparent)" },
+  } satisfies ChartConfig;
+
   return (
     <Card className="min-w-0">
       <CardHeader>
@@ -235,47 +262,47 @@ function DailyBreaksChart({ data }: { data: CacheBreaksPayload }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div
-          className="flex h-40 w-full items-end gap-1.5"
-          role="img"
-          aria-label="Daily cache breaks by cause"
-        >
-          {buckets.map((bucket) => {
-            const heightPct = (bucket.breaks / maxBreaks) * 100;
-            const effort = bucket.by_type.effort_switch ?? 0;
-            const ttlConfirmed = bucket.by_type.ttl_confirmed ?? 0;
-            const ttlLikely = bucket.by_type.ttl_likely ?? 0;
-            const segments = [
-              { type: "effort_switch" as const, count: effort },
-              { type: "ttl_confirmed" as const, count: ttlConfirmed },
-              { type: "ttl_likely" as const, count: ttlLikely },
-            ].filter((seg) => seg.count > 0);
-            const day = bucket.bucket.slice(5);
-            return (
-              <div
-                key={bucket.bucket}
-                className="group relative flex h-full flex-1 flex-col justify-end"
-                title={`${bucket.bucket} · ${bucket.breaks} breaks (${effort} effort, ${ttlConfirmed + ttlLikely} TTL) · ${formatTokens(bucket.re_read_tokens)} re-read · ${formatCostUsd(bucket.waste_usd)}`}
-              >
-                <div
-                  className="flex w-full flex-col-reverse overflow-hidden rounded-t-sm transition-opacity group-hover:opacity-100"
-                  style={{ height: `${Math.max(heightPct, bucket.breaks > 0 ? 4 : 0)}%` }}
-                >
-                  {segments.map((seg) => (
-                    <div
-                      key={seg.type}
-                      style={{
-                        background: TYPE_BAR_COLOR[seg.type],
-                        height: `${(seg.count / bucket.breaks) * 100}%`,
-                      }}
-                    />
-                  ))}
-                </div>
-                <span className="mt-1 block text-center mono text-[0.6rem] text-muted-foreground">{day}</span>
-              </div>
-            );
-          })}
-        </div>
+        <ChartContainer config={chartConfig} className="aspect-auto h-[14rem] w-full" aria-label="Daily cache breaks by cause">
+          <BarChart accessibilityLayer data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
+            <CartesianGrid vertical={false} />
+            <XAxis
+              dataKey="bucket"
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              minTickGap={24}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+            />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              width={32}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+              allowDecimals={false}
+            />
+            <ChartTooltip
+              cursor={false}
+              content={
+                <ChartTooltipContent
+                  indicator="dot"
+                  formatter={(value, name) => (
+                    <div className="flex min-w-[10rem] items-center justify-between gap-3">
+                      <span className="text-muted-foreground">
+                        {chartConfig[String(name)]?.label ?? String(name)}
+                      </span>
+                      <span className="font-mono font-medium text-foreground tabular-nums">
+                        {Number(value).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                />
+              }
+            />
+            <Bar dataKey="effort_switch" stackId="a" fill="var(--color-effort_switch)" radius={[0, 0, 0, 0]} />
+            <Bar dataKey="ttl_confirmed" stackId="a" fill="var(--color-ttl_confirmed)" />
+            <Bar dataKey="ttl_likely" stackId="a" fill="var(--color-ttl_likely)" radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ChartContainer>
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
           {(["effort_switch", "ttl_confirmed", "ttl_likely"] as CacheBreakType[]).map((type) => (
             <span key={type} className="inline-flex items-center gap-1.5">
@@ -283,7 +310,6 @@ function DailyBreaksChart({ data }: { data: CacheBreaksPayload }) {
               {cacheBreakTone(type, null, null).label}
             </span>
           ))}
-          <span className="mono">peak {maxValue.toLocaleString()} breaks/day</span>
         </div>
       </CardContent>
     </Card>
@@ -349,7 +375,7 @@ function BreakdownCard({
 const sessionColumns: ColumnDef<CacheBreakSessionRow>[] = [
   {
     id: "session",
-    header: () => <HeaderLabel>Session</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Session" />,
     cell: ({ row }) => {
       const item = row.original;
       return (
@@ -371,23 +397,23 @@ const sessionColumns: ColumnDef<CacheBreakSessionRow>[] = [
   {
     id: "project",
     accessorFn: (row) => row.project,
-    header: () => <HeaderLabel>Project</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Project" />,
   },
   {
     id: "vendor",
     accessorFn: (row) => row.vendor,
-    header: () => <HeaderLabel>Vendor</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Vendor" />,
   },
   {
     id: "breaks",
     accessorFn: (row) => row.breaks,
-    header: () => <HeaderLabel>Breaks</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Breaks" />,
     cell: ({ getValue }) => <span className="mono">{getValue<number>().toLocaleString()}</span>,
   },
   {
     id: "confirmed",
     accessorFn: (row) => row.confirmed,
-    header: () => <HeaderLabel>Confirmed</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Confirmed" />,
     cell: ({ getValue }) => {
       const n = getValue<number>();
       return n > 0 ? <Badge variant="secondary" className="mono">{n}</Badge> : <span className="mono text-muted-foreground">0</span>;
@@ -396,22 +422,27 @@ const sessionColumns: ColumnDef<CacheBreakSessionRow>[] = [
   {
     id: "re_read",
     accessorFn: (row) => row.re_read_tokens,
-    header: () => <HeaderLabel>Re-read</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Re-read" />,
     cell: ({ getValue }) => <span className="mono">{formatTokens(getValue<number>())}</span>,
   },
   {
     id: "waste",
     accessorFn: (row) => row.waste_usd,
-    header: () => <HeaderLabel>Waste</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Waste" />,
     cell: ({ getValue }) => <span className="mono">{formatCostUsd(getValue<number>())}</span>,
   },
 ];
 
 function TopSessionsTable({ rows }: { rows: CacheBreakSessionRow[] }) {
+  const [sorting, setSorting] = React.useState<SortingState>([]);
   const table = useReactTable({
     data: rows,
     columns: sessionColumns,
+    state: { sorting },
+    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
   return (
     <Card className="min-w-0">
@@ -423,6 +454,7 @@ function TopSessionsTable({ rows }: { rows: CacheBreakSessionRow[] }) {
       </CardHeader>
       <CardContent>
         <DataTable table={table} columnCount={sessionColumns.length} emptyMessage="No sessions with cache breaks." emptyHint="No cache breaks recorded in this period." />
+        <DataTablePagination table={table} />
       </CardContent>
     </Card>
   );
@@ -432,7 +464,7 @@ const breakColumns: ColumnDef<AggregateCacheBreak>[] = [
   {
     id: "type",
     accessorFn: (row) => row.type,
-    header: () => <HeaderLabel>Type</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Type" />,
     cell: ({ row }) => {
       const item = row.original;
       const tone = cacheBreakTone(item.type, item.effort_from, item.effort_to);
@@ -451,7 +483,7 @@ const breakColumns: ColumnDef<AggregateCacheBreak>[] = [
   },
   {
     id: "session",
-    header: () => <HeaderLabel>Session</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Session" />,
     cell: ({ row }) => {
       const item = row.original;
       return (
@@ -468,24 +500,24 @@ const breakColumns: ColumnDef<AggregateCacheBreak>[] = [
   {
     id: "vendor",
     accessorFn: (row) => row.vendor,
-    header: () => <HeaderLabel>Vendor</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Vendor" />,
   },
   {
     id: "idle",
     accessorFn: (row) => row.idle_seconds,
-    header: () => <HeaderLabel>Idle</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Idle" />,
     cell: ({ getValue }) => <span className="mono text-muted-foreground">{formatIdleSeconds(getValue<number>())}</span>,
   },
   {
     id: "re_read",
     accessorFn: (row) => row.re_read_tokens,
-    header: () => <HeaderLabel>Re-read</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Re-read" />,
     cell: ({ getValue }) => <span className="mono">{formatTokens(getValue<number>())}</span>,
   },
   {
     id: "cost",
     accessorFn: (row) => row.est_cost_usd ?? -1,
-    header: () => <HeaderLabel>Est. cost</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Est. cost" />,
     cell: ({ getValue }) => {
       const v = getValue<number>();
       return <span className="mono">{v < 0 ? "-" : formatCostUsd(v)}</span>;
@@ -494,7 +526,7 @@ const breakColumns: ColumnDef<AggregateCacheBreak>[] = [
   {
     id: "day",
     accessorFn: (row) => row.timestamp ?? "",
-    header: () => <HeaderLabel>When</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="When" />,
     cell: ({ getValue }) => {
       const v = getValue<string>();
       return <span className="mono text-caption text-muted-foreground">{v ? v.slice(0, 10) : "-"}</span>;
@@ -503,10 +535,15 @@ const breakColumns: ColumnDef<AggregateCacheBreak>[] = [
 ];
 
 function BreakTable({ rows }: { rows: AggregateCacheBreak[] }) {
+  const [sorting, setSorting] = React.useState<SortingState>([]);
   const table = useReactTable({
     data: rows,
     columns: breakColumns,
+    state: { sorting },
+    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
   return (
     <Card className="min-w-0">
@@ -517,7 +554,8 @@ function BreakTable({ rows }: { rows: AggregateCacheBreak[] }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <DataTable table={table} columnCount={breakColumns.length} emptyMessage="No cache breaks recorded." emptyHint="No cache breaks recorded in this period." />
+        <DataTable table={table} columnCount={breakColumns.length} emptyMessage="No cache breaks recorded." emptyHint="No cache breaks recorded in this period." showDensityToggle showExport exportFilename="cache-breaks" />
+        <DataTablePagination table={table} />
       </CardContent>
     </Card>
   );

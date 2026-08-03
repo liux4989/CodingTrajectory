@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { getCoreRowModel, getSortedRowModel, getPaginationRowModel, useReactTable, type ColumnDef, type SortingState } from "@tanstack/react-table";
 import { AlertTriangle, CircleSlash, ShieldAlert } from "lucide-react";
 import {
   fetchErrorCollection,
@@ -9,6 +9,7 @@ import {
   type ErrorCollectionKind,
   type ErrorCollectionPayload,
 } from "@/api";
+import { DonutChart } from "@/components/charts";
 import { MetricCard } from "@/components/metric-card";
 import { SectionTabs } from "@/components/section-tabs";
 import { LoadingShell } from "@/components/loading-shell";
@@ -18,6 +19,8 @@ import { StateBlock } from "@/components/state-block";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable } from "@/components/data-table";
+import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import {
   Select,
   SelectContent,
@@ -26,7 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDateRange } from "@/hooks/use-date-range";
-import { HeaderLabel, FilterLabel } from "@/components/table-cells";
+import { FilterLabel } from "@/components/table-cells";
 
 const ALL_PROJECTS = "__all_projects__";
 
@@ -108,7 +111,7 @@ export function ErrorCollectionRoute() {
             label: "Breakdown",
             content: (
               <div className="grid gap-4">
-                <KindCards data={data} />
+                <KindDonut data={data} />
                 <ProjectCards data={data} />
               </div>
             ),
@@ -135,6 +138,7 @@ function SummaryCards({ data }: { data: ErrorCollectionPayload }) {
         label="Errors"
         value={data.summary.total_errors}
         detail={`${data.summary.sessions.toLocaleString()} sessions in ${data.filters.since_days} days`}
+        ratio={data.summary.sessions ? data.summary.affected_sessions / data.summary.sessions : 0}
       />
       <MetricCard
         label="Affected Sessions"
@@ -156,23 +160,44 @@ function SummaryCards({ data }: { data: ErrorCollectionPayload }) {
   );
 }
 
-function KindCards({ data }: { data: ErrorCollectionPayload }) {
+function KindDonut({ data }: { data: ErrorCollectionPayload }) {
+  const kinds = Object.keys(KIND_LABELS) as ErrorCollectionKind[];
+  const total = data.summary.total_errors || 1;
+  const chartData = kinds.map((kind) => ({
+    label: KIND_LABELS[kind],
+    value: data.summary.by_kind[kind] ?? 0,
+  }));
   return (
-    <section className="grid min-w-0 grid-cols-3 gap-4 max-lg:grid-cols-1">
-      {Object.entries(KIND_LABELS).map(([kind, label]) => (
-        <Card key={kind} className="min-w-0">
-          <CardContent className="flex items-center gap-3 pt-6">
-            <KindIcon kind={kind as ErrorCollectionKind} />
-            <div className="min-w-0">
-              <p className="m-0 text-muted-foreground">{label}</p>
-              <p className="m-0 metric-hero">
-                {data.summary.by_kind[kind as ErrorCollectionKind].toLocaleString()}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </section>
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="title-card">Errors by Kind</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <DonutChart
+          data={chartData}
+          centerLabel={data.summary.total_errors.toLocaleString()}
+          centerSubLabel="errors"
+          ariaLabel="Errors by kind"
+        />
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
+          {kinds.map((kind, index) => {
+            const count = data.summary.by_kind[kind] ?? 0;
+            return (
+              <span key={kind} className="inline-flex items-center gap-1.5">
+                <span
+                  className="inline-block h-2 w-2 rounded-[2px]"
+                  style={{ background: `var(--chart-${index + 1})` }}
+                />
+                {KIND_LABELS[kind]}
+                <span className="mono">
+                  {count.toLocaleString()} ({Math.round((count / total) * 100)}%)
+                </span>
+              </span>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -211,7 +236,7 @@ function ProjectCards({ data }: { data: ErrorCollectionPayload }) {
 const errorColumns: ColumnDef<ErrorCollectionItem>[] = [
   {
     id: "type",
-    header: () => <HeaderLabel>Type</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Type" />,
     cell: ({ row }) => {
       const item = row.original;
       return (
@@ -227,7 +252,7 @@ const errorColumns: ColumnDef<ErrorCollectionItem>[] = [
   },
   {
     id: "session",
-    header: () => <HeaderLabel>Session</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Session" />,
     cell: ({ row }) => {
       const item = row.original;
       return (
@@ -249,12 +274,12 @@ const errorColumns: ColumnDef<ErrorCollectionItem>[] = [
   {
     id: "project",
     accessorFn: (row) => row.project || "unknown",
-    header: () => <HeaderLabel>Project</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Project" />,
   },
   {
     id: "severity",
     accessorFn: (row) => row.severity,
-    header: () => <HeaderLabel>Severity</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Severity" />,
     cell: ({ getValue }) => {
       const severity = getValue<"info" | "warning" | "critical">();
       return (
@@ -265,7 +290,7 @@ const errorColumns: ColumnDef<ErrorCollectionItem>[] = [
   {
     id: "confidence",
     accessorFn: (row) => row.confidence,
-    header: () => <HeaderLabel>Confidence</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Confidence" />,
     cell: ({ getValue }) => {
       const confidence = getValue<"direct" | "inferred">();
       return (
@@ -276,7 +301,7 @@ const errorColumns: ColumnDef<ErrorCollectionItem>[] = [
   {
     id: "evidence",
     accessorFn: (row) => row.evidence,
-    header: () => <HeaderLabel>Evidence</HeaderLabel>,
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Evidence" />,
     cell: ({ getValue }) => {
       const items = getValue<string[]>();
       return (
@@ -294,10 +319,15 @@ const errorColumns: ColumnDef<ErrorCollectionItem>[] = [
 ];
 
 function ErrorTable({ rows }: { rows: ErrorCollectionItem[] }) {
+  const [sorting, setSorting] = React.useState<SortingState>([]);
   const table = useReactTable({
     data: rows,
     columns: errorColumns,
+    state: { sorting },
+    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
@@ -312,7 +342,11 @@ function ErrorTable({ rows }: { rows: ErrorCollectionItem[] }) {
           columnCount={errorColumns.length}
           emptyMessage="No collected errors for this scope."
           emptyHint="No errors collected in this period. Try expanding the date range."
+          showDensityToggle
+          showExport
+          exportFilename="errors"
         />
+        <DataTablePagination table={table} />
       </CardContent>
     </Card>
   );

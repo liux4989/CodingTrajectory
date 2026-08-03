@@ -1,9 +1,16 @@
 import * as React from "react"
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   LabelList,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
   XAxis,
   YAxis,
 } from "recharts"
@@ -318,6 +325,167 @@ function bucketValue(
   view: "cost" | "tokens",
 ) {
   return view === "tokens" ? row.usage.processed_tokens ?? 0 : row.estimated_cost_usd
+}
+
+// ---- DonutChart ----
+
+type DonutDatum = { label: string; value: number; color?: string }
+
+type DonutChartProps = {
+  data: DonutDatum[]
+  className?: string
+  ariaLabel?: string
+  /** Center label (e.g. total count). */
+  centerLabel?: string
+  /** Center sub-label (e.g. "total"). */
+  centerSubLabel?: string
+}
+
+/**
+ * Compact donut chart for proportional breakdowns. Each slice is colored from
+ * the chart palette unless a per-datum color is provided. Renders an interactive
+ * tooltip with percentage values.
+ */
+export function DonutChart({ data, className, ariaLabel, centerLabel, centerSubLabel }: DonutChartProps) {
+  const total = data.reduce((sum, item) => sum + item.value, 0) || 1
+  const config = React.useMemo(() => {
+    const built: ChartConfig = {}
+    data.forEach((item, index) => {
+      built[item.label] = {
+        label: item.label,
+        color: item.color ?? CHART_PALETTE[index % CHART_PALETTE.length],
+      }
+    })
+    return built
+  }, [data])
+
+  const chartData = data.map((item, index) => ({
+    name: item.label,
+    value: item.value,
+    fill: item.color ?? `var(--color-${item.label})`,
+    colorVar: item.color ?? CHART_PALETTE[index % CHART_PALETTE.length],
+  }))
+
+  return (
+    <ChartContainer
+      config={config}
+      className={cn("aspect-auto h-[10rem] w-full", className)}
+      aria-label={ariaLabel}
+    >
+      <PieChart>
+        <ChartTooltip
+          cursor={false}
+          content={
+            <ChartTooltipContent
+              hideLabel
+              formatter={(value, name) => (
+                <div className="flex min-w-[8rem] items-center justify-between gap-3">
+                  <span className="text-muted-foreground">{config[String(name)]?.label ?? String(name)}</span>
+                  <span className="font-mono font-medium text-foreground tabular-nums">
+                    {Number(value).toLocaleString()} ({Math.round((Number(value) / total) * 100)}%)
+                  </span>
+                </div>
+              )}
+            />
+          }
+        />
+        <Pie
+          data={chartData}
+          dataKey="value"
+          nameKey="name"
+          innerRadius="62%"
+          outerRadius="100%"
+          paddingAngle={2}
+          stroke="none"
+        >
+          {chartData.map((entry) => (
+            <Cell key={entry.name} fill={entry.colorVar} />
+          ))}
+        </Pie>
+        {centerLabel ? (
+          <text
+            x="50%"
+            y="50%"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            className="fill-foreground font-display font-extrabold"
+            style={{ fontSize: "1.5rem" }}
+          >
+            {centerLabel}
+          </text>
+        ) : null}
+        {centerSubLabel ? (
+          <text
+            x="50%"
+            y="62%"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            className="fill-muted-foreground font-display"
+            style={{ fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.08em" }}
+          >
+            {centerSubLabel}
+          </text>
+        ) : null}
+      </PieChart>
+    </ChartContainer>
+  )
+}
+
+// ---- Sparkline ----
+
+type SparklineProps = {
+  data: Array<{ label: string; value: number }>
+  className?: string
+  ariaLabel?: string
+  color?: string
+  variant?: "line" | "area"
+}
+
+/**
+ * Ultra-compact sparkline for embedding in metric card footers. No axes, no
+ * grid, no legend - just the shape. Supports line and area variants.
+ */
+export function Sparkline({ data, className, ariaLabel, color = "var(--chart-1)", variant = "area" }: SparklineProps) {
+  if (!data.length) return null
+  const chartData = data.map((entry) => ({ label: entry.label, value: entry.value }))
+  const config = { value: { label: "Value", color } } satisfies ChartConfig
+
+  return (
+    <ChartContainer
+      config={config}
+      className={cn("aspect-auto h-8 w-full", className)}
+      aria-label={ariaLabel}
+    >
+      {variant === "area" ? (
+        <AreaChart data={chartData} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+          <defs>
+            <linearGradient id="sparkline-gradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.3} />
+              <stop offset="100%" stopColor={color} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <Area
+            type="monotone"
+            dataKey="value"
+            stroke={color}
+            strokeWidth={1.5}
+            fill="url(#sparkline-gradient)"
+            dot={false}
+          />
+        </AreaChart>
+      ) : (
+        <LineChart data={chartData} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+          <Line
+            type="monotone"
+            dataKey="value"
+            stroke={color}
+            strokeWidth={1.5}
+            dot={false}
+          />
+        </LineChart>
+      )}
+    </ChartContainer>
+  )
 }
 
 function compactNumber(value: number) {
