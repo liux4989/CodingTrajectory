@@ -1,0 +1,74 @@
+{
+  "generated_at": "2025-08-03",
+  "target_graph": {
+    "root_session_id": "019f6e1a-b402-7e61-985d-dde827545977",
+    "scope": "global",
+    "note": "largest graph on disk; 112 sessions, 213 turns, 19284 items, 76923 events"
+  },
+  "store_build": {
+    "targeted_warm_cache": {
+      "median_s": 16.26,
+      "store": { "graphs": 1, "sessions": 112, "turns": 213, "items": 19284, "events": 76923 },
+      "note": "resolve_store({session_id}) via path-index cache -> targeted ingest"
+    },
+    "global_all_logs": {
+      "median_s": 59.72,
+      "store": { "graphs": 718, "sessions": 1189, "turns": 7209, "items": 146808, "events": 457278 },
+      "note": "full discovery over ~/.codex, ~/.claude, ~/.pi"
+    }
+  },
+  "projection_warm_store": {
+    "session.stats":        { "median_s": 157.0, "note": "build_session_graph_stats_token_usage dominates (157s); context_stats=0.37s" },
+    "session.tool_usage":   { "median_s": 38.77, "note": "_build_item_real_token_costs_for_session; 2.43M cost_evidence_from_usage calls" },
+    "session.items":        { "median_s": 21.86, "params": { "types": ["tool_call"] } },
+    "graph.usage":          { "median_s": 1.45 },
+    "session.usage":        { "median_s": 0.638 },
+    "session.request_usage":{ "median_s": 0.810 },
+    "session.overview":     { "median_s": 0.337 },
+    "session.events":       { "median_s": 0.317 },
+    "session.model_usage":  { "median_s": 0.311 },
+    "graph.overview":       { "median_s": 0.061 }
+  },
+  "profile_session_stats": {
+    "wall_under_cprofile_s": 170.0,
+    "bottleneck": "build_session_graph_stats_token_usage (analysis.py:937)",
+    "top_cumulative": [
+      { "func": "_allocate_real_token_costs_for_entries (analysis.py:1506)", "cumtime_s": 124.6, "ncalls": 5606 },
+      { "func": "_allocate_int (analysis.py:1590)", "cumtime_s": 68.7, "ncalls": 33636 },
+      { "func": "builtins.sorted", "cumtime_s": 63.0, "ncalls": 27699 },
+      { "func": "<lambda> sort-key (analysis.py:1604)", "tottime_s": 51.9, "ncalls": 83555366 },
+      { "func": "pydantic BaseModel.__init__", "cumtime_s": 51.3, "ncalls": 33895988 },
+      { "func": "_add_allocated_real_token_cost (analysis.py:1315)", "cumtime_s": 19.5, "ncalls": 16938942 }
+    ],
+    "root_causes": [
+      "O(observations x entries) rebuild of present_entries per observation (analysis.py:957)",
+      "AllocatedRealTokenCost is a pydantic BaseModel instantiated ~33.9M times in the hot allocation loop",
+      "_allocate_int does a sorted(range(n), key=lambda) 6x per allocation; lambda invoked 83.5M times"
+    ]
+  },
+  "profile_session_tool_usage": {
+    "wall_under_cprofile_s": 81.76,
+    "bottleneck": "_build_item_real_token_costs_for_session (analysis.py:1119)",
+    "top_cumulative": [
+      { "func": "_build_item_real_token_costs_for_session (analysis.py:1119)", "cumtime_s": 79.5, "tottime_s": 5.5 },
+      { "func": "cost_evidence_from_usage (pricing.py:188)", "cumtime_s": 46.7, "ncalls": 2431057 },
+      { "func": "estimate_cost (pricing.py:315)", "cumtime_s": 38.1, "ncalls": 2430769 },
+      { "func": "pydantic BaseModel.__init__", "cumtime_s": 12.6, "ncalls": 12274931 },
+      { "func": "_allocate_real_token_costs_for_entries (analysis.py:1506)", "cumtime_s": 11.2, "ncalls": 6005 },
+      { "func": "uuid.__eq__", "tottime_s": 5.2, "ncalls": 58046072 }
+    ],
+    "root_causes": [
+      "O(observations x entries) present_entries filter per observation (analysis.py:1131)",
+      "cost_evidence_from_usage / estimate_cost called 2.43M times; each builds CostEvidenceFlat pydantic + price lookup",
+      "uuid.__eq__ 58M calls: list-membership / repeated UUID equality in a hot path instead of set/dict keying"
+    ]
+  },
+  "optimization_targets_ranked": [
+    { "target": "AllocatedRealTokenCost -> dataclass/namedtuple", "methods": ["session.stats", "session.tool_usage"], "est_impact": "~50s on stats" },
+    { "target": "present_entries O(n^2) filter -> sort entries once + bisect / prefix per observation", "methods": ["session.stats", "session.tool_usage"], "est_impact": "removes 33.9M / 12.3M redundant iterations" },
+    { "target": "_allocate_int sort lambda -> precompute once, avoid per-allocation sort", "methods": ["session.stats", "session.tool_usage"], "est_impact": "~50s (83.5M lambda calls)" },
+    { "target": "cost_evidence_from_usage memoization / batch pricing", "methods": ["session.tool_usage"], "est_impact": "~47s" },
+    { "target": "uuid list-membership -> set/dict", "methods": ["session.tool_usage"], "est_impact": "~5s (58M __eq__)" },
+    { "target": "ingestion pydantic model_validate cost (store build 16s targeted / 60s global)", "methods": ["all (store layer)"], "est_impact": "store-build latency" }
+  ]
+}

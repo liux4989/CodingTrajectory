@@ -216,6 +216,16 @@ def main() -> int:
     parser.add_argument("--profile", default="", help="comma-separated methods to cProfile (e.g. stats,tool_usage)")
     parser.add_argument("--no-store-build", action="store_true", help="skip the (slow) store-build benchmarks")
     parser.add_argument("--no-projection", action="store_true", help="skip per-method projection benchmarks")
+    parser.add_argument(
+        "--methods",
+        default="",
+        help="comma-separated method names to include in projection (default: all)",
+    )
+    parser.add_argument(
+        "--skip-methods",
+        default="",
+        help="comma-separated method names to exclude from projection",
+    )
     args = parser.parse_args()
 
     current_dir = REPO_ROOT
@@ -289,7 +299,13 @@ def main() -> int:
 
         print(f"{'method':22}{'params':22}{'median':>11}{'min':>11}{'max':>11}  resp")
         print("-" * 100)
+        include = {m.strip() for m in args.methods.split(",") if m.strip()}
+        exclude = {m.strip() for m in args.skip_methods.split(",") if m.strip()}
         for method, params in ENTRYPOINT_METHODS:
+            if include and method not in include:
+                continue
+            if method in exclude:
+                continue
             full = {"session_id": graph_id, **params}
             label = json.dumps(params, sort_keys=True) if params else "{}"
             try:
