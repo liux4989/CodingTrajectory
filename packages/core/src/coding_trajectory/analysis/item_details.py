@@ -31,7 +31,6 @@ def build_item_details(
     include_content: bool = False,
 ) -> dict[str, Any]:
     concept = _classify_item(item)
-    index = build_session_graph_index(session_graph)
 
     if isinstance(item, AgentMessageItem):
         operations = ["text_reply"]
@@ -48,10 +47,14 @@ def build_item_details(
     elif isinstance(item, PlanItem):
         if concept == ItemKind.PLAN_SUBAGENT:
             operations = ["spawn", "collect_result"]
-            shape = _plan_subagent_shape(item, index=index)
+            shape = _plan_subagent_shape(
+                item, index=build_session_graph_index(session_graph)
+            )
         elif concept == ItemKind.SESSION_HANDOFF:
             operations = ["handoff"]
-            shape = _session_handoff_shape(item, index=index)
+            shape = _session_handoff_shape(
+                item, index=build_session_graph_index(session_graph)
+            )
         else:
             operations = ["update"]
             shape = _plan_shape(item, include_content=include_content)

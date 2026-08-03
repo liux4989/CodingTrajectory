@@ -22,6 +22,7 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final, Literal
 from urllib.error import URLError
@@ -185,6 +186,124 @@ class CostEvidenceFlat(BaseModel):
         return {key: value for key, value in data.items() if value is not None}
 
 
+def _usage_int(usage: dict[str, Any], primary: str, fallback: str) -> int:
+    value = usage.get(primary, usage.get(fallback, 0))
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _estimate_cost_from_ints(
+    input_tokens: int,
+    cached_input_tokens: int,
+    cache_creation_input_tokens: int,
+    output_tokens: int,
+    reasoning_output_tokens: int,
+    *,
+    model: str | None,
+    provider: str | None,
+    pricing_input_tokens: int | None = None,
+) -> tuple[float, str, str] | None:
+    """Fast-path cost estimate returning (amount_usd, pricing_source, effective_date).
+
+    Mirrors estimate_cost math but takes token ints directly (avoiding
+    TokenUsage.model_validate + CostBreakdown/CostEstimate pydantic overhead)
+    for the 2M+ call hot path in tool-usage attribution.
+    """
+    normalized_model = _normalize_model_name(model)
+    if normalized_model is None:
+        return None
+    rules = _load_live_price_rules(now=datetime.now(UTC))
+    rule = _lookup_price_rule(rules, provider=provider, model=normalized_model)
+    if rule is None:
+        rule = _lookup_price_rule(
+            _openai_standard_price_rules(),
+            provider=provider,
+            model=normalized_model,
+        )
+    if rule is None:
+        return None
+
+    tier_input_tokens = (
+        input_tokens
+        if pricing_input_tokens is None
+        else max(pricing_input_tokens, 0)
+    )
+    above_threshold = (
+        rule.threshold_tokens is not None and tier_input_tokens > rule.threshold_tokens
+    )
+    input_rate = _threshold_rate(
+        above_threshold, rule.input_per_mtok, rule.input_per_mtok_above_threshold
+    )
+    cached_rate = _threshold_rate(
+        above_threshold,
+        rule.cached_input_per_mtok,
+        rule.cached_input_per_mtok_above_threshold,
+    )
+    cache_creation_rate = _threshold_rate(
+        above_threshold,
+        rule.cache_creation_input_per_mtok,
+        rule.cache_creation_input_per_mtok_above_threshold,
+    )
+    output_rate = _threshold_rate(
+        above_threshold, rule.output_per_mtok, rule.output_per_mtok_above_threshold
+    )
+    standard_input_tokens = input_tokens
+    if not _uses_net_input_convention(provider, rule.model):
+        standard_input_tokens = max(
+            input_tokens - cached_input_tokens - cache_creation_input_tokens, 0
+        )
+    amount = _round_usd(
+        _price(standard_input_tokens, input_rate)
+        + _price(cached_input_tokens, cached_rate)
+        + _price(cache_creation_input_tokens, cache_creation_rate)
+        + _price(output_tokens, output_rate)
+        + _price(reasoning_output_tokens, rule.reasoning_output_per_mtok)
+    )
+    return (amount, rule.pricing_source, rule.pricing_effective_date)
+
+
+def _cost_evidence_from_accum(
+    input_tokens: int,
+    uncached_input_tokens: int,
+    cached_input_tokens: int,
+    cache_creation_input_tokens: int,
+    output_tokens: int,
+    reasoning_output_tokens: int,
+    *,
+    model: str | None,
+    provider: str | None,
+    pricing_input_tokens: int | None = None,
+) -> CostEvidenceFlat | None:
+    """Cost evidence directly from _CostAccum int fields, skipping dict conversion."""
+    if not (
+        input_tokens
+        or uncached_input_tokens
+        or cached_input_tokens
+        or cache_creation_input_tokens
+        or output_tokens
+        or reasoning_output_tokens
+    ):
+        return None
+    estimate = _estimate_cost_from_ints(
+        input_tokens,
+        cached_input_tokens,
+        cache_creation_input_tokens,
+        output_tokens,
+        reasoning_output_tokens,
+        model=model,
+        provider=provider,
+        pricing_input_tokens=pricing_input_tokens,
+    )
+    if estimate is None:
+        return None
+    amount_usd, pricing_source, pricing_effective_date = estimate
+    return CostEvidenceFlat(
+        value_usd=amount_usd,
+        confidence="estimated",
+        source=pricing_source,
+        effective_date=pricing_effective_date or None,
+    )
+
+
 def cost_evidence_from_usage(
     usage: dict[str, Any] | None,
     *,
@@ -210,31 +329,33 @@ def cost_evidence_from_usage(
             confidence="reported",
             source="session log",
         )
-    if not any(
-        usage.get(key, 0)
-        for key in (
-            "prompt_tokens",
-            "uncached_prompt_tokens",
-            "cached_prompt_tokens",
-            "cache_write_tokens",
-            "completion_tokens",
-            "reasoning_tokens",
-        )
+    if not (
+        usage.get("prompt_tokens", 0)
+        or usage.get("uncached_prompt_tokens", 0)
+        or usage.get("cached_prompt_tokens", 0)
+        or usage.get("cache_write_tokens", 0)
+        or usage.get("completion_tokens", 0)
+        or usage.get("reasoning_tokens", 0)
     ):
         return None
-    estimate = estimate_cost(
-        usage,
+    estimate = _estimate_cost_from_ints(
+        _usage_int(usage, "prompt_tokens", "input"),
+        _usage_int(usage, "cached_prompt_tokens", "cached"),
+        _usage_int(usage, "cache_write_tokens", "cache_creation"),
+        _usage_int(usage, "completion_tokens", "output"),
+        _usage_int(usage, "reasoning_tokens", "reasoning"),
         model=model,
         provider=provider,
         pricing_input_tokens=pricing_input_tokens,
     )
     if estimate is None:
         return None
+    amount_usd, pricing_source, pricing_effective_date = estimate
     return CostEvidenceFlat(
-        value_usd=estimate.amount_usd,
+        value_usd=amount_usd,
         confidence="estimated",
-        source=estimate.pricing_source,
-        effective_date=estimate.pricing_effective_date or None,
+        source=pricing_source,
+        effective_date=pricing_effective_date or None,
     )
 
 
@@ -751,6 +872,7 @@ def _parse_alias_window(model: str) -> int | None:
     return int(size * (1_000 if unit == "k" else 1_000_000))
 
 
+@lru_cache(maxsize=256)
 def _normalize_model_name(model: str | None) -> str | None:
     """Canonical model id: strip provider prefixes, alias suffix, variant and
     date suffixes, and region/deployment markers. Single copy reused by both
