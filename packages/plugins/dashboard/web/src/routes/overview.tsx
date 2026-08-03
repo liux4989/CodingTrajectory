@@ -16,11 +16,13 @@ import { MetricCard } from "@/components/metric-card";
 import { StaggerGroup } from "@/components/stagger-group";
 import { StateBlock } from "@/components/state-block";
 import { MiniBarChart } from "@/components/charts";
+import { SectionTabs } from "@/components/section-tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function OverviewRoute() {
+  const [activeTab, setActiveTab] = React.useState("sessions");
   const { days: sinceDays } = useDateRange();
   const overview = useQuery({
     queryKey: ["overview", sinceDays],
@@ -139,40 +141,68 @@ export function OverviewRoute() {
         </Card>
       </section>
 
-      <Card className="min-w-0">
-        <CardHeader>
-          <CardTitle className="title-card">Top Token-Cost Sessions</CardTitle>
-          <CardDescription>Sessions ranked by token usage.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <TopSessionsTable sessions={data.sessions.top_sessions} windowDays={data.sessions.window_days} />
-        </CardContent>
-      </Card>
-
       {issueCount ? (
-        <Card className="min-w-0 border-warning/40">
+        <SectionTabs
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          tabs={[
+            {
+              id: "sessions",
+              label: "Top Sessions",
+              content: (
+                <Card className="min-w-0">
+                  <CardHeader>
+                    <CardTitle className="title-card">Top Token-Cost Sessions</CardTitle>
+                    <CardDescription>Sessions ranked by token usage.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <TopSessionsTable sessions={data.sessions.top_sessions} windowDays={data.sessions.window_days} />
+                  </CardContent>
+                </Card>
+              ),
+            },
+            {
+              id: "issues",
+              label: "Warnings & Errors",
+              badge: issueCount,
+              content: (
+                <div className="grid gap-4">
+                  <Card className="min-w-0 border-warning/40">
+                    <CardHeader>
+                      <CardTitle className="title-card">Warnings and Errors</CardTitle>
+                      <CardDescription>Issues reported while collecting session metrics.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="grid gap-3">
+                      {data.sessions.errors.map((error, index) => (
+                        <IssueRow key={`error-${index}`} label="Error" message={formatIssue(error)} />
+                      ))}
+                      {data.sessions.warnings.map((warning, index) => (
+                        <IssueRow
+                          key={`warning-${index}`}
+                          label={warning.project}
+                          message={warning.message}
+                          detail={warning.session_id || undefined}
+                        />
+                      ))}
+                    </CardContent>
+                  </Card>
+                  <OverviewIssueAgent prompt={issueAgentPrompt} />
+                </div>
+              ),
+            },
+          ]}
+        />
+      ) : (
+        <Card className="min-w-0">
           <CardHeader>
-            <CardTitle className="title-card">Warnings and Errors</CardTitle>
-            <CardDescription>Issues reported while collecting session metrics.</CardDescription>
+            <CardTitle className="title-card">Top Token-Cost Sessions</CardTitle>
+            <CardDescription>Sessions ranked by token usage.</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-3">
-            {data.sessions.errors.map((error, index) => (
-              <IssueRow key={`error-${index}`} label="Error" message={formatIssue(error)} />
-            ))}
-            {data.sessions.warnings.map((warning, index) => (
-              <IssueRow
-                key={`warning-${index}`}
-                label={warning.project}
-                message={warning.message}
-                detail={warning.session_id || undefined}
-              />
-            ))}
+          <CardContent>
+            <TopSessionsTable sessions={data.sessions.top_sessions} windowDays={data.sessions.window_days} />
           </CardContent>
         </Card>
-      ) : null}
-      {issueCount ? (
-        <OverviewIssueAgent prompt={issueAgentPrompt} />
-      ) : null}
+      )}
     </div>
   );
 }

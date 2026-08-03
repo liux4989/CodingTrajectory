@@ -22,6 +22,12 @@ import { LoadingShell } from "@/components/loading-shell";
 import { SessionLink } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { useDateRange } from "@/hooks/use-date-range";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -781,170 +787,191 @@ export function TokenEfficiencyProjectRoute() {
       onSearchChange={onSearchChange}
       data={data}
     >
-      <Card className="min-w-0">
-        <CardHeader>
-          <CardTitle>
-            <h3 className="m-0 title-card">
-              {current.label} compared with {comparison.previous?.label ?? "no baseline"}
-            </h3>
-          </CardTitle>
-          <CardDescription>
-            Full sessions are bucketed by session completion; turn distributions
-            are bucketed independently by turn completion in the dashboard host timezone.
-          </CardDescription>
-        </CardHeader>
-      </Card>
-      <section className="stat-grid" aria-label={`${unit} prompt-token distribution`}>
-        <MetricCard
-          label="Total prompt tokens"
-          value={formatTokens(current.total_prompt_tokens)}
-          detail={`${formatCount(current.session_count)} sessions · ${formatCount(current.turn_count)} turns`}
-          trend={trendBadge(comparison.deltas.total_prompt_tokens_pct)}
-        />
-        <MetricCard
-          label={`Average per ${unit}`}
-          value={formatTokens(distribution.avg)}
-          detail={`${formatCount(unitCount)} completed ${unit}${unitCount === 1 ? "" : "s"}`}
-        />
-        <MetricCard
-          label={`Median per ${unit}`}
-          value={formatTokens(distribution.median)}
-          detail={formatExactTokens(distribution.median)}
-          trend={trendBadge(deltaForUnit(comparison, unit, "median"))}
-        />
-        <MetricCard
-          label={`P90 per ${unit}`}
-          value={formatTokens(distribution.p90)}
-          detail={formatExactTokens(distribution.p90)}
-          trend={trendBadge(deltaForUnit(comparison, unit, "p90"))}
-        />
-      </section>
-      <TrendChart summaries={data.trends[grain]} unit={unit} grain={grain} />
-      <div className="grid min-w-0 gap-6 xl:grid-cols-2">
-        <Card className="min-w-0">
-          <CardHeader>
-            <CardTitle>
-              <h3 className="m-0 title-card">Generic tool-pattern composition</h3>
-            </CardTitle>
-            <CardDescription>
-              Exclusive structural classifications; overlapping diagnostic
-              indicators remain available in the full pattern view.
-            </CardDescription>
-            <CardAction>
-              <Button asChild variant="outline" size="sm">
-                <Link
-                  to="/token-efficiency/$projectName/patterns"
-                  params={{ projectName }}
-                  search={{ grain, unit }}
-                >
-                  View all
-                </Link>
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent>
-            {topPatterns.length ? (
-              <Table>
-                <TableCaption>Highest attributed patterns in {current.label}.</TableCaption>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead scope="col">Pattern</TableHead>
-                    <TableHead scope="col" className="text-right">Share</TableHead>
-                    <TableHead scope="col" className="text-right">P90 / {unit}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {topPatterns.map((pattern) => (
-                    <TableRow key={pattern.key}>
-                      <TableCell>
-                        <Link
-                          to="/token-efficiency/$projectName/patterns/$patternKey"
-                          params={{ projectName, patternKey: pattern.key }}
-                          search={{ grain, unit }}
-                          className="link font-medium"
-                        >
-                          {pattern.label}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatPercent(pattern.current.token_share)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatTokens(patternDistribution(pattern, unit).p90)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <StateBlock title="No attributed patterns" />
-            )}
-          </CardContent>
-        </Card>
-        <Card className="min-w-0">
-          <CardHeader>
-            <CardTitle>
-              <h3 className="m-0 title-card">Project hotspots</h3>
-            </CardTitle>
-            <CardDescription>
-              Business-specific resources are kept separate from the generic classifier.
-            </CardDescription>
-            <CardAction>
-              <Button asChild variant="outline" size="sm">
-                <Link
-                  to="/token-efficiency/$projectName/hotspots"
-                  params={{ projectName }}
-                  search={{ grain, unit }}
-                >
-                  View all
-                </Link>
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent>
-            {topHotspots.length ? (
-              <Table>
-                <TableCaption>Highest enclosing prompt-token resource hotspots.</TableCaption>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead scope="col">Resource</TableHead>
-                    <TableHead scope="col">Status</TableHead>
-                    <TableHead scope="col" className="text-right">Enclosing tokens</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {topHotspots.map((hotspot) => (
-                    <TableRow key={hotspot.key}>
-                      <TableCell className="max-w-[22rem] truncate">
-                        <Link
-                          to="/token-efficiency/$projectName/hotspots/$hotspotKey"
-                          params={{ projectName, hotspotKey: hotspot.key }}
-                          search={{ grain, unit }}
-                          className="link font-mono"
-                          title={hotspot.resource}
-                        >
-                          {hotspot.resource}
-                        </Link>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{formatLabel(hotspot.status)}</Badge>
-                      </TableCell>
-                      <TableCell
-                        className="text-right font-mono"
-                        title={formatExactTokens(hotspot.enclosing_prompt_tokens)}
-                      >
-                        {formatTokens(hotspot.enclosing_prompt_tokens)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <StateBlock title="No repeated resource hotspots" />
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      <Accordion type="multiple" defaultValue={["comparison"]} className="grid gap-2">
+        <AccordionItem value="comparison">
+          <AccordionTrigger className="items-center rounded-md px-2.5 py-2 text-caption font-normal hover:no-underline">
+            {"Comparison & Trend"}
+          </AccordionTrigger>
+          <AccordionContent className="grid gap-2">
+            <Card className="min-w-0">
+              <CardHeader>
+                <CardTitle>
+                  <h3 className="m-0 title-card">
+                    {current.label} compared with {comparison.previous?.label ?? "no baseline"}
+                  </h3>
+                </CardTitle>
+                <CardDescription>
+                  Full sessions are bucketed by session completion; turn distributions
+                  are bucketed independently by turn completion in the dashboard host timezone.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+            <section className="stat-grid" aria-label={`${unit} prompt-token distribution`}>
+              <MetricCard
+                label="Total prompt tokens"
+                value={formatTokens(current.total_prompt_tokens)}
+                detail={`${formatCount(current.session_count)} sessions · ${formatCount(current.turn_count)} turns`}
+                trend={trendBadge(comparison.deltas.total_prompt_tokens_pct)}
+              />
+              <MetricCard
+                label={`Average per ${unit}`}
+                value={formatTokens(distribution.avg)}
+                detail={`${formatCount(unitCount)} completed ${unit}${unitCount === 1 ? "" : "s"}`}
+              />
+              <MetricCard
+                label={`Median per ${unit}`}
+                value={formatTokens(distribution.median)}
+                detail={formatExactTokens(distribution.median)}
+                trend={trendBadge(deltaForUnit(comparison, unit, "median"))}
+              />
+              <MetricCard
+                label={`P90 per ${unit}`}
+                value={formatTokens(distribution.p90)}
+                detail={formatExactTokens(distribution.p90)}
+                trend={trendBadge(deltaForUnit(comparison, unit, "p90"))}
+              />
+            </section>
+            <TrendChart summaries={data.trends[grain]} unit={unit} grain={grain} />
+          </AccordionContent>
+        </AccordionItem>
+        <AccordionItem value="patterns">
+          <AccordionTrigger className="items-center rounded-md px-2.5 py-2 text-caption font-normal hover:no-underline">
+            Tool Patterns
+          </AccordionTrigger>
+          <AccordionContent>
+            <Card className="min-w-0">
+              <CardHeader>
+                <CardTitle>
+                  <h3 className="m-0 title-card">Generic tool-pattern composition</h3>
+                </CardTitle>
+                <CardDescription>
+                  Exclusive structural classifications; overlapping diagnostic
+                  indicators remain available in the full pattern view.
+                </CardDescription>
+                <CardAction>
+                  <Button asChild variant="outline" size="sm">
+                    <Link
+                      to="/token-efficiency/$projectName/patterns"
+                      params={{ projectName }}
+                      search={{ grain, unit }}
+                    >
+                      View all
+                    </Link>
+                  </Button>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                {topPatterns.length ? (
+                  <Table>
+                    <TableCaption>Highest attributed patterns in {current.label}.</TableCaption>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead scope="col">Pattern</TableHead>
+                        <TableHead scope="col" className="text-right">Share</TableHead>
+                        <TableHead scope="col" className="text-right">P90 / {unit}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {topPatterns.map((pattern) => (
+                        <TableRow key={pattern.key}>
+                          <TableCell>
+                            <Link
+                              to="/token-efficiency/$projectName/patterns/$patternKey"
+                              params={{ projectName, patternKey: pattern.key }}
+                              search={{ grain, unit }}
+                              className="link font-medium"
+                            >
+                              {pattern.label}
+                            </Link>
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {formatPercent(pattern.current.token_share)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {formatTokens(patternDistribution(pattern, unit).p90)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <StateBlock title="No attributed patterns" />
+                )}
+              </CardContent>
+            </Card>
+          </AccordionContent>
+        </AccordionItem>
+        <AccordionItem value="hotspots">
+          <AccordionTrigger className="items-center rounded-md px-2.5 py-2 text-caption font-normal hover:no-underline">
+            Project Hotspots
+          </AccordionTrigger>
+          <AccordionContent>
+            <Card className="min-w-0">
+              <CardHeader>
+                <CardTitle>
+                  <h3 className="m-0 title-card">Project hotspots</h3>
+                </CardTitle>
+                <CardDescription>
+                  Business-specific resources are kept separate from the generic classifier.
+                </CardDescription>
+                <CardAction>
+                  <Button asChild variant="outline" size="sm">
+                    <Link
+                      to="/token-efficiency/$projectName/hotspots"
+                      params={{ projectName }}
+                      search={{ grain, unit }}
+                    >
+                      View all
+                    </Link>
+                  </Button>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                {topHotspots.length ? (
+                  <Table>
+                    <TableCaption>Highest enclosing prompt-token resource hotspots.</TableCaption>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead scope="col">Resource</TableHead>
+                        <TableHead scope="col">Status</TableHead>
+                        <TableHead scope="col" className="text-right">Enclosing tokens</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {topHotspots.map((hotspot) => (
+                        <TableRow key={hotspot.key}>
+                          <TableCell className="max-w-[22rem] truncate">
+                            <Link
+                              to="/token-efficiency/$projectName/hotspots/$hotspotKey"
+                              params={{ projectName, hotspotKey: hotspot.key }}
+                              search={{ grain, unit }}
+                              className="link font-mono"
+                              title={hotspot.resource}
+                            >
+                              {hotspot.resource}
+                            </Link>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{formatLabel(hotspot.status)}</Badge>
+                          </TableCell>
+                          <TableCell
+                            className="text-right font-mono"
+                            title={formatExactTokens(hotspot.enclosing_prompt_tokens)}
+                          >
+                            {formatTokens(hotspot.enclosing_prompt_tokens)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <StateBlock title="No repeated resource hotspots" />
+                )}
+              </CardContent>
+            </Card>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </ProjectPage>
   );
 }

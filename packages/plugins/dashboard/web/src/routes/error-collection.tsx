@@ -10,6 +10,7 @@ import {
   type ErrorCollectionPayload,
 } from "@/api";
 import { MetricCard } from "@/components/metric-card";
+import { SectionTabs } from "@/components/section-tabs";
 import { LoadingShell } from "@/components/loading-shell";
 import { RouteHeader } from "@/components/route-header";
 import { shortSessionId } from "@/components/session-link";
@@ -45,6 +46,8 @@ export function ErrorCollectionRoute() {
     queryFn: () => fetchErrorCollection({ sinceDays, projectName }),
     placeholderData: (previous) => previous,
   });
+
+  const [activeTab, setActiveTab] = React.useState("breakdown");
 
   const setProjectName = (value: string) => {
     void navigate({
@@ -95,10 +98,29 @@ export function ErrorCollectionRoute() {
         </CardContent>
       </Card>
 
-      <SummaryCards data={data} />
-      <KindCards data={data} />
-      <ProjectCards data={data} />
-      <ErrorTable rows={data.errors} />
+      <SectionTabs
+        summary={<SummaryCards data={data} />}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        tabs={[
+          {
+            id: "breakdown",
+            label: "Breakdown",
+            content: (
+              <div className="grid gap-4">
+                <KindCards data={data} />
+                <ProjectCards data={data} />
+              </div>
+            ),
+          },
+          {
+            id: "errors",
+            label: "All Errors",
+            badge: data.summary.total_errors,
+            content: <ErrorTable rows={data.errors} />,
+          },
+        ]}
+      />
     </div>
   );
 }

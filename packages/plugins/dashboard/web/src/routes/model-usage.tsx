@@ -15,6 +15,7 @@ import {
 import { DataTable } from "@/components/data-table";
 import { MetricCard } from "@/components/metric-card";
 import { RouteHeader } from "@/components/route-header";
+import { SectionTabs } from "@/components/section-tabs";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { LoadingShell } from "@/components/loading-shell";
@@ -94,6 +95,11 @@ export function ModelUsageRoute() {
     });
   };
 
+  const [sectionTab, setSectionTab] = React.useState("models");
+  React.useEffect(() => {
+    setSectionTab("models");
+  }, [view]);
+
   if (query.isPending) {
     return <LoadingShell eyebrow="Model economics" title="Loading model usage" variant="metrics" />;
   }
@@ -167,8 +173,8 @@ export function ModelUsageRoute() {
       </Card>
 
       {view === "overview" ? <OverviewView data={data} /> : null}
-      {view === "cost" ? <CostView data={data} /> : null}
-      {view === "tokens" ? <TokensView data={data} /> : null}
+      {view === "cost" ? <CostView data={data} activeTab={sectionTab} onTabChange={setSectionTab} /> : null}
+      {view === "tokens" ? <TokensView data={data} activeTab={sectionTab} onTabChange={setSectionTab} /> : null}
       {view === "time" ? <TimeView data={data} /> : null}
     </div>
   );
@@ -184,28 +190,88 @@ function OverviewView({ data }: { data: ModelUsagePayload }) {
   );
 }
 
-function CostView({ data }: { data: ModelUsagePayload }) {
+function CostView({
+  data,
+  activeTab,
+  onTabChange,
+}: {
+  data: ModelUsagePayload;
+  activeTab: string;
+  onTabChange: (tab: string) => void;
+}) {
   return (
-    <>
-      <SummaryCards data={data} view="cost" />
-      <ModelTable data={data} view="cost" />
-      <TimeBuckets data={data} view="cost" />
-      <SessionTable data={data} view="cost" />
-      <TurnTable data={data} view="cost" />
-    </>
+    <SectionTabs
+      summary={<SummaryCards data={data} view="cost" />}
+      activeTab={activeTab}
+      onTabChange={onTabChange}
+      tabs={[
+        {
+          id: "models",
+          label: "Models",
+          content: (
+            <>
+              <ModelTable data={data} view="cost" />
+              <TimeBuckets data={data} view="cost" />
+            </>
+          ),
+        },
+        {
+          id: "sessions",
+          label: "Sessions",
+          content: <SessionTable data={data} view="cost" />,
+        },
+        {
+          id: "turns",
+          label: "Turns",
+          content: <TurnTable data={data} view="cost" />,
+        },
+      ]}
+    />
   );
 }
 
-function TokensView({ data }: { data: ModelUsagePayload }) {
+function TokensView({
+  data,
+  activeTab,
+  onTabChange,
+}: {
+  data: ModelUsagePayload;
+  activeTab: string;
+  onTabChange: (tab: string) => void;
+}) {
   return (
-    <>
-      <SummaryCards data={data} view="tokens" />
-      <TokenBucketCards data={data} />
-      <ModelTable data={data} view="tokens" />
-      <TimeBuckets data={data} view="tokens" />
-      <SessionTable data={data} view="tokens" />
-      <TurnTable data={data} view="tokens" />
-    </>
+    <SectionTabs
+      summary={
+        <>
+          <SummaryCards data={data} view="tokens" />
+          <TokenBucketCards data={data} />
+        </>
+      }
+      activeTab={activeTab}
+      onTabChange={onTabChange}
+      tabs={[
+        {
+          id: "models",
+          label: "Models",
+          content: (
+            <>
+              <ModelTable data={data} view="tokens" />
+              <TimeBuckets data={data} view="tokens" />
+            </>
+          ),
+        },
+        {
+          id: "sessions",
+          label: "Sessions",
+          content: <SessionTable data={data} view="tokens" />,
+        },
+        {
+          id: "turns",
+          label: "Turns",
+          content: <TurnTable data={data} view="tokens" />,
+        },
+      ]}
+    />
   );
 }
 

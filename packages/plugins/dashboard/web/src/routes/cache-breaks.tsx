@@ -5,6 +5,7 @@ import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-
 import { fetchCacheBreaks, type AggregateCacheBreak, type CacheBreaksPayload, type CacheBreakSessionRow } from "@/api";
 import { MetricCard } from "@/components/metric-card";
 import { RouteHeader } from "@/components/route-header";
+import { SectionTabs } from "@/components/section-tabs";
 import { shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { LoadingShell } from "@/components/loading-shell";
@@ -47,6 +48,8 @@ export function CacheBreaksRoute() {
     queryFn: () => fetchCacheBreaks({ sinceDays, projectName }),
     placeholderData: (previous) => previous,
   });
+
+  const [activeTab, setActiveTab] = React.useState("chart");
 
   const setProjectName = (value: string) => {
     void navigate({
@@ -98,26 +101,56 @@ export function CacheBreaksRoute() {
         </CardContent>
       </Card>
 
-      {data.warnings.length > 0 ? (
-        <div className="alert alert-warning rounded-xl text-body-sm text-foreground">
-          {data.warnings.join(" · ")}
-        </div>
-      ) : null}
-
       {!hasBreaks ? (
         <StateBlock
           title="No cache breaks in this range"
           detail="No turn re-read a collapsed or evicted prompt cache during the selected window."
         />
       ) : (
-        <>
-          <SummaryCards data={data} />
-          <ByTypeStrip data={data} />
-          <DailyBreaksChart data={data} />
-          <BreakdownCards data={data} />
-          <TopSessionsTable rows={data.top_sessions} />
-          <BreakTable rows={data.breaks} />
-        </>
+        <SectionTabs
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          ariaLabel="Cache breaks sections"
+          summary={
+            <>
+              <SummaryCards data={data} />
+              {data.warnings.length > 0 ? (
+                <div className="alert alert-warning rounded-xl text-body-sm text-foreground">
+                  {data.warnings.join(" · ")}
+                </div>
+              ) : null}
+            </>
+          }
+          tabs={[
+            {
+              id: "chart",
+              label: "Trend",
+              content: (
+                <>
+                  <ByTypeStrip data={data} />
+                  <DailyBreaksChart data={data} />
+                </>
+              ),
+            },
+            {
+              id: "breakdown",
+              label: "Breakdown",
+              content: <BreakdownCards data={data} />,
+            },
+            {
+              id: "sessions",
+              label: "Top Sessions",
+              badge={data.top_sessions.length},
+              content: <TopSessionsTable rows={data.top_sessions} />,
+            },
+            {
+              id: "all",
+              label: "All Breaks",
+              badge={data.breaks.length},
+              content: <BreakTable rows={data.breaks} />,
+            },
+          ]}
+        />
       )}
     </div>
   );
