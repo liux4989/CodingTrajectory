@@ -48,7 +48,7 @@ Target: largest graph on disk (`019f6e1a…`, 112 sessions / 213 turns /
 
 | method | before | after | speedup |
 |--------|--------|-------|---------|
-| `session.stats` | **157.0 s** | **11.8 s** | 13.3x |
+| `session.stats` | **157.0 s** | **4.6 s** | 34.1x |
 | `session.tool_usage` | **38.8 s** | **14.5 s** | 2.7x |
 | `session.items` {tool_call} | **21.9 s** | **0.25 s** | 88x |
 | `graph.usage` | 1.45 s | 0.90 s | 1.6x |
@@ -127,15 +127,30 @@ builds (226M UUID hashes) per `session.items` call.**
   avoiding the redundant `dict[key]=` reassignment (and its UUID hash) when the
   key already exists.
 
+### Phase 7: NumPy-backed stats accumulation (`metrics/analysis.py`)
+
+`build_session_graph_stats_token_usage` now accumulates the seven allocated
+token fields in one `int64` array per session. Context-source rows are grouped
+by key after allocation, at the output boundary, instead of constructing and
+mutating one `_CostAccum` per entry for every observation. The allocation
+function retains its list-based default for `session.tool_usage`; only stats
+requests array results.
+
+On the largest graph this reduced `session.stats` from the documented 11.8 s to
+4.6 s (4.0 s on a second warm run), with the committed metric baselines
+unchanged.
+
 ## 5. Remaining bottlenecks
 
-`session.stats` at ~12s is dominated by the per-element `_CostAccum` construction
-+ accumulation loop (~7s, 19.4M Python iterations) and `_allocate_int_batch`
-(~3s numpy). Further vectorization would require numpy-backed accumulation
-arrays instead of per-element `_CostAccum` objects.
+`session.stats` is now dominated by `_allocate_int_batch` (~2.8 s under
+cProfile, 6,005 observations) and the remaining projection/output work. The
+19.4M per-element Python accumulation iterations and their `_CostAccum`
+construction have been removed.
 
-`session.tool_usage` at ~15s is dominated by `_cost_evidence_from_accum`
-(2.4M calls, ~8s) - the pricing lookup is now the bottleneck, not allocation.
+`session.tool_usage` at ~15s remains dominated by `_cost_evidence_from_accum`
+(2.4M calls), specifically per-item cost arithmetic and evidence construction.
+Model pricing rules are now resolved through a projection-scoped cache; live
+catalog lookup is no longer repeated for each item.
 
 ## 6. Reproducing
 

@@ -948,8 +948,8 @@ def build_session_graph_stats_token_usage(
     session_graph: SessionGraph,
 ) -> dict[str, Any]:
     """Return stats-table token attribution across starting context and items."""
-    allocated_by_item: dict[UUID, _CostAccum] = {}
-    allocated_by_context_key: dict[str, _CostAccum] = {}
+    allocated_usage_by_item: dict[UUID, dict[str, int]] = {}
+    allocated_usage_by_context_source: dict[str, dict[str, int]] = {}
     billed_token_usage: _CostAccum | None = None
 
     for session in session_graph.sessions:
@@ -960,7 +960,6 @@ def build_session_graph_stats_token_usage(
         n_entries = len(entries)
         entry_times = [e.started_at for e in entries]
         all_weights = np.array([e.visible_tokens for e in entries], dtype=np.int64)
-        context_key_by_index = [e.context_key for e in entries]
         is_output_eligible = np.array(
             [e.context_key is None and e.output_eligible for e in entries],
             dtype=bool,
@@ -972,8 +971,11 @@ def build_session_graph_stats_token_usage(
         turn_id_idx = np.array(
             [turn_to_int[e.turn_id] for e in entries], dtype=np.int64
         )
-
-        allocated_by_index: list[_CostAccum | None] = [None] * n_entries
+        context_indices_by_key: dict[str, list[int]] = {}
+        for index, entry in enumerate(entries):
+            if entry.context_key is not None:
+                context_indices_by_key.setdefault(entry.context_key, []).append(index)
+        allocated_by_index = np.zeros((n_entries, 7), dtype=np.int64)
 
         for observation, turn_id in _session_usage_observations(session):
             cutoff = bisect.bisect_right(entry_times, observation.timestamp)
@@ -993,7 +995,11 @@ def build_session_graph_stats_token_usage(
                 )
             output_weights = np.where(output_mask, weights, np.int64(0))
             allocations = _token_cost_allocations(
-                observation.usage, observation, weights, output_weights
+                observation.usage,
+                observation,
+                weights,
+                output_weights,
+                as_arrays=True,
             )
             if allocations is None:
                 continue
@@ -1005,48 +1011,37 @@ def build_session_graph_stats_token_usage(
                 output_a,
                 reasoning_a,
                 total_a,
-                method,
+                _method,
             ) = allocations
-            for i in range(cutoff):
-                cost = _CostAccum(
-                    input_tokens=input_a[i],
-                    uncached_input_tokens=uncached_input_a[i],
-                    cached_input_tokens=cached_a[i],
-                    cache_creation_input_tokens=cache_creation_a[i],
-                    output_tokens=output_a[i],
-                    reasoning_output_tokens=reasoning_a[i],
-                    total_tokens=total_a[i],
-                    allocation_method=method,
+            allocated_by_index[:cutoff, 0] += input_a
+            allocated_by_index[:cutoff, 1] += uncached_input_a
+            allocated_by_index[:cutoff, 2] += cached_a
+            allocated_by_index[:cutoff, 3] += cache_creation_a
+            allocated_by_index[:cutoff, 4] += output_a
+            allocated_by_index[:cutoff, 5] += reasoning_a
+            allocated_by_index[:cutoff, 6] += total_a
+
+        for index, entry in enumerate(entries):
+            if entry.context_key is not None:
+                continue
+            usage = _allocated_cost_usage_dict_from_array(allocated_by_index[index])
+            if usage:
+                allocated_usage_by_item[entry.item_id] = usage
+
+        for key, indices in context_indices_by_key.items():
+            usage = _allocated_cost_usage_dict_from_array(
+                allocated_by_index[indices].sum(axis=0)
+            )
+            if not usage:
+                continue
+            existing = allocated_usage_by_context_source.get(key)
+            if existing is None:
+                allocated_usage_by_context_source[key] = usage
+            else:
+                allocated_usage_by_context_source[key] = _sum_usage_dicts(
+                    (existing, usage)
                 )
-                context_key = context_key_by_index[i]
-                if context_key is not None:
-                    existing = allocated_by_context_key.get(context_key)
-                    if existing is None:
-                        allocated_by_context_key[context_key] = cost
-                    else:
-                        _add_allocated_real_token_cost(existing, cost)
-                    continue
-                existing = allocated_by_index[i]
-                if existing is None:
-                    allocated_by_index[i] = cost
-                else:
-                    _add_allocated_real_token_cost(existing, cost)
 
-        for i, entry in enumerate(entries):
-            cost = allocated_by_index[i]
-            if cost is not None:
-                allocated_by_item[entry.item_id] = cost
-
-    allocated_usage_by_item = {
-        item_id: usage
-        for item_id, cost in allocated_by_item.items()
-        if (usage := _allocated_cost_usage_dict(cost))
-    }
-    allocated_usage_by_context_source = {
-        key: usage
-        for key, cost in allocated_by_context_key.items()
-        if (usage := _allocated_cost_usage_dict(cost))
-    }
     assert _sum_usage_dicts(
         (
             _sum_usage_dicts(allocated_usage_by_item.values()),
@@ -1382,15 +1377,47 @@ def _allocated_cost_usage_dict(
 ) -> dict[str, int]:
     if cost is None:
         return {}
+    return _allocated_cost_usage_dict_from_values(
+        cost.input_tokens,
+        cost.uncached_input_tokens,
+        cost.cached_input_tokens,
+        cost.cache_creation_input_tokens,
+        cost.output_tokens,
+        cost.reasoning_output_tokens,
+        cost.total_tokens,
+    )
+
+
+def _allocated_cost_usage_dict_from_array(values: np.ndarray) -> dict[str, int]:
+    return _allocated_cost_usage_dict_from_values(
+        int(values[0]),
+        int(values[1]),
+        int(values[2]),
+        int(values[3]),
+        int(values[4]),
+        int(values[5]),
+        int(values[6]),
+    )
+
+
+def _allocated_cost_usage_dict_from_values(
+    input_tokens: int,
+    uncached_input_tokens: int,
+    cached_input_tokens: int,
+    cache_creation_input_tokens: int,
+    output_tokens: int,
+    reasoning_output_tokens: int,
+    total_tokens: int,
+) -> dict[str, int]:
     usage_dict = {
-        "prompt_tokens": cost.input_tokens,
-        "uncached_prompt_tokens": cost.uncached_input_tokens,
-        "cached_prompt_tokens": cost.cached_input_tokens,
-        "cache_write_tokens": cost.cache_creation_input_tokens,
-        "completion_tokens": cost.output_tokens,
-        "reasoning_tokens": cost.reasoning_output_tokens,
-        "processed_tokens": cost.total_tokens,
-        "prompt_completion_tokens": cost.input_tokens + cost.output_tokens,
+        "prompt_tokens": input_tokens,
+        "uncached_prompt_tokens": uncached_input_tokens,
+        "cached_prompt_tokens": cached_input_tokens,
+        "cache_write_tokens": cache_creation_input_tokens,
+        "completion_tokens": output_tokens,
+        "reasoning_tokens": reasoning_output_tokens,
+        "processed_tokens": total_tokens,
+        "prompt_completion_tokens": input_tokens + output_tokens,
     }
     return {key: value for key, value in usage_dict.items() if value > 0}
 
@@ -1628,20 +1655,23 @@ def _token_cost_allocations(
     observation: TokenUsageObservation,
     all_weights: np.ndarray,
     output_weights: np.ndarray,
+    *,
+    as_arrays: bool = False,
 ) -> tuple[
-    list[int],
-    list[int],
-    list[int],
-    list[int],
-    list[int],
-    list[int],
-    list[int],
+    list[int] | np.ndarray,
+    list[int] | np.ndarray,
+    list[int] | np.ndarray,
+    list[int] | np.ndarray,
+    list[int] | np.ndarray,
+    list[int] | np.ndarray,
+    list[int] | np.ndarray,
     str,
 ] | None:
-    """Allocate observation usage across weights; return 7 lists + method.
+    """Allocate observation usage across weights; return 7 parts + method.
 
-    Returns None for zero usage. The 7 lists are: input, uncached_input,
-    cached, cache_creation, output, reasoning, total.
+    Returns None for zero usage. The 7 parts are: input, uncached_input,
+    cached, cache_creation, output, reasoning, total. ``as_arrays`` keeps
+    these parts in NumPy form for callers that accumulate them in bulk.
     """
     if _is_zero_usage(usage):
         return None
@@ -1662,21 +1692,33 @@ def _token_cost_allocations(
             effective_input_total,
         ],
         all_weights,
+        as_array=as_arrays,
     )
     output_results = _allocate_int_batch(
-        [usage.output_tokens, usage.reasoning_output_tokens], output_weights
+        [usage.output_tokens, usage.reasoning_output_tokens],
+        output_weights,
+        as_array=as_arrays,
     )
     input_a, cached_a, cache_creation_a, uncached_input_a = all_results
     output_a, reasoning_a = output_results
-    n = len(input_a)
-    total_a = [
-        uncached_input_a[i]
-        + cached_a[i]
-        + cache_creation_a[i]
-        + output_a[i]
-        + reasoning_a[i]
-        for i in range(n)
-    ]
+    if as_arrays:
+        total_a = (
+            uncached_input_a
+            + cached_a
+            + cache_creation_a
+            + output_a
+            + reasoning_a
+        )
+    else:
+        n = len(input_a)
+        total_a = [
+            uncached_input_a[i]
+            + cached_a[i]
+            + cache_creation_a[i]
+            + output_a[i]
+            + reasoning_a[i]
+            for i in range(n)
+        ]
     return (
         input_a,
         uncached_input_a,
@@ -1760,8 +1802,8 @@ def _allocate_int(total: int, weights: list[int]) -> list[int]:
 
 
 def _allocate_int_batch(
-    totals: list[int], weights: list[int] | "np.ndarray"
-) -> list[list[int]]:
+    totals: list[int], weights: list[int] | "np.ndarray", *, as_array: bool = False
+) -> list[list[int]] | np.ndarray:
     """Allocate multiple totals across the same weights via largest-remainder.
 
     Vectorized with numpy: the float floors and remainders are computed for all
@@ -1771,6 +1813,8 @@ def _allocate_int_batch(
     """
     n = len(weights)
     if n == 0:
+        if as_array:
+            return np.zeros((len(totals), 0), dtype=np.int64)
         return [[0] * n for _ in totals]
     weights_arr = np.asarray(weights, dtype=np.int64)
     weight_total = int(weights_arr.sum())
@@ -1788,7 +1832,7 @@ def _allocate_int_batch(
             continue
         order = np.lexsort((neg_weights, -raw[row] + floors[row]))[:remainder]
         floors[row, order] += 1
-    return floors.tolist()
+    return floors if as_array else floors.tolist()
 
 
 def _build_invoke_response_tokens(
