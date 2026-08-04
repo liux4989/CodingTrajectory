@@ -51,6 +51,7 @@ _THRESHOLD_OVERRIDES = {
     "gpt-5.4": 272_000,
     "gpt-5.5": 272_000,
 }
+_PRICING_RULE_UNSET = object()
 
 # Disable live models.dev fetches (offline ingestion / sandboxed runs). When
 # set, only the static curated context-window map and OpenAI standard price
@@ -201,6 +202,7 @@ def _estimate_cost_from_ints(
     model: str | None,
     provider: str | None,
     pricing_input_tokens: int | None = None,
+    pricing_rule: PriceRule | None | object = _PRICING_RULE_UNSET,
 ) -> tuple[float, str, str] | None:
     """Fast-path cost estimate returning (amount_usd, pricing_source, effective_date).
 
@@ -208,17 +210,10 @@ def _estimate_cost_from_ints(
     TokenUsage.model_validate + CostBreakdown/CostEstimate pydantic overhead)
     for the 2M+ call hot path in tool-usage attribution.
     """
-    normalized_model = _normalize_model_name(model)
-    if normalized_model is None:
-        return None
-    rules = _load_live_price_rules(now=datetime.now(UTC))
-    rule = _lookup_price_rule(rules, provider=provider, model=normalized_model)
-    if rule is None:
-        rule = _lookup_price_rule(
-            _openai_standard_price_rules(),
-            provider=provider,
-            model=normalized_model,
-        )
+    if pricing_rule is _PRICING_RULE_UNSET:
+        rule = _resolve_price_rule(model, provider=provider)
+    else:
+        rule = pricing_rule
     if rule is None:
         return None
 
@@ -272,6 +267,7 @@ def _cost_evidence_from_accum(
     model: str | None,
     provider: str | None,
     pricing_input_tokens: int | None = None,
+    pricing_rule: PriceRule | None | object = _PRICING_RULE_UNSET,
 ) -> CostEvidenceFlat | None:
     """Cost evidence directly from _CostAccum int fields, skipping dict conversion."""
     if not (
@@ -292,6 +288,7 @@ def _cost_evidence_from_accum(
         model=model,
         provider=provider,
         pricing_input_tokens=pricing_input_tokens,
+        pricing_rule=pricing_rule,
     )
     if estimate is None:
         return None
@@ -444,14 +441,7 @@ def estimate_cost(
     normalized_model = _normalize_model_name(model)
     if normalized_model is None:
         return None
-    rules = _load_live_price_rules(now=now or datetime.now(UTC))
-    rule = _lookup_price_rule(rules, provider=provider, model=normalized_model)
-    if rule is None:
-        rule = _lookup_price_rule(
-            _openai_standard_price_rules(),
-            provider=provider,
-            model=normalized_model,
-        )
+    rule = _resolve_price_rule(normalized_model, provider=provider, now=now)
     if rule is None:
         return None
     breakdown = _estimate_usage(
@@ -490,14 +480,7 @@ def cache_break_waste_usd(
     normalized_model = _normalize_model_name(model)
     if normalized_model is None:
         return None
-    rules = _load_live_price_rules(now=now or datetime.now(UTC))
-    rule = _lookup_price_rule(rules, provider=provider, model=normalized_model)
-    if rule is None:
-        rule = _lookup_price_rule(
-            _openai_standard_price_rules(),
-            provider=provider,
-            model=normalized_model,
-        )
+    rule = _resolve_price_rule(normalized_model, provider=provider, now=now)
     if rule is None or rule.cached_input_per_mtok is None:
         return None
     delta_rate = rule.input_per_mtok - rule.cached_input_per_mtok
@@ -846,6 +829,43 @@ def _lookup_price_rule(
         if rule is not None:
             return rule
     return rules.get(model)
+
+
+def _resolve_price_rule(
+    model: str | None,
+    *,
+    provider: str | None,
+    now: datetime | None = None,
+    cache: dict[tuple[str | None, str], PriceRule | None] | None = None,
+) -> PriceRule | None:
+    """Resolve one model price, optionally reusing a caller-owned cache.
+
+    The live catalog itself is already cached for 24 hours. This smaller cache
+    avoids repeating the locked catalog access and provider/model dictionary
+    lookup for each item allocated from one provider request. A caller should
+    scope it to one projection so all evidence in that projection uses one
+    pricing snapshot.
+    """
+    normalized_model = _normalize_model_name(model)
+    if normalized_model is None:
+        return None
+    key = (_normalize_provider(provider), normalized_model)
+    if cache is not None:
+        cached = cache.get(key, _PRICING_RULE_UNSET)
+        if cached is not _PRICING_RULE_UNSET:
+            return cached
+
+    rules = _load_live_price_rules(now=now or datetime.now(UTC))
+    rule = _lookup_price_rule(rules, provider=provider, model=normalized_model)
+    if rule is None:
+        rule = _lookup_price_rule(
+            _openai_standard_price_rules(),
+            provider=provider,
+            model=normalized_model,
+        )
+    if cache is not None:
+        cache[key] = rule
+    return rule
 
 
 def _provider_model_key(provider: str, model: str) -> str:

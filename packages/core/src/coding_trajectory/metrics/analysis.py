@@ -73,7 +73,9 @@ from coding_trajectory.metrics.context_stats._common import (
 from coding_trajectory.metrics.accounting import usage_accounting_payload
 from coding_trajectory.metrics.pricing import (
     CostEvidenceFlat,
+    PriceRule,
     _cost_evidence_from_accum,
+    _resolve_price_rule,
     _uses_net_input_convention,
     cache_break_waste_usd,
     cost_evidence_from_usage,
@@ -887,6 +889,7 @@ def build_session_graph_tool_usage(
 
     tool_items: list[ToolItemFlat] = []
     item_real_token_costs: list[ItemRealTokenCostFlat] = []
+    pricing_rule_cache: dict[tuple[str | None, str], PriceRule | None] = {}
     for session in session_graph.sessions:
         selected_turns = [
             turn
@@ -896,7 +899,9 @@ def build_session_graph_tool_usage(
         selected_turn_ids = {turn.turn_id for turn in selected_turns}
         session_item_real_token_costs = [
             item
-            for item in _build_item_real_token_costs_for_session(session)
+            for item in _build_item_real_token_costs_for_session(
+                session, pricing_rule_cache=pricing_rule_cache
+            )
             if item.turn_id in selected_turn_ids
         ]
         item_real_token_costs.extend(session_item_real_token_costs)
@@ -1197,6 +1202,8 @@ def _stats_cost_entries_for_session(session: Session) -> list[_ItemCostEntry]:
 
 def _build_item_real_token_costs_for_session(
     session: Session,
+    *,
+    pricing_rule_cache: dict[tuple[str | None, str], PriceRule | None] | None = None,
 ) -> list[ItemRealTokenCostFlat]:
     """Billed attribution: sum every API call's per-call usage across present items.
 
@@ -1212,6 +1219,8 @@ def _build_item_real_token_costs_for_session(
     ]
     if not entries:
         return []
+    if pricing_rule_cache is None:
+        pricing_rule_cache = {}
 
     entries_by_turn: dict[UUID, list[_ItemCostEntry]] = {}
     for entry in entries:
@@ -1248,6 +1257,13 @@ def _build_item_real_token_costs_for_session(
             observation,
             output_weights=output_weights_by_turn[turn_id][:cutoff],
         )
+        if not observation_allocations:
+            continue
+        pricing_rule = _resolve_price_rule(
+            observation.model,
+            provider=observation.provider,
+            cache=pricing_rule_cache,
+        )
         for item_id, cost in observation_allocations.items():
             existing = allocated_costs.get(item_id)
             if existing is None:
@@ -1265,6 +1281,7 @@ def _build_item_real_token_costs_for_session(
                     model=observation.model,
                     provider=observation.provider,
                     pricing_input_tokens=observation.usage.input_tokens,
+                    pricing_rule=pricing_rule,
                 )
             )
 
