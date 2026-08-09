@@ -48,6 +48,18 @@ Canonical session graph and project index
 
 CodingTrajectory owns identities, provenance, evaluation lifecycle, and reporting. Codex app-server remains the first evaluator-agent backend behind an interface so a future Codex SDK or another judge provider does not change the evaluation contract.
 
+This phase applies the task, trial, grader, transcript, outcome, harness, and suite mapping adopted from Anthropic's [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) in the high-level design.
+
+### Scheduling and Trial Isolation
+
+The scheduler parallelizes independent evaluation jobs, not dependent steps inside one job. Rubric compilation precedes semantic grading, a requested evidence expansion precedes the final semantic pass, and aggregation waits for all required grader results.
+
+Each semantic worker owns an independent app-server manager and bounded ephemeral judge thread. A thread pool around one shared manager is still one semantic worker if that manager serializes turns. Production concurrency therefore comes from a pool of isolated worker processes or managers with explicit capacity, rate, and cost budgets.
+
+Executable replay workers start from clean snapshots with isolated writable state. No trial may observe another trial's patch, git history mutation, generated artifacts, caches that affect correctness, or resource failure. Scheduler records distinguish agent failure, grader failure, worker failure, and shared-infrastructure failure so correlated infrastructure faults are not counted as independent model failures.
+
+Queue claims are lease-based and idempotent by source fingerprint plus evaluator policy. Project-level fairness, bounded retries, backpressure, and separate semantic and executable capacity prevent a large historical backfill from starving current evaluations.
+
 ## Category Rubric Families
 
 ### Repository Engineering
@@ -282,6 +294,23 @@ Harbor is the preferred replay target because it supports isolated task environm
 Reference solutions are optional. When an accepted human or agent solution exists, it proves task solvability but is not used as exact-patch truth. Observable behavior and rubric criteria remain authoritative.
 
 Replay reports include pass@1, pass@k when repeated attempts exist, result variance, cost variance, and failure-mode distribution.
+
+They also report pass^k when repeated independent attempts exist and consistent success matters. Re-grading one stored attempt with several judges measures grader agreement and is never counted as pass@k or pass^k.
+
+## Suite Lifecycle
+
+Suites declare one primary purpose:
+
+- `capability`: difficult tasks intended to expose headroom and discriminate stronger models or harnesses.
+- `regression`: previously reliable tasks expected to remain near the frozen quality bar.
+- `calibration`: human-reviewed cases used to measure grader and rubric agreement.
+- `replay`: frozen real-project tasks used for independent model or harness trials.
+
+High-performing capability tasks may graduate into a regression suite, but historical scores keep their original suite version and purpose. Balanced cases cover when a behavior should and should not occur. A known-good reference solution is preferred for replay tasks to establish solvability, but it does not become exact-patch truth.
+
+Suite owners periodically inspect complete transcripts and outcomes for sampled passes and failures, compare model-based grades with human judgment, and add production failures as candidate tasks. Automated judges continue to receive bounded canonical projections; complete raw transcripts are for reconstruction, authorized human audit, and grader debugging.
+
+Capability suites are monitored for saturation. A saturated suite can remain valuable for regression detection, but model-improvement claims move to a harder or broader version rather than relying on tiny changes at the ceiling.
 
 ## Historical Backfill and Continuous Evaluation
 

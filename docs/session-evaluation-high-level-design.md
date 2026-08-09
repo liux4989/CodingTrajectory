@@ -16,6 +16,31 @@ The mechanism adds three derived properties to coding work:
 
 The evaluation must reward verified project outcomes rather than activity volume, persuasive final answers, or token usage.
 
+## External Evaluation Reference
+
+This design adopts the practical evaluation vocabulary and grader-selection guidance in Anthropic's [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents). The article is a design reference, not a source of runtime authority; CodingTrajectory's versioned contracts below remain normative.
+
+| Reference concept | CodingTrajectory interpretation |
+| --- | --- |
+| Task | A frozen request, environment identity, success criteria, and rubric. |
+| Trial | One independent attempt by a model and agent harness. A judge rerun over the same observed work is not a new trial. |
+| Grader | A semantic criterion judge, executable verifier, or optional human review signal. |
+| Transcript or trajectory | The complete source record retained for reconstruction and human audit. Automated judges receive a bounded canonical evidence projection of it. |
+| Outcome | Observable repository, artifact, command, runtime, or external postcondition state. |
+| Evaluation harness | CodingTrajectory scheduling, evidence selection, grading, aggregation, and persistence. |
+| Agent harness | The model-facing coding runtime that produced the work; Codex app-server is separately used as the first semantic-judge backend. |
+| Evaluation suite | A frozen cohort with a declared capability, regression, calibration, or replay purpose. |
+
+The corresponding design rules are:
+
+- Prefer outcome graders over prescribed tool-call or reasoning paths; inspect trajectory evidence when requirements, safety, interaction quality, or grader diagnosis requires it.
+- Use deterministic graders where possible, model graders where necessary, and bounded human review to calibrate subjective judgments.
+- Preserve partial achievement and `unknown` rather than forcing binary certainty from insufficient evidence.
+- Separate capability suites, which need room for improvement, from regression suites, which protect already-reliable behavior.
+- Treat repeated model attempts as isolated trials and report reliability across trials; do not manufacture sample size by re-grading one historical attempt.
+- Sample complete transcripts during human calibration and grader debugging, while keeping raw logs out of the default automated-judge context.
+- Review suites for ambiguous tasks, grader exploits, harness constraints, class imbalance, and saturation before treating score changes as model changes.
+
 ## Product Questions
 
 The system should answer:

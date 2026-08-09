@@ -23,6 +23,7 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - Provider-specific payloads remain in transcript `data` and canonical `vendor_data` only when they are useful to CT; unused raw log properties are skipped instead of modeled.
 
 # Evaluation Projection Layer
+- Evaluation terminology and grader selection follow the adaptation of Anthropic's [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) recorded in the session-evaluation high-level design; CodingTrajectory's versioned contracts remain authoritative.
 - Raw vendor logs are reconstruction and audit inputs, not default evaluator context.
 - Evaluation starts from canonical `session.overview` and `session.items` projections and builds a versioned task contract plus bounded evidence records with stable evidence IDs.
 - Rubric compilation receives requests, material requirement changes, compact turn structure, repository instructions, and validation authority without receiving the full outcome trajectory.

@@ -18,6 +18,8 @@ Build the smallest end-to-end evaluation framework that can:
 
 Phase 1 proves the contract. It is not the full benchmarking product.
 
+The terminology and grader strategy follow the mapping to Anthropic's [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) in the high-level design. Phase 1 evaluates one observed historical attempt at a time. Re-running its semantic judge measures evaluator variance; it does not create another independent model trial.
+
 ## Existing Repository Boundary
 
 The canonical `ct api` service remains the source of truth for normalized sessions, turns, items, usage, tool evidence, project path, and request lineage. The dashboard plugin consumes those contracts and owns derived evaluation jobs.
@@ -107,6 +109,8 @@ created_at
 ```
 
 Re-evaluating an unchanged scope with the same versions may reuse the artifact. A changed source fingerprint, rubric revision, or evaluator version creates a distinct evaluation.
+
+An evaluation artifact is a grade of an observed attempt, not a new attempt. Independent trials require replaying a frozen task from a clean environment with the target model and agent harness, which is deferred to Phase 2.
 
 ### Category Result
 
@@ -375,6 +379,7 @@ The cohort manifest freezes canonical session IDs, project paths or unavailable-
 - Semantic and executable disagreement remains explicit in the artifact.
 - Session resolution is produced from a session rubric, not turn-score averaging.
 - A bounded human review agrees with primary category and resolution on at least 80% of the cohort.
+- For the human audit sample, reviewers compare the bounded evidence projection with the complete source transcript and record any outcome-changing evidence omitted by selection.
 - Re-running unchanged executable checks is deterministic; semantic variance is measured and retained.
 - Evaluation failure never changes canonical session data or project files beyond allowed local build artifacts.
 
