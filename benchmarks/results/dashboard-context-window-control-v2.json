@@ -1,0 +1,343 @@
+{
+  "schema_version": 2,
+  "generated_at": "2026-08-12T18:25:20.492374+00:00",
+  "environment": {
+    "python": "3.12.11",
+    "platform": "macOS-27.0-arm64-arm-64bit"
+  },
+  "provenance": {
+    "repository_revision": "a04320095dd086dad38767e2f8c59e7082a306be",
+    "repository_dirty": false,
+    "benchmark_harness_sha256": "ecc52d21013dda033cd285234a03e3ca0bd8e3f2d4d2b716fb7490d5ee1de5e2",
+    "plugin_source_sha256": "7574924c4524dc06f7ad69b7a8cecfb417ee4f60254ca683bee496aca96352bf",
+    "core_cli_source_sha256": "db1eb9ac169bebae53ca5156b35ddb68dc9ad430ed649327000b3f9de1ba0bc9",
+    "uv_lock_sha256": "b49697d02539e1c1c8380c5f712fd22de28e9cd579e2373829237ab9fa2a0c75",
+    "ct_command": "/private/tmp/ct-dashboard-control-v2-79bac32/.venv/bin/ct",
+    "ct_executable": "/private/tmp/ct-dashboard-control-v2-79bac32/.venv/bin/ct",
+    "ct_executable_sha256": "ece35ac628d88925e53ff8d2f20effc1ac1e8aa8b3dd902e8f9b094f2cc26b73"
+  },
+  "fixture_id": "dashboard-context-window-large-v1",
+  "fixture_sha256": "8704a31d83f6703eed6464d279b2b7d7cd2570dce8122c45885f7e255b957de1",
+  "workload_scope": "host-pinned session identity; response digest detects drift but the source corpus is not bundled",
+  "fixture": {
+    "since_days": 7,
+    "project_name": "trail-trading",
+    "session_id": "019ff437-4409-7e02-ae07-bf97cc39215d",
+    "session_title": "Explain Prototype Research Lab",
+    "session_graph_size": 13241,
+    "selection": "pinned representative fixture"
+  },
+  "repeat": 5,
+  "thresholds_ms": {
+    "warning": 1000.0,
+    "critical": 5000.0
+  },
+  "results": [
+    {
+      "name": "context-window",
+      "method": "GET",
+      "route": "/api/sessions/context-window",
+      "query": {
+        "session_id": [
+          "019ff437-4409-7e02-ae07-bf97cc39215d"
+        ]
+      },
+      "status": "critical",
+      "cold_runs_ms": [
+        32173.889,
+        31541.968,
+        32511.949,
+        34233.332,
+        34281.964
+      ],
+      "warm_runs_ms": [
+        0.397,
+        0.361,
+        0.374,
+        0.408,
+        0.415
+      ],
+      "cold_median_ms": 32511.949,
+      "warm_median_ms": 0.397,
+      "warm_speedup": 81859.64,
+      "nested_ct_median_ms": 32509.851,
+      "dashboard_median_ms": 2.098,
+      "response_bytes": 79801,
+      "response_sha256": "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2",
+      "cold_response_sha256": [
+        "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2",
+        "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2",
+        "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2",
+        "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2",
+        "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2"
+      ],
+      "warm_response_sha256": [
+        "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2",
+        "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2",
+        "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2",
+        "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2",
+        "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2"
+      ],
+      "response_stable": true,
+      "internal_calls": [
+        {
+          "run": 1,
+          "phase": "cold",
+          "sequence": 1,
+          "label": "ct session stats",
+          "request_count": 1,
+          "elapsed_ms": 8130.688,
+          "response_bytes": 14855,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 1,
+          "phase": "cold",
+          "sequence": 2,
+          "label": "ct session overview",
+          "request_count": 1,
+          "elapsed_ms": 7754.975,
+          "response_bytes": 6397,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 1,
+          "phase": "cold",
+          "sequence": 3,
+          "label": "ct session usage",
+          "request_count": 1,
+          "elapsed_ms": 7959.866,
+          "response_bytes": 3440,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 1,
+          "phase": "cold",
+          "sequence": 4,
+          "label": "ct api call session.tool_usage",
+          "request_count": 1,
+          "elapsed_ms": 8324.519,
+          "response_bytes": 64450,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 2,
+          "phase": "cold",
+          "sequence": 1,
+          "label": "ct session stats",
+          "request_count": 1,
+          "elapsed_ms": 8081.771,
+          "response_bytes": 14855,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 2,
+          "phase": "cold",
+          "sequence": 2,
+          "label": "ct session overview",
+          "request_count": 1,
+          "elapsed_ms": 7730.41,
+          "response_bytes": 6397,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 2,
+          "phase": "cold",
+          "sequence": 3,
+          "label": "ct session usage",
+          "request_count": 1,
+          "elapsed_ms": 7763.388,
+          "response_bytes": 3440,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 2,
+          "phase": "cold",
+          "sequence": 4,
+          "label": "ct api call session.tool_usage",
+          "request_count": 1,
+          "elapsed_ms": 7964.338,
+          "response_bytes": 64450,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 3,
+          "phase": "cold",
+          "sequence": 1,
+          "label": "ct session stats",
+          "request_count": 1,
+          "elapsed_ms": 8010.919,
+          "response_bytes": 14855,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 3,
+          "phase": "cold",
+          "sequence": 2,
+          "label": "ct session overview",
+          "request_count": 1,
+          "elapsed_ms": 7930.468,
+          "response_bytes": 6397,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 3,
+          "phase": "cold",
+          "sequence": 3,
+          "label": "ct session usage",
+          "request_count": 1,
+          "elapsed_ms": 8588.499,
+          "response_bytes": 3440,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 3,
+          "phase": "cold",
+          "sequence": 4,
+          "label": "ct api call session.tool_usage",
+          "request_count": 1,
+          "elapsed_ms": 7979.965,
+          "response_bytes": 64450,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 4,
+          "phase": "cold",
+          "sequence": 1,
+          "label": "ct session stats",
+          "request_count": 1,
+          "elapsed_ms": 8068.132,
+          "response_bytes": 14855,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 4,
+          "phase": "cold",
+          "sequence": 2,
+          "label": "ct session overview",
+          "request_count": 1,
+          "elapsed_ms": 8339.656,
+          "response_bytes": 6397,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 4,
+          "phase": "cold",
+          "sequence": 3,
+          "label": "ct session usage",
+          "request_count": 1,
+          "elapsed_ms": 8731.364,
+          "response_bytes": 3440,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 4,
+          "phase": "cold",
+          "sequence": 4,
+          "label": "ct api call session.tool_usage",
+          "request_count": 1,
+          "elapsed_ms": 9091.682,
+          "response_bytes": 64450,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 5,
+          "phase": "cold",
+          "sequence": 1,
+          "label": "ct session stats",
+          "request_count": 1,
+          "elapsed_ms": 8497.492,
+          "response_bytes": 14855,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 5,
+          "phase": "cold",
+          "sequence": 2,
+          "label": "ct session overview",
+          "request_count": 1,
+          "elapsed_ms": 8565.138,
+          "response_bytes": 6397,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 5,
+          "phase": "cold",
+          "sequence": 3,
+          "label": "ct session usage",
+          "request_count": 1,
+          "elapsed_ms": 8748.521,
+          "response_bytes": 3440,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 5,
+          "phase": "cold",
+          "sequence": 4,
+          "label": "ct api call session.tool_usage",
+          "request_count": 1,
+          "elapsed_ms": 8468.569,
+          "response_bytes": 64450,
+          "status": "ok",
+          "error": null
+        }
+      ],
+      "error": null
+    }
+  ],
+  "excluded_apis": [
+    "overview",
+    "projects",
+    "project-detail",
+    "sessions",
+    "session-timeline",
+    "model-usage",
+    "error-collection",
+    "cache-breaks",
+    "evaluations",
+    "vendors",
+    "project-cleanup-preview",
+    "session-cleanup-preview",
+    "token-efficiency",
+    "token-efficiency-project"
+  ],
+  "gate": {
+    "status": "fail",
+    "measurement_status": "pass",
+    "threshold_status": "fail",
+    "failures": [
+      {
+        "code": "threshold_breach",
+        "message": "cold median has critical threshold status",
+        "route": "/api/sessions/context-window",
+        "category": "threshold"
+      }
+    ]
+  },
+  "comparison": null,
+  "notes": [
+    "Dashboard-cache-cold runs clear projection and shared source caches before each call; warm runs immediately repeat the same call.",
+    "nested_ct_median_ms is median summed subprocess work; dashboard_median_ms is a residual estimate and is not valid CPU attribution when subprocesses overlap.",
+    "Agent, evaluation-start, cleanup-apply, and other state-changing APIs are excluded.",
+    "Token-efficiency projections are included only with --include-expensive or an explicit --api selection."
+  ]
+}

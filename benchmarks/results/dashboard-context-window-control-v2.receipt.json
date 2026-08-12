@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "role": "schema-v2-legacy-control-receipt",
+  "artifact": "benchmarks/results/dashboard-context-window-control-v2.json",
+  "artifact_sha256": "8c9cf6a4670275bdbc5c0eaf4ade99dba30b3e6d3b84e254861020fc75f9e4a1",
+  "experiment_id": "dashboard-context-window-same-core-v2",
+  "control_revision": "a04320095dd086dad38767e2f8c59e7082a306be",
+  "control_base_revision": "b5c172f3a0eefde40a74745002bdf9a5f6355ed9",
+  "harness_source_revision": "79bac324e996ddd54518d28b2645fe2a51698a29",
+  "harness_git_blob_oid": "f001c4ac30a3930de60d46a158ee0c61dbfaa1f2",
+  "control_dashboard_tree_oid": "7abf962c3c82ea42fc24c9a2fa8da953a48bc857",
+  "core_tree_oid": "44fb720e9707cfb53499b07112b3fb2d884b0429",
+  "cli_tree_oid": "6520b654214f721da73e6b88b8d18f4538f0a460",
+  "reconstruction": "Start at control_base_revision and replace packages/plugins/dashboard/api_benchmark.py with the blob from harness_source_revision, then commit that single-file harness change.",
+  "cache_scope": "dashboard projection cache cleared before each cold call; this legacy implementation has no shared source cache; OS and source filesystem caches retained",
+  "limitations": [
+    "The workload is host-pinned and the underlying session corpus is not bundled.",
+    "The control commit is reconstructible from retained Git objects but is not part of main history.",
+    "The 5-second threshold fails; measurement validity and release-threshold status are recorded separately."
+  ]
+}
