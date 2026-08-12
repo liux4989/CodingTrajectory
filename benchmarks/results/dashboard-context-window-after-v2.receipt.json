@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "role": "schema-v2-optimized-candidate-receipt",
+  "artifact": "benchmarks/results/dashboard-context-window-after-v2.json",
+  "artifact_sha256": "c46bee681cf315d32f8344fef3ec74b3ba6248d55365df161d4c3b74135e081a",
+  "experiment_id": "dashboard-context-window-same-core-v2",
+  "candidate_revision": "e0f8e66080dbaf54571bfbd43c09917ed95aca8e",
+  "control_artifact": "benchmarks/results/dashboard-context-window-control-v2.json",
+  "control_artifact_sha256": "8c9cf6a4670275bdbc5c0eaf4ade99dba30b3e6d3b84e254861020fc75f9e4a1",
+  "fixture_sha256": "8704a31d83f6703eed6464d279b2b7d7cd2570dce8122c45885f7e255b957de1",
+  "response_sha256": "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2",
+  "core_cli_source_sha256": "db1eb9ac169bebae53ca5156b35ddb68dc9ad430ed649327000b3f9de1ba0bc9",
+  "benchmark_harness_sha256": "ecc52d21013dda033cd285234a03e3ca0bd8e3f2d4d2b716fb7490d5ee1de5e2",
+  "control_cold_median_ms": 32511.949,
+  "candidate_cold_median_ms": 8595.418,
+  "latency_reduction_percent": 73.562,
+  "speedup": 3.782,
+  "comparison_status": "pass",
+  "measurement_status": "pass",
+  "threshold_status": "fail",
+  "cache_scope": "dashboard projection and shared source caches cleared before each cold call; OS and source filesystem caches retained",
+  "limitations": [
+    "The workload is host-pinned and the underlying session corpus is not bundled.",
+    "The candidate remains above the fixture's 5-second critical threshold.",
+    "This is direct service/projection latency, not HTTP or machine cold-start latency."
+  ]
+}
