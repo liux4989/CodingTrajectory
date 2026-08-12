@@ -23,6 +23,7 @@ try:
     from . import session_analysis as session_analysis_mod
     from . import token_efficiency as token_efficiency_mod
     from .jobs import JobRunner, JobStore
+    from .source_data import DashboardSourceData
     from .work_manager import DashboardWorkManager
 except ImportError:
     import agent_task as agent_task_mod
@@ -37,12 +38,22 @@ except ImportError:
     import session_analysis as session_analysis_mod
     import token_efficiency as token_efficiency_mod
     from jobs import JobRunner, JobStore
+    from source_data import DashboardSourceData
     from work_manager import DashboardWorkManager
 
 
 class DashboardDataService:
-    def __init__(self, *, cache_ttl_seconds: float = 12) -> None:
-        self._work = DashboardWorkManager(cache_ttl_seconds)
+    def __init__(
+        self,
+        *,
+        cache_ttl_seconds: float = 60,
+        stale_ttl_seconds: float = 120,
+    ) -> None:
+        self._work = DashboardWorkManager(
+            cache_ttl_seconds,
+            stale_ttl_seconds=stale_ttl_seconds,
+        )
+        self._source = DashboardSourceData(ct_json=lambda args: _ct_json(args))
         self._jobs = JobStore()
         self._runner = JobRunner(self._jobs)
         self._token_efficiency_generation = 0
@@ -53,7 +64,7 @@ class DashboardDataService:
         )
         self._evaluation_store = evaluation_mod.EvaluationStore()
         self._evaluations = evaluation_mod.EvaluationService(
-            ct_json=_ct_json,
+            ct_json=self._source.json,
             app_server=self._app_server,
             store=self._evaluation_store,
         )
@@ -63,10 +74,20 @@ class DashboardDataService:
         self._agent_sessions.shutdown()
         self._app_server.close()
         close_active_app_servers()
+        self._work.shutdown(wait=False)
+        self._source.shutdown()
+
+    def clear_caches(self) -> None:
+        """Invalidate both dashboard projections and shared source reads."""
+        self._work.clear_all()
+        self._source.clear()
+
+    def _invalidate_cached_data(self) -> None:
+        self.clear_caches()
+        self._token_efficiency_generation += 1
 
     def refresh(self) -> dict[str, Any]:
-        self._work.clear_all()
-        self._token_efficiency_generation += 1
+        self._invalidate_cached_data()
         return {"status": "refreshed"}
 
     def overview(self, query: dict[str, list[str]]) -> dict[str, Any]:
@@ -143,18 +164,29 @@ class DashboardDataService:
         project_name = _first(query, "project_name")
         if not project_name:
             raise ValueError("project_name is required")
-        projects = _ct_json(
+        since_days_raw = _first(query, "since_days")
+        since_days = int(since_days_raw) if since_days_raw is not None else None
+        return self._work.get_or_compute(
+            ("project_detail", project_name, since_days),
+            lambda: self._project_detail_uncached(project_name, since_days),
+        )
+
+    def _project_detail_uncached(
+        self,
+        project_name: str,
+        since_days: int | None,
+    ) -> dict[str, Any]:
+        projects = self._source.json(
             ["project", "list", "--params", json.dumps({}), "--output", "json"]
         )
         items = projects.get("items") or {}
         meta = items.get(project_name)
         if not meta:
             raise ValueError(f"project not found: {project_name}")
-        since_days_raw = _first(query, "since_days")
         sessions_params: dict[str, Any] = {"project_name": project_name}
-        if since_days_raw is not None:
-            sessions_params["since_days"] = int(since_days_raw)
-        sessions = _ct_json(
+        if since_days is not None:
+            sessions_params["since_days"] = since_days
+        sessions = _ct_json_expensive(
             [
                 "project",
                 "sessions",
@@ -168,7 +200,7 @@ class DashboardDataService:
             "name": project_name,
             "path": meta.get("path"),
             "vendors": meta.get("vendors") or [],
-            "since_days": sessions_params.get("since_days"),
+            "since_days": since_days,
             "sessions": sessions.get("items") or [],
             "session_count": len(sessions.get("items") or []),
         }
@@ -215,6 +247,7 @@ class DashboardDataService:
             lambda: context_window_mod.build_projection(
                 session_id,
                 turn_id=turn_id,
+                ct_json=_ct_json_expensive,
             ).model_dump(mode="json"),
         )
 
@@ -225,7 +258,7 @@ class DashboardDataService:
         return self._work.get_or_compute(
             ("model_usage", since_days, project_name, model_key),
             lambda: model_usage_mod.build_projection(
-                ct_json=_ct_json,
+                ct_json=self._source.json,
                 since_days=since_days,
                 project_name=project_name,
                 model_key=model_key,
@@ -240,28 +273,23 @@ class DashboardDataService:
     ) -> dict[str, Any]:
         since_days = min(_int(query, "since_days", 7), 30)
         generation = (
-            self._token_efficiency_generation
-            if generation is None
-            else generation
+            self._token_efficiency_generation if generation is None else generation
         )
         return self._work.get_or_compute(
             ("token_efficiency_index", since_days, generation),
             lambda: token_efficiency_mod.build_index_projection(
-                ct_json=_ct_json_token_efficiency,
+                ct_json=_ct_json_expensive,
                 since_days=since_days,
             ),
             ttl_seconds=3_600,
+            stale_ttl_seconds=3_600,
         )
 
-    def start_token_efficiency_index(
-        self, body: dict[str, Any]
-    ) -> dict[str, Any]:
+    def start_token_efficiency_index(self, body: dict[str, Any]) -> dict[str, Any]:
         query = _body_query(body)
         since_days = min(_int(query, "since_days", 7), 30)
         generation = self._token_efficiency_generation
-        operation_key = (
-            f"token-efficiency-index:v1:{since_days}:g{generation}"
-        )
+        operation_key = f"token-efficiency-index:v1:{since_days}:g{generation}"
         job_id, created = self._runner.submit_once(
             operation_key,
             "token-efficiency-index",
@@ -287,9 +315,7 @@ class DashboardDataService:
             raise ValueError("project_name is required")
         since_days = min(_int(query, "since_days", 7), 30)
         generation = (
-            self._token_efficiency_generation
-            if generation is None
-            else generation
+            self._token_efficiency_generation if generation is None else generation
         )
         return self._work.get_or_compute(
             (
@@ -299,16 +325,15 @@ class DashboardDataService:
                 generation,
             ),
             lambda: token_efficiency_mod.build_project_projection(
-                ct_json=_ct_json_token_efficiency,
+                ct_json=_ct_json_expensive,
                 project_name=project_name,
                 since_days=since_days,
             ),
             ttl_seconds=3_600,
+            stale_ttl_seconds=3_600,
         )
 
-    def start_token_efficiency_project(
-        self, body: dict[str, Any]
-    ) -> dict[str, Any]:
+    def start_token_efficiency_project(self, body: dict[str, Any]) -> dict[str, Any]:
         query = _body_query(body)
         project_name = _first(query, "project_name")
         if not project_name:
@@ -340,7 +365,7 @@ class DashboardDataService:
         return self._work.get_or_compute(
             ("error_collection", since_days, project_name),
             lambda: error_collection_mod.build_projection(
-                ct_json=_ct_json,
+                ct_json=self._source.json,
                 since_days=since_days,
                 project_name=project_name,
             ),
@@ -355,7 +380,7 @@ class DashboardDataService:
         return self._work.get_or_compute(
             ("cache_breaks", since_days, project_name),
             lambda: cache_breaks_mod.build_projection(
-                ct_json=_ct_json,
+                ct_json=self._source.json,
                 since_days=since_days,
                 project_name=project_name,
             ),
@@ -372,7 +397,7 @@ class DashboardDataService:
                 "session-analysis",
                 session_analysis_mod.build_analysis,
                 session_id.strip(),
-                ct_json=_ct_json,
+                ct_json=self._source.json,
                 app_server=self._app_server,
             )
             reused = False
@@ -382,7 +407,7 @@ class DashboardDataService:
                 "session-analysis",
                 session_analysis_mod.build_analysis,
                 session_id.strip(),
-                ct_json=_ct_json,
+                ct_json=self._source.json,
                 app_server=self._app_server,
             )
             reused = not created
@@ -552,12 +577,16 @@ class DashboardDataService:
         return self._work.get_or_compute(
             ("cleanup_preview", "project", _query_key(query)),
             lambda: _preview_payload(_project_cleanup_preview(query)),
+            ttl_seconds=12,
+            stale_ttl_seconds=12,
         )
 
     def session_cleanup_preview(self, query: dict[str, list[str]]) -> dict[str, Any]:
         return self._work.get_or_compute(
             ("cleanup_preview", "session", _query_key(query)),
             lambda: _preview_payload(_session_cleanup_preview(query)),
+            ttl_seconds=12,
+            stale_ttl_seconds=12,
         )
 
     def apply_project_cleanup(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -585,9 +614,7 @@ class DashboardDataService:
             action,
             selected,
         )
-        self._work.clear_prefix(("projects",))
-        self._work.clear_prefix(("overview",))
-        self._work.clear_prefix(("cleanup_preview", "project"))
+        self._invalidate_cached_data()
         return result
 
     def apply_session_cleanup(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -614,19 +641,14 @@ class DashboardDataService:
             action,
             selected,
         )
-        self._work.clear_prefix(("sessions",))
-        self._work.clear_prefix(("session_data",))
-        self._work.clear_prefix(("overview",))
-        self._work.clear_prefix(("model_usage",))
-        self._work.clear_prefix(("error_collection",))
-        self._work.clear_prefix(("cleanup_preview", "session"))
+        self._invalidate_cached_data()
         return result
 
     def _projects_uncached(self, vendor: str | None) -> dict[str, Any]:
         params: dict[str, Any] = {}
         if vendor:
             params["agent_vendor"] = vendor
-        payload = _ct_json(
+        payload = self._source.json(
             ["project", "list", "--params", json.dumps(params), "--output", "json"]
         )
         items = payload.get("items") or {}
@@ -642,8 +664,15 @@ class DashboardDataService:
         }
 
     def _sessions_uncached(self, params: dict[str, Any]) -> dict[str, Any]:
-        payload = _ct_json(
-            ["project", "sessions", "--params", json.dumps(params), "--output", "json"]
+        payload = self._source.json(
+            [
+                "project",
+                "sessions",
+                "--params",
+                json.dumps(params),
+                "--output",
+                "json",
+            ]
         )
         return {"items": payload.get("items") or []}
 
@@ -657,23 +686,11 @@ class DashboardDataService:
             request["project_name"] = params["project_name"]
         if params.get("agent_vendor"):
             request["agent_vendor"] = params["agent_vendor"]
-        payload = _ct_json(
-            [
-                "api",
-                "call",
-                "project.sessions",
-                "--global-scope",
-                "--params",
-                json.dumps(request),
-            ]
+        result = self._source.call(
+            "project.sessions",
+            request,
+            global_scope=True,
         )
-        if not payload.get("ok"):
-            error = payload.get("error") or {}
-            return {
-                "items": [],
-                "errors": [{"message": error.get("message") or "request failed"}],
-            }
-        result = payload.get("result") or {}
         return {
             "items": [
                 _dashboard_session_item(item)
@@ -726,17 +743,13 @@ def _overview_attach_session_costs(session_items: list[dict[str, Any]]) -> None:
     ``cost_usd`` field that ``project.sessions`` usage never populates.
     """
     session_ids = [
-        str(item.get("id") or "")
-        for item in session_items
-        if item.get("id")
+        str(item.get("id") or "") for item in session_items if item.get("id")
     ]
     if not session_ids:
         return
     payloads = model_usage_mod._model_usage_batch(_ct_json, session_ids)
     for payload in payloads:
-        session_id = str(
-            payload.get("id") or payload.get("root_session_id") or ""
-        )
+        session_id = str(payload.get("id") or payload.get("root_session_id") or "")
         if not session_id:
             continue
         models = [
@@ -1022,13 +1035,11 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
     return _run_ct_json(args, timeout_seconds=30)
 
 
-def _ct_json_token_efficiency(args: list[str]) -> dict[str, Any]:
+def _ct_json_expensive(args: list[str]) -> dict[str, Any]:
     return _run_ct_json(args, timeout_seconds=120)
 
 
-def _run_ct_json(
-    args: list[str], *, timeout_seconds: int
-) -> dict[str, Any]:
+def _run_ct_json(args: list[str], *, timeout_seconds: int) -> dict[str, Any]:
     ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
     if not ct:
         raise RuntimeError(

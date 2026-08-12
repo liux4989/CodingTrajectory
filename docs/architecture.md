@@ -323,6 +323,7 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct session events [ID] --type TYPE` | Filtered event search |
 | `uv run ct plugin list` | List available plugins |
 | `uv run ct plugin dashboard web` | Start web dashboard |
+| `uv run ct plugin dashboard benchmark` | Benchmark read-only dashboard API projections |
 | `uv run ct plugin code-time` | Today's coding time summary |
 
 ### Testing

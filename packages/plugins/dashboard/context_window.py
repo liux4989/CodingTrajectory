@@ -134,7 +134,6 @@ class CacheBreakRecord(BaseModel):
     #   is simply unknown.
     type: Literal[
         "ttl_confirmed", "ttl_likely", "effort_switch", "model_switch", "unattributed"
-
     ]
     idle_seconds: float
     re_read_tokens: int
@@ -235,7 +234,10 @@ def main(
     )
     args = parser.parse_args(argv)
 
-    projection = build_projection(args.session_id, turn_id=args.turn_id)
+    try:
+        projection = build_projection(args.session_id, turn_id=args.turn_id)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     if args.output == "json":
         print(projection.model_dump_json(indent=2))
     else:
@@ -250,17 +252,7 @@ def build_projection(
     ct_json: Callable[[list[str]], dict[str, Any]] | None = None,
 ) -> ContextWindowProjection:
     run = ct_json or _ct_json
-    stats = run(["session", "stats", "--global-scope", "--output", "json", session_id])
-    overview = run(
-        ["session", "overview", "--global-scope", "--output", "json", session_id]
-    )
-    usage = run(["session", "usage", "--global-scope", "--output", "json", session_id])
-    tool_usage = _ct_api_result(
-        "session.tool_usage",
-        {"session_id": session_id},
-        global_scope=True,
-        ct_json=run,
-    )
+    stats, overview, usage, tool_usage = _load_projection_inputs(session_id, run)
 
     selected_stats = _selected_session_stats(stats, session_id)
     active_session_id = str(
@@ -269,7 +261,12 @@ def build_projection(
     selected_usage = _selected_session_usage(usage, active_session_id)
     session_sections = _project_session_sections(stats, usage)
 
-    vendor = str(selected_stats.get("vendor") or stats.get("vendor") or _overview_vendor(overview) or "unknown")
+    vendor = str(
+        selected_stats.get("vendor")
+        or stats.get("vendor")
+        or _overview_vendor(overview)
+        or "unknown"
+    )
     model = selected_stats.get("model") or {}
     model_name = _optional_text(model.get("name"))
     categories = _project_categories(selected_stats)
@@ -285,7 +282,10 @@ def build_projection(
             session_id=active_session_id,
         ),
     ]
-    warnings = [str(item) for item in selected_stats.get("warnings") or stats.get("warnings") or []]
+    warnings = [
+        str(item)
+        for item in selected_stats.get("warnings") or stats.get("warnings") or []
+    ]
     if len(session_sections) > 1:
         warnings.append(
             "This session id resolves to a session graph; context-window values are scoped to the active session, not the graph aggregate."
@@ -295,7 +295,9 @@ def build_projection(
         raise SystemExit(f"turn not found in session overview: {turn_id}")
 
     compaction = _project_compaction(selected_stats)
-    cache_breaks = _project_cache_breaks(selected_usage, vendor=vendor, compaction=compaction)
+    cache_breaks = _project_cache_breaks(
+        selected_usage, vendor=vendor, compaction=compaction
+    )
 
     context = selected_stats.get("context") or {}
     reported_context_window = model.get("context_window") or model.get(
@@ -351,6 +353,584 @@ def build_projection(
         cache_breaks=cache_breaks,
         warnings=_dedupe(warnings),
     )
+
+
+def _load_projection_inputs(
+    session_id: str,
+    run: Callable[[list[str]], dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    # ``ct api batch`` returns internal service shapes, while the dedicated
+    # commands apply CLI display compaction. Keep that compatibility boundary
+    # local to this plugin instead of importing CLI-private helpers.
+    requests = [
+        {
+            "id": name,
+            "method": method,
+            "params": {"session_id": session_id},
+        }
+        for name, method in (
+            ("stats", "session.stats"),
+            ("overview", "session.overview"),
+            ("usage", "session.usage"),
+            ("tool_usage", "session.tool_usage"),
+        )
+    ]
+    payload = run(
+        [
+            "api",
+            "batch",
+            "--global-scope",
+            "--requests",
+            json.dumps(requests),
+        ]
+    )
+    rows = {
+        str(item.get("id")): item
+        for item in payload.get("items") or []
+        if isinstance(item, dict)
+    }
+    stats = _required_batch_result(rows, "stats")
+    overview = _required_batch_result(rows, "overview")
+    usage = _required_batch_result(rows, "usage")
+    tool_usage = _required_batch_result(rows, "tool_usage")
+    if not isinstance(stats.get("root_session_id"), str):
+        raise RuntimeError("ct api request returned invalid result: stats")
+    if not isinstance(overview.get("root_session_id"), str):
+        raise RuntimeError("ct api request returned invalid result: overview")
+    if not isinstance(usage.get("session_id"), str) or not isinstance(
+        usage.get("total_usage"), dict
+    ):
+        raise RuntimeError("ct api request returned invalid result: usage")
+    if not isinstance(tool_usage.get("root_session_id"), str):
+        raise RuntimeError("ct api request returned invalid result: tool_usage")
+    return (
+        _compact_stats_api(stats),
+        _compact_overview_api(overview),
+        _compact_usage_api(usage),
+        tool_usage,
+    )
+
+
+def _required_batch_result(
+    rows: dict[str, dict[str, Any]], request_id: str
+) -> dict[str, Any]:
+    row = rows.get(request_id)
+    if row is None:
+        raise RuntimeError(f"ct api batch omitted response: {request_id}")
+    if not row.get("ok"):
+        error = row.get("error") or {}
+        message = error.get("message") if isinstance(error, dict) else error
+        raise RuntimeError(str(message or f"ct api request failed: {request_id}"))
+    result = row.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError(f"ct api request returned invalid result: {request_id}")
+    return result
+
+
+def _compact_stats_api(payload: dict[str, Any]) -> dict[str, Any]:
+    model = payload.get("model") or {}
+    context = payload.get("context_window") or {}
+    runtime = payload.get("runtime") or {}
+    messages = payload.get("messages") or {}
+    compaction = payload.get("compaction") or {}
+    compact = _drop_none(
+        {
+            "id": payload.get("root_session_id") or payload.get("session_id"),
+            "session_id": payload.get("session_id"),
+            "role": payload.get("role"),
+            "relationship": payload.get("relationship"),
+            "parent": payload.get("parent_session_id"),
+            "agent_name": payload.get("agent_name"),
+            "title": payload.get("title"),
+            "vendor": payload.get("vendor"),
+            "model": _drop_none(
+                {
+                    "name": model.get("name"),
+                    "context_window": model.get("context_window_tokens"),
+                }
+            )
+            or None,
+            "context": _drop_none(
+                {
+                    "used": context.get("used_tokens"),
+                    "pct": context.get("used_percent"),
+                    "categories": [
+                        _compact_context_category(item)
+                        for item in context.get("categories") or []
+                    ]
+                    or None,
+                }
+            )
+            or None,
+            "provider_usage_buckets": [
+                _compact_context_category(item)
+                for item in payload.get("provider_usage_buckets") or []
+            ]
+            or None,
+            "runtime": _compact_stats_runtime(runtime),
+            "compaction": _compact_compaction(compaction),
+            "messages": _drop_none(
+                {
+                    "user": messages.get("user"),
+                    "assistant": messages.get("assistant"),
+                    "developer": messages.get("developer"),
+                    "tools": messages.get("tool_outputs"),
+                    "reasoning": messages.get("reasoning_items"),
+                    "compacted": messages.get("compacted_contexts"),
+                }
+            )
+            or None,
+            "usage": _compact_usage_tokens(payload.get("usage"), include_cost=False),
+            "billed_token_usage": _compact_usage_tokens(
+                payload.get("billed_token_usage"), include_cost=False
+            ),
+            "warnings": payload.get("warnings") or None,
+        }
+    )
+    if payload.get("scope"):
+        compact["scope"] = payload["scope"]
+    if payload.get("graph_context_window"):
+        compact["graph_context"] = compact.get("context")
+    if payload.get("graph_billed_token_usage"):
+        compact["graph_billed_token_usage"] = _compact_usage_tokens(
+            payload.get("graph_billed_token_usage"), include_cost=False
+        )
+    compact["sessions"] = [
+        _compact_stats_api(item)
+        for item in payload.get("sessions") or []
+        if isinstance(item, dict)
+    ] or None
+    return _drop_none(compact)
+
+
+def _compact_stats_runtime(runtime: dict[str, Any]) -> dict[str, Any] | None:
+    return (
+        _drop_none(
+            {
+                "status": runtime.get("status"),
+                "start": runtime.get("started_at"),
+                "end": runtime.get("ended_at"),
+                "execution_seconds": runtime.get("execution_seconds"),
+                "model_active_seconds": runtime.get("model_active_seconds"),
+                "processed_tokens_per_second": runtime.get(
+                    "processed_tokens_per_second"
+                ),
+                "wait_seconds": runtime.get("wait_seconds"),
+                "turns": runtime.get("turns"),
+                "items": runtime.get("items"),
+                "tools": runtime.get("tool_calls"),
+                "failed_tools": runtime.get("failed_tool_calls") or None,
+                "subagents": runtime.get("subagent_sessions"),
+                "compactions": runtime.get("compactions"),
+                "interrupted_turns": runtime.get("interrupted_turns") or None,
+                "rollbacks": runtime.get("rollbacks") or None,
+                "average_ttft_ms": runtime.get("average_time_to_first_token_ms"),
+            }
+        )
+        or None
+    )
+
+
+def _compact_context_category(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    return _drop_none(
+        {
+            "key": value.get("key"),
+            "label": value.get("label"),
+            "tokens": value.get("tokens"),
+            "usage": value.get("allocated_usage"),
+            "estimated_cost": value.get("estimated_cost"),
+            "pct": value.get("percent"),
+            "chars": value.get("observed_chars"),
+            "items": value.get("items"),
+            "confidence": value.get("confidence"),
+            "source": value.get("source"),
+            "children": [
+                _compact_context_category(child)
+                for child in value.get("children") or []
+            ]
+            or None,
+        }
+    )
+
+
+def _compact_overview_api(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": payload.get("root_session_id"),
+        "sessions": [
+            _drop_none(
+                {
+                    "id": session.get("session_id"),
+                    "relationship": _compact_relationship(session.get("relationship")),
+                    "vendor": session.get("vendor"),
+                    "status": session.get("status"),
+                    "agent": session.get("agent_name"),
+                    "cwd": session.get("cwd"),
+                    "compactions": session.get("compactions"),
+                    "turns": [
+                        _drop_none(
+                            {
+                                "id": turn.get("turn_id"),
+                                "status": turn.get("status"),
+                                "request": _compact_request(turn.get("user_request")),
+                                "activity": [
+                                    _compact_activity(activity)
+                                    for activity in turn.get("activity") or []
+                                ]
+                                or None,
+                                "teammate_summary": turn.get("teammate_summary"),
+                                "items": (
+                                    (turn.get("refs") or {}).get("item_ids")
+                                    if isinstance(turn.get("refs"), dict)
+                                    else None
+                                ),
+                            }
+                        )
+                        for turn in session.get("turns") or []
+                        if isinstance(turn, dict)
+                    ],
+                }
+            )
+            for session in payload.get("sessions") or []
+            if isinstance(session, dict)
+        ],
+    }
+
+
+def _compact_relationship(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    if value.get("role") == "main":
+        return _drop_none({"role": "main", "forks": value.get("forked_session_ids")})
+    return (
+        _drop_none(
+            {
+                "type": value.get("relationship"),
+                "parent": value.get("parent_session_id"),
+                "forks": value.get("forked_session_ids"),
+            }
+        )
+        or None
+    )
+
+
+def _compact_request(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    return (
+        _drop_none(
+            {
+                "text": value.get("content")
+                or value.get("summary")
+                or value.get("text"),
+                "source": value.get("source"),
+                "type": value.get("type")
+                if value.get("type") not in {None, "message"}
+                else None,
+            }
+        )
+        or None
+    )
+
+
+def _compact_activity(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    if "compaction" in value:
+        return _drop_none(
+            {
+                "compaction": value.get("compaction"),
+                "mechanism": value.get("mechanism"),
+                "summary": value.get("summary"),
+                "trigger": value.get("trigger"),
+                "pre": value.get("pre_tokens"),
+                "post": value.get("post_tokens"),
+                "dropped": value.get("dropped_tokens"),
+            }
+        )
+    if "tool" in value:
+        compact = {
+            "tool": value.get("tool"),
+            "count": value.get("count"),
+            "status": value.get("status"),
+        }
+        for key in ("cmd", "path", "query", "url", "text"):
+            if value.get(key) is not None:
+                compact[key] = value[key]
+        for key in ("paths", "queries", "urls", "targets"):
+            if value.get(key) is not None:
+                compact[key] = value[key]
+        if value.get("item_ids") is not None:
+            compact["item_ids"] = value["item_ids"]
+        if compact.get("count") == 1:
+            compact.pop("count", None)
+        return _drop_none(compact)
+    if "text" in value:
+        return _drop_none(
+            {"text": value.get("text"), "item_ids": value.get("item_ids")}
+        )
+    if "teammate_summary" in value:
+        return {"teammate_summary": value.get("teammate_summary")}
+    return value
+
+
+def _compact_usage_api(payload: dict[str, Any]) -> dict[str, Any]:
+    runtime = payload.get("runtime") or {}
+    effort_changes = payload.get("effort_changes") or {}
+    return _drop_none(
+        {
+            "id": payload.get("session_id"),
+            "scope": payload.get("scope"),
+            "extra_billing": payload.get("extra_billing"),
+            "runtime": _drop_none(
+                {
+                    "status": runtime.get("status"),
+                    "start": runtime.get("started_at"),
+                    "end": runtime.get("ended_at"),
+                    "execution_seconds": runtime.get("execution_seconds"),
+                    "model_active_seconds": runtime.get("model_active_seconds"),
+                    "processed_tokens_per_second": runtime.get(
+                        "processed_tokens_per_second"
+                    ),
+                    "wait_seconds": runtime.get("wait_seconds"),
+                }
+            )
+            or None,
+            "usage": _compact_usage_tokens(payload.get("total_usage")),
+            "graph_usage": _compact_usage_tokens(payload.get("graph_total_usage")),
+            "cost": _evidence_value(payload.get("estimated_cost")),
+            "pricing": _evidence_pricing(payload.get("estimated_cost")),
+            "models": _compact_usage_models(payload.get("models")),
+            "compaction": _compact_compaction(payload.get("compaction")),
+            "effort_changes": _compact_effort_changes(effort_changes),
+            "turns": [
+                _compact_usage_turn(turn)
+                for turn in payload.get("turns") or []
+                if isinstance(turn, dict)
+            ],
+            "sessions": [
+                _compact_usage_session(session)
+                for session in payload.get("sessions") or []
+                if isinstance(session, dict)
+            ]
+            or None,
+            "warnings": payload.get("warnings") or None,
+        }
+    )
+
+
+def _compact_usage_tokens(
+    value: Any, *, include_cost: bool = True
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return (
+        _drop_none(
+            {
+                "prompt": value.get("prompt_tokens"),
+                "uncached_prompt": value.get("uncached_prompt_tokens"),
+                "cached_prompt": value.get("cached_prompt_tokens"),
+                "cache_write": value.get("cache_write_tokens"),
+                "completion": value.get("completion_tokens"),
+                "reasoning": value.get("reasoning_tokens"),
+                "reported_total": value.get("reported_total_tokens"),
+                "processed": value.get("processed_tokens"),
+                "prompt_completion": value.get("prompt_completion_tokens"),
+                "cost": value.get("cost_usd") if include_cost else None,
+            }
+        )
+        or None
+    )
+
+
+def _compact_usage_turn(value: dict[str, Any]) -> dict[str, Any]:
+    runtime = value.get("runtime") or {}
+    return _drop_none(
+        {
+            "id": value.get("turn_id"),
+            "session": value.get("session_id"),
+            "runtime": _drop_none(
+                {
+                    "start": runtime.get("started_at"),
+                    "end": runtime.get("ended_at"),
+                    "execution_seconds": runtime.get("execution_seconds"),
+                    "model_active_seconds": runtime.get("model_active_seconds"),
+                    "processed_tokens_per_second": runtime.get(
+                        "processed_tokens_per_second"
+                    ),
+                    "wait_before_seconds": runtime.get("wait_before_seconds"),
+                }
+            )
+            or None,
+            "usage": _compact_usage_tokens(value.get("usage")),
+            "cost": _evidence_value(value.get("estimated_cost")),
+            "pricing": _evidence_pricing(value.get("estimated_cost")),
+            "cache_break_waste_usd": value.get("cache_break_waste_usd"),
+            "cache_break_re_read_tokens": value.get("cache_break_re_read_tokens"),
+            "cache_boundary_loss_tokens": value.get("cache_boundary_loss_tokens"),
+            "cache_first_call_cached_tokens": value.get(
+                "cache_first_call_cached_tokens"
+            ),
+            "cache_intra_turn_loss_tokens": value.get("cache_intra_turn_loss_tokens"),
+            "cache_intra_turn_waste_usd": value.get("cache_intra_turn_waste_usd"),
+        }
+    )
+
+
+def _compact_usage_session(value: dict[str, Any]) -> dict[str, Any]:
+    runtime = value.get("runtime") or {}
+    return _drop_none(
+        {
+            "id": value.get("session_id"),
+            "role": value.get("role"),
+            "relationship": value.get("relationship"),
+            "parent": value.get("parent_session_id"),
+            "agent_name": value.get("agent_name"),
+            "title": value.get("title"),
+            "runtime": _drop_none(
+                {
+                    "status": runtime.get("status"),
+                    "start": runtime.get("started_at"),
+                    "end": runtime.get("ended_at"),
+                    "execution_seconds": runtime.get("execution_seconds"),
+                    "model_active_seconds": runtime.get("model_active_seconds"),
+                    "processed_tokens_per_second": runtime.get(
+                        "processed_tokens_per_second"
+                    ),
+                    "wait_seconds": runtime.get("wait_seconds"),
+                    "turns": runtime.get("turns"),
+                    "items": runtime.get("items"),
+                    "tools": runtime.get("tool_calls"),
+                    "failed_tools": runtime.get("failed_tool_calls") or None,
+                }
+            )
+            or None,
+            "usage": _compact_usage_tokens(value.get("total_usage")),
+            "cost": _evidence_value(value.get("estimated_cost")),
+            "pricing": _evidence_pricing(value.get("estimated_cost")),
+            "models": _compact_usage_models(value.get("models")),
+            "effort_changes": _compact_effort_changes(
+                value.get("effort_changes") or {}
+            ),
+            "turns": [
+                _compact_usage_turn(turn)
+                for turn in value.get("turns") or []
+                if isinstance(turn, dict)
+            ],
+        }
+    )
+
+
+def _compact_usage_models(value: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(value, list):
+        return None
+    rows = [
+        _drop_none(
+            {
+                "provider": model.get("provider"),
+                "model": model.get("model"),
+                "turns": model.get("turns"),
+                "model_active_seconds": model.get("model_active_seconds"),
+                "processed_tokens_per_second": model.get("processed_tokens_per_second"),
+                "usage": _compact_usage_tokens(model.get("usage")),
+                "cost": _evidence_value(model.get("estimated_cost")),
+                "pricing": _evidence_pricing(model.get("estimated_cost")),
+            }
+        )
+        for model in value
+        if isinstance(model, dict)
+    ]
+    return rows or None
+
+
+def _compact_effort_changes(value: dict[str, Any]) -> dict[str, Any]:
+    return _drop_none(
+        {
+            "count": value.get("count") or 0,
+            "events": [
+                _drop_none(
+                    {
+                        "timestamp": event.get("timestamp"),
+                        "from": event.get("effort_from"),
+                        "to": event.get("effort_to"),
+                    }
+                )
+                for event in value.get("events") or []
+                if isinstance(event, dict)
+            ]
+            or None,
+        }
+    )
+
+
+def _compact_compaction(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return (
+        _drop_none(
+            {
+                "count": value.get("count"),
+                "cumulative_dropped": value.get("cumulative_dropped_tokens"),
+                "last": _compact_compaction_event(value.get("last")),
+                "events": [
+                    _compact_compaction_event(event)
+                    for event in value.get("events") or []
+                    if isinstance(event, dict)
+                ]
+                or None,
+            }
+        )
+        or None
+    )
+
+
+def _compact_compaction_event(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return (
+        _drop_none(
+            {
+                "mechanism": value.get("mechanism"),
+                "timestamp": value.get("timestamp"),
+                "trigger": value.get("trigger"),
+                "pre": value.get("pre_tokens"),
+                "post": value.get("post_tokens"),
+                "dropped": value.get("dropped_tokens"),
+            }
+        )
+        or None
+    )
+
+
+def _evidence_value(value: Any) -> float | None:
+    if not isinstance(value, dict):
+        return None
+    raw = value.get("value_usd")
+    return (
+        float(raw)
+        if isinstance(raw, int | float) and not isinstance(raw, bool)
+        else None
+    )
+
+
+def _evidence_pricing(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return (
+        _drop_none(
+            {
+                "confidence": value.get("confidence"),
+                "source": value.get("source"),
+                "effective_date": value.get("effective_date"),
+            }
+        )
+        or None
+    )
+
+
+def _drop_none(value: dict[str, Any]) -> dict[str, Any]:
+    return {key: item for key, item in value.items() if item is not None}
 
 
 def render_markdown(projection: ContextWindowProjection) -> str:
@@ -482,9 +1062,11 @@ def render_markdown(projection: ContextWindowProjection) -> str:
         type_summary = ", ".join(
             f"{cb.by_type.get(key, 0)} {key}"
             for key in (
-                "effort_switch", "model_switch",
-                "ttl_confirmed", "ttl_likely", "unattributed",
-
+                "effort_switch",
+                "model_switch",
+                "ttl_confirmed",
+                "ttl_likely",
+                "unattributed",
             )
             if cb.by_type.get(key)
         )
@@ -502,8 +1084,16 @@ def render_markdown(projection: ContextWindowProjection) -> str:
             trigger = event.trigger or "-"
             pre = _format_tokens(event.pre_tokens)
             post = _format_tokens(event.post_tokens)
-            delta = f"{pre} -> {post}" if event.pre_tokens is not None and event.post_tokens is not None else "-"
-            dropped = _format_tokens(event.dropped_tokens) if event.dropped_tokens is not None else "-"
+            delta = (
+                f"{pre} -> {post}"
+                if event.pre_tokens is not None and event.post_tokens is not None
+                else "-"
+            )
+            dropped = (
+                _format_tokens(event.dropped_tokens)
+                if event.dropped_tokens is not None
+                else "-"
+            )
             timestamp = _one_line(event.timestamp, 19)
             lines.append(
                 f"  {index:>2}  {timestamp:<19} {mechanism:<18} {trigger:<10} {delta:>15} {dropped:>10}"
@@ -559,7 +1149,9 @@ def _project_session_sections(
         session_id = str(item.get("session_id") or item.get("id") or "")
         if not session_id:
             continue
-        usage_item = usage_by_id.get(session_id) or usage_by_id.get(str(item.get("id"))) or {}
+        usage_item = (
+            usage_by_id.get(session_id) or usage_by_id.get(str(item.get("id"))) or {}
+        )
         context = item.get("context") or {}
         pricing = usage_item.get("pricing") or {}
         cost = _optional_float(usage_item.get("cost"))
@@ -626,12 +1218,8 @@ def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
             timestamp=str(event.get("timestamp") or ""),
             mechanism=str(event.get("mechanism") or ""),
             trigger=_optional_text(event.get("trigger")),
-            pre_tokens=_optional_int(
-                event.get("pre") or event.get("pre_tokens")
-            ),
-            post_tokens=_optional_int(
-                event.get("post") or event.get("post_tokens")
-            ),
+            pre_tokens=_optional_int(event.get("pre") or event.get("pre_tokens")),
+            post_tokens=_optional_int(event.get("post") or event.get("post_tokens")),
             dropped_tokens=_optional_int(
                 event.get("dropped") or event.get("dropped_tokens")
             ),
@@ -807,9 +1395,7 @@ def _project_cache_breaks(
                 idle_seconds=0.0,
                 re_read_tokens=intra_loss,
                 cached_after_tokens=None,
-                est_cost_usd=_optional_float(
-                    turn.get("cache_intra_turn_waste_usd")
-                ),
+                est_cost_usd=_optional_float(turn.get("cache_intra_turn_waste_usd")),
                 effort_from=None,
                 effort_to=None,
             )
@@ -933,8 +1519,11 @@ def _effort_changed_turns(
         # Form-agnostic: the CLI reshapes to ``from``/``to``; the raw api emits
         # ``effort_from``/``effort_to``. Read both so this works on either form.
         change_ts.append(
-            (ts, event.get("from") or event.get("effort_from"),
-             event.get("to") or event.get("effort_to"))
+            (
+                ts,
+                event.get("from") or event.get("effort_from"),
+                event.get("to") or event.get("effort_to"),
+            )
         )
     if not change_ts:
         return {}
@@ -948,10 +1537,12 @@ def _effort_changed_turns(
         start = _parse_iso_timestamp(runtime.get("start") or runtime.get("started_at"))
         end = _parse_iso_timestamp(runtime.get("end") or runtime.get("ended_at"))
         re_read = _usage_token(turn.get("usage"), "uncached_prompt") or 0
-        if start is not None and re_read > 0 and (turn.get("id") or turn.get("turn_id")):
-            candidates.append(
-                (start, end, str(turn.get("id") or turn.get("turn_id")))
-            )
+        if (
+            start is not None
+            and re_read > 0
+            and (turn.get("id") or turn.get("turn_id"))
+        ):
+            candidates.append((start, end, str(turn.get("id") or turn.get("turn_id"))))
     if not candidates:
         return {}
     candidates.sort()
@@ -1284,9 +1875,7 @@ def _tool_events_by_turn(
         turn_id = _optional_text(item.get("turn_id"))
         if turn_id is None:
             continue
-        by_turn.setdefault(turn_id, []).append(
-            _tool_item_events(item, index=index)
-        )
+        by_turn.setdefault(turn_id, []).append(_tool_item_events(item, index=index))
     return by_turn
 
 
@@ -1962,7 +2551,6 @@ def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
         "ttl_likely": "⏳",
         "effort_switch": "⚡",
         "model_switch": "🔄",
-
         "unattributed": "❓",
     }[record.type]
     label = {
@@ -1971,7 +2559,6 @@ def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
         "effort_switch": "effort-switch",
         "model_switch": "model-switch",
         "unattributed": "cache miss",
-
     }[record.type]
     base = (
         f"{icon} {label}: {_format_idle(record.idle_seconds)} idle → "
@@ -2000,9 +2587,11 @@ def _cache_breaks_teaser(summary: CacheBreakSummary | None) -> str | None:
     type_summary = ", ".join(
         f"{summary.by_type.get(key, 0)} {key}"
         for key in (
-            "effort_switch", "model_switch",
-            "ttl_confirmed", "ttl_likely", "unattributed",
-
+            "effort_switch",
+            "model_switch",
+            "ttl_confirmed",
+            "ttl_likely",
+            "unattributed",
         )
         if summary.by_type.get(key)
     )
