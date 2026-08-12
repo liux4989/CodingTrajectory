@@ -5,7 +5,7 @@ Surveys two cost layers of the query path:
 
 1. Store build (discovery + ingestion -> DocumentStore)
    - targeted: ingest only the files for one session_graph (warm path-index cache)
-   - global:   ingest every matching log on disk
+   - full:     ingest every matching log in the selected project/global scope
 2. Projection (warm store): each ServiceRuntime method run in isolation
 
 For the slowest methods, an optional cProfile pass pinpoints hot lines.
@@ -13,7 +13,7 @@ For the slowest methods, an optional cProfile pass pinpoints hot lines.
 Usage:
     uv run python scripts/benchmark-query.py                       # auto-pick largest graph
     uv run python scripts/benchmark-query.py --graph-id <uuid>      # target a specific graph
-    uv run python scripts/benchmark-query.py --global-scope         # project-scoped discovery
+    uv run python scripts/benchmark-query.py --global-scope         # search all known logs
     uv run python scripts/benchmark-query.py --profile stats,tool_usage
     uv run python scripts/benchmark-query.py --repeat 3
     uv run python scripts/benchmark-query.py --small                # use smallest graph (sanity)
@@ -73,9 +73,8 @@ def _fmt_ms(seconds: float) -> str:
     return f"{seconds * 1000:8.1f}ms"
 
 
-def _size_kb(payload: Any) -> str:
-    raw = json.dumps(payload, default=str)
-    return f"{len(raw) / 1024:8.1f}KB"
+def _fmt_size(byte_count: int) -> str:
+    return f"{byte_count / 1024:8.1f}KB"
 
 
 def _store_stats(store: DocumentStore) -> dict[str, int]:
@@ -105,7 +104,6 @@ def bench_store_build(
         t0 = time.perf_counter()
         last_store, note = resolve_store(
             params,
-            log_file=None,
             global_scope=global_scope,
             current_dir=current_dir,
             cache=cache2,
@@ -149,7 +147,7 @@ def bench_projection(
             cache=cache,
         )
         runs.append(time.perf_counter() - t0)
-        resp_size = len(json.dumps(result, default=str))
+        resp_size = len(json.dumps(result, default=str, separators=(",", ":")))
     return {
         "runs_s": runs,
         "median_s": statistics.median(runs),
@@ -195,7 +193,7 @@ def pick_graph(
     """Pick a graph id; return (graph_id, {sessions,turns,items})."""
     from coding_trajectory.runtime import ServiceRuntime
 
-    rt = ServiceRuntime(global_scope=True, current_dir=current_dir)
+    rt = ServiceRuntime(global_scope=global_scope, current_dir=current_dir)
     res = rt.call("project.sessions", {})
     rt.close()
     items = res["items"]
@@ -210,7 +208,11 @@ def pick_graph(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--graph-id", help="target a specific session_graph root id")
-    parser.add_argument("--global-scope", action="store_true", help="project-scoped (not global) discovery")
+    parser.add_argument(
+        "--global-scope",
+        action="store_true",
+        help="search all known log files instead of the current project",
+    )
     parser.add_argument("--small", action="store_true", help="use the smallest graph (sanity check)")
     parser.add_argument("--repeat", type=int, default=1, help="repetitions per measurement")
     parser.add_argument("--profile", default="", help="comma-separated methods to cProfile (e.g. stats,tool_usage)")
@@ -229,7 +231,7 @@ def main() -> int:
     args = parser.parse_args()
 
     current_dir = REPO_ROOT
-    global_scope = not args.global_scope  # default: global
+    global_scope = args.global_scope
     cache = IndexCache.load()
 
     # --- pick a target graph -------------------------------------------------
@@ -261,9 +263,12 @@ def main() -> int:
         print("\n## Layer 1: store build (discovery + ingestion)\n")
         print(f"{'case':28}{'median':>11}{'min':>11}{'max':>11}  store")
         print("-" * 90)
+        full_scope_label = (
+            "global (all logs)" if global_scope else "project (current project)"
+        )
         for label, params in [
             ("targeted (warm cache)", {"session_id": graph_id}),
-            ("global (all logs)", {}),
+            (full_scope_label, {}),
         ]:
             r = bench_store_build(
                 global_scope=global_scope,
@@ -287,7 +292,6 @@ def main() -> int:
         t0 = time.perf_counter()
         store, discovery_note = resolve_store(
             {"session_id": graph_id},
-            log_file=None,
             global_scope=global_scope,
             current_dir=current_dir,
             cache=warm_cache,
@@ -325,7 +329,8 @@ def main() -> int:
             baseline["projection"][f"{method} {label}"] = r
             print(
                 f"{method:22}{label:22}{_fmt_ms(r['median_s']):>11}"
-                f"{_fmt_ms(r['min_s']):>11}{_fmt_ms(r['max_s']):>11}  {_size_kb(r)}"
+                f"{_fmt_ms(r['min_s']):>11}{_fmt_ms(r['max_s']):>11}  "
+                f"{_fmt_size(r['resp_bytes'])}"
             )
 
         # --- cProfile the requested slow methods -----------------------------

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from coding_trajectory.analysis.session_graph_views import build_session_graph_narrative
+from coding_trajectory.analysis.session_stats import session_title
 from coding_trajectory.ingestion.common import format_datetime, prune_nones
 from coding_trajectory.ingestion.indexes import build_session_graph_index
 from coding_trajectory.ingestion.models import SessionGraph
@@ -61,14 +62,24 @@ def build_graph_overview(
     *,
     num_turns: int | None = None,
     drop_turns: int | None = None,
+    include_narrative: bool = True,
 ) -> dict[str, Any]:
-    """Return the complete tree, including spawned-agent sessions."""
+    """Return the complete tree, including spawned-agent sessions.
+
+    The narrative projection carries turn requests, assistant responses, and
+    item references. It can be omitted while retaining graph topology and
+    session metadata. Defaults preserve the legacy response shape.
+    """
     index = build_session_graph_index(session_graph)
-    narrative = build_session_graph_narrative(
-        session_graph,
-        num_turns=num_turns,
-        drop_turns=drop_turns,
-        index=index,
+    narrative = (
+        build_session_graph_narrative(
+            session_graph,
+            num_turns=num_turns,
+            drop_turns=drop_turns,
+            index=index,
+        )
+        if include_narrative
+        else {"sessions": []}
     )
     sessions = []
     narrative_by_id = {
@@ -76,6 +87,18 @@ def build_graph_overview(
     }
     for session in session_graph.sessions:
         node = dict(narrative_by_id.get(str(session.session_id), {}))
+        if not include_narrative:
+            node.update(
+                prune_nones(
+                    {
+                        "vendor": session.vendor.value,
+                        "status": session.status,
+                        "agent_name": session.agent_name,
+                        "title": session_title(session),
+                        "cwd": session.cwd,
+                    }
+                )
+            )
         codex = session.extensions.codex if session.extensions else None
         node.update(
             prune_nones(

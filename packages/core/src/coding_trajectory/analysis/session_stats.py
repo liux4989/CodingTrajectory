@@ -2,11 +2,9 @@
 
 The metrics layer produces a raw stats result (context window, provider
 usage buckets, billed token usage). The *presentation* concerns that used
-to live in the service handler - the ``scope`` label, the ``graph_*``
-aliases that mirror the graph-level totals, and the per-session sections
-carrying workflow ``role``/``relationship``/``parent_session_id`` labels
-- are projection concerns and belong here, not in the canonical service
-layer.
+to live in the service handler - the ``scope`` label and per-session sections
+carrying workflow ``role``/``relationship``/``parent_session_id`` labels -
+are projection concerns and belong here, not in the canonical service layer.
 
 Field names and shapes are part of the public ``session.stats`` contract
 and are preserved exactly; this module only relocates the assembly logic.
@@ -15,7 +13,8 @@ and are preserved exactly; this module only relocates the assembly logic.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.indexes import (
@@ -23,6 +22,10 @@ from coding_trajectory.ingestion.indexes import (
     ordered_sessions,
 )
 from coding_trajectory.ingestion.models import Session, SessionGraph
+from coding_trajectory.token_counter import counter_for_session_graph
+
+if TYPE_CHECKING:
+    from coding_trajectory.metrics.models import SessionMetrics
 
 # Edge types that mark a session as a spawned subagent rather than a peer
 # member of the graph. Co-located with session_role so the label logic is
@@ -87,19 +90,38 @@ def session_stats_sections(
     *,
     build_session_graph_context_stats: Callable[..., dict[str, Any]],
     build_session_graph_stats_token_usage: Callable[[SessionGraph], dict[str, Any]],
+    precomputed_usage_by_session: dict[UUID, dict[str, Any]] | None = None,
+    precomputed_counter_name: str | None = None,
+    precomputed_metrics_by_session: dict[UUID, SessionMetrics] | None = None,
+    include_composition: bool = True,
 ) -> list[dict[str, Any]]:
-    """Build a per-session stats section for each session in the graph."""
+    """Build a per-session stats section for each session in the graph.
+
+    Composition controls the nested semantic category tree only. Observed
+    context totals, runtime, usage, billing, and session identity are retained.
+    """
     index = build_session_graph_index(session_graph)
+    precomputed_by_session = precomputed_usage_by_session or {}
+    metrics_by_session = precomputed_metrics_by_session or {}
     sections: list[dict[str, Any]] = []
     for session in ordered_sessions(index):
         single = single_session_graph(session_graph, session)
-        stats_usage = build_session_graph_stats_token_usage(single)
+        stats_usage = None
+        if (
+            precomputed_counter_name
+            and counter_for_session_graph(single).name == precomputed_counter_name
+        ):
+            stats_usage = precomputed_by_session.get(session.session_id)
+        if stats_usage is None:
+            stats_usage = build_session_graph_stats_token_usage(single)
         section = build_session_graph_context_stats(
             single,
             allocated_usage_by_item=stats_usage["allocated_usage_by_item"],
             allocated_usage_by_context_source=stats_usage[
                 "allocated_usage_by_context_source"
             ],
+            include_composition=include_composition,
+            precomputed_metrics=metrics_by_session.get(session.session_id),
         )
         if stats_usage.get("billed_token_usage"):
             section["billed_token_usage"] = stats_usage["billed_token_usage"]
@@ -131,35 +153,31 @@ def build_session_stats_projection(
     *,
     build_session_graph_context_stats: Callable[..., dict[str, Any]],
     build_session_graph_stats_token_usage: Callable[[SessionGraph], dict[str, Any]],
+    precomputed_usage_by_session: dict[UUID, dict[str, Any]] | None = None,
+    precomputed_counter_name: str | None = None,
+    precomputed_metrics_by_session: dict[UUID, SessionMetrics] | None = None,
+    include_session_composition: bool = True,
 ) -> dict[str, Any]:
     """Layer the graph-scope presentation fields onto a stats result.
 
-    Stamps the ``session_graph`` scope, mirrors the graph-level totals into
-    ``graph_*`` aliases (so callers can distinguish graph vs session totals
-    when a graph is collapsed), and attaches per-session sections when the
-    graph holds more than one session. Mutates and returns ``stats_result``.
+    Stamps the ``session_graph`` scope and attaches per-session sections when
+    the graph holds more than one session. Nested per-session composition is an
+    optional projection detail. Mutates and returns ``stats_result``.
     """
     if len(session_graph.sessions) == 1:
         stats_result["scope"] = "session"
-        for key in (
-            "graph_context_window",
-            "graph_provider_usage_buckets",
-            "graph_billed_token_usage",
-            "sessions",
-        ):
-            stats_result.pop(key, None)
+        stats_result.pop("sessions", None)
         return stats_result
 
     stats_result["scope"] = "session_graph"
-    stats_result["graph_context_window"] = stats_result.get("context_window")
-    stats_result["graph_provider_usage_buckets"] = stats_result.get(
-        "provider_usage_buckets"
-    )
-    stats_result["graph_billed_token_usage"] = stats_result.get("billed_token_usage")
     if len(session_graph.sessions) > 1:
         stats_result["sessions"] = session_stats_sections(
             session_graph,
             build_session_graph_context_stats=build_session_graph_context_stats,
             build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
+            precomputed_usage_by_session=precomputed_usage_by_session,
+            precomputed_counter_name=precomputed_counter_name,
+            precomputed_metrics_by_session=precomputed_metrics_by_session,
+            include_composition=include_session_composition,
         )
     return stats_result

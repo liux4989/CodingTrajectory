@@ -82,7 +82,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     call.add_argument(
         "--global-scope",
         action="store_true",
-        help="Search all known log files.",
+        help="Use global discovery for requests without a session entry point.",
     )
     add_params_flag(call)
     call.set_defaults(
@@ -111,7 +111,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     batch.add_argument(
         "--global-scope",
         action="store_true",
-        help="Search all known log files.",
+        help="Use global discovery for requests without session entry points.",
     )
     batch.set_defaults(
         _plugin_handler=_handle_api_batch,

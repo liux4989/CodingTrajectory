@@ -59,11 +59,13 @@ execution time remains in that denominator.
 
 ## Allocated item cost
 
-`session.tool_usage` exposes `item_real_token_costs` as a derived attribution
-layer. The raw item chronology remains unchanged; each observed provider usage
-record is allocated across the items visible in the same turn at that
-observation, weighted by visible item tokens. The turn boundary makes prior
-attribution stable as later turns arrive. The allocated rows reconcile in glossary buckets
+`session.tool_usage` exposes per-tool allocation by default and adds the full
+`item_real_token_costs` ledger when the request uses
+`include=["item_costs"]`. This is a derived attribution layer. The raw item
+chronology remains unchanged; each observed provider usage record is allocated
+across the items visible in the same turn at that observation, weighted by
+visible item tokens. The turn boundary makes prior attribution stable as later
+turns arrive. The allocated rows reconcile in glossary buckets
 (`prompt_tokens`, `cached_prompt_tokens`, `processed_tokens`, and related
 fields), not in internal model field names such as `input_tokens` or
 `total_tokens`. Item `estimated_cost` prices each allocated slice using the

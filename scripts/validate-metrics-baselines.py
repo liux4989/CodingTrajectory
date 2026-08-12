@@ -234,7 +234,7 @@ def project_surface(store: DocumentStore, case: BaselineCase, method: str) -> An
         # versioned service payload rather than a CLI compact projection.
         return payload
     compact = compact_payload(method, payload)
-    return service_contract(method).validate_public_response(compact)
+    return service_contract(method).validate_cli_response(compact)
 
 
 def resolve_path(payload: Any, path: str) -> tuple[bool, Any]:

@@ -489,12 +489,6 @@ def _compact_stats_api(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if payload.get("scope"):
         compact["scope"] = payload["scope"]
-    if payload.get("graph_context_window"):
-        compact["graph_context"] = compact.get("context")
-    if payload.get("graph_billed_token_usage"):
-        compact["graph_billed_token_usage"] = _compact_usage_tokens(
-            payload.get("graph_billed_token_usage"), include_cost=False
-        )
     compact["sessions"] = [
         _compact_stats_api(item)
         for item in payload.get("sessions") or []
@@ -698,7 +692,6 @@ def _compact_usage_api(payload: dict[str, Any]) -> dict[str, Any]:
             )
             or None,
             "usage": _compact_usage_tokens(payload.get("total_usage")),
-            "graph_usage": _compact_usage_tokens(payload.get("graph_total_usage")),
             "cost": _evidence_value(payload.get("estimated_cost")),
             "pricing": _evidence_pricing(payload.get("estimated_cost")),
             "models": _compact_usage_models(payload.get("models")),
@@ -2435,32 +2428,6 @@ def _ct_json(args: list[str]) -> dict[str, Any]:
             f"ct command returned a non-object payload: {' '.join(command)}"
         )
     return payload
-
-
-def _ct_api_result(
-    method: str,
-    params: dict[str, Any],
-    *,
-    global_scope: bool = False,
-    ct_json: Callable[[list[str]], dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    args = [
-        "api",
-        "call",
-        method,
-        "--params",
-        json.dumps(params),
-    ]
-    if global_scope:
-        args.insert(3, "--global-scope")
-    payload = (ct_json or _ct_json)(args)
-    if not payload.get("ok"):
-        error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
-        raise SystemExit(str(error.get("message") or f"ct api call failed: {method}"))
-    result = payload.get("result")
-    if not isinstance(result, dict):
-        raise SystemExit(f"ct api call returned a non-object result: {method}")
-    return result
 
 
 def _token_evidence(

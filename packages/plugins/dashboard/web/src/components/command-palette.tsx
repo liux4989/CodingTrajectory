@@ -52,13 +52,12 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     const sessionItems: CommandItem[] = (sessions.data?.items ?? [])
       .slice(0, 50)
       .map((s) => ({
-        id: `session-${s.id ?? s.root_session_id}`,
-        label: s.title || s.id?.slice(0, 12) || s.root_session_id?.slice(0, 12) || "Untitled",
-        hint: [s.project_name, (s.vendors ?? s.v ?? []).join(", ")].filter(Boolean).join(" · "),
+        id: `session-${s.root_session_id}`,
+        label: s.title || s.root_session_id.slice(0, 12),
+        hint: [s.project, s.vendors.join(", ")].filter(Boolean).join(" · "),
         group: "Sessions" as const,
         onSelect: () => {
-          const id = s.root_session_id ?? s.id;
-          if (id) navigate({ to: "/sessions/$sessionId/context-window", params: { sessionId: id } });
+          navigate({ to: "/sessions/$sessionId/context-window", params: { sessionId: s.root_session_id } });
         },
       }));
 

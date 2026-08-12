@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import bisect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Iterable
 from uuid import UUID, uuid5
@@ -16,6 +16,7 @@ from coding_trajectory.analysis.content_size import (
     item_output_text,
     output_is_truncated,
     reported_token_count,
+    scoped_content_size_cache,
     visible_text_size,
 )
 from coding_trajectory.analysis.session_stats import (
@@ -62,25 +63,23 @@ from coding_trajectory.metrics.models import (
     ReadAfterResult,
     RequestUsageFlat,
     SessionGraphMetrics,
-    SessionGraphMetricsFlat,
     SessionGraphModelUsageFlat,
     SessionGraphRequestUsageFlat,
-    SessionGraphToolUsageFlat,
-    SessionMetricsFlat,
+    SessionMetrics,
     SessionUsageCompactFlat,
-    TokenUsage,
-    TokenUsageObservation,
     ToolItemFlat,
     ToolTokenAttribution,
+    TokenUsage,
+    TokenUsageObservation,
+    SessionGraphToolUsageFlat,
     TurnMetrics,
-    TurnMetricsFlat,
     TurnRuntimeFlat,
     TurnUsageCompactFlat,
 )
 from coding_trajectory.metrics.pricing import (
     CostEvidenceFlat,
     PriceRule,
-    _cost_evidence_from_accum,
+    _cost_evidence_values_from_accum,
     _resolve_price_rule,
     _uses_net_input_convention,
     cache_break_waste_usd,
@@ -88,56 +87,7 @@ from coding_trajectory.metrics.pricing import (
     get_model_context_window,
 )
 from coding_trajectory.metrics.throughput import processed_tokens_per_second
-from coding_trajectory.token_counter import session_scoped
-
-
-def build_session_graph_metrics(
-    session_graph: SessionGraph,
-) -> dict[str, Any]:
-    """Return a flat usage summary: sessions -> turns."""
-    full = _build_full_metrics(session_graph)
-    sessions_flat: list[SessionMetricsFlat] = []
-
-    for session in full.sessions:
-        turns_flat: list[TurnMetricsFlat] = []
-        for turn in session.turns:
-            model = _turn_model(turn)
-            turns_flat.append(
-                TurnMetricsFlat(
-                    turn_id=turn.turn_id,
-                    sequence=turn.sequence,
-                    status=turn.status,
-                    started_at=turn.started_at,
-                    completed_at=turn.completed_at,
-                    model=model,
-                    token_usage=turn.token_usage,
-                    model_active_seconds=turn.model_active_seconds,
-                    processed_tokens_per_second=processed_tokens_per_second(
-                        turn.token_usage.processed_token_total(),
-                        turn.model_active_seconds,
-                    ),
-                )
-            )
-        sessions_flat.append(
-            SessionMetricsFlat(
-                session_id=session.session_id,
-                vendor=session.vendor,
-                status=session.status,
-                token_usage=session.token_usage,
-                model_active_seconds=session.model_active_seconds,
-                processed_tokens_per_second=session.processed_tokens_per_second,
-                turns=turns_flat,
-            )
-        )
-
-    return SessionGraphMetricsFlat(
-        root_session_id=full.root_session_id,
-        token_usage=full.token_usage,
-        model_active_seconds=full.model_active_seconds,
-        processed_tokens_per_second=full.processed_tokens_per_second,
-        sessions=sessions_flat,
-        warnings=full.warnings,
-    ).model_dump(mode="json")
+from coding_trajectory.token_counter import get_current_counter, session_scoped
 
 
 def build_session_graph_full_metrics(
@@ -152,6 +102,8 @@ def build_session_graph_context_stats(
     *,
     allocated_usage_by_item: dict[UUID, dict[str, int]] | None = None,
     allocated_usage_by_context_source: dict[str, dict[str, int]] | None = None,
+    include_composition: bool = True,
+    precomputed_metrics: SessionGraphMetrics | SessionMetrics | None = None,
 ) -> dict[str, Any]:
     """Return provider-specific context-window stats by dispatching to a vendor handler."""
     from coding_trajectory.metrics.context_stats import (
@@ -162,6 +114,8 @@ def build_session_graph_context_stats(
         session_graph,
         allocated_usage_by_item=allocated_usage_by_item,
         allocated_usage_by_context_source=allocated_usage_by_context_source,
+        include_composition=include_composition,
+        precomputed_metrics=precomputed_metrics,
     )
 
 
@@ -169,8 +123,14 @@ def build_session_graph_usage(
     session_graph: SessionGraph,
     *,
     turn_id: str | None = None,
+    include_graph_turns: bool = True,
 ) -> dict[str, Any]:
-    """Return compact turn-level token usage accounting."""
+    """Return compact turn-level token usage accounting.
+
+    Graph projections may omit the graph-level turn list (the same turns remain
+    available in the per-session sections). Single-session projections retain
+    their top-level turns regardless.
+    """
     full = _build_full_metrics(session_graph)
     index = build_session_graph_index(session_graph)
     multi_session = len(full.sessions) > 1
@@ -196,7 +156,8 @@ def build_session_graph_usage(
                 execution_seconds=_turn_execution_seconds(turn),
                 wait_before_seconds=_turn_wait_before_seconds(previous_turn, turn),
             )
-            turns.append(compact_turn)
+            if not multi_session or include_graph_turns:
+                turns.append(compact_turn)
             session_turns.append(compact_turn)
 
         if turn_id is not None and not session_turns:
@@ -261,12 +222,8 @@ def build_session_graph_usage(
     payload["scope"] = "session_graph" if multi_session else "session"
     if turn_id is not None:
         payload["selected_turn_id"] = turn_id
-    if multi_session:
-        payload["graph_total_usage"] = payload.get("total_usage")
-        payload["graph_runtime"] = payload.get("runtime")
-    else:
-        payload.pop("graph_total_usage", None)
-        payload.pop("graph_runtime", None)
+    if multi_session and not include_graph_turns:
+        payload.pop("turns", None)
     payload["models"] = [row.model_dump(mode="json") for row in graph_model_breakdown]
     if multi_session:
         payload["sessions"] = session_sections
@@ -375,30 +332,47 @@ def build_session_graph_request_usage(
     session_graph: SessionGraph,
     *,
     turn_id: str | None = None,
+    include_causality: bool = True,
+    include_context_diagnostics: bool = True,
 ) -> dict[str, Any]:
-    """Return the exact provider-request usage ledger and causal tool links."""
+    """Return the exact provider-request usage ledger.
+
+    Causal tool links and request-context diagnostics are independently
+    projectable payload details. Usage, pricing, ordering, and request identity
+    are unaffected. Defaults preserve the legacy response shape.
+    """
     full = _build_full_metrics(session_graph)
     requests: list[RequestUsageFlat] = []
 
     for session in session_graph.sessions:
-        context_by_event_id = {
-            item.source_event_id: item
-            for item in session.context_usage
-            if item.source_event_id is not None
-        }
+        context_by_event_id = (
+            {
+                item.source_event_id: item
+                for item in session.context_usage
+                if item.source_event_id is not None
+            }
+            if include_context_diagnostics
+            else {}
+        )
         for turn in sorted(session.turns, key=lambda item: item.sequence):
             if turn_id is not None and str(turn.turn_id) != turn_id:
                 continue
             observations = _turn_usage_observations(session, turn)
-            tool_items = sorted(
-                (item for item in turn.items if is_tool_shaped_item(item)),
-                key=lambda item: (item.started_at, item.sequence),
+            tool_items = (
+                sorted(
+                    (item for item in turn.items if is_tool_shaped_item(item)),
+                    key=lambda item: (item.started_at, item.sequence),
+                )
+                if include_causality
+                else []
             )
             previous_timestamp = turn.started_at
             previous_context_used: int | None = None
             for sequence, observation in enumerate(observations, start=1):
-                context_observation = context_by_event_id.get(
-                    observation.source.event_id
+                context_observation = (
+                    context_by_event_id.get(observation.source.event_id)
+                    if include_context_diagnostics
+                    else None
                 )
                 context_used = (
                     context_observation.used_input_tokens
@@ -406,26 +380,39 @@ def build_session_graph_request_usage(
                     else None
                 )
                 context_window = (
-                    context_observation.context_window_tokens
-                    if context_observation is not None
+                    (
+                        context_observation.context_window_tokens
+                        if context_observation is not None
+                        else None
+                    )
+                    or get_model_context_window(
+                        observation.model,
+                        provider=observation.provider,
+                    )
+                    if include_context_diagnostics
                     else None
-                ) or get_model_context_window(
-                    observation.model,
-                    provider=observation.provider,
                 )
-                invoked = [
-                    item
-                    for item in tool_items
-                    if previous_timestamp < item.started_at <= observation.timestamp
-                ]
-                consumed = [
-                    item
-                    for item in tool_items
-                    if item.completed_at is not None
-                    and previous_timestamp
-                    < item.completed_at
-                    <= observation.timestamp
-                ]
+                invoked = (
+                    [
+                        item
+                        for item in tool_items
+                        if previous_timestamp < item.started_at <= observation.timestamp
+                    ]
+                    if include_causality
+                    else []
+                )
+                consumed = (
+                    [
+                        item
+                        for item in tool_items
+                        if item.completed_at is not None
+                        and previous_timestamp
+                        < item.completed_at
+                        <= observation.timestamp
+                    ]
+                    if include_causality
+                    else []
+                )
                 requests.append(
                     RequestUsageFlat(
                         usage_event_id=observation.source.event_id,
@@ -884,12 +871,36 @@ def build_session_graph_tool_usage(
     session_graph: SessionGraph,
     *,
     turn_id: str | None = None,
+    include_item_real_token_costs: bool = True,
+    include_advanced_causality: bool = True,
 ) -> dict[str, Any]:
-    """Return tool usage plus turn-stable cache-aware item attribution."""
+    """Return tool usage plus turn-stable cache-aware item attribution.
+
+    The all-item cost ledger and advanced causal diagnostics are independent
+    payload details. Aggregate and per-tool allocation/pricing remain intact
+    when either detail is omitted. Defaults retain both detail groups.
+    """
+    with scoped_content_size_cache():
+        return _build_session_graph_tool_usage(
+            session_graph,
+            turn_id=turn_id,
+            include_item_real_token_costs=include_item_real_token_costs,
+            include_advanced_causality=include_advanced_causality,
+        )
+
+
+def _build_session_graph_tool_usage(
+    session_graph: SessionGraph,
+    *,
+    turn_id: str | None = None,
+    include_item_real_token_costs: bool = True,
+    include_advanced_causality: bool = True,
+) -> dict[str, Any]:
     full = _build_full_metrics(session_graph)
 
     tool_items: list[ToolItemFlat] = []
     item_real_token_costs: list[ItemRealTokenCostFlat] = []
+    selected_allocated_costs: list[AllocatedRealTokenCost | None] = []
     pricing_rule_cache: dict[tuple[str | None, str], PriceRule | None] = {}
     for session in session_graph.sessions:
         selected_turns = [
@@ -898,64 +909,90 @@ def build_session_graph_tool_usage(
             if turn_id is None or str(turn.turn_id) == turn_id
         ]
         selected_turn_ids = {turn.turn_id for turn in selected_turns}
-        session_item_real_token_costs = [
-            item
-            for item in _build_item_real_token_costs_for_session(
-                session, pricing_rule_cache=pricing_rule_cache
-            )
-            if item.turn_id in selected_turn_ids
-        ]
-        item_real_token_costs.extend(session_item_real_token_costs)
-        session_costs_by_item_id = {
-            item.item_id: item.allocated_real_token_cost
-            for item in session_item_real_token_costs
-            if item.allocated_real_token_cost is not None
+        selected_tool_item_ids = {
+            item.item_id
+            for turn in selected_turns
+            for item in turn.items
+            if is_tool_shaped_item(item)
         }
-        session_estimated_costs_by_item_id = {
-            item.item_id: item.estimated_cost
-            for item in session_item_real_token_costs
-            if item.estimated_cost is not None
-        }
+        cost_projection = _build_item_real_token_cost_projection_for_session(
+            session,
+            selected_turn_ids=selected_turn_ids,
+            selected_item_ids=selected_tool_item_ids,
+            include_items=include_item_real_token_costs,
+            pricing_rule_cache=pricing_rule_cache,
+        )
+        item_real_token_costs.extend(cost_projection.items)
+        selected_allocated_costs.append(cost_projection.allocated_real_token_cost)
         for turn in selected_turns:
-            turn_observations = _turn_usage_observations(session, turn)
+            turn_observations = (
+                _turn_usage_observations(session, turn)
+                if include_advanced_causality
+                else []
+            )
             tool_items.extend(
                 _build_tool_items_for_turn(
                     turn,
                     session_id=session.session_id,
                     turn_observations=turn_observations,
-                    allocated_real_token_cost_by_item=session_costs_by_item_id,
-                    estimated_cost_by_item=session_estimated_costs_by_item_id,
+                    allocated_real_token_cost_by_item=(
+                        cost_projection.allocated_real_token_cost_by_item
+                    ),
+                    estimated_cost_by_item=cost_projection.estimated_cost_by_item,
+                    include_advanced_causality=include_advanced_causality,
                 )
             )
 
-    return SessionGraphToolUsageFlat(
+    payload = SessionGraphToolUsageFlat(
         root_session_id=full.root_session_id,
         tool_item_count=len(tool_items),
-        tool_call_count=len(tool_items),
         tool_output_chars=sum(item.output_chars for item in tool_items),
         tool_output_original_tokens=sum(
             item.output_original_tokens or 0 for item in tool_items
         ),
-        allocated_real_token_cost=_sum_item_real_token_costs(item_real_token_costs),
-        item_real_token_costs=item_real_token_costs,
+        allocated_real_token_cost=_sum_allocated_real_token_costs(
+            selected_allocated_costs
+        ),
+        item_real_token_costs=(
+            item_real_token_costs if include_item_real_token_costs else []
+        ),
         tool_items=tool_items,
         attribution_policy=AttributionPolicy(scope="turn_items"),
         warnings=full.warnings,
     ).model_dump(mode="json")
+    if not include_item_real_token_costs:
+        payload.pop("item_real_token_costs", None)
+    return payload
+
+
+@dataclass(slots=True)
+class _StatsTokenUsageBreakdown:
+    graph_usage: dict[str, Any]
+    usage_by_session: dict[UUID, dict[str, Any]]
+    counter_name: str
 
 
 @session_scoped
-def build_session_graph_stats_token_usage(
+def _build_session_graph_stats_usage_breakdown(
     session_graph: SessionGraph,
-) -> dict[str, Any]:
-    """Return stats-table token attribution across starting context and items."""
+) -> _StatsTokenUsageBreakdown:
+    """Build graph and reusable per-session stats attribution in one pass."""
     allocated_usage_by_item: dict[UUID, dict[str, int]] = {}
     allocated_usage_by_context_source: dict[str, dict[str, int]] = {}
     billed_token_usage: _CostAccum | None = None
+    usage_by_session: dict[UUID, dict[str, Any]] = {}
 
     for session in session_graph.sessions:
+        session_usage_by_item: dict[UUID, dict[str, int]] = {}
+        session_usage_by_context_source: dict[str, dict[str, int]] = {}
+        session_billed_token_usage: _CostAccum | None = None
         entries = _stats_cost_entries_for_session(session)
         if not entries:
+            usage_by_session[session.session_id] = {
+                "allocated_usage_by_item": session_usage_by_item,
+                "allocated_usage_by_context_source": session_usage_by_context_source,
+                "billed_token_usage": {},
+            }
             continue
         entries.sort(key=lambda e: e.started_at)
         n_entries = len(entries)
@@ -982,8 +1019,8 @@ def build_session_graph_stats_token_usage(
             cutoff = bisect.bisect_right(entry_times, observation.timestamp)
             if cutoff == 0:
                 continue
-            billed_token_usage = _add_allocated_real_token_cost(
-                billed_token_usage,
+            session_billed_token_usage = _add_allocated_real_token_cost(
+                session_billed_token_usage,
                 _allocated_cost_from_usage_observation(observation),
             )
             weights = all_weights[:cutoff]
@@ -1027,7 +1064,7 @@ def build_session_graph_stats_token_usage(
                 continue
             usage = _allocated_cost_usage_dict_from_array(allocated_by_index[index])
             if usage:
-                allocated_usage_by_item[entry.item_id] = usage
+                session_usage_by_item[entry.item_id] = usage
 
         for key, indices in context_indices_by_key.items():
             usage = _allocated_cost_usage_dict_from_array(
@@ -1035,13 +1072,39 @@ def build_session_graph_stats_token_usage(
             )
             if not usage:
                 continue
-            existing = allocated_usage_by_context_source.get(key)
+            existing = session_usage_by_context_source.get(key)
             if existing is None:
-                allocated_usage_by_context_source[key] = usage
+                session_usage_by_context_source[key] = usage
             else:
-                allocated_usage_by_context_source[key] = _sum_usage_dicts(
+                session_usage_by_context_source[key] = _sum_usage_dicts(
                     (existing, usage)
                 )
+
+        session_billed_usage = _allocated_cost_usage_dict(session_billed_token_usage)
+        assert (
+            _sum_usage_dicts(
+                (
+                    _sum_usage_dicts(session_usage_by_item.values()),
+                    _sum_usage_dicts(session_usage_by_context_source.values()),
+                )
+            )
+            == session_billed_usage
+        ), "per-session stats attribution must reconcile to billed token usage"
+        usage_by_session[session.session_id] = {
+            "allocated_usage_by_item": session_usage_by_item,
+            "allocated_usage_by_context_source": session_usage_by_context_source,
+            "billed_token_usage": session_billed_usage,
+        }
+        allocated_usage_by_item.update(session_usage_by_item)
+        for key, usage in session_usage_by_context_source.items():
+            existing = allocated_usage_by_context_source.get(key)
+            allocated_usage_by_context_source[key] = (
+                usage if existing is None else _sum_usage_dicts((existing, usage))
+            )
+        if session_billed_token_usage is not None:
+            billed_token_usage = _add_allocated_real_token_cost(
+                billed_token_usage, session_billed_token_usage
+            )
 
     assert _sum_usage_dicts(
         (
@@ -1051,33 +1114,52 @@ def build_session_graph_stats_token_usage(
     ) == _allocated_cost_usage_dict(billed_token_usage), (
         "session stats attribution must reconcile to billed token usage"
     )
-    return {
-        "allocated_usage_by_item": allocated_usage_by_item,
-        "allocated_usage_by_context_source": allocated_usage_by_context_source,
-        "billed_token_usage": _allocated_cost_usage_dict(billed_token_usage),
-    }
+    return _StatsTokenUsageBreakdown(
+        graph_usage={
+            "allocated_usage_by_item": allocated_usage_by_item,
+            "allocated_usage_by_context_source": allocated_usage_by_context_source,
+            "billed_token_usage": _allocated_cost_usage_dict(billed_token_usage),
+        },
+        usage_by_session=usage_by_session,
+        counter_name=get_current_counter().name,
+    )
+
+
+def build_session_graph_stats_token_usage(
+    session_graph: SessionGraph,
+) -> dict[str, Any]:
+    """Return stats-table token attribution across starting context and items."""
+    return _build_session_graph_stats_usage_breakdown(session_graph).graph_usage
 
 
 def _sum_item_real_token_costs(
     items: list[ItemRealTokenCostFlat],
 ) -> AllocatedRealTokenCost | None:
-    costs = [
-        item.allocated_real_token_cost
-        for item in items
-        if item.allocated_real_token_cost is not None
-    ]
-    if not costs:
+    return _sum_allocated_real_token_costs(
+        item.allocated_real_token_cost for item in items
+    )
+
+
+def _sum_allocated_real_token_costs(
+    costs: Iterable[AllocatedRealTokenCost | None],
+) -> AllocatedRealTokenCost | None:
+    present_costs = [cost for cost in costs if cost is not None]
+    if not present_costs:
         return None
     return AllocatedRealTokenCost(
-        input_tokens=sum(cost.input_tokens for cost in costs),
-        uncached_input_tokens=sum(cost.uncached_input_tokens for cost in costs),
-        cached_input_tokens=sum(cost.cached_input_tokens for cost in costs),
-        cache_creation_input_tokens=sum(
-            cost.cache_creation_input_tokens for cost in costs
+        input_tokens=sum(cost.input_tokens for cost in present_costs),
+        uncached_input_tokens=sum(
+            cost.uncached_input_tokens for cost in present_costs
         ),
-        output_tokens=sum(cost.output_tokens for cost in costs),
-        reasoning_output_tokens=sum(cost.reasoning_output_tokens for cost in costs),
-        total_tokens=sum(cost.total_tokens for cost in costs),
+        cached_input_tokens=sum(cost.cached_input_tokens for cost in present_costs),
+        cache_creation_input_tokens=sum(
+            cost.cache_creation_input_tokens for cost in present_costs
+        ),
+        output_tokens=sum(cost.output_tokens for cost in present_costs),
+        reasoning_output_tokens=sum(
+            cost.reasoning_output_tokens for cost in present_costs
+        ),
+        total_tokens=sum(cost.total_tokens for cost in present_costs),
     )
 
 
@@ -1148,20 +1230,95 @@ class _CostAccum:
     allocation_method: str = "usage_observation_weighted_by_visible_item_tokens"
 
 
-def _cost_accum_to_allocated_cost(
-    cost: _CostAccum | None,
+@dataclass(slots=True)
+class _EstimatedCostAccum:
+    """Primitive, output-equivalent aggregate of request-tier cost slices."""
+
+    amounts: list[float] = field(default_factory=list)
+    rows_seen: int = 0
+    missing: bool = False
+    date_seen: bool = False
+    effective_date: str | None = None
+    mixed_dates: bool = False
+
+    def add(self, values: tuple[float, str, str | None] | None) -> None:
+        self.rows_seen += 1
+        if values is None:
+            self.missing = True
+            self.amounts.clear()
+            return
+        if self.missing:
+            return
+        amount, _pricing_source, effective_date = values
+        self.amounts.append(amount)
+        if not self.date_seen:
+            self.date_seen = True
+            self.effective_date = effective_date
+        elif effective_date != self.effective_date:
+            self.mixed_dates = True
+
+    def evidence(self, *, source: str) -> CostEvidenceFlat | None:
+        if not self.rows_seen or self.missing:
+            return None
+        return CostEvidenceFlat(
+            value_usd=round(sum(self.amounts), 8),
+            confidence="estimated",
+            source=source,
+            effective_date=None if self.mixed_dates else self.effective_date,
+        )
+
+
+@dataclass(slots=True)
+class _ItemRealTokenCostProjection:
+    """Selected output over one session's complete primitive allocation."""
+
+    items: list[ItemRealTokenCostFlat]
+    allocated_real_token_cost: AllocatedRealTokenCost | None
+    allocated_real_token_cost_by_item: dict[UUID, AllocatedRealTokenCost]
+    estimated_cost_by_item: dict[UUID, CostEvidenceFlat]
+
+
+def _array_to_allocated_cost(
+    values: np.ndarray,
+    allocation_method: str | None,
 ) -> AllocatedRealTokenCost | None:
-    if cost is None:
+    if allocation_method is None:
         return None
     return AllocatedRealTokenCost(
-        input_tokens=cost.input_tokens,
-        uncached_input_tokens=cost.uncached_input_tokens,
-        cached_input_tokens=cost.cached_input_tokens,
-        cache_creation_input_tokens=cost.cache_creation_input_tokens,
-        output_tokens=cost.output_tokens,
-        reasoning_output_tokens=cost.reasoning_output_tokens,
-        total_tokens=cost.total_tokens,
-        allocation_method=cost.allocation_method,  # type: ignore[arg-type]
+        input_tokens=int(values[0]),
+        uncached_input_tokens=int(values[1]),
+        cached_input_tokens=int(values[2]),
+        cache_creation_input_tokens=int(values[3]),
+        output_tokens=int(values[4]),
+        reasoning_output_tokens=int(values[5]),
+        total_tokens=int(values[6]),
+        allocation_method=allocation_method,  # type: ignore[arg-type]
+    )
+
+
+def _sum_allocated_cost_rows(
+    values: np.ndarray,
+    allocation_methods: list[str | None],
+    indices: Iterable[int],
+) -> AllocatedRealTokenCost | None:
+    """Sum selected primitive rows with the legacy aggregate serialization."""
+    allocated_indices = [
+        index for index in indices if allocation_methods[index] is not None
+    ]
+    if not allocated_indices:
+        return None
+    totals = [
+        sum(int(values[index, column]) for index in allocated_indices)
+        for column in range(7)
+    ]
+    return AllocatedRealTokenCost(
+        input_tokens=totals[0],
+        uncached_input_tokens=totals[1],
+        cached_input_tokens=totals[2],
+        cache_creation_input_tokens=totals[3],
+        output_tokens=totals[4],
+        reasoning_output_tokens=totals[5],
+        total_tokens=totals[6],
     )
 
 
@@ -1202,12 +1359,31 @@ def _build_item_real_token_costs_for_session(
     *,
     pricing_rule_cache: dict[tuple[str | None, str], PriceRule | None] | None = None,
 ) -> list[ItemRealTokenCostFlat]:
+    """Build the complete, legacy-ordered item ledger for one session."""
+    return _build_item_real_token_cost_projection_for_session(
+        session,
+        selected_turn_ids=None,
+        selected_item_ids=set(),
+        include_items=True,
+        pricing_rule_cache=pricing_rule_cache,
+    ).items
+
+
+def _build_item_real_token_cost_projection_for_session(
+    session: Session,
+    *,
+    selected_turn_ids: set[UUID] | None,
+    selected_item_ids: set[UUID],
+    include_items: bool,
+    pricing_rule_cache: dict[tuple[str | None, str], PriceRule | None] | None = None,
+) -> _ItemRealTokenCostProjection:
     """Billed attribution: sum every API call's per-call usage across present items.
 
     Iterates *every* usage observation (not just the last per turn) and allocates
     that call's per-call token delta across the items present at the call, weighted
-    by visible tokens. Costs accumulate without capping, so per-item sums reconcile
-    exactly to the provider-reported cumulative usage.
+    by visible tokens. The complete primitive allocation always reconciles to
+    provider-reported cumulative usage. Output models and request-tier cost
+    evidence are then materialized only for the selected ledger/tool rows.
     """
     events_by_id = index_events_by_id(session.events)
     entries = [
@@ -1216,66 +1392,123 @@ def _build_item_real_token_costs_for_session(
         for entry in _item_cost_entries_for_turn(turn, events_by_id=events_by_id)
     ]
     if not entries:
-        return []
+        return _ItemRealTokenCostProjection(
+            items=[],
+            allocated_real_token_cost=None,
+            allocated_real_token_cost_by_item={},
+            estimated_cost_by_item={},
+        )
     if pricing_rule_cache is None:
         pricing_rule_cache = {}
 
-    entries_by_turn: dict[UUID, list[_ItemCostEntry]] = {}
-    for entry in entries:
-        entries_by_turn.setdefault(entry.turn_id, []).append(entry)
+    selected_output_indices = [
+        index
+        for index, entry in enumerate(entries)
+        if selected_turn_ids is None or entry.turn_id in selected_turn_ids
+    ]
+    selected_item_indices = {
+        index
+        for index in selected_output_indices
+        if entries[index].item_id in selected_item_ids
+    }
+    priced_indices = (
+        set(selected_output_indices) if include_items else selected_item_indices
+    )
+
+    entry_indices_by_turn: dict[UUID, list[int]] = {}
+    for index, entry in enumerate(entries):
+        entry_indices_by_turn.setdefault(entry.turn_id, []).append(index)
     weights_by_turn: dict[UUID, np.ndarray] = {}
-    item_ids_by_turn: dict[UUID, list[UUID]] = {}
     output_weights_by_turn: dict[UUID, np.ndarray] = {}
     times_by_turn: dict[UUID, list[datetime]] = {}
-    for tid, turn_entries in entries_by_turn.items():
-        turn_entries.sort(key=lambda e: e.started_at)
-        times_by_turn[tid] = [e.started_at for e in turn_entries]
+    for tid, turn_indices in entry_indices_by_turn.items():
+        turn_indices.sort(key=lambda index: entries[index].started_at)
+        times_by_turn[tid] = [entries[index].started_at for index in turn_indices]
         weights_by_turn[tid] = np.array(
-            [e.visible_tokens for e in turn_entries], dtype=np.int64
+            [entries[index].visible_tokens for index in turn_indices], dtype=np.int64
         )
-        item_ids_by_turn[tid] = [e.item_id for e in turn_entries]
         output_weights_by_turn[tid] = np.array(
-            [e.visible_tokens if e.output_eligible else 0 for e in turn_entries],
+            [
+                entries[index].visible_tokens if entries[index].output_eligible else 0
+                for index in turn_indices
+            ],
             dtype=np.int64,
         )
 
-    allocated_costs: dict[UUID, _CostAccum] = {}
-    estimated_costs: dict[UUID, list[CostEvidenceFlat | None]] = {}
+    allocated_by_index = np.zeros((len(entries), 7), dtype=np.int64)
+    allocation_method_by_index: list[str | None] = [None] * len(entries)
+    estimated_costs: list[_EstimatedCostAccum | None] = [None] * len(entries)
     for observation, turn_id in _session_usage_observations(session):
-        if turn_id is None or turn_id not in entries_by_turn:
+        if turn_id is None or turn_id not in entry_indices_by_turn:
             continue
-        cutoff = bisect.bisect_right(
-            times_by_turn[turn_id], observation.timestamp
-        )
+        cutoff = bisect.bisect_right(times_by_turn[turn_id], observation.timestamp)
         if cutoff == 0:
             continue
-        observation_allocations = _allocate_real_token_costs_for_entries(
-            weights_by_turn[turn_id][:cutoff],
-            item_ids_by_turn[turn_id][:cutoff],
+        allocations = _token_cost_allocations(
+            observation.usage,
             observation,
-            output_weights=output_weights_by_turn[turn_id][:cutoff],
+            weights_by_turn[turn_id][:cutoff],
+            output_weights_by_turn[turn_id][:cutoff],
+            as_arrays=True,
         )
-        if not observation_allocations:
+        if allocations is None:
             continue
+        (
+            input_a,
+            uncached_input_a,
+            cached_a,
+            cache_creation_a,
+            output_a,
+            reasoning_a,
+            total_a,
+            allocation_method,
+        ) = allocations
+        present_indices = entry_indices_by_turn[turn_id][:cutoff]
+        allocated_by_index[present_indices] += np.column_stack(
+            (
+                input_a,
+                uncached_input_a,
+                cached_a,
+                cache_creation_a,
+                output_a,
+                reasoning_a,
+                total_a,
+            )
+        )
+        for entry_index in present_indices:
+            if allocation_method_by_index[entry_index] is None:
+                allocation_method_by_index[entry_index] = allocation_method
+        # Resolve in legacy observation order even when this projection has no
+        # priced rows. The request-scoped cache is also the pricing-catalog
+        # freshness boundary; delaying a first resolution could change which
+        # rule later selected rows reuse.
         pricing_rule = _resolve_price_rule(
             observation.model,
             provider=observation.provider,
             cache=pricing_rule_cache,
         )
-        for item_id, cost in observation_allocations.items():
-            existing = allocated_costs.get(item_id)
-            if existing is None:
-                allocated_costs[item_id] = cost
-            else:
-                _add_allocated_real_token_cost(existing, cost)
-            estimated_costs.setdefault(item_id, []).append(
-                _cost_evidence_from_accum(
-                    cost.input_tokens,
-                    cost.uncached_input_tokens,
-                    cost.cached_input_tokens,
-                    cost.cache_creation_input_tokens,
-                    cost.output_tokens,
-                    cost.reasoning_output_tokens,
+        pricing_offsets = [
+            (offset, entry_index)
+            for offset, entry_index in enumerate(present_indices)
+            if entry_index in priced_indices
+        ]
+        if not pricing_offsets:
+            continue
+        for offset, entry_index in pricing_offsets:
+            cost_accum = estimated_costs[entry_index]
+            if cost_accum is None:
+                cost_accum = _EstimatedCostAccum()
+                estimated_costs[entry_index] = cost_accum
+            if cost_accum.missing:
+                continue
+            cost_accum.add(
+                _cost_evidence_values_from_accum(
+                    int(input_a[offset]),
+                    int(uncached_input_a[offset]),
+                    int(cached_a[offset]),
+                    int(cache_creation_a[offset]),
+                    int(output_a[offset]),
+                    int(reasoning_a[offset]),
                     model=observation.model,
                     provider=observation.provider,
                     pricing_input_tokens=observation.usage.input_tokens,
@@ -1283,35 +1516,71 @@ def _build_item_real_token_costs_for_session(
                 )
             )
 
-    items = [
-        ItemRealTokenCostFlat(
-            item_id=entry.item_id,
-            session_id=entry.session_id,
-            turn_id=entry.turn_id,
-            sequence=entry.sequence,
-            kind=entry.kind,
-            visible_tokens=entry.visible_tokens,
-            allocated_real_token_cost=_cost_accum_to_allocated_cost(
-                allocated_costs.get(entry.item_id)
-            ),
-            estimated_cost=_aggregate_cost_evidence(
-                estimated_costs.get(entry.item_id, []),
-                source="request-tier allocated aggregate",
-            ),
+    session_allocated_cost = _sum_allocated_cost_rows(
+        allocated_by_index,
+        allocation_method_by_index,
+        range(len(entries)),
+    )
+    _assert_item_real_token_costs_reconcile(
+        session,
+        entries,
+        session_allocated_cost,
+    )
+
+    items: list[ItemRealTokenCostFlat] = []
+    allocated_real_token_cost_by_item: dict[UUID, AllocatedRealTokenCost] = {}
+    estimated_cost_by_item: dict[UUID, CostEvidenceFlat] = {}
+    for index in selected_output_indices:
+        if not include_items and index not in selected_item_indices:
+            continue
+        entry = entries[index]
+        allocated_cost = _array_to_allocated_cost(
+            allocated_by_index[index], allocation_method_by_index[index]
         )
-        for entry in entries
-    ]
-    _assert_item_real_token_costs_reconcile(session, entries, items)
-    return items
+        estimated_cost = (
+            estimated_costs[index].evidence(
+                source="request-tier allocated aggregate"
+            )
+            if estimated_costs[index] is not None
+            else None
+        )
+        if index in selected_item_indices:
+            if allocated_cost is not None:
+                allocated_real_token_cost_by_item[entry.item_id] = allocated_cost
+            if estimated_cost is not None:
+                estimated_cost_by_item[entry.item_id] = estimated_cost
+        if include_items:
+            items.append(
+                ItemRealTokenCostFlat(
+                    item_id=entry.item_id,
+                    session_id=entry.session_id,
+                    turn_id=entry.turn_id,
+                    sequence=entry.sequence,
+                    kind=entry.kind,
+                    visible_tokens=entry.visible_tokens,
+                    allocated_real_token_cost=allocated_cost,
+                    estimated_cost=estimated_cost,
+                )
+            )
+    return _ItemRealTokenCostProjection(
+        items=items,
+        allocated_real_token_cost=_sum_allocated_cost_rows(
+            allocated_by_index,
+            allocation_method_by_index,
+            selected_output_indices,
+        ),
+        allocated_real_token_cost_by_item=allocated_real_token_cost_by_item,
+        estimated_cost_by_item=estimated_cost_by_item,
+    )
 
 
 def _assert_item_real_token_costs_reconcile(
     session: Session,
     entries: list[_ItemCostEntry],
-    items: list[ItemRealTokenCostFlat],
+    allocated_real_token_cost: AllocatedRealTokenCost | None,
 ) -> None:
     expected = _sum_allocated_usage_for_present_observations(session, entries)
-    actual = _allocated_cost_usage_dict(_sum_item_real_token_costs(items))
+    actual = _allocated_cost_usage_dict(allocated_real_token_cost)
     assert actual == expected, (
         "item real token cost allocation must reconcile to observed session usage"
     )
@@ -1538,12 +1807,29 @@ def _build_tool_items_for_turn(
     turn_observations: list[TokenUsageObservation],
     allocated_real_token_cost_by_item: dict[UUID, AllocatedRealTokenCost] | None = None,
     estimated_cost_by_item: dict[UUID, CostEvidenceFlat] | None = None,
+    include_advanced_causality: bool = True,
 ) -> list[ToolItemFlat]:
     tool_entries = [item for item in turn.items if is_tool_shaped_item(item)]
     if not tool_entries:
         return []
 
     tool_entries_sorted = sorted(tool_entries, key=lambda item: item.started_at)
+    if not include_advanced_causality:
+        projected_items: list[ToolItemFlat] = []
+        for item in tool_entries_sorted:
+            base = _tool_item_flat(
+                item,
+                session_id=session_id,
+                turn_id=turn.turn_id,
+            )
+            base.token_attribution = _build_token_attribution(item)
+            base.allocated_real_token_cost = (
+                allocated_real_token_cost_by_item or {}
+            ).get(item.item_id)
+            base.estimated_cost = (estimated_cost_by_item or {}).get(item.item_id)
+            projected_items.append(base)
+        return projected_items
+
     groups: list[tuple[list[Any], TokenUsageObservation | None]] = []
     current: list[Any] = []
     current_signature: tuple[Any, Any] | None = None
@@ -1731,47 +2017,6 @@ def _token_cost_allocations(
         total_a,
         method,
     )
-
-
-def _allocate_real_token_costs_for_entries(
-    all_weights: np.ndarray,
-    item_ids: list[UUID],
-    observation: TokenUsageObservation | None,
-    *,
-    output_weights: np.ndarray | None = None,
-) -> dict[UUID, _CostAccum]:
-    if observation is None or not item_ids:
-        return {}
-    if output_weights is None:
-        output_weights = all_weights
-    allocations = _token_cost_allocations(
-        observation.usage, observation, all_weights, output_weights
-    )
-    if allocations is None:
-        return {}
-    (
-        input_a,
-        uncached_input_a,
-        cached_a,
-        cache_creation_a,
-        output_a,
-        reasoning_a,
-        total_a,
-        method,
-    ) = allocations
-    result: dict[UUID, _CostAccum] = {}
-    for index, item_id in enumerate(item_ids):
-        result[item_id] = _CostAccum(
-            input_tokens=input_a[index],
-            uncached_input_tokens=uncached_input_a[index],
-            cached_input_tokens=cached_a[index],
-            cache_creation_input_tokens=cache_creation_a[index],
-            output_tokens=output_a[index],
-            reasoning_output_tokens=reasoning_a[index],
-            total_tokens=total_a[index],
-            allocation_method=method,
-        )
-    return result
 
 
 def _effective_input_token_total(

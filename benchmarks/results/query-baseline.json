@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-08-04",
+  "generated_at": "2026-08-13",
   "target_graph": {
     "root_session_id": "019f6e1a-b402-7e61-985d-dde827545977",
     "scope": "global",
@@ -40,6 +40,83 @@
       "session.items":        "88x"
     }
   },
+  "phase8_current": {
+    "measurement": "three consecutive runs; targeted store uses warm path index; projections use an in-memory store",
+    "targeted_store_build": {
+      "base_median_s": 16.3326,
+      "runs_s": [10.357648, 11.246922, 10.559325],
+      "median_s": 10.559325,
+      "speedup": "1.55x"
+    },
+    "projection_warm_store": {
+      "graph.stats": {
+        "base_median_s": 20.913335,
+        "runs_s": [10.24055, 9.882118, 9.795852],
+        "median_s": 9.882118,
+        "response_bytes": 1325598,
+        "canonical_sha256": "659c7dcebf6f42e6979ae5754c5114d21e0a018a4f875d164f5f26919b2e97f8",
+        "speedup": "2.12x"
+      },
+      "session.tool_usage": {
+        "base_median_s": 13.103716,
+        "runs_s": [6.226211, 6.049091, 6.183245],
+        "median_s": 6.183245,
+        "response_bytes": 12496335,
+        "canonical_sha256": "86777deb9cdeabb504aa3178bb92b9af7071cec27852fb17a373706d5554f7ee",
+        "speedup": "2.12x"
+      }
+    },
+    "equivalence": {
+      "store_counts": {
+        "sessions": 112,
+        "turns": 213,
+        "items": 19284,
+        "events": 76923
+      },
+      "session.overview_sha256": "7594a8cb2698454b16f3b809893e1996a67f50e4c8ea080dd150978dfb79b9d7",
+      "graph.overview_sha256": "02441cd51908a5ddd0a6a8f48200eb18bf8ab2d7b5547760b61e0e6653a9f810"
+    }
+  },
+  "phase9_cleanup": {
+    "measurement": "three consecutive warm-store runs for time; minified JSON response size from a separate repeat-1 run",
+    "projection_warm_store": {
+      "graph.overview": {
+        "runs_s": [0.024987, 0.022650, 0.022171],
+        "median_s": 0.022650,
+        "response_bytes": 103193,
+        "v1_default_bytes": 1636444,
+        "payload_reduction": "93.7%"
+      },
+      "graph.usage": {
+        "runs_s": [1.054032, 0.936193, 0.947739],
+        "median_s": 0.947739,
+        "response_bytes": 393901,
+        "v1_default_bytes": 577547,
+        "payload_reduction": "31.8%"
+      },
+      "graph.stats": {
+        "runs_s": [9.023311, 8.701450, 8.916484],
+        "median_s": 8.916484,
+        "response_bytes": 282897,
+        "v1_default_bytes": 1325598,
+        "payload_reduction": "78.7%"
+      },
+      "session.request_usage": {
+        "runs_s": [0.423444, 0.433269, 0.226597],
+        "median_s": 0.423444,
+        "response_bytes": 3859842,
+        "v1_default_bytes": 5872614,
+        "payload_reduction": "34.3%"
+      },
+      "session.tool_usage": {
+        "runs_s": [5.821906, 5.670545, 5.795083],
+        "median_s": 5.795083,
+        "response_bytes": 6127572,
+        "v1_default_bytes": 12496335,
+        "payload_reduction": "51.0%"
+      }
+    }
+  },
   "optimizations_applied": [
     "_allocate_int DSU sort-key precompute (83.5M lambda calls eliminated)",
     "AllocatedRealTokenCost -> _CostAccum dataclass in hot loop (~34M pydantic instantiations eliminated)",
@@ -50,10 +127,11 @@
     "numpy vectorized _allocate_int_batch (broadcasting + np.lexsort in C; 32s -> 3.8s)",
     "precomputed numpy weight arrays per session/turn (no per-observation list comps)",
     "index-based accumulation in build_session_graph_stats_token_usage (58M uuid.__hash__ + 39M dict.get eliminated)",
-    "vectorized turn-id output-eligibility mask via int-coded turn indices"
+    "vectorized turn-id output-eligibility mask via int-coded turn indices",
+    "v2 compact projections omit optional graph narrative, per-session composition, flat turns, request causality, and all-item cost ledgers by default"
   ],
   "remaining_bottlenecks": {
-    "session.stats_11s": "per-element _CostAccum construction + accumulation loop (19.4M Python iterations, ~7s). Would need numpy-backed accumulation arrays to vectorize further.",
-    "session.tool_usage_15s": "_cost_evidence_from_accum (2.4M calls, ~8s) + _allocate_int_batch (~3s). Pricing lookup is now the dominant cost."
+    "graph.stats_9s": "integer attribution over every observed request and visible item remains the dominant exact-accounting cost",
+    "session.tool_usage_6s": "request-tier pricing still runs per selected item slice to preserve thresholds and rounding"
   }
 }

@@ -6,14 +6,14 @@ Survey, baseline measurement, profiling, and optimization of the
 ## 1. The exposed API
 
 The public query surface is the JSON-RPC-style **`ServiceRuntime`**
-(`packages/core/src/coding_trajectory/runtime.py`) exposing 15 methods via
+(`packages/core/src/coding_trajectory/runtime.py`) exposing 13 methods via
 `runtime.call(method, params)` / `batch(requests)`:
 
 | group | methods |
 |-------|---------|
-| collection | `project.list`, `project.sessions`, `project.logfile` |
+| collection | `project.list`, `project.sessions` |
 | overview | `session.overview`, `graph.overview` |
-| usage | `session.usage`, `graph.usage`, `session.turn_usage`, `session.model_usage`, `session.request_usage`, `session.tool_usage` |
+| usage | `session.usage`, `graph.usage`, `session.model_usage`, `session.request_usage`, `session.tool_usage` |
 | stats | `session.stats`, `graph.stats` |
 | detail | `session.events`, `session.items` |
 
@@ -22,7 +22,7 @@ The public query surface is the JSON-RPC-style **`ServiceRuntime`**
 ```
 ServiceRuntime.call
   └─ contract.validate_request
-  └─ (short-circuit) project.list / project.sessions[no include]
+  └─ (short-circuit) project.list
   └─ _store_for -> resolve_store
        ├─ targeted: cache path-index -> _build_store_targeted  (ingest N files)
        └─ fallback: discover_store (ingest ALL matching logs)
@@ -44,7 +44,56 @@ optionally cProfiles named methods. Writes `benchmarks/results/query-baseline.js
 Target: largest graph on disk (`019f6e1a…`, 112 sessions / 213 turns /
 19 284 items / 76 923 events).
 
-### Projection (warm store, single dispatch) - before vs after
+### Current worktree benchmark (Phase 7 base vs Phase 8)
+
+Measured on 2026-08-13 as three consecutive runs against the same retained
+graph. Store timings use targeted discovery with a warm path-index cache;
+projection timings use the already-built in-memory store.
+
+| layer / method | Phase 7 base | Phase 8 | reduction | speedup |
+|----------------|-------------:|--------:|----------:|--------:|
+| targeted store build | 16.33 s | 10.56 s | 35.3% | 1.55x |
+| `graph.stats` | 20.91 s | 9.88 s | 52.7% | 2.12x |
+| `session.tool_usage` | 13.10 s | 6.18 s | 52.8% | 2.12x |
+
+The optimized store retained the same 112 sessions, 213 turns, 19 284 items,
+and 76 923 events. Canonical JSON output remained identical for the two hot
+projections:
+
+| method | canonical bytes | SHA-256 before and after |
+|--------|----------------:|--------------------------|
+| `graph.stats` | 1 325 598 | `659c7dcebf6f42e6979ae5754c5114d21e0a018a4f875d164f5f26919b2e97f8` |
+| `session.tool_usage` | 12 496 335 | `86777deb9cdeabb504aa3178bb92b9af7071cec27852fb17a373706d5554f7ee` |
+
+The ingestion changes were also checked through `session.overview` and
+`graph.overview`; both canonical response hashes remained unchanged.
+
+### Version 2 surface cleanup (Phase 9)
+
+Version 2 makes diagnostic detail explicit instead of returning every nested
+projection by default. Measured on the same 112-session graph, with minified
+canonical JSON:
+
+| method | v1 default | v2 default | reduction | warm median |
+|--------|-----------:|-----------:|----------:|------------:|
+| `graph.overview` | 1 636 444 B | 103 193 B | 93.7% | 0.023 s |
+| `graph.stats` | 1 325 598 B | 282 897 B | 78.7% | 8.92 s |
+| `graph.usage` | 577 547 B | 393 901 B | 31.8% | 0.95 s |
+| `session.request_usage` | 5 872 614 B | 3 859 842 B | 34.3% | 0.42 s |
+| `session.tool_usage` | 12 496 335 B | 6 127 572 B | 51.0% | 5.80 s |
+
+The omitted projections remain available through typed `include` values. The
+compact stats and tool-usage paths also avoid materializing the omitted
+per-session category trees and all-item cost rows while retaining full primitive
+allocation, request-tier pricing boundaries, and reconciliation assertions.
+
+The public registry now has 13 versioned methods. The unreachable
+`project.logfile` method and duplicate `session.turn_usage` projection were
+removed; `session.usage` with `turn_id` is the authoritative replacement for the
+latter. All graph totals use canonical `runtime` and `total_usage` fields rather
+than duplicate `graph_*` aliases.
+
+### Historical projection benchmark (Phases 1-7)
 
 | method | before | after | speedup |
 |--------|--------|-------|---------|
@@ -59,7 +108,7 @@ Target: largest graph on disk (`019f6e1a…`, 112 sessions / 213 turns /
 | `session.model_usage` | 0.31 s | 0.16 s | 1.9x |
 | `graph.overview` | 0.06 s | 0.06 s | - |
 
-### Store build (unchanged)
+### Historical store-build benchmark (before Phase 8)
 
 | case | median |
 |------|--------|
@@ -140,17 +189,63 @@ On the largest graph this reduced `session.stats` from the documented 11.8 s to
 4.6 s (4.0 s on a second warm run), with the committed metric baselines
 unchanged.
 
+### Phase 8: request-wide reuse and allocation-boundary materialization
+
+Phase 8 removed repeated work at three distinct boundaries while retaining the
+then-current public response contracts. Phase 9 subsequently versions and
+shrinks that surface as described above.
+
+#### Targeted store construction
+
+- Discovery still scans every candidate header, but scans started-turn ids only
+  for sessions that are actually referenced as parents. On the retained graph,
+  this reduced full-file parent scans from 112 files to 8.
+- Graph edge construction now builds the item/event lookup once per parent
+  session instead of once per child edge (111 builds became 8).
+- Transcript projection maintains a set beside the current turn's ordered event
+  id list, preserving list order while making duplicate checks constant-time.
+
+#### Graph stats
+
+- The graph attribution pass retains each session's local allocation before it
+  merges graph totals. Per-session sections reuse that allocation when the
+  session and graph resolve to the same tokenizer.
+- Sessions with a different tokenizer still run their original isolated
+  attribution pass. This guard is required for mixed `cl100k_base` /
+  `o200k_base` graphs, where reusing graph-scoped weights would change integer
+  allocation.
+- A request-scoped visible-content cache reuses exact token counts across graph
+  attribution, context composition, and per-session presentation. Its key
+  includes the effective tokenizer and any provider-reported token override,
+  and the cache is discarded when the request finishes.
+
+#### Tool-usage attribution
+
+- Per-observation allocation now accumulates seven integer token fields in a
+  NumPy array indexed by item instead of constructing and merging a Python
+  dataclass for every observation/item slice.
+- Per-slice price results accumulate as primitive floats and dates. One
+  `CostEvidenceFlat` Pydantic model is materialized per final item instead of
+  one per slice (about 2.4 million temporary models on this graph).
+- Request-level pricing-tier selection, component and slice rounding, ordered
+  final summation, missing-price behavior, and effective-date aggregation stay
+  at their original boundaries.
+
 ## 5. Remaining bottlenecks
 
-`session.stats` is now dominated by `_allocate_int_batch` (~2.8 s under
-cProfile, 6,005 observations) and the remaining projection/output work. The
-19.4M per-element Python accumulation iterations and their `_CostAccum`
-construction have been removed.
+`graph.stats` is now dominated by visible-content entry construction and the
+remaining integer allocation passes. Mixed-tokenizer sessions deliberately
+retain their isolated attribution fallback for correctness.
 
-`session.tool_usage` at ~15s remains dominated by `_cost_evidence_from_accum`
-(2.4M calls), specifically per-item cost arithmetic and evidence construction.
-Model pricing rules are now resolved through a projection-scoped cache; live
-catalog lookup is no longer repeated for each item.
+`session.tool_usage` still performs request-tier price arithmetic for roughly
+2.4 million observation/item slices. That arithmetic cannot be moved after
+aggregation because pricing thresholds and rounding are request-specific; the
+temporary Pydantic evidence construction around it has been removed.
+
+Targeted store construction still parses and validates the session files that
+belong to the selected graph. A persistent canonical-session cache could remove
+more work, but it needs explicit file fingerprints, schema invalidation, and
+parent-trimming dependency handling before it is safe.
 
 ## 6. Reproducing
 

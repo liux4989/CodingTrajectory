@@ -5,6 +5,7 @@ from uuid import UUID
 
 from coding_trajectory import debug
 from coding_trajectory.ingestion.models import ContextUsageObservation, SessionGraph
+from coding_trajectory.metrics._build import _build_full_metrics
 from coding_trajectory.metrics.context_stats._common import (
     compaction_stats,
     message_stats,
@@ -15,15 +16,17 @@ from coding_trajectory.metrics.context_stats._common import (
 from coding_trajectory.metrics.context_stats.composition import (
     AnchorOutcome,
     build_context_composition,
+    context_composition_anchor_outcome,
 )
-from coding_trajectory.metrics._build import _build_full_metrics
-from coding_trajectory.metrics.pricing import get_model_context_window
 from coding_trajectory.metrics.models import (
     ContextCategoryFlat,
     ContextModelStatsFlat,
     ContextWindowStatsFlat,
     SessionContextStatsFlat,
+    SessionGraphMetrics,
+    SessionMetrics,
 )
+from coding_trajectory.metrics.pricing import get_model_context_window
 
 
 def build_session_graph_context_stats(
@@ -31,6 +34,8 @@ def build_session_graph_context_stats(
     *,
     allocated_usage_by_item: dict[UUID, dict[str, int]] | None = None,
     allocated_usage_by_context_source: dict[str, dict[str, int]] | None = None,
+    include_composition: bool = True,
+    precomputed_metrics: SessionGraphMetrics | SessionMetrics | None = None,
 ) -> dict[str, Any]:
     vendors = {session.vendor for session in session_graph.sessions if session.vendor}
     if not vendors:
@@ -42,7 +47,7 @@ def build_session_graph_context_stats(
         )
 
     vendor = next(iter(vendors))
-    full = _build_full_metrics(session_graph)
+    full = precomputed_metrics or _build_full_metrics(session_graph)
     runtime = runtime_stats(
         session_graph,
         processed_tokens=full.token_usage.processed_token_total(),
@@ -51,14 +56,18 @@ def build_session_graph_context_stats(
     messages = message_stats(session_graph)
     compaction = compaction_stats(session_graph)
     observation = _latest_context_usage(session_graph)
-    categories, anchor_outcome = build_context_composition(
-        session_graph,
-        allocated_usage_by_item=allocated_usage_by_item,
-        allocated_usage_by_context_source=allocated_usage_by_context_source,
-        pricing_model=observation.model if observation else None,
-        pricing_provider=(observation.provider if observation else None)
-        or vendor.value,
-    )
+    if include_composition:
+        categories, anchor_outcome = build_context_composition(
+            session_graph,
+            allocated_usage_by_item=allocated_usage_by_item,
+            allocated_usage_by_context_source=allocated_usage_by_context_source,
+            pricing_model=observation.model if observation else None,
+            pricing_provider=(observation.provider if observation else None)
+            or vendor.value,
+        )
+    else:
+        categories = []
+        anchor_outcome = context_composition_anchor_outcome(session_graph)
     if observation is None:
         no_obs_message = f"No {vendor.value} context usage observation found; provider context usage is unavailable."
         warnings: list[str] = []
@@ -69,7 +78,7 @@ def build_session_graph_context_stats(
             vendor=vendor.value,
             severity="info",
         )
-        return SessionContextStatsFlat(
+        payload = SessionContextStatsFlat(
             root_session_id=session_graph.root_session_id,
             vendor=vendor.value,
             context_window=ContextWindowStatsFlat(categories=categories),
@@ -78,6 +87,7 @@ def build_session_graph_context_stats(
             messages=messages,
             warnings=warnings,
         ).model_dump(mode="json")
+        return _project_composition(payload, include=include_composition)
 
     context_window = observation.context_window_tokens or get_model_context_window(
         observation.model, provider=observation.provider or vendor.value
@@ -120,7 +130,7 @@ def build_session_graph_context_stats(
             vendor=vendor.value,
         )
 
-    return SessionContextStatsFlat(
+    payload = SessionContextStatsFlat(
         root_session_id=session_graph.root_session_id,
         vendor=vendor.value,
         model=ContextModelStatsFlat(
@@ -140,6 +150,19 @@ def build_session_graph_context_stats(
         usage=token_usage_from_mapping(observation.usage),
         warnings=warnings,
     ).model_dump(mode="json")
+    return _project_composition(payload, include=include_composition)
+
+
+def _project_composition(
+    payload: dict[str, Any],
+    *,
+    include: bool,
+) -> dict[str, Any]:
+    if not include:
+        context_window = payload.get("context_window")
+        if isinstance(context_window, dict):
+            context_window.pop("categories", None)
+    return payload
 
 
 def _latest_context_usage(

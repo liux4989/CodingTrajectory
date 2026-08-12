@@ -210,7 +210,7 @@ class MetricsService:
             [
                 {
                     "id": graph.session_graph_id,
-                    "method": "session.usage",
+                    "method": "graph.usage",
                     "params": {"session_id": graph.session_graph_id},
                 }
                 for graph in sample
@@ -257,7 +257,7 @@ class MetricsService:
 def _load_graphs(since_days: int) -> list[GraphRecord]:
     session_result = _api_call(
         "project.sessions",
-        {"since_days": since_days, "include": ["runtime", "usage"]},
+        {"since_days": since_days},
     )
     session_items = [item for item in session_result.get("items") or [] if isinstance(item, dict)]
     graph_ids = [
@@ -266,20 +266,12 @@ def _load_graphs(since_days: int) -> list[GraphRecord]:
         if item.get("root_session_id") or item.get("id")
     ]
     usage_results: dict[str, dict[str, Any]] = {}
-    model_results: dict[str, dict[str, Any]] = {}
     for offset in range(0, len(graph_ids), 50):
         chunk = graph_ids[offset : offset + 50]
         requests = [
             {
                 "id": f"usage:{graph_id}",
-                "method": "session.usage",
-                "params": {"session_id": graph_id},
-            }
-            for graph_id in chunk
-        ] + [
-            {
-                "id": f"models:{graph_id}",
-                "method": "session.model_usage",
+                "method": "graph.usage",
                 "params": {"session_id": graph_id},
             }
             for graph_id in chunk
@@ -287,7 +279,6 @@ def _load_graphs(since_days: int) -> list[GraphRecord]:
         results = _batch_results(requests)
         for graph_id in chunk:
             usage_results[graph_id] = results.get(f"usage:{graph_id}") or {}
-            model_results[graph_id] = results.get(f"models:{graph_id}") or {}
 
     records: list[GraphRecord] = []
     for item in session_items:
@@ -295,21 +286,23 @@ def _load_graphs(since_days: int) -> list[GraphRecord]:
         if not graph_id:
             continue
         usage_payload = usage_results.get(graph_id) or {}
-        model_payload = model_results.get(graph_id) or {}
         vendors = item.get("vendors") or []
         warnings = [str(value) for value in item.get("warnings") or []]
         warnings.extend(str(value) for value in usage_payload.get("warnings") or [])
-        warnings.extend(str(value) for value in model_payload.get("warnings") or [])
         records.append(
             GraphRecord(
                 session_graph_id=graph_id,
-                project=_optional_str(model_payload.get("project") or item.get("project")),
-                title=_optional_str(model_payload.get("title") or item.get("title")),
-                vendor=_optional_str(model_payload.get("vendor") or (vendors[0] if vendors else None)),
-                usage=_usage(usage_payload) or dict(item.get("usage") or {}),
-                runtime=dict(usage_payload.get("graph_runtime") or usage_payload.get("runtime") or item.get("runtime") or {}),
+                project=_optional_str(item.get("project")),
+                title=_optional_str(item.get("title")),
+                vendor=_optional_str(vendors[0] if vendors else None),
+                usage=_usage(usage_payload),
+                runtime=dict(usage_payload.get("runtime") or {}),
                 cost=usage_payload.get("estimated_cost") if isinstance(usage_payload.get("estimated_cost"), dict) else None,
-                models=tuple(row for row in model_payload.get("models") or [] if isinstance(row, dict)),
+                models=tuple(
+                    row
+                    for row in usage_payload.get("models") or []
+                    if isinstance(row, dict)
+                ),
                 warnings=tuple(dict.fromkeys(warnings)),
             )
         )
@@ -444,7 +437,7 @@ def _comparison_groups(graphs: tuple[GraphRecord, ...], *, execution: bool) -> l
             else:
                 key, label = "unknown-model", "Unknown model"
             group = _group(groups, key, label, None, None)
-            _add_graph_runtime(group, graph)
+            _add_runtime_values(group, graph)
             _add_usage(group["usage"], graph.usage)
             group["turns"] += _int(graph.runtime.get("turns"))
             continue
@@ -506,7 +499,7 @@ def _group(
     return groups[key]
 
 
-def _add_graph_runtime(group: dict[str, Any], graph: GraphRecord) -> None:
+def _add_runtime_values(group: dict[str, Any], graph: GraphRecord) -> None:
     group["graph_ids"].add(graph.session_graph_id)
     group["active_values"].append(_int(graph.runtime.get("execution_seconds")))
     group["wait_values"].append(_int(graph.runtime.get("wait_seconds")))
@@ -650,11 +643,8 @@ def _model_key(provider: str | None, model: str | None) -> str:
 
 
 def _usage(payload: dict[str, Any]) -> dict[str, Any]:
-    for key in ("graph_total_usage", "total_usage", "graph_usage", "usage"):
-        value = payload.get(key)
-        if isinstance(value, dict):
-            return value
-    return {}
+    value = payload.get("total_usage")
+    return value if isinstance(value, dict) else {}
 
 
 def _add_usage(target: dict[str, int], usage: dict[str, Any]) -> None:

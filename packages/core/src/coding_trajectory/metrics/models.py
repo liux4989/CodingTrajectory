@@ -173,42 +173,6 @@ class SessionGraphMetrics(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Simplified flat output for ct session stats scopes
-# ---------------------------------------------------------------------------
-
-
-class TurnMetricsFlat(BaseModel):
-    turn_id: UUID
-    sequence: int
-    status: str | None = None
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
-    model: str | None = None
-    token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    model_active_seconds: float | None = None
-    processed_tokens_per_second: float | None = None
-
-
-class SessionMetricsFlat(BaseModel):
-    session_id: UUID
-    vendor: str
-    status: str | None = None
-    token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    model_active_seconds: float | None = None
-    processed_tokens_per_second: float | None = None
-    turns: list[TurnMetricsFlat] = Field(default_factory=list)
-
-
-class SessionGraphMetricsFlat(BaseModel):
-    root_session_id: UUID
-    token_usage: TokenUsage = Field(default_factory=TokenUsage)
-    model_active_seconds: float | None = None
-    processed_tokens_per_second: float | None = None
-    sessions: list[SessionMetricsFlat] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-
-
 class ContextCategoryFlat(BaseModel):
     key: str
     label: str
@@ -743,8 +707,6 @@ class AllocatedRealTokenCost(BaseModel):
             "processed_tokens": self.total_tokens,
             "prompt_completion_tokens": self.input_tokens + self.output_tokens,
             "allocation_method": self.allocation_method,
-            "confidence": self.confidence,
-            "usage_authority": self.usage_authority,
         }
 
 
@@ -819,7 +781,6 @@ class ItemRealTokenCostFlat(BaseModel):
 class SessionGraphToolUsageFlat(BaseModel):
     root_session_id: UUID
     tool_item_count: int = 0
-    tool_call_count: int = 0
     tool_output_chars: int = 0
     tool_output_original_tokens: int = 0
     allocated_real_token_cost: AllocatedRealTokenCost | None = None

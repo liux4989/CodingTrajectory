@@ -7,8 +7,9 @@ from typing import Any
 
 from coding_trajectory_cli._shared import (
     GhFormatter,
+    add_global_scope_flag,
+    add_json_output_flag,
     add_output_flags,
-    add_params_flag,
     add_session_source,
     add_turn_window_flags,
     display_value,
@@ -17,7 +18,6 @@ from coding_trajectory_cli._shared import (
     format_percent,
     format_tokens,
     one_line,
-    params_from_json,
     render_usage_line,
 )
 
@@ -43,9 +43,7 @@ CONTEXT_USAGE_WIDTH = 34
 
 
 def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
-    params = params_from_json(args)
-    if args.session_id:
-        params["session_id"] = args.session_id
+    params: dict[str, Any] = {"session_id": args.session_id}
     if args.num_turns is not None:
         params["num_turns"] = args.num_turns
     if args.drop_turns is not None:
@@ -54,19 +52,49 @@ def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _session_stats_params(args: argparse.Namespace) -> dict[str, Any]:
-    params = params_from_json(args)
-    if args.session_id:
-        params["session_id"] = args.session_id
-    return params
+    return {"session_id": args.session_id}
 
 
 def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
-    params = params_from_json(args)
-    if args.session_id:
-        params["session_id"] = args.session_id
+    params: dict[str, Any] = {"session_id": args.session_id}
     if args.turn_id:
         params["turn_id"] = args.turn_id
     return params
+
+
+def _session_request_usage_params(args: argparse.Namespace) -> dict[str, Any]:
+    params = _session_usage_params(args)
+    include = [
+        value
+        for enabled, value in (
+            (args.include_context, "context"),
+            (args.include_causality, "causality"),
+        )
+        if enabled
+    ]
+    if include:
+        params["include"] = include
+    return params
+
+
+def _session_events_params(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        **({"session_id": args.session_id} if args.session_id else {}),
+        **({"event_ids": args.event_ids} if args.event_ids else {}),
+        **({"turn_id": args.turn_id} if args.turn_id else {}),
+        **({"type": args.event_type} if args.event_type else {}),
+        **({"filters": args.filters} if args.filters is not None else {}),
+    }
+
+
+def _session_items_params(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "session_id": args.session_id,
+        **({"item_ids": args.resource_ids} if args.resource_ids else {}),
+        **({"turn_id": args.turn_id} if args.turn_id else {}),
+        **({"types": args.item_types} if args.item_types else {}),
+        **({"include_content": True} if args.include_content else {}),
+    }
 
 
 def _overview_request_label(request: Any) -> str:
@@ -119,7 +147,11 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
     roots: list[dict[str, Any]] = []
     for session in sessions:
         relationship = session.get("relationship") or {}
-        parent_id = relationship.get("parent_session_id") or relationship.get("parent")
+        parent_id = (
+            relationship.get("parent_session_id")
+            or relationship.get("parent")
+            or session.get("parent_session_id")
+        )
         if parent_id and str(parent_id) in by_id:
             children_by_parent.setdefault(str(parent_id), []).append(session)
         else:
@@ -149,12 +181,16 @@ def _render_session_tree_node(
 ) -> None:
     indent = "  " * depth
     relationship = session.get("relationship") or {}
-    role = relationship.get("role") or relationship.get("relationship") or "session"
+    role = (
+        relationship.get("role")
+        or relationship.get("relationship")
+        or session.get("edge_type")
+        or "session"
+    )
     header = f"{indent}- session `{session.get('session_id') or '-'}`"
-    if depth > 0:
-        header += f"  {role}"
-    else:
-        header += f"  {role}"
+    if session.get("title"):
+        header += f"  {one_line(session['title'], limit=64)}"
+    header += f"  {role}"
     header += f", {session.get('vendor') or '-'}, {display_value(session.get('status')) or '-'}"
     if session.get("agent_name"):
         header += f", {session['agent_name']}"
@@ -517,7 +553,7 @@ def _render_session_stats_sections(
         )
 
     graph_context = payload.get("context_window") or {}
-    graph_runtime = payload.get("runtime") or {}
+    runtime = payload.get("runtime") or {}
     graph_billed = payload.get("billed_token_usage") or {}
     lines.extend(["", "Graph aggregate", ""])
     lines.append(
@@ -530,10 +566,10 @@ def _render_session_stats_sections(
         )
     lines.append(
         "- Graph runtime: "
-        f"{graph_runtime.get('turns') or 0} turns, "
-        f"{graph_runtime.get('items') or 0} items, "
-        f"{graph_runtime.get('tool_calls') or 0} tool calls, "
-        f"{graph_runtime.get('subagent_sessions') or 0} subagent sessions"
+        f"{runtime.get('turns') or 0} turns, "
+        f"{runtime.get('items') or 0} items, "
+        f"{runtime.get('tool_calls') or 0} tool calls, "
+        f"{runtime.get('subagent_sessions') or 0} subagent sessions"
     )
     for warning in payload.get("warnings") or []:
         lines.append(f"- Warning: {warning}")
@@ -806,7 +842,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     add_session_source(session_overview)
     add_turn_window_flags(session_overview, view_name="projection")
     add_output_flags(session_overview)
-    add_params_flag(session_overview)
     session_overview.set_defaults(
         _method="session.overview",
         _params=_session_turn_window_params,
@@ -822,7 +857,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     add_session_source(session_stats)
     add_output_flags(session_stats)
-    add_params_flag(session_stats)
     session_stats.set_defaults(
         _method="session.stats",
         _params=_session_stats_params,
@@ -852,7 +886,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Include turns with no recorded token usage (default: hide them).",
     )
     add_output_flags(session_usage)
-    add_params_flag(session_usage)
     session_usage.set_defaults(
         _method="session.usage",
         _params=_session_usage_params,
@@ -863,7 +896,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_request_usage = session_sub.add_parser(
         "request-usage",
         prog="ct session request-usage",
-        help="Show exact provider-request usage, cost, and tool causality.",
+        help="Show exact provider-request usage and cost.",
         formatter_class=GhFormatter,
     )
     add_session_source(session_request_usage)
@@ -874,11 +907,20 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         default=None,
         help="Limit request usage to one turn.",
     )
-    add_output_flags(session_request_usage)
-    add_params_flag(session_request_usage)
+    session_request_usage.add_argument(
+        "--include-context",
+        action="store_true",
+        help="Include request context-window diagnostics.",
+    )
+    session_request_usage.add_argument(
+        "--include-causality",
+        action="store_true",
+        help="Include tool-result-to-next-request causal links.",
+    )
+    add_json_output_flag(session_request_usage)
     session_request_usage.set_defaults(
         _method="session.request_usage",
-        _params=_session_usage_params,
+        _params=_session_request_usage_params,
         _default_output="json",
     )
 
@@ -889,9 +931,17 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         epilog=EVENT_SCAN_EPILOG,
         formatter_class=GhFormatter,
     )
-    add_session_source(session_events)
-    add_output_flags(session_events)
-    add_params_flag(session_events)
+    add_session_source(session_events, required=False)
+    add_json_output_flag(session_events)
+    add_global_scope_flag(session_events)
+    session_events.add_argument(
+        "--event-id",
+        dest="event_ids",
+        action="append",
+        metavar="EVENT_ID",
+        default=None,
+        help="Resolve an explicit event ID. Repeatable; SESSION_ID is optional.",
+    )
     session_events.add_argument(
         "--turn",
         dest="turn_id",
@@ -916,13 +966,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     session_events.set_defaults(
         _method="session.events",
-        _params=lambda args: {
-            **params_from_json(args),
-            **({"session_id": args.session_id} if args.session_id else {}),
-            **({"turn_id": args.turn_id} if args.turn_id else {}),
-            **({"type": args.event_type} if args.event_type else {}),
-            **({"filters": args.filters} if args.filters is not None else {}),
-        },
+        _params=_session_events_params,
         _default_output="json",
     )
 
@@ -947,16 +991,17 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         default=False,
         help="Return full item content instead of truncation references.",
     )
-    add_output_flags(session_items)
-    add_params_flag(session_items)
+    session_items.add_argument(
+        "--type",
+        dest="item_types",
+        action="append",
+        metavar="ITEM_TYPE",
+        default=None,
+        help="Limit results to an item type. Repeatable.",
+    )
+    add_json_output_flag(session_items)
     session_items.set_defaults(
         _method="session.items",
-        _params=lambda args: {
-            **params_from_json(args),
-            "session_id": args.session_id,
-            **({"item_ids": args.resource_ids} if args.resource_ids else {}),
-            **({"turn_id": args.turn_id} if args.turn_id else {}),
-            **({"include_content": True} if args.include_content else {}),
-        },
+        _params=_session_items_params,
         _default_output="json",
     )

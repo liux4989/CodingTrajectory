@@ -60,14 +60,12 @@ export type ProjectDetail = {
 };
 
 export type SessionItem = {
-  id?: string | null;
-  root_session_id?: string | null;
-  v?: string[];
-  vendors?: string[];
+  root_session_id: string;
+  graph_id?: string | null;
+  vendors: string[];
+  session_ids: string[];
   title?: string | null;
-  project_name?: string | null;
-  started_at?: string | null;
-  updated_at?: string | null;
+  project?: string | null;
 };
 
 export type TokenEvidence = {

@@ -22,15 +22,14 @@ import { DataTableColumnHeader } from "@/components/ui/data-table-column-header"
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SessionLink } from "@/components/session-link";
 import { useDateRange } from "@/hooks/use-date-range";
-import { relativeTime } from "@/lib/relative-time";
 import { Button } from "@/components/ui/button";
 
 function sessionId(item: SessionItem) {
-  return item.root_session_id ?? item.id ?? null;
+  return item.root_session_id;
 }
 
 function sessionVendors(item: SessionItem) {
-  return item.vendors ?? item.v ?? [];
+  return item.vendors;
 }
 
 const columns: ColumnDef<SessionItem>[] = [
@@ -54,16 +53,6 @@ const columns: ColumnDef<SessionItem>[] = [
     accessorKey: "title",
     header: ({ column }) => <DataTableColumnHeader column={column} label="Title" />,
     cell: ({ getValue }) => getValue<string | null>() ?? "-",
-  },
-  {
-    id: "updated",
-    accessorFn: (row) => row.updated_at ?? row.started_at ?? "",
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Updated" />,
-    cell: ({ row }) => (
-      <span className="mono text-body-sm" title={row.original.updated_at ?? row.original.started_at ?? ""}>
-        {relativeTime(row.original.updated_at ?? row.original.started_at)}
-      </span>
-    ),
   },
 ];
 
@@ -128,7 +117,7 @@ export function ProjectDetailRoute() {
         </span>
       </div>
       <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, or id" />
-      {detail.isPending ? <TableSkeleton rows={6} cols={4} /> : null}
+      {detail.isPending ? <TableSkeleton rows={6} cols={3} /> : null}
       {detail.isError ? <StateBlock title="Project detail failed" detail={detail.error.message} onRetry={() => detail.refetch()} /> : null}
       {detail.data ? (
         <>

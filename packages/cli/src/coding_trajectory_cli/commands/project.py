@@ -8,15 +8,14 @@ from typing import Any
 from coding_trajectory_cli._shared import (
     GhFormatter,
     add_agent_vendor_flag,
+    add_global_scope_flag,
     add_output_flags,
-    add_params_flag,
-    params_from_json,
     positive_int,
 )
 
 
 def _project_list_params(args: argparse.Namespace) -> dict[str, Any]:
-    params = params_from_json(args)
+    params: dict[str, Any] = {}
     agent_vendor = getattr(args, "agent_vendor", None)
     if agent_vendor is not None:
         params["agent_vendor"] = agent_vendor
@@ -24,7 +23,7 @@ def _project_list_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _project_sessions_params(args: argparse.Namespace) -> dict[str, Any]:
-    params = params_from_json(args)
+    params: dict[str, Any] = {}
     if args.project_name:
         params["project_name"] = args.project_name
     if args.all_time is True:
@@ -89,7 +88,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     add_agent_vendor_flag(project_list)
     add_output_flags(project_list)
-    add_params_flag(project_list)
     project_list.set_defaults(
         _method="project.list",
         _params=_project_list_params,
@@ -125,7 +123,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     add_agent_vendor_flag(project_sessions)
     add_output_flags(project_sessions)
-    add_params_flag(project_sessions)
+    add_global_scope_flag(project_sessions)
     project_sessions.set_defaults(
         _method="project.sessions",
         _params=_project_sessions_params,

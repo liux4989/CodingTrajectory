@@ -58,9 +58,7 @@ def _load_scope_model_usage(
     ct_json: Callable[[list[str]], dict[str, Any]],
     filters: ModelUsageFilters,
 ) -> dict[str, Any]:
-    projects_payload = ct_json(
-        ["project", "list", "--params", "{}", "--output", "json"]
-    )
+    projects_payload = _api_call(ct_json, "project.list", {})
     session_params: dict[str, Any] = {
         "since_days": filters.since_days,
     }

@@ -28,9 +28,7 @@ def build_projection(
     project_name: str | None = None,
 ) -> dict[str, Any]:
     filters = ErrorCollectionFilters(since_days=since_days, project_name=project_name)
-    projects_payload = ct_json(
-        ["project", "list", "--params", "{}", "--output", "json"]
-    )
+    projects_payload = _api_call(ct_json, "project.list", {})
     session_params: dict[str, Any] = {
         "since_days": filters.since_days,
         "include": ["runtime", "usage"],
@@ -184,16 +182,13 @@ def _session_errors(
 
     tool_calls = _int(runtime.get("tool_calls"))
     failed_tool_calls = _int(runtime.get("failed_tool_calls"))
-    tool_result_count = _int(
-        (tool_usage or {}).get("tool_call_count")
-        or (tool_usage or {}).get("tool_item_count")
-    )
-    missing_projection = tool_calls > 0 and tool_result_count == 0
+    tool_item_count = _int((tool_usage or {}).get("tool_item_count"))
+    missing_projection = tool_calls > 0 and tool_item_count == 0
     if failed_tool_calls or missing_projection:
         evidence = [
             f"runtime.tool_calls={tool_calls}",
             f"runtime.failed_tool_calls={failed_tool_calls}",
-            f"session.tool_usage.tool_call_count={tool_result_count}",
+            f"session.tool_usage.tool_item_count={tool_item_count}",
         ]
         if missing_projection:
             evidence.append("tool_usage_projection=missing")
@@ -256,7 +251,9 @@ def _tool_coverage_detail(*, failed_tool_calls: int, missing_projection: bool) -
             f"{'' if failed_tool_calls == 1 else 's'}"
         )
     if missing_projection:
-        parts.append("tool calls exist but session.tool_usage produced no tool rows")
+        parts.append(
+            "tool calls exist but session.tool_usage produced no tool item rows"
+        )
     return "; ".join(parts) + "."
 
 

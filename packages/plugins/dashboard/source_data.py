@@ -14,9 +14,14 @@ except ImportError:
 
 
 _CACHEABLE_METHODS = {"project.list", "project.sessions"}
-_CONTRACT_VERSION = {"project.list": 1, "project.sessions": 1}
+_CONTRACT_VERSION = {"project.list": 2, "project.sessions": 2}
 _REQUEST_FIELDS = {
-    "project.list": {"agent_vendor"},
+    "project.list": {
+        "project_name",
+        "since_days",
+        "modified_since",
+        "agent_vendor",
+    },
     "project.sessions": {
         "project_name",
         "since_days",
@@ -91,18 +96,14 @@ class DashboardSourceData:
         parsed = _cacheable_command(args)
         if parsed is None:
             return self._ct_json(args)
-        method, params, global_scope, output_form = parsed
+        method, params, global_scope = parsed
         result = self.call(method, params, global_scope=global_scope)
-        if output_form == "api":
-            return {
-                "id": None,
-                "method": method,
-                "ok": True,
-                "result": result,
-            }
-        if method == "project.list":
-            return _compact_project_list(result)
-        return _compact_project_sessions(result)
+        return {
+            "id": None,
+            "method": method,
+            "ok": True,
+            "result": result,
+        }
 
     def _call_uncached(
         self,
@@ -129,7 +130,7 @@ class DashboardSourceData:
 
 def _cacheable_command(
     args: list[str],
-) -> tuple[str, dict[str, Any], bool, str] | None:
+) -> tuple[str, dict[str, Any], bool] | None:
     if len(args) >= 3 and args[:2] == ["api", "call"]:
         method = args[2]
         if method not in _CACHEABLE_METHODS:
@@ -138,20 +139,7 @@ def _cacheable_command(
             method,
             _params_arg(args),
             "--global-scope" in args,
-            "api",
         )
-    if len(args) >= 2 and args[0] == "project":
-        action = args[1]
-        method = {
-            "list": "project.list",
-            "sessions": "project.sessions",
-        }.get(action)
-        if method is None:
-            return None
-        params = _params_arg(args)
-        if method == "project.sessions" and "since_days" not in params:
-            params["since_days"] = 30
-        return method, params, method == "project.list", "cli"
     return None
 
 
@@ -177,19 +165,19 @@ def _validated_params(method: str, params: dict[str, Any]) -> dict[str, Any]:
         value = normalized.get(field)
         if value is not None and not isinstance(value, str):
             raise ValueError(f"{method} {field} must be a string")
+    since_days = normalized.get("since_days")
+    if since_days is not None and (
+        not isinstance(since_days, int)
+        or isinstance(since_days, bool)
+        or since_days < 1
+    ):
+        raise ValueError(f"{method} since_days must be at least 1")
     if method == "project.sessions":
         include = normalized.get("include", [])
         if not isinstance(include, list) or any(
             value not in {"runtime", "usage"} for value in include
         ):
             raise ValueError("project.sessions include must contain runtime or usage")
-        since_days = normalized.get("since_days")
-        if since_days is not None and (
-            not isinstance(since_days, int)
-            or isinstance(since_days, bool)
-            or since_days < 1
-        ):
-            raise ValueError("project.sessions since_days must be at least 1")
         normalized["include"] = sorted(set(include))
     return normalized
 
@@ -208,43 +196,3 @@ def _validate_result(method: str, result: dict[str, Any]) -> None:
         )
     if not valid:
         raise RuntimeError(f"ct api request returned invalid result: {method}")
-
-
-def _compact_project_list(payload: dict[str, Any]) -> dict[str, Any]:
-    items = payload.get("items") or {}
-    if not isinstance(items, dict):
-        raise RuntimeError("project.list returned invalid items")
-    return {
-        "items": {
-            name: {
-                key: item[key]
-                for key in ("path", "vendors", "sessions")
-                if item.get(key) is not None
-            }
-            for name, item in items.items()
-            if isinstance(item, dict)
-        }
-    }
-
-
-def _compact_project_sessions(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "items": [
-            {
-                key: value
-                for key, value in {
-                    "id": item.get("root_session_id"),
-                    "project": item.get("project"),
-                    "title": item.get("title"),
-                    "vendors": item.get("vendors"),
-                    "sessions": item.get("session_ids"),
-                    "runtime": item.get("runtime"),
-                    "usage": item.get("usage"),
-                    "warnings": item.get("warnings") or None,
-                }.items()
-                if value is not None
-            }
-            for item in payload.get("items") or []
-            if isinstance(item, dict)
-        ]
-    }

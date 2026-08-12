@@ -270,6 +270,48 @@ def _cost_evidence_from_accum(
     pricing_rule: PriceRule | None | object = _PRICING_RULE_UNSET,
 ) -> CostEvidenceFlat | None:
     """Cost evidence directly from _CostAccum int fields, skipping dict conversion."""
+    values = _cost_evidence_values_from_accum(
+        input_tokens,
+        uncached_input_tokens,
+        cached_input_tokens,
+        cache_creation_input_tokens,
+        output_tokens,
+        reasoning_output_tokens,
+        model=model,
+        provider=provider,
+        pricing_input_tokens=pricing_input_tokens,
+        pricing_rule=pricing_rule,
+    )
+    if values is None:
+        return None
+    amount_usd, pricing_source, pricing_effective_date = values
+    return CostEvidenceFlat(
+        value_usd=amount_usd,
+        confidence="estimated",
+        source=pricing_source,
+        effective_date=pricing_effective_date,
+    )
+
+
+def _cost_evidence_values_from_accum(
+    input_tokens: int,
+    uncached_input_tokens: int,
+    cached_input_tokens: int,
+    cache_creation_input_tokens: int,
+    output_tokens: int,
+    reasoning_output_tokens: int,
+    *,
+    model: str | None,
+    provider: str | None,
+    pricing_input_tokens: int | None = None,
+    pricing_rule: PriceRule | None | object = _PRICING_RULE_UNSET,
+) -> tuple[float, str, str | None] | None:
+    """Return primitive cost evidence for allocation hot paths.
+
+    The tuple preserves every request-tier and rounding decision made by
+    ``_estimate_cost_from_ints`` while letting callers aggregate millions of
+    slices without constructing one Pydantic model per slice.
+    """
     if not (
         input_tokens
         or uncached_input_tokens
@@ -293,12 +335,7 @@ def _cost_evidence_from_accum(
     if estimate is None:
         return None
     amount_usd, pricing_source, pricing_effective_date = estimate
-    return CostEvidenceFlat(
-        value_usd=amount_usd,
-        confidence="estimated",
-        source=pricing_source,
-        effective_date=pricing_effective_date or None,
-    )
+    return (amount_usd, pricing_source, pricing_effective_date or None)
 
 
 def cost_evidence_from_usage(

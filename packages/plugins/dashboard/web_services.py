@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -183,8 +184,10 @@ class DashboardDataService:
         project_name: str,
         since_days: int | None,
     ) -> dict[str, Any]:
-        projects = self._source.json(
-            ["project", "list", "--params", json.dumps({}), "--output", "json"]
+        projects = self._source.call(
+            "project.list",
+            {},
+            global_scope=True,
         )
         items = projects.get("items") or {}
         meta = items.get(project_name)
@@ -193,15 +196,11 @@ class DashboardDataService:
         sessions_params: dict[str, Any] = {"project_name": project_name}
         if since_days is not None:
             sessions_params["since_days"] = since_days
-        sessions = _ct_json_expensive(
-            [
-                "project",
-                "sessions",
-                "--params",
-                json.dumps(sessions_params),
-                "--output",
-                "json",
-            ]
+        sessions = _api_result(
+            "project.sessions",
+            sessions_params,
+            global_scope=True,
+            ct_json=_ct_json_expensive,
         )
         return {
             "name": project_name,
@@ -655,8 +654,10 @@ class DashboardDataService:
         params: dict[str, Any] = {}
         if vendor:
             params["agent_vendor"] = vendor
-        payload = self._source.json(
-            ["project", "list", "--params", json.dumps(params), "--output", "json"]
+        payload = self._source.call(
+            "project.list",
+            params,
+            global_scope=True,
         )
         items = payload.get("items") or {}
         return {
@@ -671,15 +672,10 @@ class DashboardDataService:
         }
 
     def _sessions_uncached(self, params: dict[str, Any]) -> dict[str, Any]:
-        payload = self._source.json(
-            [
-                "project",
-                "sessions",
-                "--params",
-                json.dumps(params),
-                "--output",
-                "json",
-            ]
+        payload = self._source.call(
+            "project.sessions",
+            params,
+            global_scope=True,
         )
         return {"items": payload.get("items") or []}
 
@@ -743,21 +739,21 @@ def _session_data_query_params(query: dict[str, list[str]]) -> dict[str, Any]:
 
 
 def _overview_attach_session_costs(session_items: list[dict[str, Any]]) -> None:
-    """Attach per-session estimated cost from ``session.model_usage``.
+    """Attach per-graph estimated cost from ``graph.usage`` model rows.
 
-    Mirrors ``model_usage._session_row`` cost derivation so the overview shares
-    the same pricing source as the model-usage route instead of reading a
-    ``cost_usd`` field that ``project.sessions`` usage never populates.
+    The overview rows represent the graphs returned by ``project.sessions``.
+    Reading ``graph.usage`` keeps their cost scope aligned with their runtime and
+    usage totals while reusing the request-attributed model rows already present
+    in that response.
     """
     session_ids = [
         str(item.get("id") or "") for item in session_items if item.get("id")
     ]
     if not session_ids:
         return
-    payloads = model_usage_mod._model_usage_batch(_ct_json, session_ids)
-    for payload in payloads:
-        session_id = str(payload.get("id") or payload.get("root_session_id") or "")
-        if not session_id:
+    payloads = _graph_usage_batch(session_ids)
+    for session_id, payload in payloads.items():
+        if not payload:
             continue
         models = [
             model_usage_mod._priced_model(row)
@@ -776,6 +772,35 @@ def _overview_attach_session_costs(session_items: list[dict[str, Any]]) -> None:
                 item["cost_usd"] = round(float(total), 8)
                 item["pricing_confidence"] = confidence
                 break
+
+
+def _graph_usage_batch(graph_ids: list[str]) -> dict[str, dict[str, Any]]:
+    requests = [
+        {
+            "id": graph_id,
+            "method": "graph.usage",
+            "params": {"session_id": graph_id},
+        }
+        for graph_id in graph_ids
+    ]
+    payload = _ct_json(
+        [
+            "api",
+            "batch",
+            "--global-scope",
+            "--requests",
+            json.dumps(requests),
+        ]
+    )
+    results: dict[str, dict[str, Any]] = {}
+    for item in payload.get("items") or []:
+        if not isinstance(item, dict) or not item.get("ok"):
+            continue
+        graph_id = item.get("id")
+        result = item.get("result")
+        if graph_id and isinstance(result, dict):
+            results[str(graph_id)] = result
+    return results
 
 
 def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -891,13 +916,35 @@ def _batch_result(
     return result
 
 
+def _api_result(
+    method: str,
+    params: dict[str, Any],
+    *,
+    global_scope: bool = False,
+    ct_json: Callable[[list[str]], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    args = ["api", "call", method, "--params", json.dumps(params)]
+    if global_scope:
+        args.append("--global-scope")
+    payload = (ct_json or _ct_json)(args)
+    if not payload.get("ok"):
+        error = payload.get("error") or {}
+        raise RuntimeError(
+            str(error.get("message") or f"ct api request failed: {method}")
+        )
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError(f"ct api request returned invalid result: {method}")
+    return result
+
+
 def _dashboard_session_item(item: dict[str, Any]) -> dict[str, Any]:
     return {
-        "id": item.get("root_session_id") or item.get("id"),
+        "id": item.get("root_session_id"),
         "project": item.get("project"),
         "title": item.get("title"),
         "vendors": item.get("vendors") or [],
-        "sessions": item.get("session_ids") or item.get("sessions") or [],
+        "sessions": item.get("session_ids") or [],
         "runtime": item.get("runtime") or {},
         "usage": item.get("usage") or {},
         "warnings": item.get("warnings") or [],
