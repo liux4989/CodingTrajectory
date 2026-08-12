@@ -23,6 +23,11 @@ from coding_trajectory.analysis.session_stats import (
     session_role,
     session_title,
 )
+from coding_trajectory.ingestion.indexes import (
+    build_session_graph_index,
+    index_events_by_id,
+    ordered_sessions,
+)
 from coding_trajectory.ingestion.models import (
     ContextUsageObservation,
     Event,
@@ -33,9 +38,16 @@ from coding_trajectory.ingestion.models import (
     Turn,
     is_tool_shaped_item,
 )
-from coding_trajectory.ingestion.indexes import (
-    build_session_graph_index,
-    ordered_sessions,
+from coding_trajectory.metrics._build import (
+    _build_full_metrics,
+    _is_zero_usage,
+    _token_usage_from_mapping,
+)
+from coding_trajectory.metrics.accounting import usage_accounting_payload
+from coding_trajectory.metrics.context_stats._common import (
+    compaction_stats,
+    effort_change_stats,
+    runtime_stats,
 )
 from coding_trajectory.metrics.models import (
     AllocatedRealTokenCost,
@@ -49,28 +61,22 @@ from coding_trajectory.metrics.models import (
     ModelUsageTurnFlat,
     ReadAfterResult,
     RequestUsageFlat,
-    SessionGraphModelUsageFlat,
-    SessionGraphRequestUsageFlat,
-    SessionMetricsFlat,
-    SessionUsageCompactFlat,
-    ToolItemFlat,
-    ToolTokenAttribution,
-    TokenUsage,
-    TokenUsageObservation,
     SessionGraphMetrics,
     SessionGraphMetricsFlat,
+    SessionGraphModelUsageFlat,
+    SessionGraphRequestUsageFlat,
     SessionGraphToolUsageFlat,
-    TurnRuntimeFlat,
-    TurnUsageCompactFlat,
+    SessionMetricsFlat,
+    SessionUsageCompactFlat,
+    TokenUsage,
+    TokenUsageObservation,
+    ToolItemFlat,
+    ToolTokenAttribution,
     TurnMetrics,
     TurnMetricsFlat,
+    TurnRuntimeFlat,
+    TurnUsageCompactFlat,
 )
-from coding_trajectory.metrics.context_stats._common import (
-    compaction_stats,
-    effort_change_stats,
-    runtime_stats,
-)
-from coding_trajectory.metrics.accounting import usage_accounting_payload
 from coding_trajectory.metrics.pricing import (
     CostEvidenceFlat,
     PriceRule,
@@ -83,11 +89,6 @@ from coding_trajectory.metrics.pricing import (
 )
 from coding_trajectory.metrics.throughput import processed_tokens_per_second
 from coding_trajectory.token_counter import session_scoped
-from coding_trajectory.metrics._build import (
-    _build_full_metrics,
-    _is_zero_usage,
-    _token_usage_from_mapping,
-)
 
 
 def build_session_graph_metrics(
@@ -1166,6 +1167,7 @@ def _cost_accum_to_allocated_cost(
 
 def _stats_cost_entries_for_session(session: Session) -> list[_ItemCostEntry]:
     entries: list[_ItemCostEntry] = []
+    events_by_id = index_events_by_id(session.events)
     for source_index, source in enumerate(session.context_sources):
         size = visible_text_size(source.text)
         tokens = size.tokens or (source.reported_tokens or 0)
@@ -1190,7 +1192,7 @@ def _stats_cost_entries_for_session(session: Session) -> list[_ItemCostEntry]:
     entries.extend(
         entry
         for turn in sorted(session.turns, key=lambda item: item.sequence)
-        for entry in _item_cost_entries_for_turn(session, turn)
+        for entry in _item_cost_entries_for_turn(turn, events_by_id=events_by_id)
     )
     return entries
 
@@ -1207,10 +1209,11 @@ def _build_item_real_token_costs_for_session(
     by visible tokens. Costs accumulate without capping, so per-item sums reconcile
     exactly to the provider-reported cumulative usage.
     """
+    events_by_id = index_events_by_id(session.events)
     entries = [
         entry
         for turn in sorted(session.turns, key=lambda item: item.sequence)
-        for entry in _item_cost_entries_for_turn(session, turn)
+        for entry in _item_cost_entries_for_turn(turn, events_by_id=events_by_id)
     ]
     if not entries:
         return []
@@ -1483,9 +1486,17 @@ def _add_allocated_real_token_cost(
     return left
 
 
-def _item_cost_entries_for_turn(session: Session, turn: Turn) -> list[_ItemCostEntry]:
+def _item_cost_entries_for_turn(
+    turn: Turn,
+    *,
+    events_by_id: dict[UUID, Event],
+) -> list[_ItemCostEntry]:
     entries: list[_ItemCostEntry] = []
-    user_event = _event_by_id(session.events, turn.user_request_event_id)
+    user_event = (
+        events_by_id.get(turn.user_request_event_id)
+        if turn.user_request_event_id is not None
+        else None
+    )
     if user_event is not None and user_event.type == EventType.USER_PROMPT_SUBMITTED:
         text = user_event.payload.get("text")
         if isinstance(text, str) and text:
@@ -1518,15 +1529,6 @@ def _item_cost_entries_for_turn(session: Session, turn: Turn) -> list[_ItemCostE
             )
         )
     return entries
-
-
-def _event_by_id(events: list[Event], event_id: UUID | None) -> Event | None:
-    if event_id is None:
-        return None
-    for event in events:
-        if event.event_id == event_id:
-            return event
-    return None
 
 
 def _build_tool_items_for_turn(
