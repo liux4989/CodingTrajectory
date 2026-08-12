@@ -29,7 +29,6 @@ from coding_trajectory.ingestion.models import (
     Vendor,
 )
 
-
 TranscriptKind = Literal[
     "user_message",
     "turn_started",
@@ -74,6 +73,101 @@ class TranscriptRecord(BaseModel):
     fidelity: TranscriptFidelity = "observed"
 
 
+class _TurnProjectionState:
+    """Own turn lifecycle state and its ordered event-id invariants."""
+
+    def __init__(self, *, session_id: UUID) -> None:
+        self._session_id = session_id
+        self.turns: list[Turn] = []
+        self.current_turn: Turn | None = None
+        self._current_event_ids: set[UUID] = set()
+        self._last_event_ids: set[UUID] = set()
+        self._turn_sequence = 0
+        self._item_sequence = 0
+        self.has_final_answer = False
+        self.vendor_turn_id: str | None = None
+
+    def open_turn(
+        self,
+        *,
+        started_at: datetime,
+        opening_event_id: UUID,
+        user_request_event_id: UUID | None,
+        vendor_turn_id: str | None,
+    ) -> None:
+        if self.current_turn is not None:
+            msg = "cannot open a turn while another turn is active"
+            raise RuntimeError(msg)
+
+        turn = Turn(
+            session_id=self._session_id,
+            sequence=self._turn_sequence,
+            started_at=started_at,
+            user_request_event_id=user_request_event_id,
+            event_ids=[],
+        )
+        self.current_turn = turn
+        self._current_event_ids = set()
+        self.append_event_id(opening_event_id)
+        self._turn_sequence += 1
+        self._item_sequence = 0
+        self.has_final_answer = False
+        self.vendor_turn_id = vendor_turn_id
+
+    def close_turn(self, ended_at: datetime, *, status: TurnStatus) -> None:
+        turn = self.current_turn
+        if turn is None:
+            return
+
+        turn.ended_at = ended_at
+        turn.status = status
+        self.turns.append(turn)
+        self._last_event_ids = self._current_event_ids
+        self._reset_current_turn()
+
+    def append_event_id(self, event_id: UUID) -> None:
+        turn = self.current_turn
+        if turn is None:
+            return
+        self._append_unique_event_id(turn, self._current_event_ids, event_id)
+
+    def append_late_event_id(self, event_id: UUID) -> None:
+        """Attach a post-flush event to the most recently completed turn."""
+        if not self.turns:
+            return
+        self._append_unique_event_id(self.turns[-1], self._last_event_ids, event_id)
+
+    def attach_user_request(self, event_id: UUID) -> None:
+        turn = self.current_turn
+        if turn is None:
+            return
+
+        self.append_event_id(event_id)
+        if turn.user_request_event_id is None:
+            turn.user_request_event_id = event_id
+
+    def next_item_sequence(self) -> int:
+        value = self._item_sequence
+        self._item_sequence += 1
+        return value
+
+    def _reset_current_turn(self) -> None:
+        self.current_turn = None
+        self._current_event_ids = set()
+        self._item_sequence = 0
+        self.has_final_answer = False
+        self.vendor_turn_id = None
+
+    @staticmethod
+    def _append_unique_event_id(
+        turn: Turn, known_event_ids: set[UUID], event_id: UUID
+    ) -> None:
+        if event_id in known_event_ids:
+            return
+        turn.event_ids.append(event_id)
+        known_event_ids.add(event_id)
+
+
 class TranscriptProjector:
     """Project transcript records into the canonical chronicle hierarchy."""
 
@@ -94,16 +188,7 @@ class TranscriptProjector:
         self.default_previous_turn_status = default_previous_turn_status
         self._prefer_lifecycle = prefer_lifecycle
 
-        self.turns: list[Turn] = []
-        self.current_turn: Turn | None = None
-        self.turn_sequence = 0
-        self.item_sequence = 0
-        self.current_turn_has_final_answer = False
-        self.current_user_request_text: str | None = None
-        # Vendor turn_id of the currently open turn (set when a turn is opened by
-        # a ``turn_started`` boundary). ``None`` for turns opened by a user
-        # message on vendors that do not emit lifecycle boundaries.
-        self._current_vendor_turn_id: str | None = None
+        self._turn_state = _TurnProjectionState(session_id=session_id)
         # Turn_ids that terminate (``task_complete``/``turn_aborted``) in THIS
         # file. Used to skip inherited/orphan ``turn_started`` markers carried
         # into a forked continuation window from its source - their matching
@@ -167,16 +252,16 @@ class TranscriptProjector:
             elif record.kind == "runtime":
                 self._append_turn_event_id(record.record_id)
 
-        if self.current_turn is not None:
+        if self._turn_state.current_turn is not None:
             status = self.active_status or TurnStatus.COMPLETED
             self._flush_turn(
                 self.records[-1].timestamp
                 if self.records
-                else self.current_turn.started_at,
+                else self._turn_state.current_turn.started_at,
                 status=status,
             )
 
-        return self.turns
+        return self._turn_state.turns
 
     # -- handlers ---------------------------------------------------------
 
@@ -186,25 +271,19 @@ class TranscriptProjector:
             self._append_turn_event_id(record.record_id)
             return
 
-        if self.current_turn is not None:
+        if self._turn_state.current_turn is not None:
             status = (
                 record.data.get("previous_turn_status")
                 or self.default_previous_turn_status
             )
             self._flush_turn(record.timestamp, status=TurnStatus(status))
 
-        self.current_turn = Turn(
-            session_id=self.session_id,
-            sequence=self.turn_sequence,
+        self._turn_state.open_turn(
             started_at=record.timestamp,
+            opening_event_id=record.record_id,
             user_request_event_id=record.record_id,
-            event_ids=[record.record_id],
+            vendor_turn_id=None,
         )
-        self.turn_sequence += 1
-        self.item_sequence = 0
-        self.current_turn_has_final_answer = False
-        text = record.data.get("text")
-        self.current_user_request_text = text if isinstance(text, str) else None
 
     def _handle_turn_started(self, record: TranscriptRecord) -> None:
         vendor_turn_id = _non_empty_str(record.data.get("turn_id_raw"))
@@ -219,25 +298,19 @@ class TranscriptProjector:
             and vendor_turn_id is not None
             and vendor_turn_id not in self._completable_turn_ids
         ):
-            if self.current_turn is not None:
+            if self._turn_state.current_turn is not None:
                 self._append_turn_event_id(record.record_id)
             return
-        if self.current_turn is not None:
+        if self._turn_state.current_turn is not None:
             # A new turn began before the prior terminated: close the prior as
             # interrupted (its terminal event was not observed in this file).
             self._flush_turn(record.timestamp, status=self.default_previous_turn_status)
-        self.current_turn = Turn(
-            session_id=self.session_id,
-            sequence=self.turn_sequence,
+        self._turn_state.open_turn(
             started_at=record.timestamp,
+            opening_event_id=record.record_id,
             user_request_event_id=None,
-            event_ids=[record.record_id],
+            vendor_turn_id=vendor_turn_id,
         )
-        self.turn_sequence += 1
-        self.item_sequence = 0
-        self.current_turn_has_final_answer = False
-        self.current_user_request_text = None
-        self._current_vendor_turn_id = vendor_turn_id
 
     def _handle_user_message_in_turn(self, record: TranscriptRecord) -> None:
         """Attach a ``user_message`` to the currently open turn as an in-turn
@@ -250,17 +323,12 @@ class TranscriptProjector:
         capturing its event id/text as the turn's user request - instead of
         opening a new turn.
         """
-        if self.current_turn is None:
+        if self._turn_state.current_turn is None:
             return
-        self._append_turn_event_id(record.record_id)
-        if self.current_turn.user_request_event_id is None:
-            self.current_turn.user_request_event_id = record.record_id
-            text = record.data.get("text")
-            if isinstance(text, str):
-                self.current_user_request_text = text
+        self._turn_state.attach_user_request(record.record_id)
 
     def _handle_assistant_message(self, record: TranscriptRecord) -> None:
-        if self.current_turn is None:
+        if self._turn_state.current_turn is None:
             return
 
         self._append_turn_event_id(record.record_id)
@@ -278,10 +346,11 @@ class TranscriptProjector:
             )
 
         if record.data.get("phase") == "final_answer" and cleaned:
-            self.current_turn_has_final_answer = True
+            self._turn_state.has_final_answer = True
 
     def _handle_tool_call(self, record: TranscriptRecord) -> None:
-        if self.current_turn is None:
+        current_turn = self._turn_state.current_turn
+        if current_turn is None:
             return
 
         self._append_turn_event_id(record.record_id)
@@ -293,10 +362,10 @@ class TranscriptProjector:
             text = record.data.get("text")
             cleaned = text.strip() if isinstance(text, str) else None
             if cleaned or vendor_data:
-                self.current_turn.items.append(
+                current_turn.items.append(
                     ReasoningItem(
                         session_id=self.session_id,
-                        turn_id=self.current_turn.turn_id,
+                        turn_id=current_turn.turn_id,
                         sequence=self._next_item_sequence(),
                         started_at=record.timestamp,
                         completed_at=record.timestamp,
@@ -309,19 +378,19 @@ class TranscriptProjector:
                 )
             return
 
-        common = dict(
-            session_id=self.session_id,
-            turn_id=self.current_turn.turn_id,
-            sequence=self._next_item_sequence(),
-            started_at=record.timestamp,
-            tool_name=record.data.get("tool_name"),
-            tool_call_id=record.data.get("tool_call_id"),
-            input=record.data.get("input"),
-            output=record.data.get("output"),
-            status=status if isinstance(status, str) else "requested",
-            event_ids=[record.record_id],
-            vendor_data=vendor_data if isinstance(vendor_data, dict) else {},
-        )
+        common = {
+            "session_id": self.session_id,
+            "turn_id": current_turn.turn_id,
+            "sequence": self._next_item_sequence(),
+            "started_at": record.timestamp,
+            "tool_name": record.data.get("tool_name"),
+            "tool_call_id": record.data.get("tool_call_id"),
+            "input": record.data.get("input"),
+            "output": record.data.get("output"),
+            "status": status if isinstance(status, str) else "requested",
+            "event_ids": [record.record_id],
+            "vendor_data": vendor_data if isinstance(vendor_data, dict) else {},
+        }
 
         item: Item
         if item_kind == "command_execution":
@@ -341,10 +410,10 @@ class TranscriptProjector:
         else:
             item = ToolCallItem(**common)
 
-        self.current_turn.items.append(item)
+        current_turn.items.append(item)
 
     def _handle_tool_result(self, record: TranscriptRecord) -> None:
-        if self.current_turn is None:
+        if self._turn_state.current_turn is None:
             return
 
         self._append_turn_event_id(record.record_id)
@@ -365,14 +434,13 @@ class TranscriptProjector:
         )
 
     def _handle_usage(self, record: TranscriptRecord) -> None:
-        if self.current_turn is None:
-            if self.turns:
-                _append_event_id(self.turns[-1], record.record_id)
+        if self._turn_state.current_turn is not None:
+            self._append_turn_event_id(record.record_id)
             return
-        self._append_turn_event_id(record.record_id)
+        self._turn_state.append_late_event_id(record.record_id)
 
     def _handle_task_complete(self, record: TranscriptRecord) -> None:
-        if self.current_turn is None:
+        if self._turn_state.current_turn is None:
             return
         terminal_turn_id = _non_empty_str(record.data.get("turn_id_raw"))
         # When the open turn was opened by a lifecycle boundary (vendor turn_id
@@ -382,15 +450,15 @@ class TranscriptProjector:
         # within user-message files. User-message turns keep no vendor turn_id,
         # so they are unaffected (preserving prior user_message-mode behavior).
         if (
-            self._current_vendor_turn_id is not None
+            self._turn_state.vendor_turn_id is not None
             and terminal_turn_id is not None
-            and terminal_turn_id != self._current_vendor_turn_id
+            and terminal_turn_id != self._turn_state.vendor_turn_id
         ):
             return
         self._append_turn_event_id(record.record_id)
         text = record.data.get("text")
         if (
-            not self.current_turn_has_final_answer
+            not self._turn_state.has_final_answer
             and isinstance(text, str)
             and text.strip()
         ):
@@ -406,9 +474,7 @@ class TranscriptProjector:
     # -- helpers ----------------------------------------------------------
 
     def _next_item_sequence(self) -> int:
-        value = self.item_sequence
-        self.item_sequence += 1
-        return value
+        return self._turn_state.next_item_sequence()
 
     def _append_or_merge_agent_message(
         self,
@@ -418,8 +484,9 @@ class TranscriptProjector:
         event_ids: list[UUID],
         vendor_data: dict[str, Any],
     ) -> None:
-        assert self.current_turn is not None
-        items = self.current_turn.items
+        current_turn = self._turn_state.current_turn
+        assert current_turn is not None
+        items = current_turn.items
         if items:
             last = items[-1]
             if isinstance(last, AgentMessageItem) and last.text == text:
@@ -436,7 +503,7 @@ class TranscriptProjector:
 
         item = AgentMessageItem(
             session_id=self.session_id,
-            turn_id=self.current_turn.turn_id,
+            turn_id=current_turn.turn_id,
             sequence=self._next_item_sequence(),
             started_at=started_at,
             completed_at=started_at,
@@ -461,8 +528,9 @@ class TranscriptProjector:
         event_ids: list[UUID],
         vendor_data: dict[str, Any] | None,
     ) -> None:
-        assert self.current_turn is not None
-        items = self.current_turn.items
+        current_turn = self._turn_state.current_turn
+        assert current_turn is not None
+        items = current_turn.items
 
         if tool_call_id:
             for item in reversed(items):
@@ -492,7 +560,7 @@ class TranscriptProjector:
 
         fallback = ToolCallItem(
             session_id=self.session_id,
-            turn_id=self.current_turn.turn_id,
+            turn_id=current_turn.turn_id,
             sequence=self._next_item_sequence(),
             started_at=completed_at,
             completed_at=completed_at,
@@ -546,26 +614,10 @@ class TranscriptProjector:
             )
 
     def _flush_turn(self, ended_at: datetime, *, status: TurnStatus) -> None:
-        if self.current_turn is None:
-            return
-        self.current_turn.ended_at = ended_at
-        self.current_turn.status = status
-        self.turns.append(self.current_turn)
-        self.current_turn = None
-        self.item_sequence = 0
-        self.current_turn_has_final_answer = False
-        self.current_user_request_text = None
-        self._current_vendor_turn_id = None
+        self._turn_state.close_turn(ended_at, status=status)
 
     def _append_turn_event_id(self, event_id: UUID) -> None:
-        if self.current_turn is None:
-            return
-        _append_event_id(self.current_turn, event_id)
-
-
-def _append_event_id(turn: Turn, event_id: UUID) -> None:
-    if event_id not in turn.event_ids:
-        turn.event_ids.append(event_id)
+        self._turn_state.append_event_id(event_id)
 
 
 def project_transcript(

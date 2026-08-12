@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from coding_trajectory import debug
+from coding_trajectory.analysis.session_stats import (
+    build_session_stats_projection,
+    session_graph_title,
+)
+from coding_trajectory.contracts import service_contract
 from coding_trajectory.discovery import (
     DiscoverySource,
     discover_project_metadata,
@@ -19,8 +25,6 @@ from coding_trajectory.discovery import (
     format_discovery_sources,
     locate_session_files,
 )
-from coding_trajectory import debug
-from coding_trajectory.contracts import service_contract
 from coding_trajectory.ingestion.common import (
     format_datetime,
     normalize_project_key,
@@ -29,14 +33,10 @@ from coding_trajectory.ingestion.common import (
 from coding_trajectory.ingestion.models import (
     Event,
     EventType,
-    Session,
     Item,
+    Session,
     SessionGraph,
     Turn,
-)
-from coding_trajectory.analysis.session_stats import (
-    build_session_stats_projection,
-    session_graph_title,
 )
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 
@@ -318,10 +318,50 @@ _CACHE_FILE = _CACHE_DIR / "index.json"
 
 @dataclass
 class IndexCache:
-    """Lazy index persisted to ~/.coding-trajectory/index.json."""
+    """Disposable source and entry-point locator persisted between invocations.
+
+    ``session_to_session_graph`` is the legacy persisted field name. It stores
+    every supported session-graph entry point (graph, session, and turn IDs),
+    while :attr:`entrypoint_to_root` exposes that meaning to core code.
+    Canonical graph membership remains owned by :class:`DocumentStore`.
+    """
 
     path_to_session_graph: dict[str, str] = field(default_factory=dict)
     session_to_session_graph: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def entrypoint_to_root(self) -> dict[str, str]:
+        """Return the legacy-backed entry-point mapping."""
+        return self.session_to_session_graph
+
+    def root_for_entrypoint(self, entrypoint_id: str) -> str:
+        return self.entrypoint_to_root.get(entrypoint_id, entrypoint_id)
+
+    def index_store(self, store: DocumentStore) -> None:
+        """Record ownership with the same graph/session/turn precedence as lookup."""
+        for turn_id, turn in store.turns.items():
+            root_session_id = store.session_to_root.get(turn.session_id)
+            if root_session_id is not None:
+                self.entrypoint_to_root[str(turn_id)] = str(root_session_id)
+        for session_id, root_session_id in store.session_to_root.items():
+            self.entrypoint_to_root[str(session_id)] = str(root_session_id)
+        for root_session_id in store.session_graphs:
+            root = str(root_session_id)
+            self.entrypoint_to_root[root] = root
+
+    def index_discovery(
+        self,
+        *,
+        sources: list[DiscoverySource],
+        store: DocumentStore,
+    ) -> None:
+        """Record paths and entry points from one completed discovery result."""
+        for source in sources:
+            if source.root_session_id is not None:
+                self.path_to_session_graph[str(source.path)] = str(
+                    source.root_session_id
+                )
+        self.index_store(store)
 
     def paths_for_session_graph(self, root_session_id: str) -> list[str]:
         return [
@@ -380,7 +420,9 @@ class IndexCache:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_session_graph(store: Any, raw_id: str | None) -> Any:
+def _resolve_session_graph(
+    store: DocumentStore, raw_id: str | None
+) -> SessionGraph:
     """Resolve a session graph by a session entry point."""
     if raw_id is None:
         session_graphs = list(store.session_graphs.values())
@@ -417,21 +459,6 @@ def _session_graph_entrypoint_id(params: dict[str, Any]) -> str | None:
     )
 
 
-def _update_path_index(cache: IndexCache, sources: list[DiscoverySource]) -> None:
-    for source in sources:
-        if source.root_session_id is not None:
-            cache.path_to_session_graph[str(source.path)] = str(source.root_session_id)
-
-
-def _update_session_index(cache: IndexCache, store: DocumentStore) -> None:
-    for session_id, root_session_id in store.session_to_root.items():
-        cache.session_to_session_graph[str(session_id)] = str(root_session_id)
-    for turn_id, turn in store.turns.items():
-        root_session_id = store.session_to_root.get(turn.session_id)
-        if root_session_id is not None:
-            cache.session_to_session_graph[str(turn_id)] = str(root_session_id)
-
-
 def _build_store_full(
     *,
     global_scope: bool,
@@ -451,8 +478,7 @@ def _build_store_full(
         modified_since=modified_since,
         agent_vendor=agent_vendor,
     )
-    _update_path_index(cache, discovery.sources)
-    _update_session_index(cache, discovery.store)
+    cache.index_discovery(sources=discovery.sources, store=discovery.store)
 
     return discovery.store, format_discovery_sources(discovery.sources)
 
@@ -465,8 +491,7 @@ def _build_store_targeted(
         return DocumentStore.from_session_graphs([]), "(no targeted paths)"
     expanded_paths = _expand_targeted_paths([Path(p) for p in paths])
     discovery = discover_store_from_files(expanded_paths)
-    _update_path_index(cache, discovery.sources)
-    _update_session_index(cache, discovery.store)
+    cache.index_discovery(sources=discovery.sources, store=discovery.store)
     return discovery.store, format_discovery_sources(discovery.sources)
 
 
@@ -504,15 +529,13 @@ def resolve_store(
     """Build a store: use cached path index for targeted load, fall back to full discovery."""
     if log_file is not None:
         discovery = discover_store_from_file(log_file)
-        _update_path_index(cache, discovery.sources)
+        cache.index_discovery(sources=discovery.sources, store=discovery.store)
         return discovery.store, format_discovery_sources(discovery.sources)
 
     entrypoint_id = _session_graph_entrypoint_id(params)
     if entrypoint_id and cache.path_to_session_graph:
         normalized_entrypoint_id = _normalize_user_id(entrypoint_id)
-        target_session_graph_id = cache.session_to_session_graph.get(
-            normalized_entrypoint_id, normalized_entrypoint_id
-        )
+        target_session_graph_id = cache.root_for_entrypoint(normalized_entrypoint_id)
         cached_paths = cache.paths_for_session_graph(target_session_graph_id)
         if cached_paths:
             return _build_store_targeted(cached_paths, cache)
@@ -570,7 +593,7 @@ def _resolve_bulk_cached_paths(
             normalized = _normalize_user_id(raw_id)
         except ValueError:
             continue
-        root_id = cache.session_to_session_graph.get(normalized, normalized)
+        root_id = cache.root_for_entrypoint(normalized)
         if root_id in seen_roots:
             continue
         seen_roots.add(root_id)
@@ -704,7 +727,7 @@ def dispatch(
     method: str,
     params: dict[str, Any],
     *,
-    store: Any,
+    store: DocumentStore,
     global_scope: bool,
     current_dir: Path,
     discovery_note: str,
@@ -719,6 +742,7 @@ def dispatch(
         discovery_note=discovery_note,
         cache=cache,
     )
+    context.cache.index_store(context.store)
     try:
         handler = SERVICE_HANDLERS[method]
     except KeyError as exc:
@@ -727,24 +751,14 @@ def dispatch(
     return contract.validate_response(result)
 
 
-def _cache_session_graph(context: ServiceContext, session_graph: SessionGraph) -> None:
-    for session in session_graph.sessions:
-        context.cache.session_to_session_graph[str(session.session_id)] = str(
-            session_graph.root_session_id
-        )
-
-
 def _graph_handler(
     build: Callable[[dict[str, Any], SessionGraph], Any],
 ) -> ServiceHandler:
-    """Resolve + cache the graph, then wrap the graph-level build result.
+    """Resolve the graph and wrap the graph-level build result.
 
-    Every ``graph.*`` projection follows the same preamble: resolve the
-    graph from the entry-point id, cache its session->root mapping
-    for future targeted loads, build the projection, and pass it through
-    the public output seam. Centralizing that here lets each handler read
-    as pure projection logic. Cache-before-build is observably neutral
-    because no projection reads the index cache while building.
+    Every ``graph.*`` projection follows the same preamble: resolve the graph
+    from the entry-point id, build the projection, and pass it through the
+    public output seam. Entry-point caching is centralized in :func:`dispatch`.
     """
 
     @wraps(build)
@@ -752,7 +766,6 @@ def _graph_handler(
         session_graph = _resolve_session_graph(
             context.store, _session_graph_entrypoint_id(params)
         )
-        _cache_session_graph(context, session_graph)
         return _public_output_for_session_graph(
             session_graph, build(params, session_graph)
         )
@@ -803,11 +816,9 @@ def _single_session_handler(
         session_graph = _resolve_session_graph(
             context.store, _session_graph_entrypoint_id(params)
         )
-        _cache_session_graph(context, session_graph)
         selected_graph = _single_session_graph(
             session_graph, _session_graph_entrypoint_id(params)
         )
-        _cache_session_graph(context, selected_graph)
         return _public_output_for_session_graph(
             selected_graph, build(params, selected_graph)
         )
@@ -1053,12 +1064,18 @@ def _handle_session_events(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
     from coding_trajectory.analysis.projections import build_event_scan
+    from coding_trajectory.ingestion.indexes import (
+        SessionGraphIndex,
+        build_session_graph_index,
+        item_for_event,
+    )
 
     event_ids = params.get("event_ids")
     selected_turn_id = params.get("turn_id")
     if event_ids:
         matches: list[dict[str, Any]] = []
         root_session_id: str | None = None
+        indexes_by_graph_id: dict[UUID, SessionGraphIndex] = {}
         for eid in event_ids:
             try:
                 event = resolve_resource(context.store, "event", eid)
@@ -1083,7 +1100,11 @@ def _handle_session_events(
                     continue
                 if root_session_id is None:
                     root_session_id = str(selected_graph.root_session_id)
-                related_item = _item_for_event(selected_graph, event.event_id)
+                index = indexes_by_graph_id.get(selected_graph.root_session_id)
+                if index is None:
+                    index = build_session_graph_index(selected_graph)
+                    indexes_by_graph_id[selected_graph.root_session_id] = index
+                related_item = item_for_event(index, event.event_id)
                 detail = _public_output_for_session_graph(
                     selected_graph,
                     serialize_event_detail(event, related_item=related_item),
@@ -1104,9 +1125,7 @@ def _handle_session_events(
 
     entrypoint_id = _session_graph_entrypoint_id(params)
     session_graph = _resolve_session_graph(context.store, entrypoint_id)
-    _cache_session_graph(context, session_graph)
     session_graph = _single_session_graph(session_graph, entrypoint_id)
-    _cache_session_graph(context, session_graph)
     allowed_event_ids = _event_ids_for_turn(session_graph, selected_turn_id)
 
     event_type = params.get("type")
@@ -1148,12 +1167,18 @@ def _handle_session_items(
     params: dict[str, Any], context: ServiceContext
 ) -> list[dict[str, Any]]:
     from coding_trajectory.analysis.projections import build_item_details
+    from coding_trajectory.ingestion.indexes import (
+        SessionGraphIndex,
+        build_session_graph_index,
+    )
+    from coding_trajectory.ingestion.models import PlanItem
 
     item_ids = params.get("item_ids")
     selected_turn_id = params.get("turn_id")
     include_content = bool(params.get("include_content"))
     if item_ids:
         result: list[dict[str, Any]] = []
+        indexes_by_graph_id: dict[UUID, SessionGraphIndex] = {}
         for item_id in item_ids:
             try:
                 item = resolve_resource(context.store, "item", item_id)
@@ -1164,6 +1189,12 @@ def _handle_session_items(
                     selected_turn_id
                 ):
                     continue
+                index = None
+                if isinstance(item, PlanItem):
+                    index = indexes_by_graph_id.get(session_graph.root_session_id)
+                    if index is None:
+                        index = build_session_graph_index(session_graph)
+                        indexes_by_graph_id[session_graph.root_session_id] = index
                 result.append(
                     _public_output_for_session_graph(
                         session_graph,
@@ -1171,6 +1202,7 @@ def _handle_session_items(
                             item,
                             session_graph=session_graph,
                             include_content=include_content,
+                            index=index,
                         ),
                     )
                 )
@@ -1185,11 +1217,10 @@ def _handle_session_items(
 
     entrypoint_id = params.get("session_id") or params.get("root_session_id")
     session_graph = _resolve_session_graph(context.store, entrypoint_id)
-    _cache_session_graph(context, session_graph)
     session_graph = _single_session_graph(session_graph, entrypoint_id)
-    _cache_session_graph(context, session_graph)
 
     types_filter = set(params["types"]) if params.get("types") else None
+    projection_index: SessionGraphIndex | None = None
     result = []
     for session in session_graph.sessions:
         for turn in session.turns:
@@ -1200,6 +1231,8 @@ def _handle_session_items(
             for item in turn.items:
                 if types_filter and item.kind not in types_filter:
                     continue
+                if isinstance(item, PlanItem) and projection_index is None:
+                    projection_index = build_session_graph_index(session_graph)
                 result.append(
                     _public_output_for_session_graph(
                         session_graph,
@@ -1207,6 +1240,7 @@ def _handle_session_items(
                             item,
                             session_graph=session_graph,
                             include_content=include_content,
+                            index=projection_index,
                         ),
                     )
                 )
@@ -1238,15 +1272,6 @@ def _event_ids_for_turn(
                 ),
             }
     raise ResourceNotFoundError(f"turn not found in selected session: {turn_id}")
-
-
-def _item_for_event(session_graph: SessionGraph, event_id: UUID) -> Item | None:
-    for session in session_graph.sessions:
-        for turn in session.turns:
-            for item in turn.items:
-                if event_id in item.event_ids:
-                    return item
-    return None
 
 
 SERVICE_HANDLERS: dict[str, ServiceHandler] = {

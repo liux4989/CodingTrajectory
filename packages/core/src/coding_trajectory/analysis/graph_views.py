@@ -63,12 +63,13 @@ def build_graph_overview(
     drop_turns: int | None = None,
 ) -> dict[str, Any]:
     """Return the complete tree, including spawned-agent sessions."""
+    index = build_session_graph_index(session_graph)
     narrative = build_session_graph_narrative(
         session_graph,
         num_turns=num_turns,
         drop_turns=drop_turns,
+        index=index,
     )
-    index = build_session_graph_index(session_graph)
     sessions = []
     narrative_by_id = {
         str(session.get("session_id")): session for session in narrative["sessions"]

@@ -10,12 +10,14 @@ from uuid import UUID
 from coding_trajectory.ingestion.common import (
     normalize_project_key as _normalize_project_key,
 )
+from coding_trajectory.ingestion.indexes import index_event_owners
 from coding_trajectory.ingestion.models import (
+    Event,
     EventType,
     Item,
     Session,
-    SessionGraph,
     SessionEdge,
+    SessionGraph,
     SessionGraphSummary,
     Turn,
 )
@@ -101,7 +103,7 @@ def build_session_graph(
     project_identifier: str,
     sessions: list[Session],
 ) -> SessionGraph:
-    summary = build_session_graph_summary(sessions)
+    summary = build_session_graph_summary(sessions, root_session_id=root_session_id)
     edges = build_edges(sessions)
 
     return SessionGraph(
@@ -113,16 +115,20 @@ def build_session_graph(
     )
 
 
-def build_session_graph_summary(sessions: list[Session]) -> SessionGraphSummary:
+def build_session_graph_summary(
+    sessions: list[Session], *, root_session_id: UUID | None = None
+) -> SessionGraphSummary:
     started_at = min((session.started_at for session in sessions), default=None)
     ended_at = _max_datetime(session.ended_at for session in sessions)
-    root_session = _root_session(sessions)
+    if root_session_id is None:
+        root_session = _root_session(sessions)
+        root_session_id = root_session.session_id if root_session else None
     vendors = sorted(
         {session.vendor for session in sessions}, key=lambda item: item.value
     )
 
     return SessionGraphSummary(
-        root_session_id=root_session.session_id if root_session else None,
+        root_session_id=root_session_id,
         started_at=started_at,
         ended_at=ended_at,
         session_count=len(sessions),
@@ -134,20 +140,26 @@ def build_session_graph_summary(sessions: list[Session]) -> SessionGraphSummary:
 def build_edges(sessions: list[Session]) -> list[SessionEdge]:
     edges: list[SessionEdge] = []
     session_map = {session.session_id: session for session in sessions}
+    parent_indexes: dict[UUID, _EdgeOriginIndex] = {}
 
     for session in sessions:
         if session.parent_session_id is None:
             continue
         parent = session_map.get(session.parent_session_id)
-        edge = _build_edge(parent, session)
-        if edge is None:
+        if parent is None:
             continue
+        index = parent_indexes.get(parent.session_id)
+        if index is None:
+            index = _EdgeOriginIndex.from_session(parent)
+            parent_indexes[parent.session_id] = index
+        origin = index.origin_for(session.session_id)
+        edge = _build_edge(parent, session, origin)
         edges.append(edge)
 
     return edges
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _EdgeOrigin:
     event_id: UUID
     turn_id: UUID | None
@@ -155,11 +167,67 @@ class _EdgeOrigin:
     tool_name: str | None
 
 
-def _build_edge(parent: Session | None, child: Session) -> SessionEdge | None:
-    if parent is None:
-        return None
+@dataclass(frozen=True, slots=True)
+class _EdgeOriginIndex:
+    spawn_call_id_by_child_id: dict[str, str]
+    origins_by_call_id: dict[str, _EdgeOrigin]
+    latest_tool_origin: _EdgeOrigin | None
 
-    origin = _find_edge_origin(parent, child.session_id)
+    @classmethod
+    def from_session(cls, session: Session) -> _EdgeOriginIndex:
+        """Index the parent facts shared by all of its child edges once."""
+        extensions = session.extensions
+        spawn_links = (
+            dict(extensions.codex.spawn_links)
+            if extensions and extensions.codex
+            else {}
+        )
+        spawn_call_ids = set(spawn_links.values())
+        first_events_by_call_id: dict[str, Event] = {}
+        latest_tool_event: Event | None = None
+        for event in session.events:
+            if event.type != EventType.TOOL_CALL_REQUESTED:
+                continue
+            latest_tool_event = event
+            call_id = event.payload.get("tool_call_id")
+            if (
+                isinstance(call_id, str)
+                and call_id in spawn_call_ids
+                and call_id not in first_events_by_call_id
+            ):
+                first_events_by_call_id[call_id] = event
+
+        if latest_tool_event is None:
+            return cls(
+                spawn_call_id_by_child_id=spawn_links,
+                origins_by_call_id={},
+                latest_tool_origin=None,
+            )
+
+        item_index = index_event_owners(session.turns)
+        return cls(
+            spawn_call_id_by_child_id=spawn_links,
+            origins_by_call_id={
+                call_id: _edge_origin(event, item_index)
+                for call_id, event in first_events_by_call_id.items()
+            },
+            latest_tool_origin=_edge_origin(latest_tool_event, item_index),
+        )
+
+    def origin_for(self, child_session_id: UUID) -> _EdgeOrigin | None:
+        """Resolve a child's spawn origin, falling back to the latest tool call."""
+        spawn_call_id = self.spawn_call_id_by_child_id.get(str(child_session_id))
+        if spawn_call_id is not None:
+            origin = self.origins_by_call_id.get(spawn_call_id)
+            if origin is not None:
+                return origin
+
+        return self.latest_tool_origin
+
+
+def _build_edge(
+    parent: Session, child: Session, origin: _EdgeOrigin | None
+) -> SessionEdge:
     edge_type = (
         "forked_from"
         if _is_codex_fork(child)
@@ -189,82 +257,22 @@ def _build_edge(parent: Session | None, child: Session) -> SessionEdge | None:
     )
 
 
-def _find_edge_origin(
-    session: Session, child_session_id: UUID | None = None
-) -> _EdgeOrigin | None:
-    # Prefer the real spawn call: codex sub_agent_activity{kind:started} links
-    # the child's agent_thread_id to the spawn tool-call call_id, recorded on
-    # the parent's codex extensions. Resolve that call to its turn/item so the
-    # edge provenance reflects the actual spawn, not the parent's last tool call.
-    spawn_call_id = _spawn_call_id_for(session, child_session_id)
-    if spawn_call_id is not None:
-        origin = _find_tool_call_by_call_id(session, spawn_call_id)
-        if origin is not None:
-            return origin
-
-    tool_events = [
-        event for event in session.events if event.type == EventType.TOOL_CALL_REQUESTED
-    ]
-    if not tool_events:
-        return None
-
-    item_index = _build_item_event_index(session)
-    for event in reversed(tool_events):
-        turn, item = item_index.get(event.event_id, (None, None))
-        return _EdgeOrigin(
-            event_id=event.event_id,
-            turn_id=turn.turn_id if turn else None,
-            item_id=item.item_id if item else None,
-            tool_name=_event_tool_name(event),
-        )
-
-    return None
+def _edge_origin(
+    event: Event,
+    item_index: dict[UUID, tuple[Turn, Item | None]],
+) -> _EdgeOrigin:
+    owner = item_index.get(event.event_id)
+    turn = owner[0] if owner else None
+    item = owner[1] if owner else None
+    return _EdgeOrigin(
+        event_id=event.event_id,
+        turn_id=turn.turn_id if turn else None,
+        item_id=item.item_id if item else None,
+        tool_name=_event_tool_name(event),
+    )
 
 
-def _spawn_call_id_for(session: Session, child_session_id: UUID | None) -> str | None:
-    """Return the spawn tool-call call_id recorded for ``child_session_id``."""
-    if child_session_id is None:
-        return None
-    extensions = session.extensions
-    if not extensions or not extensions.codex:
-        return None
-    return extensions.codex.spawn_links.get(str(child_session_id))
-
-
-def _find_tool_call_by_call_id(session: Session, call_id: str) -> _EdgeOrigin | None:
-    """Resolve a tool call by its provider call_id to its turn/item origin."""
-    item_index = _build_item_event_index(session)
-    for event in session.events:
-        if event.type != EventType.TOOL_CALL_REQUESTED:
-            continue
-        if event.payload.get("tool_call_id") != call_id:
-            continue
-        turn, item = item_index.get(event.event_id, (None, None))
-        return _EdgeOrigin(
-            event_id=event.event_id,
-            turn_id=turn.turn_id if turn else None,
-            item_id=item.item_id if item else None,
-            tool_name=_event_tool_name(event),
-        )
-    return None
-
-
-def _build_item_event_index(
-    session: Session,
-) -> dict[UUID, tuple[Turn | None, Item | None]]:
-    index: dict[UUID, tuple[Turn | None, Item | None]] = {}
-    for turn in session.turns:
-        for event_id in turn.event_ids:
-            index.setdefault(event_id, (turn, None))
-        if turn.user_request_event_id is not None:
-            index.setdefault(turn.user_request_event_id, (turn, None))
-        for item in turn.items:
-            for event_id in item.event_ids:
-                index[event_id] = (turn, item)
-    return index
-
-
-def _event_tool_name(event: Any) -> str | None:
+def _event_tool_name(event: Event) -> str | None:
     tool_name = event.payload.get("tool_name")
     if isinstance(tool_name, str) and tool_name.strip():
         return tool_name

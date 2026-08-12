@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -10,19 +11,27 @@ from coding_trajectory.ingestion.models import (
     Event,
     Item,
     Session,
-    SessionGraph,
     SessionEdge,
+    SessionGraph,
     Turn,
 )
 
 
 @dataclass(frozen=True)
 class SessionGraphIndex:
+    """Request-local navigation derived from a canonical ``SessionGraph``.
+
+    Duplicate event objects use the last occurrence in canonical graph order.
+    Event ownership prefers an item reference over a turn-only reference, with
+    the last item reference winning. The helpers below define both policies.
+    """
+
     session_ids_in_order: list[UUID]
     sessions_by_id: dict[UUID, Session]
     turns_by_id: dict[UUID, Turn]
     items_by_id: dict[UUID, Item]
     events_by_id: dict[UUID, Event]
+    items_by_event_id: dict[UUID, Item]
     session_by_turn_id: dict[UUID, UUID]
     session_by_item_id: dict[UUID, UUID]
     parent: dict[UUID, UUID | None]
@@ -38,6 +47,7 @@ def build_session_graph_index(session_graph: SessionGraph) -> SessionGraphIndex:
     turns_by_id: dict[UUID, Turn] = {}
     items_by_id: dict[UUID, Item] = {}
     events_by_id: dict[UUID, Event] = {}
+    items_by_event_id: dict[UUID, Item] = {}
     session_by_turn_id: dict[UUID, UUID] = {}
     session_by_item_id: dict[UUID, UUID] = {}
 
@@ -49,8 +59,10 @@ def build_session_graph_index(session_graph: SessionGraph) -> SessionGraphIndex:
             for item in turn.items:
                 items_by_id[item.item_id] = item
                 session_by_item_id[item.item_id] = session.session_id
-        for event in session.events:
-            events_by_id[event.event_id] = event
+        for event_id, (_turn, item) in index_event_owners(session.turns).items():
+            if item is not None:
+                items_by_event_id[event_id] = item
+        events_by_id.update(index_events_by_id(session.events))
 
     incoming_edge_by_target: dict[UUID, SessionEdge] = {}
     outgoing_edges_by_source_item: dict[UUID, list[SessionEdge]] = defaultdict(list)
@@ -94,6 +106,7 @@ def build_session_graph_index(session_graph: SessionGraph) -> SessionGraphIndex:
         turns_by_id=turns_by_id,
         items_by_id=items_by_id,
         events_by_id=events_by_id,
+        items_by_event_id=items_by_event_id,
         session_by_turn_id=session_by_turn_id,
         session_by_item_id=session_by_item_id,
         parent=parent,
@@ -134,10 +147,41 @@ def incoming_edge(index: SessionGraphIndex, session_id: UUID) -> SessionEdge | N
     return index.incoming_edge_by_target.get(session_id)
 
 
+def index_events_by_id(events: Iterable[Event]) -> dict[UUID, Event]:
+    """Index event objects by id, with the last canonical occurrence winning."""
+    return {event.event_id: event for event in events}
+
+
+def index_event_owners(
+    turns: Iterable[Turn],
+) -> dict[UUID, tuple[Turn, Item | None]]:
+    """Index event references using the canonical ownership collision policy.
+
+    The first turn-only reference wins. Item references are more specific and
+    override turn-only ownership; when multiple items reference an event, the
+    last item in canonical traversal order wins.
+    """
+    owners: dict[UUID, tuple[Turn, Item | None]] = {}
+    for turn in turns:
+        for event_id in turn.event_ids:
+            owners.setdefault(event_id, (turn, None))
+        if turn.user_request_event_id is not None:
+            owners.setdefault(turn.user_request_event_id, (turn, None))
+        for item in turn.items:
+            for event_id in item.event_ids:
+                owners[event_id] = (turn, item)
+    return owners
+
+
 def event_for_turn_user_request(index: SessionGraphIndex, turn: Turn) -> Event | None:
     if turn.user_request_event_id is None:
         return None
     return index.events_by_id.get(turn.user_request_event_id)
+
+
+def item_for_event(index: SessionGraphIndex, event_id: UUID) -> Item | None:
+    """Return the authoritative item owner for an event reference, if present."""
+    return index.items_by_event_id.get(event_id)
 
 
 def target_session_id_for_item(

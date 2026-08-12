@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Annotated, Any, Literal, TypeAlias
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class EventType(str, Enum):
@@ -344,3 +344,18 @@ class SessionGraph(BaseModel):
     summary: SessionGraphSummary | None = None
     edges: list[SessionEdge] = Field(default_factory=list)
     sessions: list[Session] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _normalize_summary_root(self) -> SessionGraph:
+        """Keep the legacy summary mirror derived from the canonical graph root."""
+        if self.summary is None:
+            return self
+        if self.summary.root_session_id is None:
+            self.summary = self.summary.model_copy(
+                update={"root_session_id": self.root_session_id}
+            )
+        elif self.summary.root_session_id != self.root_session_id:
+            raise ValueError(
+                "summary.root_session_id must match SessionGraph.root_session_id"
+            )
+        return self

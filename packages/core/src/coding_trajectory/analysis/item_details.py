@@ -29,6 +29,7 @@ def build_item_details(
     *,
     session_graph: SessionGraph,
     include_content: bool = False,
+    index: SessionGraphIndex | None = None,
 ) -> dict[str, Any]:
     concept = _classify_item(item)
 
@@ -48,12 +49,12 @@ def build_item_details(
         if concept == ItemKind.PLAN_SUBAGENT:
             operations = ["spawn", "collect_result"]
             shape = _plan_subagent_shape(
-                item, index=build_session_graph_index(session_graph)
+                item, index=index or build_session_graph_index(session_graph)
             )
         elif concept == ItemKind.SESSION_HANDOFF:
             operations = ["handoff"]
             shape = _session_handoff_shape(
-                item, index=build_session_graph_index(session_graph)
+                item, index=index or build_session_graph_index(session_graph)
             )
         else:
             operations = ["update"]

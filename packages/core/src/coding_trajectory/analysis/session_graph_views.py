@@ -6,19 +6,6 @@ from datetime import datetime
 from typing import Any
 
 from coding_trajectory.analysis.activity_flow import build_overview_flows
-from coding_trajectory.ingestion.common import prune_nones
-from coding_trajectory.ingestion.indexes import (
-    SessionGraphIndex,
-    build_session_graph_index,
-    ordered_sessions,
-)
-from coding_trajectory.ingestion.models import (
-    AgentMessageItem,
-    Session,
-    SessionGraph,
-    Turn,
-)
-
 from coding_trajectory.analysis.request_lineage import (
     effective_user_request,
     extract_user_request,
@@ -31,7 +18,18 @@ from coding_trajectory.analysis.teammate_summary import (
     is_teammate_turn,
     merge_teammate_turn_nodes,
 )
-
+from coding_trajectory.ingestion.common import prune_nones
+from coding_trajectory.ingestion.indexes import (
+    SessionGraphIndex,
+    build_session_graph_index,
+    ordered_sessions,
+)
+from coding_trajectory.ingestion.models import (
+    AgentMessageItem,
+    Session,
+    SessionGraph,
+    Turn,
+)
 
 # Vendor-reported compaction observation kinds. Codex emits
 # ``context_compacted`` (full eviction, no pre/post delta in the event); Claude
@@ -99,8 +97,10 @@ def build_session_graph_narrative(
     *,
     num_turns: int | None = None,
     drop_turns: int | None = None,
+    index: SessionGraphIndex | None = None,
 ) -> dict[str, Any]:
-    index = build_session_graph_index(session_graph)
+    if index is None:
+        index = build_session_graph_index(session_graph)
 
     ordered = [
         _session_narrative_node(

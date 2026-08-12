@@ -10,6 +10,7 @@ from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationError
 
+from coding_trajectory.ingestion.indexes import index_events_by_id
 from coding_trajectory.ingestion.models import Event, Item, Session, SessionGraph, Turn
 
 
@@ -49,8 +50,7 @@ def _index_session_graph(
             turns[turn.turn_id] = turn
             for item in turn.items:
                 items[item.item_id] = item
-        for event in session.events:
-            events[event.event_id] = event
+        events.update(index_events_by_id(session.events))
 
 
 @dataclass(slots=True)
@@ -65,7 +65,7 @@ class DocumentStore:
     items: dict[UUID, Item] = field(default_factory=dict)
 
     @classmethod
-    def from_path(cls, path: str | Path) -> "DocumentStore":
+    def from_path(cls, path: str | Path) -> DocumentStore:
         source = Path(path)
 
         try:
@@ -80,7 +80,7 @@ class DocumentStore:
     @classmethod
     def from_session_graphs(
         cls, session_graphs_list: list[SessionGraph]
-    ) -> "DocumentStore":
+    ) -> DocumentStore:
         session_graphs: dict[UUID, SessionGraph] = {}
         session_to_root: dict[UUID, UUID] = {}
         sessions: dict[UUID, Session] = {}
@@ -109,7 +109,7 @@ class DocumentStore:
         )
 
     @classmethod
-    def from_data(cls, raw: object) -> "DocumentStore":
+    def from_data(cls, raw: object) -> DocumentStore:
         if (
             isinstance(raw, dict)
             and "result" in raw
@@ -145,8 +145,7 @@ class DocumentStore:
                 turns[turn.turn_id] = turn
                 for item in turn.items:
                     items[item.item_id] = item
-            for event in session.events:
-                events[event.event_id] = event
+            events.update(index_events_by_id(session.events))
 
         try:
             if isinstance(raw, list):
