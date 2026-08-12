@@ -143,9 +143,7 @@ class DashboardDataService:
         project_name = _first(query, "project_name")
         if not project_name:
             raise ValueError("project_name is required")
-        projects = _ct_json(
-            ["project", "list", "--params", json.dumps({}), "--output", "json"]
-        )
+        projects = _api_result("project.list", {})
         items = projects.get("items") or {}
         meta = items.get(project_name)
         if not meta:
@@ -154,16 +152,7 @@ class DashboardDataService:
         sessions_params: dict[str, Any] = {"project_name": project_name}
         if since_days_raw is not None:
             sessions_params["since_days"] = int(since_days_raw)
-        sessions = _ct_json(
-            [
-                "project",
-                "sessions",
-                "--params",
-                json.dumps(sessions_params),
-                "--output",
-                "json",
-            ]
-        )
+        sessions = _api_result("project.sessions", sessions_params)
         return {
             "name": project_name,
             "path": meta.get("path"),
@@ -626,9 +615,7 @@ class DashboardDataService:
         params: dict[str, Any] = {}
         if vendor:
             params["agent_vendor"] = vendor
-        payload = _ct_json(
-            ["project", "list", "--params", json.dumps(params), "--output", "json"]
-        )
+        payload = _api_result("project.list", params)
         items = payload.get("items") or {}
         return {
             "items": [
@@ -642,9 +629,7 @@ class DashboardDataService:
         }
 
     def _sessions_uncached(self, params: dict[str, Any]) -> dict[str, Any]:
-        payload = _ct_json(
-            ["project", "sessions", "--params", json.dumps(params), "--output", "json"]
-        )
+        payload = _api_result("project.sessions", params)
         return {"items": payload.get("items") or []}
 
     def _session_data_uncached(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -719,11 +704,12 @@ def _session_data_query_params(query: dict[str, list[str]]) -> dict[str, Any]:
 
 
 def _overview_attach_session_costs(session_items: list[dict[str, Any]]) -> None:
-    """Attach per-session estimated cost from ``session.model_usage``.
+    """Attach per-graph estimated cost from ``graph.usage`` model rows.
 
-    Mirrors ``model_usage._session_row`` cost derivation so the overview shares
-    the same pricing source as the model-usage route instead of reading a
-    ``cost_usd`` field that ``project.sessions`` usage never populates.
+    The overview rows represent the graphs returned by ``project.sessions``.
+    Reading ``graph.usage`` keeps their cost scope aligned with their runtime and
+    usage totals while reusing the request-attributed model rows already present
+    in that response.
     """
     session_ids = [
         str(item.get("id") or "")
@@ -732,12 +718,9 @@ def _overview_attach_session_costs(session_items: list[dict[str, Any]]) -> None:
     ]
     if not session_ids:
         return
-    payloads = model_usage_mod._model_usage_batch(_ct_json, session_ids)
-    for payload in payloads:
-        session_id = str(
-            payload.get("id") or payload.get("root_session_id") or ""
-        )
-        if not session_id:
+    payloads = _graph_usage_batch(session_ids)
+    for session_id, payload in payloads.items():
+        if not payload:
             continue
         models = [
             model_usage_mod._priced_model(row)
@@ -756,6 +739,35 @@ def _overview_attach_session_costs(session_items: list[dict[str, Any]]) -> None:
                 item["cost_usd"] = round(float(total), 8)
                 item["pricing_confidence"] = confidence
                 break
+
+
+def _graph_usage_batch(graph_ids: list[str]) -> dict[str, dict[str, Any]]:
+    requests = [
+        {
+            "id": graph_id,
+            "method": "graph.usage",
+            "params": {"session_id": graph_id},
+        }
+        for graph_id in graph_ids
+    ]
+    payload = _ct_json(
+        [
+            "api",
+            "batch",
+            "--global-scope",
+            "--requests",
+            json.dumps(requests),
+        ]
+    )
+    results: dict[str, dict[str, Any]] = {}
+    for item in payload.get("items") or []:
+        if not isinstance(item, dict) or not item.get("ok"):
+            continue
+        graph_id = item.get("id")
+        result = item.get("result")
+        if graph_id and isinstance(result, dict):
+            results[str(graph_id)] = result
+    return results
 
 
 def _overview_activity(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -868,6 +880,27 @@ def _batch_result(
     result = response.get("result") or {}
     if not isinstance(result, dict):
         raise RuntimeError(f"ct api request returned invalid result: {request_id}")
+    return result
+
+
+def _api_result(
+    method: str,
+    params: dict[str, Any],
+    *,
+    global_scope: bool = False,
+) -> dict[str, Any]:
+    args = ["api", "call", method, "--params", json.dumps(params)]
+    if global_scope:
+        args.append("--global-scope")
+    payload = _ct_json(args)
+    if not payload.get("ok"):
+        error = payload.get("error") or {}
+        raise RuntimeError(
+            str(error.get("message") or f"ct api request failed: {method}")
+        )
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError(f"ct api request returned invalid result: {method}")
     return result
 
 

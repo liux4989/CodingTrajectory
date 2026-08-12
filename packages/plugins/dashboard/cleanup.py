@@ -246,20 +246,31 @@ def _run_cli_interactive(
 
 
 def _load_project_list(params: dict[str, Any]) -> dict[str, Any]:
-    return _ct_json(["project", "list", "--params", json.dumps(params), "--output", "json"])
+    return _load_api_result("project.list", params)
 
 
 def _load_project_sessions(params: dict[str, Any]) -> dict[str, Any]:
-    return _ct_json(
+    return _load_api_result("project.sessions", params)
+
+
+def _load_api_result(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    payload = _ct_json(
         [
             "api",
             "call",
-            "project.sessions",
+            method,
             "--global-scope",
             "--params",
             json.dumps(params),
         ]
     )
+    if not payload.get("ok"):
+        error = payload.get("error") or {}
+        raise SystemExit(str(error.get("message") or f"ct api request failed: {method}"))
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise SystemExit(f"ct api call {method} returned a non-object result")
+    return result
 
 
 def _ct_json(args: list[str]) -> dict[str, Any]:
@@ -281,13 +292,7 @@ def _visible_session_ids(vendor_filter: str | None) -> set[str]:
     params: dict[str, Any] = {}
     if vendor_filter:
         params["agent_vendor"] = vendor_filter
-    payload = _load_project_sessions(params)
-    if not payload.get("ok"):
-        error = payload.get("error")
-        raise SystemExit(str(error.get("message") if isinstance(error, dict) else error))
-    result = payload.get("result")
-    if not isinstance(result, dict):
-        raise SystemExit("ct api call project.sessions returned a non-object result")
+    result = _load_project_sessions(params)
 
     session_ids: set[str] = set()
     for item in result.get("items") or []:

@@ -770,7 +770,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     doctor_parser.add_argument(
         "--output",
-        "--format",
         "-o",
         dest="output_format",
         choices=["markdown", "json"],

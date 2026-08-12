@@ -40,7 +40,7 @@ def build_projection(
     project_name: str | None = None,
 ) -> dict[str, Any]:
     filters = CacheBreaksFilters(since_days=since_days, project_name=project_name)
-    projects_payload = ct_json(["project", "list", "--params", "{}", "--output", "json"])
+    projects_payload = _api_call(ct_json, "project.list", {})
     session_params: dict[str, Any] = {
         "since_days": filters.since_days,
         "include": ["runtime"],

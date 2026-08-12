@@ -51,7 +51,7 @@ The plugin uses the following stable terms:
 | Session graph | The root coding trajectory including the main session and related subagents or sidechains |
 | Session | One canonical agent session inside a graph |
 | Turn | One user-to-agent interaction unit inside a session |
-| Model row | A provider/model usage group observed by `session.model_usage` |
+| Model row | A provider/model usage group observed across a `graph.usage` result |
 | Mixed models | A graph or turn containing more than one provider/model group |
 | Processed tokens | The canonical normalized processed-token total defined by core accounting |
 | Cost evidence | A core-emitted USD value labeled `reported` or `estimated` |
@@ -102,10 +102,8 @@ Initial manifest requirements:
 
 ```toml
 [requires]
-"project.list" = 1
-"project.sessions" = 1
-"session.usage" = 1
-"session.model_usage" = 1
+"project.sessions" = 2
+"graph.usage" = 2
 ```
 
 ## Existing Core Fit
@@ -115,11 +113,11 @@ The current core measurement layer already provides the required Phase 1 evidenc
 | Requirement | Core source |
 | --- | --- |
 | Graph inventory and project filters | `project.sessions` |
-| Graph, session, and turn token usage | `session.usage` |
-| Main and subagent separation | `session.usage.sessions[]` |
-| Provider/model token attribution | `session.model_usage` |
-| Turn and graph cost evidence | `session.usage` and `session.model_usage` |
-| Active execution, waiting, and turn counts | `project.sessions` and `session.usage` |
+| Graph, session, and turn token usage | `graph.usage` |
+| Main and subagent separation | `graph.usage.sessions[]` |
+| Provider/model token attribution | `graph.usage.models[]` |
+| Turn and graph cost evidence | `graph.usage` |
+| Active execution, waiting, and turn counts | `graph.usage` |
 | Public contract discovery | `ct api schema <method>` |
 
 The only proposed core metric addition is a canonical cache-hit-rate helper derived from cached and uncached prompt tokens. The provider-normalization rule belongs in core. The frontend plugin consumes the resulting facts and must not reinterpret provider input conventions.
@@ -131,7 +129,7 @@ React route and URL filters
   -> plugin HTTP API
   -> cached cohort read model
   -> ct api call project.sessions
-  -> ct api batch session.usage and session.model_usage
+  -> ct api batch graph.usage
   -> core-normalized public JSON
 ```
 
@@ -405,7 +403,7 @@ Before release, the plugin must demonstrate:
 
 - at least two agent vendors in one cohort when local data permits;
 - single-model and mixed-model graph handling;
-- exact agreement between graph totals displayed in the UI and `session.usage` for selected drill-down rows;
+- exact agreement between graph totals displayed in the UI and `graph.usage` for selected drill-down rows;
 - reported, estimated, and unavailable cost states;
 - token distribution using canonical processed-token values;
 - cache-rate coverage rather than missing-as-zero behavior;
@@ -423,12 +421,12 @@ The metrics-validation quality gate defined in `docs/metrics-validation-quality-
 - Scaffold `packages/plugins/metrics` and its manifest.
 - Add the Vite/shadcn web package.
 - Implement shared filters, URL state, cache boundaries, and cohort metadata.
-- Integrate `project.sessions`, `session.usage`, and `session.model_usage` through batched calls.
+- Integrate `project.sessions` inventory and batched `graph.usage` calls.
 
 ### Phase 2: Token Usage
 
 - Implement usage, distribution, cache hit rate, and input-versus-output modes.
-- Validate selected session rows against `ct session usage` and `session.model_usage`.
+- Validate selected graph rows against `ct graph usage`.
 
 ### Phase 3: Cost
 

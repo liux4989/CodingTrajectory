@@ -17,7 +17,6 @@ from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.runtime import ServiceRuntime
 from coding_trajectory_cli._shared import (
     GhFormatter,
-    add_output_flags,
     compact_payload,
     json_text,
     render_markdown_for_terminal,
@@ -29,16 +28,18 @@ from coding_trajectory_cli.telemetry import write_invocation_record
 
 EPILOG = """\
 NOTE
-  Sessions are located automatically via cache; pass a SESSION_ID to use
-  that coding session as the session tree entry point, or omit it to use the
-  most-recent session in the current working directory.
+  Use `ct project sessions` to choose the SESSION_ID required by session and
+  graph analysis commands. `ct session events` may instead resolve one or more
+  explicit --event-id values.
 """
 
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     method: str = args._method
     params: dict[str, Any] = args._params(args)
-    effective_global_scope = True if method == "project.list" else args.global_scope
+    effective_global_scope = (
+        True if method == "project.list" else getattr(args, "global_scope", False)
+    )
     with ServiceRuntime(
         global_scope=effective_global_scope,
         current_dir=Path.cwd(),
@@ -50,11 +51,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct",
         description="Inspect coding sessions stored in JSONL log files.",
-        usage="ct [flags] <command> [args]",
+        usage="ct <command> [args]",
         epilog=EPILOG,
         formatter_class=GhFormatter,
     )
-    add_output_flags(parser)
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     for register in REGISTRARS:
@@ -67,7 +67,7 @@ def _render_payload(args: argparse.Namespace, payload: Any) -> str:
     if selected_output(args) == "json":
         if method:
             compact = compact_payload(method, payload)
-            compact = service_contract(method).validate_public_response(compact)
+            compact = service_contract(method).validate_cli_response(compact)
             return json_text(compact)
         return json_text(payload)
 

@@ -95,17 +95,10 @@ Dispatch rules:
   unchanged so the plugin owns its full help text. Core renders only the
   brief `ct plugin` index (names + descriptions).
 
-Example:
-
-```text
-ct plugin dashboard session abc123
-```
-
-Dispatches as:
-
-```text
-cd packages/plugins/dashboard && python dashboard.py session abc123
-```
+For example, `ct plugin dashboard session context-window abc123` dispatches
+the dashboard entry script with `session context-window abc123`. Bare
+`dashboard project` and `dashboard session` are help namespaces, not aliases
+for core navigation commands.
 
 Plugins that need first-party one-shot reports should call stable CLI surfaces,
 preferably with machine-readable output:
@@ -143,6 +136,9 @@ ct api schema project.list
 ```
 
 Schemas are generated from the Pydantic models used for runtime validation.
+The `response` schema describes the actual `ct api call` success/error envelope,
+`result` describes its canonical service payload, and `cli_response` is present
+when the dedicated command declares a separately modeled compact schema.
 
 There is no compatibility layer for the old in-process Python plugin API.
 
@@ -190,7 +186,9 @@ than repricing aggregate turn or session buckets.
 Plugin consumers may call `session.tool_usage` for estimated visible-content
 tool input/output attribution and event-order diagnostics. Allocated real-token
 cost is bounded to the containing turn and must not replace observed session or
-turn usage totals.
+turn usage totals. Its default response keeps tool rows and their allocation;
+request `include=["item_costs"]` for the full all-item ledger or
+`include=["causality"]` for response/read-after-result diagnostics.
 
 Provider behavior remains explicit:
 
@@ -232,11 +230,11 @@ uses local policy about what is safe to delete.
 ### Command Shape
 
 ```text
-ct plugin dashboard project [--agent-vendor VENDOR]
 ct plugin dashboard web [--host 127.0.0.1] [--port 8765] [--open]
 ct plugin dashboard project cleanup [--dry-run] [--older-than 30d] [--path PATH] [--detail]
-ct plugin dashboard session [PROJECT] [--since-days N|--all-time] [--agent-vendor VENDOR]
 ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm]
+ct plugin dashboard session context-window SESSION_ID [flags]
+ct plugin dashboard session evaluate SESSION_ID [flags]
 ```
 
 Project cleanup behavior:
@@ -245,7 +243,7 @@ Project cleanup behavior:
   candidate.
 - `--dry-run` lists matching candidates without changing the filesystem.
 - `--detail` prints the exact JSON payload for either mode.
-- `dashboard project` reads candidates from the global `ct project list` result.
+- Project cleanup reads candidates from the `project.list` service result.
 - Project cleanup supports permanent deletion only; it does not expose trash or
   terminal UI modes.
 - The web dashboard provides target selection and confirmation for interactive

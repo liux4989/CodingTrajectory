@@ -3,37 +3,49 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal
+from datetime import datetime
+from typing import Any, ClassVar, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, model_validator
 
 
 class ContractModel(BaseModel):
-    """Contract base that permits additive fields within one method version."""
+    """Response base that permits additive fields within one method version."""
 
     model_config = ConfigDict(extra="allow")
 
 
-class SessionEntryRequest(ContractModel):
+class RequestModel(BaseModel):
+    """Strict request base; parameter changes require a method-version bump."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SessionEntryRequest(RequestModel):
     session_id: str | None = None
     root_session_id: str | None = None
     turn_id: str | None = None
 
+    @model_validator(mode="after")
+    def require_entrypoint(self) -> SessionEntryRequest:
+        if not (self.session_id or self.root_session_id or self.turn_id):
+            raise ValueError("session_id, root_session_id, or turn_id is required")
+        return self
 
-class ProjectListRequest(ContractModel):
-    agent_vendor: str | None = None
 
-
-class ProjectSessionsRequest(ContractModel):
+class ProjectListRequest(RequestModel):
     project_name: str | None = None
     since_days: int | None = Field(default=None, ge=1)
-    modified_since: Any | None = None
+    modified_since: datetime | None = None
+    agent_vendor: str | None = None
+
+
+class ProjectSessionsRequest(RequestModel):
+    project_name: str | None = None
+    since_days: int | None = Field(default=None, ge=1)
+    modified_since: datetime | None = None
     agent_vendor: str | None = None
     include: list[Literal["runtime", "usage"]] = Field(default_factory=list)
-
-
-class ProjectLogfileRequest(ContractModel):
-    pass
 
 
 class SessionOverviewRequest(SessionEntryRequest):
@@ -41,16 +53,24 @@ class SessionOverviewRequest(SessionEntryRequest):
     drop_turns: int | None = Field(default=None, ge=1)
 
 
+class GraphOverviewRequest(SessionOverviewRequest):
+    include: list[Literal["narrative"]] = Field(default_factory=list)
+
+
 class SessionStatsRequest(SessionEntryRequest):
     pass
 
 
-class SessionTurnUsageRequest(SessionEntryRequest):
-    turn_id: str
+class GraphStatsRequest(SessionStatsRequest):
+    include: list[Literal["session_composition"]] = Field(default_factory=list)
 
 
 class SessionUsageRequest(SessionEntryRequest):
     pass
+
+
+class GraphUsageRequest(SessionUsageRequest):
+    include: list[Literal["flat_turns"]] = Field(default_factory=list)
 
 
 class SessionModelUsageRequest(SessionEntryRequest):
@@ -58,14 +78,14 @@ class SessionModelUsageRequest(SessionEntryRequest):
 
 
 class SessionRequestUsageRequest(SessionEntryRequest):
-    pass
+    include: list[Literal["causality", "context"]] = Field(default_factory=list)
 
 
 class SessionToolUsageRequest(SessionEntryRequest):
-    pass
+    include: list[Literal["causality", "item_costs"]] = Field(default_factory=list)
 
 
-class SessionEventsRequest(ContractModel):
+class SessionEventsRequest(RequestModel):
     session_id: str | None = None
     root_session_id: str | None = None
     turn_id: str | None = None
@@ -74,14 +94,33 @@ class SessionEventsRequest(ContractModel):
     filters: list[str] = Field(default_factory=list)
     limit: int | None = Field(default=None, ge=1)
 
+    @model_validator(mode="after")
+    def require_scope_or_event_ids(self) -> SessionEventsRequest:
+        if not (
+            self.session_id
+            or self.root_session_id
+            or self.turn_id
+            or self.event_ids
+        ):
+            raise ValueError(
+                "session_id, root_session_id, turn_id, or event_ids is required"
+            )
+        return self
 
-class SessionItemsRequest(ContractModel):
+
+class SessionItemsRequest(RequestModel):
     item_ids: list[str] | None = None
     session_id: str | None = None
     root_session_id: str | None = None
     turn_id: str | None = None
     types: list[str] | None = None
     include_content: bool = False
+
+    @model_validator(mode="after")
+    def require_scope_or_item_ids(self) -> SessionItemsRequest:
+        if not (self.session_id or self.root_session_id or self.item_ids):
+            raise ValueError("session_id, root_session_id, or item_ids is required")
+        return self
 
 
 class ProjectSummary(ContractModel):
@@ -112,7 +151,7 @@ class ProjectSessionsResponse(ContractModel):
 
 class SessionOverviewResponse(ContractModel):
     root_session_id: str
-    sessions: list[dict[str, Any]] = Field(default_factory=list)
+    sessions: list[dict[str, Any]]
 
 
 class GraphOverviewResponse(ContractModel):
@@ -128,28 +167,30 @@ class GraphOverviewResponse(ContractModel):
 class SessionStatsResponse(ContractModel):
     root_session_id: str | None = None
     scope: str | None = None
+    vendor: str | None = None
     model: dict[str, Any] = Field(default_factory=dict)
     context_window: dict[str, Any] = Field(default_factory=dict)
-    graph_context_window: dict[str, Any] | None = None
     runtime: dict[str, Any] = Field(default_factory=dict)
     messages: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, Any] = Field(default_factory=dict)
     billed_token_usage: dict[str, Any] | None = None
-    graph_billed_token_usage: dict[str, Any] | None = None
     provider_usage_buckets: list[dict[str, Any]] = Field(default_factory=list)
-    graph_provider_usage_buckets: list[dict[str, Any]] | None = None
-    sessions: list[dict[str, Any]] = Field(default_factory=list)
+    sessions: list[dict[str, Any]] | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SessionUsageResponse(ContractModel):
     session_id: str
     scope: str | None = None
+    selected_turn_id: str | None = None
     total_usage: dict[str, Any]
-    graph_total_usage: dict[str, Any] | None = None
-    graph_runtime: dict[str, Any] | None = None
     runtime: dict[str, Any] = Field(default_factory=dict)
-    turns: list[dict[str, Any]] = Field(default_factory=list)
-    sessions: list[dict[str, Any]] = Field(default_factory=list)
+    turns: list[dict[str, Any]] | None = None
+    sessions: list[dict[str, Any]] | None = None
+    models: list[dict[str, Any]] = Field(default_factory=list)
+    estimated_cost: dict[str, Any] | None = None
+    compaction: dict[str, Any] | None = None
+    effort_changes: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -161,6 +202,8 @@ class SessionModelUsageResponse(ContractModel):
     started_at: Any | None = None
     completed_at: Any | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
+    model_active_seconds: float | None = None
+    processed_tokens_per_second: float | None = None
     context: dict[str, Any] | None = None
     models: list[dict[str, Any]] = Field(default_factory=list)
     dominant_model: dict[str, Any] | None = None
@@ -177,15 +220,16 @@ class SessionRequestUsageResponse(ContractModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class SessionTurnUsageResponse(ContractModel):
-    root_session_id: str
-    token_usage: dict[str, Any]
-    turns: list[dict[str, Any]] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-
-
 class SessionToolUsageResponse(ContractModel):
     root_session_id: str
+    tool_item_count: int = 0
+    tool_output_chars: int = 0
+    tool_output_original_tokens: int = 0
+    allocated_real_token_cost: dict[str, Any] | None = None
+    item_real_token_costs: list[dict[str, Any]] | None = None
+    tool_items: list[dict[str, Any]] = Field(default_factory=list)
+    attribution_policy: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SessionEventsResponse(ContractModel):
@@ -194,7 +238,7 @@ class SessionEventsResponse(ContractModel):
     matches: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class PublicSessionEventsResponse(ContractModel):
+class CliSessionEventsResponse(ContractModel):
     id: str | None = None
     type: str | None = None
     matches: list[dict[str, Any]] = Field(default_factory=list)
@@ -204,7 +248,7 @@ class SessionItemsResponse(RootModel[list[dict[str, Any]]]):
     pass
 
 
-class PublicSessionGraphSummary(ContractModel):
+class CliSessionGraphSummary(ContractModel):
     graph_id: str | None = None
     id: str
     project: str | None = None
@@ -216,56 +260,63 @@ class PublicSessionGraphSummary(ContractModel):
     warnings: list[str] | None = None
 
 
-class PublicProjectSessionsResponse(ContractModel):
-    items: list[PublicSessionGraphSummary]
+class CliProjectSessionsResponse(ContractModel):
+    items: list[CliSessionGraphSummary]
 
 
-class PublicSessionOverviewResponse(ContractModel):
+class CliSessionOverviewResponse(ContractModel):
     id: str
     sessions: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class PublicSessionStatsResponse(ContractModel):
+class CliSessionStatsResponse(ContractModel):
     id: str
     scope: str | None = None
     vendor: str | None = None
     model: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
-    graph_context: dict[str, Any] | None = None
     provider_usage_buckets: list[dict[str, Any]] | None = None
     runtime: dict[str, Any] | None = None
     messages: dict[str, Any] | None = None
     usage: dict[str, Any] | None = None
     billed_token_usage: dict[str, Any] | None = None
-    graph_billed_token_usage: dict[str, Any] | None = None
     sessions: list[dict[str, Any]] | None = None
     warnings: list[str] | None = None
 
 
-class PublicSessionUsageResponse(ContractModel):
+class CliSessionUsageResponse(ContractModel):
     id: str
     scope: str | None = None
     runtime: dict[str, Any] | None = None
     usage: dict[str, Any]
-    graph_usage: dict[str, Any] | None = None
     turns: list[dict[str, Any]] = Field(default_factory=list)
     sessions: list[dict[str, Any]] | None = None
     warnings: list[str] | None = None
 
 
-class PublicSessionModelUsageResponse(ContractModel):
-    id: str
-    vendor: str | None = None
-    project: str | None = None
-    title: str | None = None
-    started_at: Any | None = None
-    completed_at: Any | None = None
-    usage: dict[str, Any] = Field(default_factory=dict)
-    context: dict[str, Any] | None = None
-    models: list[dict[str, Any]] = Field(default_factory=list)
-    dominant_model: dict[str, Any] | None = None
-    turns: list[dict[str, Any]] = Field(default_factory=list)
-    warnings: list[str] | None = None
+ResultT = TypeVar("ResultT")
+
+
+class ApiEnvelopeModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ApiSuccessResponse(ApiEnvelopeModel, Generic[ResultT]):
+    id: Any
+    method: str
+    ok: Literal[True]
+    result: ResultT
+
+
+class ApiErrorDetail(ApiEnvelopeModel):
+    message: str
+
+
+class ApiErrorResponse(ApiEnvelopeModel):
+    id: Any
+    method: Any
+    ok: Literal[False]
+    error: ApiErrorDetail
 
 
 @dataclass(frozen=True)
@@ -274,13 +325,13 @@ class ServiceContract:
     version: int
     request_model: type[BaseModel]
     response_model: type[BaseModel]
-    public_response_model: type[BaseModel] | None = None
+    cli_response_model: type[BaseModel] | None = None
 
-    schema_version: ClassVar[int] = 1
+    schema_version: ClassVar[int] = 2
 
     def validate_request(self, params: dict[str, Any]) -> dict[str, Any]:
         return self.request_model.model_validate(params).model_dump(
-            mode="json",
+            mode="python",
             exclude_none=True,
         )
 
@@ -290,100 +341,98 @@ class ServiceContract:
             exclude_none=True,
         )
 
-    def validate_public_response(self, payload: Any) -> Any:
-        model = self.public_response_model or self.response_model
+    def validate_cli_response(self, payload: Any) -> Any:
+        model = self.cli_response_model or self.response_model
         return model.model_validate(payload).model_dump(
             mode="json",
             exclude_none=True,
         )
 
     def schema(self, *, command: str) -> dict[str, Any]:
-        response_model = self.public_response_model or self.response_model
-        return {
+        schema = {
             "schema_version": self.schema_version,
             "command": command,
             "method": self.method,
             "method_version": self.version,
             "request": self.request_model.model_json_schema(),
-            "response": response_model.model_json_schema(),
+            "response": TypeAdapter(
+                ApiSuccessResponse[self.response_model] | ApiErrorResponse
+            ).json_schema(),
+            "result": self.response_model.model_json_schema(),
         }
+        if self.cli_response_model is not None:
+            schema["cli_response"] = self.cli_response_model.model_json_schema()
+        return schema
 
 
 SERVICE_CONTRACTS = {
     contract.method: contract
     for contract in (
-        ServiceContract("project.list", 1, ProjectListRequest, ProjectListResponse),
+        ServiceContract("project.list", 2, ProjectListRequest, ProjectListResponse),
         ServiceContract(
             "project.sessions",
-            1,
+            2,
             ProjectSessionsRequest,
             ProjectSessionsResponse,
-            PublicProjectSessionsResponse,
-        ),
-        ServiceContract(
-            "project.logfile", 1, ProjectLogfileRequest, ProjectSessionsResponse
+            CliProjectSessionsResponse,
         ),
         ServiceContract(
             "session.overview",
-            1,
+            2,
             SessionOverviewRequest,
             SessionOverviewResponse,
-            PublicSessionOverviewResponse,
+            CliSessionOverviewResponse,
         ),
         ServiceContract(
             "graph.overview",
-            1,
-            SessionOverviewRequest,
-            GraphOverviewResponse,
+            2,
+            GraphOverviewRequest,
             GraphOverviewResponse,
         ),
         ServiceContract(
             "session.stats",
-            1,
+            2,
             SessionStatsRequest,
             SessionStatsResponse,
-            PublicSessionStatsResponse,
+            CliSessionStatsResponse,
         ),
-        ServiceContract("graph.stats", 1, SessionStatsRequest, SessionStatsResponse),
         ServiceContract(
-            "session.turn_usage", 1, SessionTurnUsageRequest, SessionTurnUsageResponse
+            "graph.stats", 2, GraphStatsRequest, SessionStatsResponse
         ),
         ServiceContract(
             "session.usage",
-            1,
+            2,
             SessionUsageRequest,
             SessionUsageResponse,
-            PublicSessionUsageResponse,
+            CliSessionUsageResponse,
         ),
-        ServiceContract("graph.usage", 1, SessionUsageRequest, SessionUsageResponse),
+        ServiceContract("graph.usage", 2, GraphUsageRequest, SessionUsageResponse),
         ServiceContract(
             "session.model_usage",
-            1,
+            2,
             SessionModelUsageRequest,
             SessionModelUsageResponse,
-            PublicSessionModelUsageResponse,
         ),
         ServiceContract(
             "session.request_usage",
-            1,
+            2,
             SessionRequestUsageRequest,
             SessionRequestUsageResponse,
         ),
         ServiceContract(
-            "session.tool_usage", 1, SessionToolUsageRequest, SessionToolUsageResponse
+            "session.tool_usage", 2, SessionToolUsageRequest, SessionToolUsageResponse
         ),
         ServiceContract(
             "session.events",
-            1,
+            2,
             SessionEventsRequest,
             SessionEventsResponse,
-            PublicSessionEventsResponse,
+            CliSessionEventsResponse,
         ),
         ServiceContract(
             "session.items",
-            1,
+            2,
             SessionItemsRequest,
-            SessionItemsResponse,
             SessionItemsResponse,
         ),
     )

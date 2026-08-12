@@ -54,34 +54,23 @@ class GhFormatter(argparse.RawDescriptionHelpFormatter):
         return text
 
 
-def add_session_source(parser: argparse.ArgumentParser) -> None:
+def add_session_source(
+    parser: argparse.ArgumentParser, *, required: bool = True
+) -> None:
+    options: dict[str, Any] = {}
+    if not required:
+        options.update(nargs="?", default=None)
     parser.add_argument(
         "session_id",
         metavar="SESSION_ID",
-        nargs="?",
-        default=None,
-        help="Session ID to use as the session tree entry point. Omit to use the most-recent session.",
+        help="Session or graph entry-point ID.",
+        **options,
     )
-
-
-def add_base_output_flags(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--output",
-        "--format",
-        "-o",
-        dest="output_format",
-        choices=OUTPUT_CHOICES,
-        default=None,
-        metavar="{" + ",".join(OUTPUT_CHOICES) + "}",
-        help="Select stdout format.",
-    )
-    parser.set_defaults(global_scope=False)
 
 
 def add_output_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output",
-        "--format",
         "-o",
         dest="output_format",
         choices=OUTPUT_CHOICES,
@@ -89,10 +78,25 @@ def add_output_flags(parser: argparse.ArgumentParser) -> None:
         metavar="{" + ",".join(OUTPUT_CHOICES) + "}",
         help="Select stdout format.",
     )
+
+
+def add_json_output_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--output",
+        "-o",
+        dest="output_format",
+        choices=("json",),
+        default=None,
+        metavar="{json}",
+        help="Emit JSON (the only supported format for this command).",
+    )
+
+
+def add_global_scope_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--global-scope",
         action="store_true",
-        help="Search all known log files instead of the most-recent session.",
+        help="Search all known log files instead of the current project.",
     )
 
 
@@ -134,11 +138,6 @@ def add_turn_window_flags(parser: argparse.ArgumentParser, *, view_name: str) ->
         metavar="K",
         help="Drop the last K visible turns, matching thread/rollback semantics.",
     )
-
-
-def params_from_json(args: argparse.Namespace) -> dict[str, Any]:
-    params = getattr(args, "params_json", None)
-    return dict(params or {})
 
 
 def json_object_arg(value: str) -> dict[str, Any]:
@@ -774,7 +773,6 @@ def compact_payload(method: str, payload: Any) -> Any:
                 )
                 or None,
                 "usage": compact_usage(payload.get("total_usage")),
-                "graph_usage": compact_usage(payload.get("graph_total_usage")),
                 "cost": evidence_value(payload.get("estimated_cost")),
                 "pricing": evidence_to_pricing(payload.get("estimated_cost")),
                 "models": compact_usage_models(payload.get("models")),
@@ -868,12 +866,6 @@ def compact_payload(method: str, payload: Any) -> Any:
         compact = compact_stats_payload(payload)
         if payload.get("scope"):
             compact["scope"] = payload.get("scope")
-        if payload.get("graph_context_window"):
-            compact["graph_context"] = compact.get("context")
-        if payload.get("graph_billed_token_usage"):
-            compact["graph_billed_token_usage"] = compact_usage(
-                payload.get("graph_billed_token_usage"), include_cost=False
-            )
         compact["sessions"] = [
             compact_stats_payload(session)
             for session in payload.get("sessions") or []

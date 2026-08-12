@@ -12,7 +12,6 @@ CodingTrajectory has confident token accounting at the model request/response
 boundary. In current public surfaces this is represented at turn/session level:
 
 - `session.usage`
-- `session.turn_usage`
 - `session.stats`
 
 Item-level token cost is different. Codex persisted logs do not attach
@@ -38,27 +37,11 @@ The current safe boundary is:
 
 ## Current Surfaces
 
-### `session.turn_usage`
-
-Purpose: inspect real usage for one turn. Its top-level `token_usage` is scoped
-to the requested turn rather than repeating the full-session total.
-
-Keep this surface unchanged. It should remain the highest-confidence answer for
-the token cost of a user turn. It includes cache-aware token buckets exactly as
-reported or normalized:
-
-- `prompt_tokens`
-- `cached_prompt_tokens`
-- `cache_write_tokens`
-- `completion_tokens`
-- `reasoning_tokens`
-- `reported_total_tokens`
-- `processed_tokens`
-
 ### `session.usage`
 
 Purpose: compact session and turn-level token accounting. Estimated cost is
 obtained by pricing each provider request and then summing the request ledger.
+Pass `turn_id` to scope this authoritative observed-usage surface to one turn.
 
 Keep this surface unchanged. It should not expose item attribution because that
 would mix measured provider usage with estimated visible-content attribution.
@@ -100,8 +83,9 @@ Use two ledgers:
 
 ## Proposed Tool Attribution Fields
 
-Extend each `ToolItemFlat` emitted by `session.tool_usage` with token-only
-diagnostics:
+Each `ToolItemFlat` emitted by `session.tool_usage` carries token-only
+diagnostics. The heavier response-causality fields are returned only when the
+request includes `causality`:
 
 ```json
 {
@@ -136,10 +120,10 @@ Field meaning:
 - `tool_output_tokens`: estimated visible tool-result tokens.
 - `content_confidence`: why the output-token estimate is trusted.
 - `invoke_response_tokens`: optional allocation of output/reasoning tokens from
-  the model response that requested the tool.
+  the model response that requested the tool; requires `include=["causality"]`.
 - `read_after_result`: whether the tool result was followed by another model
   request in the same turn, meaning the result could have contributed to that
-  request's input context.
+  request's input context; requires `include=["causality"]`.
 
 The item view keeps provider usage buckets separate after allocation:
 `prompt_tokens`, `uncached_prompt_tokens`, `cached_prompt_tokens`,
@@ -221,8 +205,8 @@ The `session.tool_usage` payload should include a note or metadata block:
 ```json
 {
   "attribution_policy": {
-    "scope": "tool_items",
-    "cache": "allocated_as_separate_usage_bucket",
+    "scope": "turn_items",
+    "cache": "allocated_from_exact_usage",
     "usage_authority": "session.usage",
     "method": "visible_content_plus_event_order"
   }
@@ -293,8 +277,8 @@ Use real sessions rather than synthetic-only fixtures.
 
 Expected behavior:
 
-1. `session.usage` and `session.turn_usage` remain token-focused; any estimated
-   cost is the sum of independently priced provider requests.
+1. `session.usage`, including its `turn_id` projection, remains token-focused;
+   any estimated cost is the sum of independently priced provider requests.
 2. `session.stats` remains cache-aware.
 3. `session.tool_usage` includes token attribution only when evidence exists.
 4. Multi-tool responses are marked shared rather than duplicated as exact item

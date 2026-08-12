@@ -84,7 +84,10 @@ def build_report(
         [project_filter]
         if project_filter
         else sorted(
-            (_ct_json(["project", "list", "--output", "json"]).get("items") or {})
+            (
+                _ct_api_result_with_command(ct, "project.list", {}).get("items")
+                or {}
+            )
         )
     )
 
@@ -96,16 +99,11 @@ def build_report(
         params: dict[str, Any] = {"since_days": since_days, "project_name": name}
         if agent_vendor:
             params["agent_vendor"] = agent_vendor
-        payload = _ct_json_safe(
-            [
-                "project",
-                "sessions",
-                "--global-scope",
-                "--params",
-                json.dumps(params),
-                "--output",
-                "json",
-            ]
+        payload = _ct_api_result_safe(
+            ct,
+            "project.sessions",
+            params,
+            global_scope=True,
         )
         return name, (payload or {}).get("items") or []
 
@@ -193,7 +191,7 @@ def _fetch_session_data_bulk(
         requests = [
             {
                 "id": root_id,
-                "method": "session.usage",
+                "method": "graph.usage",
                 "params": {"session_id": root_id},
             }
             for root_id in chunk
@@ -216,9 +214,13 @@ def _fetch_session_data_bulk(
                 continue
             result = item.get("result") or {}
             runtime = result.get("runtime") or {}
-            usage = result.get("total_usage") or result.get("usage") or {}
-            if result.get("cost_usd") is not None:
-                usage = {**usage, "cost_usd": result.get("cost_usd")}
+            usage = result.get("total_usage") or {}
+            estimated_cost = result.get("estimated_cost")
+            cost_usd = (
+                estimated_cost.get("value_usd")
+                if isinstance(estimated_cost, dict)
+                else None
+            )
             result_map[root_id] = {
                 "root_session_id": root_id,
                 "vendor": "unknown",
@@ -227,7 +229,7 @@ def _fetch_session_data_bulk(
                 "turns": runtime.get("turns") or 0,
                 "tool_calls": runtime.get("tool_calls") or 0,
                 "tokens": _extract_tokens(usage),
-                "cost_usd": usage.get("cost_usd"),
+                "cost_usd": cost_usd,
             }
 
     return result_map
@@ -446,15 +448,6 @@ def _one_line(value: str, limit: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _ct_json(args: list[str]) -> dict[str, Any]:
-    ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
-    if not ct:
-        raise SystemExit(
-            "ct executable not found; set CT_COMMAND to the ct command path"
-        )
-    return _ct_json_with_command(ct, args)
-
-
 def _ct_json_with_command(ct: str, args: list[str]) -> dict[str, Any]:
     command = [*shlex.split(ct), *args]
     try:
@@ -469,10 +462,27 @@ def _ct_json_with_command(ct: str, args: list[str]) -> dict[str, Any]:
     return json.loads(completed.stdout)
 
 
-def _ct_json_safe(args: list[str]) -> dict[str, Any] | None:
-    ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
-    if not ct:
-        return None
+def _ct_api_result_with_command(
+    ct: str,
+    method: str,
+    params: dict[str, Any],
+    *,
+    global_scope: bool = False,
+) -> dict[str, Any]:
+    args = ["api", "call", method, "--params", json.dumps(params)]
+    if global_scope:
+        args.append("--global-scope")
+    payload = _ct_json_with_command(ct, args)
+    if not payload.get("ok"):
+        error = payload.get("error") or {}
+        raise SystemExit(str(error.get("message") or f"ct api request failed: {method}"))
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise SystemExit(f"ct api call {method} returned a non-object result")
+    return result
+
+
+def _ct_json_safe_with_command(ct: str, args: list[str]) -> dict[str, Any] | None:
     command = [*shlex.split(ct), *args]
     try:
         completed = subprocess.run(
@@ -486,6 +496,23 @@ def _ct_json_safe(args: list[str]) -> dict[str, Any] | None:
         return json.loads(completed.stdout)
     except json.JSONDecodeError:
         return None
+
+
+def _ct_api_result_safe(
+    ct: str,
+    method: str,
+    params: dict[str, Any],
+    *,
+    global_scope: bool = False,
+) -> dict[str, Any] | None:
+    args = ["api", "call", method, "--params", json.dumps(params)]
+    if global_scope:
+        args.append("--global-scope")
+    payload = _ct_json_safe_with_command(ct, args)
+    if not payload or not payload.get("ok"):
+        return None
+    result = payload.get("result")
+    return result if isinstance(result, dict) else None
 
 
 def _run_web(args: list[str]) -> int:

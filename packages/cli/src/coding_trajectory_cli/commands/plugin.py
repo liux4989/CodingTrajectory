@@ -20,7 +20,7 @@ import json
 import sys
 from typing import Any
 
-from coding_trajectory_cli._shared import GhFormatter, add_base_output_flags
+from coding_trajectory_cli._shared import GhFormatter, add_output_flags
 from coding_trajectory_cli.outcome import CommandOutcome, EarlyDispatchOutcome, status_error
 from coding_trajectory_cli.plugins import (
     PLUGIN_COMMANDS,
@@ -148,7 +148,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="List available ct CLI plugins.",
         formatter_class=GhFormatter,
     )
-    add_base_output_flags(plugin_list)
+    add_output_flags(plugin_list)
     plugin_list.set_defaults(
         _plugin_handler=_handle_plugin_list,
         _renderer=_render_plugin_list_text,

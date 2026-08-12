@@ -6,14 +6,14 @@ Survey, baseline measurement, profiling, and optimization of the
 ## 1. The exposed API
 
 The public query surface is the JSON-RPC-style **`ServiceRuntime`**
-(`packages/core/src/coding_trajectory/runtime.py`) exposing 15 methods via
+(`packages/core/src/coding_trajectory/runtime.py`) exposing 13 methods via
 `runtime.call(method, params)` / `batch(requests)`:
 
 | group | methods |
 |-------|---------|
-| collection | `project.list`, `project.sessions`, `project.logfile` |
+| collection | `project.list`, `project.sessions` |
 | overview | `session.overview`, `graph.overview` |
-| usage | `session.usage`, `graph.usage`, `session.turn_usage`, `session.model_usage`, `session.request_usage`, `session.tool_usage` |
+| usage | `session.usage`, `graph.usage`, `session.model_usage`, `session.request_usage`, `session.tool_usage` |
 | stats | `session.stats`, `graph.stats` |
 | detail | `session.events`, `session.items` |
 
@@ -22,7 +22,7 @@ The public query surface is the JSON-RPC-style **`ServiceRuntime`**
 ```
 ServiceRuntime.call
   └─ contract.validate_request
-  └─ (short-circuit) project.list / project.sessions[no include]
+  └─ (short-circuit) project.list
   └─ _store_for -> resolve_store
        ├─ targeted: cache path-index -> _build_store_targeted  (ingest N files)
        └─ fallback: discover_store (ingest ALL matching logs)
@@ -67,6 +67,31 @@ projections:
 
 The ingestion changes were also checked through `session.overview` and
 `graph.overview`; both canonical response hashes remained unchanged.
+
+### Version 2 surface cleanup (Phase 9)
+
+Version 2 makes diagnostic detail explicit instead of returning every nested
+projection by default. Measured on the same 112-session graph, with minified
+canonical JSON:
+
+| method | v1 default | v2 default | reduction | warm median |
+|--------|-----------:|-----------:|----------:|------------:|
+| `graph.overview` | 1 636 444 B | 103 193 B | 93.7% | 0.023 s |
+| `graph.stats` | 1 325 598 B | 282 897 B | 78.7% | 8.92 s |
+| `graph.usage` | 577 547 B | 393 901 B | 31.8% | 0.95 s |
+| `session.request_usage` | 5 872 614 B | 3 859 842 B | 34.3% | 0.42 s |
+| `session.tool_usage` | 12 496 335 B | 6 127 572 B | 51.0% | 5.80 s |
+
+The omitted projections remain available through typed `include` values. The
+compact stats and tool-usage paths also avoid materializing the omitted
+per-session category trees and all-item cost rows while retaining full primitive
+allocation, request-tier pricing boundaries, and reconciliation assertions.
+
+The public registry now has 13 versioned methods. The unreachable
+`project.logfile` method and duplicate `session.turn_usage` projection were
+removed; `session.usage` with `turn_id` is the authoritative replacement for the
+latter. All graph totals use canonical `runtime` and `total_usage` fields rather
+than duplicate `graph_*` aliases.
 
 ### Historical projection benchmark (Phases 1-7)
 
@@ -166,8 +191,9 @@ unchanged.
 
 ### Phase 8: request-wide reuse and allocation-boundary materialization
 
-The current worktree removes repeated work at three distinct boundaries while
-retaining the existing public response contracts.
+Phase 8 removed repeated work at three distinct boundaries while retaining the
+then-current public response contracts. Phase 9 subsequently versions and
+shrinks that surface as described above.
 
 #### Targeted store construction
 

@@ -1,10 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
-import shlex
-import shutil
-import subprocess
 import sys
 
 try:
@@ -43,54 +39,15 @@ def _build_root_parser() -> argparse.ArgumentParser:
     parser.add_argument("--web", action="store_true", help="Open the dashboard web program.")
     sub = parser.add_subparsers(dest="action", metavar="<command>")
     sub.add_parser("web", help="Rich dashboard with analytics (browser).")
-    project = sub.add_parser("project", help="List managed projects and project actions.")
-    project.add_argument("--agent-vendor", default=None)
-    project_cleanup = sub.add_parser(
-        "project cleanup",
-        help="Clean old project directories.",
-    )
-    project_cleanup.add_argument("--older-than", default="30d")
-    project_cleanup.add_argument("--path", default=None)
-    project_cleanup.add_argument("--dry-run", action="store_true")
-    project_cleanup.add_argument("--detail", action="store_true")
-    session = sub.add_parser("session", help="List sessions and session actions.")
-    session.add_argument("project_name", nargs="?")
-    session.add_argument("--since-days", type=int, default=30)
-    session.add_argument("--all-time", action="store_true")
-    session.add_argument("--agent-vendor", default=None)
-    session_cleanup = sub.add_parser(
-        "session cleanup",
-        help="Clean orphaned or low-value session logs.",
-    )
-    session_cleanup.add_argument("--agent-vendor", default=None)
-    session_cleanup.add_argument("--trash", action="store_true")
-    session_cleanup.add_argument("--delete", action="store_true")
-    session_cleanup.add_argument("--confirm", action="store_true")
-    session_context_window = sub.add_parser(
-        "session context-window",
-        help="Inspect session context composition and trajectory events.",
-    )
-    session_context_window.add_argument("session_id")
-    session_context_window.add_argument("--turn", dest="turn_id", default=None)
-    session_context_window.add_argument(
-        "--output",
-        choices=("markdown", "json"),
-        default="markdown",
-    )
-    session_evaluate = sub.add_parser(
-        "session evaluate",
-        help="Run the lightweight session or turn evaluator.",
-    )
-    session_evaluate.add_argument("session_id")
-    session_evaluate.add_argument("--turn", dest="turn_id", default=None)
-    session_evaluate.add_argument("--output", choices=("text", "json"), default="text")
+    sub.add_parser("project", help="Project cleanup actions.")
+    sub.add_parser("session", help="Session analysis and cleanup actions.")
     return parser
 
 
-def _project_list_parser() -> argparse.ArgumentParser:
+def _project_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct plugin dashboard project",
-        description="Alias for `ct project list`.",
+        description="Dashboard project management actions.",
         epilog="SUBCOMMANDS\n  cleanup   Clean old project directories.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -117,10 +74,10 @@ def _project_cleanup_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _session_list_parser() -> argparse.ArgumentParser:
+def _session_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct plugin dashboard session",
-        description="Alias for `ct project sessions`.",
+        description="Dashboard session analysis and cleanup actions.",
         epilog=(
             "SUBCOMMANDS\n"
             "  cleanup          Clean orphaned or low-value session logs.\n"
@@ -150,7 +107,12 @@ def _handle_project_command(args: list[str]) -> int:
     if args and args[0] == "cleanup":
         parsed = _project_cleanup_parser().parse_args(args[1:])
         return _project_cleanup(parsed)
-    return _ct_passthrough(["project", "list", *args])
+    parser = _project_parser()
+    if not args:
+        print(parser.format_help(), end="")
+        return 0
+    parser.parse_args(args)
+    return 2
 
 
 def _handle_session_command(args: list[str]) -> int:
@@ -161,7 +123,12 @@ def _handle_session_command(args: list[str]) -> int:
         return context_window_mod.main(args[1:])
     if args and args[0] == "evaluate":
         return evaluation_mod.main(args[1:])
-    return _ct_passthrough(["project", "sessions", *args])
+    parser = _session_parser()
+    if not args:
+        print(parser.format_help(), end="")
+        return 0
+    parser.parse_args(args)
+    return 2
 
 
 def _root_entry_text() -> str:
@@ -171,9 +138,7 @@ def _root_entry_text() -> str:
             "",
             "Commands:",
             "  ct plugin dashboard web [flags]    Rich dashboard with analytics (browser)",
-            "  ct plugin dashboard project [ct project list flags]",
             "  ct plugin dashboard project cleanup [--dry-run] [flags]",
-            "  ct plugin dashboard session [ct project sessions flags]",
             "  ct plugin dashboard session cleanup [flags]",
             "  ct plugin dashboard session context-window SESSION_ID [flags]",
             "  ct plugin dashboard session evaluate SESSION_ID [flags]",
@@ -201,20 +166,6 @@ def _session_cleanup(args: argparse.Namespace) -> int:
         return 2
     print(cleanup_mod.render(args, payload))
     return 1 if (payload.get("summary") or {}).get("error_count") else 0
-
-
-def _ct_passthrough(args: list[str]) -> int:
-    ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
-    if not ct:
-        print("error: ct executable not found; set CT_COMMAND to the ct command path", file=sys.stderr)
-        return 127
-    command = [*shlex.split(ct), *args]
-    try:
-        completed = subprocess.run(command, check=False)
-    except OSError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    return completed.returncode
 
 
 def _run_dashboard_web(args: list[str]) -> int:

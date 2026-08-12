@@ -200,8 +200,8 @@ coding-trajectory/
 ## Service API
 
 The application layer implements versioned Pydantic method contracts consumed
-by the CLI. Plugins consume the corresponding CLI JSON output rather than
-importing the application layer.
+by the CLI. Automation and plugins use `ct api call` or `ct api batch`; dedicated
+commands provide a separate compact presentation shape for interactive use.
 
 `ServiceRuntime` is the shared in-process executor behind ordinary CLI commands,
 `ct api call`, and `ct api batch`. It owns contract validation, index persistence,
@@ -215,31 +215,30 @@ explicit collection of independent calls; shell pipelines and tools such as
 |---|---|
 | `project.list` | List all discovered projects with vendors and paths |
 | `project.sessions` | List session graphs, optionally including bulk runtime and usage summaries |
-| `project.logfile` | List session graphs from an explicit log file |
 | `session.overview` | Narrative overview: hierarchy, activity keys, turn summaries |
 | `session.stats` | Provider usage plus common observed composition buckets and runtime statistics for one thread |
 | `session.usage` | Token usage and request-summed cost breakdown by turn for one thread |
-| `session.request_usage` | Per-provider-request usage, pricing, context growth, and causal tool links |
-| `graph.overview` | Orchestration graph identity, capabilities, connected sessions, and structural edges |
-| `graph.stats` | Aggregate provider usage, composition, and runtime statistics |
-| `graph.usage` | Aggregate token usage and log-reported cost breakdown |
-| `session.tool_usage` | Turn-scoped tool statistics and stable item token-cost allocation |
-| `session.turn_usage` | Per-turn usage detail |
+| `session.model_usage` | Detailed model and turn-level usage diagnostics for one thread |
+| `session.request_usage` | Per-provider-request usage and pricing, with opt-in context and causal diagnostics |
+| `graph.overview` | Orchestration identity, connected sessions, and structural edges, with opt-in narrative turns |
+| `graph.stats` | Aggregate provider usage and runtime, with opt-in per-session composition |
+| `graph.usage` | Aggregate token usage and cost, with opt-in flat graph turns |
+| `session.tool_usage` | Per-tool allocation, with opt-in all-item ledger and causal diagnostics |
 | `session.items` | Turn-filterable item detail with optional full-content expansion |
 | `session.events` | Turn-filterable event query, request-usage selection, and full tool-result dereferencing |
 
 ### Store Resolution
 
-1. If `--log-file` is provided, ingest that single file directly.
-2. If a session entry point ID is given and the index cache maps it to source files, perform a **targeted load** (ingest only the relevant files).
-3. Otherwise, perform a **full discovery** scan scoped to the current project (or global with `--global-scope`).
+1. If a session entry point ID is given and the index cache maps it to source files, perform a **targeted load** (ingest only the relevant files).
+2. Otherwise, perform a **full discovery** scan scoped to the current project (or global with `--global-scope`).
 
 ### Output Formats
 
 - Report commands default to `--output markdown` for human reading.
 - Detail and raw-query commands default to `--output json` for scripting.
-- JSON mode is minified with a token-efficient public schema.
-- `ct api schema METHOD` prints the full request and response JSON Schema and
+- Dedicated-command JSON is minified with a token-efficient CLI schema.
+- `ct api schema METHOD` prints the API envelope, canonical result, request,
+  and any separately modeled CLI presentation JSON Schemas, then
   exits before discovery, ingestion, or cache mutation.
 
 ## Plugin Lifecycle
@@ -312,15 +311,15 @@ uv sync                    # Install all workspace dependencies
 |---|---|
 | `uv run ct project list` | List discovered projects |
 | `uv run ct project sessions [PROJECT]` | List sessions for a project |
-| `uv run ct session overview [ID]` | One-thread overview |
-| `uv run ct session stats [ID]` | One-thread context window statistics |
-| `uv run ct session usage [ID]` | One-thread token and log-reported cost breakdown |
-| `uv run ct graph overview [ID]` | Connected-session tree and structural edges |
-| `uv run ct graph stats [ID]` | Graph-wide context window statistics |
-| `uv run ct graph usage [ID]` | Graph-wide token and log-reported cost breakdown |
+| `uv run ct session overview SESSION_ID` | One-thread overview |
+| `uv run ct session stats SESSION_ID` | One-thread context window statistics |
+| `uv run ct session usage SESSION_ID` | One-thread token and log-reported cost breakdown |
+| `uv run ct graph overview SESSION_ID` | Connected-session tree and structural edges |
+| `uv run ct graph stats SESSION_ID` | Graph-wide context window statistics |
+| `uv run ct graph usage SESSION_ID` | Graph-wide token and log-reported cost breakdown |
 | `uv run ct session items SESSION_ID [ITEM_ID ...]` | Session item detail (JSON) |
-| `uv run ct session events --params '{"event_ids": [...]}'` | Event detail (JSON) |
-| `uv run ct session events [ID] --type TYPE` | Filtered event search |
+| `uv run ct session events --event-id EVENT_ID [--event-id EVENT_ID ...]` | Event detail (JSON) |
+| `uv run ct session events SESSION_ID --type TYPE` | Filtered event search |
 | `uv run ct plugin list` | List available plugins |
 | `uv run ct plugin dashboard web` | Start web dashboard |
 | `uv run ct plugin code-time` | Today's coding time summary |

@@ -174,23 +174,16 @@ def build_analysis(
     cwd: Path | None = None,
     app_server: CodexAppServerManager | None = None,
 ) -> SessionAnalysis:
-    overview = ct_json(
-        ["session", "overview", "--global-scope", "--output", "json", session_id]
-    )
-    usage = ct_json(
-        ["session", "usage", "--global-scope", "--output", "json", session_id]
-    )
-    stats = ct_json(
-        ["session", "stats", "--global-scope", "--output", "json", session_id]
-    )
+    overview = ct_json(["session", "overview", session_id, "--output", "json"])
+    usage = ct_json(["session", "usage", session_id, "--output", "json"])
+    stats = ct_json(["session", "stats", session_id, "--output", "json"])
     requested = ct_json(
         [
             "session",
             "events",
-            "--global-scope",
+            session_id,
             "--output",
             "json",
-            session_id,
             "--type",
             "tool.call.requested",
         ]
@@ -199,10 +192,9 @@ def build_analysis(
         [
             "session",
             "events",
-            "--global-scope",
+            session_id,
             "--output",
             "json",
-            session_id,
             "--type",
             "tool.call.succeeded",
         ]
@@ -211,10 +203,9 @@ def build_analysis(
         [
             "session",
             "events",
-            "--global-scope",
+            session_id,
             "--output",
             "json",
-            session_id,
             "--type",
             "tool.call.failed",
         ]

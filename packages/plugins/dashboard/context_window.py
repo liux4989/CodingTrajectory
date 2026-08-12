@@ -250,11 +250,9 @@ def build_projection(
     ct_json: Callable[[list[str]], dict[str, Any]] | None = None,
 ) -> ContextWindowProjection:
     run = ct_json or _ct_json
-    stats = run(["session", "stats", "--global-scope", "--output", "json", session_id])
-    overview = run(
-        ["session", "overview", "--global-scope", "--output", "json", session_id]
-    )
-    usage = run(["session", "usage", "--global-scope", "--output", "json", session_id])
+    stats = run(["session", "stats", session_id, "--output", "json"])
+    overview = run(["session", "overview", session_id, "--output", "json"])
+    usage = run(["session", "usage", session_id, "--output", "json"])
     tool_usage = _ct_api_result(
         "session.tool_usage",
         {"session_id": session_id},

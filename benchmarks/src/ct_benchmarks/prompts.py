@@ -16,21 +16,21 @@ from .models import TaskType, ToolVariant
 
 _VARIANT_PREAMBLES: dict[ToolVariant, str] = {
     ToolVariant.CT_CLI: """\
-You have the `ct` CLI for exploring coding agent session logs. All commands return JSON.
+You have the `ct` CLI for exploring coding agent session logs. Use the JSON output forms shown below.
 
 The log file to analyze is at: {log_file}
 
 ## Structured View
 Use this sequence to explore the log through enriched, post-processed structure:
-1. `ct project list`  → list all known projects; find the project and trajectory ID for the log above
-2. `ct project sessions <PROJECT_NAME>`  → list sessions for the project and choose a session ID
-3. `ct session overview <SESSION_ID>`  → session structure, item types, user requests — start here
-4. `ct session items <SESSION_ID> [<ITEM_ID> ...]`  → full detail for one session or specific items (returns JSON array)
+1. `ct project list --output json`  → list all known projects; find the project for the log above
+2. `ct project sessions <PROJECT_NAME> --output json`  → list sessions for the project and choose a session ID
+3. `ct session overview <SESSION_ID> --output json`  → session structure, item types, user requests — start here
+4. `ct session items <SESSION_ID> [<ITEM_ID> ...] --output json`  → full detail for one session or specific items (returns JSON array)
 
 ## Raw View
 Only fall back to raw events when structured data is truncated or missing detail you need:
-1. `ct session events <SESSION_ID> --type TYPE [--filter KEY=VALUE ...]`
-2. `ct session events --params '{{"event_ids": ["<EVENT_ID>"]}}'`
+1. `ct session events <SESSION_ID> --type TYPE [--filter KEY=VALUE ...] --output json`
+2. `ct session events --event-id <EVENT_ID> [--event-id <EVENT_ID> ...] --output json`
 
 """,
 

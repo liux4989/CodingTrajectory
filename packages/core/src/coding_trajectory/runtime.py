@@ -6,13 +6,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import (
     IndexCache,
     dispatch,
     project_list_metadata,
-    project_sessions_metadata,
     resolve_store,
 )
 
@@ -95,13 +96,12 @@ class ServiceRuntime:
             return
         self._batch_store = resolve_store(
             {"session_ids": ids},
-            log_file=None,
             global_scope=self.global_scope,
             current_dir=self.current_dir,
             cache=self.cache,
         )
 
-    def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def call(self, method: str, params: dict[str, Any]) -> Any:
         contract = service_contract(method)
         validated_params = contract.validate_request(params)
         if method == "project.list":
@@ -109,15 +109,6 @@ class ServiceRuntime:
                 project_list_metadata(
                     validated_params,
                     global_scope=True,
-                    current_dir=self.current_dir,
-                )
-            )
-
-        if method == "project.sessions" and not validated_params.get("include"):
-            return contract.validate_response(
-                project_sessions_metadata(
-                    validated_params,
-                    global_scope=self.global_scope,
                     current_dir=self.current_dir,
                 )
             )
@@ -143,7 +134,13 @@ class ServiceRuntime:
             return _error_item(request_id, method, "params must be an object")
         try:
             result = self.call(method, params)
-        except (KeyError, ValueError, ResourceNotFoundError, DocumentError) as exc:
+        except (
+            KeyError,
+            ValueError,
+            ValidationError,
+            ResourceNotFoundError,
+            DocumentError,
+        ) as exc:
             return _error_item(request_id, method, str(exc))
         return {
             "id": request_id,
@@ -163,7 +160,6 @@ class ServiceRuntime:
         if key not in self._stores:
             self._stores[key] = resolve_store(
                 params,
-                log_file=None,
                 global_scope=self.global_scope,
                 current_dir=self.current_dir,
                 cache=self.cache,

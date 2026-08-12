@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-import re
-from typing import Iterable
 from uuid import UUID
 
 from coding_trajectory.analysis.content_size import (
     item_input_size,
+    item_input_text,
     item_output_size,
+    item_output_text,
     visible_text_size,
 )
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
@@ -175,6 +177,40 @@ def build_context_composition(
     return categories, anchor_outcome
 
 
+@session_scoped
+def context_composition_anchor_outcome(
+    session_graph: SessionGraph,
+) -> AnchorOutcome:
+    """Return the composition anchor outcome without materializing categories.
+
+    Compact graph stats retain the anchor warning but omit each session's
+    semantic category tree. The warning depends on only three facts: whether
+    provider usage exists, whether any resident conversation content has a
+    positive visible-token estimate, and the starting-context token total.
+    Non-empty visible text always contributes at least one token, so the
+    conversation check can avoid tokenizing every resident item.
+    """
+    latest = _latest_context_usage_observation(session_graph)
+    if latest is None or not latest.used_input_tokens:
+        return AnchorOutcome.NO_USAGE
+
+    boundaries = {
+        session.session_id: _eviction_boundary(session)
+        for session in session_graph.sessions
+    }
+    if not _has_resident_conversation(session_graph, boundaries=boundaries):
+        return AnchorOutcome.NO_CONVERSATION
+
+    starting_tokens = sum(
+        (visible_text_size(source.text).tokens or source.reported_tokens or 0)
+        for session in session_graph.sessions
+        for source in session.context_sources
+    )
+    if latest.used_input_tokens - starting_tokens <= 0:
+        return AnchorOutcome.OVERCOUNT
+    return AnchorOutcome.ANCHORED
+
+
 def _attach_estimated_cost(
     categories: list[ContextCategoryFlat],
     *,
@@ -292,6 +328,58 @@ def _eviction_boundary(session: Session) -> datetime | None:
 def _is_resident(timestamp: datetime, boundary: datetime | None) -> bool:
     """Whether a timestamped item survives the last compaction boundary."""
     return boundary is None or timestamp >= boundary
+
+
+def _has_resident_conversation(
+    session_graph: SessionGraph,
+    *,
+    boundaries: dict[UUID, datetime | None],
+) -> bool:
+    """Whether composition would assign positive tokens to conversation."""
+    for session in session_graph.sessions:
+        boundary = boundaries.get(session.session_id)
+        if any(
+            event.type == EventType.USER_PROMPT_SUBMITTED
+            and _is_resident(event.timestamp, boundary)
+            and isinstance(event.payload.get("text"), str)
+            and bool(event.payload["text"])
+            for event in session.events
+        ):
+            return True
+
+    has_agent_message_items = any(
+        item.kind == "agent_message"
+        and _is_resident(item.started_at, boundaries.get(item.session_id))
+        for session in session_graph.sessions
+        for turn in session.turns
+        for item in turn.items
+    )
+    for session in session_graph.sessions:
+        boundary = boundaries.get(session.session_id)
+        if not has_agent_message_items and any(
+            event.type == EventType.LLM_RESPONSE
+            and _is_resident(event.timestamp, boundary)
+            and isinstance(event.payload.get("text"), str)
+            and bool(event.payload["text"])
+            for event in session.events
+        ):
+            return True
+        for turn in session.turns:
+            for item in turn.items:
+                if not _is_resident(item.started_at, boundary):
+                    continue
+                if item.kind in {"reasoning", "agent_message"}:
+                    if item.text:
+                        return True
+                    continue
+                if item.kind in {
+                    "tool_call",
+                    "command_execution",
+                    "file_change",
+                    "plan",
+                } and (item_input_text(item) or item_output_text(item)):
+                    return True
+    return False
 
 
 def _starting_context(

@@ -3,10 +3,8 @@ description = "Compare canonical token, cost, and execution metrics across codin
 entry = "metrics.py"
 
 [requires]
-"project.list" = 1
-"project.sessions" = 1
-"session.usage" = 1
-"session.model_usage" = 1
+"project.sessions" = 2
+"graph.usage" = 2
 
 [[tools]]
 name = "."

@@ -14,7 +14,6 @@ from coding_trajectory.discovery import (
     DiscoverySource,
     discover_project_metadata,
     discover_store,
-    discover_store_from_file,
     discover_store_from_files,
     format_discovery_sources,
     locate_session_files,
@@ -496,17 +495,11 @@ def _expand_targeted_paths(paths: list[Path]) -> list[Path]:
 def resolve_store(
     params: dict[str, Any],
     *,
-    log_file: Path | None,
     global_scope: bool,
     current_dir: Path,
     cache: IndexCache,
 ) -> tuple[DocumentStore, str]:
     """Build a store: use cached path index for targeted load, fall back to full discovery."""
-    if log_file is not None:
-        discovery = discover_store_from_file(log_file)
-        _update_path_index(cache, discovery.sources)
-        return discovery.store, format_discovery_sources(discovery.sources)
-
     entrypoint_id = _session_graph_entrypoint_id(params)
     if entrypoint_id and cache.path_to_session_graph:
         normalized_entrypoint_id = _normalize_user_id(entrypoint_id)
@@ -634,52 +627,6 @@ def project_list_metadata(
             ),
         }
 
-    return {"items": items}
-
-
-def project_sessions_metadata(
-    params: dict[str, Any],
-    *,
-    global_scope: bool,
-    current_dir: Path,
-) -> dict[str, Any]:
-    """List project sessions using the same visible-turn semantics as overview."""
-    from coding_trajectory.analysis.session_graph_views import (
-        session_graph_has_visible_overview_content,
-    )
-
-    discovery = discover_store(
-        current_dir=current_dir,
-        global_scope=global_scope,
-        project_name=params.get("project_name"),
-        since_days=params.get("since_days"),
-        modified_since=params.get("modified_since"),
-        agent_vendor=params.get("agent_vendor"),
-    )
-    items = [
-        prune_nones(
-            {
-                "graph_id": str(graph.root_session_id),
-                "root_session_id": str(graph.root_session_id),
-                "title": session_graph_title(graph),
-                "vendors": sorted(
-                    {
-                        session.vendor.value
-                        for session in graph.sessions
-                        if session.vendor
-                    }
-                )
-                or None,
-                "session_ids": [str(session.session_id) for session in graph.sessions],
-                "project": graph.project_identifier,
-            }
-        )
-        for graph in sorted(
-            discovery.store.session_graphs.values(),
-            key=lambda item: (item.project_identifier or "", str(item.root_session_id)),
-        )
-        if session_graph_has_visible_overview_content(graph)
-    ]
     return {"items": items}
 
 
@@ -833,10 +780,7 @@ def _handle_project_sessions(
     include = set(params.get("include") or [])
     items: list[dict[str, Any]] = []
     for graph in session_graphs:
-        # Match the visible-turn semantics of project_sessions_metadata /
-        # session.overview so the returned session set is the same whether
-        # or not the caller requests bulk runtime/usage summaries via
-        # ``include``.
+        # Match session.overview visible-turn semantics for every projection.
         if not session_graph_has_visible_overview_content(graph):
             continue
         item = {
@@ -877,22 +821,6 @@ def _handle_project_list(
     )
 
 
-def _handle_project_logfile(
-    _params: dict[str, Any], context: ServiceContext
-) -> dict[str, Any]:
-    session_graphs = list(context.store.session_graphs.values())
-    if not session_graphs:
-        raise ValueError("no session_graphs found in log file")
-    return {
-        "items": [
-            _public_output_for_session_graph(
-                graph, serialize_session_graph_detail(graph)
-            )
-            for graph in session_graphs
-        ]
-    }
-
-
 @_single_session_handler
 def _handle_session_overview(
     params: dict[str, Any], session_graph: SessionGraph
@@ -909,36 +837,6 @@ def _handle_session_overview(
 @_single_session_handler
 def _handle_session_stats(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     return _build_stats_response(session_graph)
-
-
-@_single_session_handler
-def _handle_session_turn_usage(
-    params: dict[str, Any], session_graph: SessionGraph
-) -> Any:
-    from coding_trajectory.metrics import build_session_graph_metrics
-
-    result = build_session_graph_metrics(session_graph)
-    turn_id = str(params["turn_id"])
-    turns = [
-        {
-            "session_id": session["session_id"],
-            "vendor": session["vendor"],
-            "session_status": session.get("status"),
-            "turn_id": turn["turn_id"],
-            "sequence": turn["sequence"],
-            "status": turn.get("status"),
-            "token_usage": turn["token_usage"],
-        }
-        for session in result["sessions"]
-        for turn in session["turns"]
-        if str(turn["turn_id"]) == turn_id
-    ]
-    return {
-        "root_session_id": result["root_session_id"],
-        "token_usage": turns[0]["token_usage"] if turns else {},
-        "turns": turns,
-        "warnings": result.get("warnings") or [],
-    }
 
 
 @_single_session_handler
@@ -966,9 +864,12 @@ def _handle_session_request_usage(
 ) -> Any:
     from coding_trajectory.metrics import build_session_graph_request_usage
 
+    include = set(params.get("include") or [])
     return build_session_graph_request_usage(
         session_graph,
         turn_id=params.get("turn_id"),
+        include_causality="causality" in include,
+        include_context_diagnostics="context" in include,
     )
 
 
@@ -978,9 +879,12 @@ def _handle_session_tool_usage(
 ) -> Any:
     from coding_trajectory.metrics import build_session_graph_tool_usage
 
+    include = set(params.get("include") or [])
     return build_session_graph_tool_usage(
         session_graph,
         turn_id=params.get("turn_id"),
+        include_item_real_token_costs="item_costs" in include,
+        include_advanced_causality="causality" in include,
     )
 
 
@@ -992,18 +896,29 @@ def _handle_graph_overview(params: dict[str, Any], session_graph: SessionGraph) 
         session_graph,
         num_turns=_optional_positive_int(params, "num_turns"),
         drop_turns=_optional_positive_int(params, "drop_turns"),
+        include_narrative="narrative" in set(params.get("include") or []),
     )
 
 
 @_graph_handler
 def _handle_graph_stats(params: dict[str, Any], session_graph: SessionGraph) -> Any:
-    return _build_stats_response(session_graph)
+    return _build_stats_response(
+        session_graph,
+        include_session_composition=(
+            "session_composition" in set(params.get("include") or [])
+        ),
+    )
 
 
-def _build_stats_response(session_graph: SessionGraph) -> dict[str, Any]:
+def _build_stats_response(
+    session_graph: SessionGraph,
+    *,
+    include_session_composition: bool = True,
+) -> dict[str, Any]:
     from coding_trajectory.analysis.content_size import scoped_content_size_cache
     from coding_trajectory.metrics import (
         build_session_graph_context_stats,
+        build_session_graph_full_metrics,
         build_session_graph_stats_token_usage,
     )
     from coding_trajectory.metrics.analysis import (
@@ -1013,12 +928,14 @@ def _build_stats_response(session_graph: SessionGraph) -> dict[str, Any]:
     with scoped_content_size_cache():
         stats_breakdown = _build_session_graph_stats_usage_breakdown(session_graph)
         stats_usage = stats_breakdown.graph_usage
+        full_metrics = build_session_graph_full_metrics(session_graph)
         result = build_session_graph_context_stats(
             session_graph,
             allocated_usage_by_item=stats_usage["allocated_usage_by_item"],
             allocated_usage_by_context_source=stats_usage[
                 "allocated_usage_by_context_source"
             ],
+            precomputed_metrics=full_metrics,
         )
         if stats_usage.get("billed_token_usage"):
             result["billed_token_usage"] = stats_usage["billed_token_usage"]
@@ -1029,6 +946,10 @@ def _build_stats_response(session_graph: SessionGraph) -> dict[str, Any]:
             build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
             precomputed_usage_by_session=stats_breakdown.usage_by_session,
             precomputed_counter_name=stats_breakdown.counter_name,
+            precomputed_metrics_by_session={
+                session.session_id: session for session in full_metrics.sessions
+            },
+            include_session_composition=include_session_composition,
         )
 
 
@@ -1036,7 +957,12 @@ def _build_stats_response(session_graph: SessionGraph) -> dict[str, Any]:
 def _handle_graph_usage(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.metrics import build_session_graph_usage
 
-    return build_session_graph_usage(session_graph, turn_id=params.get("turn_id"))
+    include = set(params.get("include") or [])
+    return build_session_graph_usage(
+        session_graph,
+        turn_id=params.get("turn_id"),
+        include_graph_turns="flat_turns" in include,
+    )
 
 
 def _handle_session_events(
@@ -1238,12 +1164,10 @@ def _item_for_event(session_graph: SessionGraph, event_id: UUID) -> Item | None:
 SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "project.list": _handle_project_list,
     "project.sessions": _handle_project_sessions,
-    "project.logfile": _handle_project_logfile,
     "session.overview": _handle_session_overview,
     "graph.overview": _handle_graph_overview,
     "session.stats": _handle_session_stats,
     "graph.stats": _handle_graph_stats,
-    "session.turn_usage": _handle_session_turn_usage,
     "session.usage": _handle_session_usage,
     "graph.usage": _handle_graph_usage,
     "session.model_usage": _handle_session_model_usage,
