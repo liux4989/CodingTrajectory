@@ -96,6 +96,7 @@ class TranscriptProjector:
 
         self.turns: list[Turn] = []
         self.current_turn: Turn | None = None
+        self._current_turn_event_ids: set[UUID] = set()
         self.turn_sequence = 0
         self.item_sequence = 0
         self.current_turn_has_final_answer = False
@@ -200,6 +201,7 @@ class TranscriptProjector:
             user_request_event_id=record.record_id,
             event_ids=[record.record_id],
         )
+        self._current_turn_event_ids = {record.record_id}
         self.turn_sequence += 1
         self.item_sequence = 0
         self.current_turn_has_final_answer = False
@@ -233,6 +235,7 @@ class TranscriptProjector:
             user_request_event_id=None,
             event_ids=[record.record_id],
         )
+        self._current_turn_event_ids = {record.record_id}
         self.turn_sequence += 1
         self.item_sequence = 0
         self.current_turn_has_final_answer = False
@@ -552,6 +555,7 @@ class TranscriptProjector:
         self.current_turn.status = status
         self.turns.append(self.current_turn)
         self.current_turn = None
+        self._current_turn_event_ids.clear()
         self.item_sequence = 0
         self.current_turn_has_final_answer = False
         self.current_user_request_text = None
@@ -560,7 +564,10 @@ class TranscriptProjector:
     def _append_turn_event_id(self, event_id: UUID) -> None:
         if self.current_turn is None:
             return
-        _append_event_id(self.current_turn, event_id)
+        if event_id in self._current_turn_event_ids:
+            return
+        self._current_turn_event_ids.add(event_id)
+        self.current_turn.event_ids.append(event_id)
 
 
 def _append_event_id(turn: Turn, event_id: UUID) -> None:

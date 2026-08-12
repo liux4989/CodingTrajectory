@@ -908,27 +908,7 @@ def _handle_session_overview(
 
 @_single_session_handler
 def _handle_session_stats(params: dict[str, Any], session_graph: SessionGraph) -> Any:
-    from coding_trajectory.metrics import (
-        build_session_graph_context_stats,
-        build_session_graph_stats_token_usage,
-    )
-
-    stats_usage = build_session_graph_stats_token_usage(session_graph)
-    result = build_session_graph_context_stats(
-        session_graph,
-        allocated_usage_by_item=stats_usage["allocated_usage_by_item"],
-        allocated_usage_by_context_source=stats_usage[
-            "allocated_usage_by_context_source"
-        ],
-    )
-    if stats_usage.get("billed_token_usage"):
-        result["billed_token_usage"] = stats_usage["billed_token_usage"]
-    return build_session_stats_projection(
-        session_graph,
-        result,
-        build_session_graph_context_stats=build_session_graph_context_stats,
-        build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
-    )
+    return _build_stats_response(session_graph)
 
 
 @_single_session_handler
@@ -1005,9 +985,7 @@ def _handle_session_tool_usage(
 
 
 @_graph_handler
-def _handle_graph_overview(
-    params: dict[str, Any], session_graph: SessionGraph
-) -> Any:
+def _handle_graph_overview(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.analysis.graph_views import build_graph_overview
 
     return build_graph_overview(
@@ -1019,27 +997,39 @@ def _handle_graph_overview(
 
 @_graph_handler
 def _handle_graph_stats(params: dict[str, Any], session_graph: SessionGraph) -> Any:
+    return _build_stats_response(session_graph)
+
+
+def _build_stats_response(session_graph: SessionGraph) -> dict[str, Any]:
+    from coding_trajectory.analysis.content_size import scoped_content_size_cache
     from coding_trajectory.metrics import (
         build_session_graph_context_stats,
         build_session_graph_stats_token_usage,
     )
+    from coding_trajectory.metrics.analysis import (
+        _build_session_graph_stats_usage_breakdown,
+    )
 
-    stats_usage = build_session_graph_stats_token_usage(session_graph)
-    result = build_session_graph_context_stats(
-        session_graph,
-        allocated_usage_by_item=stats_usage["allocated_usage_by_item"],
-        allocated_usage_by_context_source=stats_usage[
-            "allocated_usage_by_context_source"
-        ],
-    )
-    if stats_usage.get("billed_token_usage"):
-        result["billed_token_usage"] = stats_usage["billed_token_usage"]
-    return build_session_stats_projection(
-        session_graph,
-        result,
-        build_session_graph_context_stats=build_session_graph_context_stats,
-        build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
-    )
+    with scoped_content_size_cache():
+        stats_breakdown = _build_session_graph_stats_usage_breakdown(session_graph)
+        stats_usage = stats_breakdown.graph_usage
+        result = build_session_graph_context_stats(
+            session_graph,
+            allocated_usage_by_item=stats_usage["allocated_usage_by_item"],
+            allocated_usage_by_context_source=stats_usage[
+                "allocated_usage_by_context_source"
+            ],
+        )
+        if stats_usage.get("billed_token_usage"):
+            result["billed_token_usage"] = stats_usage["billed_token_usage"]
+        return build_session_stats_projection(
+            session_graph,
+            result,
+            build_session_graph_context_stats=build_session_graph_context_stats,
+            build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
+            precomputed_usage_by_session=stats_breakdown.usage_by_session,
+            precomputed_counter_name=stats_breakdown.counter_name,
+        )
 
 
 @_graph_handler
@@ -1231,11 +1221,7 @@ def _event_ids_for_turn(
                     if turn.user_request_event_id is not None
                     else []
                 ),
-                *(
-                    event_id
-                    for item in turn.items
-                    for event_id in item.event_ids
-                ),
+                *(event_id for item in turn.items for event_id in item.event_ids),
             }
     raise ResourceNotFoundError(f"turn not found in selected session: {turn_id}")
 

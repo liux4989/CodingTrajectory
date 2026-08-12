@@ -14,7 +14,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from coding_trajectory import debug
 from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
-from coding_trajectory.ingestion.adapters.base import BaseAdapter
+from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import (
     Event,
@@ -94,16 +94,29 @@ def _ingest_sessions(
     """
     started_turn_ids_by_session: dict[UUID, set[str]] = {}
     parent_session_by_path: dict[Path, UUID | None] = {}
+    header_scans: list[tuple[BaseAdapter, SessionHeader | None]] = []
     for _vendor, adapter_cls, path in candidates:
         adapter = adapter_cls()
         header = adapter.scan_header(path)
+        header_scans.append((adapter, header))
         if header is None:
             parent_session_by_path[path] = None
+            continue
+        parent_session_by_path[path] = header.parent_session_id
+
+    referenced_parent_ids = {
+        parent_session_id
+        for parent_session_id in parent_session_by_path.values()
+        if parent_session_id is not None
+    }
+    for (_vendor, _adapter_cls, path), (adapter, header) in zip(
+        candidates, header_scans, strict=True
+    ):
+        if header is None or header.session_id not in referenced_parent_ids:
             continue
         started = adapter.scan_started_turn_ids(path)
         if started is not None:
             started_turn_ids_by_session[header.session_id] = started
-        parent_session_by_path[path] = header.parent_session_id
 
     ingested: list[tuple[Vendor, Path, Session]] = []
     for vendor, adapter_cls, path in candidates:

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+from uuid import UUID
 
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.indexes import (
@@ -23,6 +24,7 @@ from coding_trajectory.ingestion.indexes import (
     ordered_sessions,
 )
 from coding_trajectory.ingestion.models import Session, SessionGraph
+from coding_trajectory.token_counter import counter_for_session_graph
 
 # Edge types that mark a session as a spawned subagent rather than a peer
 # member of the graph. Co-located with session_role so the label logic is
@@ -87,13 +89,23 @@ def session_stats_sections(
     *,
     build_session_graph_context_stats: Callable[..., dict[str, Any]],
     build_session_graph_stats_token_usage: Callable[[SessionGraph], dict[str, Any]],
+    precomputed_usage_by_session: dict[UUID, dict[str, Any]] | None = None,
+    precomputed_counter_name: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build a per-session stats section for each session in the graph."""
     index = build_session_graph_index(session_graph)
+    precomputed_by_session = precomputed_usage_by_session or {}
     sections: list[dict[str, Any]] = []
     for session in ordered_sessions(index):
         single = single_session_graph(session_graph, session)
-        stats_usage = build_session_graph_stats_token_usage(single)
+        stats_usage = None
+        if (
+            precomputed_counter_name
+            and counter_for_session_graph(single).name == precomputed_counter_name
+        ):
+            stats_usage = precomputed_by_session.get(session.session_id)
+        if stats_usage is None:
+            stats_usage = build_session_graph_stats_token_usage(single)
         section = build_session_graph_context_stats(
             single,
             allocated_usage_by_item=stats_usage["allocated_usage_by_item"],
@@ -131,6 +143,8 @@ def build_session_stats_projection(
     *,
     build_session_graph_context_stats: Callable[..., dict[str, Any]],
     build_session_graph_stats_token_usage: Callable[[SessionGraph], dict[str, Any]],
+    precomputed_usage_by_session: dict[UUID, dict[str, Any]] | None = None,
+    precomputed_counter_name: str | None = None,
 ) -> dict[str, Any]:
     """Layer the graph-scope presentation fields onto a stats result.
 
@@ -161,5 +175,7 @@ def build_session_stats_projection(
             session_graph,
             build_session_graph_context_stats=build_session_graph_context_stats,
             build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
+            precomputed_usage_by_session=precomputed_usage_by_session,
+            precomputed_counter_name=precomputed_counter_name,
         )
     return stats_result
