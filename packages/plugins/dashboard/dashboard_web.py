@@ -172,6 +172,8 @@ def _handler_for(
                     payload = service.error_collection(query)
                 elif path == "/api/cache-breaks":
                     payload = service.cache_breaks(query)
+                elif path == "/api/diagnostics/cache":
+                    payload = service.cache_metrics()
                 elif path == "/api/evaluations":
                     payload = service.evaluation_list(query)
                 elif path.startswith("/api/evaluations/"):

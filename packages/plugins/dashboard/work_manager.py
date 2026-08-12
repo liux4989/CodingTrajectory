@@ -24,6 +24,10 @@ class _InFlightWork:
     background: bool = False
 
 
+class _WorkInvalidated(Exception):
+    """Internal control flow for a foreground load invalidated while running."""
+
+
 class DashboardWorkManager:
     """Caches dashboard projections and deduplicates concurrent cache misses.
 
@@ -50,6 +54,22 @@ class DashboardWorkManager:
         self._entries: dict[tuple[Any, ...], CacheEntry] = {}
         self._in_flight: dict[tuple[Any, ...], _InFlightWork] = {}
         self._retry_after: dict[tuple[Any, ...], float] = {}
+        self._metrics = {
+            "lookups_total": 0,
+            "fresh_hits_total": 0,
+            "stale_serves_total": 0,
+            "misses_total": 0,
+            "loads_started_total": 0,
+            "coalesced_waits_total": 0,
+            "load_failed_total": 0,
+            "refresh_started_total": 0,
+            "refresh_succeeded_total": 0,
+            "refresh_failed_total": 0,
+            "refresh_invalidated_total": 0,
+            "invalidated_retries_total": 0,
+            "invalidations_total": 0,
+            "evictions_total": 0,
+        }
         self._lock = threading.Lock()
         self._closed = False
         self._refresh_pool = ThreadPoolExecutor(
@@ -77,25 +97,37 @@ class DashboardWorkManager:
             with self._lock:
                 if self._closed:
                     raise RuntimeError("dashboard work manager is shut down")
+                self._metrics["lookups_total"] += 1
                 entry = self._entries.get(key)
                 if entry:
                     age = now - entry.created_at
                     if age < ttl:
+                        self._metrics["fresh_hits_total"] += 1
                         return entry.value
                     if age < stale_ttl:
+                        self._metrics["stale_serves_total"] += 1
                         self._start_background_refresh(key, factory, now)
                         return entry.value
                 work = self._in_flight.get(key)
                 if work is None:
                     work = _InFlightWork(event=threading.Event())
                     self._in_flight[key] = work
+                    self._metrics["misses_total"] += 1
+                    self._metrics["loads_started_total"] += 1
                     owner = True
                 else:
+                    self._metrics["misses_total"] += 1
+                    self._metrics["coalesced_waits_total"] += 1
                     owner = False
             if owner:
-                return self._compute(key, factory, work)
+                try:
+                    return self._compute(key, factory, work)
+                except _WorkInvalidated:
+                    continue
             work.event.wait()
             if work.invalidated:
+                with self._lock:
+                    self._metrics["invalidated_retries_total"] += 1
                 continue
             if work.error is not None:
                 raise work.error
@@ -104,6 +136,7 @@ class DashboardWorkManager:
 
     def clear_prefix(self, prefix: tuple[Any, ...]) -> None:
         with self._lock:
+            self._metrics["invalidations_total"] += 1
             for key in list(self._entries):
                 if key[: len(prefix)] == prefix:
                     del self._entries[key]
@@ -118,6 +151,7 @@ class DashboardWorkManager:
 
     def clear_all(self) -> None:
         with self._lock:
+            self._metrics["invalidations_total"] += 1
             self._entries.clear()
             self._retry_after.clear()
             for work in self._in_flight.values():
@@ -136,6 +170,21 @@ class DashboardWorkManager:
             self._in_flight.clear()
         self._refresh_pool.shutdown(wait=wait, cancel_futures=True)
 
+    def metrics(self) -> dict[str, int]:
+        """Return aggregate operation counters and registry-size gauges.
+
+        ``invalidations_total`` counts clear operations. ``in_flight`` counts
+        coalescible registry entries; an invalidated factory may still finish
+        after it has been removed from that registry.
+        """
+        with self._lock:
+            return {
+                **self._metrics,
+                "entries": len(self._entries),
+                "in_flight": len(self._in_flight),
+                "retry_backoffs": len(self._retry_after),
+            }
+
     def _start_background_refresh(
         self,
         key: tuple[Any, ...],
@@ -153,6 +202,8 @@ class DashboardWorkManager:
             work.event.set()
             if self._in_flight.get(key) is work:
                 del self._in_flight[key]
+        else:
+            self._metrics["refresh_started_total"] += 1
 
     def _refresh(
         self,
@@ -178,22 +229,44 @@ class DashboardWorkManager:
             value = factory()
         except BaseException as exc:
             with self._lock:
-                work.error = exc
-                if work.background and not work.invalidated:
+                invalidated = work.invalidated
+                if not invalidated:
+                    work.error = exc
+                if work.background and not invalidated:
                     self._retry_after[key] = time.monotonic() + self._retry_seconds
+                    self._metrics["refresh_failed_total"] += 1
+                elif not work.background and not invalidated:
+                    self._metrics["load_failed_total"] += 1
                 if self._in_flight.get(key) is work:
                     del self._in_flight[key]
                 work.event.set()
+                if invalidated and not work.background:
+                    self._metrics["invalidated_retries_total"] += 1
+            if invalidated:
+                if work.background:
+                    with self._lock:
+                        self._metrics["refresh_invalidated_total"] += 1
+                raise _WorkInvalidated
             raise
         with self._lock:
-            if not work.invalidated:
+            invalidated = work.invalidated
+            if not invalidated:
                 self._entries[key] = CacheEntry(time.monotonic(), value)
                 self._retry_after.pop(key, None)
                 self._evict_oldest()
-            work.result = value
+                work.result = value
+                if work.background:
+                    self._metrics["refresh_succeeded_total"] += 1
+            elif not work.background:
+                self._metrics["invalidated_retries_total"] += 1
             if self._in_flight.get(key) is work:
                 del self._in_flight[key]
             work.event.set()
+        if invalidated:
+            if work.background:
+                with self._lock:
+                    self._metrics["refresh_invalidated_total"] += 1
+            raise _WorkInvalidated
         return value
 
     def _evict_oldest(self) -> None:
@@ -204,3 +277,4 @@ class DashboardWorkManager:
             )
             del self._entries[oldest]
             self._retry_after.pop(oldest, None)
+            self._metrics["evictions_total"] += 1

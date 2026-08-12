@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "dashboard-context-window-large-v1",
+  "fixture": {
+    "since_days": 7,
+    "project_name": "trail-trading",
+    "session_id": "019ff437-4409-7e02-ae07-bf97cc39215d",
+    "session_title": "Explain Prototype Research Lab",
+    "session_graph_size": 13241,
+    "selection": "pinned representative fixture"
+  },
+  "apis": [
+    "context-window"
+  ],
+  "minimum_repeat": 5,
+  "deterministic_response_apis": [
+    "context-window"
+  ],
+  "expected_response_sha256": {
+    "context-window": "1734467722bd4f363e2823780d05592a0df1b04afee9cc008cb8923f555d73b2"
+  },
+  "thresholds_ms": {
+    "warning": 1000.0,
+    "critical": 5000.0
+  }
+}

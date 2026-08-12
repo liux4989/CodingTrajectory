@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "role": "legacy-control-receipt",
+  "artifact": "benchmarks/results/dashboard-context-window-before-v1.json",
+  "artifact_sha256": "ed3b7cdab8957c6fd678d0d6a381241ba1eedc4326d999559d66d2e96ad69525",
+  "experiment_id": "dashboard-context-window-same-core-v1",
+  "control_revision": "b5c172f3a0eefde40a74745002bdf9a5f6355ed9",
+  "core_tree_oid": "44fb720e9707cfb53499b07112b3fb2d884b0429",
+  "cli_tree_oid": "6520b654214f721da73e6b88b8d18f4538f0a460",
+  "dashboard_tree_oid": "d8cf92120420fa6d402c7908232cc40c30a5e7fe",
+  "candidate_core_cli_relationship": "packages/core and packages/cli are byte-identical between control b5c172f and merge revision 66c1a05",
+  "session_id": "019ff437-4409-7e02-ae07-bf97cc39215d",
+  "repeat": 5,
+  "cache_scope": "dashboard projection and shared source caches cleared before each cold call; OS and source filesystem caches retained",
+  "command": "CT_COMMAND=<control-worktree>/.venv/bin/ct uv run --package coding-trajectory ct plugin dashboard benchmark --api context-window --session-id 019ff437-4409-7e02-ae07-bf97cc39215d --repeat 5 --save <repo>/benchmarks/results/dashboard-context-window-before-v1.json --json",
+  "limitations": [
+    "The schema-v1 artifact does not embed repository, source, response, or fixture hashes.",
+    "The fixture-manifest association is post-hoc by session id.",
+    "This receipt records same-host observational control evidence and is not accepted by strict schema-v2 comparison."
+  ]
+}

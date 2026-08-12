@@ -79,8 +79,8 @@ class DashboardDataService:
 
     def clear_caches(self) -> None:
         """Invalidate both dashboard projections and shared source reads."""
-        self._work.clear_all()
         self._source.clear()
+        self._work.clear_all()
 
     def _invalidate_cached_data(self) -> None:
         self.clear_caches()
@@ -89,6 +89,13 @@ class DashboardDataService:
     def refresh(self) -> dict[str, Any]:
         self._invalidate_cached_data()
         return {"status": "refreshed"}
+
+    def cache_metrics(self) -> dict[str, Any]:
+        """Return observational snapshots; the two layers are not atomic."""
+        return {
+            "projection": self._work.metrics(),
+            "source": self._source.metrics(),
+        }
 
     def overview(self, query: dict[str, list[str]]) -> dict[str, Any]:
         since_days = _int(query, "since_days", 7)

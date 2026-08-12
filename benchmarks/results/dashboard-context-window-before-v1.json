@@ -1,0 +1,300 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-12T18:05:43.900022+00:00",
+  "environment": {
+    "python": "3.12.11",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "ct_command": "/tmp/codingtrajectory-dashboard-control.6Cu6dr/.venv/bin/ct"
+  },
+  "fixture": {
+    "since_days": 7,
+    "project_name": null,
+    "session_id": "019ff437-4409-7e02-ae07-bf97cc39215d",
+    "session_title": null,
+    "session_graph_size": null,
+    "selection": "explicit fixture"
+  },
+  "repeat": 5,
+  "thresholds_ms": {
+    "warning": 1000.0,
+    "critical": 5000.0
+  },
+  "results": [
+    {
+      "name": "context-window",
+      "method": "GET",
+      "route": "/api/sessions/context-window",
+      "query": {
+        "session_id": [
+          "019ff437-4409-7e02-ae07-bf97cc39215d"
+        ]
+      },
+      "status": "critical",
+      "cold_runs_ms": [
+        36551.596,
+        35122.904,
+        35882.243,
+        34488.963,
+        34942.202
+      ],
+      "warm_runs_ms": [
+        0.282,
+        0.288,
+        0.289,
+        0.297,
+        0.289
+      ],
+      "cold_median_ms": 35122.904,
+      "warm_median_ms": 0.289,
+      "warm_speedup": 121620.07,
+      "nested_ct_median_ms": 35120.811,
+      "dashboard_median_ms": 2.093,
+      "response_bytes": 83725,
+      "internal_calls": [
+        {
+          "run": 1,
+          "phase": "cold",
+          "sequence": 1,
+          "label": "ct session stats",
+          "request_count": 1,
+          "elapsed_ms": 9910.648,
+          "response_bytes": 14855,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 1,
+          "phase": "cold",
+          "sequence": 2,
+          "label": "ct session overview",
+          "request_count": 1,
+          "elapsed_ms": 9240.104,
+          "response_bytes": 6397,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 1,
+          "phase": "cold",
+          "sequence": 3,
+          "label": "ct session usage",
+          "request_count": 1,
+          "elapsed_ms": 8747.987,
+          "response_bytes": 3440,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 1,
+          "phase": "cold",
+          "sequence": 4,
+          "label": "ct api call session.tool_usage",
+          "request_count": 1,
+          "elapsed_ms": 8649.37,
+          "response_bytes": 64450,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 2,
+          "phase": "cold",
+          "sequence": 1,
+          "label": "ct session stats",
+          "request_count": 1,
+          "elapsed_ms": 8582.857,
+          "response_bytes": 14855,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 2,
+          "phase": "cold",
+          "sequence": 2,
+          "label": "ct session overview",
+          "request_count": 1,
+          "elapsed_ms": 8609.641,
+          "response_bytes": 6397,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 2,
+          "phase": "cold",
+          "sequence": 3,
+          "label": "ct session usage",
+          "request_count": 1,
+          "elapsed_ms": 9232.275,
+          "response_bytes": 3440,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 2,
+          "phase": "cold",
+          "sequence": 4,
+          "label": "ct api call session.tool_usage",
+          "request_count": 1,
+          "elapsed_ms": 8696.038,
+          "response_bytes": 64450,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 3,
+          "phase": "cold",
+          "sequence": 1,
+          "label": "ct session stats",
+          "request_count": 1,
+          "elapsed_ms": 9433.334,
+          "response_bytes": 14855,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 3,
+          "phase": "cold",
+          "sequence": 2,
+          "label": "ct session overview",
+          "request_count": 1,
+          "elapsed_ms": 8888.395,
+          "response_bytes": 6397,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 3,
+          "phase": "cold",
+          "sequence": 3,
+          "label": "ct session usage",
+          "request_count": 1,
+          "elapsed_ms": 8875.304,
+          "response_bytes": 3440,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 3,
+          "phase": "cold",
+          "sequence": 4,
+          "label": "ct api call session.tool_usage",
+          "request_count": 1,
+          "elapsed_ms": 8683.04,
+          "response_bytes": 64450,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 4,
+          "phase": "cold",
+          "sequence": 1,
+          "label": "ct session stats",
+          "request_count": 1,
+          "elapsed_ms": 8499.405,
+          "response_bytes": 14855,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 4,
+          "phase": "cold",
+          "sequence": 2,
+          "label": "ct session overview",
+          "request_count": 1,
+          "elapsed_ms": 7643.184,
+          "response_bytes": 6397,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 4,
+          "phase": "cold",
+          "sequence": 3,
+          "label": "ct session usage",
+          "request_count": 1,
+          "elapsed_ms": 8922.57,
+          "response_bytes": 3440,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 4,
+          "phase": "cold",
+          "sequence": 4,
+          "label": "ct api call session.tool_usage",
+          "request_count": 1,
+          "elapsed_ms": 9421.433,
+          "response_bytes": 64450,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 5,
+          "phase": "cold",
+          "sequence": 1,
+          "label": "ct session stats",
+          "request_count": 1,
+          "elapsed_ms": 9301.912,
+          "response_bytes": 14855,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 5,
+          "phase": "cold",
+          "sequence": 2,
+          "label": "ct session overview",
+          "request_count": 1,
+          "elapsed_ms": 8202.269,
+          "response_bytes": 6397,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 5,
+          "phase": "cold",
+          "sequence": 3,
+          "label": "ct session usage",
+          "request_count": 1,
+          "elapsed_ms": 8600.531,
+          "response_bytes": 3440,
+          "status": "ok",
+          "error": null
+        },
+        {
+          "run": 5,
+          "phase": "cold",
+          "sequence": 4,
+          "label": "ct api call session.tool_usage",
+          "request_count": 1,
+          "elapsed_ms": 8835.475,
+          "response_bytes": 64450,
+          "status": "ok",
+          "error": null
+        }
+      ],
+      "error": null
+    }
+  ],
+  "excluded_apis": [
+    "overview",
+    "projects",
+    "project-detail",
+    "sessions",
+    "session-timeline",
+    "model-usage",
+    "error-collection",
+    "cache-breaks",
+    "evaluations",
+    "vendors",
+    "project-cleanup-preview",
+    "session-cleanup-preview",
+    "token-efficiency",
+    "token-efficiency-project"
+  ],
+  "notes": [
+    "Cold runs clear the dashboard result cache before each call; warm runs immediately repeat the same call.",
+    "nested_ct_median_ms sums dashboard-owned ct subprocess wall time; dashboard_median_ms is the remaining route and JSON serialization time.",
+    "Agent, evaluation-start, cleanup-apply, and other state-changing APIs are excluded.",
+    "Token-efficiency projections are included only with --include-expensive or an explicit --api selection."
+  ]
+}

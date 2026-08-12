@@ -55,6 +55,9 @@ class DashboardSourceData:
     def shutdown(self) -> None:
         self._work.shutdown(wait=False)
 
+    def metrics(self) -> dict[str, int]:
+        return self._work.metrics()
+
     def call(
         self,
         method: str,
