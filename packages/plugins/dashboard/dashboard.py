@@ -8,10 +8,12 @@ import subprocess
 import sys
 
 try:
+    from . import api_benchmark as api_benchmark_mod
     from . import cleanup as cleanup_mod
     from . import context_window as context_window_mod
     from . import evaluation as evaluation_mod
 except ImportError:
+    import api_benchmark as api_benchmark_mod
     import cleanup as cleanup_mod
     import context_window as context_window_mod
     import evaluation as evaluation_mod
@@ -26,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     if raw_args[0] in {"web", "--web"}:
         return _run_dashboard_web(raw_args[1:])
     action, rest = raw_args[0], raw_args[1:]
+    if action == "benchmark":
+        return api_benchmark_mod.main(rest)
     if action == "project":
         return _handle_project_command(rest)
     if action == "session":
@@ -40,10 +44,15 @@ def _build_root_parser() -> argparse.ArgumentParser:
         description=_root_entry_text(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--web", action="store_true", help="Open the dashboard web program.")
+    parser.add_argument(
+        "--web", action="store_true", help="Open the dashboard web program."
+    )
     sub = parser.add_subparsers(dest="action", metavar="<command>")
     sub.add_parser("web", help="Rich dashboard with analytics (browser).")
-    project = sub.add_parser("project", help="List managed projects and project actions.")
+    sub.add_parser("benchmark", help="Benchmark read-only dashboard APIs.")
+    project = sub.add_parser(
+        "project", help="List managed projects and project actions."
+    )
     project.add_argument("--agent-vendor", default=None)
     project_cleanup = sub.add_parser(
         "project cleanup",
@@ -171,6 +180,7 @@ def _root_entry_text() -> str:
             "",
             "Commands:",
             "  ct plugin dashboard web [flags]    Rich dashboard with analytics (browser)",
+            "  ct plugin dashboard benchmark [flags]",
             "  ct plugin dashboard project [ct project list flags]",
             "  ct plugin dashboard project cleanup [--dry-run] [flags]",
             "  ct plugin dashboard session [ct project sessions flags]",
@@ -206,7 +216,10 @@ def _session_cleanup(args: argparse.Namespace) -> int:
 def _ct_passthrough(args: list[str]) -> int:
     ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
     if not ct:
-        print("error: ct executable not found; set CT_COMMAND to the ct command path", file=sys.stderr)
+        print(
+            "error: ct executable not found; set CT_COMMAND to the ct command path",
+            file=sys.stderr,
+        )
         return 127
     command = [*shlex.split(ct), *args]
     try:
@@ -224,7 +237,10 @@ def _run_dashboard_web(args: list[str]) -> int:
         try:
             from dashboard_web import main as web_main
         except ImportError:
-            print(f"error: dashboard web entrypoint could not be loaded: {exc}", file=sys.stderr)
+            print(
+                f"error: dashboard web entrypoint could not be loaded: {exc}",
+                file=sys.stderr,
+            )
             return 2
     return web_main(args)
 

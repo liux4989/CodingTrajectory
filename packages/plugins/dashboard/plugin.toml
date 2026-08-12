@@ -22,6 +22,10 @@ name = "web"
 summary = "Run the dashboard web program."
 
 [[tools]]
+name = "benchmark"
+summary = "Benchmark read-only dashboard APIs."
+
+[[tools]]
 name = "project"
 summary = "List managed projects and project actions."
 
