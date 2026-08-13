@@ -25,8 +25,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const listRef = React.useRef<HTMLDivElement>(null);
 
   const sessions = useQuery({
-    queryKey: ["sessions"],
-    queryFn: fetchSessions,
+    queryKey: ["sessions", "command-palette", 7],
+    queryFn: ({ signal }) => fetchSessions({ sinceDays: 7, limit: 50, signal }),
     enabled: open,
     staleTime: 60_000,
   });
@@ -42,10 +42,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     const navItems: CommandItem[] = [
       { id: "nav-overview", label: "Overview", group: "Navigate", onSelect: () => navigate({ to: "/" }) },
       { id: "nav-sessions", label: "Sessions", group: "Navigate", onSelect: () => navigate({ to: "/sessions" }) },
-      { id: "nav-model-usage", label: "Model Usage", group: "Navigate", onSelect: () => navigate({ to: "/model-usage" }) },
+      { id: "nav-model-usage", label: "Model Usage", group: "Navigate", onSelect: () => navigate({ to: "/model-usage", search: { projectName: undefined, modelKey: undefined, view: undefined } }) },
       { id: "nav-token-efficiency", label: "Token Efficiency", group: "Navigate", onSelect: () => navigate({ to: "/token-efficiency" }) },
-      { id: "nav-cache-breaks", label: "Cache Breaks", group: "Navigate", onSelect: () => navigate({ to: "/cache-breaks" }) },
-      { id: "nav-errors", label: "Errors", group: "Navigate", onSelect: () => navigate({ to: "/error-collection" }) },
+      { id: "nav-cache-breaks", label: "Cache Breaks", group: "Navigate", onSelect: () => navigate({ to: "/cache-breaks", search: { projectName: undefined } }) },
+      { id: "nav-errors", label: "Errors", group: "Navigate", onSelect: () => navigate({ to: "/error-collection", search: { projectName: undefined } }) },
       { id: "nav-cleanup", label: "Cleanup", group: "Navigate", onSelect: () => navigate({ to: "/cleanup" }) },
     ];
 
@@ -68,7 +68,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         label: p.name,
         hint: p.path ?? undefined,
         group: "Projects" as const,
-        onSelect: () => navigate({ to: "/projects/$projectName", params: { projectName: p.name } }),
+        onSelect: () => navigate({ to: "/projects/$projectName", params: { projectName: p.name }, search: { sinceDays: undefined } }),
       }));
 
     return [...navItems, ...sessionItems, ...projectItems];

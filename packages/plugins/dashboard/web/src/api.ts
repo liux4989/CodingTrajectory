@@ -57,6 +57,7 @@ export type ProjectDetail = {
   since_days: number | null;
   sessions: SessionItem[];
   session_count: number;
+  page?: CursorPageMetadata;
 };
 
 export type SessionItem = {
@@ -66,6 +67,23 @@ export type SessionItem = {
   session_ids: string[];
   title?: string | null;
   project?: string | null;
+};
+
+export type CursorPageMetadata = {
+  revision: number;
+  next_cursor: string | null;
+  has_more: boolean;
+};
+
+export type SessionPage = {
+  items: SessionItem[];
+  page?: CursorPageMetadata;
+};
+
+export type CursorRequest = {
+  cursor?: string;
+  limit?: number;
+  signal?: AbortSignal;
 };
 
 export type TokenEvidence = {
@@ -208,6 +226,7 @@ export type CacheBreaksPayload = {
   time_buckets: Array<CacheBreakGroupRow & { bucket: string; by_type: Partial<CacheBreakTypeCount> }>;
   breaks: AggregateCacheBreak[];
   warnings: string[];
+  pages?: { breaks?: CursorPageMetadata };
 };
 
 export type ContextWindowPayload = {
@@ -541,6 +560,10 @@ export type ModelUsagePayload = {
     usage: UsageBuckets;
   }>>;
   warnings: Array<{ session_id: string; message: string }>;
+  pages?: {
+    sessions?: CursorPageMetadata;
+    turns?: CursorPageMetadata;
+  };
 };
 
 export type TokenEfficiencyGrain = "daily" | "weekly";
@@ -694,6 +717,7 @@ export type TokenEfficiencyIndexPayload = {
   warnings: string[];
   project_options: ProjectItem[];
   projects: TokenEfficiencyProjectIndexRow[];
+  pages?: { projects?: CursorPageMetadata };
 };
 
 export type TokenEfficiencyProjectPayload = {
@@ -723,6 +747,12 @@ export type TokenEfficiencyProjectPayload = {
   patterns: Record<TokenEfficiencyGrain, TokenEfficiencyPatternRow[]>;
   hotspots: Record<TokenEfficiencyGrain, TokenEfficiencyHotspotRow[]>;
   outliers: Record<TokenEfficiencyGrain, TokenEfficiencyOutlierRow[]>;
+  pages?: Partial<
+    Record<
+      "patterns" | "hotspots" | "outliers",
+      Partial<Record<TokenEfficiencyGrain, CursorPageMetadata>>
+    >
+  >;
 };
 
 export type ErrorCollectionKind =
@@ -759,6 +789,7 @@ export type ErrorCollectionPayload = {
     generated_at: string;
   };
   errors: ErrorCollectionItem[];
+  pages?: { errors?: CursorPageMetadata };
 };
 
 export async function fetchOverview(params?: { sinceDays?: number }) {
@@ -773,14 +804,37 @@ export async function fetchProjects() {
   return fetchJson<{ items: ProjectItem[] }>("/api/projects");
 }
 
-export async function fetchProjectDetail(projectName: string, sinceDays?: number) {
+export async function fetchProjectDetail(
+  projectName: string,
+  sinceDays?: number,
+  request?: CursorRequest,
+) {
   const params = new URLSearchParams({ project_name: projectName });
   if (sinceDays != null) params.set("since_days", String(sinceDays));
-  return fetchJson<ProjectDetail>(`/api/projects/detail?${params}`);
+  if (request?.cursor) params.set("cursor", request.cursor);
+  if (request?.limit != null) params.set("limit", String(request.limit));
+  return fetchJson<ProjectDetail>(`/api/projects/detail?${params}`, {
+    signal: request?.signal,
+  });
 }
 
-export async function fetchSessions() {
-  return fetchJson<{ items: SessionItem[] }>("/api/sessions");
+export async function fetchSessions(
+  request: CursorRequest & {
+    sinceDays?: number;
+    projectName?: string;
+    agentVendor?: string;
+  } = {},
+) {
+  const params = new URLSearchParams();
+  if (request.sinceDays != null) params.set("since_days", String(request.sinceDays));
+  if (request.projectName) params.set("project_name", request.projectName);
+  if (request.agentVendor) params.set("agent_vendor", request.agentVendor);
+  if (request.cursor) params.set("cursor", request.cursor);
+  if (request.limit != null) params.set("limit", String(request.limit));
+  const query = params.toString();
+  return fetchJson<SessionPage>(`/api/sessions${query ? `?${query}` : ""}`, {
+    signal: request.signal,
+  });
 }
 
 export async function fetchContextWindow(sessionId: string) {
@@ -870,6 +924,59 @@ export type JobRecord = {
   error: string | null;
 };
 
+export type DashboardFreshness = {
+  last_refresh_at: string | null;
+  lag_seconds: number | null;
+};
+
+export type DashboardSourceStatus = {
+  ready: number;
+  ingesting: number;
+  failed: number;
+  incomplete: number;
+};
+
+export type DashboardSnapshot = {
+  revision: number;
+  generated_at: string;
+  freshness: DashboardFreshness;
+  catching_up: boolean;
+  source_status: DashboardSourceStatus;
+  minimum_available_revision: number;
+  bootstrap: {
+    ready: boolean;
+    scan_started_at: string | null;
+    scan_finished_at: string | null;
+    error: string | null;
+    last_result?: Record<string, unknown> | null;
+  };
+};
+
+export type DashboardUpsert = {
+  entity_type: string;
+  entity_id: string;
+  revision: number;
+  payload: unknown;
+};
+
+export type DashboardDeletion = {
+  entity_type: string;
+  entity_id: string;
+  revision: number;
+};
+
+export type DashboardChanges = {
+  from_revision: number;
+  to_revision: number;
+  reset_required: boolean;
+  upserts: DashboardUpsert[];
+  deletions: DashboardDeletion[];
+  invalidations: string[];
+  freshness: DashboardFreshness;
+  catching_up: boolean;
+  source_status: DashboardSourceStatus;
+};
+
 type JobAccepted = {
   status: "pending";
   job_id: string;
@@ -882,6 +989,18 @@ export async function fetchJobStatus(jobId: string, signal?: AbortSignal) {
   return fetchJson<JobRecord>(`/api/jobs/${encodeURIComponent(jobId)}`, { signal });
 }
 
+export async function fetchDashboardSnapshot(signal?: AbortSignal) {
+  return fetchJson<DashboardSnapshot>("/api/dashboard/snapshot", { signal });
+}
+
+export async function fetchDashboardChanges(params: {
+  afterRevision: number;
+  signal?: AbortSignal;
+}) {
+  const search = new URLSearchParams({ after_revision: String(params.afterRevision) });
+  return fetchJson<DashboardChanges>(`/api/dashboard/changes?${search}`, { signal: params.signal });
+}
+
 export async function fetchCleanupPreview(kind: "project" | "session", params?: { sinceDays?: number }) {
   const search = new URLSearchParams();
   if (params?.sinceDays != null) search.set("since_days", String(params.sinceDays));
@@ -890,52 +1009,100 @@ export async function fetchCleanupPreview(kind: "project" | "session", params?: 
   return fetchJson<CleanupPreview>(`/api/cleanup/${kind}/preview${suffix}`);
 }
 
-export async function fetchModelUsage(params: { sinceDays?: number; projectName?: string | null; modelKey?: string | null }) {
+export async function fetchModelUsage(params: {
+  sinceDays?: number;
+  projectName?: string | null;
+  modelKey?: string | null;
+  detail?: "sessions" | "turns" | "both";
+  cursor?: string;
+  revision?: number;
+  limit?: number;
+  signal?: AbortSignal;
+}) {
   const search = new URLSearchParams();
   search.set("since_days", String(params.sinceDays ?? 7));
   if (params.projectName) search.set("project_name", params.projectName);
   if (params.modelKey) search.set("model_key", params.modelKey);
-  return fetchJson<ModelUsagePayload>(`/api/model-usage?${search}`);
+  if (params.detail) search.set("detail", params.detail);
+  if (params.cursor) search.set("cursor", params.cursor);
+  if (params.revision != null) search.set("revision", String(params.revision));
+  search.set("limit", String(params.limit ?? 50));
+  return fetchJson<ModelUsagePayload>(`/api/model-usage?${search}`, {
+    signal: params.signal,
+  });
 }
 
 export async function fetchTokenEfficiencyIndex(params: {
   sinceDays?: number;
+  cursor?: string;
+  limit?: number;
   signal?: AbortSignal;
 }) {
-  return startAndWaitForJob<TokenEfficiencyIndexPayload>(
-    "/api/token-efficiency",
-    { since_days: Math.min(params.sinceDays ?? 7, 30) },
-    params.signal,
-  );
+  const search = new URLSearchParams({
+    since_days: String(Math.min(params.sinceDays ?? 7, 30)),
+    limit: String(params.limit ?? 50),
+  });
+  if (params.cursor) search.set("cursor", params.cursor);
+  return fetchJson<TokenEfficiencyIndexPayload>(`/api/token-efficiency?${search}`, {
+    signal: params.signal,
+  });
 }
 
 export async function fetchTokenEfficiencyProject(params: {
   projectName: string;
   sinceDays?: number;
+  detail?: "patterns" | "hotspots" | "outliers";
+  grain?: TokenEfficiencyGrain;
+  cursor?: string;
+  limit?: number;
   signal?: AbortSignal;
 }) {
-  return startAndWaitForJob<TokenEfficiencyProjectPayload>(
-    "/api/token-efficiency/project",
-    {
-      project_name: params.projectName,
-      since_days: Math.min(params.sinceDays ?? 7, 30),
-    },
-    params.signal,
+  const search = new URLSearchParams({
+    project_name: params.projectName,
+    since_days: String(Math.min(params.sinceDays ?? 7, 30)),
+    limit: String(params.limit ?? 50),
+  });
+  if (params.detail) search.set("detail", params.detail);
+  if (params.grain) search.set("grain", params.grain);
+  if (params.cursor) search.set("cursor", params.cursor);
+  return fetchJson<TokenEfficiencyProjectPayload>(
+    `/api/token-efficiency/project?${search}`,
+    { signal: params.signal },
   );
 }
 
-export async function fetchErrorCollection(params: { sinceDays?: number; projectName?: string | null }) {
+export async function fetchErrorCollection(params: {
+  sinceDays?: number;
+  projectName?: string | null;
+  cursor?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}) {
   const search = new URLSearchParams();
   search.set("since_days", String(params.sinceDays ?? 7));
   if (params.projectName) search.set("project_name", params.projectName);
-  return fetchJson<ErrorCollectionPayload>(`/api/error-collection?${search}`);
+  if (params.cursor) search.set("cursor", params.cursor);
+  search.set("limit", String(params.limit ?? 50));
+  return fetchJson<ErrorCollectionPayload>(`/api/error-collection?${search}`, {
+    signal: params.signal,
+  });
 }
 
-export async function fetchCacheBreaks(params: { sinceDays?: number; projectName?: string | null }) {
+export async function fetchCacheBreaks(params: {
+  sinceDays?: number;
+  projectName?: string | null;
+  cursor?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}) {
   const search = new URLSearchParams();
   search.set("since_days", String(params.sinceDays ?? 7));
   if (params.projectName) search.set("project_name", params.projectName);
-  return fetchJson<CacheBreaksPayload>(`/api/cache-breaks?${search}`);
+  if (params.cursor) search.set("cursor", params.cursor);
+  search.set("limit", String(params.limit ?? 50));
+  return fetchJson<CacheBreaksPayload>(`/api/cache-breaks?${search}`, {
+    signal: params.signal,
+  });
 }
 
 export async function refreshDashboardData() {

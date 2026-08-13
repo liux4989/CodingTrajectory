@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { getCoreRowModel, getSortedRowModel, getPaginationRowModel, useReactTable, type ColumnDef, type SortingState } from "@tanstack/react-table";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { fetchCacheBreaks, type AggregateCacheBreak, type CacheBreaksPayload, type CacheBreakSessionRow } from "@/api";
@@ -12,6 +12,7 @@ import { shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { LoadingShell } from "@/components/loading-shell";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { DataTable } from "@/components/data-table";
@@ -48,10 +49,19 @@ export function CacheBreaksRoute() {
   const navigate = useNavigate({ from: "/cache-breaks" });
   const { days: sinceDays } = useDateRange();
   const projectName = search.projectName ?? null;
-  const query = useQuery({
+  const query = useInfiniteQuery({
     queryKey: ["cache-breaks", sinceDays, projectName],
-    queryFn: () => fetchCacheBreaks({ sinceDays, projectName }),
-    placeholderData: (previous) => previous,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) =>
+      fetchCacheBreaks({
+        sinceDays,
+        projectName,
+        cursor: pageParam ?? undefined,
+        limit: 50,
+        signal,
+      }),
+    getNextPageParam: (lastPage) =>
+      lastPage.pages?.breaks?.next_cursor ?? undefined,
   });
 
   const [activeTab, setActiveTab] = React.useState("chart");
@@ -73,7 +83,17 @@ export function CacheBreaksRoute() {
     return <StateBlock title="Cache breaks unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
 
-  const data = query.data;
+  const first = query.data.pages[0];
+  const data = {
+    ...first,
+    breaks: Array.from(
+      new Map(
+        query.data.pages
+          .flatMap((page) => page.breaks)
+          .map((row) => [`${row.session_id}:${row.turn_id}:${row.type}`, row]),
+      ).values(),
+    ),
+  };
   const hasBreaks = data.summary.total_breaks > 0;
 
   return (
@@ -112,7 +132,8 @@ export function CacheBreaksRoute() {
           detail="No turn re-read a collapsed or evicted prompt cache during the selected window."
         />
       ) : (
-        <SectionTabs
+        <>
+          <SectionTabs
           activeTab={activeTab}
           onTabChange={setActiveTab}
           ariaLabel="Cache breaks sections"
@@ -145,17 +166,30 @@ export function CacheBreaksRoute() {
             {
               id: "sessions",
               label: "Top Sessions",
-              badge={data.top_sessions.length},
+              badge: data.top_sessions.length,
               content: <TopSessionsTable rows={data.top_sessions} />,
             },
             {
               id: "all",
               label: "All Breaks",
-              badge={data.breaks.length},
+              badge: data.breaks.length,
               content: <BreakTable rows={data.breaks} />,
             },
           ]}
-        />
+          />
+          {query.hasNextPage ? (
+            <div className="flex justify-center">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void query.fetchNextPage()}
+                disabled={query.isFetchingNextPage}
+              >
+                {query.isFetchingNextPage ? "Loading breaks…" : "Load more breaks"}
+              </Button>
+            </div>
+          ) : null}
+        </>
       )}
     </div>
   );
@@ -247,11 +281,11 @@ function DailyBreaksChart({ data }: { data: CacheBreaksPayload }) {
     waste: b.waste_usd,
   }));
 
-  const chartConfig = {
+  const chartConfig: ChartConfig = {
     effort_switch: { label: "Effort Switch", color: "var(--warning)" },
     ttl_confirmed: { label: "TTL Confirmed", color: "color-mix(in srgb, var(--foreground) 45%, transparent)" },
     ttl_likely: { label: "TTL Likely", color: "color-mix(in srgb, var(--foreground) 22%, transparent)" },
-  } satisfies ChartConfig;
+  };
 
   return (
     <Card className="min-w-0">

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { getCoreRowModel, getSortedRowModel, getPaginationRowModel, useReactTable, type ColumnDef, type SortingState } from "@tanstack/react-table";
 import { BarChart3 } from "lucide-react";
 import {
@@ -74,10 +74,48 @@ export function ModelUsageRoute() {
   const projectName = search.projectName ?? null;
   const modelKey = search.modelKey ?? null;
   const view = search.view ?? "overview";
-  const query = useQuery({
-    queryKey: ["model-usage", sinceDays, projectName, modelKey],
-    queryFn: () => fetchModelUsage({ sinceDays, projectName, modelKey }),
-    placeholderData: (previous) => previous,
+  const sessionsQuery = useInfiniteQuery({
+    queryKey: ["model-usage", sinceDays, projectName, modelKey, "sessions"],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) =>
+      fetchModelUsage({
+        sinceDays,
+        projectName,
+        modelKey,
+        detail: "sessions",
+        cursor: pageParam ?? undefined,
+        limit: 50,
+        signal,
+      }),
+    getNextPageParam: (lastPage) =>
+      lastPage.pages?.sessions?.next_cursor ?? undefined,
+  });
+  const sessionRevision =
+    sessionsQuery.data?.pages[0]?.pages?.sessions?.revision ?? null;
+  const turnsQuery = useInfiniteQuery({
+    queryKey: [
+      "model-usage",
+      sinceDays,
+      projectName,
+      modelKey,
+      "turns",
+      sessionRevision,
+    ],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) =>
+      fetchModelUsage({
+        sinceDays,
+        projectName,
+        modelKey,
+        detail: "turns",
+        cursor: pageParam ?? undefined,
+        revision: sessionRevision ?? undefined,
+        limit: 50,
+        signal,
+      }),
+    getNextPageParam: (lastPage) =>
+      lastPage.pages?.turns?.next_cursor ?? undefined,
+    enabled: sessionRevision != null,
   });
 
   const setProjectName = (value: string) => {
@@ -110,15 +148,33 @@ export function ModelUsageRoute() {
     setSectionTab("models");
   }, [view]);
 
-  if (query.isPending) {
+  if (sessionsQuery.isPending || turnsQuery.isPending) {
     return <LoadingShell eyebrow="Model economics" title="Loading model usage" variant="metrics" />;
   }
 
-  if (query.isError) {
-    return <StateBlock title="Model usage unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
+  if (sessionsQuery.isError || turnsQuery.isError) {
+    const error = sessionsQuery.error ?? turnsQuery.error;
+    return <StateBlock title="Model usage unavailable" detail={error?.message ?? "The model usage query failed."} onRetry={() => { void sessionsQuery.refetch(); void turnsQuery.refetch(); }} />;
   }
 
-  const data = query.data;
+  const first = sessionsQuery.data.pages[0];
+  const data: ModelUsagePayload = {
+    ...first,
+    sessions: Array.from(
+      new Map(
+        sessionsQuery.data.pages
+          .flatMap((page) => page.sessions)
+          .map((row) => [row.id, row]),
+      ).values(),
+    ),
+    turns: Array.from(
+      new Map(
+        turnsQuery.data.pages
+          .flatMap((page) => page.turns)
+          .map((row) => [`${row.session_id}:${row.turn_id}`, row]),
+      ).values(),
+    ),
+  };
 
   return (
     <div className="route-container w-full min-w-0 overflow-hidden">
@@ -186,6 +242,30 @@ export function ModelUsageRoute() {
       {view === "cost" ? <CostView data={data} activeTab={sectionTab} onTabChange={setSectionTab} /> : null}
       {view === "tokens" ? <TokensView data={data} activeTab={sectionTab} onTabChange={setSectionTab} /> : null}
       {view === "time" ? <TimeView data={data} /> : null}
+      {sessionsQuery.hasNextPage || turnsQuery.hasNextPage ? (
+        <div className="flex flex-wrap justify-center gap-2">
+          {sessionsQuery.hasNextPage ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void sessionsQuery.fetchNextPage()}
+              disabled={sessionsQuery.isFetchingNextPage}
+            >
+              {sessionsQuery.isFetchingNextPage ? "Loading sessions…" : "Load more sessions"}
+            </Button>
+          ) : null}
+          {turnsQuery.hasNextPage ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void turnsQuery.fetchNextPage()}
+              disabled={turnsQuery.isFetchingNextPage}
+            >
+              {turnsQuery.isFetchingNextPage ? "Loading turns…" : "Load more turns"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

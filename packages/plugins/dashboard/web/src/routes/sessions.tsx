@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import {
   useReactTable,
@@ -20,6 +20,10 @@ import { DataTable } from "@/components/data-table";
 import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SessionLink } from "@/components/session-link";
+import { Button } from "@/components/ui/button";
+
+const SESSION_WINDOW_DAYS = 7;
+const CURSOR_PAGE_SIZE = 50;
 
 function sessionId(item: SessionItem) {
   return item.root_session_id;
@@ -65,8 +69,26 @@ export function SessionsRoute() {
   const [filter, setFilter] = React.useState("");
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const router = useRouter();
-  const sessions = useQuery({ queryKey: ["sessions"], queryFn: fetchSessions, placeholderData: (previous) => previous });
-  const data = sessions.data?.items ?? [];
+  const sessions = useInfiniteQuery({
+    queryKey: ["sessions", "cursor", SESSION_WINDOW_DAYS],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) =>
+      fetchSessions({
+        sinceDays: SESSION_WINDOW_DAYS,
+        cursor: pageParam ?? undefined,
+        limit: CURSOR_PAGE_SIZE,
+        signal,
+      }),
+    getNextPageParam: (lastPage) => lastPage.page?.next_cursor ?? undefined,
+    placeholderData: (previous) => previous,
+  });
+  const data = React.useMemo(() => {
+    const byId = new Map<string, SessionItem>();
+    for (const page of sessions.data?.pages ?? []) {
+      for (const item of page.items) byId.set(sessionId(item), item);
+    }
+    return [...byId.values()];
+  }, [sessions.data]);
 
   const table = useReactTable({
     data,
@@ -105,6 +127,29 @@ export function SessionsRoute() {
             }}
           />
           <DataTablePagination table={table} />
+          <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2 text-body-sm text-muted-foreground">
+            <span>
+              {data.length.toLocaleString()} session{data.length === 1 ? "" : "s"} loaded from the last {SESSION_WINDOW_DAYS} days
+            </span>
+            {sessions.hasNextPage ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={sessions.isFetchingNextPage}
+                onClick={() => void sessions.fetchNextPage()}
+              >
+                {sessions.isFetchingNextPage ? "Loading…" : `Load ${CURSOR_PAGE_SIZE} more`}
+              </Button>
+            ) : null}
+          </div>
+          {sessions.isFetchNextPageError ? (
+            <StateBlock
+              title="More sessions could not be loaded"
+              detail={sessions.error.message}
+              onRetry={() => void sessions.fetchNextPage()}
+            />
+          ) : null}
         </>
       ) : null}
     </div>

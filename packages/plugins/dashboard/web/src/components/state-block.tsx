@@ -1,9 +1,7 @@
 import * as React from "react";
 import { AlertCircle, RotateCcw } from "lucide-react";
-import { motion } from "motion/react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { fadeUp } from "@/lib/motion";
 
 type StateBlockProps = {
   title: string;
@@ -20,7 +18,7 @@ type StateBlockProps = {
  */
 export function StateBlock({ title, detail, onRetry, retryLabel = "Retry" }: StateBlockProps) {
   return (
-    <motion.div variants={fadeUp} initial="hidden" animate="visible">
+    <div>
       <Card className={onRetry ? "border-destructive/30" : undefined}>
         <CardContent className="flex items-start gap-3">
           {onRetry ? <AlertCircle size={18} className="mt-0.5 shrink-0 text-destructive" /> : null}
@@ -36,6 +34,6 @@ export function StateBlock({ title, detail, onRetry, retryLabel = "Retry" }: Sta
           ) : null}
         </CardContent>
       </Card>
-    </motion.div>
+    </div>
   );
 }

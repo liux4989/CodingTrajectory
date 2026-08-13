@@ -14,7 +14,11 @@ from pydantic import BaseModel, Field
 
 Grain = Literal["daily", "weekly"]
 
-_BATCH_SIZE = 32
+# A batch shares one ServiceRuntime and its resolved store.  Keep this bounded
+# so one CLI response cannot grow without limit, while avoiding repeated index
+# loads/saves for the small legacy chunks.  Batches remain sequential: parallel
+# CLI processes would race on the shared index cache.
+_BATCH_SIZE = 128
 _PATTERN_LABELS = {
     "broad_search_read": "Broad / batched search and read",
     "targeted_search_read": "Targeted search and read",

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useParams, useSearch } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import {
   useReactTable,
   getCoreRowModel,
@@ -23,6 +23,8 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SessionLink } from "@/components/session-link";
 import { useDateRange } from "@/hooks/use-date-range";
 import { Button } from "@/components/ui/button";
+
+const CURSOR_PAGE_SIZE = 50;
 
 function sessionId(item: SessionItem) {
   return item.root_session_id;
@@ -63,12 +65,26 @@ export function ProjectDetailRoute() {
   const sinceDays = urlSinceDays ?? rangeDays;
   const [filter, setFilter] = React.useState("");
   const [sorting, setSorting] = React.useState<SortingState>([]);
-  const detail = useQuery({
-    queryKey: ["project", projectName, sinceDays],
-    queryFn: () => fetchProjectDetail(projectName, sinceDays),
+  const detail = useInfiniteQuery({
+    queryKey: ["project", projectName, sinceDays, "cursor"],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) =>
+      fetchProjectDetail(projectName, sinceDays, {
+        cursor: pageParam ?? undefined,
+        limit: CURSOR_PAGE_SIZE,
+        signal,
+      }),
+    getNextPageParam: (lastPage) => lastPage.page?.next_cursor ?? undefined,
     placeholderData: (previous) => previous,
   });
-  const data = detail.data?.sessions ?? [];
+  const project = detail.data?.pages[0];
+  const data = React.useMemo(() => {
+    const byId = new Map<string, SessionItem>();
+    for (const page of detail.data?.pages ?? []) {
+      for (const item of page.sessions) byId.set(sessionId(item), item);
+    }
+    return [...byId.values()];
+  }, [detail.data]);
 
   const table = useReactTable({
     data,
@@ -108,12 +124,12 @@ export function ProjectDetailRoute() {
       />
       <div className="flex flex-wrap items-center gap-2">
         <FolderGit2 size={16} className="text-muted-foreground" />
-        <VendorBadges vendors={detail.data?.vendors ?? []} />
-        {detail.data?.path ? (
-          <span className="mono text-body-sm text-muted-foreground">{detail.data.path}</span>
+        <VendorBadges vendors={project?.vendors ?? []} />
+        {project?.path ? (
+          <span className="mono text-body-sm text-muted-foreground">{project.path}</span>
         ) : null}
         <span className="text-body-sm text-muted-foreground">
-          {detail.data?.session_count ?? 0} session(s) from the last {sinceDays} day{sinceDays === 1 ? "" : "s"}
+          {project?.session_count ?? 0} session(s) from the last {sinceDays} day{sinceDays === 1 ? "" : "s"}
         </span>
       </div>
       <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, or id" />
@@ -123,6 +139,29 @@ export function ProjectDetailRoute() {
         <>
           <DataTable table={table} columnCount={columns.length} emptyMessage="No sessions found for this project." />
           <DataTablePagination table={table} />
+          <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2 text-body-sm text-muted-foreground">
+            <span>
+              {data.length.toLocaleString()} of {(project?.session_count ?? data.length).toLocaleString()} sessions loaded
+            </span>
+            {detail.hasNextPage ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={detail.isFetchingNextPage}
+                onClick={() => void detail.fetchNextPage()}
+              >
+                {detail.isFetchingNextPage ? "Loading…" : `Load ${CURSOR_PAGE_SIZE} more`}
+              </Button>
+            ) : null}
+          </div>
+          {detail.isFetchNextPageError ? (
+            <StateBlock
+              title="More project sessions could not be loaded"
+              detail={detail.error.message}
+              onRetry={() => void detail.fetchNextPage()}
+            />
+          ) : null}
         </>
       ) : null}
     </div>

@@ -1,21 +1,46 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import mimetypes
+import re
 import sys
 import webbrowser
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
+
+_FINGERPRINTED_ASSET = re.compile(r"-[A-Za-z0-9_-]{8,}\.[^.]+$")
+_GZIP_CONTENT_TYPES = (
+    "application/javascript",
+    "application/json",
+    "application/manifest+json",
+    "application/wasm",
+    "image/svg+xml",
+    "text/",
+)
+
 try:
+    from .incremental_runtime import DashboardIncrementalRuntime
     from .web_services import DashboardDataService
 except ImportError:
+    from incremental_runtime import DashboardIncrementalRuntime
     from web_services import DashboardDataService
+
+
+_DEFAULT_PAGE_SIZE = 50
+_MAX_PAGE_SIZE = 200
+_MAX_CURSOR_LENGTH = 4096
+
+
+class DashboardBootstrapPending(RuntimeError):
+    """A supported revisioned route is waiting for its first snapshot."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,11 +71,15 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def serve(config: DashboardWebConfig) -> int:
-    handler = _handler_for(config.static_dir, DashboardDataService())
+    service = DashboardDataService()
+    runtime = DashboardIncrementalRuntime(current_dir=_repo_root())
+    handler = _handler_for(config.static_dir, service, runtime)
     ThreadingHTTPServer.allow_reuse_address = True
     try:
         server = ThreadingHTTPServer((config.host, config.port), handler)
     except OSError as exc:
+        runtime.shutdown()
+        service.shutdown()
         print(
             f"error: could not bind to {config.host}:{config.port} ({exc}); "
             "stop the other process or use --port to pick a different port",
@@ -66,6 +95,9 @@ def serve(config: DashboardWebConfig) -> int:
     except KeyboardInterrupt:
         print("\nDashboard web stopped.")
     finally:
+        incremental_runtime = getattr(handler, "dashboard_runtime", None)
+        if incremental_runtime is not None:
+            incremental_runtime.shutdown()
         service = getattr(handler, "dashboard_service", None)
         if service is not None:
             service.shutdown()
@@ -94,11 +126,14 @@ def _static_dir(raw: str | None) -> Path:
 
 
 def _handler_for(
-    static_dir: Path, service: DashboardDataService
+    static_dir: Path,
+    service: DashboardDataService,
+    runtime: DashboardIncrementalRuntime | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     class DashboardRequestHandler(BaseHTTPRequestHandler):
         server_version = "CodingTrajectoryDashboard/0.1"
         dashboard_service = service
+        dashboard_runtime = runtime
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -150,28 +185,233 @@ def _handler_for(
 
         def _handle_api_get(self, path: str, query: dict[str, list[str]]) -> None:
             try:
-                if path == "/api/overview":
-                    payload = service.overview(query)
+                self._used_legacy_fallback = False
+                limit = _bounded_page_size(query)
+                cursor = _cursor(query)
+                if path == "/api/dashboard/snapshot":
+                    payload = (
+                        runtime.snapshot()
+                        if runtime is not None
+                        else _unavailable_snapshot()
+                    )
+                elif path == "/api/dashboard/changes":
+                    after_revision = _bounded_nonnegative_int(
+                        query, "after_revision", 0
+                    )
+                    payload = (
+                        runtime.changes(after_revision)
+                        if runtime is not None
+                        else _unavailable_changes(after_revision)
+                    )
+                elif path == "/api/overview":
+                    since_days = _bounded_positive_int(query, "since_days", 7)
+                    incremental = (
+                        runtime.overview(since_days=since_days)
+                        if runtime is not None
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.overview(query),
+                        revisioned_scope=(
+                            runtime is not None and since_days == runtime.since_days
+                        ),
+                    )
                 elif path == "/api/projects":
-                    payload = service.projects(query)
+                    incremental = (
+                        runtime.projects(
+                            agent_vendor=_first(query, "agent_vendor"),
+                            limit=limit,
+                            cursor=cursor,
+                        )
+                        if runtime is not None
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.projects(query),
+                        revisioned_scope=runtime is not None,
+                    )
                 elif path == "/api/projects/detail":
-                    payload = service.project_detail(query)
+                    project_name = _required(query, "project_name")
+                    since_days_raw = _first(query, "since_days")
+                    since_days = _bounded_positive_int(query, "since_days", 7)
+                    incremental = (
+                        runtime.project_detail(
+                            project_name=project_name,
+                            since_days=since_days,
+                            limit=limit,
+                            cursor=cursor,
+                        )
+                        if runtime is not None and since_days_raw is not None
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.project_detail(query),
+                        revisioned_scope=(
+                            runtime is not None
+                            and since_days_raw is not None
+                            and since_days == runtime.since_days
+                        ),
+                    )
                 elif path == "/api/sessions":
-                    payload = service.sessions(query)
+                    since_days = _bounded_positive_int(query, "since_days", 30)
+                    incremental = (
+                        runtime.sessions(
+                            since_days=since_days,
+                            project_name=_first(query, "project_name"),
+                            agent_vendor=_first(query, "agent_vendor"),
+                            limit=limit,
+                            cursor=cursor,
+                        )
+                        if runtime is not None and not _truthy(query, "all_time")
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.sessions(query),
+                        revisioned_scope=(
+                            runtime is not None
+                            and since_days == runtime.since_days
+                            and not _truthy(query, "all_time")
+                        ),
+                    )
                 elif path == "/api/sessions/timeline":
-                    payload = service.session_timeline(query)
+                    since_days = _bounded_positive_int(query, "since_days", 30)
+                    incremental = (
+                        runtime.session_timeline(
+                            since_days=since_days,
+                            limit=limit,
+                            cursor=cursor,
+                        )
+                        if runtime is not None and not _truthy(query, "all_time")
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.session_timeline(query),
+                        revisioned_scope=(
+                            runtime is not None
+                            and since_days == runtime.since_days
+                            and not _truthy(query, "all_time")
+                        ),
+                    )
                 elif path == "/api/sessions/context-window":
-                    payload = service.context_window(query)
+                    incremental = (
+                        runtime.context_window(
+                            session_id=_required(query, "session_id"),
+                            turn_id=_first(query, "turn_id"),
+                        )
+                        if runtime is not None
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.context_window(query),
+                        revisioned_scope=runtime is not None,
+                    )
                 elif path == "/api/model-usage":
-                    payload = service.model_usage(query)
+                    since_days = _bounded_positive_int(query, "since_days", 7)
+                    incremental = (
+                        runtime.model_usage(
+                            since_days=since_days,
+                            project_name=_first(query, "project_name"),
+                            model_key=_first(query, "model_key"),
+                            detail=_first(query, "detail") or "both",
+                            limit=limit,
+                            cursor=cursor,
+                            revision=_optional_revision(query),
+                        )
+                        if runtime is not None
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.model_usage(query),
+                        revisioned_scope=(
+                            runtime is not None and since_days == runtime.since_days
+                        ),
+                    )
                 elif path == "/api/token-efficiency":
-                    payload = service.token_efficiency_index(query)
+                    since_days = min(_bounded_positive_int(query, "since_days", 7), 30)
+                    incremental = (
+                        runtime.token_efficiency_index(
+                            since_days=since_days,
+                            limit=limit,
+                            cursor=cursor,
+                        )
+                        if runtime is not None
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.token_efficiency_index(query),
+                        revisioned_scope=(
+                            runtime is not None and since_days == runtime.since_days
+                        ),
+                    )
                 elif path == "/api/token-efficiency/project":
-                    payload = service.token_efficiency_project(query)
+                    since_days = min(_bounded_positive_int(query, "since_days", 7), 30)
+                    detail = _first(query, "detail")
+                    grain = _first(query, "grain")
+                    incremental = (
+                        runtime.token_efficiency_project(
+                            project_name=_required(query, "project_name"),
+                            since_days=since_days,
+                            limit=limit,
+                            cursor=cursor,
+                            detail=detail,
+                            grain=grain,
+                        )
+                        if runtime is not None
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.token_efficiency_project(query),
+                        revisioned_scope=(
+                            runtime is not None and since_days == runtime.since_days
+                        ),
+                    )
                 elif path == "/api/error-collection":
-                    payload = service.error_collection(query)
+                    since_days = _bounded_positive_int(query, "since_days", 7)
+                    incremental = (
+                        runtime.error_collection(
+                            since_days=since_days,
+                            project_name=_first(query, "project_name"),
+                            limit=limit,
+                            cursor=cursor,
+                        )
+                        if runtime is not None
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.error_collection(query),
+                        revisioned_scope=(
+                            runtime is not None and since_days == runtime.since_days
+                        ),
+                    )
                 elif path == "/api/cache-breaks":
-                    payload = service.cache_breaks(query)
+                    since_days = _bounded_positive_int(query, "since_days", 7)
+                    incremental = (
+                        runtime.cache_breaks(
+                            since_days=since_days,
+                            project_name=_first(query, "project_name"),
+                            limit=limit,
+                            cursor=cursor,
+                        )
+                        if runtime is not None
+                        else None
+                    )
+                    payload = self._with_legacy_fallback(
+                        incremental,
+                        lambda: service.cache_breaks(query),
+                        revisioned_scope=(
+                            runtime is not None and since_days == runtime.since_days
+                        ),
+                    )
                 elif path == "/api/diagnostics/cache":
                     payload = service.cache_metrics()
                 elif path == "/api/evaluations":
@@ -196,6 +436,9 @@ def _handler_for(
                 else:
                     self._json_error(HTTPStatus.NOT_FOUND, "not found")
                     return
+            except DashboardBootstrapPending as exc:
+                self._json_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
+                return
             except RuntimeError as exc:
                 self._json_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
                 return
@@ -204,11 +447,30 @@ def _handler_for(
                 return
             self._json_response(payload)
 
+        def _with_legacy_fallback(
+            self,
+            incremental: dict[str, Any] | None,
+            fallback: Callable[[], dict[str, Any]],
+            *,
+            revisioned_scope: bool = False,
+        ) -> dict[str, Any]:
+            if incremental is not None:
+                return incremental
+            if revisioned_scope and runtime is not None and not runtime.is_ready():
+                raise DashboardBootstrapPending(
+                    "dashboard read models are catching up; retry shortly"
+                )
+            self._used_legacy_fallback = True
+            return fallback()
+
         def _handle_api_post(
             self, path: str, body: dict[str, Any]
         ) -> tuple[dict[str, Any], HTTPStatus]:
             if path == "/api/refresh":
-                return service.refresh(), HTTPStatus.OK
+                payload = service.refresh()
+                if runtime is not None:
+                    payload["incremental"] = runtime.request_refresh()
+                return payload, HTTPStatus.OK
             if path == "/api/token-efficiency":
                 return (
                     service.start_token_efficiency_index(body),
@@ -306,8 +568,32 @@ def _handler_for(
                 mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
             )
             data = resolved.read_bytes()
+            is_html = resolved.name == "index.html"
+            is_fingerprinted_asset = (
+                resolved.parent.name == "assets"
+                and _FINGERPRINTED_ASSET.search(resolved.name) is not None
+            )
+            accepts_gzip = "gzip" in self.headers.get("Accept-Encoding", "").lower()
+            can_gzip = content_type.startswith(_GZIP_CONTENT_TYPES)
+            use_gzip = accepts_gzip and can_gzip and len(data) >= 512
+            if use_gzip:
+                data = gzip.compress(data)
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
+            self.send_header(
+                "Cache-Control",
+                "no-cache"
+                if is_html
+                else (
+                    "public, max-age=31536000, immutable"
+                    if is_fingerprinted_asset
+                    else "public, max-age=3600"
+                ),
+            )
+            if can_gzip:
+                self.send_header("Vary", "Accept-Encoding")
+            if use_gzip:
+                self.send_header("Content-Encoding", "gzip")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             if include_body:
@@ -330,6 +616,8 @@ def _handler_for(
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            if getattr(self, "_used_legacy_fallback", False):
+                self.send_header("X-Dashboard-Delivery", "legacy-fallback")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -388,6 +676,116 @@ def _agent_session_turn_id(path: str) -> str | None:
     if not agent_session_id or "/" in agent_session_id:
         return None
     return agent_session_id
+
+
+def _first(query: dict[str, list[str]], key: str) -> str | None:
+    values = query.get(key) or []
+    value = values[0].strip() if values else ""
+    return value or None
+
+
+def _required(query: dict[str, list[str]], key: str) -> str:
+    value = _first(query, key)
+    if value is None:
+        raise ValueError(f"{key} is required")
+    return value
+
+
+def _truthy(query: dict[str, list[str]], key: str) -> bool:
+    value = _first(query, key)
+    return value is not None and value.lower() in {"1", "true", "yes", "on"}
+
+
+def _bounded_page_size(query: dict[str, list[str]]) -> int:
+    return _bounded_positive_int(
+        query,
+        "limit",
+        _DEFAULT_PAGE_SIZE,
+        maximum=_MAX_PAGE_SIZE,
+    )
+
+
+def _bounded_positive_int(
+    query: dict[str, list[str]],
+    key: str,
+    default: int,
+    *,
+    maximum: int = 3650,
+) -> int:
+    value = _first(query, key)
+    if value is None:
+        return default
+    parsed = int(value)
+    if not 1 <= parsed <= maximum:
+        raise ValueError(f"{key} must be between 1 and {maximum}")
+    return parsed
+
+
+def _bounded_nonnegative_int(
+    query: dict[str, list[str]], key: str, default: int
+) -> int:
+    value = _first(query, key)
+    if value is None:
+        return default
+    parsed = int(value)
+    if not 0 <= parsed <= 9_223_372_036_854_775_807:
+        raise ValueError(f"{key} must be a non-negative integer")
+    return parsed
+
+
+def _cursor(query: dict[str, list[str]]) -> str | None:
+    value = _first(query, "cursor")
+    if value is not None and len(value) > _MAX_CURSOR_LENGTH:
+        raise ValueError("cursor is too long")
+    return value
+
+
+def _optional_revision(query: dict[str, list[str]]) -> int | None:
+    if _first(query, "revision") is None:
+        return None
+    return _bounded_nonnegative_int(query, "revision", 0)
+
+
+def _unavailable_snapshot() -> dict[str, Any]:
+    return {
+        "revision": 0,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "freshness": {"last_refresh_at": None, "lag_seconds": None},
+        "catching_up": False,
+        "source_status": {
+            "ready": 0,
+            "ingesting": 0,
+            "failed": 0,
+            "incomplete": 0,
+        },
+        "minimum_available_revision": 0,
+        "bootstrap": {
+            "ready": False,
+            "scan_started_at": None,
+            "scan_finished_at": None,
+            "error": "incremental runtime unavailable",
+            "last_result": None,
+        },
+    }
+
+
+def _unavailable_changes(after_revision: int) -> dict[str, Any]:
+    snapshot = _unavailable_snapshot()
+    return {
+        "from_revision": after_revision,
+        "to_revision": after_revision,
+        "reset_required": False,
+        "upserts": [],
+        "deletions": [],
+        "invalidations": [],
+        "freshness": snapshot["freshness"],
+        "catching_up": False,
+        "source_status": snapshot["source_status"],
+    }
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
 
 
 if __name__ == "__main__":

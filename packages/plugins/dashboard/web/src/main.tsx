@@ -1,6 +1,5 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { MotionConfig } from "motion/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
@@ -8,6 +7,7 @@ import { StateBlock } from "@/components/state-block";
 import { Toaster } from "@/components/ui/sonner";
 import { DateRangeProvider } from "@/hooks/use-date-range";
 import { CommandPalette } from "@/components/command-palette";
+import { DashboardDeliveryProvider } from "@/hooks/use-dashboard-delivery";
 import "@/styles.css";
 
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
@@ -236,12 +236,12 @@ declare module "@tanstack/react-router" {
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <MotionConfig reducedMotion="user">
-      <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={queryClient}>
+      <DashboardDeliveryProvider>
         <DateRangeProvider>
           <RouterProvider router={router} />
         </DateRangeProvider>
-      </QueryClientProvider>
-    </MotionConfig>
+      </DashboardDeliveryProvider>
+    </QueryClientProvider>
   </React.StrictMode>,
 );

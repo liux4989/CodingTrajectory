@@ -271,7 +271,7 @@ export function DataTable<TData extends RowData>({
                   {isExpanded && renderRowDetail ? (
                     <TableRow key={`${row.id}-detail`}>
                       <TableCell
-                        colSpan={visibleColumnIds.length + (renderRowDetail ? 1 : 0)}
+                        colSpan={visibleColumnIds.length + 1}
                         className="bg-surface-subtle p-3"
                       >
                         {renderRowDetail(row.original)}

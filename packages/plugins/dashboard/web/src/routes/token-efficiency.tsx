@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import {
   fetchTokenEfficiencyIndex,
@@ -22,6 +22,8 @@ import { LoadingShell } from "@/components/loading-shell";
 import { SessionLink } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { useDateRange } from "@/hooks/use-date-range";
+import type { UseJobResult } from "@/hooks/use-job";
+import { LoadingState } from "@/components/loading-state";
 import {
   Accordion,
   AccordionContent,
@@ -44,7 +46,6 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { MetricSkeleton, TableSkeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -166,21 +167,104 @@ function DeltaBadge({ value }: { value: number | null | undefined }) {
   );
 }
 
-function useEfficiencyProject(
-  projectName: string,
-) {
+type TokenEfficiencyIndexResult = UseJobResult<TokenEfficiencyIndexPayload> & {
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  fetchNextPage: () => void;
+};
+
+function useTokenEfficiencyIndex(): TokenEfficiencyIndexResult {
   const { days: sinceDays } = useDateRange();
-  return useQuery({
-    queryKey: ["token-efficiency-project", projectName, sinceDays],
-    queryFn: ({ signal }) =>
-      fetchTokenEfficiencyProject({
-        projectName,
+  const query = useInfiniteQuery({
+    queryKey: ["token-efficiency", "index", sinceDays, 50],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) =>
+      fetchTokenEfficiencyIndex({
         sinceDays,
+        cursor: pageParam ?? undefined,
+        limit: 50,
         signal,
       }),
-    staleTime: 120_000,
-    placeholderData: (previous) => previous,
+    getNextPageParam: (lastPage) =>
+      lastPage.pages?.projects?.next_cursor ?? undefined,
   });
+  const data = React.useMemo(() => {
+    const pages = query.data?.pages;
+    const first = pages?.[0];
+    if (!first) return null;
+    const projects = pages.flatMap((page) => page.projects);
+    return {
+      ...first,
+      projects: Array.from(
+        new Map(projects.map((project) => [project.project_name, project])).values(),
+      ),
+      pages: {
+        ...first.pages,
+        projects: pages.at(-1)?.pages?.projects,
+      },
+    };
+  }, [query.data]);
+  const error = query.error instanceof Error ? query.error.message : null;
+  return {
+    status: query.isError ? "error" : data ? "ready" : "running",
+    jobId: null,
+    data,
+    error,
+    progress: query.hasNextPage ? "More projects are available" : null,
+    elapsedMs: 0,
+    start: () => void query.refetch(),
+    cancel: () => undefined,
+    reset: () => void query.refetch(),
+    hasNextPage: query.hasNextPage,
+    isFetchingNextPage: query.isFetchingNextPage,
+    fetchNextPage: () => void query.fetchNextPage(),
+  };
+}
+
+function useEfficiencyProject(projectName: string): UseJobResult<TokenEfficiencyProjectPayload> {
+  const { days: sinceDays } = useDateRange();
+  const query = useQuery({
+    queryKey: ["token-efficiency", "project", projectName, sinceDays],
+    queryFn: ({ signal }) =>
+      fetchTokenEfficiencyProject({ projectName, sinceDays, limit: 100, signal }),
+  });
+  const error = query.error instanceof Error ? query.error.message : null;
+  return {
+    status: query.isError ? "error" : query.data ? "ready" : "running",
+    jobId: null,
+    data: query.data ?? null,
+    error,
+    progress: null,
+    elapsedMs: 0,
+    start: () => void query.refetch(),
+    cancel: () => undefined,
+    reset: () => void query.refetch(),
+  };
+}
+
+function TokenEfficiencyJobLoading({
+  title,
+  detail,
+  job,
+  skeleton,
+}: {
+  title: string;
+  detail: string;
+  job: UseJobResult<unknown>;
+  skeleton: React.ReactNode;
+}) {
+  const phase = job.status === "running" ? "Collecting telemetry" : "Preparing collection";
+  return (
+    <div className="flex flex-col gap-4">
+      <LoadingState
+        title={`${title}: ${phase}`}
+        detail={detail}
+        elapsedMs={job.elapsedMs}
+        progress={job.progress ?? `Job status: ${job.status}`}
+      />
+      {skeleton}
+    </div>
+  );
 }
 
 function EfficiencyScope({
@@ -419,21 +503,20 @@ function ProjectPage({
   );
 }
 
-function ProjectLoading({ projectName }: { projectName: string }) {
+function ProjectLoading({
+  projectName,
+  job,
+}: {
+  projectName: string;
+  job: UseJobResult<unknown>;
+}) {
   return (
-    <div className="route-container">
-      <RouteHeader eyebrow="Token efficiency" title={projectName} />
-      <StateBlock
-        title="Collecting the project snapshot"
-        detail="The first historical load can take several minutes. Daily, weekly, pattern, hotspot, and outlier pages will reuse this same cached snapshot."
-      />
-      <section className="stat-grid" aria-label="Loading token efficiency metrics">
-        {Array.from({ length: 4 }, (_, index) => (
-          <MetricSkeleton key={index} />
-        ))}
-      </section>
-      <TableSkeleton rows={6} cols={6} />
-    </div>
+    <TokenEfficiencyJobLoading
+      title={projectName}
+      detail="Collecting completed session and turn telemetry for this project."
+      job={job}
+      skeleton={<LoadingShell eyebrow="Token efficiency" title={projectName} variant="mixed" />}
+    />
   );
 }
 
@@ -446,12 +529,12 @@ function TrendChart({
   unit: TokenEfficiencyUnit;
   grain: TokenEfficiencyGrain;
 }) {
-  const chartConfig = {
+  const chartConfig: ChartConfig = {
     median: { label: "Median", color: "var(--chart-1)" },
     p90: { label: "P90", color: "var(--chart-2)" },
     p95: { label: "P95", color: "var(--chart-3)" },
     max: { label: "Max", color: "var(--chart-3)" },
-  } satisfies ChartConfig;
+  };
   const rows = summaries.map((summary) => {
     const distribution = distributionFor(summary, unit);
     return {
@@ -660,21 +743,22 @@ function ContributorsTable({
 
 export function TokenEfficiencyIndexRoute() {
   const { days: sinceDays } = useDateRange();
-  const query = useQuery({
-    queryKey: ["token-efficiency-index", sinceDays],
-    queryFn: ({ signal }) => fetchTokenEfficiencyIndex({ sinceDays, signal }),
-    staleTime: 120_000,
-    placeholderData: (previous) => previous,
-  });
-
-  if (query.isPending) {
-    return <LoadingShell eyebrow="Token efficiency" title="Project baselines" variant="table" tableRows={7} tableCols={6} />;
+  const job = useTokenEfficiencyIndex();
+  if (!job.data && job.status !== "error") {
+    return (
+      <TokenEfficiencyJobLoading
+        title="Project baselines"
+        detail="Building project baselines from completed session telemetry."
+        job={job}
+        skeleton={<LoadingShell eyebrow="Token efficiency" title="Project baselines" variant="table" tableRows={7} tableCols={6} />}
+      />
+    );
   }
-  if (query.isError) {
-    return <StateBlock title="Token efficiency unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
+  if (job.status === "error" || !job.data) {
+    return <StateBlock title="Token efficiency unavailable" detail={job.error ?? "The collection did not return data."} onRetry={job.start} />;
   }
 
-  const data = query.data;
+  const data = job.data;
   const rows: TokenEfficiencyProjectIndexRow[] = data.projects;
   const rootGraphs = rows.reduce((sum, row) => sum + (row.root_graphs ?? 0), 0);
   const promptTokens = rows.reduce((sum, row) => sum + (row.prompt_tokens ?? 0), 0);
@@ -721,23 +805,24 @@ export function TokenEfficiencyIndexRoute() {
         </CardHeader>
         <CardContent>
           {rows.length ? (
-            <Table>
-              <TableCaption>
-                Cumulative graph usage for roots discovered by recent file modification.
-              </TableCaption>
-              <TableHeader>
-                <TableRow>
-                  <TableHead scope="col">Project</TableHead>
-                  <TableHead scope="col" className="text-right">Root graphs</TableHead>
-                  <TableHead scope="col" className="text-right">Prompt tokens</TableHead>
-                  <TableHead scope="col" className="text-right">Average / graph</TableHead>
-                  <TableHead scope="col" className="text-right">Median / graph</TableHead>
-                  <TableHead scope="col" className="text-right">P90 / graph</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((row) => (
-                  <TableRow key={row.project_name}>
+            <div className="flex flex-col gap-4">
+              <Table>
+                <TableCaption>
+                  Cumulative graph usage for roots discovered by recent file modification.
+                </TableCaption>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead scope="col">Project</TableHead>
+                    <TableHead scope="col" className="text-right">Root graphs</TableHead>
+                    <TableHead scope="col" className="text-right">Prompt tokens</TableHead>
+                    <TableHead scope="col" className="text-right">Average / graph</TableHead>
+                    <TableHead scope="col" className="text-right">Median / graph</TableHead>
+                    <TableHead scope="col" className="text-right">P90 / graph</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((row) => (
+                    <TableRow key={row.project_name}>
                     <TableCell>
                       <Link
                         to="/token-efficiency/$projectName"
@@ -766,10 +851,23 @@ export function TokenEfficiencyIndexRoute() {
                     <TableCell className="text-right font-mono">
                       {formatTokens(row.graph_prompt?.p90)}
                     </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {job.hasNextPage ? (
+                <div className="flex justify-center">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={job.fetchNextPage}
+                    disabled={job.isFetchingNextPage}
+                  >
+                    {job.isFetchingNextPage ? "Loading projects…" : "Load more projects"}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
           ) : (
             <StateBlock
               title="No project telemetry"
@@ -794,9 +892,9 @@ export function TokenEfficiencyProjectRoute() {
     void navigate({ search: (current) => ({ ...current, ...patch }) });
   };
 
-  if (query.isPending) return <ProjectLoading projectName={projectName} />;
-  if (query.isError) {
-    return <StateBlock title="Project efficiency unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
+  if (!query.data && query.status !== "error") return <ProjectLoading projectName={projectName} job={query} />;
+  if (query.status === "error" || !query.data) {
+    return <StateBlock title="Project efficiency unavailable" detail={query.error ?? "The collection did not return data."} onRetry={query.start} />;
   }
 
   const data = query.data;
@@ -1039,9 +1137,9 @@ export function TokenEfficiencyPatternsRoute() {
     void navigate({ search: (current) => ({ ...current, ...patch }) });
   };
 
-  if (query.isPending) return <ProjectLoading projectName={projectName} />;
-  if (query.isError) {
-    return <StateBlock title="Pattern metrics unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
+  if (!query.data && query.status !== "error") return <ProjectLoading projectName={projectName} job={query} />;
+  if (query.status === "error" || !query.data) {
+    return <StateBlock title="Pattern metrics unavailable" detail={query.error ?? "The collection did not return data."} onRetry={query.start} />;
   }
   const data = query.data;
 
@@ -1160,9 +1258,9 @@ export function TokenEfficiencyPatternDetailRoute() {
     void navigate({ search: (current) => ({ ...current, ...patch }) });
   };
 
-  if (query.isPending) return <ProjectLoading projectName={projectName} />;
-  if (query.isError) {
-    return <StateBlock title="Pattern detail unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
+  if (!query.data && query.status !== "error") return <ProjectLoading projectName={projectName} job={query} />;
+  if (query.status === "error" || !query.data) {
+    return <StateBlock title="Pattern detail unavailable" detail={query.error ?? "The collection did not return data."} onRetry={query.start} />;
   }
   const data = query.data;
   const pattern = data.patterns[grain].find((row) => row.key === patternKey);
@@ -1345,9 +1443,9 @@ export function TokenEfficiencyHotspotsRoute() {
     void navigate({ search: (current) => ({ ...current, ...patch }) });
   };
 
-  if (query.isPending) return <ProjectLoading projectName={projectName} />;
-  if (query.isError) {
-    return <StateBlock title="Hotspot metrics unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
+  if (!query.data && query.status !== "error") return <ProjectLoading projectName={projectName} job={query} />;
+  if (query.status === "error" || !query.data) {
+    return <StateBlock title="Hotspot metrics unavailable" detail={query.error ?? "The collection did not return data."} onRetry={query.start} />;
   }
   const data = query.data;
 
@@ -1460,9 +1558,9 @@ export function TokenEfficiencyHotspotDetailRoute() {
     void navigate({ search: (current) => ({ ...current, ...patch }) });
   };
 
-  if (query.isPending) return <ProjectLoading projectName={projectName} />;
-  if (query.isError) {
-    return <StateBlock title="Hotspot detail unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
+  if (!query.data && query.status !== "error") return <ProjectLoading projectName={projectName} job={query} />;
+  if (query.status === "error" || !query.data) {
+    return <StateBlock title="Hotspot detail unavailable" detail={query.error ?? "The collection did not return data."} onRetry={query.start} />;
   }
   const data = query.data;
   const hotspot = data.hotspots[grain].find((row) => row.key === hotspotKey);
@@ -1606,9 +1704,9 @@ export function TokenEfficiencyOutliersRoute() {
     void navigate({ search: (current) => ({ ...current, ...patch }) });
   };
 
-  if (query.isPending) return <ProjectLoading projectName={projectName} />;
-  if (query.isError) {
-    return <StateBlock title="Outlier metrics unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
+  if (!query.data && query.status !== "error") return <ProjectLoading projectName={projectName} job={query} />;
+  if (query.status === "error" || !query.data) {
+    return <StateBlock title="Outlier metrics unavailable" detail={query.error ?? "The collection did not return data."} onRetry={query.start} />;
   }
   const data = query.data;
 

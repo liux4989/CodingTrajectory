@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Moon, Sun } from "lucide-react";
+import { CircleAlert, LoaderCircle, Moon, Sun } from "lucide-react";
 import { useTheme } from "@/hooks/use-theme";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -7,6 +7,41 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { DateRangeToggle } from "@/components/date-range-toggle";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { RefreshButton } from "@/components/refresh-button";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useDashboardDelivery } from "@/hooks/use-dashboard-delivery";
+
+function DeliveryStatus() {
+  const delivery = useDashboardDelivery();
+  const failed = delivery.sourceStatus?.failed ?? 0;
+  const incomplete = delivery.sourceStatus?.incomplete ?? 0;
+  const lag = delivery.freshness?.lag_seconds;
+  const label = delivery.error
+    ? "Delivery error"
+    : delivery.catchingUp
+      ? "Catching up"
+      : failed > 0
+      ? `${failed} source failure${failed === 1 ? "" : "s"}`
+      : incomplete > 0
+        ? `${incomplete} incomplete source${incomplete === 1 ? "" : "s"}`
+        : "Live";
+  const detail = delivery.error
+    ? `Delivery unavailable: ${delivery.error}`
+    : `Revision ${delivery.revision ?? "—"} · ${lag == null ? "refresh lag unavailable" : `${Math.round(lag)}s refresh lag`}`;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge variant={delivery.error || failed > 0 ? "destructive" : "outline"} className="hidden gap-1 sm:inline-flex">
+          {delivery.catchingUp || delivery.isRefreshing ? <LoaderCircle className="animate-spin" /> : null}
+          {delivery.error || failed > 0 ? <CircleAlert /> : null}
+          {label}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent>{detail}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 export function SiteHeader() {
   const { theme, toggle } = useTheme();
@@ -21,6 +56,7 @@ export function SiteHeader() {
         />
         <Breadcrumbs />
         <div className="ml-auto flex items-center gap-2">
+          <DeliveryStatus />
           <RefreshButton />
           <DateRangeToggle />
           <Button

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { getCoreRowModel, getSortedRowModel, getPaginationRowModel, useReactTable, type ColumnDef, type SortingState } from "@tanstack/react-table";
 import { AlertTriangle, CircleSlash, ShieldAlert } from "lucide-react";
 import {
@@ -17,6 +17,7 @@ import { RouteHeader } from "@/components/route-header";
 import { shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable } from "@/components/data-table";
 import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
@@ -44,10 +45,19 @@ export function ErrorCollectionRoute() {
   const navigate = useNavigate({ from: "/error-collection" });
   const { days: sinceDays } = useDateRange();
   const projectName = search.projectName ?? null;
-  const query = useQuery({
+  const query = useInfiniteQuery({
     queryKey: ["error-collection", sinceDays, projectName],
-    queryFn: () => fetchErrorCollection({ sinceDays, projectName }),
-    placeholderData: (previous) => previous,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) =>
+      fetchErrorCollection({
+        sinceDays,
+        projectName,
+        cursor: pageParam ?? undefined,
+        limit: 50,
+        signal,
+      }),
+    getNextPageParam: (lastPage) =>
+      lastPage.pages?.errors?.next_cursor ?? undefined,
   });
 
   const [activeTab, setActiveTab] = React.useState("breakdown");
@@ -69,7 +79,15 @@ export function ErrorCollectionRoute() {
     return <StateBlock title="Error collection unavailable" detail={query.error.message} onRetry={() => query.refetch()} />;
   }
 
-  const data = query.data;
+  const first = query.data.pages[0];
+  const data = {
+    ...first,
+    errors: Array.from(
+      new Map(
+        query.data.pages.flatMap((page) => page.errors).map((row) => [row.id, row]),
+      ).values(),
+    ),
+  };
 
   return (
     <div className="route-container w-full min-w-0 overflow-hidden">
@@ -124,6 +142,18 @@ export function ErrorCollectionRoute() {
           },
         ]}
       />
+      {query.hasNextPage ? (
+        <div className="flex justify-center">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void query.fetchNextPage()}
+            disabled={query.isFetchingNextPage}
+          >
+            {query.isFetchingNextPage ? "Loading errors…" : "Load more errors"}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
