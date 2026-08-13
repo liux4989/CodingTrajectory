@@ -3,8 +3,8 @@
 The benchmark invokes the same ``DashboardDataService`` methods as the HTTP
 handler. It also wraps every dashboard-owned ``ct`` subprocess adapter so a
 slow route can be split into nested core/CLI time and dashboard projection
-time. Agent creation, evaluation execution, cleanup application, and other
-state-changing routes are intentionally outside the suite.
+time. Cleanup application and other state-changing routes are intentionally
+outside the suite.
 """
 
 from __future__ import annotations
@@ -53,7 +53,6 @@ STANDARD_API_NAMES = (
     "model-usage",
     "error-collection",
     "cache-breaks",
-    "evaluations",
     "vendors",
     "project-cleanup-preview",
     "session-cleanup-preview",
@@ -384,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
             require_project=bool(
                 requested & {"project-detail", "token-efficiency-project"}
             ),
-            require_session=bool(requested & {"context-window", "evaluations"}),
+            require_session=bool(requested & {"context-window"}),
         )
     )
     save_target = _resolve_save_target(args.save, no_save=args.no_save)
@@ -461,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
         notes=[
             "Dashboard-cache-cold runs clear projection and shared source caches before each call; warm runs immediately repeat the same call.",
             "nested_ct_median_ms is median summed subprocess work; dashboard_median_ms is a residual estimate and is not valid CPU attribution when subprocesses overlap.",
-            "Agent, evaluation-start, cleanup-apply, and other state-changing APIs are excluded.",
+            "Cleanup-apply and other state-changing APIs are excluded.",
             "Token-efficiency projections are included only with --include-expensive or an explicit --api selection.",
         ],
     )
@@ -1108,10 +1107,6 @@ def _api_specs(
         **({"project_name": [fixture.project_name]} if fixture.project_name else {}),
     }
     session_query = {"session_id": [fixture.session_id]} if fixture.session_id else {}
-    evaluation_query = {
-        "scope_type": ["session"],
-        **({"scope_id": [fixture.session_id]} if fixture.session_id else {}),
-    }
     project_missing = None if fixture.project_name else "no project fixture discovered"
     session_missing = None if fixture.session_id else "no session fixture discovered"
     return [
@@ -1178,13 +1173,6 @@ def _api_specs(
             "/api/cache-breaks",
             since_query,
             lambda: service.cache_breaks(since_query),
-        ),
-        _ApiSpec(
-            "evaluations",
-            "/api/evaluations",
-            evaluation_query,
-            lambda: service.evaluation_list(evaluation_query),
-            session_missing,
         ),
         _ApiSpec("vendors", "/api/vendors", {}, lambda: service.vendors({})),
         _ApiSpec(

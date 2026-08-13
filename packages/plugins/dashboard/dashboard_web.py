@@ -165,21 +165,6 @@ def _handler_for(
                 return
             self._json_response(payload, status=status)
 
-        def do_DELETE(self) -> None:
-            parsed = urlparse(self.path)
-            if not parsed.path.startswith("/api/"):
-                self._json_error(HTTPStatus.NOT_FOUND, "not found")
-                return
-            try:
-                payload, status = self._handle_api_delete(parsed.path)
-            except ValueError as exc:
-                self._json_error(HTTPStatus.BAD_REQUEST, str(exc))
-                return
-            except RuntimeError as exc:
-                self._json_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
-                return
-            self._json_response(payload, status=status)
-
         def log_message(self, format: str, *args: Any) -> None:
             print(f"{self.address_string()} - {format % args}", file=sys.stderr)
 
@@ -414,13 +399,6 @@ def _handler_for(
                     )
                 elif path == "/api/diagnostics/cache":
                     payload = service.cache_metrics()
-                elif path == "/api/evaluations":
-                    payload = service.evaluation_list(query)
-                elif path.startswith("/api/evaluations/"):
-                    evaluation_id = path[len("/api/evaluations/") :].strip("/")
-                    if not evaluation_id:
-                        raise ValueError("evaluation_id is required")
-                    payload = service.evaluation(evaluation_id)
                 elif path == "/api/vendors":
                     payload = service.vendors(query)
                 elif path == "/api/cleanup/project/preview":
@@ -429,9 +407,6 @@ def _handler_for(
                     payload = service.session_cleanup_preview(query)
                 elif path.startswith("/api/jobs/"):
                     self._handle_job_get(path)
-                    return
-                elif path.startswith("/api/agent-sessions/"):
-                    self._handle_agent_session_get(path)
                     return
                 else:
                     self._json_error(HTTPStatus.NOT_FOUND, "not found")
@@ -481,44 +456,18 @@ def _handler_for(
                     service.start_token_efficiency_project(body),
                     HTTPStatus.ACCEPTED,
                 )
-            if path == "/api/agent-sessions":
-                return service.create_agent_session(body), HTTPStatus.CREATED
-            agent_session_id = _agent_session_turn_id(path)
-            if agent_session_id:
-                return (
-                    service.agent_session_turn(agent_session_id, body),
-                    HTTPStatus.ACCEPTED,
-                )
-            if path == "/api/agent-turn":
-                return service.agent_turn(body), HTTPStatus.ACCEPTED
             if path == "/api/cleanup/project/apply":
                 return service.apply_project_cleanup(body), HTTPStatus.OK
             if path == "/api/cleanup/session/apply":
                 return service.apply_session_cleanup(body), HTTPStatus.OK
             if path == "/api/sessions/analysis":
                 return service.session_analysis(body), HTTPStatus.ACCEPTED
-            evaluation_scope = _evaluation_scope(path)
-            if evaluation_scope:
-                scope_type, scope_id = evaluation_scope
-                return (
-                    service.start_evaluation(
-                        scope_type=scope_type,
-                        scope_id=scope_id,
-                    ),
-                    HTTPStatus.ACCEPTED,
-                )
             session_id = _session_analysis_id(path)
             if session_id:
                 return (
                     service.session_analysis({**body, "session_id": session_id}),
                     HTTPStatus.ACCEPTED,
                 )
-            raise ValueError("unknown api endpoint")
-
-        def _handle_api_delete(self, path: str) -> tuple[dict[str, Any], HTTPStatus]:
-            agent_session_id = _agent_session_id(path)
-            if agent_session_id:
-                return service.close_agent_session(agent_session_id), HTTPStatus.OK
             raise ValueError("unknown api endpoint")
 
         def _handle_job_get(self, path: str) -> None:
@@ -530,23 +479,6 @@ def _handler_for(
                 payload = service.job_status(job_id)
             except ValueError as exc:
                 self._json_error(HTTPStatus.NOT_FOUND, str(exc))
-                return
-            self._json_response(payload)
-
-        def _handle_agent_session_get(self, path: str) -> None:
-            agent_session_id = _agent_session_id(path)
-            if not agent_session_id:
-                self._json_error(HTTPStatus.NOT_FOUND, "not found")
-                return
-            try:
-                payload = service.agent_session(agent_session_id)
-            except ValueError as exc:
-                status = (
-                    HTTPStatus.NOT_FOUND
-                    if str(exc) == "agent_session_not_found"
-                    else HTTPStatus.BAD_REQUEST
-                )
-                self._json_error(status, str(exc))
                 return
             self._json_response(payload)
 
@@ -643,39 +575,6 @@ def _session_analysis_id(path: str) -> str | None:
         return None
     session_id = path[len(prefix) : -len(suffix)].strip("/")
     return session_id or None
-
-
-def _evaluation_scope(path: str) -> tuple[str, str] | None:
-    prefix = "/api/evaluations/"
-    if not path.startswith(prefix):
-        return None
-    suffix = path[len(prefix) :].strip("/")
-    parts = suffix.split("/", 1)
-    if len(parts) != 2 or parts[0] not in {"turns", "sessions"} or not parts[1]:
-        return None
-    scope_type = "turn" if parts[0] == "turns" else "session"
-    return scope_type, parts[1]
-
-
-def _agent_session_id(path: str) -> str | None:
-    prefix = "/api/agent-sessions/"
-    if not path.startswith(prefix):
-        return None
-    suffix = path[len(prefix) :].strip("/")
-    if not suffix or "/" in suffix:
-        return None
-    return suffix
-
-
-def _agent_session_turn_id(path: str) -> str | None:
-    prefix = "/api/agent-sessions/"
-    suffix = "/turns"
-    if not path.startswith(prefix) or not path.endswith(suffix):
-        return None
-    agent_session_id = path[len(prefix) : -len(suffix)].strip("/")
-    if not agent_session_id or "/" in agent_session_id:
-        return None
-    return agent_session_id
 
 
 def _first(query: dict[str, list[str]], key: str) -> str | None:

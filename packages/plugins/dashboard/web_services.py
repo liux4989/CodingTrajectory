@@ -12,13 +12,10 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from . import agent_task as agent_task_mod
-    from .agent_sessions import AgentSessionStore
     from . import cache_breaks as cache_breaks_mod
     from . import cleanup as cleanup_mod
     from .codex_app_server import CodexAppServerManager, close_active_app_servers
     from . import context_window as context_window_mod
-    from . import evaluation as evaluation_mod
     from . import error_collection as error_collection_mod
     from . import model_usage as model_usage_mod
     from . import session_analysis as session_analysis_mod
@@ -27,13 +24,10 @@ try:
     from .source_data import DashboardSourceData
     from .work_manager import DashboardWorkManager
 except ImportError:
-    import agent_task as agent_task_mod
-    from agent_sessions import AgentSessionStore
     import cache_breaks as cache_breaks_mod
     import cleanup as cleanup_mod
     from codex_app_server import CodexAppServerManager, close_active_app_servers
     import context_window as context_window_mod
-    import evaluation as evaluation_mod
     import error_collection as error_collection_mod
     import model_usage as model_usage_mod
     import session_analysis as session_analysis_mod
@@ -59,20 +53,9 @@ class DashboardDataService:
         self._runner = JobRunner(self._jobs)
         self._token_efficiency_generation = 0
         self._app_server = CodexAppServerManager(cwd=_repo_root())
-        self._agent_sessions = AgentSessionStore(
-            cwd=_repo_root(),
-            app_server=self._app_server,
-        )
-        self._evaluation_store = evaluation_mod.EvaluationStore()
-        self._evaluations = evaluation_mod.EvaluationService(
-            ct_json=self._source.json,
-            app_server=self._app_server,
-            store=self._evaluation_store,
-        )
 
     def shutdown(self) -> None:
         self._runner.shutdown(wait=False)
-        self._agent_sessions.shutdown()
         self._app_server.close()
         close_active_app_servers()
         self._work.shutdown(wait=False)
@@ -423,132 +406,6 @@ class DashboardDataService:
             "operation_key": operation_key,
             "reused": reused,
         }
-
-    def start_evaluation(
-        self,
-        *,
-        scope_type: evaluation_mod.ScopeType,
-        scope_id: str,
-    ) -> dict[str, Any]:
-        scope_id = scope_id.strip()
-        if not scope_id:
-            raise ValueError(f"{scope_type}_id is required")
-        operation_key = (
-            f"session-evaluation:{evaluation_mod.EVALUATOR_VERSION}:"
-            f"{scope_type}:{scope_id}"
-        )
-        job_id, created = self._runner.submit_once(
-            operation_key,
-            "session-evaluation",
-            self._evaluations.evaluate,
-            scope_type=scope_type,
-            scope_id=scope_id,
-        )
-        return {
-            "status": "pending",
-            "job_id": job_id,
-            "operation_key": operation_key,
-            "reused": not created,
-        }
-
-    def evaluation(self, evaluation_id: str) -> dict[str, Any]:
-        artifact = self._evaluation_store.get(evaluation_id)
-        if artifact is None:
-            raise ValueError("evaluation_not_found")
-        return artifact.model_dump(mode="json")
-
-    def evaluation_list(self, query: dict[str, list[str]]) -> dict[str, Any]:
-        scope_id = _first(query, "scope_id")
-        if not scope_id:
-            raise ValueError("scope_id is required")
-        scope_type = _first(query, "scope_type") or "session"
-        if scope_type not in {"turn", "session"}:
-            raise ValueError("scope_type must be turn or session")
-        artifacts = self._evaluation_store.find(
-            scope_type=scope_type,
-            scope_id=scope_id,
-        )
-        return {
-            "scope_type": scope_type,
-            "scope_id": scope_id,
-            "items": [
-                {
-                    "evaluation_id": artifact.identity.evaluation_id,
-                    "created_at": artifact.identity.created_at,
-                    "title": artifact.title,
-                    "category": (
-                        artifact.category.primary if artifact.category else None
-                    ),
-                    "resolution": artifact.aggregate.resolution,
-                    "rubric_score": artifact.aggregate.rubric_score,
-                    "evidence_coverage": artifact.aggregate.evidence_coverage,
-                }
-                for artifact in artifacts
-            ],
-        }
-
-    def create_agent_session(self, body: dict[str, Any]) -> dict[str, Any]:
-        route_scope = body.get("route_scope")
-        ephemeral = bool(body.get("ephemeral", True))
-        if route_scope is not None and not isinstance(route_scope, str):
-            raise ValueError("route_scope must be a string")
-        return self._agent_sessions.create(
-            route_scope=route_scope.strip() if isinstance(route_scope, str) else None,
-            ephemeral=ephemeral,
-        )
-
-    def agent_session(self, agent_session_id: str) -> dict[str, Any]:
-        return self._agent_sessions.public(agent_session_id)
-
-    def close_agent_session(self, agent_session_id: str) -> dict[str, Any]:
-        self._agent_sessions.close(agent_session_id)
-        return {"status": "closed", "agent_session_id": agent_session_id}
-
-    def agent_session_turn(
-        self, agent_session_id: str, body: dict[str, Any]
-    ) -> dict[str, Any]:
-        prompt = body.get("prompt")
-        output_schema = body.get("output_schema")
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError("prompt is required")
-        if output_schema is not None and not isinstance(output_schema, dict):
-            raise ValueError("output_schema must be an object")
-        self._agent_sessions.public(agent_session_id)
-        job_id = self._runner.submit(
-            "agent-session-turn",
-            self._agent_sessions.run_turn,
-            agent_session_id=agent_session_id,
-            prompt=prompt.strip(),
-            output_schema=output_schema,
-        )
-        self._agent_sessions.note_job_started(agent_session_id, job_id)
-        return {
-            "status": "pending",
-            "job_id": job_id,
-            "agent_session_id": agent_session_id,
-        }
-
-    def agent_turn(self, body: dict[str, Any]) -> dict[str, Any]:
-        prompt = body.get("prompt")
-        thread_id = body.get("thread_id")
-        output_schema = body.get("output_schema")
-        ephemeral = bool(body.get("ephemeral", False))
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError("prompt is required")
-        if thread_id is not None and not isinstance(thread_id, str):
-            raise ValueError("thread_id must be a string")
-        if output_schema is not None and not isinstance(output_schema, dict):
-            raise ValueError("output_schema must be an object")
-        job_id = self._runner.submit(
-            "agent-turn",
-            agent_task_mod.run_agent_turn,
-            prompt=prompt,
-            thread_id=thread_id,
-            output_schema=output_schema,
-            ephemeral=ephemeral,
-            app_server=self._app_server,
-        )
-        return {"status": "pending", "job_id": job_id}
 
     def job_status(self, job_id: str) -> dict[str, Any]:
         record = self._jobs.get(job_id)

@@ -7,12 +7,10 @@ try:
     from . import api_benchmark as api_benchmark_mod
     from . import cleanup as cleanup_mod
     from . import context_window as context_window_mod
-    from . import evaluation as evaluation_mod
 except ImportError:
     import api_benchmark as api_benchmark_mod
     import cleanup as cleanup_mod
     import context_window as context_window_mod
-    import evaluation as evaluation_mod
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -88,8 +86,7 @@ def _session_parser() -> argparse.ArgumentParser:
         epilog=(
             "SUBCOMMANDS\n"
             "  cleanup          Clean orphaned or low-value session logs.\n"
-            "  context-window   Inspect context composition and trajectory events.\n"
-            "  evaluate         Run the lightweight session or turn evaluator."
+            "  context-window   Inspect context composition and trajectory events."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -128,8 +125,6 @@ def _handle_session_command(args: list[str]) -> int:
         return _session_cleanup(parsed)
     if args and args[0] == "context-window":
         return context_window_mod.main(args[1:])
-    if args and args[0] == "evaluate":
-        return evaluation_mod.main(args[1:])
     parser = _session_parser()
     if not args:
         print(parser.format_help(), end="")
@@ -149,7 +144,6 @@ def _root_entry_text() -> str:
             "  ct plugin dashboard project cleanup [--dry-run] [flags]",
             "  ct plugin dashboard session cleanup [flags]",
             "  ct plugin dashboard session context-window SESSION_ID [flags]",
-            "  ct plugin dashboard session evaluate SESSION_ID [flags]",
             "",
             "Web:  Overview-first UI with explicit routes for browsing and cleanup.",
         ]

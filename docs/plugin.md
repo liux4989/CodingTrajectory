@@ -235,7 +235,6 @@ ct plugin dashboard benchmark [--fixture-file FILE] [--repeat N] [--api NAME] [-
 ct plugin dashboard project cleanup [--dry-run] [--older-than 30d] [--path PATH] [--detail]
 ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm]
 ct plugin dashboard session context-window SESSION_ID [flags]
-ct plugin dashboard session evaluate SESSION_ID [flags]
 ```
 
 Project cleanup behavior:

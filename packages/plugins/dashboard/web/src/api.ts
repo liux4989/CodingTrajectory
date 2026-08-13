@@ -345,23 +345,6 @@ export type SessionAnalysis = {
   }>;
 };
 
-export type AgentTurnResult = {
-  schema_version: 2;
-  generated_at: string;
-  agent_session_id: string;
-  app_server_turn_id: string | null;
-  response_text: string;
-};
-
-export type AgentSession = {
-  agent_session_id: string;
-  route_scope: string | null;
-  created_at: string;
-  last_used_at: string;
-  active_job_id: string | null;
-  recent_job_ids: string[];
-};
-
 export type CleanupSummary = {
   candidate_count: number;
   skipped_count: number;
@@ -850,67 +833,6 @@ export async function analyzeSession(sessionId: string, refresh = false) {
   });
 }
 
-export async function createAgentSession(params: {
-  routeScope?: string | null;
-  ephemeral?: boolean;
-}) {
-  return fetchJson<AgentSession>("/api/agent-sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      route_scope: params.routeScope ?? null,
-      ephemeral: params.ephemeral ?? false,
-    }),
-  });
-}
-
-export async function fetchAgentSession(agentSessionId: string) {
-  return fetchJson<AgentSession>(`/api/agent-sessions/${encodeURIComponent(agentSessionId)}`);
-}
-
-export async function closeAgentSession(agentSessionId: string) {
-  return fetchJson<{ status: "closed"; agent_session_id: string }>(
-    `/api/agent-sessions/${encodeURIComponent(agentSessionId)}`,
-    { method: "DELETE" },
-  );
-}
-
-export async function runAgentSessionTurn(params: {
-  agentSessionId: string;
-  prompt: string;
-  outputSchema?: Record<string, unknown> | null;
-}) {
-  return fetchJson<JobAccepted>(
-    `/api/agent-sessions/${encodeURIComponent(params.agentSessionId)}/turns`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: params.prompt,
-        output_schema: params.outputSchema ?? null,
-      }),
-    },
-  );
-}
-
-export async function runAgentTurn(params: {
-  prompt: string;
-  threadId?: string | null;
-  outputSchema?: Record<string, unknown> | null;
-  ephemeral?: boolean;
-}) {
-  return fetchJson<JobAccepted>("/api/agent-turn", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      prompt: params.prompt,
-      thread_id: params.threadId ?? null,
-      output_schema: params.outputSchema ?? null,
-      ephemeral: params.ephemeral ?? false,
-    }),
-  });
-}
-
 export type JobStatus = "pending" | "running" | "ready" | "error";
 
 export type JobRecord = {
@@ -982,7 +904,6 @@ type JobAccepted = {
   job_id: string;
   operation_key?: string;
   reused?: boolean;
-  agent_session_id?: string;
 };
 
 export async function fetchJobStatus(jobId: string, signal?: AbortSignal) {
