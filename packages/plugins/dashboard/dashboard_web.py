@@ -423,16 +423,6 @@ def _handler_for(
                 if runtime is not None:
                     payload["incremental"] = runtime.request_refresh()
                 return payload, HTTPStatus.OK
-            if path == "/api/token-efficiency":
-                return (
-                    service.start_token_efficiency_index(body),
-                    HTTPStatus.ACCEPTED,
-                )
-            if path == "/api/token-efficiency/project":
-                return (
-                    service.start_token_efficiency_project(body),
-                    HTTPStatus.ACCEPTED,
-                )
             if path == "/api/sessions/analysis":
                 return service.session_analysis(body), HTTPStatus.ACCEPTED
             session_id = _session_analysis_id(path)

@@ -7,15 +7,7 @@ type Crumb = { key: string; label: string; to: string };
 
 const LABEL_FNS: Record<string, (params: Record<string, unknown>) => string> = {
   "/": () => "Overview",
-  "/model-usage": () => "Model usage",
-  "/token-efficiency": () => "Token efficiency",
-  "/token-efficiency/$projectName": (p) => String(p.projectName ?? "Project"),
-  "/token-efficiency/$projectName/patterns": () => "Patterns",
-  "/token-efficiency/$projectName/patterns/$patternKey": (p) =>
-    humanize(String(p.patternKey ?? "Pattern")),
-  "/token-efficiency/$projectName/hotspots": () => "Hotspots",
-  "/token-efficiency/$projectName/hotspots/$hotspotKey": () => "Hotspot",
-  "/token-efficiency/$projectName/outliers": () => "Outliers",
+  "/model-usage": () => "Usage",
   "/sessions": () => "Sessions",
   "/sessions/$sessionId/context-window": (p) => {
     const id = String(p.sessionId ?? "");
@@ -29,22 +21,15 @@ type Props = {
 
 export function Breadcrumbs({ className }: Props) {
   const matches = useMatches();
-  const leaf = matches.at(-1);
-  const crumbs: Crumb[] =
-    leaf?.pathname.startsWith("/token-efficiency")
-      ? tokenEfficiencyCrumbs(
-          leaf.pathname,
-          leaf.params as Record<string, unknown>,
-        )
-      : matches
-          .filter((m) => m.routeId !== "__root__" && m.pathname !== "/")
-          .map((m) => {
-            const fn = LABEL_FNS[m.routeId];
-            const label = fn
-              ? fn(m.params as Record<string, unknown>)
-              : humanize(m.routeId);
-            return { key: m.id, label, to: m.pathname };
-          });
+  const crumbs: Crumb[] = matches
+    .filter((m) => m.routeId !== "__root__" && m.pathname !== "/")
+    .map((m) => {
+      const fn = LABEL_FNS[m.routeId];
+      const label = fn
+        ? fn(m.params as Record<string, unknown>)
+        : humanize(m.routeId);
+      return { key: m.id, label, to: m.pathname };
+    });
 
   if (crumbs.length === 0) return null;
 
@@ -84,64 +69,6 @@ export function Breadcrumbs({ className }: Props) {
       })}
     </nav>
   );
-}
-
-function tokenEfficiencyCrumbs(
-  pathname: string,
-  params: Record<string, unknown>,
-): Crumb[] {
-  const crumbs: Crumb[] = [
-    {
-      key: "token-efficiency",
-      label: "Token efficiency",
-      to: "/token-efficiency",
-    },
-  ];
-  const projectName = String(params.projectName ?? "");
-  if (!projectName) return crumbs;
-  const projectPath = `/token-efficiency/${encodeURIComponent(projectName)}`;
-  crumbs.push({
-    key: "token-efficiency-project",
-    label: projectName,
-    to: projectPath,
-  });
-  if (pathname.includes("/patterns")) {
-    const patternsPath = `${projectPath}/patterns`;
-    crumbs.push({
-      key: "token-efficiency-patterns",
-      label: "Patterns",
-      to: patternsPath,
-    });
-    const patternKey = String(params.patternKey ?? "");
-    if (patternKey) {
-      crumbs.push({
-        key: "token-efficiency-pattern",
-        label: humanize(patternKey),
-        to: pathname,
-      });
-    }
-  } else if (pathname.includes("/hotspots")) {
-    const hotspotsPath = `${projectPath}/hotspots`;
-    crumbs.push({
-      key: "token-efficiency-hotspots",
-      label: "Hotspots",
-      to: hotspotsPath,
-    });
-    if (params.hotspotKey) {
-      crumbs.push({
-        key: "token-efficiency-hotspot",
-        label: "Hotspot",
-        to: pathname,
-      });
-    }
-  } else if (pathname.endsWith("/outliers")) {
-    crumbs.push({
-      key: "token-efficiency-outliers",
-      label: "Outliers",
-      to: pathname,
-    });
-  }
-  return crumbs;
 }
 
 function humanize(routeId: string) {

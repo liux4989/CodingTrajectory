@@ -630,26 +630,6 @@ export type TokenEfficiencyCoverage = {
   [key: string]: number | undefined;
 };
 
-export type TokenEfficiencyProjectIndexRow = {
-  project_name: string;
-  display_name: string;
-  root_graphs: number;
-  prompt_tokens: number;
-  graph_prompt: TokenEfficiencyDistribution;
-};
-
-export type TokenEfficiencyIndexPayload = {
-  schema_version: 1;
-  generated_at: string;
-  filters: { since_days: number };
-  attribution: Record<string, unknown>;
-  coverage: TokenEfficiencyCoverage;
-  warnings: string[];
-  project_options: ProjectItem[];
-  projects: TokenEfficiencyProjectIndexRow[];
-  pages?: { projects?: CursorPageMetadata };
-};
-
 export type TokenEfficiencyProjectPayload = {
   schema_version: 1;
   generated_at: string;
@@ -837,22 +817,6 @@ export async function fetchModelUsage(params: {
   if (params.revision != null) search.set("revision", String(params.revision));
   search.set("limit", String(params.limit ?? 50));
   return fetchJson<ModelUsagePayload>(`/api/model-usage?${search}`, {
-    signal: params.signal,
-  });
-}
-
-export async function fetchTokenEfficiencyIndex(params: {
-  sinceDays?: number;
-  cursor?: string;
-  limit?: number;
-  signal?: AbortSignal;
-}) {
-  const search = new URLSearchParams({
-    since_days: String(Math.min(params.sinceDays ?? 7, 30)),
-    limit: String(params.limit ?? 50),
-  });
-  if (params.cursor) search.set("cursor", params.cursor);
-  return fetchJson<TokenEfficiencyIndexPayload>(`/api/token-efficiency?${search}`, {
     signal: params.signal,
   });
 }

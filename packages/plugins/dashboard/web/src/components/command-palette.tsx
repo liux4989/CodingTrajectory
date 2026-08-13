@@ -42,8 +42,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     const navItems: CommandItem[] = [
       { id: "nav-overview", label: "Overview", group: "Navigate", onSelect: () => navigate({ to: "/" }) },
       { id: "nav-sessions", label: "Sessions", group: "Navigate", onSelect: () => navigate({ to: "/sessions", search: { projectName: undefined } }) },
-      { id: "nav-model-usage", label: "Model Usage", group: "Navigate", onSelect: () => navigate({ to: "/model-usage", search: { projectName: undefined, modelKey: undefined, view: undefined } }) },
-      { id: "nav-token-efficiency", label: "Token Efficiency", group: "Navigate", onSelect: () => navigate({ to: "/token-efficiency" }) },
+      { id: "nav-model-usage", label: "Usage", group: "Navigate", onSelect: () => navigate({ to: "/model-usage", search: { projectName: undefined, modelKey: undefined, view: undefined, grain: undefined, unit: undefined } }) },
     ];
 
     const sessionItems: CommandItem[] = (sessions.data?.items ?? [])

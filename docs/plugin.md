@@ -246,12 +246,9 @@ Project cleanup behavior:
 - Project cleanup reads candidates from the `project.list` service result.
 - Project cleanup supports permanent deletion only; it does not expose trash or
   terminal UI modes.
-- The web dashboard provides target selection and confirmation for interactive
-  project cleanup.
 
-The first command surface should remain this small. More complex cleanup flows
-should move into the dashboard-owned web application rather than adding many
-one-off flags to the CLI.
+The first command surface should remain this small. Cleanup is CLI-only; the
+web dashboard stays read-only.
 
 ### Project Cleanup Rules
 

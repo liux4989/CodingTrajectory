@@ -42,6 +42,7 @@ import {
 } from "@/components/ui/table";
 import { FilterLabel, RightCell } from "@/components/table-cells";
 import { useDateRange } from "@/hooks/use-date-range";
+import { EfficiencyLens } from "@/routes/usage-efficiency";
 
 const ALL_PROJECTS = "__all_projects__";
 const ALL_MODELS = "__all_models__";
@@ -63,6 +64,7 @@ const VIEW_OPTIONS = [
   { value: "cost", label: "Cost" },
   { value: "tokens", label: "Tokens" },
   { value: "time", label: "Time" },
+  { value: "efficiency", label: "Efficiency" },
 ] as const;
 
 type UsageView = (typeof VIEW_OPTIONS)[number]["value"];
@@ -74,6 +76,8 @@ export function ModelUsageRoute() {
   const projectName = search.projectName ?? null;
   const modelKey = search.modelKey ?? null;
   const view = search.view ?? "overview";
+  const grain = search.grain ?? "weekly";
+  const unit = search.unit ?? "session";
   const sessionsQuery = useInfiniteQuery({
     queryKey: ["model-usage", sinceDays, projectName, modelKey, "sessions"],
     initialPageParam: null as string | null,
@@ -179,8 +183,8 @@ export function ModelUsageRoute() {
   return (
     <div className="route-container w-full min-w-0 overflow-hidden">
       <RouteHeader
-        eyebrow="Model economics"
-        title="Model usage overview"
+        eyebrow="Usage"
+        title="Where did tokens, time, and money go?"
       />
 
       <Card className="min-w-0">
@@ -242,6 +246,16 @@ export function ModelUsageRoute() {
       {view === "cost" ? <CostView data={data} activeTab={sectionTab} onTabChange={setSectionTab} /> : null}
       {view === "tokens" ? <TokensView data={data} activeTab={sectionTab} onTabChange={setSectionTab} /> : null}
       {view === "time" ? <TimeView data={data} /> : null}
+      {view === "efficiency" ? (
+        <EfficiencyLens
+          projectName={projectName}
+          grain={grain}
+          unit={unit}
+          onSearchChange={(patch) => {
+            void navigate({ search: (current) => ({ ...current, ...patch }) });
+          }}
+        />
+      ) : null}
       {sessionsQuery.hasNextPage || turnsQuery.hasNextPage ? (
         <div className="flex flex-wrap justify-center gap-2">
           {sessionsQuery.hasNextPage ? (

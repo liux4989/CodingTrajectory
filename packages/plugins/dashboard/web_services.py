@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shlex
@@ -269,25 +268,6 @@ class DashboardDataService:
             stale_ttl_seconds=3_600,
         )
 
-    def start_token_efficiency_index(self, body: dict[str, Any]) -> dict[str, Any]:
-        query = _body_query(body)
-        since_days = min(_int(query, "since_days", 7), 30)
-        generation = self._token_efficiency_generation
-        operation_key = f"token-efficiency-index:v1:{since_days}:g{generation}"
-        job_id, created = self._runner.submit_once(
-            operation_key,
-            "token-efficiency-index",
-            self.token_efficiency_index,
-            query,
-            generation=generation,
-        )
-        return {
-            "status": "pending",
-            "job_id": job_id,
-            "operation_key": operation_key,
-            "reused": not created,
-        }
-
     def token_efficiency_project(
         self,
         query: dict[str, list[str]],
@@ -316,32 +296,6 @@ class DashboardDataService:
             ttl_seconds=3_600,
             stale_ttl_seconds=3_600,
         )
-
-    def start_token_efficiency_project(self, body: dict[str, Any]) -> dict[str, Any]:
-        query = _body_query(body)
-        project_name = _first(query, "project_name")
-        if not project_name:
-            raise ValueError("project_name is required")
-        since_days = min(_int(query, "since_days", 7), 30)
-        generation = self._token_efficiency_generation
-        operation_key = (
-            "token-efficiency-project:v1:"
-            f"{_project_cache_key(project_name)}:{since_days}:"
-            f"g{generation}"
-        )
-        job_id, created = self._runner.submit_once(
-            operation_key,
-            "token-efficiency-project",
-            self.token_efficiency_project,
-            query,
-            generation=generation,
-        )
-        return {
-            "status": "pending",
-            "job_id": job_id,
-            "operation_key": operation_key,
-            "reused": not created,
-        }
 
     def cache_breaks(self, query: dict[str, list[str]]) -> dict[str, Any]:
         since_days = _int(query, "since_days", 7)
@@ -746,18 +700,6 @@ def _number(value: Any) -> int | float:
     if isinstance(value, int | float):
         return value
     return 0
-
-
-def _query_key(query: dict[str, list[str]]) -> str:
-    normalized = {
-        key: sorted(str(value) for value in values)
-        for key, values in sorted(query.items())
-    }
-    return json.dumps(normalized, sort_keys=True)
-
-
-def _project_cache_key(value: str) -> str:
-    return hashlib.sha256(value.casefold().encode()).hexdigest()[:20]
 
 
 def _ct_json(args: list[str]) -> dict[str, Any]:

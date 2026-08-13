@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   BarChart3,
   MessageSquare,
-  Gauge,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -50,16 +49,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       label: "Analytics",
       items: [
         {
-          title: "Model usage",
+          title: "Usage",
           url: "/model-usage",
           icon: BarChart3,
           match: () => Boolean(matchRoute({ to: "/model-usage" })),
-        },
-        {
-          title: "Token efficiency",
-          url: "/token-efficiency",
-          icon: Gauge,
-          match: () => Boolean(matchRoute({ to: "/token-efficiency", fuzzy: true })),
         },
       ],
     },
