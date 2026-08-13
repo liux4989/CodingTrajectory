@@ -36,8 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 _CHECKSUM_BYTES: Final = 64 * 1024
 _MAX_CHANGE_PAYLOAD_BYTES: Final = 64 * 1024
 _MAX_CHANGE_IDENTIFIER_BYTES: Final = 16 * 1024
-_ENTITY_PARTITION_MIGRATION_VERSION: Final = "1"
-_SOURCE_PAYLOAD_MIGRATION_VERSION: Final = "1"
+_STORE_FORMAT_VERSION: Final = "2"
 _MAX_CANONICAL_PAYLOAD_BYTES: Final = 256 * 1024 * 1024
 _JSON_OBJECT = TypeAdapter(dict[str, Any])
 
@@ -226,6 +225,10 @@ class StoredPayloadError(RuntimeError):
     """A persisted canonical payload cannot be safely decoded or validated."""
 
 
+class IncompatibleStoreError(RuntimeError):
+    """A disposable SQLite store was created by another storage format."""
+
+
 class SourceFenceError(RuntimeError):
     """A registered source no longer matches its transaction snapshot."""
 
@@ -296,7 +299,7 @@ class MaterializationContext:
     def active_messages(
         self, *, source_path: str | None = None
     ) -> Iterator[SourceMessage]:
-        """Yield active canonical payloads, with legacy-envelope fallback."""
+        """Yield active canonical payloads from the current store format."""
 
         self._ensure_active()
         yield from self._store._active_messages(self._connection, source_path)
@@ -493,7 +496,34 @@ class IncrementalStore:
         self.retain_source_messages = retain_source_messages
         self._refresh_lock = threading.Lock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self._assert_compatible_store()
         self._initialize()
+
+    def _assert_compatible_store(self) -> None:
+        """Reject obsolete derived state instead of migrating or decoding it."""
+
+        if not self.database_path.is_file() or self.database_path.stat().st_size == 0:
+            return
+        uri = f"{self.database_path.as_uri()}?mode=ro"
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = sqlite3.connect(uri, uri=True, timeout=1.0)
+            row = connection.execute(
+                "SELECT value FROM store_metadata WHERE key = 'store_format_version'"
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise IncompatibleStoreError(
+                f"derived store has no supported format marker: {self.database_path}"
+            ) from exc
+        finally:
+            if connection is not None:
+                connection.close()
+        if row is None or str(row[0]) != _STORE_FORMAT_VERSION:
+            actual = str(row[0]) if row is not None else "missing"
+            raise IncompatibleStoreError(
+                "derived store format is incompatible: "
+                f"expected {_STORE_FORMAT_VERSION}, found {actual}"
+            )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=30.0)
@@ -590,6 +620,16 @@ class IncrementalStore:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_current
                     ON entity_versions(entity_kind, entity_key)
                     WHERE valid_to_revision IS NULL;
+                CREATE INDEX IF NOT EXISTS idx_entity_keyset ON entity_versions(
+                    entity_kind, scope_key, deleted, sort_key, tiebreaker,
+                    entity_key, valid_from_revision, valid_to_revision
+                );
+                CREATE INDEX IF NOT EXISTS idx_entity_partition_keyset
+                    ON entity_versions(
+                        entity_kind, scope_key, partition_key, deleted, sort_key,
+                        tiebreaker, entity_key, valid_from_revision,
+                        valid_to_revision
+                    );
                 CREATE TABLE IF NOT EXISTS revision_changes (
                     change_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     revision INTEGER NOT NULL REFERENCES revisions(revision),
@@ -612,9 +652,11 @@ class IncrementalStore:
             )
             if not connection.in_transaction:
                 connection.execute("BEGIN IMMEDIATE")
-            self._migrate_source_ctime(connection)
-            self._migrate_source_payloads(connection)
-            self._migrate_entity_partitions(connection)
+            connection.execute(
+                "INSERT OR IGNORE INTO store_metadata(key, value) "
+                "VALUES('store_format_version', ?)",
+                (_STORE_FORMAT_VERSION,),
+            )
             connection.execute(
                 "INSERT OR IGNORE INTO store_metadata(key, value) VALUES('revision', '0')"
             )
@@ -638,112 +680,6 @@ class IncrementalStore:
             raise
         finally:
             connection.close()
-
-    @staticmethod
-    def _migrate_source_ctime(connection: sqlite3.Connection) -> None:
-        columns = {
-            str(row[1]) for row in connection.execute("PRAGMA table_info(sources)")
-        }
-        if "committed_ctime_ns" not in columns:
-            connection.execute(
-                "ALTER TABLE sources ADD COLUMN committed_ctime_ns "
-                "INTEGER NOT NULL DEFAULT 0"
-            )
-
-    @staticmethod
-    def _migrate_source_payloads(connection: sqlite3.Connection) -> None:
-        """Add compressed canonical payload columns without rewriting legacy rows."""
-
-        columns = {
-            str(row[1])
-            for row in connection.execute("PRAGMA table_info(source_messages)")
-        }
-        if "canonical_json_zlib" not in columns:
-            connection.execute(
-                "ALTER TABLE source_messages ADD COLUMN canonical_json_zlib BLOB"
-            )
-        if "canonical_json_size" not in columns:
-            connection.execute(
-                "ALTER TABLE source_messages ADD COLUMN canonical_json_size INTEGER"
-            )
-        connection.execute(
-            """
-            INSERT INTO store_metadata(key, value)
-            VALUES('source_payload_migration', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """,
-            (_SOURCE_PAYLOAD_MIGRATION_VERSION,),
-        )
-
-    @staticmethod
-    def _migrate_entity_partitions(connection: sqlite3.Connection) -> None:
-        """Add disposable-store partition columns created by early v1 builds."""
-
-        columns = {
-            str(row[1])
-            for row in connection.execute("PRAGMA table_info(entity_versions)")
-        }
-        marker = connection.execute(
-            "SELECT value FROM store_metadata WHERE key = ?",
-            ("entity_partition_migration",),
-        ).fetchone()
-        requires_rebuild = bool(
-            (marker is None or marker[0] != _ENTITY_PARTITION_MIGRATION_VERSION)
-            and connection.execute("SELECT 1 FROM entity_versions LIMIT 1").fetchone()
-        )
-        if "scope_key" not in columns:
-            connection.execute(
-                "ALTER TABLE entity_versions ADD COLUMN scope_key TEXT NOT NULL DEFAULT ''"
-            )
-        if "partition_key" not in columns:
-            connection.execute(
-                "ALTER TABLE entity_versions ADD COLUMN partition_key TEXT NOT NULL DEFAULT ''"
-            )
-        connection.execute("DROP INDEX IF EXISTS idx_entity_keyset")
-        connection.execute("DROP INDEX IF EXISTS idx_entity_partition_keyset")
-        connection.execute(
-            """
-            CREATE INDEX idx_entity_keyset ON entity_versions(
-                entity_kind, scope_key, deleted, sort_key, tiebreaker,
-                entity_key, valid_from_revision, valid_to_revision
-            )
-            """
-        )
-        if requires_rebuild:
-            # SQLite is disposable derived state.  Early v1 rows cannot be
-            # assigned a trustworthy scope/partition after the fact, so make
-            # the missing projection observable to the runtime and force a
-            # canonical rebuild instead of silently serving empty filters.
-            connection.execute("DELETE FROM entity_versions")
-            connection.execute("DELETE FROM revision_changes")
-            revision_row = connection.execute(
-                "SELECT value FROM store_metadata WHERE key = 'revision'"
-            ).fetchone()
-            revision = int(revision_row[0]) if revision_row is not None else 0
-            connection.execute(
-                """
-                INSERT INTO store_metadata(key, value)
-                VALUES('changes_pruned_through', ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
-                (str(revision),),
-            )
-        connection.execute(
-            """
-            INSERT INTO store_metadata(key, value)
-            VALUES('entity_partition_migration', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """,
-            (_ENTITY_PARTITION_MIGRATION_VERSION,),
-        )
-        connection.execute(
-            """
-            CREATE INDEX idx_entity_partition_keyset ON entity_versions(
-                entity_kind, scope_key, partition_key, deleted, sort_key,
-                tiebreaker, entity_key, valid_from_revision, valid_to_revision
-            )
-            """
-        )
 
     def current_revision(self) -> int:
         """Return the latest atomically published derived snapshot revision."""
@@ -802,41 +738,63 @@ class IncrementalStore:
         Revision changes define the supported snapshot TTL. Entity versions
         older than that boundary cannot be reached by a valid browser cursor and
         are disposable. Source-message tombstones are never a read authority and
-        can be removed immediately; checkpoint-only stores remove all legacy
-        transcript copies.
+        can be removed immediately; checkpoint-only stores remove all retained
+        source-message copies.
         """
 
         with self._refresh_lock:
             connection = self._connect()
             try:
                 connection.execute("BEGIN IMMEDIATE")
+                messages_before = _table_count(connection, "source_messages")
+                versions_before = _table_count(connection, "entity_versions")
+                changes_before = _table_count(connection, "revision_changes")
+                tombstones_before = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM entity_versions WHERE deleted = 1"
+                    ).fetchone()[0]
+                )
+                self._prune_changes(
+                    connection,
+                    self._current_revision(connection),
+                )
                 cutoff = int(
                     self._metadata(connection, "changes_pruned_through") or "0"
                 )
                 if self.retain_source_messages:
-                    messages_deleted = connection.execute(
-                        "DELETE FROM source_messages WHERE active = 0"
-                    ).rowcount
+                    connection.execute("DELETE FROM source_messages WHERE active = 0")
                 else:
-                    messages_deleted = connection.execute(
-                        "DELETE FROM source_messages"
-                    ).rowcount
-                versions_deleted = connection.execute(
+                    connection.execute("DELETE FROM source_messages")
+                connection.execute(
                     """
                     DELETE FROM entity_versions
                      WHERE valid_to_revision IS NOT NULL
                        AND valid_to_revision <= ?
                     """,
                     (cutoff,),
-                ).rowcount
-                tombstones_deleted = connection.execute(
+                )
+                connection.execute(
                     """
                     DELETE FROM entity_versions
                      WHERE valid_to_revision IS NULL AND deleted = 1
                        AND valid_from_revision <= ?
                     """,
                     (cutoff,),
-                ).rowcount
+                )
+                messages_deleted = messages_before - _table_count(
+                    connection, "source_messages"
+                )
+                versions_deleted = versions_before - _table_count(
+                    connection, "entity_versions"
+                )
+                changes_deleted = changes_before - _table_count(
+                    connection, "revision_changes"
+                )
+                tombstones_deleted = tombstones_before - int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM entity_versions WHERE deleted = 1"
+                    ).fetchone()[0]
+                )
                 connection.commit()
                 page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
                 pages_before = int(
@@ -861,6 +819,7 @@ class IncrementalStore:
                 with self._connect() as compact_connection:
                     compact_connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                     compact_connection.execute("VACUUM")
+                    compact_connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 with self._connect() as measured:
                     pages_after = int(
                         measured.execute("PRAGMA page_count").fetchone()[0]
@@ -870,6 +829,7 @@ class IncrementalStore:
         return {
             "messages_deleted": max(messages_deleted, 0),
             "entity_versions_deleted": max(versions_deleted, 0),
+            "revision_changes_deleted": max(changes_deleted, 0),
             "tombstones_deleted": max(tombstones_deleted, 0),
             "reclaimable_bytes": reclaimable_bytes,
             "compacted": compacted,
@@ -2251,6 +2211,18 @@ class IncrementalStore:
             connection.close()
 
 
+def _table_count(
+    connection: sqlite3.Connection,
+    table: Literal["source_messages", "entity_versions", "revision_changes"],
+) -> int:
+    queries = {
+        "source_messages": "SELECT COUNT(*) FROM source_messages",
+        "entity_versions": "SELECT COUNT(*) FROM entity_versions",
+        "revision_changes": "SELECT COUNT(*) FROM revision_changes",
+    }
+    return int(connection.execute(queries[table]).fetchone()[0])
+
+
 def _disk_metadata(path: str) -> _DiskMetadata:
     stat = os.stat(path)
     if not os.path.isfile(path):
@@ -2319,16 +2291,12 @@ def _compress_canonical_payload(payload: dict[str, Any]) -> tuple[bytes, int]:
     return zlib.compress(canonical), len(canonical)
 
 
-def _stored_payload(row: sqlite3.Row) -> tuple[dict[str, Any], bool]:
+def _stored_payload(row: sqlite3.Row) -> dict[str, Any]:
     compressed = row["canonical_json_zlib"]
     if compressed is None:
-        try:
-            envelope = _JSON_OBJECT.validate_python(json.loads(row["normalized_json"]))
-        except Exception as exc:
-            raise StoredPayloadError(
-                f"invalid legacy payload envelope for {row['source_message_id']}"
-            ) from exc
-        return envelope, False
+        raise StoredPayloadError(
+            f"canonical payload is missing for {row['source_message_id']}"
+        )
 
     try:
         expected_size = row["canonical_json_size"]
@@ -2352,7 +2320,7 @@ def _stored_payload(row: sqlite3.Row) -> tuple[dict[str, Any], bool]:
         payload = _JSON_OBJECT.validate_json(canonical)
         if _canonical_json(payload).encode("utf-8") != canonical:
             raise ValueError("stored payload is not canonical JSON")
-        return payload, True
+        return payload
     except Exception as exc:
         raise StoredPayloadError(
             f"invalid compressed payload for {row['source_message_id']}"
@@ -2360,7 +2328,6 @@ def _stored_payload(row: sqlite3.Row) -> tuple[dict[str, Any], bool]:
 
 
 def _message_from_row(row: sqlite3.Row) -> SourceMessage:
-    payload, payload_complete = _stored_payload(row)
     return SourceMessage(
         source_message_id=row["source_message_id"],
         source_path=row["path"],
@@ -2372,8 +2339,8 @@ def _message_from_row(row: sqlite3.Row) -> SourceMessage:
         event_timestamp=row["event_timestamp"],
         root_link=row["root_link"],
         parent_link=row["parent_link"],
-        payload=payload,
-        payload_complete=payload_complete,
+        payload=_stored_payload(row),
+        payload_complete=True,
     )
 
 
@@ -2494,6 +2461,7 @@ __all__ = [
     "EntityMutation",
     "EntityRow",
     "IncrementalStore",
+    "IncompatibleStoreError",
     "IngestionStatus",
     "KeysetPage",
     "MaterializationContext",

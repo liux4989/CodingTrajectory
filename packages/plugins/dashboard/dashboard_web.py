@@ -170,7 +170,7 @@ def _handler_for(
 
         def _handle_api_get(self, path: str, query: dict[str, list[str]]) -> None:
             try:
-                self._used_legacy_fallback = False
+                self._used_service_fallback = False
                 limit = _bounded_page_size(query)
                 cursor = _cursor(query)
                 if path == "/api/dashboard/snapshot":
@@ -195,7 +195,7 @@ def _handler_for(
                         if runtime is not None
                         else None
                     )
-                    payload = self._with_legacy_fallback(
+                    payload = self._with_service_fallback(
                         incremental,
                         lambda: service.overview(query),
                         revisioned_scope=(
@@ -212,7 +212,7 @@ def _handler_for(
                         if runtime is not None
                         else None
                     )
-                    payload = self._with_legacy_fallback(
+                    payload = self._with_service_fallback(
                         incremental,
                         lambda: service.projects(query),
                         revisioned_scope=runtime is not None,
@@ -231,7 +231,7 @@ def _handler_for(
                         if runtime is not None and since_days_raw is not None
                         else None
                     )
-                    payload = self._with_legacy_fallback(
+                    payload = self._with_service_fallback(
                         incremental,
                         lambda: service.project_detail(query),
                         revisioned_scope=(
@@ -253,7 +253,7 @@ def _handler_for(
                         if runtime is not None and not _truthy(query, "all_time")
                         else None
                     )
-                    payload = self._with_legacy_fallback(
+                    payload = self._with_service_fallback(
                         incremental,
                         lambda: service.sessions(query),
                         revisioned_scope=(
@@ -273,7 +273,7 @@ def _handler_for(
                         if runtime is not None and not _truthy(query, "all_time")
                         else None
                     )
-                    payload = self._with_legacy_fallback(
+                    payload = self._with_service_fallback(
                         incremental,
                         lambda: service.session_timeline(query),
                         revisioned_scope=(
@@ -291,7 +291,7 @@ def _handler_for(
                         if runtime is not None
                         else None
                     )
-                    payload = self._with_legacy_fallback(
+                    payload = self._with_service_fallback(
                         incremental,
                         lambda: service.context_window(query),
                         revisioned_scope=runtime is not None,
@@ -311,7 +311,7 @@ def _handler_for(
                         if runtime is not None
                         else None
                     )
-                    payload = self._with_legacy_fallback(
+                    payload = self._with_service_fallback(
                         incremental,
                         lambda: service.model_usage(query),
                         revisioned_scope=(
@@ -329,7 +329,7 @@ def _handler_for(
                         if runtime is not None
                         else None
                     )
-                    payload = self._with_legacy_fallback(
+                    payload = self._with_service_fallback(
                         incremental,
                         lambda: service.token_efficiency_index(query),
                         revisioned_scope=(
@@ -352,7 +352,7 @@ def _handler_for(
                         if runtime is not None
                         else None
                     )
-                    payload = self._with_legacy_fallback(
+                    payload = self._with_service_fallback(
                         incremental,
                         lambda: service.token_efficiency_project(query),
                         revisioned_scope=(
@@ -399,7 +399,7 @@ def _handler_for(
                 return
             self._json_response(payload)
 
-        def _with_legacy_fallback(
+        def _with_service_fallback(
             self,
             incremental: dict[str, Any] | None,
             fallback: Callable[[], dict[str, Any]],
@@ -408,11 +408,15 @@ def _handler_for(
         ) -> dict[str, Any]:
             if incremental is not None:
                 return incremental
-            if revisioned_scope and runtime is not None and not runtime.is_ready():
-                raise DashboardBootstrapPending(
-                    "dashboard read models are catching up; retry shortly"
+            if runtime is not None:
+                if revisioned_scope:
+                    raise DashboardBootstrapPending(
+                        "dashboard read model is not available yet; retry shortly"
+                    )
+                raise ValueError(
+                    "requested scope is not available from revisioned dashboard data"
                 )
-            self._used_legacy_fallback = True
+            self._used_service_fallback = True
             return fallback()
 
         def _handle_api_post(
@@ -511,8 +515,8 @@ def _handler_for(
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            if getattr(self, "_used_legacy_fallback", False):
-                self.send_header("X-Dashboard-Delivery", "legacy-fallback")
+            if getattr(self, "_used_service_fallback", False):
+                self.send_header("X-Dashboard-Delivery", "service-fallback")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

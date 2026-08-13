@@ -24,6 +24,12 @@ from coding_trajectory.ingestion.models import (
     Turn,
     Vendor,
 )
+from coding_trajectory.ingestion.retention import (
+    CanonicalRetention,
+    compact_usage_mapping,
+    retain_event_for_measurements,
+    retain_item_for_measurements,
+)
 from coding_trajectory.query import DocumentError, DocumentStore
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.discovery_paths import (
@@ -83,6 +89,8 @@ def _selected_vendor_configs(
 
 def _ingest_sessions(
     candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
+    *,
+    retention: CanonicalRetention = "trajectory",
 ) -> list[tuple[Vendor, Path, Session]]:
     """Ingest candidate files in two passes so forked files can drop the
     inherited-history segment they re-materialize.
@@ -132,6 +140,7 @@ def _ingest_sessions(
                 adapter.ingest_file(path, parent_started_turn_ids=parent_started),
                 vendor=vendor,
                 source=path,
+                retention=retention,
             )
         except Exception as exc:
             debug.warn(
@@ -643,8 +652,17 @@ def discover_store_from_file(path: Path) -> DiscoveryResult:
     raise DocumentError(f"no adapter could parse log file: {path}")
 
 
-def discover_store_from_files(paths: list[Path]) -> DiscoveryResult:
-    """Build a store from multiple explicit log files, preserving cross-session links."""
+def discover_store_from_files(
+    paths: list[Path],
+    *,
+    retention: CanonicalRetention = "trajectory",
+) -> DiscoveryResult:
+    """Build a store from explicit logs while preserving cross-session links.
+
+    ``measurements`` retains the canonical hierarchy and fields required by
+    usage, model, runtime, pricing, and reconciliation projections, but drops
+    transcript bodies before sessions accumulate into connected components.
+    """
     sessions_by_project: dict[str, list[Session]] = {}
     path_session_meta: list[tuple[Vendor, Path, UUID]] = []
 
@@ -657,7 +675,7 @@ def discover_store_from_files(paths: list[Path]) -> DiscoveryResult:
             candidates.append((vendor, adapter_cls, path))
             break
 
-    for vendor, path, session in _ingest_sessions(candidates):
+    for vendor, path, session in _ingest_sessions(candidates, retention=retention):
         project_identifier = infer_project_identifier(session, path, fallback=path.stem)
         if not project_identifier:
             project_identifier = path.stem
@@ -802,7 +820,13 @@ def _stable_uuid(vendor: Vendor, source: Path, **fields: object) -> UUID:
     return uuid5(NAMESPACE_URL, json.dumps(payload, sort_keys=True, default=str))
 
 
-def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Session:
+def stabilize_session(
+    session: Session,
+    *,
+    vendor: Vendor,
+    source: Path,
+    retention: CanonicalRetention = "trajectory",
+) -> Session:
     # --- stabilize event IDs ---
     event_id_map: dict[object, object] = {}
     events: list[Event] = []
@@ -817,7 +841,11 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
             payload=event.payload,
         )
         event_id_map[event.event_id] = stable_event_id
-        events.append(event.model_copy(update={"event_id": stable_event_id}))
+        stable_event = event.model_copy(update={"event_id": stable_event_id})
+        if retention == "measurements":
+            stable_event = retain_event_for_measurements(stable_event)
+        if stable_event is not None:
+            events.append(stable_event)
 
     # --- stabilize turn + item IDs ---
     turn_id_map: dict[object, object] = {}
@@ -845,18 +873,17 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
                 started_at=item.started_at.isoformat(),
                 tool_call_id=getattr(item, "tool_call_id", None),
             )
-            stable_items.append(
-                item.model_copy(
-                    update={
-                        "item_id": stable_item_id,
-                        "session_id": session.session_id,
-                        "turn_id": stable_turn_id,
-                        "event_ids": [
-                            event_id_map.get(eid, eid) for eid in item.event_ids
-                        ],
-                    }
-                )
+            stable_item = item.model_copy(
+                update={
+                    "item_id": stable_item_id,
+                    "session_id": session.session_id,
+                    "turn_id": stable_turn_id,
+                    "event_ids": [event_id_map.get(eid, eid) for eid in item.event_ids],
+                }
             )
+            if retention == "measurements":
+                stable_item = retain_item_for_measurements(stable_item)
+            stable_items.append(stable_item)
 
         user_req_eid = turn.user_request_event_id
         stable_user_req_eid = (
@@ -880,7 +907,16 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
                 "source_event_id": event_id_map.get(
                     observation.source_event_id,
                     observation.source_event_id,
-                )
+                ),
+                **(
+                    {
+                        "usage": compact_usage_mapping(observation.usage),
+                        "cumulative_usage": None,
+                        "categories": [],
+                    }
+                    if retention == "measurements"
+                    else {}
+                ),
             }
         )
         for observation in session.context_usage
@@ -891,6 +927,9 @@ def stabilize_session(session: Session, *, vendor: Vendor, source: Path) -> Sess
             "events": events,
             "turns": turns,
             "context_usage": context_usage,
+            "context_sources": (
+                [] if retention == "measurements" else session.context_sources
+            ),
             "cwd": cwd,
         }
     )

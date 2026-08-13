@@ -39,6 +39,7 @@ from coding_trajectory.ingestion.adapters.codex import (
 from coding_trajectory.ingestion.adapters.pi import PiAdapter
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.ingestion.models import Session, SessionGraph, Vendor
+from coding_trajectory.ingestion.retention import CanonicalRetention
 from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
     canonical_session_ids,
 )
@@ -558,6 +559,7 @@ def rebuild_affected_session_graphs_from_files(
     sources: Iterable[SourceInput],
     seed_paths: Iterable[str | Path] = (),
     old_root_session_ids: Iterable[str | UUID] = (),
+    retention: CanonicalRetention = "trajectory",
 ) -> IncrementalGraphBuild:
     """Rebuild affected components directly from immutable JSONL sources.
 
@@ -631,7 +633,9 @@ def rebuild_affected_session_graphs_from_files(
         )
 
     try:
-        discovery = discover_store_from_files([Path(path) for path in sorted(selected)])
+        discovery = discover_store_from_files(
+            [Path(path) for path in sorted(selected)], retention=retention
+        )
     except Exception as exc:
         issues.append(
             _issue(

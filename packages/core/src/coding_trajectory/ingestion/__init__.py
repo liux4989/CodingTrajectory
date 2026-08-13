@@ -52,11 +52,13 @@ from coding_trajectory.ingestion.models import (
     Vendor,
     VendorExtensions,
 )
+from coding_trajectory.ingestion.retention import CanonicalRetention
 
 __all__ = [
     # models
     "AgentMessageItem",
     "ClaudeCodeExtensions",
+    "CanonicalRetention",
     "CodexExtensions",
     "CommandExecutionItem",
     "ContextCategoryObservation",

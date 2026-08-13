@@ -113,9 +113,11 @@ except ImportError:
     import context_window
 
 
-PARSER_VERSION = "core-source-checkpoint-v2"
-READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v2"
+PARSER_VERSION = "core-source-checkpoint-v3"
+READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v3"
 DEFAULT_REFRESH_SECONDS = 15.0
+RETAINED_CHANGE_REVISIONS = 96
+OBSOLETE_DATABASE_GRACE_SECONDS = 24 * 60 * 60
 
 
 class RuntimeSnapshot(BaseModel):
@@ -147,10 +149,13 @@ class DashboardIncrementalRuntime:
         self.current_dir = current_dir.resolve()
         self.since_days = since_days
         self.refresh_seconds = max(1.0, refresh_seconds)
+        self._uses_default_database = database_path is None
+        resolved_database_path = (database_path or _default_database_path()).resolve()
         self.store = IncrementalStore(
-            database_path or _default_database_path(),
+            resolved_database_path,
             parser_version=PARSER_VERSION,
             schema_version=READ_MODEL_SCHEMA_VERSION,
+            retained_change_revisions=RETAINED_CHANGE_REVISIONS,
             retain_source_messages=False,
         )
         self._executor = ThreadPoolExecutor(
@@ -1075,17 +1080,21 @@ class DashboardIncrementalRuntime:
             )
             graph_started = perf_counter()
             graph_build = rebuild_affected_session_graphs_from_files(
-                sources=component_sources
+                sources=component_sources,
+                retention="measurements",
             )
             graph_seconds += perf_counter() - graph_started
-            pending_relationships.extend(graph_build.source_relationships)
+            component_relationships = graph_build.source_relationships
+            pending_relationships.extend(component_relationships)
             pending_graph_issues.extend(graph_build.issues)
             issue_count += len(graph_build.issues)
-            for graph in graph_build.graphs:
+            component_graphs = graph_build.graphs
+            del graph_build
+            for graph in component_graphs:
                 project_name = str(graph.project_identifier or "unknown")
                 source_paths = [
                     relationship.source_path
-                    for relationship in graph_build.source_relationships
+                    for relationship in component_relationships
                     if relationship.root_session_id == graph.root_session_id
                 ]
                 core_started = perf_counter()
@@ -1124,6 +1133,12 @@ class DashboardIncrementalRuntime:
                 fact_seconds += perf_counter() - facts_started
                 pending_facts.extend(graph_facts)
                 fact_entities += len(graph_facts)
+            if component_graphs:
+                del graph
+            # Do not keep the previous component resident while Python
+            # evaluates the next canonical rebuild call.
+            del component_graphs
+            del component_relationships
             processed_components += 1
             processed_sources += len(component.source_paths)
             pending_sources.extend(component_sources)
@@ -1208,6 +1223,7 @@ class DashboardIncrementalRuntime:
         gc_started = perf_counter()
         gc_result = self.store.garbage_collect(compact=True)
         gc_seconds = perf_counter() - gc_started
+        obsolete_databases_removed = self._retire_obsolete_databases()
         status = "complete" if issue_count == 0 else "partial"
         return {
             "status": status,
@@ -1222,6 +1238,7 @@ class DashboardIncrementalRuntime:
             "parsed_bytes": ingestion.parsed_bytes,
             "parsed_lines": ingestion.parsed_lines,
             "garbage_collection": gc_result,
+            "obsolete_databases_removed": obsolete_databases_removed,
             "timings": {
                 "source_ingestion_seconds": round(ingestion_seconds, 6),
                 "topology_planning_seconds": round(planning_seconds, 6),
@@ -1254,17 +1271,31 @@ class DashboardIncrementalRuntime:
             )
 
         result = self.store.refresh(candidates, materialize=materialize)
+        gc_started = perf_counter()
+        gc_result = self.store.garbage_collect(compact=True)
+        gc_seconds = perf_counter() - gc_started
+        obsolete_databases_removed = self._retire_obsolete_databases()
         return {
             "status": "unchanged" if not result.changed_sources else "updated",
             "revision": result.revision,
             "changed_sources": len(result.changed_sources),
             "parsed_bytes": result.parsed_bytes,
             "parsed_lines": result.parsed_lines,
+            "garbage_collection": gc_result,
+            "obsolete_databases_removed": obsolete_databases_removed,
             "timings": {
                 **materialization_timings,
+                "garbage_collection_seconds": round(gc_seconds, 6),
                 "total_seconds": round(perf_counter() - refresh_started, 6),
             },
         }
+
+    def _retire_obsolete_databases(self) -> list[str]:
+        if not self._uses_default_database:
+            return []
+        return _remove_obsolete_dashboard_databases(
+            grace_seconds=OBSOLETE_DATABASE_GRACE_SECONDS
+        )
 
     def _singleton(self, entity_kind: str, entity_key: str):
         return self.store.get_entity(entity_kind, entity_key)
@@ -1372,6 +1403,7 @@ def _materialize_changed_graphs(
         sources=sources,
         seed_paths=seed_paths,
         old_root_session_ids=old_roots,
+        retention="measurements",
     )
     graph_seconds = perf_counter() - graph_started
 
@@ -1834,7 +1866,42 @@ def _candidate_paths(since_days: int) -> tuple[Path, ...]:
 
 
 def _default_database_path() -> Path:
-    return Path.home() / ".coding-trajectory" / "dashboard" / "read-models-v2.sqlite3"
+    return Path.home() / ".coding-trajectory" / "dashboard" / "read-models-v3.sqlite3"
+
+
+def _remove_obsolete_dashboard_databases(*, grace_seconds: int) -> list[str]:
+    """Remove retired derived stores only after a long inactivity grace period."""
+
+    cutoff = datetime.now(UTC).timestamp() - grace_seconds
+    obsolete = (
+        Path.home() / ".coding-trajectory" / "dashboard" / "read-models-v2.sqlite3",
+    )
+    removed: list[str] = []
+    for database in obsolete:
+        members = tuple(
+            path
+            for path in (
+                database,
+                Path(f"{database}-wal"),
+                Path(f"{database}-shm"),
+            )
+            if path.exists()
+        )
+        if not members:
+            continue
+        try:
+            latest_mtime = max(path.stat().st_mtime for path in members)
+        except OSError:
+            continue
+        if latest_mtime > cutoff:
+            continue
+        for path in members:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
+        removed.append(str(database))
+    return removed
 
 
 def _delivery_family(entity_kind: str) -> str:
