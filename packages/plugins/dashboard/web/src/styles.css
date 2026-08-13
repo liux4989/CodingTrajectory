@@ -691,16 +691,6 @@
       top: 1rem;
     }
   }
-  .context-playback-rail {
-    position: sticky;
-    inset-block-end: 0.75rem;
-    z-index: 50;
-    border-radius: var(--radius-xl);
-    border: 1px solid var(--border-soft);
-    background: color-mix(in srgb, var(--card) 96%, white 4%);
-    padding: 0.75rem;
-    box-shadow: var(--shadow-lg);
-  }
   @media (max-width: 64rem) {
     .context-window-title-row {
       grid-template-columns: minmax(0, 1fr);

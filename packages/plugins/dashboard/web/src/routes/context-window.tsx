@@ -2,7 +2,7 @@ import * as React from "react";
 import { useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AlertTriangle, Eye, Lightbulb, Pin, PinOff, Play, Pause, Maximize, Minimize, Search, X, Sparkles, Square } from "lucide-react";
+import { AlertTriangle, Eye, Lightbulb, Pin, PinOff, Search, X, Sparkles, Square } from "lucide-react";
 import {
   analyzeSession,
   fetchContextWindow,
@@ -197,9 +197,6 @@ export function ContextWindowRoute() {
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [pinnedId, setPinnedId] = React.useState<string | null>(null);
   const [hoveredCategory, setHoveredCategory] = React.useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = React.useState(false);
-  const [playbackSpeed, setPlaybackSpeed] = React.useState(1);
-  const [isFullscreen, setIsFullscreen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState("");
   const [activeCategories, setActiveCategories] = React.useState<Set<string>>(new Set());
   const [expandedGroups, setExpandedGroups] = React.useState<string[] | null>(null);
@@ -228,28 +225,6 @@ export function ContextWindowRoute() {
   // array takes over. Accordion `value` is always controlled so this works
   // as a fall-untouched default.
   const expandedValue = expandedGroups ?? turnGroups.map((group) => group.key);
-
-  React.useEffect(() => {
-    if (!isPlaying) return;
-    const interval = setInterval(() => {
-      setSelectedId((current) => {
-        const idx = Math.max(filteredEvents.findIndex((e) => e.id === current), 0);
-        const nextIndex = Math.min(idx + 1, filteredEvents.length - 1);
-        if (nextIndex === idx) {
-          setIsPlaying(false);
-          return current;
-        }
-        return filteredEvents[nextIndex].id;
-      });
-    }, 800 / playbackSpeed);
-    return () => clearInterval(interval);
-  }, [isPlaying, filteredEvents, playbackSpeed]);
-
-  React.useEffect(() => {
-    const handler = () => setIsFullscreen(Boolean(document.fullscreenElement));
-    document.addEventListener("fullscreenchange", handler);
-    return () => document.removeEventListener("fullscreenchange", handler);
-  }, []);
 
   const activeId = pinnedId ?? selectedId ?? filteredEvents[0]?.id ?? null;
   const activeEvent = events.find((event) => event.id === activeId) ?? null;
@@ -311,17 +286,7 @@ export function ContextWindowRoute() {
     return next;
   }, [query.data?.cache_breaks]);
 
-  const playbackIndex = filteredEvents.findIndex((e) => e.id === activeId);
-  const playbackPct = filteredEvents.length > 0
-    ? ((Math.max(playbackIndex, 0) + 1) / filteredEvents.length) * 100
-    : 0;
   const activeEvidence = activeEvent ? evidenceByEventId.get(activeEvent.id) ?? [] : [];
-
-  React.useEffect(() => {
-    if (!isPlaying || !activeId) return;
-    const index = filteredEvents.findIndex((e) => e.id === activeId);
-    eventRefs.current[index]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [activeId, isPlaying, filteredEvents]);
 
   function moveFocus(index: number, direction: -1 | 1) {
     const next = Math.min(Math.max(index + direction, 0), filteredEvents.length - 1);
@@ -341,14 +306,6 @@ export function ContextWindowRoute() {
   function clearFilters() {
     setActiveCategories(new Set());
     setSearchQuery("");
-  }
-
-  function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-    } else {
-      document.exitFullscreen().catch(() => {});
-    }
   }
 
   if (query.isPending) {
@@ -816,60 +773,6 @@ export function ContextWindowRoute() {
           </aside>
         </div>
 
-        <div className="context-playback-rail">
-          <div className="flex items-center gap-3">
-            <Button
-              size="icon"
-              variant="secondary"
-              onClick={() => setIsPlaying((p) => !p)}
-              aria-label={isPlaying ? "Pause playback" : "Play through events"}
-            >
-              {isPlaying ? <Pause size={16} /> : <Play size={16} />}
-            </Button>
-            <div className="flex-1">
-              <div
-                className="flex h-2 w-full overflow-hidden rounded-full bg-surface-emphasis"
-                role="img"
-                aria-label={`Replay progress: ${Math.max(playbackIndex, 0) + 1} of ${filteredEvents.length} events`}
-              >
-                <span
-                  className="block bg-moss transition-all duration-300"
-                  style={{ width: `${Math.min(playbackPct, 100)}%` }}
-                />
-              </div>
-            </div>
-            <span className="w-16 text-right mono text-body-sm">
-              {filteredEvents.length > 0 ? `${Math.max(playbackIndex, 0) + 1}/${filteredEvents.length}` : "-"}
-            </span>
-            <div className="flex items-center gap-1 rounded-lg border border-border-soft p-0.5">
-              {[0.5, 1, 2].map((speed) => (
-                <button
-                  key={speed}
-                  type="button"
-                  onClick={() => setPlaybackSpeed(speed)}
-                  className={cn(
-                    "rounded-md px-2 py-1 text-caption font-medium transition-colors",
-                    playbackSpeed === speed
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                  aria-pressed={playbackSpeed === speed}
-                  aria-label={`Playback speed ${speed}x`}
-                >
-                  {speed}x
-                </button>
-              ))}
-            </div>
-            <Button
-              size="icon"
-              variant="secondary"
-              onClick={toggleFullscreen}
-              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-            >
-              {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
-            </Button>
-          </div>
-        </div>
       </div>
     </div>
   );
