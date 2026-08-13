@@ -24,10 +24,9 @@ from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFou
 from coding_trajectory.service import IndexCache, dispatch
 
 try:
-    from . import cache_breaks, error_collection, model_usage, token_efficiency
+    from . import cache_breaks, model_usage, token_efficiency
 except ImportError:  # pragma: no cover - direct plugin-directory imports
     import cache_breaks  # type: ignore[no-redef]
-    import error_collection  # type: ignore[no-redef]
     import model_usage  # type: ignore[no-redef]
     import token_efficiency  # type: ignore[no-redef]
 
@@ -39,8 +38,6 @@ PersistedRow: TypeAlias = Mapping[str, Any] | Any
 MODEL_META = "analytical.model_usage.meta.v1"
 MODEL_SESSION = "analytical.model_usage.session.v1"
 MODEL_TURN = "analytical.model_usage.turn.v1"
-ERROR_META = "analytical.error_collection.meta.v1"
-ERROR_ITEM = "analytical.error_collection.item.v1"
 CACHE_META = "analytical.cache_breaks.meta.v1"
 CACHE_ITEM = "analytical.cache_breaks.item.v1"
 TOKEN_INDEX_META = "analytical.token_efficiency.index_meta.v1"
@@ -538,63 +535,6 @@ def build_model_usage_rows_from_ct_json(
     return rows
 
 
-def build_error_collection_rows(
-    *,
-    store: DocumentStore,
-    current_dir: Path,
-    since_days: int = 7,
-    project_name: str | None = None,
-    project_list: Mapping[str, Any] | None = None,
-) -> list[Mutation]:
-    """Run Error Collection once and persist independently pageable errors."""
-
-    adapter = DocumentStoreCtJson(
-        store, current_dir=current_dir, project_list=project_list
-    )
-    return build_error_collection_rows_from_ct_json(
-        ct_json=adapter,
-        since_days=since_days,
-        project_name=project_name,
-    )
-
-
-def build_error_collection_rows_from_ct_json(
-    *,
-    ct_json: CtJson,
-    since_days: int = 7,
-    project_name: str | None = None,
-) -> list[Mutation]:
-    """Normalize Error Collection through any contract-compatible adapter."""
-
-    projection = error_collection.build_projection(
-        ct_json=ct_json,
-        since_days=since_days,
-        project_name=project_name,
-    )
-    scope = _scope_key(
-        "error_collection", since_days=since_days, project_name=project_name
-    )
-    rows = [
-        _mutation(
-            ERROR_META,
-            scope,
-            scope,
-            "",
-            _without(projection, "errors"),
-        )
-    ]
-    rows.extend(
-        _detail_mutations(
-            ERROR_ITEM,
-            scope,
-            projection.get("errors") or [],
-            id_of=lambda row, index: str(row.get("id") or index),
-            partition="errors",
-        )
-    )
-    return rows
-
-
 def build_cache_break_rows(
     *,
     store: DocumentStore,
@@ -661,7 +601,7 @@ def build_standard_analytical_rows(
     project_name: str | None = None,
     project_list: Mapping[str, Any] | None = None,
 ) -> list[Mutation]:
-    """Build Model Usage, Error Collection, and Cache Breaks from one store.
+    """Build Model Usage and Cache Breaks from one store.
 
     Each existing projection is called exactly once through one adapter and one
     canonical index cache over the supplied authoritative store.
@@ -687,11 +627,6 @@ def build_standard_analytical_rows_from_ct_json(
 
     return [
         *build_model_usage_rows_from_ct_json(
-            ct_json=ct_json,
-            since_days=since_days,
-            project_name=project_name,
-        ),
-        *build_error_collection_rows_from_ct_json(
             ct_json=ct_json,
             since_days=since_days,
             project_name=project_name,
@@ -835,16 +770,6 @@ def reconstruct_model_usage(
     limit: int,
 ) -> dict[str, Any]:
     return _reconstruct(meta_row, detail=detail, rows=rows, page=page, limit=limit)
-
-
-def reconstruct_error_collection(
-    meta_row: PersistedRow,
-    *,
-    rows: Iterable[PersistedRow],
-    page: Any,
-    limit: int,
-) -> dict[str, Any]:
-    return _reconstruct(meta_row, detail="errors", rows=rows, page=page, limit=limit)
 
 
 def reconstruct_cache_breaks(
@@ -1243,8 +1168,6 @@ __all__ = [
     "CACHE_META",
     "CanonicalFactsCtJson",
     "DocumentStoreCtJson",
-    "ERROR_ITEM",
-    "ERROR_META",
     "FACT_MODEL_USAGE",
     "FACT_PROJECT",
     "FACT_PROJECT_SESSION",
@@ -1266,8 +1189,6 @@ __all__ = [
     "build_canonical_fact_rows",
     "build_canonical_fact_rows_from_ct_json",
     "build_canonical_root_fact_rows",
-    "build_error_collection_rows",
-    "build_error_collection_rows_from_ct_json",
     "build_model_usage_rows",
     "build_model_usage_rows_from_ct_json",
     "build_standard_analytical_rows",
@@ -1280,7 +1201,6 @@ __all__ = [
     "analytical_scope_key",
     "page_metadata",
     "reconstruct_cache_breaks",
-    "reconstruct_error_collection",
     "reconstruct_model_usage",
     "reconstruct_token_efficiency_index",
     "reconstruct_token_efficiency_project",

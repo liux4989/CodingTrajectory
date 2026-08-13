@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -13,10 +12,8 @@ from typing import Any
 
 try:
     from . import cache_breaks as cache_breaks_mod
-    from . import cleanup as cleanup_mod
     from .codex_app_server import CodexAppServerManager, close_active_app_servers
     from . import context_window as context_window_mod
-    from . import error_collection as error_collection_mod
     from . import model_usage as model_usage_mod
     from . import session_analysis as session_analysis_mod
     from . import token_efficiency as token_efficiency_mod
@@ -25,10 +22,8 @@ try:
     from .work_manager import DashboardWorkManager
 except ImportError:
     import cache_breaks as cache_breaks_mod
-    import cleanup as cleanup_mod
     from codex_app_server import CodexAppServerManager, close_active_app_servers
     import context_window as context_window_mod
-    import error_collection as error_collection_mod
     import model_usage as model_usage_mod
     import session_analysis as session_analysis_mod
     import token_efficiency as token_efficiency_mod
@@ -348,18 +343,6 @@ class DashboardDataService:
             "reused": not created,
         }
 
-    def error_collection(self, query: dict[str, list[str]]) -> dict[str, Any]:
-        since_days = _int(query, "since_days", 7)
-        project_name = _first(query, "project_name")
-        return self._work.get_or_compute(
-            ("error_collection", since_days, project_name),
-            lambda: error_collection_mod.build_projection(
-                ct_json=self._source.json,
-                since_days=since_days,
-                project_name=project_name,
-            ),
-        )
-
     def cache_breaks(self, query: dict[str, list[str]]) -> dict[str, Any]:
         since_days = _int(query, "since_days", 7)
         project_name = _first(query, "project_name")
@@ -435,77 +418,6 @@ class DashboardDataService:
                 )
             }
         }
-
-    def project_cleanup_preview(self, query: dict[str, list[str]]) -> dict[str, Any]:
-        return self._work.get_or_compute(
-            ("cleanup_preview", "project", _query_key(query)),
-            lambda: _preview_payload(_project_cleanup_preview(query)),
-            ttl_seconds=12,
-            stale_ttl_seconds=12,
-        )
-
-    def session_cleanup_preview(self, query: dict[str, list[str]]) -> dict[str, Any]:
-        return self._work.get_or_compute(
-            ("cleanup_preview", "session", _query_key(query)),
-            lambda: _preview_payload(_session_cleanup_preview(query)),
-            ttl_seconds=12,
-            stale_ttl_seconds=12,
-        )
-
-    def apply_project_cleanup(self, body: dict[str, Any]) -> dict[str, Any]:
-        action = _cleanup_action(body, allow_trash=False)
-        selected_paths = _selected_paths(body)
-        query = _body_query(body)
-        preview = _project_cleanup_preview(query)
-        selected = [
-            target
-            for target in preview.candidates
-            if isinstance(target, cleanup_mod.ProjectTarget)
-            and target.path in selected_paths
-        ]
-        _require_all_selected(selected_paths, [target.path for target in selected])
-        result = cleanup_mod.apply_project_selection(
-            argparse.Namespace(
-                older_than=_first(query, "older_than") or "30d",
-                path=_first(query, "path"),
-                trash=action == "trash",
-                delete=action == "delete",
-                confirm=True,
-                detail=True,
-            ),
-            preview,
-            action,
-            selected,
-        )
-        self._invalidate_cached_data()
-        return result
-
-    def apply_session_cleanup(self, body: dict[str, Any]) -> dict[str, Any]:
-        action = _cleanup_action(body)
-        selected_paths = _selected_paths(body)
-        query = _body_query(body)
-        preview = _session_cleanup_preview(query)
-        selected = [
-            target
-            for target in preview.candidates
-            if isinstance(target, cleanup_mod.SessionTarget)
-            and target.path in selected_paths
-        ]
-        _require_all_selected(selected_paths, [target.path for target in selected])
-        result = cleanup_mod.apply_session_selection(
-            argparse.Namespace(
-                agent_vendor=_first(query, "agent_vendor"),
-                trash=action == "trash",
-                delete=action == "delete",
-                confirm=True,
-                detail=True,
-            ),
-            preview,
-            action,
-            selected,
-        )
-        self._invalidate_cached_data()
-        return result
 
     def _projects_uncached(self, vendor: str | None) -> dict[str, Any]:
         params: dict[str, Any] = {}
@@ -834,100 +746,6 @@ def _number(value: Any) -> int | float:
     if isinstance(value, int | float):
         return value
     return 0
-
-
-def _project_cleanup_preview(query: dict[str, list[str]]) -> cleanup_mod.CleanupPreview:
-    older_than = _first(query, "older_than")
-    if older_than is None:
-        older_than = f"{_int(query, 'since_days', 30)}d"
-    return cleanup_mod.preview_project_cleanup(
-        argparse.Namespace(
-            older_than=older_than,
-            path=_first(query, "path"),
-            trash=False,
-            delete=False,
-            confirm=False,
-            detail=False,
-        )
-    )
-
-
-def _session_cleanup_preview(query: dict[str, list[str]]) -> cleanup_mod.CleanupPreview:
-    return cleanup_mod.preview_session_cleanup(
-        argparse.Namespace(
-            agent_vendor=_first(query, "agent_vendor"),
-            trash=False,
-            delete=False,
-            confirm=False,
-            detail=False,
-        )
-    )
-
-
-def _preview_payload(preview: cleanup_mod.CleanupPreview) -> dict[str, Any]:
-    skipped_reasons: dict[str, int] = {}
-    for item in preview.skipped:
-        for reason in item.reason:
-            skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
-    return {
-        "target_kind": preview.target_kind,
-        "filters": preview.filters,
-        "summary": {
-            "candidate_count": len(preview.candidates),
-            "skipped_count": len(preview.skipped),
-            "skipped_reasons": dict(sorted(skipped_reasons.items())),
-        },
-        "candidates": [target.model_dump(mode="json") for target in preview.candidates],
-        "skipped": [
-            item.model_dump(mode="json")
-            for item in sorted(
-                preview.skipped, key=lambda target: (target.kind, target.path)
-            )
-        ],
-    }
-
-
-def _cleanup_action(
-    body: dict[str, Any],
-    *,
-    allow_trash: bool = True,
-) -> cleanup_mod.Action:
-    action = body.get("action")
-    allowed = {"trash", "delete"} if allow_trash else {"delete"}
-    if action not in allowed:
-        raise ValueError(
-            "action must be trash or delete" if allow_trash else "action must be delete"
-        )
-    return action
-
-
-def _selected_paths(body: dict[str, Any]) -> set[str]:
-    raw = body.get("paths")
-    if not isinstance(raw, list) or not raw:
-        raise ValueError("paths must be a non-empty list")
-    paths = {item for item in raw if isinstance(item, str) and item}
-    if len(paths) != len(raw):
-        raise ValueError("paths must contain only non-empty strings")
-    return paths
-
-
-def _require_all_selected(requested: set[str], matched: list[str]) -> None:
-    missing = requested - set(matched)
-    if missing:
-        raise ValueError(
-            f"selected path is no longer a cleanup candidate: {sorted(missing)[0]}"
-        )
-
-
-def _body_query(body: dict[str, Any]) -> dict[str, list[str]]:
-    raw = body.get("filters") or {}
-    if not isinstance(raw, dict):
-        raise ValueError("filters must be an object")
-    query: dict[str, list[str]] = {}
-    for key, value in raw.items():
-        if isinstance(key, str) and value is not None:
-            query[key] = [str(value)]
-    return query
 
 
 def _query_key(query: dict[str, list[str]]) -> str:

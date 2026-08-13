@@ -20,8 +20,6 @@ const QUERY_FAMILIES = {
   "token-efficiency": [["token-efficiency"]],
   "context-window": [["context-window"]],
   "cache-breaks": [["cache-breaks"]],
-  "error-collection": [["error-collection"]],
-  cleanup: [["cleanup"]],
 } as const;
 
 const ALL_QUERY_FAMILIES = Object.values(QUERY_FAMILIES).flat();

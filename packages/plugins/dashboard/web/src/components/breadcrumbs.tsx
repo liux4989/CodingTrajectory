@@ -16,10 +16,7 @@ const LABEL_FNS: Record<string, (params: Record<string, unknown>) => string> = {
   "/token-efficiency/$projectName/hotspots": () => "Hotspots",
   "/token-efficiency/$projectName/hotspots/$hotspotKey": () => "Hotspot",
   "/token-efficiency/$projectName/outliers": () => "Outliers",
-  "/cache-breaks": () => "Cache breaks",
-  "/error-collection": () => "Errors",
   "/sessions": () => "Sessions",
-  "/cleanup": () => "Cleanup",
   "/projects/$projectName": (p) => String(p.projectName ?? "Project"),
   "/sessions/$sessionId/context-window": (p) => {
     const id = String(p.sessionId ?? "");

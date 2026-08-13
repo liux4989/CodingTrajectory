@@ -345,49 +345,6 @@ export type SessionAnalysis = {
   }>;
 };
 
-export type CleanupSummary = {
-  candidate_count: number;
-  skipped_count: number;
-  skipped_reasons: Record<string, number>;
-};
-
-export type CleanupTarget = {
-  path: string;
-  reason: string[];
-  project?: string;
-  vendor?: string;
-  session_id?: string | null;
-  modified_at?: string | null;
-  vendors?: string[];
-};
-
-export type CleanupPreview = {
-  target_kind: "project" | "session";
-  filters: Record<string, unknown>;
-  summary: CleanupSummary;
-  candidates: CleanupTarget[];
-  skipped: Array<{ kind: string; path: string; reason: string[] }>;
-};
-
-export type CleanupApplyPayload = {
-  action: "trash" | "delete";
-  paths: string[];
-  filters?: Record<string, unknown>;
-};
-
-export type CleanupResult = {
-  action: string;
-  manifest_path: string | null;
-  summary: {
-    target_count: number;
-    candidate_count: number;
-    skipped_count: number;
-    error_count: number;
-    skipped_reasons: Record<string, number>;
-  };
-  errors: Array<{ path: string; error: string }>;
-};
-
 export type UsageBuckets = {
   prompt_tokens?: number;
   cached_prompt_tokens?: number;
@@ -738,43 +695,6 @@ export type TokenEfficiencyProjectPayload = {
   >;
 };
 
-export type ErrorCollectionKind =
-  | "abort_coding_session"
-  | "abrupt_coding_mid_session"
-  | "fail_tool_coverage";
-
-export type ErrorCollectionItem = {
-  id: string;
-  session_id: string;
-  project: string | null;
-  session_title: string | null;
-  started_at: string | null;
-  ended_at: string | null;
-  kind: ErrorCollectionKind;
-  severity: "info" | "warning" | "critical";
-  confidence: "direct" | "inferred";
-  title: string;
-  detail: string;
-  evidence: string[];
-};
-
-export type ErrorCollectionPayload = {
-  schema_version: 1;
-  filters: { since_days: number; project_name: string | null };
-  project_options: ProjectItem[];
-  summary: {
-    sessions: number;
-    affected_sessions: number;
-    total_errors: number;
-    by_kind: Record<ErrorCollectionKind, number>;
-    by_severity: Record<"critical" | "warning" | "info", number>;
-    top_projects: Array<{ project: string; errors: number }>;
-    generated_at: string;
-  };
-  errors: ErrorCollectionItem[];
-  pages?: { errors?: CursorPageMetadata };
-};
-
 export async function fetchOverview(params?: { sinceDays?: number }) {
   const search = new URLSearchParams();
   if (params?.sinceDays != null) search.set("since_days", String(params.sinceDays));
@@ -922,14 +842,6 @@ export async function fetchDashboardChanges(params: {
   return fetchJson<DashboardChanges>(`/api/dashboard/changes?${search}`, { signal: params.signal });
 }
 
-export async function fetchCleanupPreview(kind: "project" | "session", params?: { sinceDays?: number }) {
-  const search = new URLSearchParams();
-  if (params?.sinceDays != null) search.set("since_days", String(params.sinceDays));
-  const query = search.toString();
-  const suffix = query ? `?${query}` : "";
-  return fetchJson<CleanupPreview>(`/api/cleanup/${kind}/preview${suffix}`);
-}
-
 export async function fetchModelUsage(params: {
   sinceDays?: number;
   projectName?: string | null;
@@ -992,23 +904,6 @@ export async function fetchTokenEfficiencyProject(params: {
   );
 }
 
-export async function fetchErrorCollection(params: {
-  sinceDays?: number;
-  projectName?: string | null;
-  cursor?: string;
-  limit?: number;
-  signal?: AbortSignal;
-}) {
-  const search = new URLSearchParams();
-  search.set("since_days", String(params.sinceDays ?? 7));
-  if (params.projectName) search.set("project_name", params.projectName);
-  if (params.cursor) search.set("cursor", params.cursor);
-  search.set("limit", String(params.limit ?? 50));
-  return fetchJson<ErrorCollectionPayload>(`/api/error-collection?${search}`, {
-    signal: params.signal,
-  });
-}
-
 export async function fetchCacheBreaks(params: {
   sinceDays?: number;
   projectName?: string | null;
@@ -1028,14 +923,6 @@ export async function fetchCacheBreaks(params: {
 
 export async function refreshDashboardData() {
   return fetchJson<{ status: "refreshed" }>("/api/refresh", { method: "POST" });
-}
-
-export async function applyCleanup(kind: "project" | "session", payload: CleanupApplyPayload) {
-  return fetchJson<CleanupResult>(`/api/cleanup/${kind}/apply`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {

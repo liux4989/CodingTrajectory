@@ -4,10 +4,7 @@ import {
   LayoutDashboard,
   BarChart3,
   MessageSquare,
-  Trash2,
-  AlertTriangle,
   Gauge,
-  Zap,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -64,18 +61,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           icon: Gauge,
           match: () => Boolean(matchRoute({ to: "/token-efficiency", fuzzy: true })),
         },
-        {
-          title: "Cache breaks",
-          url: "/cache-breaks",
-          icon: Zap,
-          match: () => Boolean(matchRoute({ to: "/cache-breaks" })),
-        },
-        {
-          title: "Errors",
-          url: "/error-collection",
-          icon: AlertTriangle,
-          match: () => Boolean(matchRoute({ to: "/error-collection" })),
-        },
       ],
     },
     {
@@ -86,12 +71,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           url: "/sessions",
           icon: MessageSquare,
           match: () => Boolean(matchRoute({ to: "/sessions", fuzzy: true })),
-        },
-        {
-          title: "Cleanup",
-          url: "/cleanup",
-          icon: Trash2,
-          match: () => Boolean(matchRoute({ to: "/cleanup" })),
         },
       ],
     },

@@ -51,11 +51,8 @@ STANDARD_API_NAMES = (
     "session-timeline",
     "context-window",
     "model-usage",
-    "error-collection",
     "cache-breaks",
     "vendors",
-    "project-cleanup-preview",
-    "session-cleanup-preview",
 )
 EXPENSIVE_API_NAMES = (
     "token-efficiency",
@@ -1163,30 +1160,12 @@ def _api_specs(
             project_missing,
         ),
         _ApiSpec(
-            "error-collection",
-            "/api/error-collection",
-            since_query,
-            lambda: service.error_collection(since_query),
-        ),
-        _ApiSpec(
             "cache-breaks",
             "/api/cache-breaks",
             since_query,
             lambda: service.cache_breaks(since_query),
         ),
         _ApiSpec("vendors", "/api/vendors", {}, lambda: service.vendors({})),
-        _ApiSpec(
-            "project-cleanup-preview",
-            "/api/cleanup/project/preview",
-            since_query,
-            lambda: service.project_cleanup_preview(since_query),
-        ),
-        _ApiSpec(
-            "session-cleanup-preview",
-            "/api/cleanup/session/preview",
-            {},
-            lambda: service.session_cleanup_preview({}),
-        ),
     ]
 
 

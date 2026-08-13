@@ -359,25 +359,6 @@ def _handler_for(
                             runtime is not None and since_days == runtime.since_days
                         ),
                     )
-                elif path == "/api/error-collection":
-                    since_days = _bounded_positive_int(query, "since_days", 7)
-                    incremental = (
-                        runtime.error_collection(
-                            since_days=since_days,
-                            project_name=_first(query, "project_name"),
-                            limit=limit,
-                            cursor=cursor,
-                        )
-                        if runtime is not None
-                        else None
-                    )
-                    payload = self._with_legacy_fallback(
-                        incremental,
-                        lambda: service.error_collection(query),
-                        revisioned_scope=(
-                            runtime is not None and since_days == runtime.since_days
-                        ),
-                    )
                 elif path == "/api/cache-breaks":
                     since_days = _bounded_positive_int(query, "since_days", 7)
                     incremental = (
@@ -401,10 +382,6 @@ def _handler_for(
                     payload = service.cache_metrics()
                 elif path == "/api/vendors":
                     payload = service.vendors(query)
-                elif path == "/api/cleanup/project/preview":
-                    payload = service.project_cleanup_preview(query)
-                elif path == "/api/cleanup/session/preview":
-                    payload = service.session_cleanup_preview(query)
                 elif path.startswith("/api/jobs/"):
                     self._handle_job_get(path)
                     return
@@ -456,10 +433,6 @@ def _handler_for(
                     service.start_token_efficiency_project(body),
                     HTTPStatus.ACCEPTED,
                 )
-            if path == "/api/cleanup/project/apply":
-                return service.apply_project_cleanup(body), HTTPStatus.OK
-            if path == "/api/cleanup/session/apply":
-                return service.apply_session_cleanup(body), HTTPStatus.OK
             if path == "/api/sessions/analysis":
                 return service.session_analysis(body), HTTPStatus.ACCEPTED
             session_id = _session_analysis_id(path)

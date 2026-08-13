@@ -40,8 +40,6 @@ try:
         CACHE_ITEM,
         CACHE_META,
         CanonicalFactsCtJson,
-        ERROR_ITEM,
-        ERROR_META,
         FACT_PROJECT,
         FACT_PROJECT_SESSION,
         MODEL_META,
@@ -57,7 +55,6 @@ try:
         build_canonical_fact_rows,
         build_canonical_root_fact_rows,
         build_cache_break_rows_from_ct_json,
-        build_error_collection_rows_from_ct_json,
         build_model_usage_rows_from_ct_json,
         build_standard_analytical_rows_from_ct_json,
         build_token_efficiency_index_rows_from_ct_json,
@@ -65,7 +62,6 @@ try:
         canonical_fact_entity_kinds,
         page_metadata,
         reconstruct_cache_breaks,
-        reconstruct_error_collection,
         reconstruct_model_usage,
         reconstruct_token_efficiency_index,
         reconstruct_token_efficiency_project,
@@ -88,8 +84,6 @@ except ImportError:
         CACHE_ITEM,
         CACHE_META,
         CanonicalFactsCtJson,
-        ERROR_ITEM,
-        ERROR_META,
         FACT_PROJECT,
         FACT_PROJECT_SESSION,
         MODEL_META,
@@ -105,7 +99,6 @@ except ImportError:
         build_canonical_fact_rows,
         build_canonical_root_fact_rows,
         build_cache_break_rows_from_ct_json,
-        build_error_collection_rows_from_ct_json,
         build_model_usage_rows_from_ct_json,
         build_standard_analytical_rows_from_ct_json,
         build_token_efficiency_index_rows_from_ct_json,
@@ -113,7 +106,6 @@ except ImportError:
         canonical_fact_entity_kinds,
         page_metadata,
         reconstruct_cache_breaks,
-        reconstruct_error_collection,
         reconstruct_model_usage,
         reconstruct_token_efficiency_index,
         reconstruct_token_efficiency_project,
@@ -517,48 +509,6 @@ class DashboardIncrementalRuntime:
             limit=limit,
         )
 
-    def error_collection(
-        self,
-        *,
-        since_days: int,
-        project_name: str | None = None,
-        limit: int = 50,
-        cursor: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Serve the default-scope Error Collection page from SQLite."""
-
-        if since_days != self.since_days:
-            return None
-        if not self.is_ready():
-            return None
-        scope = analytical_scope_key(
-            "error_collection",
-            since_days=self.since_days,
-            project_name=project_name,
-        )
-        if self._analytical_meta(ERROR_META, scope) is None:
-            self._materialize_filtered_analytical_scope(
-                route="error_collection",
-                scope=scope,
-                project_name=project_name,
-            )
-        page = self.store.query_entities(
-            ERROR_ITEM,
-            limit=limit,
-            cursor=cursor,
-            scope_key=scope,
-            partition_key="errors",
-        )
-        meta = self._analytical_meta(ERROR_META, scope, revision=page.revision)
-        if meta is None:
-            return None
-        return reconstruct_error_collection(
-            meta,
-            rows=page.items,
-            page=page,
-            limit=limit,
-        )
-
     def cache_breaks(
         self,
         *,
@@ -792,7 +742,7 @@ class DashboardIncrementalRuntime:
     def _materialize_filtered_analytical_scope(
         self,
         *,
-        route: Literal["model_usage", "error_collection", "cache_breaks"],
+        route: Literal["model_usage", "cache_breaks"],
         scope: str,
         project_name: str | None,
         model_key: str | None = None,
@@ -800,7 +750,6 @@ class DashboardIncrementalRuntime:
         def publish(context: MaterializationContext) -> None:
             meta_kind = {
                 "model_usage": MODEL_META,
-                "error_collection": ERROR_META,
                 "cache_breaks": CACHE_META,
             }[route]
             if any(
@@ -822,14 +771,6 @@ class DashboardIncrementalRuntime:
                 )
                 kinds = (MODEL_META, MODEL_SESSION, MODEL_TURN)
                 family = "model-usage"
-            elif route == "error_collection":
-                rows = build_error_collection_rows_from_ct_json(
-                    ct_json=adapter,
-                    since_days=self.since_days,
-                    project_name=project_name,
-                )
-                kinds = (ERROR_META, ERROR_ITEM)
-                family = "error-collection"
             else:
                 rows = build_cache_break_rows_from_ct_json(
                     ct_json=adapter,
@@ -1111,10 +1052,6 @@ class DashboardIncrementalRuntime:
             (
                 MODEL_META,
                 analytical_scope_key("model_usage", since_days=self.since_days),
-            ),
-            (
-                ERROR_META,
-                analytical_scope_key("error_collection", since_days=self.since_days),
             ),
             (
                 CACHE_META,
@@ -1524,8 +1461,6 @@ def _default_analytical_entity_kinds() -> tuple[str, ...]:
         MODEL_META,
         MODEL_SESSION,
         MODEL_TURN,
-        ERROR_META,
-        ERROR_ITEM,
         CACHE_META,
         CACHE_ITEM,
         TOKEN_INDEX_META,
@@ -1543,7 +1478,6 @@ def _delivery_families() -> tuple[str, ...]:
         "projects",
         "sessions",
         "model-usage",
-        "error-collection",
         "cache-breaks",
         "token-efficiency",
         "context-window",

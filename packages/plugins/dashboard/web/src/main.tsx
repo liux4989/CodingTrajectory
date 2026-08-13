@@ -22,9 +22,6 @@ const TokenEfficiencyPatternDetailRoute = React.lazy(() => import("@/routes/toke
 const TokenEfficiencyHotspotsRoute = React.lazy(() => import("@/routes/token-efficiency").then((mod) => ({ default: mod.TokenEfficiencyHotspotsRoute })));
 const TokenEfficiencyHotspotDetailRoute = React.lazy(() => import("@/routes/token-efficiency").then((mod) => ({ default: mod.TokenEfficiencyHotspotDetailRoute })));
 const TokenEfficiencyOutliersRoute = React.lazy(() => import("@/routes/token-efficiency").then((mod) => ({ default: mod.TokenEfficiencyOutliersRoute })));
-const CacheBreaksRoute = React.lazy(() => import("@/routes/cache-breaks").then((mod) => ({ default: mod.CacheBreaksRoute })));
-const ErrorCollectionRoute = React.lazy(() => import("@/routes/error-collection").then((mod) => ({ default: mod.ErrorCollectionRoute })));
-const CleanupRoute = React.lazy(() => import("@/routes/cleanup").then((mod) => ({ default: mod.CleanupRoute })));
 
 function RouteBoundary({ children }: { children: React.ReactNode }) {
   return (
@@ -184,30 +181,6 @@ const tokenEfficiencyOutliersRoute = createRoute({
   component: () => <RouteBoundary><TokenEfficiencyOutliersRoute /></RouteBoundary>,
 });
 
-const cacheBreaksRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/cache-breaks",
-  validateSearch: (search: Record<string, unknown>): { projectName: string | undefined } => ({
-    projectName: typeof search.projectName === "string" ? search.projectName : undefined,
-  }),
-  component: () => <RouteBoundary><CacheBreaksRoute /></RouteBoundary>,
-});
-
-const errorCollectionRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/error-collection",
-  validateSearch: (search: Record<string, unknown>): { projectName: string | undefined } => ({
-    projectName: typeof search.projectName === "string" ? search.projectName : undefined,
-  }),
-  component: () => <RouteBoundary><ErrorCollectionRoute /></RouteBoundary>,
-});
-
-const cleanupRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/cleanup",
-  component: () => <RouteBoundary><CleanupRoute /></RouteBoundary>,
-});
-
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
@@ -222,9 +195,6 @@ const router = createRouter({
     tokenEfficiencyHotspotsRoute,
     tokenEfficiencyHotspotDetailRoute,
     tokenEfficiencyOutliersRoute,
-    cacheBreaksRoute,
-    errorCollectionRoute,
-    cleanupRoute,
   ]),
 });
 
