@@ -25,6 +25,7 @@ from coding_trajectory.analysis.session_stats import (
     session_title,
 )
 from coding_trajectory.ingestion.indexes import (
+    SessionGraphIndex,
     build_session_graph_index,
     index_events_by_id,
     ordered_sessions,
@@ -124,6 +125,8 @@ def build_session_graph_usage(
     *,
     turn_id: str | None = None,
     include_graph_turns: bool = True,
+    precomputed_metrics: SessionGraphMetrics | None = None,
+    precomputed_index: SessionGraphIndex | None = None,
 ) -> dict[str, Any]:
     """Return compact turn-level token usage accounting.
 
@@ -131,8 +134,8 @@ def build_session_graph_usage(
     available in the per-session sections). Single-session projections retain
     their top-level turns regardless.
     """
-    full = _build_full_metrics(session_graph)
-    index = build_session_graph_index(session_graph)
+    full = precomputed_metrics or _build_full_metrics(session_graph)
+    index = precomputed_index or build_session_graph_index(session_graph)
     multi_session = len(full.sessions) > 1
     session_metrics_by_id = {session.session_id: session for session in full.sessions}
     turns: list[TurnUsageCompactFlat] = []
@@ -236,9 +239,10 @@ def build_session_graph_model_usage(
     session_graph: SessionGraph,
     *,
     turn_id: str | None = None,
+    precomputed_metrics: SessionGraphMetrics | None = None,
 ) -> dict[str, Any]:
     """Return provider/model usage facts at session and turn granularity."""
-    full = _build_full_metrics(session_graph)
+    full = precomputed_metrics or _build_full_metrics(session_graph)
     sessions_by_id = {session.session_id: session for session in session_graph.sessions}
     root_session = sessions_by_id.get(session_graph.root_session_id)
     turns: list[ModelUsageTurnFlat] = []
@@ -648,9 +652,7 @@ def _model_groups_for_turn(turn: TurnMetrics) -> list[ModelUsageModelFlat]:
                 else None
             ),
             estimated_cost=(
-                _aggregate_observation_cost(
-                    observations_by_model[(provider, model)]
-                )
+                _aggregate_observation_cost(observations_by_model[(provider, model)])
                 if observations_by_model.get((provider, model))
                 else cost_evidence_from_usage(
                     usage.model_dump(mode="json"),
@@ -675,9 +677,7 @@ def _model_usage_breakdown(
     model_turns: dict[tuple[str | None, str | None], set[UUID]] = {}
     active_seconds: dict[tuple[str | None, str | None], float] = {}
     active_seconds_complete: dict[tuple[str | None, str | None], bool] = {}
-    model_costs: dict[
-        tuple[str | None, str | None], list[CostEvidenceFlat | None]
-    ] = {}
+    model_costs: dict[tuple[str | None, str | None], list[CostEvidenceFlat | None]] = {}
     for turn in turn_list:
         groups = _model_groups_for_turn(turn)
         for group in groups:
@@ -873,6 +873,7 @@ def build_session_graph_tool_usage(
     turn_id: str | None = None,
     include_item_real_token_costs: bool = True,
     include_advanced_causality: bool = True,
+    precomputed_metrics: SessionGraphMetrics | None = None,
 ) -> dict[str, Any]:
     """Return tool usage plus turn-stable cache-aware item attribution.
 
@@ -886,6 +887,7 @@ def build_session_graph_tool_usage(
             turn_id=turn_id,
             include_item_real_token_costs=include_item_real_token_costs,
             include_advanced_causality=include_advanced_causality,
+            precomputed_metrics=precomputed_metrics,
         )
 
 
@@ -895,8 +897,9 @@ def _build_session_graph_tool_usage(
     turn_id: str | None = None,
     include_item_real_token_costs: bool = True,
     include_advanced_causality: bool = True,
+    precomputed_metrics: SessionGraphMetrics | None = None,
 ) -> dict[str, Any]:
-    full = _build_full_metrics(session_graph)
+    full = precomputed_metrics or _build_full_metrics(session_graph)
 
     tool_items: list[ToolItemFlat] = []
     item_real_token_costs: list[ItemRealTokenCostFlat] = []
@@ -1132,6 +1135,31 @@ def build_session_graph_stats_token_usage(
     return _build_session_graph_stats_usage_breakdown(session_graph).graph_usage
 
 
+def build_session_graph_billed_token_usage(
+    session_graph: SessionGraph,
+    *,
+    precomputed_metrics: SessionGraphMetrics | None = None,
+) -> dict[str, int]:
+    """Return canonical billed usage without item/context allocation.
+
+    Core economics readiness needs the provider-request accounting total and an
+    exact reconciliation boundary, but it does not need to allocate every
+    observation over visible transcript items.  Evidence projections still use
+    :func:`build_session_graph_stats_token_usage` for that expensive detail.
+    """
+
+    full = precomputed_metrics or _build_full_metrics(session_graph)
+    billed: _CostAccum | None = None
+    for session in full.sessions:
+        for turn in session.turns:
+            for observation in turn.observations:
+                billed = _add_allocated_real_token_cost(
+                    billed,
+                    _allocated_cost_from_usage_observation(observation),
+                )
+    return _allocated_cost_usage_dict(billed)
+
+
 def _sum_item_real_token_costs(
     items: list[ItemRealTokenCostFlat],
 ) -> AllocatedRealTokenCost | None:
@@ -1148,9 +1176,7 @@ def _sum_allocated_real_token_costs(
         return None
     return AllocatedRealTokenCost(
         input_tokens=sum(cost.input_tokens for cost in present_costs),
-        uncached_input_tokens=sum(
-            cost.uncached_input_tokens for cost in present_costs
-        ),
+        uncached_input_tokens=sum(cost.uncached_input_tokens for cost in present_costs),
         cached_input_tokens=sum(cost.cached_input_tokens for cost in present_costs),
         cache_creation_input_tokens=sum(
             cost.cache_creation_input_tokens for cost in present_costs
@@ -1538,9 +1564,7 @@ def _build_item_real_token_cost_projection_for_session(
             allocated_by_index[index], allocation_method_by_index[index]
         )
         estimated_cost = (
-            estimated_costs[index].evidence(
-                source="request-tier allocated aggregate"
-            )
+            estimated_costs[index].evidence(source="request-tier allocated aggregate")
             if estimated_costs[index] is not None
             else None
         )
@@ -1945,16 +1969,19 @@ def _token_cost_allocations(
     output_weights: np.ndarray,
     *,
     as_arrays: bool = False,
-) -> tuple[
-    list[int] | np.ndarray,
-    list[int] | np.ndarray,
-    list[int] | np.ndarray,
-    list[int] | np.ndarray,
-    list[int] | np.ndarray,
-    list[int] | np.ndarray,
-    list[int] | np.ndarray,
-    str,
-] | None:
+) -> (
+    tuple[
+        list[int] | np.ndarray,
+        list[int] | np.ndarray,
+        list[int] | np.ndarray,
+        list[int] | np.ndarray,
+        list[int] | np.ndarray,
+        list[int] | np.ndarray,
+        list[int] | np.ndarray,
+        str,
+    ]
+    | None
+):
     """Allocate observation usage across weights; return 7 parts + method.
 
     Returns None for zero usage. The 7 parts are: input, uncached_input,
@@ -1991,11 +2018,7 @@ def _token_cost_allocations(
     output_a, reasoning_a = output_results
     if as_arrays:
         total_a = (
-            uncached_input_a
-            + cached_a
-            + cache_creation_a
-            + output_a
-            + reasoning_a
+            uncached_input_a + cached_a + cache_creation_a + output_a + reasoning_a
         )
     else:
         n = len(input_a)

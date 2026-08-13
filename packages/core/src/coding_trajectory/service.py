@@ -12,7 +12,6 @@ from uuid import UUID
 
 from coding_trajectory import debug
 from coding_trajectory.analysis.session_stats import (
-    build_session_stats_projection,
     session_graph_title,
 )
 from coding_trajectory.contracts import service_contract
@@ -419,9 +418,7 @@ class IndexCache:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_session_graph(
-    store: DocumentStore, raw_id: str | None
-) -> SessionGraph:
+def _resolve_session_graph(store: DocumentStore, raw_id: str | None) -> SessionGraph:
     """Resolve a session graph by a session entry point."""
     if raw_id is None:
         session_graphs = list(store.session_graphs.values())
@@ -926,42 +923,12 @@ def _build_stats_response(
     *,
     include_session_composition: bool = True,
 ) -> dict[str, Any]:
-    from coding_trajectory.analysis.content_size import scoped_content_size_cache
-    from coding_trajectory.metrics import (
-        build_session_graph_context_stats,
-        build_session_graph_full_metrics,
-        build_session_graph_stats_token_usage,
-    )
-    from coding_trajectory.metrics.analysis import (
-        _build_session_graph_stats_usage_breakdown,
-    )
+    from coding_trajectory.metrics import build_session_graph_stats
 
-    with scoped_content_size_cache():
-        stats_breakdown = _build_session_graph_stats_usage_breakdown(session_graph)
-        stats_usage = stats_breakdown.graph_usage
-        full_metrics = build_session_graph_full_metrics(session_graph)
-        result = build_session_graph_context_stats(
-            session_graph,
-            allocated_usage_by_item=stats_usage["allocated_usage_by_item"],
-            allocated_usage_by_context_source=stats_usage[
-                "allocated_usage_by_context_source"
-            ],
-            precomputed_metrics=full_metrics,
-        )
-        if stats_usage.get("billed_token_usage"):
-            result["billed_token_usage"] = stats_usage["billed_token_usage"]
-        return build_session_stats_projection(
-            session_graph,
-            result,
-            build_session_graph_context_stats=build_session_graph_context_stats,
-            build_session_graph_stats_token_usage=build_session_graph_stats_token_usage,
-            precomputed_usage_by_session=stats_breakdown.usage_by_session,
-            precomputed_counter_name=stats_breakdown.counter_name,
-            precomputed_metrics_by_session={
-                session.session_id: session for session in full_metrics.sessions
-            },
-            include_session_composition=include_session_composition,
-        )
+    return build_session_graph_stats(
+        session_graph,
+        include_session_composition=include_session_composition,
+    )
 
 
 @_graph_handler

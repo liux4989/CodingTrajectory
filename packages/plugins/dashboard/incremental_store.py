@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, BinaryIO, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -481,6 +481,7 @@ class IncrementalStore:
         schema_version: str = "dashboard-source-v1",
         retained_change_revisions: int = 512,
         event_identity: EventIdentityExtractor | None = None,
+        retain_source_messages: bool = True,
     ) -> None:
         if retained_change_revisions < 1:
             raise ValueError("retained_change_revisions must be at least 1")
@@ -489,6 +490,7 @@ class IncrementalStore:
         self.schema_version = schema_version
         self.retained_change_revisions = retained_change_revisions
         self._event_identity = event_identity or _default_event_identity
+        self.retain_source_messages = retain_source_messages
         self._refresh_lock = threading.Lock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
@@ -794,6 +796,87 @@ class IncrementalStore:
             for row in rows
         )
 
+    def garbage_collect(self, *, compact: bool = False) -> dict[str, int | bool]:
+        """Prune expired derived history and optionally reclaim SQLite pages.
+
+        Revision changes define the supported snapshot TTL. Entity versions
+        older than that boundary cannot be reached by a valid browser cursor and
+        are disposable. Source-message tombstones are never a read authority and
+        can be removed immediately; checkpoint-only stores remove all legacy
+        transcript copies.
+        """
+
+        with self._refresh_lock:
+            connection = self._connect()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                cutoff = int(
+                    self._metadata(connection, "changes_pruned_through") or "0"
+                )
+                if self.retain_source_messages:
+                    messages_deleted = connection.execute(
+                        "DELETE FROM source_messages WHERE active = 0"
+                    ).rowcount
+                else:
+                    messages_deleted = connection.execute(
+                        "DELETE FROM source_messages"
+                    ).rowcount
+                versions_deleted = connection.execute(
+                    """
+                    DELETE FROM entity_versions
+                     WHERE valid_to_revision IS NOT NULL
+                       AND valid_to_revision <= ?
+                    """,
+                    (cutoff,),
+                ).rowcount
+                tombstones_deleted = connection.execute(
+                    """
+                    DELETE FROM entity_versions
+                     WHERE valid_to_revision IS NULL AND deleted = 1
+                       AND valid_from_revision <= ?
+                    """,
+                    (cutoff,),
+                ).rowcount
+                connection.commit()
+                page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+                pages_before = int(
+                    connection.execute("PRAGMA page_count").fetchone()[0]
+                )
+                free_before = int(
+                    connection.execute("PRAGMA freelist_count").fetchone()[0]
+                )
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+
+            reclaimable_bytes = free_before * page_size
+            compacted = bool(
+                compact
+                and reclaimable_bytes >= 64 * 1024 * 1024
+                and free_before * 4 >= max(pages_before, 1)
+            )
+            if compacted:
+                with self._connect() as compact_connection:
+                    compact_connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    compact_connection.execute("VACUUM")
+                with self._connect() as measured:
+                    pages_after = int(
+                        measured.execute("PRAGMA page_count").fetchone()[0]
+                    )
+            else:
+                pages_after = pages_before
+        return {
+            "messages_deleted": max(messages_deleted, 0),
+            "entity_versions_deleted": max(versions_deleted, 0),
+            "tombstones_deleted": max(tombstones_deleted, 0),
+            "reclaimable_bytes": reclaimable_bytes,
+            "compacted": compacted,
+            "database_bytes_before": pages_before * page_size,
+            "database_bytes_after": pages_after * page_size,
+        }
+
     def refresh(
         self,
         candidates: Iterable[str | Path],
@@ -973,7 +1056,11 @@ class IncrementalStore:
                             kind=ChangeKind.DELETE,
                             disk=None,
                             previous=snapshot,
-                            invalidated_message_ids=self._message_ids(path),
+                            invalidated_message_ids=(
+                                self._message_ids(path)
+                                if self.retain_source_messages
+                                else ()
+                            ),
                             committed_offset=snapshot.committed_offset,
                             omitted_from_inventory=True,
                         )
@@ -990,7 +1077,11 @@ class IncrementalStore:
                             kind=ChangeKind.DELETE,
                             disk=None,
                             previous=snapshot,
-                            invalidated_message_ids=self._message_ids(path),
+                            invalidated_message_ids=(
+                                self._message_ids(path)
+                                if self.retain_source_messages
+                                else ()
+                            ),
                             committed_offset=snapshot.committed_offset,
                         )
                     )
@@ -1055,7 +1146,39 @@ class IncrementalStore:
             ChangeKind.REINDEX,
         }
         start = 0 if reset else (previous.committed_offset if previous else 0)
-        invalidated = self._message_ids(path) if reset and previous else ()
+        invalidated = (
+            self._message_ids(path)
+            if self.retain_source_messages and reset and previous
+            else ()
+        )
+        if not self.retain_source_messages:
+            try:
+                with open(path, "rb") as source:
+                    opened = os.fstat(source.fileno())
+                    opened_identity = f"{opened.st_dev}:{opened.st_ino}"
+                    if opened_identity != disk.file_identity:
+                        raise RuntimeError("source identity changed during scan")
+                    committed = _last_complete_line_offset(source, disk.size)
+                after = _disk_metadata(path)
+                if after != disk:
+                    raise RuntimeError("source metadata changed during scan")
+                return _IngestionPlan(
+                    path=path,
+                    kind=kind,
+                    disk=after,
+                    previous=previous,
+                    committed_offset=committed,
+                    trailing_bytes=disk.size - committed,
+                )
+            except (OSError, ValueError, RuntimeError) as exc:
+                return _IngestionPlan(
+                    path=path,
+                    kind=kind,
+                    disk=disk,
+                    previous=previous,
+                    committed_offset=previous.committed_offset if previous else 0,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
         try:
             with open(path, "rb") as source:
                 opened = os.fstat(source.fileno())
@@ -1329,7 +1452,12 @@ class IncrementalStore:
         if plan.kind == ChangeKind.DELETE:
             assert previous is not None
             source_id = self._source_id(connection, plan.path)
-            self._invalidate_messages(connection, source_id, revision)
+            if self.retain_source_messages:
+                self._invalidate_messages(connection, source_id, revision)
+            else:
+                connection.execute(
+                    "DELETE FROM source_messages WHERE source_id = ?", (source_id,)
+                )
             connection.execute(
                 """
                 UPDATE sources
@@ -1356,6 +1484,10 @@ class IncrementalStore:
 
         assert plan.disk is not None
         source_id = self._ensure_source(connection, plan, revision)
+        if not self.retain_source_messages:
+            connection.execute(
+                "DELETE FROM source_messages WHERE source_id = ?", (source_id,)
+            )
         if plan.error:
             connection.execute(
                 """
@@ -1702,6 +1834,13 @@ class IncrementalStore:
             snapshot = current if revision is None else revision
             if snapshot < 0 or snapshot > current:
                 raise ValueError("revision is outside the available snapshot range")
+            pruned_through = int(
+                self._metadata(connection, "changes_pruned_through") or "0"
+            )
+            if snapshot <= pruned_through and snapshot != current:
+                raise ValueError(
+                    "revision has expired from the snapshot retention window"
+                )
             if snapshot == current:
                 row = connection.execute(
                     """
@@ -1785,6 +1924,11 @@ class IncrementalStore:
                 snapshot = current if revision is None else revision
             if snapshot < 0 or snapshot > current:
                 raise ValueError("revision is outside the available snapshot range")
+            pruned_through = int(
+                self._metadata(connection, "changes_pruned_through") or "0"
+            )
+            if snapshot <= pruned_through and snapshot != current:
+                raise ValueError("cursor revision has expired")
             comparator = ">" if direction == "asc" else "<"
             order = "ASC" if direction == "asc" else "DESC"
             params: list[Any] = [entity_kind, snapshot, snapshot]
@@ -2028,6 +2172,23 @@ class IncrementalStore:
             previous = int(self._metadata(connection, "changes_pruned_through") or "0")
             if cutoff > previous:
                 self._set_metadata(connection, "changes_pruned_through", str(cutoff))
+            connection.execute(
+                """
+                DELETE FROM entity_versions
+                 WHERE valid_to_revision IS NOT NULL
+                   AND valid_to_revision <= ?
+                """,
+                (cutoff,),
+            )
+            connection.execute(
+                """
+                DELETE FROM entity_versions
+                 WHERE valid_to_revision IS NULL AND deleted = 1
+                   AND valid_from_revision <= ?
+                """,
+                (cutoff,),
+            )
+        connection.execute("DELETE FROM source_messages WHERE active = 0")
 
     def _encode_cursor(self, connection: sqlite3.Connection, cursor: _Cursor) -> str:
         raw = cursor.model_dump_json().encode()
@@ -2224,6 +2385,32 @@ def _default_event_identity(payload: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def _last_complete_line_offset(source: BinaryIO, size: int) -> int:
+    """Return the byte after the last newline without reading the transcript.
+
+    Checkpoint-only stores still expose an incomplete trailing JSONL record as
+    partial ingestion. Normal files cost one byte of I/O; only a malformed file
+    with no newline requires walking back to its beginning.
+    """
+
+    if size <= 0:
+        return 0
+    source.seek(size - 1)
+    if source.read(1) == b"\n":
+        return size
+    block_size = 64 * 1024
+    end = size
+    while end > 0:
+        start = max(0, end - block_size)
+        source.seek(start)
+        chunk = source.read(end - start)
+        newline = chunk.rfind(b"\n")
+        if newline >= 0:
+            return start + newline + 1
+        end = start
+    return 0
 
 
 def _message_identity(

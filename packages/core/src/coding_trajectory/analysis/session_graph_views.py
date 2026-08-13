@@ -52,8 +52,9 @@ def build_session_graph_overview(
     *,
     num_turns: int | None = None,
     drop_turns: int | None = None,
+    index: SessionGraphIndex | None = None,
 ) -> dict[str, Any]:
-    index = build_session_graph_index(session_graph)
+    index = index or build_session_graph_index(session_graph)
     member_session_lookup = build_member_session_lookup(session_graph)
 
     ordered: list[dict[str, Any]] = []

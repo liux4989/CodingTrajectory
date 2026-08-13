@@ -10,6 +10,16 @@ from coding_trajectory.metrics.analysis import (
     build_session_graph_tool_usage,
     build_session_graph_usage,
 )
+from coding_trajectory.metrics.economics import (
+    EconomicsContribution,
+    EconomicsDetail,
+    EconomicsReconciliation,
+    GraphEconomicsBundle,
+    build_economics_contribution,
+    build_graph_economics_bundle,
+    build_session_graph_stats,
+    iter_graph_economics_contributions,
+)
 from coding_trajectory.metrics.models import (
     AttributionPolicy,
     ContextCategoryFlat,
@@ -41,6 +51,10 @@ from coding_trajectory.metrics.models import (
 
 __all__ = [
     "AttributionPolicy",
+    "EconomicsContribution",
+    "EconomicsDetail",
+    "EconomicsReconciliation",
+    "GraphEconomicsBundle",
     "ContextCategoryFlat",
     "ContextModelStatsFlat",
     "ContextWindowStatsFlat",
@@ -67,10 +81,14 @@ __all__ = [
     "UsageSpan",
     "RequestUsageFlat",
     "build_session_graph_context_stats",
+    "build_economics_contribution",
+    "build_graph_economics_bundle",
+    "iter_graph_economics_contributions",
     "build_session_graph_full_metrics",
     "build_session_graph_model_usage",
     "build_session_graph_request_usage",
     "build_session_graph_stats_token_usage",
+    "build_session_graph_stats",
     "build_session_graph_runtime",
     "build_session_graph_tool_usage",
     "build_session_graph_usage",

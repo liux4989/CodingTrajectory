@@ -18,6 +18,7 @@ from uuid import UUID
 
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.indexes import (
+    SessionGraphIndex,
     build_session_graph_index,
     ordered_sessions,
 )
@@ -71,7 +72,9 @@ def single_session_graph(source_graph: SessionGraph, session: Session) -> Sessio
     )
 
 
-def session_role(session: Session, *, session_graph: SessionGraph, index: Any) -> str:
+def session_role(
+    session: Session, *, session_graph: SessionGraph, index: SessionGraphIndex
+) -> str:
     """Classify a session's workflow role within the graph.
 
     The root session is ``main``; sessions spawned via a subagent/sidechain
@@ -93,6 +96,7 @@ def session_stats_sections(
     precomputed_usage_by_session: dict[UUID, dict[str, Any]] | None = None,
     precomputed_counter_name: str | None = None,
     precomputed_metrics_by_session: dict[UUID, SessionMetrics] | None = None,
+    precomputed_index: SessionGraphIndex | None = None,
     include_composition: bool = True,
 ) -> list[dict[str, Any]]:
     """Build a per-session stats section for each session in the graph.
@@ -100,7 +104,7 @@ def session_stats_sections(
     Composition controls the nested semantic category tree only. Observed
     context totals, runtime, usage, billing, and session identity are retained.
     """
-    index = build_session_graph_index(session_graph)
+    index = precomputed_index or build_session_graph_index(session_graph)
     precomputed_by_session = precomputed_usage_by_session or {}
     metrics_by_session = precomputed_metrics_by_session or {}
     sections: list[dict[str, Any]] = []
@@ -156,6 +160,7 @@ def build_session_stats_projection(
     precomputed_usage_by_session: dict[UUID, dict[str, Any]] | None = None,
     precomputed_counter_name: str | None = None,
     precomputed_metrics_by_session: dict[UUID, SessionMetrics] | None = None,
+    precomputed_index: SessionGraphIndex | None = None,
     include_session_composition: bool = True,
 ) -> dict[str, Any]:
     """Layer the graph-scope presentation fields onto a stats result.
@@ -178,6 +183,7 @@ def build_session_stats_projection(
             precomputed_usage_by_session=precomputed_usage_by_session,
             precomputed_counter_name=precomputed_counter_name,
             precomputed_metrics_by_session=precomputed_metrics_by_session,
+            precomputed_index=precomputed_index,
             include_composition=include_session_composition,
         )
     return stats_result

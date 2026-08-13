@@ -131,6 +131,7 @@ function useEfficiencyProject(projectName: string) {
     queryKey: ["token-efficiency", "project", projectName, sinceDays],
     queryFn: ({ signal }) =>
       fetchTokenEfficiencyProject({ projectName, sinceDays, limit: 100, signal }),
+    gcTime: 5 * 60_000,
   });
 }
 

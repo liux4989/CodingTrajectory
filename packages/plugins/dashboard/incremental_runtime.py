@@ -20,8 +20,11 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from coding_trajectory.discovery import DiscoveryResult, DiscoverySource
-from coding_trajectory.query import DocumentStore
+from coding_trajectory.ingestion.incremental import (
+    plan_session_graph_components_from_files,
+    rebuild_affected_session_graphs_from_files,
+)
+from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 from coding_trajectory.service import project_list_metadata
 
 try:
@@ -32,7 +35,6 @@ try:
     from .read_models import (
         DEFAULT_RECENT_HORIZON_DAYS,
         aggregate_read_models,
-        build_read_models_from_discovery,
         materialize_graph,
     )
     from .analytical_read_models import (
@@ -42,6 +44,8 @@ try:
         CanonicalFactsCtJson,
         FACT_PROJECT,
         FACT_PROJECT_SESSION,
+        FACT_SESSION_STATS,
+        FACT_TOOL_USAGE,
         MODEL_META,
         MODEL_SESSION,
         MODEL_TURN,
@@ -56,8 +60,6 @@ try:
         build_canonical_root_fact_rows,
         build_cache_break_rows_from_ct_json,
         build_model_usage_rows_from_ct_json,
-        build_standard_analytical_rows_from_ct_json,
-        build_token_efficiency_index_rows_from_ct_json,
         build_token_efficiency_project_rows_from_ct_json,
         canonical_fact_entity_kinds,
         page_metadata,
@@ -67,7 +69,6 @@ try:
         reconstruct_token_efficiency_project,
     )
     from . import context_window
-    from .incremental_graphs import rebuild_affected_session_graphs
 except ImportError:
     from incremental_store import (
         IncrementalStore,
@@ -76,7 +77,6 @@ except ImportError:
     from read_models import (
         DEFAULT_RECENT_HORIZON_DAYS,
         aggregate_read_models,
-        build_read_models_from_discovery,
         materialize_graph,
     )
     from analytical_read_models import (
@@ -86,6 +86,8 @@ except ImportError:
         CanonicalFactsCtJson,
         FACT_PROJECT,
         FACT_PROJECT_SESSION,
+        FACT_SESSION_STATS,
+        FACT_TOOL_USAGE,
         MODEL_META,
         MODEL_SESSION,
         MODEL_TURN,
@@ -100,8 +102,6 @@ except ImportError:
         build_canonical_root_fact_rows,
         build_cache_break_rows_from_ct_json,
         build_model_usage_rows_from_ct_json,
-        build_standard_analytical_rows_from_ct_json,
-        build_token_efficiency_index_rows_from_ct_json,
         build_token_efficiency_project_rows_from_ct_json,
         canonical_fact_entity_kinds,
         page_metadata,
@@ -111,10 +111,9 @@ except ImportError:
         reconstruct_token_efficiency_project,
     )
     import context_window
-    from incremental_graphs import rebuild_affected_session_graphs
 
 
-PARSER_VERSION = "dashboard-jsonl-v1"
+PARSER_VERSION = "core-source-checkpoint-v2"
 READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v2"
 DEFAULT_REFRESH_SECONDS = 15.0
 
@@ -152,12 +151,14 @@ class DashboardIncrementalRuntime:
             database_path or _default_database_path(),
             parser_version=PARSER_VERSION,
             schema_version=READ_MODEL_SCHEMA_VERSION,
+            retain_source_messages=False,
         )
         self._executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="dashboard-ingest"
         )
         self._future: Future[dict[str, Any]] | None = None
         self._lock = threading.Lock()
+        self._evidence_lock = threading.Lock()
         self._stop = threading.Event()
         self._monitor: threading.Thread | None = None
         self._last_scan_started_at: str | None = None
@@ -206,13 +207,9 @@ class DashboardIncrementalRuntime:
         return future.result(timeout=timeout) if future is not None else None
 
     def is_ready(self) -> bool:
-        """Return whether every default revisioned route family is publishable."""
+        """Return whether the minimum product core is revisioned and publishable."""
 
-        return (
-            self._has_route_models()
-            and self._has_canonical_facts()
-            and self._has_default_analytical_models()
-        )
+        return self._has_route_models()
 
     def snapshot(self) -> dict[str, Any]:
         revision = self.store.current_revision()
@@ -238,6 +235,9 @@ class DashboardIncrementalRuntime:
         changes = self.store.changes(revision)
         last_ingested_at = changes.last_ingested_at
         lag_seconds = _lag_seconds(last_ingested_at)
+        coverage_row = self._singleton(
+            "bootstrap_coverage", f"recent:{self.since_days}d"
+        )
         return RuntimeSnapshot(
             revision=revision,
             generated_at=datetime.now(UTC).isoformat(),
@@ -256,6 +256,7 @@ class DashboardIncrementalRuntime:
                 "scan_finished_at": finished_at,
                 "error": error,
                 "last_result": last_result,
+                "coverage": coverage_row.payload if coverage_row is not None else None,
             },
         ).model_dump(mode="json")
 
@@ -440,7 +441,7 @@ class DashboardIncrementalRuntime:
 
         if since_days != self.since_days:
             return None
-        if not self.is_ready():
+        if not self._has_canonical_facts():
             return None
         if detail not in {"sessions", "turns", "both"}:
             raise ValueError("model usage detail must be sessions, turns, or both")
@@ -521,7 +522,9 @@ class DashboardIncrementalRuntime:
 
         if since_days != self.since_days:
             return None
-        if not self.is_ready():
+        if not self._has_canonical_facts():
+            return None
+        if not self._has_evidence_facts():
             return None
         scope = analytical_scope_key(
             "cache_breaks",
@@ -529,11 +532,7 @@ class DashboardIncrementalRuntime:
             project_name=project_name,
         )
         if self._analytical_meta(CACHE_META, scope) is None:
-            self._materialize_filtered_analytical_scope(
-                route="cache_breaks",
-                scope=scope,
-                project_name=project_name,
-            )
+            return None
         page = self.store.query_entities(
             CACHE_ITEM,
             limit=limit,
@@ -562,11 +561,13 @@ class DashboardIncrementalRuntime:
 
         if since_days != self.since_days:
             return None
-        if not self.is_ready():
+        if not self._has_canonical_facts():
             return None
         scope = analytical_scope_key(
             "token_efficiency_index", since_days=self.since_days
         )
+        if self._analytical_meta(TOKEN_INDEX_META, scope) is None:
+            return None
         page = self.store.query_entities(
             TOKEN_PROJECT,
             limit=limit,
@@ -598,7 +599,9 @@ class DashboardIncrementalRuntime:
 
         if since_days != self.since_days:
             return None
-        if not self.is_ready():
+        if not self._has_canonical_facts():
+            return None
+        if not self._ensure_project_evidence(project_name):
             return None
         if (detail is None) != (grain is None):
             raise ValueError("token project detail and grain must be supplied together")
@@ -622,11 +625,14 @@ class DashboardIncrementalRuntime:
                         scope_key=CANONICAL_FACT_SCOPE,
                     )
                 )
-                rows = build_token_efficiency_project_rows_from_ct_json(
-                    ct_json=adapter,
-                    project_name=project_name,
-                    since_days=since_days,
-                )
+                try:
+                    rows = build_token_efficiency_project_rows_from_ct_json(
+                        ct_json=adapter,
+                        project_name=project_name,
+                        since_days=since_days,
+                    )
+                except (ResourceNotFoundError, RuntimeError):
+                    return
                 _replace_analytical_scope_rows(
                     context,
                     rows,
@@ -679,15 +685,20 @@ class DashboardIncrementalRuntime:
 
         if not self._has_canonical_facts():
             return None
+        if not self._ensure_session_evidence(session_id):
+            return None
         revision = self.store.current_revision()
         facts = self._canonical_fact_rows(revision=revision)
         if not facts:
             return None
-        projection = context_window.build_projection(
-            session_id,
-            turn_id=turn_id,
-            ct_json=CanonicalFactsCtJson(facts),
-        )
+        try:
+            projection = context_window.build_projection(
+                session_id,
+                turn_id=turn_id,
+                ct_json=CanonicalFactsCtJson(facts),
+            )
+        except (ResourceNotFoundError, RuntimeError):
+            return None
         return projection.model_dump(mode="json")
 
     def _token_project_first_pages(
@@ -738,6 +749,135 @@ class DashboardIncrementalRuntime:
                 if cursor is None:
                     break
         return rows
+
+    def _ensure_session_evidence(self, entrypoint_id: str) -> bool:
+        root_id = self._root_for_entrypoint(entrypoint_id)
+        if root_id is None:
+            return False
+        if self._root_has_evidence(root_id):
+            return True
+        return self._materialize_evidence({root_id})
+
+    def _ensure_project_evidence(self, project_name: str) -> bool:
+        root_ids = {
+            str(source.root_link)
+            for source in self.store.sources(include_deleted=False)
+            if source.root_link
+            and str(source.metadata.get("project_identifier") or "") == project_name
+        }
+        if not root_ids:
+            return False
+        missing = {root for root in root_ids if not self._root_has_evidence(root)}
+        return not missing or self._materialize_evidence(missing)
+
+    def _materialize_evidence(self, root_ids: set[str]) -> bool:
+        with self._evidence_lock:
+            missing = {root for root in root_ids if not self._root_has_evidence(root)}
+            if not missing:
+                return True
+            sources = tuple(
+                source
+                for source in self.store.sources(include_deleted=False)
+                if source.root_link in missing
+            )
+            if not sources:
+                return False
+            graph_build = rebuild_affected_session_graphs_from_files(sources=sources)
+            if not graph_build.graphs:
+                return False
+            project_items = self._project_catalog_items()
+            rows: list[dict[str, Any]] = []
+            rebuilt_roots: set[str] = set()
+            for graph in graph_build.graphs:
+                root = str(graph.root_session_id)
+                rebuilt_roots.add(root)
+                project_name = str(graph.project_identifier or "unknown")
+                rows.extend(
+                    build_canonical_root_fact_rows(
+                        store=DocumentStore.from_session_graphs([graph]),
+                        root_session_id=root,
+                        current_dir=self.current_dir,
+                        project_list={
+                            "items": {
+                                project_name: project_items.get(
+                                    project_name,
+                                    {"path": None, "vendors": []},
+                                )
+                            }
+                        },
+                        include_projects=False,
+                        economics_detail="evidence",
+                    )
+                )
+
+            def publish(context: MaterializationContext) -> None:
+                for root in rebuilt_roots:
+                    _delete_root_facts(context, root)
+                context.mutate_many(rows)
+                context.assert_sources_current(sources)
+                context.record_invalidation(
+                    "context-window",
+                    ",".join(sorted(rebuilt_roots)),
+                    {"detail": "evidence"},
+                )
+                context.record_invalidation(
+                    "token-efficiency",
+                    ",".join(sorted(rebuilt_roots)),
+                    {"detail": "evidence"},
+                )
+
+            self.store.materialize_revision(publish)
+            return missing <= rebuilt_roots
+
+    def _root_for_entrypoint(self, entrypoint_id: str) -> str | None:
+        cursor: str | None = None
+        while True:
+            page = self.store.query_entities(
+                FACT_PROJECT_SESSION,
+                limit=500,
+                cursor=cursor,
+                scope_key=CANONICAL_FACT_SCOPE,
+            )
+            for row in page.items:
+                root = str(row.payload.get("root_session_id") or row.tiebreaker)
+                session_ids = {
+                    str(value) for value in row.payload.get("session_ids") or []
+                }
+                if entrypoint_id == root or entrypoint_id in session_ids:
+                    return root
+            cursor = page.next_cursor
+            if cursor is None:
+                return None
+
+    def _root_has_evidence(self, root_id: str) -> bool:
+        return bool(
+            self.store.query_entities(
+                FACT_TOOL_USAGE,
+                limit=1,
+                scope_key=CANONICAL_FACT_SCOPE,
+                partition_key=root_id,
+            ).items
+            and self.store.query_entities(
+                FACT_SESSION_STATS,
+                limit=1,
+                scope_key=CANONICAL_FACT_SCOPE,
+                partition_key=root_id,
+            ).items
+        )
+
+    def _project_catalog_items(self) -> dict[str, dict[str, Any]]:
+        scope = f"recent:{self.since_days}d"
+        return {
+            str(row.payload.get("name") or row.entity_key): {
+                "path": row.payload.get("path"),
+                "vendors": row.payload.get("vendors") or [],
+            }
+            for row in self.store.query_entities(
+                "project_catalog",
+                limit=500,
+                scope_key=scope,
+            ).items
+        }
 
     def _materialize_filtered_analytical_scope(
         self,
@@ -820,182 +960,282 @@ class DashboardIncrementalRuntime:
 
     def _bootstrap(self, candidates: Sequence[Path]) -> dict[str, Any]:
         bootstrap_started = perf_counter()
-        # Bounded source registry ingestion: never retain the whole corpus's
-        # parsed lines in pending SQLite plans.
         ingestion_started = perf_counter()
-        parsed_bytes = 0
-        parsed_lines = 0
-        for path in candidates:
-            result = self.store.refresh_paths([path])
-            parsed_bytes += result.parsed_bytes
-            parsed_lines += result.parsed_lines
-        self.store.refresh(candidates)
+        ingestion = self.store.refresh(candidates)
         ingestion_seconds = perf_counter() - ingestion_started
-
+        snapshots = tuple(self.store.sources(include_deleted=False))
+        snapshots_by_path = {source.path: source for source in snapshots}
+        planning_started = perf_counter()
+        plan = plan_session_graph_components_from_files(sources=snapshots)
+        planning_seconds = perf_counter() - planning_started
         project_catalog = project_list_metadata(
             {}, global_scope=True, current_dir=self.current_dir
         )
-        computed: dict[str, Any] = {}
-        timings: dict[str, float] = {}
+        project_items = project_catalog.get("items") or {}
+        if not isinstance(project_items, dict):
+            raise RuntimeError("project metadata catalog has invalid items")
+        scope = f"recent:{self.since_days}d"
+        catalog_rows = _bootstrap_catalog_mutations(project_items, scope=scope)
+        catalog_facts = build_canonical_fact_rows(
+            store=DocumentStore.from_session_graphs([]),
+            current_dir=self.current_dir,
+            project_list=project_catalog,
+            economics_detail="core",
+        )
+        graph_seconds = 0.0
+        core_seconds = 0.0
+        fact_seconds = 0.0
+        publish_seconds = 0.0
+        processed_components = 0
+        processed_sources = 0
+        projected_entities = 0
+        fact_entities = len(catalog_facts)
+        issue_count = len(plan.issues)
+        batch_count = 0
+        first_useful_seconds: float | None = None
+        first_batch = True
+        pending_entities: list[Any] = []
+        pending_facts: list[dict[str, Any]] = []
+        pending_relationships: list[Any] = []
+        pending_projection_issues: list[Any] = []
+        pending_graph_issues: list[Any] = list(plan.issues)
+        pending_sources: list[Any] = []
+        batch_bytes = 0
+        batch_started = perf_counter()
 
-        def publish(context: MaterializationContext) -> None:
+        def publish_batch() -> None:
+            nonlocal first_batch, publish_seconds, batch_count, first_useful_seconds
+            entities = tuple(pending_entities)
+            facts = tuple(pending_facts)
+            relationships = tuple(pending_relationships)
+            projection_issues = tuple(pending_projection_issues)
+            graph_issues = tuple(pending_graph_issues)
+            fenced_sources = tuple(pending_sources)
+            coverage = _bootstrap_coverage_payload(
+                state="catching_up",
+                processed_sources=processed_sources,
+                total_sources=plan.total_sources,
+                processed_components=processed_components,
+                total_components=len(plan.components),
+                issue_count=issue_count,
+                complete=False,
+            )
+
+            def publish(context: MaterializationContext) -> None:
+                if first_batch:
+                    _clear_all_entities(context)
+                    context.mutate_many(catalog_rows)
+                    context.mutate_many(catalog_facts)
+                context.mutate_many(entities)
+                context.mutate_many(facts)
+                _publish_relationships(context, relationships)
+                _publish_build_issues(context, projection_issues, scope=scope)
+                _publish_graph_issues(context, graph_issues, scope=scope)
+                aggregates = aggregate_read_models(
+                    context.current_entities(
+                        entity_kinds=(
+                            "project_catalog",
+                            "project_contribution",
+                            "session_timeline_contribution",
+                            "session",
+                        ),
+                        scope_key=scope,
+                    ),
+                    since_days=self.since_days,
+                )
+                _replace_read_model_subset(
+                    context,
+                    aggregates,
+                    entity_kinds=(
+                        "project",
+                        "project_detail",
+                        "overview",
+                        "session_timeline",
+                    ),
+                    scope_key=scope,
+                )
+                context.mutate(_bootstrap_coverage_mutation(coverage, scope=scope))
+                for family in _delivery_families():
+                    context.record_invalidation(family, scope, coverage)
+                context.assert_sources_current(fenced_sources)
+
+            started = perf_counter()
+            self.store.materialize_revision(publish, status="catching_up")
+            publish_seconds += perf_counter() - started
+            batch_count += 1
+            first_batch = False
+            if first_useful_seconds is None and self.is_ready():
+                first_useful_seconds = perf_counter() - bootstrap_started
+
+        for component in plan.components:
+            component_sources = tuple(
+                snapshots_by_path[path]
+                for path in component.source_paths
+                if path in snapshots_by_path
+            )
             graph_started = perf_counter()
-            graph_build = rebuild_affected_session_graphs(
-                sources=context.current_sources(include_deleted=True),
-                messages_for_path=lambda path: context.active_messages(
-                    source_path=path
-                ),
+            graph_build = rebuild_affected_session_graphs_from_files(
+                sources=component_sources
             )
-            timings["canonical_graph_rebuild_seconds"] = round(
-                perf_counter() - graph_started, 6
-            )
-            canonical_store = DocumentStore.from_session_graphs(
-                list(graph_build.graphs)
-            )
-            discovery = DiscoveryResult(
-                store=canonical_store,
-                sources=[
-                    DiscoverySource(
-                        vendor=relationship.vendor,
-                        path=Path(relationship.source_path),
-                        root_session_id=relationship.root_session_id,
-                    )
+            graph_seconds += perf_counter() - graph_started
+            pending_relationships.extend(graph_build.source_relationships)
+            pending_graph_issues.extend(graph_build.issues)
+            issue_count += len(graph_build.issues)
+            for graph in graph_build.graphs:
+                project_name = str(graph.project_identifier or "unknown")
+                source_paths = [
+                    relationship.source_path
                     for relationship in graph_build.source_relationships
-                ],
-            )
+                    if relationship.root_session_id == graph.root_session_id
+                ]
+                core_started = perf_counter()
+                projected = materialize_graph(
+                    graph,
+                    current_dir=self.current_dir,
+                    since_days=self.since_days,
+                    project_metadata=project_items.get(project_name),
+                    source_paths=source_paths,
+                )
+                core_seconds += perf_counter() - core_started
+                pending_entities.extend(
+                    entity.as_mutation() for entity in projected.entities
+                )
+                projected_entities += len(projected.entities)
+                pending_projection_issues.extend(projected.issues)
+                issue_count += len(projected.issues)
+                if not projected.entities:
+                    continue
+                facts_started = perf_counter()
+                graph_facts = build_canonical_root_fact_rows(
+                    store=DocumentStore.from_session_graphs([graph]),
+                    root_session_id=str(graph.root_session_id),
+                    current_dir=self.current_dir,
+                    project_list={
+                        "items": {
+                            project_name: project_items.get(
+                                project_name,
+                                {"path": None, "vendors": []},
+                            )
+                        }
+                    },
+                    include_projects=False,
+                    economics_detail="core",
+                )
+                fact_seconds += perf_counter() - facts_started
+                pending_facts.extend(graph_facts)
+                fact_entities += len(graph_facts)
+            processed_components += 1
+            processed_sources += len(component.source_paths)
+            pending_sources.extend(component_sources)
+            batch_bytes += component.total_bytes
+            root_limit = 5 if first_batch else 10
+            if (
+                processed_components == len(plan.components)
+                or len(pending_sources) >= root_limit
+                or batch_bytes >= 32 * 1024 * 1024
+                or perf_counter() - batch_started >= 2.0
+            ):
+                publish_batch()
+                pending_entities.clear()
+                pending_facts.clear()
+                pending_relationships.clear()
+                pending_projection_issues.clear()
+                pending_graph_issues.clear()
+                pending_sources.clear()
+                batch_bytes = 0
+                batch_started = perf_counter()
 
-            core_started = perf_counter()
-            build = build_read_models_from_discovery(
-                discovery,
-                current_dir=self.current_dir,
+        analytical_rows: list[dict[str, Any]] = []
+        analytical_started = perf_counter()
+
+        def finalize(context: MaterializationContext) -> None:
+            nonlocal analytical_rows
+            if first_batch:
+                _clear_all_entities(context)
+                context.mutate_many(catalog_rows)
+                context.mutate_many(catalog_facts)
+                aggregates = aggregate_read_models(
+                    context.current_entities(
+                        entity_kinds=("project_catalog",), scope_key=scope
+                    ),
+                    since_days=self.since_days,
+                )
+                _replace_read_model_subset(
+                    context,
+                    aggregates,
+                    entity_kinds=(
+                        "project",
+                        "project_detail",
+                        "overview",
+                        "session_timeline",
+                    ),
+                    scope_key=scope,
+                )
+            fact_adapter = CanonicalFactsCtJson(
+                context.current_entities(
+                    entity_kinds=canonical_fact_entity_kinds(),
+                    scope_key=CANONICAL_FACT_SCOPE,
+                )
+            )
+            analytical_rows = build_model_usage_rows_from_ct_json(
+                ct_json=fact_adapter,
                 since_days=self.since_days,
-                project_catalog=project_catalog,
-            )
-            timings["core_projection_seconds"] = round(perf_counter() - core_started, 6)
-
-            facts_started = perf_counter()
-            project_list = _project_list_payload(build.entities)
-            fact_rows = build_canonical_fact_rows(
-                store=canonical_store,
-                current_dir=self.current_dir,
-                project_list=project_list,
-            )
-            timings["canonical_facts_seconds"] = round(
-                perf_counter() - facts_started, 6
-            )
-
-            analytical_started = perf_counter()
-            fact_adapter = CanonicalFactsCtJson(fact_rows)
-            analytical_rows = [
-                *build_standard_analytical_rows_from_ct_json(
-                    ct_json=fact_adapter,
-                    since_days=self.since_days,
-                ),
-                *build_token_efficiency_index_rows_from_ct_json(
-                    ct_json=fact_adapter,
-                    since_days=self.since_days,
-                ),
-            ]
-            timings["analytical_projection_seconds"] = round(
-                perf_counter() - analytical_started, 6
-            )
-
-            _replace_all_read_models(context, build.entities)
-            _replace_analytical_rows(
-                context,
-                fact_rows,
-                entity_kinds=canonical_fact_entity_kinds(),
             )
             _replace_analytical_rows(
                 context,
                 analytical_rows,
                 entity_kinds=_default_analytical_entity_kinds(),
             )
-            for relationship in graph_build.source_relationships:
-                context.update_source_metadata(
-                    relationship.source_path,
-                    root_link=str(relationship.root_session_id),
-                    parent_link=(
-                        str(relationship.parent_session_id)
-                        if relationship.parent_session_id is not None
-                        else None
-                    ),
-                    metadata={
-                        "vendor": relationship.vendor.value,
-                        "session_id": str(relationship.session_id),
-                        "parent_session_id": (
-                            str(relationship.parent_session_id)
-                            if relationship.parent_session_id is not None
-                            else None
-                        ),
-                        "project_identifier": relationship.project_identifier,
-                    },
-                )
-            for issue in build.issues:
-                context.mutate(
-                    {
-                        "entity_kind": "ingestion_issue",
-                        "entity_key": issue.issue_id,
-                        "scope_key": build.scope_id,
-                        "partition_key": issue.root_session_id or "",
-                        "sort_key": issue.stage,
-                        "tiebreaker": issue.issue_id,
-                        "payload": issue.model_dump(mode="json"),
-                    }
-                )
-            for issue in graph_build.issues:
-                _record_ingestion_issue(
-                    context,
-                    scope=build.scope_id,
-                    stage=issue.stage,
-                    code=issue.code,
-                    message=issue.message,
-                    source_path=issue.source_path,
-                    root_session_id=issue.session_id,
-                    details=issue.details,
-                    disposition=(
-                        "failed" if issue.severity == "error" else "inconclusive"
-                    ),
-                )
-            for family in _delivery_families():
-                context.record_invalidation(family, build.scope_id)
-            context.assert_sources_current()
-            computed.update(
-                {
-                    "build": build,
-                    "graph_build": graph_build,
-                    "fact_rows": fact_rows,
-                    "analytical_rows": analytical_rows,
-                }
+            final_state = "complete" if issue_count == 0 else "partial"
+            coverage = _bootstrap_coverage_payload(
+                state=final_state,
+                processed_sources=processed_sources,
+                total_sources=plan.total_sources,
+                processed_components=processed_components,
+                total_components=len(plan.components),
+                issue_count=issue_count,
+                complete=True,
             )
+            context.mutate(_bootstrap_coverage_mutation(coverage, scope=scope))
+            for family in _delivery_families():
+                context.record_invalidation(family, scope, coverage)
+            context.assert_sources_current()
 
         publish_started = perf_counter()
-        published = self.store.materialize_revision(publish)
-        publish_total = perf_counter() - publish_started
-        build = computed["build"]
-        graph_build = computed["graph_build"]
-        fact_rows = computed["fact_rows"]
-        analytical_rows = computed["analytical_rows"]
-        status = (
-            graph_build.status if graph_build.status != "complete" else build.status
-        )
-        measured_projection = sum(timings.values())
-        timings["sqlite_publish_overhead_seconds"] = round(
-            max(0.0, publish_total - measured_projection), 6
-        )
+        published = self.store.materialize_revision(finalize, status="complete")
+        publish_seconds += perf_counter() - publish_started
+        analytical_seconds = perf_counter() - analytical_started
+        gc_started = perf_counter()
+        gc_result = self.store.garbage_collect(compact=True)
+        gc_seconds = perf_counter() - gc_started
+        status = "complete" if issue_count == 0 else "partial"
         return {
             "status": status,
             "revision": published.revision,
             "source_count": len(candidates),
-            "entity_count": len(build.entities),
-            "fact_entity_count": len(fact_rows),
+            "component_count": len(plan.components),
+            "batch_count": batch_count,
+            "entity_count": projected_entities,
+            "fact_entity_count": fact_entities,
             "analytical_entity_count": len(analytical_rows),
-            "issue_count": len(build.issues) + len(graph_build.issues),
-            "parsed_bytes": parsed_bytes,
-            "parsed_lines": parsed_lines,
+            "issue_count": issue_count,
+            "parsed_bytes": ingestion.parsed_bytes,
+            "parsed_lines": ingestion.parsed_lines,
+            "garbage_collection": gc_result,
             "timings": {
                 "source_ingestion_seconds": round(ingestion_seconds, 6),
-                **timings,
+                "topology_planning_seconds": round(planning_seconds, 6),
+                "canonical_graph_rebuild_seconds": round(graph_seconds, 6),
+                "core_projection_seconds": round(core_seconds, 6),
+                "canonical_facts_seconds": round(fact_seconds, 6),
+                "analytical_projection_seconds": round(analytical_seconds, 6),
+                "sqlite_publication_seconds": round(publish_seconds, 6),
+                "first_useful_revision_seconds": (
+                    round(first_useful_seconds, 6)
+                    if first_useful_seconds is not None
+                    else None
+                ),
+                "garbage_collection_seconds": round(gc_seconds, 6),
                 "total_seconds": round(perf_counter() - bootstrap_started, 6),
             },
         }
@@ -1048,25 +1288,8 @@ class DashboardIncrementalRuntime:
         return bool(self.store.query_entities("overview", limit=1).items)
 
     def _has_default_analytical_models(self) -> bool:
-        scopes = (
-            (
-                MODEL_META,
-                analytical_scope_key("model_usage", since_days=self.since_days),
-            ),
-            (
-                CACHE_META,
-                analytical_scope_key("cache_breaks", since_days=self.since_days),
-            ),
-            (
-                TOKEN_INDEX_META,
-                analytical_scope_key(
-                    "token_efficiency_index", since_days=self.since_days
-                ),
-            ),
-        )
-        return all(
-            self._analytical_meta(kind, scope) is not None for kind, scope in scopes
-        )
+        scope = analytical_scope_key("model_usage", since_days=self.since_days)
+        return self._analytical_meta(MODEL_META, scope) is not None
 
     def _has_canonical_facts(self) -> bool:
         return bool(
@@ -1077,6 +1300,20 @@ class DashboardIncrementalRuntime:
             ).items
             or self.store.query_entities(
                 FACT_PROJECT_SESSION,
+                limit=1,
+                scope_key=CANONICAL_FACT_SCOPE,
+            ).items
+        )
+
+    def _has_evidence_facts(self) -> bool:
+        return bool(
+            self.store.query_entities(
+                FACT_TOOL_USAGE,
+                limit=1,
+                scope_key=CANONICAL_FACT_SCOPE,
+            ).items
+            and self.store.query_entities(
+                FACT_SESSION_STATS,
                 limit=1,
                 scope_key=CANONICAL_FACT_SCOPE,
             ).items
@@ -1093,7 +1330,7 @@ def _materialize_changed_graphs(
     current_dir: Path,
     since_days: int,
 ) -> dict[str, float]:
-    """Repair changed graph partitions without reopening transcript files."""
+    """Repair changed partitions by reopening only affected source components."""
 
     started = perf_counter()
     scope = f"recent:{since_days}d"
@@ -1131,9 +1368,8 @@ def _materialize_changed_graphs(
     )
 
     graph_started = perf_counter()
-    graph_build = rebuild_affected_session_graphs(
+    graph_build = rebuild_affected_session_graphs_from_files(
         sources=sources,
-        messages_for_path=lambda path: context.active_messages(source_path=path),
         seed_paths=seed_paths,
         old_root_session_ids=old_roots,
     )
@@ -1224,6 +1460,7 @@ def _materialize_changed_graphs(
                 current_dir=current_dir,
                 project_list={"items": {project_name: project_metadata}},
                 include_projects=True,
+                economics_detail="core",
             )
         )
     context.mutate_many(new_fact_rows)
@@ -1255,16 +1492,10 @@ def _materialize_changed_graphs(
             scope_key=CANONICAL_FACT_SCOPE,
         )
     )
-    analytical_rows = [
-        *build_standard_analytical_rows_from_ct_json(
-            ct_json=fact_adapter,
-            since_days=since_days,
-        ),
-        *build_token_efficiency_index_rows_from_ct_json(
-            ct_json=fact_adapter,
-            since_days=since_days,
-        ),
-    ]
+    analytical_rows = build_model_usage_rows_from_ct_json(
+        ct_json=fact_adapter,
+        since_days=since_days,
+    )
     _replace_analytical_rows(
         context,
         analytical_rows,
@@ -1328,16 +1559,126 @@ def _materialize_changed_graphs(
     }
 
 
-def _replace_all_read_models(
-    context: MaterializationContext, entities: Iterable[Any]
+def _clear_all_entities(context: MaterializationContext) -> None:
+    """Reset disposable projections at the first progressive bootstrap batch."""
+
+    for current in tuple(context.current_entities()):
+        context.delete_entity(current.entity_kind, current.entity_key)
+
+
+def _bootstrap_catalog_mutations(
+    project_items: dict[str, Any], *, scope: str
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for name, raw_item in sorted(project_items.items()):
+        item = raw_item if isinstance(raw_item, dict) else {}
+        rows.append(
+            {
+                "entity_kind": "project_catalog",
+                "entity_key": str(name),
+                "scope_key": scope,
+                "partition_key": str(name),
+                "sort_key": str(name).casefold(),
+                "tiebreaker": str(name),
+                "payload": {
+                    "name": str(name),
+                    "path": item.get("path"),
+                    "vendors": list(item.get("vendors") or []),
+                },
+            }
+        )
+    return rows
+
+
+def _bootstrap_coverage_payload(
+    *,
+    state: str,
+    processed_sources: int,
+    total_sources: int,
+    processed_components: int,
+    total_components: int,
+    issue_count: int,
+    complete: bool,
+) -> dict[str, Any]:
+    return {
+        "state": state,
+        "processed_sources": processed_sources,
+        "total_sources": total_sources,
+        "processed_components": processed_components,
+        "total_components": total_components,
+        "inconclusive_records": issue_count,
+        "complete": complete,
+    }
+
+
+def _bootstrap_coverage_mutation(
+    payload: dict[str, Any], *, scope: str
+) -> dict[str, Any]:
+    return {
+        "entity_kind": "bootstrap_coverage",
+        "entity_key": scope,
+        "scope_key": scope,
+        "partition_key": scope,
+        "sort_key": scope,
+        "tiebreaker": scope,
+        "payload": payload,
+    }
+
+
+def _publish_relationships(
+    context: MaterializationContext, relationships: Iterable[Any]
 ) -> None:
-    replacement = list(entities)
-    desired = {(entity.entity_kind, entity.entity_id) for entity in replacement}
-    kinds = _core_read_model_entity_kinds()
-    for current in context.current_entities(entity_kinds=kinds):
-        if (current.entity_kind, current.entity_key) not in desired:
-            context.delete_entity(current.entity_kind, current.entity_key)
-    context.mutate_many(entity.as_mutation() for entity in replacement)
+    for relationship in relationships:
+        parent = (
+            str(relationship.parent_session_id)
+            if relationship.parent_session_id is not None
+            else None
+        )
+        context.update_source_metadata(
+            relationship.source_path,
+            root_link=str(relationship.root_session_id),
+            parent_link=parent,
+            metadata={
+                "vendor": relationship.vendor.value,
+                "session_id": str(relationship.session_id),
+                "parent_session_id": parent,
+                "project_identifier": relationship.project_identifier,
+            },
+        )
+
+
+def _publish_build_issues(
+    context: MaterializationContext, issues: Iterable[Any], *, scope: str
+) -> None:
+    for issue in issues:
+        context.mutate(
+            {
+                "entity_kind": "ingestion_issue",
+                "entity_key": issue.issue_id,
+                "scope_key": scope,
+                "partition_key": issue.root_session_id or "",
+                "sort_key": issue.stage,
+                "tiebreaker": issue.issue_id,
+                "payload": issue.model_dump(mode="json"),
+            }
+        )
+
+
+def _publish_graph_issues(
+    context: MaterializationContext, issues: Iterable[Any], *, scope: str
+) -> None:
+    for issue in issues:
+        _record_ingestion_issue(
+            context,
+            scope=scope,
+            stage=issue.stage,
+            code=issue.code,
+            message=issue.message,
+            source_path=issue.source_path,
+            root_session_id=issue.session_id,
+            details=issue.details,
+            disposition="failed" if issue.severity == "error" else "inconclusive",
+        )
 
 
 def _replace_analytical_rows(
@@ -1443,19 +1784,6 @@ def _record_ingestion_issue(
     )
 
 
-def _core_read_model_entity_kinds() -> tuple[str, ...]:
-    return (
-        "project_catalog",
-        "project_contribution",
-        "session_timeline_contribution",
-        "project",
-        "session",
-        "overview",
-        "session_timeline",
-        "project_detail",
-    )
-
-
 def _default_analytical_entity_kinds() -> tuple[str, ...]:
     return (
         MODEL_META,
@@ -1503,19 +1831,6 @@ def _candidate_paths(since_days: int) -> tuple[Path, ...]:
             if stat.st_mtime >= cutoff:
                 paths.append(path.resolve())
     return tuple(sorted(set(paths)))
-
-
-def _project_list_payload(entities: Sequence[Any]) -> dict[str, Any]:
-    return {
-        "items": {
-            str(entity.payload["name"]): {
-                "path": entity.payload.get("path"),
-                "vendors": entity.payload.get("vendors") or [],
-            }
-            for entity in entities
-            if entity.entity_kind == "project"
-        }
-    }
 
 
 def _default_database_path() -> Path:

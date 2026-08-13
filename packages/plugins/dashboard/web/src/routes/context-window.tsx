@@ -187,6 +187,7 @@ export function ContextWindowRoute() {
     queryKey: ["context-window", sessionId],
     queryFn: () => fetchContextWindow(sessionId),
     placeholderData: (previous) => previous,
+    gcTime: 60_000,
   });
   const analysisJob = useJob<SessionAnalysis>({
     initialJobId: initialAnalysisJobId,

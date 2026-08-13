@@ -78,6 +78,12 @@ export function ModelUsageRoute() {
   const view = search.view ?? "overview";
   const grain = search.grain ?? "weekly";
   const unit = search.unit ?? "session";
+  const [sectionTab, setSectionTab] = React.useState("models");
+  React.useEffect(() => {
+    setSectionTab("models");
+  }, [view]);
+  const needsTurns =
+    (view === "cost" || view === "tokens") && sectionTab === "turns";
   const sessionsQuery = useInfiniteQuery({
     queryKey: ["model-usage", sinceDays, projectName, modelKey, "sessions"],
     initialPageParam: null as string | null,
@@ -93,6 +99,7 @@ export function ModelUsageRoute() {
       }),
     getNextPageParam: (lastPage) =>
       lastPage.pages?.sessions?.next_cursor ?? undefined,
+    gcTime: 5 * 60_000,
   });
   const sessionRevision =
     sessionsQuery.data?.pages[0]?.pages?.sessions?.revision ?? null;
@@ -119,7 +126,8 @@ export function ModelUsageRoute() {
       }),
     getNextPageParam: (lastPage) =>
       lastPage.pages?.turns?.next_cursor ?? undefined,
-    enabled: sessionRevision != null,
+    enabled: sessionRevision != null && needsTurns,
+    gcTime: 5 * 60_000,
   });
 
   const setProjectName = (value: string) => {
@@ -147,18 +155,12 @@ export function ModelUsageRoute() {
     });
   };
 
-  const [sectionTab, setSectionTab] = React.useState("models");
-  React.useEffect(() => {
-    setSectionTab("models");
-  }, [view]);
-
-  if (sessionsQuery.isPending || turnsQuery.isPending) {
+  if (sessionsQuery.isPending) {
     return <LoadingShell eyebrow="Model economics" title="Loading model usage" variant="metrics" />;
   }
 
-  if (sessionsQuery.isError || turnsQuery.isError) {
-    const error = sessionsQuery.error ?? turnsQuery.error;
-    return <StateBlock title="Model usage unavailable" detail={error?.message ?? "The model usage query failed."} onRetry={() => { void sessionsQuery.refetch(); void turnsQuery.refetch(); }} />;
+  if (sessionsQuery.isError) {
+    return <StateBlock title="Model usage unavailable" detail={sessionsQuery.error?.message ?? "The model usage query failed."} onRetry={() => { void sessionsQuery.refetch(); }} />;
   }
 
   const first = sessionsQuery.data.pages[0];
@@ -173,7 +175,7 @@ export function ModelUsageRoute() {
     ),
     turns: Array.from(
       new Map(
-        turnsQuery.data.pages
+        (turnsQuery.data?.pages ?? [])
           .flatMap((page) => page.turns)
           .map((row) => [`${row.session_id}:${row.turn_id}`, row]),
       ).values(),
@@ -243,8 +245,8 @@ export function ModelUsageRoute() {
       </Card>
 
       {view === "overview" ? <OverviewView data={data} /> : null}
-      {view === "cost" ? <CostView data={data} activeTab={sectionTab} onTabChange={setSectionTab} /> : null}
-      {view === "tokens" ? <TokensView data={data} activeTab={sectionTab} onTabChange={setSectionTab} /> : null}
+      {view === "cost" ? <CostView data={data} activeTab={sectionTab} onTabChange={setSectionTab} turnsPending={turnsQuery.isPending} turnsError={turnsQuery.error} onRetryTurns={() => { void turnsQuery.refetch(); }} /> : null}
+      {view === "tokens" ? <TokensView data={data} activeTab={sectionTab} onTabChange={setSectionTab} turnsPending={turnsQuery.isPending} turnsError={turnsQuery.error} onRetryTurns={() => { void turnsQuery.refetch(); }} /> : null}
       {view === "time" ? <TimeView data={data} /> : null}
       {view === "efficiency" ? (
         <EfficiencyLens
@@ -268,7 +270,7 @@ export function ModelUsageRoute() {
               {sessionsQuery.isFetchingNextPage ? "Loading sessions…" : "Load more sessions"}
             </Button>
           ) : null}
-          {turnsQuery.hasNextPage ? (
+          {needsTurns && turnsQuery.hasNextPage ? (
             <Button
               type="button"
               variant="outline"
@@ -298,10 +300,16 @@ function CostView({
   data,
   activeTab,
   onTabChange,
+  turnsPending,
+  turnsError,
+  onRetryTurns,
 }: {
   data: ModelUsagePayload;
   activeTab: string;
   onTabChange: (tab: string) => void;
+  turnsPending: boolean;
+  turnsError: Error | null;
+  onRetryTurns: () => void;
 }) {
   return (
     <SectionTabs
@@ -327,7 +335,13 @@ function CostView({
         {
           id: "turns",
           label: "Turns",
-          content: <TurnTable data={data} view="cost" />,
+          content: turnsPending ? (
+            <LoadingShell eyebrow="Usage detail" title="Loading turn economics" variant="table" />
+          ) : turnsError ? (
+            <StateBlock title="Turn economics unavailable" detail={turnsError.message} onRetry={onRetryTurns} />
+          ) : (
+            <TurnTable data={data} view="cost" />
+          ),
         },
       ]}
     />
@@ -338,10 +352,16 @@ function TokensView({
   data,
   activeTab,
   onTabChange,
+  turnsPending,
+  turnsError,
+  onRetryTurns,
 }: {
   data: ModelUsagePayload;
   activeTab: string;
   onTabChange: (tab: string) => void;
+  turnsPending: boolean;
+  turnsError: Error | null;
+  onRetryTurns: () => void;
 }) {
   return (
     <SectionTabs
@@ -372,7 +392,13 @@ function TokensView({
         {
           id: "turns",
           label: "Turns",
-          content: <TurnTable data={data} view="tokens" />,
+          content: turnsPending ? (
+            <LoadingShell eyebrow="Usage detail" title="Loading turn economics" variant="table" />
+          ) : turnsError ? (
+            <StateBlock title="Turn economics unavailable" detail={turnsError.message} onRetry={onRetryTurns} />
+          ) : (
+            <TurnTable data={data} view="tokens" />
+          ),
         },
       ]}
     />
