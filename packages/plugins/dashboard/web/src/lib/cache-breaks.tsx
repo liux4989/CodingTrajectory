@@ -1,9 +1,8 @@
 import * as React from "react";
 import { Hourglass, Zap } from "lucide-react";
 
-// Shared cache-break formatting + tone helpers. Used by both the per-session
-// context-window view and the aggregate cache-breaks page so the two stay
-// visually consistent.
+// Shared cache-break formatting + tone helpers for the per-session
+// context-window view.
 
 export function formatTokens(value: number | null | undefined) {
   if (value == null) return "-";

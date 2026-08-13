@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from . import cache_breaks as cache_breaks_mod
     from .codex_app_server import CodexAppServerManager, close_active_app_servers
     from . import context_window as context_window_mod
     from . import model_usage as model_usage_mod
@@ -20,7 +19,6 @@ try:
     from .source_data import DashboardSourceData
     from .work_manager import DashboardWorkManager
 except ImportError:
-    import cache_breaks as cache_breaks_mod
     from codex_app_server import CodexAppServerManager, close_active_app_servers
     import context_window as context_window_mod
     import model_usage as model_usage_mod
@@ -295,21 +293,6 @@ class DashboardDataService:
             ),
             ttl_seconds=3_600,
             stale_ttl_seconds=3_600,
-        )
-
-    def cache_breaks(self, query: dict[str, list[str]]) -> dict[str, Any]:
-        since_days = _int(query, "since_days", 7)
-        project_name = _first(query, "project_name")
-        # One batched ``ct api call session.usage`` fetches all sessions at
-        # once (no per-session subprocess fan-out), so the default cache TTL is
-        # enough; concurrent misses coalesce in the work manager.
-        return self._work.get_or_compute(
-            ("cache_breaks", since_days, project_name),
-            lambda: cache_breaks_mod.build_projection(
-                ct_json=self._source.json,
-                since_days=since_days,
-                project_name=project_name,
-            ),
         )
 
     def session_analysis(self, body: dict[str, Any]) -> dict[str, Any]:

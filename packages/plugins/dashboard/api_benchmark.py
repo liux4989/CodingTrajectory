@@ -51,7 +51,6 @@ STANDARD_API_NAMES = (
     "session-timeline",
     "context-window",
     "model-usage",
-    "cache-breaks",
     "vendors",
 )
 EXPENSIVE_API_NAMES = (
@@ -1158,12 +1157,6 @@ def _api_specs(
             project_query,
             lambda: service.token_efficiency_project(project_query),
             project_missing,
-        ),
-        _ApiSpec(
-            "cache-breaks",
-            "/api/cache-breaks",
-            since_query,
-            lambda: service.cache_breaks(since_query),
         ),
         _ApiSpec("vendors", "/api/vendors", {}, lambda: service.vendors({})),
     ]

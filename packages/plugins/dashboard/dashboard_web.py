@@ -359,25 +359,6 @@ def _handler_for(
                             runtime is not None and since_days == runtime.since_days
                         ),
                     )
-                elif path == "/api/cache-breaks":
-                    since_days = _bounded_positive_int(query, "since_days", 7)
-                    incremental = (
-                        runtime.cache_breaks(
-                            since_days=since_days,
-                            project_name=_first(query, "project_name"),
-                            limit=limit,
-                            cursor=cursor,
-                        )
-                        if runtime is not None
-                        else None
-                    )
-                    payload = self._with_legacy_fallback(
-                        incremental,
-                        lambda: service.cache_breaks(query),
-                        revisioned_scope=(
-                            runtime is not None and since_days == runtime.since_days
-                        ),
-                    )
                 elif path == "/api/diagnostics/cache":
                     payload = service.cache_metrics()
                 elif path == "/api/vendors":

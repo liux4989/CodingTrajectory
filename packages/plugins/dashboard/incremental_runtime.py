@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import threading
 from time import perf_counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,6 +31,7 @@ try:
     from .incremental_store import (
         IncrementalStore,
         MaterializationContext,
+        SourceFenceError,
     )
     from .read_models import (
         DEFAULT_RECENT_HORIZON_DAYS,
@@ -39,8 +40,6 @@ try:
     )
     from .analytical_read_models import (
         CANONICAL_FACT_SCOPE,
-        CACHE_ITEM,
-        CACHE_META,
         CanonicalFactsCtJson,
         FACT_PROJECT,
         FACT_PROJECT_SESSION,
@@ -58,12 +57,10 @@ try:
         analytical_scope_key,
         build_canonical_fact_rows,
         build_canonical_root_fact_rows,
-        build_cache_break_rows_from_ct_json,
         build_model_usage_rows_from_ct_json,
         build_token_efficiency_project_rows_from_ct_json,
         canonical_fact_entity_kinds,
         page_metadata,
-        reconstruct_cache_breaks,
         reconstruct_model_usage,
         reconstruct_token_efficiency_index,
         reconstruct_token_efficiency_project,
@@ -73,6 +70,7 @@ except ImportError:
     from incremental_store import (
         IncrementalStore,
         MaterializationContext,
+        SourceFenceError,
     )
     from read_models import (
         DEFAULT_RECENT_HORIZON_DAYS,
@@ -81,8 +79,6 @@ except ImportError:
     )
     from analytical_read_models import (
         CANONICAL_FACT_SCOPE,
-        CACHE_ITEM,
-        CACHE_META,
         CanonicalFactsCtJson,
         FACT_PROJECT,
         FACT_PROJECT_SESSION,
@@ -100,12 +96,10 @@ except ImportError:
         analytical_scope_key,
         build_canonical_fact_rows,
         build_canonical_root_fact_rows,
-        build_cache_break_rows_from_ct_json,
         build_model_usage_rows_from_ct_json,
         build_token_efficiency_project_rows_from_ct_json,
         canonical_fact_entity_kinds,
         page_metadata,
-        reconstruct_cache_breaks,
         reconstruct_model_usage,
         reconstruct_token_efficiency_index,
         reconstruct_token_efficiency_project,
@@ -515,46 +509,6 @@ class DashboardIncrementalRuntime:
             limit=limit,
         )
 
-    def cache_breaks(
-        self,
-        *,
-        since_days: int,
-        project_name: str | None = None,
-        limit: int = 50,
-        cursor: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Serve the default-scope Cache Breaks page from SQLite."""
-
-        if since_days != self.since_days:
-            return None
-        if not self._has_canonical_facts():
-            return None
-        if not self._has_evidence_facts():
-            return None
-        scope = analytical_scope_key(
-            "cache_breaks",
-            since_days=self.since_days,
-            project_name=project_name,
-        )
-        if self._analytical_meta(CACHE_META, scope) is None:
-            return None
-        page = self.store.query_entities(
-            CACHE_ITEM,
-            limit=limit,
-            cursor=cursor,
-            scope_key=scope,
-            partition_key="breaks",
-        )
-        meta = self._analytical_meta(CACHE_META, scope, revision=page.revision)
-        if meta is None:
-            return None
-        return reconstruct_cache_breaks(
-            meta,
-            rows=page.items,
-            page=page,
-            limit=limit,
-        )
-
     def token_efficiency_index(
         self,
         *,
@@ -647,7 +601,7 @@ class DashboardIncrementalRuntime:
                 context.assert_sources_current()
                 context.record_invalidation("token-efficiency", scope)
 
-            self.store.materialize_revision(publish)
+            self._materialize_on_demand(publish)
 
         revision = self.store.current_revision()
         meta = self._analytical_meta(TOKEN_PROJECT_META, scope, revision=revision)
@@ -831,7 +785,7 @@ class DashboardIncrementalRuntime:
                     {"detail": "evidence"},
                 )
 
-            self.store.materialize_revision(publish)
+            self._materialize_on_demand(publish)
             return missing <= rebuilt_roots
 
     def _root_for_entrypoint(self, entrypoint_id: str) -> str | None:
@@ -884,19 +838,37 @@ class DashboardIncrementalRuntime:
             ).items
         }
 
+    def _materialize_on_demand(
+        self,
+        publish: Callable[[MaterializationContext], None],
+        *,
+        attempts: int = 3,
+    ) -> None:
+        """Materialize from a request thread, tolerating live source writes.
+
+        A session file can be appended between checkpoint registration and the
+        source-fence check, so refresh the checkpoints and retry before
+        surfacing the fence error.
+        """
+        for attempt in range(attempts):
+            try:
+                self.store.materialize_revision(publish)
+                return
+            except SourceFenceError:
+                if attempt == attempts - 1:
+                    raise
+                self.store.refresh(_candidate_paths(self.since_days))
+
     def _materialize_filtered_analytical_scope(
         self,
         *,
-        route: Literal["model_usage", "cache_breaks"],
+        route: Literal["model_usage"],
         scope: str,
         project_name: str | None,
         model_key: str | None = None,
     ) -> None:
         def publish(context: MaterializationContext) -> None:
-            meta_kind = {
-                "model_usage": MODEL_META,
-                "cache_breaks": CACHE_META,
-            }[route]
+            meta_kind = MODEL_META
             if any(
                 context.current_entities(entity_kinds=(meta_kind,), scope_key=scope)
             ):
@@ -916,14 +888,6 @@ class DashboardIncrementalRuntime:
                 )
                 kinds = (MODEL_META, MODEL_SESSION, MODEL_TURN)
                 family = "model-usage"
-            else:
-                rows = build_cache_break_rows_from_ct_json(
-                    ct_json=adapter,
-                    since_days=self.since_days,
-                    project_name=project_name,
-                )
-                kinds = (CACHE_META, CACHE_ITEM)
-                family = "cache-breaks"
             _replace_analytical_scope_rows(
                 context,
                 rows,
@@ -933,7 +897,7 @@ class DashboardIncrementalRuntime:
             context.assert_sources_current()
             context.record_invalidation(family, scope)
 
-        self.store.materialize_revision(publish)
+        self._materialize_on_demand(publish)
 
     def _refresh(self, force_bootstrap: bool) -> dict[str, Any]:
         started = datetime.now(UTC).isoformat()
@@ -1821,8 +1785,6 @@ def _default_analytical_entity_kinds() -> tuple[str, ...]:
         MODEL_META,
         MODEL_SESSION,
         MODEL_TURN,
-        CACHE_META,
-        CACHE_ITEM,
         TOKEN_INDEX_META,
         TOKEN_PROJECT,
     )
@@ -1838,7 +1800,6 @@ def _delivery_families() -> tuple[str, ...]:
         "projects",
         "sessions",
         "model-usage",
-        "cache-breaks",
         "token-efficiency",
         "context-window",
     )
