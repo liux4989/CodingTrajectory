@@ -19,7 +19,6 @@ const QUERY_FAMILIES = {
   "model-usage": [["model-usage"]],
   "token-efficiency": [["token-efficiency"]],
   "context-window": [["context-window"]],
-  "cache-breaks": [["cache-breaks"]],
 } as const;
 
 const ALL_QUERY_FAMILIES = Object.values(QUERY_FAMILIES).flat();
@@ -115,6 +114,10 @@ export function DashboardDeliveryProvider({ children }: { children: React.ReactN
   const [revision, setRevision] = React.useState<number | null>(null);
   const [delivery, setDelivery] = React.useState<DashboardDeliveryState>(() => statusFromSnapshot(undefined));
   const appliedRevision = React.useRef<number | null>(null);
+  // The useQuery result object is not referentially stable; keep it in a ref
+  // so effects can depend on the underlying data instead of the container.
+  const snapshotRef = React.useRef(snapshot);
+  snapshotRef.current = snapshot;
 
   React.useEffect(() => {
     if (!snapshot.data) return;
@@ -142,7 +145,7 @@ export function DashboardDeliveryProvider({ children }: { children: React.ReactN
       resetAllRouteQueries(queryClient);
       appliedRevision.current = null;
       setRevision(null);
-      void snapshot.refetch();
+      void snapshotRef.current.refetch();
       return;
     }
 
@@ -172,7 +175,7 @@ export function DashboardDeliveryProvider({ children }: { children: React.ReactN
       isRefreshing: false,
       error: null,
     }));
-  }, [changes.data, queryClient, snapshot]);
+  }, [changes.data, queryClient]);
 
   const error = snapshot.error ?? changes.error;
   const value: DashboardDeliveryState = {
