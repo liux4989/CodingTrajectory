@@ -231,7 +231,6 @@ uses local policy about what is safe to delete.
 
 ```text
 ct plugin dashboard web [--host 127.0.0.1] [--port 8765] [--open]
-ct plugin dashboard benchmark [--fixture-file FILE] [--repeat N] [--api NAME] [--compare REPORT] [--save REPORT]
 ct plugin dashboard project cleanup [--dry-run] [--older-than 30d] [--path PATH] [--detail]
 ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm]
 ct plugin dashboard session context-window SESSION_ID [flags]
@@ -302,56 +301,12 @@ The dashboard also provides a plugin-local web program:
 
 - `ct plugin dashboard web` starts a local HTTP server for the built React
   dashboard.
-- The Python server exposes dashboard-owned JSON endpoints and serves the built
-  frontend from `packages/plugins/dashboard/web/dist`.
-- `ct plugin dashboard benchmark` invokes the read-only service routes directly,
-  measures dashboard-cache-cold and warm latency, attributes latency to nested
-  `ct` calls, and hashes deterministic responses. Reports are written only with
-  an explicit `--save`; the historical all-route baseline is protected from
-  partial or unsuccessful replacement. Long-running token-efficiency worker
-  projections are opt-in with `--include-expensive`.
-- Pinned fixture manifests set the route set, minimum repeats, thresholds, and
-  expected response digests. Strict `--compare` mode rejects incompatible or
-  incomplete evidence and exits nonzero for response drift, latency regression,
-  or warning/critical threshold breaches. These manifests pin a workload on the
-  current host; the response digest detects source drift, but the underlying
-  session corpus is not bundled for cross-machine reconstruction.
-- `GET /api/diagnostics/cache` exposes aggregate projection/source cache
-  counters and gauges without exposing cache keys or session identifiers.
-
-The checked-in `benchmarks/results/dashboard-api-baseline.json` is the
-historical pre-optimization all-route scan. Its 30-second timeouts are censored
-failures, not comparable latency samples. The repeat-five
-`dashboard-context-window-before-v1.json` is a legacy same-host control trace;
-because schema v1 lacks source and response provenance, it remains observational
-and is intentionally rejected by strict schema-v2 comparison. Candidate evidence
-is generated separately so a targeted run cannot overwrite either history:
-
-```bash
-CT_COMMAND="$PWD/.venv/bin/ct" uv run ct plugin dashboard benchmark \
-  --fixture-file benchmarks/fixtures/dashboard-context-window-large-v1.json \
-  --save benchmarks/results/dashboard-context-window-after-v2.json \
-  --json
-```
-
-The artifact is written before the command returns its gate status, so a valid
-measurement remains inspectable even when the configured latency threshold
-causes a nonzero exit.
+- The Python server serves every read route from the persistent incremental
+  read models (SQLite) and serves the built frontend from
+  `packages/plugins/dashboard/web/dist`.
 - The frontend package lives under `packages/plugins/dashboard/web` and uses
   React, TanStack Query, TanStack Router, and local shadcn-style UI primitives.
-- Cleanup actions remain preview-first and POST-only; the web UI sends explicit
-  selected paths and action names before the backend calls the existing
-  plugin-local cleanup functions.
-
-Expected interactive flow:
-
-- scan old project candidates and empty session candidates;
-- show grouped candidates with paths, ages, sizes, and skip reasons;
-- let the user expand skipped categories and inspect the paths in each group;
-- let the user select or deselect candidates;
-- default to trash or archive actions;
-- require explicit confirmation before deletion;
-- write the same cleanup manifest as the CLI.
+- Cleanup is CLI-only; the web dashboard stays read-only.
 
 ### Safety Model
 

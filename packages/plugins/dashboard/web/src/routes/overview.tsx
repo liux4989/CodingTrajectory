@@ -280,7 +280,7 @@ function TopSessionsTable({ sessions }: { sessions: TopSession[] }) {
       table={table}
       columnCount={columns.length}
       emptyMessage="No sessions with token usage in this window."
-      emptyHint="Try expanding the date range using the toggle in the header."
+      emptyHint="No token usage was recorded in the last 7 days."
     />
   );
 }

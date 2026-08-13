@@ -228,7 +228,6 @@ function ScopeCard({
   discoveryDays: number;
   onSearchChange: EfficiencySearchChange;
 }) {
-  const { days: requestedDays } = useDateRange();
   return (
     <Card className="min-w-0">
       <CardHeader>
@@ -237,11 +236,7 @@ function ScopeCard({
         </CardTitle>
         <CardDescription>
           Completed {grain === "daily" ? "days" : "weeks"} · {comparisonDays}-day
-          trend
-          {requestedDays > comparisonDays
-            ? ` (capped from the ${requestedDays}-day global range)`
-            : ""}{" "}
-          · {discoveryDays}-day discovery window · values shown per {unit}
+          trend · {discoveryDays}-day discovery window · values shown per {unit}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-wrap items-center gap-4">

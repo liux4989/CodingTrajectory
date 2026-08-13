@@ -4,7 +4,6 @@ import { useTheme } from "@/hooks/use-theme";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { DateRangeToggle } from "@/components/date-range-toggle";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { RefreshButton } from "@/components/refresh-button";
 import { Badge } from "@/components/ui/badge";
@@ -58,7 +57,6 @@ export function SiteHeader() {
         <div className="ml-auto flex items-center gap-2">
           <DeliveryStatus />
           <RefreshButton />
-          <DateRangeToggle />
           <Button
             variant="outline"
             size="icon"

@@ -4,11 +4,9 @@ import argparse
 import sys
 
 try:
-    from . import api_benchmark as api_benchmark_mod
     from . import cleanup as cleanup_mod
     from . import context_window as context_window_mod
 except ImportError:
-    import api_benchmark as api_benchmark_mod
     import cleanup as cleanup_mod
     import context_window as context_window_mod
 
@@ -22,8 +20,6 @@ def main(argv: list[str] | None = None) -> int:
     if raw_args[0] in {"web", "--web"}:
         return _run_dashboard_web(raw_args[1:])
     action, rest = raw_args[0], raw_args[1:]
-    if action == "benchmark":
-        return api_benchmark_mod.main(rest)
     if action == "project":
         return _handle_project_command(rest)
     if action == "session":
@@ -43,7 +39,6 @@ def _build_root_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="action", metavar="<command>")
     sub.add_parser("web", help="Rich dashboard with analytics (browser).")
-    sub.add_parser("benchmark", help="Benchmark read-only dashboard APIs.")
     sub.add_parser("project", help="Project cleanup actions.")
     sub.add_parser("session", help="Session analysis and cleanup actions.")
     return parser
@@ -140,7 +135,6 @@ def _root_entry_text() -> str:
             "",
             "Commands:",
             "  ct plugin dashboard web [flags]    Rich dashboard with analytics (browser)",
-            "  ct plugin dashboard benchmark [flags]",
             "  ct plugin dashboard project cleanup [--dry-run] [flags]",
             "  ct plugin dashboard session cleanup [flags]",
             "  ct plugin dashboard session context-window SESSION_ID [flags]",

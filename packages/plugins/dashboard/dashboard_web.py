@@ -170,7 +170,6 @@ def _handler_for(
 
         def _handle_api_get(self, path: str, query: dict[str, list[str]]) -> None:
             try:
-                self._used_service_fallback = False
                 limit = _bounded_page_size(query)
                 cursor = _cursor(query)
                 if path == "/api/dashboard/snapshot":
@@ -189,118 +188,55 @@ def _handler_for(
                         else _unavailable_changes(after_revision)
                     )
                 elif path == "/api/overview":
-                    since_days = _bounded_positive_int(query, "since_days", 7)
-                    incremental = (
-                        runtime.overview(since_days=since_days)
-                        if runtime is not None
-                        else None
-                    )
-                    payload = self._with_service_fallback(
-                        incremental,
-                        lambda: service.overview(query),
-                        revisioned_scope=(
-                            runtime is not None and since_days == runtime.since_days
-                        ),
+                    payload = self._revisioned(
+                        lambda: runtime.overview(since_days=self._window_days(query))
                     )
                 elif path == "/api/projects":
-                    incremental = (
-                        runtime.projects(
+                    payload = self._revisioned(
+                        lambda: runtime.projects(
                             agent_vendor=_first(query, "agent_vendor"),
                             limit=limit,
                             cursor=cursor,
                         )
-                        if runtime is not None
-                        else None
-                    )
-                    payload = self._with_service_fallback(
-                        incremental,
-                        lambda: service.projects(query),
-                        revisioned_scope=runtime is not None,
                     )
                 elif path == "/api/projects/detail":
-                    project_name = _required(query, "project_name")
-                    since_days_raw = _first(query, "since_days")
-                    since_days = _bounded_positive_int(query, "since_days", 7)
-                    incremental = (
-                        runtime.project_detail(
-                            project_name=project_name,
-                            since_days=since_days,
+                    payload = self._revisioned(
+                        lambda: runtime.project_detail(
+                            project_name=_required(query, "project_name"),
+                            since_days=self._window_days(query),
                             limit=limit,
                             cursor=cursor,
                         )
-                        if runtime is not None and since_days_raw is not None
-                        else None
-                    )
-                    payload = self._with_service_fallback(
-                        incremental,
-                        lambda: service.project_detail(query),
-                        revisioned_scope=(
-                            runtime is not None
-                            and since_days_raw is not None
-                            and since_days == runtime.since_days
-                        ),
                     )
                 elif path == "/api/sessions":
-                    since_days = _bounded_positive_int(query, "since_days", 30)
-                    incremental = (
-                        runtime.sessions(
-                            since_days=since_days,
+                    payload = self._revisioned(
+                        lambda: runtime.sessions(
+                            since_days=self._window_days(query),
                             project_name=_first(query, "project_name"),
                             agent_vendor=_first(query, "agent_vendor"),
                             limit=limit,
                             cursor=cursor,
                         )
-                        if runtime is not None and not _truthy(query, "all_time")
-                        else None
-                    )
-                    payload = self._with_service_fallback(
-                        incremental,
-                        lambda: service.sessions(query),
-                        revisioned_scope=(
-                            runtime is not None
-                            and since_days == runtime.since_days
-                            and not _truthy(query, "all_time")
-                        ),
                     )
                 elif path == "/api/sessions/timeline":
-                    since_days = _bounded_positive_int(query, "since_days", 30)
-                    incremental = (
-                        runtime.session_timeline(
-                            since_days=since_days,
+                    payload = self._revisioned(
+                        lambda: runtime.session_timeline(
+                            since_days=self._window_days(query),
                             limit=limit,
                             cursor=cursor,
                         )
-                        if runtime is not None and not _truthy(query, "all_time")
-                        else None
-                    )
-                    payload = self._with_service_fallback(
-                        incremental,
-                        lambda: service.session_timeline(query),
-                        revisioned_scope=(
-                            runtime is not None
-                            and since_days == runtime.since_days
-                            and not _truthy(query, "all_time")
-                        ),
                     )
                 elif path == "/api/sessions/context-window":
-                    incremental = (
-                        runtime.context_window(
+                    payload = self._revisioned(
+                        lambda: runtime.context_window(
                             session_id=_required(query, "session_id"),
                             turn_id=_first(query, "turn_id"),
                         )
-                        if runtime is not None
-                        else None
-                    )
-                    payload = self._with_service_fallback(
-                        incremental,
-                        lambda: service.context_window(query),
-                        revisioned_scope=runtime is not None,
                     )
                 elif path == "/api/model-usage":
-                    since_days = _bounded_positive_int(query, "since_days", 7)
-                    incremental = (
-                        runtime.model_usage(
-                            since_days=since_days,
+                    payload = self._revisioned(
+                        lambda: runtime.model_usage(
+                            since_days=self._window_days(query),
                             project_name=_first(query, "project_name"),
                             model_key=_first(query, "model_key"),
                             detail=_first(query, "detail") or "both",
@@ -308,61 +244,26 @@ def _handler_for(
                             cursor=cursor,
                             revision=_optional_revision(query),
                         )
-                        if runtime is not None
-                        else None
-                    )
-                    payload = self._with_service_fallback(
-                        incremental,
-                        lambda: service.model_usage(query),
-                        revisioned_scope=(
-                            runtime is not None and since_days == runtime.since_days
-                        ),
                     )
                 elif path == "/api/token-efficiency":
-                    since_days = min(_bounded_positive_int(query, "since_days", 7), 30)
-                    incremental = (
-                        runtime.token_efficiency_index(
-                            since_days=since_days,
+                    payload = self._revisioned(
+                        lambda: runtime.token_efficiency_index(
+                            since_days=self._window_days(query),
                             limit=limit,
                             cursor=cursor,
                         )
-                        if runtime is not None
-                        else None
-                    )
-                    payload = self._with_service_fallback(
-                        incremental,
-                        lambda: service.token_efficiency_index(query),
-                        revisioned_scope=(
-                            runtime is not None and since_days == runtime.since_days
-                        ),
                     )
                 elif path == "/api/token-efficiency/project":
-                    since_days = min(_bounded_positive_int(query, "since_days", 7), 30)
-                    detail = _first(query, "detail")
-                    grain = _first(query, "grain")
-                    incremental = (
-                        runtime.token_efficiency_project(
+                    payload = self._revisioned(
+                        lambda: runtime.token_efficiency_project(
                             project_name=_required(query, "project_name"),
-                            since_days=since_days,
+                            since_days=self._window_days(query),
                             limit=limit,
                             cursor=cursor,
-                            detail=detail,
-                            grain=grain,
+                            detail=_first(query, "detail"),
+                            grain=_first(query, "grain"),
                         )
-                        if runtime is not None
-                        else None
                     )
-                    payload = self._with_service_fallback(
-                        incremental,
-                        lambda: service.token_efficiency_project(query),
-                        revisioned_scope=(
-                            runtime is not None and since_days == runtime.since_days
-                        ),
-                    )
-                elif path == "/api/diagnostics/cache":
-                    payload = service.cache_metrics()
-                elif path == "/api/vendors":
-                    payload = service.vendors(query)
                 elif path.startswith("/api/jobs/"):
                     self._handle_job_get(path)
                     return
@@ -380,31 +281,31 @@ def _handler_for(
                 return
             self._json_response(payload)
 
-        def _with_service_fallback(
-            self,
-            incremental: dict[str, Any] | None,
-            fallback: Callable[[], dict[str, Any]],
-            *,
-            revisioned_scope: bool = False,
-        ) -> dict[str, Any]:
-            if incremental is not None:
-                return incremental
-            if runtime is not None:
-                if revisioned_scope:
-                    raise DashboardBootstrapPending(
-                        "dashboard read model is not available yet; retry shortly"
-                    )
+        def _window_days(self, query: dict[str, list[str]]) -> int:
+            since_days = _bounded_positive_int(query, "since_days", 7)
+            if runtime is not None and since_days != runtime.since_days:
                 raise ValueError(
-                    "requested scope is not available from revisioned dashboard data"
+                    f"only the last {runtime.since_days} days are available"
                 )
-            self._used_service_fallback = True
-            return fallback()
+            return since_days
+
+        def _revisioned(
+            self, produce: Callable[[], dict[str, Any] | None]
+        ) -> dict[str, Any]:
+            if runtime is None:
+                raise ValueError("revisioned dashboard data is unavailable")
+            payload = produce()
+            if payload is None:
+                raise DashboardBootstrapPending(
+                    "dashboard read model is not available yet; retry shortly"
+                )
+            return payload
 
         def _handle_api_post(
             self, path: str, body: dict[str, Any]
         ) -> tuple[dict[str, Any], HTTPStatus]:
             if path == "/api/refresh":
-                payload = service.refresh()
+                payload: dict[str, Any] = {"status": "refreshed"}
                 if runtime is not None:
                     payload["incremental"] = runtime.request_refresh()
                 return payload, HTTPStatus.OK
@@ -536,11 +437,6 @@ def _required(query: dict[str, list[str]], key: str) -> str:
     if value is None:
         raise ValueError(f"{key} is required")
     return value
-
-
-def _truthy(query: dict[str, list[str]], key: str) -> bool:
-    value = _first(query, key)
-    return value is not None and value.lower() in {"1", "true", "yes", "on"}
 
 
 def _bounded_page_size(query: dict[str, list[str]]) -> int:

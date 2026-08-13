@@ -193,7 +193,7 @@ export function ModelUsageRoute() {
         <CardContent className="grid gap-6 pt-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="eyebrow-soft text-muted-foreground">
-              Showing last {sinceDays} day{sinceDays === 1 ? "" : "s"} · adjust in the header
+              Showing the last {sinceDays} days
             </p>
             <nav className="flex flex-wrap gap-2" aria-label="Model usage views">
               {VIEW_OPTIONS.map((option) => (

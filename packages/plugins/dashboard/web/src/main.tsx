@@ -5,7 +5,6 @@ import { createRootRoute, createRoute, createRouter, RouterProvider } from "@tan
 import { AppShell } from "@/components/app-shell";
 import { StateBlock } from "@/components/state-block";
 import { Toaster } from "@/components/ui/sonner";
-import { DateRangeProvider } from "@/hooks/use-date-range";
 import { CommandPalette } from "@/components/command-palette";
 import { DashboardDeliveryProvider } from "@/hooks/use-dashboard-delivery";
 import "@/styles.css";
@@ -130,9 +129,7 @@ createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <DashboardDeliveryProvider>
-        <DateRangeProvider>
-          <RouterProvider router={router} />
-        </DateRangeProvider>
+        <RouterProvider router={router} />
       </DashboardDeliveryProvider>
     </QueryClientProvider>
   </React.StrictMode>,

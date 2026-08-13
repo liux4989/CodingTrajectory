@@ -142,7 +142,7 @@ export function SessionsRoute() {
             table={table}
             columnCount={columns.length}
             emptyMessage="No sessions match the current filter."
-            emptyHint="Try adjusting the filter or expanding the date range."
+            emptyHint="Try adjusting the filter."
             onRowClick={(item) => {
               const id = sessionId(item);
               if (id) router.navigate({ to: "/sessions/$sessionId/context-window", params: { sessionId: id } });
