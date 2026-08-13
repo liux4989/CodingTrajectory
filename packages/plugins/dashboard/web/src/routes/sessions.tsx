@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useRouter } from "@tanstack/react-router";
+import { useNavigate, useRouter, useSearch } from "@tanstack/react-router";
+import { X } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -20,6 +21,7 @@ import { DataTable } from "@/components/data-table";
 import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SessionLink } from "@/components/session-link";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 const SESSION_WINDOW_DAYS = 7;
@@ -69,12 +71,15 @@ export function SessionsRoute() {
   const [filter, setFilter] = React.useState("");
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const router = useRouter();
+  const navigate = useNavigate({ from: "/sessions" });
+  const { projectName } = useSearch({ from: "/sessions" });
   const sessions = useInfiniteQuery({
-    queryKey: ["sessions", "cursor", SESSION_WINDOW_DAYS],
+    queryKey: ["sessions", "cursor", SESSION_WINDOW_DAYS, projectName ?? null],
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }) =>
       fetchSessions({
         sinceDays: SESSION_WINDOW_DAYS,
+        projectName: projectName ?? undefined,
         cursor: pageParam ?? undefined,
         limit: CURSOR_PAGE_SIZE,
         signal,
@@ -111,6 +116,23 @@ export function SessionsRoute() {
   return (
     <div className="route-container">
       <RouteHeader eyebrow="Session stream" title="Recent session entry points, kept compact for triage." />
+      {projectName ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="secondary" className="gap-1.5">
+            Project: {projectName}
+            <button
+              type="button"
+              aria-label={`Clear project filter ${projectName}`}
+              className="rounded-full hover:text-foreground"
+              onClick={() =>
+                void navigate({ search: { projectName: undefined }, replace: true })
+              }
+            >
+              <X size={12} />
+            </button>
+          </Badge>
+        </div>
+      ) : null}
       <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, project, or id" />
       {sessions.isPending ? <TableSkeleton rows={6} cols={3} /> : null}
       {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} onRetry={() => sessions.refetch()} /> : null}

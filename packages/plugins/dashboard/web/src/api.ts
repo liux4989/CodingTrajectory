@@ -50,16 +50,6 @@ export type ProjectItem = {
   vendors: string[];
 };
 
-export type ProjectDetail = {
-  name: string;
-  path: string | null;
-  vendors: string[];
-  since_days: number | null;
-  sessions: SessionItem[];
-  session_count: number;
-  page?: CursorPageMetadata;
-};
-
 export type SessionItem = {
   root_session_id: string;
   graph_id?: string | null;
@@ -705,20 +695,6 @@ export async function fetchOverview(params?: { sinceDays?: number }) {
 
 export async function fetchProjects() {
   return fetchJson<{ items: ProjectItem[] }>("/api/projects");
-}
-
-export async function fetchProjectDetail(
-  projectName: string,
-  sinceDays?: number,
-  request?: CursorRequest,
-) {
-  const params = new URLSearchParams({ project_name: projectName });
-  if (sinceDays != null) params.set("since_days", String(sinceDays));
-  if (request?.cursor) params.set("cursor", request.cursor);
-  if (request?.limit != null) params.set("limit", String(request.limit));
-  return fetchJson<ProjectDetail>(`/api/projects/detail?${params}`, {
-    signal: request?.signal,
-  });
 }
 
 export async function fetchSessions(

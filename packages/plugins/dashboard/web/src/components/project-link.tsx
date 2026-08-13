@@ -4,17 +4,15 @@ import { cn } from "@/lib/utils";
 
 type ProjectLinkProps = {
   name: string;
-  sinceDays?: number;
   className?: string;
   children?: React.ReactNode;
 };
 
-export function ProjectLink({ name, sinceDays, className, children }: ProjectLinkProps) {
+export function ProjectLink({ name, className, children }: ProjectLinkProps) {
   return (
     <Link
-      to="/projects/$projectName"
-      params={{ projectName: name }}
-      search={{ sinceDays }}
+      to="/sessions"
+      search={{ projectName: name }}
       className={cn("link", className)}
     >
       {children ?? name}

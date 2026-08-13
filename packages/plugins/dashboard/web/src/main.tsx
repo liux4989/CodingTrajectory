@@ -11,7 +11,6 @@ import { DashboardDeliveryProvider } from "@/hooks/use-dashboard-delivery";
 import "@/styles.css";
 
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
-const ProjectDetailRoute = React.lazy(() => import("@/routes/projects").then((mod) => ({ default: mod.ProjectDetailRoute })));
 const SessionsRoute = React.lazy(() => import("@/routes/sessions").then((mod) => ({ default: mod.SessionsRoute })));
 const ContextWindowRoute = React.lazy(() => import("@/routes/context-window").then((mod) => ({ default: mod.ContextWindowRoute })));
 const ModelUsageRoute = React.lazy(() => import("@/routes/model-usage").then((mod) => ({ default: mod.ModelUsageRoute })));
@@ -71,21 +70,12 @@ const indexRoute = createRoute({
   component: () => <RouteBoundary><OverviewRoute /></RouteBoundary>,
 });
 
-const projectDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/projects/$projectName",
-  validateSearch: (search: Record<string, unknown>): { sinceDays: number | undefined } => ({
-    sinceDays:
-      search.sinceDays != null && !Number.isNaN(Number(search.sinceDays))
-        ? Number(search.sinceDays)
-        : undefined,
-  }),
-  component: () => <RouteBoundary><ProjectDetailRoute /></RouteBoundary>,
-});
-
 const sessionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions",
+  validateSearch: (search: Record<string, unknown>): { projectName: string | undefined } => ({
+    projectName: typeof search.projectName === "string" ? search.projectName : undefined,
+  }),
   component: () => <RouteBoundary><SessionsRoute /></RouteBoundary>,
 });
 
@@ -184,7 +174,6 @@ const tokenEfficiencyOutliersRoute = createRoute({
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
-    projectDetailRoute,
     sessionsRoute,
     contextWindowRoute,
     modelUsageRoute,

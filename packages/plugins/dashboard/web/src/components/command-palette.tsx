@@ -41,7 +41,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const items = React.useMemo<CommandItem[]>(() => {
     const navItems: CommandItem[] = [
       { id: "nav-overview", label: "Overview", group: "Navigate", onSelect: () => navigate({ to: "/" }) },
-      { id: "nav-sessions", label: "Sessions", group: "Navigate", onSelect: () => navigate({ to: "/sessions" }) },
+      { id: "nav-sessions", label: "Sessions", group: "Navigate", onSelect: () => navigate({ to: "/sessions", search: { projectName: undefined } }) },
       { id: "nav-model-usage", label: "Model Usage", group: "Navigate", onSelect: () => navigate({ to: "/model-usage", search: { projectName: undefined, modelKey: undefined, view: undefined } }) },
       { id: "nav-token-efficiency", label: "Token Efficiency", group: "Navigate", onSelect: () => navigate({ to: "/token-efficiency" }) },
     ];
@@ -65,7 +65,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         label: p.name,
         hint: p.path ?? undefined,
         group: "Projects" as const,
-        onSelect: () => navigate({ to: "/projects/$projectName", params: { projectName: p.name }, search: { sinceDays: undefined } }),
+        onSelect: () => navigate({ to: "/sessions", search: { projectName: p.name } }),
       }));
 
     return [...navItems, ...sessionItems, ...projectItems];

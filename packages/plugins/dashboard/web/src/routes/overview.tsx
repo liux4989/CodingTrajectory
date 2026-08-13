@@ -88,7 +88,6 @@ export function OverviewRoute() {
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <ProjectLink
                           name={project.project}
-                          sinceDays={data.sessions.window_days}
                           className="truncate font-display text-base font-extrabold"
                         />
                         <Badge>{project.count} sessions</Badge>
@@ -150,7 +149,7 @@ export function OverviewRoute() {
                     <CardDescription>Sessions ranked by token usage.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <TopSessionsTable sessions={data.sessions.top_sessions} windowDays={data.sessions.window_days} />
+                    <TopSessionsTable sessions={data.sessions.top_sessions} />
                   </CardContent>
                 </Card>
               ),
@@ -190,7 +189,7 @@ export function OverviewRoute() {
             <CardDescription>Sessions ranked by token usage.</CardDescription>
           </CardHeader>
           <CardContent>
-            <TopSessionsTable sessions={data.sessions.top_sessions} windowDays={data.sessions.window_days} />
+            <TopSessionsTable sessions={data.sessions.top_sessions} />
           </CardContent>
         </Card>
       )}
@@ -212,7 +211,7 @@ function IssueRow({ label, message, detail }: { label: string; message: string; 
 
 type TopSession = OverviewPayload["sessions"]["top_sessions"][number];
 
-function TopSessionsTable({ sessions, windowDays }: { sessions: TopSession[]; windowDays: number }) {
+function TopSessionsTable({ sessions }: { sessions: TopSession[] }) {
   const columns = React.useMemo<ColumnDef<TopSession>[]>(
     () => [
       {
@@ -245,7 +244,7 @@ function TopSessionsTable({ sessions, windowDays }: { sessions: TopSession[]; wi
         cell: ({ row, getValue }) => {
           const project = row.original.project;
           return project ? (
-            <ProjectLink name={project} sinceDays={windowDays} />
+            <ProjectLink name={project} />
           ) : (
             getValue<string>()
           );
@@ -268,7 +267,7 @@ function TopSessionsTable({ sessions, windowDays }: { sessions: TopSession[]; wi
         cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
       },
     ],
-    [windowDays],
+    [],
   );
 
   const table = useReactTable({
