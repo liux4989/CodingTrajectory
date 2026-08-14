@@ -53,7 +53,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         hint: [s.project, s.vendors.join(", ")].filter(Boolean).join(" · "),
         group: "Sessions" as const,
         onSelect: () => {
-          navigate({ to: "/sessions/$sessionId/context-window", params: { sessionId: s.root_session_id } });
+          navigate({ to: "/sessions/$sessionId", params: { sessionId: s.root_session_id } });
         },
       }));
 

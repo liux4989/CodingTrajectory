@@ -179,7 +179,7 @@ function evidenceBadgeTone(severity: AnalysisEvidenceRef["severity"]) {
 }
 
 export function ContextWindowRoute() {
-  const { sessionId } = useParams({ from: "/sessions/$sessionId/context-window" });
+  const { sessionId } = useParams({ from: "/sessions/$sessionId" });
   const analysisRefreshRef = React.useRef(false);
   const analysisStorageKey = `ct-dashboard-session-analysis:${sessionId}`;
   const [initialAnalysisJobId] = React.useState(() => readStoredJobId(analysisStorageKey));

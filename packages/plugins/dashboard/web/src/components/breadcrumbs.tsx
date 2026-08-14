@@ -9,7 +9,7 @@ const LABEL_FNS: Record<string, (params: Record<string, unknown>) => string> = {
   "/": () => "Overview",
   "/model-usage": () => "Usage",
   "/sessions": () => "Sessions",
-  "/sessions/$sessionId/context-window": (p) => {
+  "/sessions/$sessionId": (p) => {
     const id = String(p.sessionId ?? "");
     return id.length > 12 ? id.slice(0, 12) : id || "Session";
   },

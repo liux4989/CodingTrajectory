@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, redirect, RouterProvider } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { StateBlock } from "@/components/state-block";
 import { Toaster } from "@/components/ui/sonner";
@@ -74,8 +74,20 @@ const sessionsRoute = createRoute({
 
 const contextWindowRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/sessions/$sessionId/context-window",
+  path: "/sessions/$sessionId",
   component: () => <RouteBoundary><ContextWindowRoute /></RouteBoundary>,
+});
+
+const legacyContextWindowRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions/$sessionId/context-window",
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: "/sessions/$sessionId",
+      params: { sessionId: params.sessionId },
+      replace: true,
+    });
+  },
 });
 
 const modelUsageRoute = createRoute({
@@ -115,6 +127,7 @@ const router = createRouter({
     indexRoute,
     sessionsRoute,
     contextWindowRoute,
+    legacyContextWindowRoute,
     modelUsageRoute,
   ]),
 });
