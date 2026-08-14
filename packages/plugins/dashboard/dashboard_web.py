@@ -28,10 +28,8 @@ _GZIP_CONTENT_TYPES = (
 
 try:
     from .incremental_runtime import DashboardIncrementalRuntime
-    from .web_services import DashboardDataService
 except ImportError:
     from incremental_runtime import DashboardIncrementalRuntime
-    from web_services import DashboardDataService
 
 
 _DEFAULT_PAGE_SIZE = 50
@@ -71,15 +69,13 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def serve(config: DashboardWebConfig) -> int:
-    service = DashboardDataService()
     runtime = DashboardIncrementalRuntime(current_dir=_repo_root())
-    handler = _handler_for(config.static_dir, service, runtime)
+    handler = _handler_for(config.static_dir, runtime)
     ThreadingHTTPServer.allow_reuse_address = True
     try:
         server = ThreadingHTTPServer((config.host, config.port), handler)
     except OSError as exc:
         runtime.shutdown()
-        service.shutdown()
         print(
             f"error: could not bind to {config.host}:{config.port} ({exc}); "
             "stop the other process or use --port to pick a different port",
@@ -98,9 +94,6 @@ def serve(config: DashboardWebConfig) -> int:
         incremental_runtime = getattr(handler, "dashboard_runtime", None)
         if incremental_runtime is not None:
             incremental_runtime.shutdown()
-        service = getattr(handler, "dashboard_service", None)
-        if service is not None:
-            service.shutdown()
         server.server_close()
     return 0
 
@@ -127,12 +120,10 @@ def _static_dir(raw: str | None) -> Path:
 
 def _handler_for(
     static_dir: Path,
-    service: DashboardDataService,
     runtime: DashboardIncrementalRuntime | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     class DashboardRequestHandler(BaseHTTPRequestHandler):
         server_version = "CodingTrajectoryDashboard/0.1"
-        dashboard_service = service
         dashboard_runtime = runtime
 
         def do_GET(self) -> None:
@@ -264,9 +255,6 @@ def _handler_for(
                             grain=_first(query, "grain"),
                         )
                     )
-                elif path.startswith("/api/jobs/"):
-                    self._handle_job_get(path)
-                    return
                 else:
                     self._json_error(HTTPStatus.NOT_FOUND, "not found")
                     return
@@ -309,27 +297,7 @@ def _handler_for(
                 if runtime is not None:
                     payload["incremental"] = runtime.request_refresh()
                 return payload, HTTPStatus.OK
-            if path == "/api/sessions/analysis":
-                return service.session_analysis(body), HTTPStatus.ACCEPTED
-            session_id = _session_analysis_id(path)
-            if session_id:
-                return (
-                    service.session_analysis({**body, "session_id": session_id}),
-                    HTTPStatus.ACCEPTED,
-                )
             raise ValueError("unknown api endpoint")
-
-        def _handle_job_get(self, path: str) -> None:
-            job_id = path[len("/api/jobs/") :].strip("/")
-            if not job_id:
-                self._json_error(HTTPStatus.NOT_FOUND, "not found")
-                return
-            try:
-                payload = service.job_status(job_id)
-            except ValueError as exc:
-                self._json_error(HTTPStatus.NOT_FOUND, str(exc))
-                return
-            self._json_response(payload)
 
         def _serve_static(self, raw_path: str, *, include_body: bool) -> None:
             relative = raw_path.lstrip("/")
@@ -397,8 +365,6 @@ def _handler_for(
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            if getattr(self, "_used_service_fallback", False):
-                self.send_header("X-Dashboard-Delivery", "service-fallback")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -416,14 +382,6 @@ def _handler_for(
 
     return DashboardRequestHandler
 
-
-def _session_analysis_id(path: str) -> str | None:
-    prefix = "/api/sessions/"
-    suffix = "/analysis"
-    if not path.startswith(prefix) or not path.endswith(suffix):
-        return None
-    session_id = path[len(prefix) : -len(suffix)].strip("/")
-    return session_id or None
 
 
 def _first(query: dict[str, list[str]], key: str) -> str | None:

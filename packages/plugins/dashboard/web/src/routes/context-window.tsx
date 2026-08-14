@@ -2,17 +2,14 @@ import * as React from "react";
 import { useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AlertTriangle, Eye, Lightbulb, Pin, PinOff, Search, X, Sparkles, Square } from "lucide-react";
+import { Eye, Pin, PinOff, Search, X } from "lucide-react";
 import {
-  analyzeSession,
   fetchContextWindow,
   type CacheBreakRecord,
   type CacheBreakSummary,
   type CompactionSummary,
   type ContextCategory,
   type ContextEvent,
-  type JobRecord,
-  type SessionAnalysis,
   type TokenEvidence,
 } from "@/api";
 import {
@@ -21,7 +18,6 @@ import {
   formatIdleSeconds,
   formatTokens,
 } from "@/lib/cache-breaks";
-import { useJob } from "@/hooks/use-job";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/loading-state";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -39,11 +35,6 @@ const categoryColors: Record<string, string> = {
 };
 
 const CATEGORY_ORDER = ["starting_context", "user_input", "files", "output", "agent", "unattributed"];
-type AnalysisFinding = SessionAnalysis["findings"][number];
-type AnalysisEvidenceRef = AnalysisFinding["evidence"][number];
-type TimelineEvidenceAnnotation = AnalysisEvidenceRef & {
-  finding: Pick<AnalysisFinding, "kind" | "title">;
-};
 
 function aggregateCategories(categories: ContextCategory[]) {
   const totals = new Map<string, number>();
@@ -65,19 +56,6 @@ function eventColor(event: ContextEvent) {
 
 function categoryTint(color: string, alpha: number) {
   return `color-mix(in srgb, ${color} ${alpha * 100}%, transparent)`;
-}
-
-function readStoredJobId(storageKey: string) {
-  if (typeof window === "undefined") return null;
-  const value = window.sessionStorage.getItem(storageKey);
-  return value?.trim() || null;
-}
-
-
-function writeStoredJobId(storageKey: string, jobId: string | null) {
-  if (typeof window === "undefined") return;
-  if (jobId) window.sessionStorage.setItem(storageKey, jobId);
-  else window.sessionStorage.removeItem(storageKey);
 }
 
 function evidenceLabel(evidence: TokenEvidence | null) {
@@ -145,55 +123,13 @@ function categoryLabel(category: string) {
   return category.replaceAll("_", " ");
 }
 
-function findingLabel(kind: SessionAnalysis["findings"][number]["kind"]) {
-  if (kind === "justified_expensive_work") return "Justified";
-  if (kind === "avoidable_pattern") return "Avoidable";
-  if (kind === "optimal_pattern") return "Optimal";
-  return "Next workflow";
-}
-
-function evidenceKindLabel(kind: AnalysisEvidenceRef["kind"]) {
-  if (kind === "context_category") return "Context";
-  if (kind === "tool_item") return "Tool item";
-  if (kind === "tool_bucket") return "Tool bucket";
-  return "Turn";
-}
-
-function evidenceRefMatchesEvent(ref: AnalysisEvidenceRef, event: ContextEvent) {
-  if (ref.kind === "context_category") {
-    return event.detail_ref.stats_category === ref.ref;
-  }
-  if (ref.kind === "tool_item") {
-    return event.detail_ref.item_id === ref.ref;
-  }
-  if (ref.kind === "tool_bucket") {
-    return event.detail_ref.tool_bucket === ref.ref;
-  }
-  return event.turn_id === ref.ref;
-}
-
-function evidenceBadgeTone(severity: AnalysisEvidenceRef["severity"]) {
-  return severity === "warning"
-    ? "border-warning/45 bg-warning/10 text-foreground"
-    : "border-moss/40 bg-moss/10 text-foreground";
-}
-
 export function ContextWindowRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId" });
-  const analysisRefreshRef = React.useRef(false);
-  const analysisStorageKey = `ct-dashboard-session-analysis:${sessionId}`;
-  const [initialAnalysisJobId] = React.useState(() => readStoredJobId(analysisStorageKey));
   const query = useQuery({
     queryKey: ["context-window", sessionId],
     queryFn: () => fetchContextWindow(sessionId),
     placeholderData: (previous) => previous,
     gcTime: 60_000,
-  });
-  const analysisJob = useJob<SessionAnalysis>({
-    initialJobId: initialAnalysisJobId,
-    onJobId: (jobId) => writeStoredJobId(analysisStorageKey, jobId),
-    start: () => analyzeSession(sessionId, analysisRefreshRef.current),
-    resolve: (record: JobRecord) => record.result as unknown as SessionAnalysis,
   });
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [pinnedId, setPinnedId] = React.useState<string | null>(null);
@@ -244,28 +180,7 @@ export function ContextWindowRoute() {
       return [...current, activeGroupId];
     });
   }, [activeGroupId]);
-  const analysis = analysisJob.data;
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
-
-  const evidenceByEventId = React.useMemo(() => {
-    const next = new Map<string, TimelineEvidenceAnnotation[]>();
-    if (!analysis) return next;
-    for (const event of events) {
-      const matches: TimelineEvidenceAnnotation[] = [];
-      for (const finding of analysis.findings) {
-        for (const evidence of finding.evidence) {
-          if (evidenceRefMatchesEvent(evidence, event)) {
-            matches.push({
-              ...evidence,
-              finding: { kind: finding.kind, title: finding.title },
-            });
-          }
-        }
-      }
-      if (matches.length > 0) next.set(event.id, matches);
-    }
-    return next;
-  }, [analysis, events]);
 
   const combinedSegments = React.useMemo(() => {
     const capacity = query.data?.context_window_tokens?.value ?? 0;
@@ -286,8 +201,6 @@ export function ContextWindowRoute() {
     }
     return next;
   }, [query.data?.cache_breaks]);
-
-  const activeEvidence = activeEvent ? evidenceByEventId.get(activeEvent.id) ?? [] : [];
 
   function moveFocus(index: number, direction: -1 | 1) {
     const next = Math.min(Math.max(index + direction, 0), filteredEvents.length - 1);
@@ -318,12 +231,6 @@ export function ContextWindowRoute() {
 
   const payload = query.data;
   const hasFilters = activeCategories.size > 0 || searchQuery.trim().length > 0;
-  const analysisRunning = analysisJob.status === "pending" || analysisJob.status === "running";
-  const analysisButtonLabel = analysisRunning
-    ? "Analyzing..."
-    : analysis
-      ? "Refresh analysis"
-      : "Analyze session";
 
   return (
     <div className="route-container w-full min-w-0 overflow-hidden pb-8">
@@ -347,40 +254,9 @@ export function ContextWindowRoute() {
                   / {formatTokens(payload.context_window_tokens?.value)} tokens
                 </p>
               </div>
-              <Button
-                size="sm"
-                variant={analysis ? "secondary" : "default"}
-                onClick={() => {
-                  analysisRefreshRef.current = Boolean(analysis);
-                  analysisJob.reset();
-                  analysisJob.start();
-                }}
-                disabled={analysisRunning}
-                className="gap-1.5"
-              >
-                {analysisRunning ? <Square size={13} className="fill-current" /> : <Sparkles size={15} />}
-                {analysisButtonLabel}
-              </Button>
             </div>
           </div>
         </div>
-
-        {analysisRunning ? (
-          <LoadingState
-            title="Analyzing session"
-            detail="The coding agent is reviewing session usage and tool events."
-            elapsedMs={analysisJob.elapsedMs}
-            progress={analysisJob.progress}
-            onCancel={analysisJob.cancel}
-          />
-        ) : null}
-        {analysisJob.status === "error" ? (
-          <div className="alert alert-destructive rounded-xl text-body-sm text-foreground">
-            {analysisJob.error}
-          </div>
-        ) : null}
-
-        {analysis ? <SessionAnalysisPanel analysis={analysis} /> : null}
 
         {payload.session_sections.length > 1 ? (
           <section className="rounded-lg border border-border-soft bg-card p-4" aria-label="Session graph context scopes">
@@ -572,9 +448,6 @@ export function ContextWindowRoute() {
               >
                 {turnGroups.map((group) => {
                   const containsActive = activeGroupId === group.key;
-                  const hasWarning = group.events.some(({ event }) =>
-                    (evidenceByEventId.get(event.id) ?? []).some((item) => item.severity === "warning"),
-                  );
                   const breakRecord = group.events[0]?.event.turn_id
                     ? breaksByTurnId.get(group.events[0].event.turn_id) ?? null
                     : null;
@@ -597,7 +470,6 @@ export function ContextWindowRoute() {
                         <span className="eyebrow-soft min-w-0 flex-1 truncate text-left text-muted-foreground">
                           {group.label}
                         </span>
-                        {hasWarning ? <AlertTriangle size={12} className="shrink-0 text-warning" /> : null}
                         {breakRecord && breakTone ? (
                           <span
                             className={cn(
@@ -627,8 +499,6 @@ export function ContextWindowRoute() {
                             const tokenPercent = totalUsedTokens > 0 && event.tokens
                               ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
                               : 0;
-                            const eventEvidence = evidenceByEventId.get(event.id) ?? [];
-                            const eventHasWarning = eventEvidence.some((item) => item.severity === "warning");
                             return (
                               <li key={event.id} className="list-none">
                                 <button
@@ -678,17 +548,6 @@ export function ContextWindowRoute() {
                                     {event.terminal_visible ? (
                                       <Eye size={14} className="text-muted-foreground" />
                                     ) : null}
-                                    {eventEvidence.length > 0 ? (
-                                      <span
-                                        className={cn(
-                                          "inline-flex h-5 min-w-5 items-center justify-center rounded-md border px-1",
-                                          eventHasWarning ? "border-warning/45 bg-warning/10 text-warning" : "border-moss/40 bg-moss/10 text-moss",
-                                        )}
-                                        title={`${eventEvidence.length} analysis evidence ${eventEvidence.length === 1 ? "match" : "matches"}`}
-                                      >
-                                        {eventHasWarning ? <AlertTriangle size={13} /> : <Lightbulb size={13} />}
-                                      </span>
-                                    ) : null}
                                   </span>
                                 </button>
                               </li>
@@ -736,32 +595,6 @@ export function ContextWindowRoute() {
                       </Button>
                     </div>
                     <p className="mt-4 whitespace-pre-wrap leading-relaxed">{activeEvent.summary ?? "No text preview is available."}</p>
-                    {activeEvidence.length > 0 ? (
-                      <div className="mt-4 overflow-hidden rounded-xl border border-border-soft">
-                        <div className="bg-surface-subtle px-4 py-2 eyebrow text-muted-foreground">
-                          Analysis Evidence
-                        </div>
-                        <div className="grid gap-2 px-4 py-3">
-                          {activeEvidence.map((item, index) => (
-                            <div
-                              key={`${item.kind}-${item.ref}-${index}`}
-                              className={cn("rounded-lg border px-3 py-2", evidenceBadgeTone(item.severity))}
-                            >
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant="outline" className="text-caption">
-                                  {evidenceKindLabel(item.kind)}
-                                </Badge>
-                                <span className="text-caption font-medium">{item.label}</span>
-                                <span className="text-caption text-muted-foreground">{item.finding.title}</span>
-                              </div>
-                              <p className="m-0 mt-1 text-caption leading-relaxed text-muted-foreground">
-                                {item.detail}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
                   </>
                 ) : (
                   <>
@@ -776,33 +609,6 @@ export function ContextWindowRoute() {
 
       </div>
     </div>
-  );
-}
-
-function SessionAnalysisPanel({ analysis }: { analysis: SessionAnalysis }) {
-  return (
-    <section className="panel-subtle rounded-xl px-4 py-3" aria-labelledby="session-analysis-title">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 id="session-analysis-title" className="m-0 font-display text-heading">
-            Session overview
-          </h2>
-        </div>
-        <Badge variant="outline" className="mono text-caption">
-          Codex
-        </Badge>
-      </div>
-
-      <div className="mt-3 grid gap-2">
-        {analysis.findings.map((finding, index) => (
-          <p key={`${finding.kind}-${index}`} className="m-0 text-body-sm leading-relaxed text-muted-foreground">
-            <span className="font-medium text-foreground">{findingLabel(finding.kind)}: {finding.title}.</span>{" "}
-            {finding.body}
-            {finding.impact ? <span className="mono text-caption"> {finding.impact}</span> : null}
-          </p>
-        ))}
-      </div>
-    </section>
   );
 }
 

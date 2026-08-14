@@ -184,94 +184,6 @@ export type ContextWindowPayload = {
   warnings: string[];
 };
 
-export type SessionAnalysis = {
-  schema_version: 5;
-  session_id: string;
-  generated_at: string;
-  app_server_thread_id: string;
-  app_server_turn_id: string | null;
-  task_story: {
-    initial_request: string | null;
-    follow_up_requests: string[];
-    phases: Array<{
-      label: string;
-      turn_ids: string[];
-      summary: string;
-    }>;
-    touched_artifacts: string[];
-    outcomes: string[];
-  };
-  usage_evidence: {
-    processed_tokens: number;
-    billed_prompt_tokens: number;
-    billed_uncached_prompt_tokens: number;
-    billed_cached_prompt_tokens: number;
-    billed_cache_write_tokens: number;
-    billed_completion_tokens: number;
-    billed_reasoning_tokens: number;
-    resident_context_tokens: number | null;
-    context_window_tokens: number | null;
-    resident_context_percent: number | null;
-    high_billed_turns: Array<Record<string, unknown>>;
-    context_composition: Array<{
-      category: string;
-      concept: string;
-      source_key: string;
-      label: string;
-      tokens: number;
-      percent: number | null;
-      confidence: string;
-      resident_estimated_cost_usd: number | null;
-    }>;
-    expensive_billed_items: Array<{
-      item_id: string;
-      turn_id: string;
-      label: string;
-      category: string;
-      summary: string;
-      processed_tokens: number;
-      billed_estimated_cost_usd: number;
-    }>;
-  };
-  tool_evidence: {
-    total_requested_calls: number;
-    total_result_calls: number;
-    failed_result_calls: number;
-    output_chars: number;
-    buckets: Array<{
-      key: string;
-      label: string;
-      judgment: "good" | "neutral" | "risky";
-      calls: number;
-      failed_calls: number;
-      output_chars: number;
-      call_share: number;
-      output_share: number;
-    }>;
-    top_output_calls: Array<{
-      bucket: string;
-      tool: string;
-      output_chars: number;
-      failed: boolean;
-      command: string;
-      timestamp: string | null;
-    }>;
-  };
-  findings: Array<{
-    kind: "justified_expensive_work" | "avoidable_pattern" | "optimal_pattern" | "recommended_workflow";
-    title: string;
-    body: string;
-    impact: string | null;
-    evidence: Array<{
-      kind: "context_category" | "tool_item" | "tool_bucket" | "turn";
-      ref: string;
-      label: string;
-      detail: string;
-      severity: "hint" | "warning";
-    }>;
-  }>;
-};
-
 export type UsageBuckets = {
   prompt_tokens?: number;
   cached_prompt_tokens?: number;
@@ -638,27 +550,6 @@ export async function fetchContextWindow(sessionId: string) {
   return fetchJson<ContextWindowPayload>(`/api/sessions/context-window?${params}`);
 }
 
-export async function analyzeSession(sessionId: string, refresh = false) {
-  return fetchJson<JobAccepted>(`/api/sessions/${encodeURIComponent(sessionId)}/analysis`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh }),
-  });
-}
-
-export type JobStatus = "pending" | "running" | "ready" | "error";
-
-export type JobRecord = {
-  id: string;
-  kind: string;
-  status: JobStatus;
-  created_at: string;
-  updated_at: string;
-  progress: string | null;
-  result: Record<string, unknown> | null;
-  error: string | null;
-};
-
 export type DashboardFreshness = {
   last_refresh_at: string | null;
   lag_seconds: number | null;
@@ -711,17 +602,6 @@ export type DashboardChanges = {
   catching_up: boolean;
   source_status: DashboardSourceStatus;
 };
-
-type JobAccepted = {
-  status: "pending";
-  job_id: string;
-  operation_key?: string;
-  reused?: boolean;
-};
-
-export async function fetchJobStatus(jobId: string, signal?: AbortSignal) {
-  return fetchJson<JobRecord>(`/api/jobs/${encodeURIComponent(jobId)}`, { signal });
-}
 
 export async function fetchDashboardSnapshot(signal?: AbortSignal) {
   return fetchJson<DashboardSnapshot>("/api/dashboard/snapshot", { signal });
@@ -801,45 +681,3 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-async function waitForPoll(signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    throw new DOMException("Request aborted", "AbortError");
-  }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      window.clearTimeout(timeout);
-      reject(new DOMException("Request aborted", "AbortError"));
-    };
-    const timeout = window.setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, 1_500);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-async function startAndWaitForJob<T>(
-  url: string,
-  filters: Record<string, string | number | boolean>,
-  signal?: AbortSignal,
-): Promise<T> {
-  const accepted = await fetchJson<JobAccepted>(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filters }),
-    signal,
-  });
-  while (true) {
-    const job = await fetchJobStatus(accepted.job_id, signal);
-    if (job.status === "ready") {
-      if (!job.result) {
-        throw new Error("Dashboard collection completed without a result");
-      }
-      return job.result as unknown as T;
-    }
-    if (job.status === "error") {
-      throw new Error(job.error || "Dashboard collection failed");
-    }
-    await waitForPoll(signal);
-  }
-}
