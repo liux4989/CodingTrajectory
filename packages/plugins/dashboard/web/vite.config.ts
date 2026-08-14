@@ -20,6 +20,10 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
+          // clsx is imported by both the entry (via cn()) and recharts; without
+          // an explicit bucket Rollup merges it into vendor-charts, making the
+          // 366KB charts chunk load eagerly on every route.
+          if (id.includes("/clsx/")) return "vendor-react";
           if (
             id.includes("/react-dom/") || id.includes("/react/") || id.includes("/scheduler/") ||
             id.includes("@radix-ui/") || id.includes("react-remove-scroll") || id.includes("aria-hidden") ||
