@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchDashboardChanges,
   fetchDashboardSnapshot,
+  type ContextWindowPayload,
   type DashboardChanges,
   type DashboardFreshness,
   type DashboardSnapshot,
@@ -15,7 +16,9 @@ const MAX_INCREMENTAL_ENTITIES = 250;
 const QUERY_FAMILIES = {
   overview: [["overview"]],
   projects: [["projects"], ["project"]],
-  sessions: [["sessions"], ["context-window"]],
+  // Context windows refetch via session-scoped invalidations/upserts instead —
+  // mapping them here would reset every open window on any session change.
+  sessions: [["sessions"]],
   "model-usage": [["model-usage"]],
   "token-efficiency": [["token-efficiency"]],
   "context-window": [["context-window"]],
@@ -39,6 +42,37 @@ const DashboardDeliveryContext = React.createContext<DashboardDeliveryState | nu
 
 function familiesFor(name: string): readonly (readonly string[])[] {
   return QUERY_FAMILIES[name as keyof typeof QUERY_FAMILIES] ?? [];
+}
+
+// A context-window query is keyed by the URL session id, which may be any
+// member of a session graph (e.g. a subagent). Reset it when the changed
+// graph's membership intersects the key or the cached payload's sections.
+function resetContextWindowQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  graphSessionIds: ReadonlySet<string>,
+) {
+  for (const query of queryClient.getQueryCache().findAll({ queryKey: ["context-window"] })) {
+    const sessionId = (query.queryKey as readonly unknown[])[1];
+    if (typeof sessionId !== "string") continue;
+    const data = query.state.data as ContextWindowPayload | undefined;
+    const affected =
+      graphSessionIds.has(sessionId) ||
+      (data != null &&
+        (graphSessionIds.has(data.session_id) ||
+          graphSessionIds.has(data.active_session_id) ||
+          data.session_sections.some((section) => graphSessionIds.has(section.session_id))));
+    if (affected) {
+      void queryClient.resetQueries({ queryKey: query.queryKey, exact: true });
+    }
+  }
+}
+
+function sessionIdsForSummary(payload: unknown, fallback: string): ReadonlySet<string> {
+  const ids = (payload as { session_ids?: unknown } | null | undefined)?.session_ids;
+  if (Array.isArray(ids) && ids.length > 0 && ids.every((id) => typeof id === "string")) {
+    return new Set(ids as string[]);
+  }
+  return new Set([fallback]);
 }
 
 function statusFromSnapshot(snapshot: DashboardSnapshot | undefined): DashboardDeliveryState {
@@ -69,12 +103,22 @@ function applyChanges(
         ["dashboard", "entities", upsert.entity_type, upsert.entity_id],
         upsert.payload,
       );
+      if (upsert.entity_type === "sessions") {
+        remember(["sessions"]);
+        resetContextWindowQueries(queryClient, sessionIdsForSummary(upsert.payload, upsert.entity_id));
+        continue;
+      }
       for (const family of familiesFor(upsert.entity_type)) remember(family);
     }
     for (const deletion of changes.deletions) {
       queryClient.removeQueries({
         queryKey: ["dashboard", "entities", deletion.entity_type, deletion.entity_id],
       });
+      if (deletion.entity_type === "sessions") {
+        remember(["sessions"]);
+        resetContextWindowQueries(queryClient, new Set([deletion.entity_id]));
+        continue;
+      }
       for (const family of familiesFor(deletion.entity_type)) remember(family);
     }
   } else {
@@ -82,8 +126,17 @@ function applyChanges(
   }
 
   if (changes.invalidations.length <= MAX_INCREMENTAL_ENTITIES) {
-    for (const invalidation of changes.invalidations) {
-      for (const family of familiesFor(invalidation)) remember(family);
+    for (const raw of changes.invalidations) {
+      // Scoped invalidations arrive as "family@scope"; a comma-joined root
+      // scope on context-window targets only the windows for those graphs.
+      const at = raw.indexOf("@");
+      const family = at === -1 ? raw : raw.slice(0, at);
+      const scope = at === -1 ? "" : raw.slice(at + 1);
+      if (family === "context-window" && scope && !scope.startsWith("recent:")) {
+        resetContextWindowQueries(queryClient, new Set(scope.split(",")));
+        continue;
+      }
+      for (const queryFamily of familiesFor(family)) remember(queryFamily);
     }
   } else {
     for (const family of ALL_QUERY_FAMILIES) remember(family);

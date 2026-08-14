@@ -284,7 +284,10 @@ class DashboardIncrementalRuntime:
                     }
                 )
             elif change.operation == "invalidate":
-                invalidations.add(family)
+                # Keep the invalidation scope on the wire ("family@scope") so
+                # clients can target per-graph queries; bare families stay
+                # family-wide for backward compatibility.
+                invalidations.add(f"{family}@{change.entity_key}")
         snapshot = self.snapshot()
         return {
             "from_revision": page.from_revision,
@@ -1546,6 +1549,12 @@ def _materialize_changed_graphs(
         )
     context.assert_sources_current()
     for family in _delivery_families():
+        if family == "context-window":
+            # Context windows are per-graph queries; broadcast per-root scopes
+            # so clients refetch only the windows whose facts actually changed.
+            if affected_roots:
+                context.record_invalidation(family, ",".join(sorted(affected_roots)))
+            continue
         context.record_invalidation(family, scope)
     return {
         "graph_rebuild_seconds": round(graph_seconds, 6),
