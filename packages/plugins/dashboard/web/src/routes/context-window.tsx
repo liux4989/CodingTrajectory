@@ -182,6 +182,28 @@ export function ContextWindowRoute() {
   }, [activeGroupId]);
   const totalUsedTokens = query.data?.used_tokens?.value ?? 0;
 
+  // Token waterfall (agent-prism style): each event bar is positioned by the
+  // cumulative tokens that entered context before it, width = its own tokens,
+  // on a shared scale of max(context capacity, total cumulative). Compaction
+  // can push cumulative past capacity, so the domain takes the max.
+  const eventWaterfall = React.useMemo(() => {
+    const capacity = query.data?.context_window_tokens?.value ?? 0;
+    const total = events.reduce((sum, event) => sum + (event.tokens?.value ?? 0), 0);
+    const domain = Math.max(capacity, total, 1);
+    const map = new Map<string, { offsetPct: number; widthPct: number }>();
+    let cursor = 0;
+    for (const event of events) {
+      const tokens = event.tokens?.value ?? 0;
+      if (tokens > 0) {
+        const offsetPct = (cursor / domain) * 100;
+        const widthPct = Math.min(Math.max((tokens / domain) * 100, 1.5), 100 - offsetPct);
+        map.set(event.id, { offsetPct, widthPct });
+      }
+      cursor += tokens;
+    }
+    return map;
+  }, [events, query.data?.context_window_tokens?.value]);
+
   const combinedSegments = React.useMemo(() => {
     const capacity = query.data?.context_window_tokens?.value ?? 0;
     return aggregateCategories(query.data?.categories ?? []).map(({ category, tokens }) => ({
@@ -496,9 +518,7 @@ export function ContextWindowRoute() {
                             const isActive = event.id === activeId;
                             const isCategoryHighlight = hoveredCategory != null && event.category === hoveredCategory;
                             const color = eventColor(event);
-                            const tokenPercent = totalUsedTokens > 0 && event.tokens
-                              ? Math.max((event.tokens.value / totalUsedTokens) * 100, 2)
-                              : 0;
+                            const waterfall = eventWaterfall.get(event.id);
                             return (
                               <li key={event.id} className="list-none">
                                 <button
@@ -537,11 +557,18 @@ export function ContextWindowRoute() {
                                     <span className="event-row-token mono text-body-sm font-medium">
                                       {event.tokens ? `+${formatTokens(event.tokens.value)}` : "-"}
                                     </span>
-                                    {tokenPercent > 0 ? (
-                                      <span className="event-row-meter">
+                                    {waterfall ? (
+                                      <span
+                                        className="event-row-meter event-row-waterfall"
+                                        title={`fills ${waterfall.offsetPct.toFixed(1)}%–${(waterfall.offsetPct + waterfall.widthPct).toFixed(1)}% of the window`}
+                                      >
                                         <span
                                           className="block h-full rounded-full"
-                                          style={{ width: `${Math.min(tokenPercent, 100)}%`, background: color }}
+                                          style={{
+                                            marginLeft: `${waterfall.offsetPct}%`,
+                                            width: `${waterfall.widthPct}%`,
+                                            background: color,
+                                          }}
                                         />
                                       </span>
                                     ) : null}

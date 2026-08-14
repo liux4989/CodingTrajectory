@@ -553,6 +553,10 @@
     border-radius: 999px;
     background: var(--surface-emphasis);
   }
+  /* Token waterfall: wider track so bar position reads at a glance. */
+  .event-row-waterfall {
+    width: 4.5rem;
+  }
   @media (max-width: 72rem) {
     .event-row-meta {
       max-inline-size: 6rem;
