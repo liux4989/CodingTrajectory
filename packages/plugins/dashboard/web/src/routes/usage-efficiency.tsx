@@ -15,6 +15,15 @@ import { LoadingShell } from "@/components/loading-shell";
 import { SessionLink } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { useDateRange } from "@/hooks/use-date-range";
+import {
+  formatCount,
+  formatDelta,
+  formatExactTokens,
+  formatLabel,
+  formatShare,
+  formatTokens,
+  shortId,
+} from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -38,52 +47,6 @@ export type EfficiencySearchChange = (patch: Partial<{
   grain: TokenEfficiencyGrain;
   unit: TokenEfficiencyUnit;
 }>) => void;
-
-const numberFormatter = new Intl.NumberFormat();
-const compactFormatter = new Intl.NumberFormat(undefined, {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-const percentFormatter = new Intl.NumberFormat(undefined, {
-  style: "percent",
-  maximumFractionDigits: 1,
-});
-
-function formatCount(value: number | null | undefined) {
-  return numberFormatter.format(value ?? 0);
-}
-
-function formatTokens(value: number | null | undefined) {
-  return compactFormatter.format(value ?? 0);
-}
-
-function formatExactTokens(value: number | null | undefined) {
-  return `${numberFormatter.format(Math.round(value ?? 0))} tokens`;
-}
-
-function formatPercent(value: number | null | undefined) {
-  return percentFormatter.format(value ?? 0);
-}
-
-function formatDelta(value: number | null | undefined) {
-  if (value == null) return "No baseline";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(1)}%`;
-}
-
-function formatLabel(value: string | null | undefined) {
-  if (!value) return "Unclassified";
-  return value
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function shortId(value: string | null | undefined) {
-  if (!value) return "—";
-  return value.length > 12 ? value.slice(0, 12) : value;
-}
 
 function distributionFor(
   summary: TokenEfficiencyPeriodSummary,
@@ -538,7 +501,7 @@ function PatternsCard({
                       {formatCount(pattern.current.calls)}
                     </TableCell>
                     <TableCell className="text-right font-mono">
-                      {formatPercent(pattern.current.incidence_rate)}
+                      {formatShare(pattern.current.incidence_rate)}
                     </TableCell>
                     <TableCell className="text-right font-mono">
                       {formatTokens(distribution.avg)}
@@ -550,7 +513,7 @@ function PatternsCard({
                       {formatTokens(distribution.p90)}
                     </TableCell>
                     <TableCell className="text-right font-mono">
-                      {formatPercent(pattern.current.token_share)}
+                      {formatShare(pattern.current.token_share)}
                     </TableCell>
                     <TableCell className="text-right">
                       <DeltaBadge value={pattern.deltas.prompt_tokens_pct} />
@@ -636,7 +599,7 @@ function HotspotsCard({
                     {formatTokens(hotspot.enclosing_prompt_tokens)}
                   </TableCell>
                   <TableCell className="text-right font-mono">
-                    {formatPercent(hotspot.largest_call_share)}
+                    {formatShare(hotspot.largest_call_share)}
                   </TableCell>
                   <TableCell className="text-right">
                     <DeltaBadge value={hotspot.delta_pct} />
@@ -711,7 +674,7 @@ function OutliersCard({
                     {formatTokens(outlier.prompt_tokens)}
                   </TableCell>
                   <TableCell className="text-right font-mono">
-                    {formatPercent(outlier.session_share)}
+                    {formatShare(outlier.session_share)}
                   </TableCell>
                   <TableCell className="text-right font-mono">
                     {outlier.max_context_tokens == null

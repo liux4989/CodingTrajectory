@@ -42,6 +42,12 @@ import {
 } from "@/components/ui/table";
 import { FilterLabel, RightCell } from "@/components/table-cells";
 import { useDateRange } from "@/hooks/use-date-range";
+import {
+  formatCompactNumber,
+  formatCostUsd,
+  formatDuration,
+  formatPercent,
+} from "@/lib/format";
 import { EfficiencyLens } from "@/routes/usage-efficiency";
 
 const ALL_PROJECTS = "__all_projects__";
@@ -421,10 +427,10 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     const turnStats = data.summary.token_stats.turn;
     return (
       <section className="stat-grid min-w-0">
-        <MetricCard label="Processed Tokens" value={compactNumber(data.summary.processed_tokens)} detail={`${data.summary.sessions.toLocaleString()} sessions`} />
-        <MetricCard label="Session Tokens" value={compactNumber(sessionStats.avg)} detail={distributionDetail(sessionStats)} />
-        <MetricCard label="Turn Tokens" value={compactNumber(turnStats.avg)} detail={distributionDetail(turnStats)} />
-        <MetricCard label="Turns" value={compactNumber(data.summary.turns)} detail={`${data.summary.models.toLocaleString()} models in scope`} />
+        <MetricCard label="Processed Tokens" value={formatCompactNumber(data.summary.processed_tokens)} detail={`${data.summary.sessions.toLocaleString()} sessions`} />
+        <MetricCard label="Session Tokens" value={formatCompactNumber(sessionStats.avg)} detail={distributionDetail(sessionStats)} />
+        <MetricCard label="Turn Tokens" value={formatCompactNumber(turnStats.avg)} detail={distributionDetail(turnStats)} />
+        <MetricCard label="Turns" value={formatCompactNumber(data.summary.turns)} detail={`${data.summary.models.toLocaleString()} models in scope`} />
       </section>
     );
   }
@@ -434,8 +440,8 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
       <section className="stat-grid min-w-0">
         <MetricCard label="Elapsed Time" value={formatDuration(data.summary.total_elapsed_seconds)} detail={`${data.summary.sessions.toLocaleString()} completed sessions`} />
         <MetricCard label="Session Time" value={formatDuration(sessionStats.avg)} detail={distributionDetail(sessionStats, formatDuration)} />
-        <MetricCard label="Turns" value={compactNumber(data.summary.turns)} detail={`${compactNumber(data.summary.processed_tokens)} filtered tokens`} />
-        <MetricCard label="Throughput" value={compactNumber(tokensPerMinute(data.summary.processed_tokens, data.summary.total_elapsed_seconds))} detail="tokens/min across elapsed time" />
+        <MetricCard label="Turns" value={formatCompactNumber(data.summary.turns)} detail={`${formatCompactNumber(data.summary.processed_tokens)} filtered tokens`} />
+        <MetricCard label="Throughput" value={formatCompactNumber(tokensPerMinute(data.summary.processed_tokens, data.summary.total_elapsed_seconds))} detail="tokens/min across elapsed time" />
       </section>
     );
   }
@@ -444,9 +450,9 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     const turnStats = data.summary.cost_stats.turn;
     return (
       <section className="stat-grid min-w-0">
-        <MetricCard label="Estimated Cost" value={formatCost(data.summary.estimated_cost_usd)} detail={`${data.summary.sessions.toLocaleString()} sessions in ${data.filters.since_days} days`} />
-        <MetricCard label="Session Cost" value={formatCost(sessionStats.avg)} detail={distributionDetail(sessionStats, formatCost)} />
-        <MetricCard label="Turn Cost" value={formatCost(turnStats.avg)} detail={distributionDetail(turnStats, formatCost)} />
+        <MetricCard label="Estimated Cost" value={formatCostUsd(data.summary.estimated_cost_usd)} detail={`${data.summary.sessions.toLocaleString()} sessions in ${data.filters.since_days} days`} />
+        <MetricCard label="Session Cost" value={formatCostUsd(sessionStats.avg)} detail={distributionDetail(sessionStats, formatCostUsd)} />
+        <MetricCard label="Turn Cost" value={formatCostUsd(turnStats.avg)} detail={distributionDetail(turnStats, formatCostUsd)} />
         <MetricCard label="Pricing Gaps" value={data.summary.missing_price_count} detail={data.summary.top_model_by_sessions ? `Most sessions: ${data.summary.top_model_by_sessions}` : "No sessions"} />
       </section>
     );
@@ -455,13 +461,13 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     <section className="stat-grid min-w-0">
       <MetricCard
         label="Estimated Cost"
-        value={formatCost(data.summary.estimated_cost_usd)}
+        value={formatCostUsd(data.summary.estimated_cost_usd)}
         detail={`${data.summary.sessions.toLocaleString()} sessions in ${data.filters.since_days} days`}
       />
       <MetricCard
         label="Turns"
-        value={compactNumber(data.summary.turns)}
-        detail={`${compactNumber(data.summary.processed_tokens)} observed tokens`}
+        value={formatCompactNumber(data.summary.turns)}
+        detail={`${formatCompactNumber(data.summary.processed_tokens)} observed tokens`}
       />
       <MetricCard
         label="Models"
@@ -487,7 +493,7 @@ function TokenBucketCards({ data }: { data: ModelUsagePayload }) {
           <MetricCard
             key={key}
             label={`${label} Tokens`}
-            value={compactNumber(sum(sessionValues))}
+            value={formatCompactNumber(sum(sessionValues))}
             detail={`session ${distributionDetail(bucketStats.session)} · turn ${distributionDetail(bucketStats.turn)}`}
           />
         );
@@ -516,7 +522,7 @@ const overviewModelColumns: ColumnDef<ModelUsageModel>[] = [
     id: "avg_turn_tokens",
     accessorFn: (row) => average(totalTokens(row.usage), row.turns),
     header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Turn Tokens" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
   },
   {
     accessorKey: "avg_turn_elapsed_seconds",
@@ -527,7 +533,7 @@ const overviewModelColumns: ColumnDef<ModelUsageModel>[] = [
     id: "tokens",
     accessorFn: (row) => totalTokens(row.usage),
     header: ({ column }) => <DataTableColumnHeader column={column} label="Processed Tokens" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
   },
   {
     id: "token_confidence",
@@ -538,7 +544,7 @@ const overviewModelColumns: ColumnDef<ModelUsageModel>[] = [
   {
     accessorKey: "estimated_cost_usd",
     header: ({ column }) => <DataTableColumnHeader column={column} label="Total Cost" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
   },
   {
     id: "pricing",
@@ -615,7 +621,7 @@ function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
       id: "tokens",
       accessorFn: (row) => totalTokens(row.usage),
       header: ({ column }) => <DataTableColumnHeader column={column} label="Tokens" className="text-right" />,
-      cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+      cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
     },
     ...(view === "tokens"
       ? [
@@ -623,13 +629,13 @@ function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
             id: "avg_session_tokens",
             accessorFn: (row) => row.token_stats.session.avg,
             header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Session Tokens" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+            cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
           } satisfies ColumnDef<ModelUsageModel>,
           {
             id: "median_session_tokens",
             accessorFn: (row) => row.token_stats.session.median,
             header: ({ column }) => <DataTableColumnHeader column={column} label="Median Session Tokens" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+            cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
           } satisfies ColumnDef<ModelUsageModel>,
           modelStatColumn("p90_session_tokens", "P90 Session Tokens", (row) => row.token_stats.session.p90),
           modelStatColumn("p95_session_tokens", "P95 Session Tokens", (row) => row.token_stats.session.p95),
@@ -645,7 +651,7 @@ function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
           {
             accessorKey: "estimated_cost_usd",
             header: ({ column }) => <DataTableColumnHeader column={column} label="Total Cost" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+            cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
           } satisfies ColumnDef<ModelUsageModel>,
         ]),
     ...(view === "cost"
@@ -653,7 +659,7 @@ function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
           {
             accessorKey: "avg_session_cost_usd",
             header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Session Cost" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+            cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
           } satisfies ColumnDef<ModelUsageModel>,
           costStatColumn("median_session_cost_usd", "Median Session Cost", (row) => row.cost_stats.session.median),
           costStatColumn("p90_session_cost_usd", "P90 Session Cost", (row) => row.cost_stats.session.p90),
@@ -661,7 +667,7 @@ function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
           {
             accessorKey: "avg_turn_cost_usd",
             header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Turn Cost" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+            cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
           } satisfies ColumnDef<ModelUsageModel>,
           costStatColumn("median_turn_cost_usd", "Median Turn Cost", (row) => row.cost_stats.turn.median),
           costStatColumn("p90_turn_cost_usd", "P90 Turn Cost", (row) => row.cost_stats.turn.p90),
@@ -686,7 +692,7 @@ function modelStatColumn(
     id,
     accessorFn,
     header: ({ column }) => <DataTableColumnHeader column={column} label={label} className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
   };
 }
 
@@ -699,7 +705,7 @@ function costStatColumn(
     id,
     accessorFn,
     header: ({ column }) => <DataTableColumnHeader column={column} label={label} className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
   };
 }
 
@@ -708,7 +714,7 @@ function tokenColumn(key: keyof UsageBuckets, label: string): ColumnDef<ModelUsa
     id: key,
     accessorFn: (row) => row.usage[key] ?? 0,
     header: ({ column }) => <DataTableColumnHeader column={column} label={label} className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
   };
 }
 
@@ -769,12 +775,12 @@ const overviewSessionColumns: ColumnDef<ModelUsageSession>[] = [
     id: "tokens",
     accessorFn: (row) => totalTokens(row.usage),
     header: ({ column }) => <DataTableColumnHeader column={column} label="Tokens" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
   },
   {
     accessorKey: "estimated_cost_usd",
     header: ({ column }) => <DataTableColumnHeader column={column} label="Cost" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
   },
   {
     id: "context",
@@ -805,8 +811,8 @@ function SessionModelsDetail({ session }: { session: ModelUsageSession }) {
               <TableRow key={model.model_key}>
                 <TableCell className="py-1 px-2 font-medium">{model.model_key}</TableCell>
                 <TableCell className="py-1 px-2 text-right">{model.turns.toLocaleString()}</TableCell>
-                <TableCell className="py-1 px-2 text-right">{compactNumber(totalTokens(model.usage))}</TableCell>
-                <TableCell className="py-1 px-2 text-right">{formatCost(model.estimated_cost_usd)}</TableCell>
+                <TableCell className="py-1 px-2 text-right">{formatCompactNumber(totalTokens(model.usage))}</TableCell>
+                <TableCell className="py-1 px-2 text-right">{formatCostUsd(model.estimated_cost_usd)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -890,7 +896,7 @@ const timeOverviewModelColumns: ColumnDef<ModelUsageModel>[] = [
     id: "tokens_per_min",
     accessorFn: (row) => tokensPerMinute(totalTokens(row.usage), row.elapsed_seconds),
     header: ({ column }) => <DataTableColumnHeader column={column} label="Tokens/Min" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
   },
 ];
 
@@ -948,7 +954,7 @@ function sessionColumns(view: UsageView): ColumnDef<ModelUsageSession>[] {
             id: "tokens_per_min",
             accessorFn: (row) => tokensPerMinute(totalTokens(row.usage), row.elapsed_seconds),
             header: ({ column }) => <DataTableColumnHeader column={column} label="Tokens/Min" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+            cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
           } satisfies ColumnDef<ModelUsageSession>,
         ]
       : view === "tokens"
@@ -970,7 +976,7 @@ function sessionColumns(view: UsageView): ColumnDef<ModelUsageSession>[] {
       id: "tokens",
       accessorFn: (row) => totalTokens(row.usage),
       header: ({ column }) => <DataTableColumnHeader column={column} label="Tokens" className="text-right" />,
-      cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+      cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
     },
     ...(view === "tokens"
       ? []
@@ -978,7 +984,7 @@ function sessionColumns(view: UsageView): ColumnDef<ModelUsageSession>[] {
           {
             accessorKey: "estimated_cost_usd",
             header: ({ column }) => <DataTableColumnHeader column={column} label="Cost" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+            cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
           } satisfies ColumnDef<ModelUsageSession>,
         ]),
   ];
@@ -1019,7 +1025,7 @@ function sessionTokenColumn(key: keyof UsageBuckets, label: string): ColumnDef<M
     id: key,
     accessorFn: (row) => row.usage[key] ?? 0,
     header: ({ column }) => <DataTableColumnHeader column={column} label={label} className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
   };
 }
 
@@ -1102,7 +1108,7 @@ function turnColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageTurn>[] {
       id: "tokens",
       accessorFn: (row) => totalTokens(row.usage),
       header: ({ column }) => <DataTableColumnHeader column={column} label="Tokens" className="text-right" />,
-      cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+      cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
     },
     ...(view === "tokens"
       ? []
@@ -1110,7 +1116,7 @@ function turnColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageTurn>[] {
           {
             accessorKey: "estimated_cost_usd",
             header: ({ column }) => <DataTableColumnHeader column={column} label="Cost" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{formatCost(getValue<number>())}</RightCell>,
+            cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
           } satisfies ColumnDef<ModelUsageTurn>,
         ]),
   ];
@@ -1121,7 +1127,7 @@ function turnTokenColumn(key: keyof UsageBuckets, label: string): ColumnDef<Mode
     id: key,
     accessorFn: (row) => row.usage[key] ?? 0,
     header: ({ column }) => <DataTableColumnHeader column={column} label={label} className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
   };
 }
 
@@ -1210,7 +1216,7 @@ function sum(values: number[]) {
 
 function distributionDetail(
   stats: DistributionStats,
-  formatValue: (value: number) => string = compactNumber,
+  formatValue: (value: number) => string = formatCompactNumber,
 ) {
   return `avg ${formatValue(stats.avg)} / med ${formatValue(stats.median)} / p90 ${formatValue(stats.p90)} / p95 ${formatValue(stats.p95)}`;
 }
@@ -1248,29 +1254,3 @@ function sessionTableDescription(view: UsageView) {
   return "Progressive drilldown from session cost to dominant model and context usage.";
 }
 
-function compactNumber(value: number) {
-  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
-}
-
-function formatCost(value: number) {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: value < 0.01 && value > 0 ? 4 : 2,
-  }).format(value);
-}
-
-function formatDuration(value: number) {
-  const seconds = Math.max(0, Math.round(value));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remainingSeconds = seconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
-  return `${remainingSeconds}s`;
-}
-
-function formatPercent(value?: number | null) {
-  if (value == null) return "-";
-  return `${value.toFixed(1)}%`;
-}

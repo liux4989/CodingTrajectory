@@ -6,6 +6,7 @@ import { HeaderLabel, RightCell } from "@/components/table-cells";
 import { ProjectLink } from "@/components/project-link";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { useDateRange } from "@/hooks/use-date-range";
+import { formatCompactNumber, formatCostUsd, formatDuration } from "@/lib/format";
 import { DataTable } from "@/components/data-table";
 import { LoadingShell } from "@/components/loading-shell";
 import { RouteHeader } from "@/components/route-header";
@@ -65,8 +66,8 @@ export function OverviewRoute() {
         />
         <MetricCard
           label="Tokens"
-          value={compactNumber(usage.processed_tokens)}
-          detail={`${formatCost(usage.cost_usd)} known cost${usage.missing_cost_count ? `, ${usage.missing_cost_count} partial` : ""}`}
+          value={formatCompactNumber(usage.processed_tokens)}
+          detail={`${formatCostUsd(usage.cost_usd)} known cost${usage.missing_cost_count ? `, ${usage.missing_cost_count} partial` : ""}`}
         />
         </StaggerGroup>
       </section>
@@ -102,8 +103,8 @@ export function OverviewRoute() {
                     </div>
                     <div className="grid min-w-[12rem] gap-1 text-right text-body-sm text-muted-foreground max-sm:text-left">
                       <span>{formatDuration(project.execution_seconds)} runtime</span>
-                      <span>{compactNumber(project.processed_tokens)} tokens</span>
-                      <span>{project.known_cost_count ? formatCost(project.cost_usd) : "Cost unavailable"}</span>
+                      <span>{formatCompactNumber(project.processed_tokens)} tokens</span>
+                      <span>{project.known_cost_count ? formatCostUsd(project.cost_usd) : "Cost unavailable"}</span>
                     </div>
                   </div>
                 ))}
@@ -264,7 +265,7 @@ function TopSessionsTable({ sessions }: { sessions: TopSession[] }) {
         id: "tokens",
         accessorFn: (row) => row.processed_tokens,
         header: () => <HeaderLabel align="right">Tokens</HeaderLabel>,
-        cell: ({ getValue }) => <RightCell>{compactNumber(getValue<number>())}</RightCell>,
+        cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
       },
     ],
     [],
@@ -285,21 +286,6 @@ function TopSessionsTable({ sessions }: { sessions: TopSession[] }) {
   );
 }
 
-function compactNumber(value: number) {
-  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
-}
-
-function formatCost(value: number) {
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value);
-}
-
-function formatDuration(seconds: number) {
-  if (!seconds) return "0m";
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.round((seconds % 3600) / 60);
-  if (hours) return `${hours}h ${minutes}m`;
-  return `${Math.max(1, minutes)}m`;
-}
 
 function formatWhen(value?: string | null) {
   if (!value) return "Start time unavailable";

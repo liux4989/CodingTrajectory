@@ -1,4 +1,5 @@
 import * as React from "react"
+import { formatCompactNumber, formatCostUsd } from "@/lib/format"
 import {
   Area,
   AreaChart,
@@ -290,8 +291,8 @@ export function UsageTimelineChart({ buckets, view }: UsageTimelineChartProps) {
                           </span>
                           <span className="font-mono font-medium text-foreground tabular-nums">
                             {view === "tokens"
-                              ? compactNumber(Number(value))
-                              : formatCost(Number(value))}
+                              ? formatCompactNumber(Number(value))
+                              : formatCostUsd(Number(value))}
                           </span>
                         </div>
                       </>
@@ -488,17 +489,3 @@ export function Sparkline({ data, className, ariaLabel, color = "var(--chart-1)"
   )
 }
 
-function compactNumber(value: number) {
-  return new Intl.NumberFormat(undefined, {
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(value)
-}
-
-function formatCost(value: number) {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: value < 0.01 && value > 0 ? 4 : 2,
-  }).format(value)
-}
