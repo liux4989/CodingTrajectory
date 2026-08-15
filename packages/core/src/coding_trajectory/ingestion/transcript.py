@@ -185,27 +185,28 @@ def build_session_provenance(
 ) -> SessionProvenance:
     """Assemble canonical-id -> source-span provenance for one compact session.
 
-    Items inherit the ordered spans of their constituent events, so merged
-    agent messages and tool call/result pairs map to every source range that
-    produced them.
+    Ownership of the stabilizer's span map is transferred to the returned
+    provenance.  Items record the ordered ids of their constituent events, so
+    merged agent messages and tool call/result pairs map to every source range
+    that produced them without duplicating span objects.
     """
 
-    item_spans: dict[UUID, tuple[RecordSpan, ...]] = {}
+    spans = stabilizer.spans
+    stabilizer.spans = {}
+    item_events: dict[UUID, tuple[UUID, ...]] = {}
     for turn in turns:
         for item in turn.items:
-            spans = tuple(
-                stabilizer.spans[event_id]
-                for event_id in item.event_ids
-                if event_id in stabilizer.spans
+            event_ids = tuple(
+                event_id for event_id in item.event_ids if event_id in spans
             )
-            if spans:
-                item_spans[item.item_id] = spans
+            if event_ids:
+                item_events[item.item_id] = event_ids
     return SessionProvenance(
         session_id=session_id,
         vendor=vendor,
         source_path=str(source),
-        events=dict(stabilizer.spans),
-        items=item_spans,
+        events=spans,
+        items=item_events,
     )
 
 

@@ -26,6 +26,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
+from itertools import islice
 from pathlib import Path
 from typing import Any, BinaryIO, Final, Literal
 
@@ -49,6 +50,20 @@ def _canonical_json(value: Any) -> str:
 
 def _digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _executemany_chunked(
+    connection: sqlite3.Connection,
+    sql: str,
+    rows: Iterable[tuple[Any, ...]],
+    *,
+    chunk_size: int = 4000,
+) -> None:
+    """Insert a lazily produced row stream in bounded executemany chunks."""
+
+    iterator = iter(rows)
+    while chunk := list(islice(iterator, chunk_size)):
+        connection.executemany(sql, chunk)
 
 
 class StrictModel(BaseModel):
@@ -508,12 +523,12 @@ class MaterializationContext:
         Rows are deleted and re-inserted inside the same transaction as the
         revision that publishes the corresponding canonical facts, so a
         locator can never point at a source range the fence would reject.
+        Event and item iterables are consumed in bounded chunks so a large
+        root never materializes its full insertion list.
         """
 
         self._ensure_active()
-        self._store._replace_root_detail(
-            self._connection, root_id, tuple(events), tuple(items)
-        )
+        self._store._replace_root_detail(self._connection, root_id, events, items)
 
     def clear_detail(self) -> None:
         """Delete every current-only detail locator (bootstrap reset)."""
@@ -2106,19 +2121,20 @@ class IncrementalStore:
         self,
         connection: sqlite3.Connection,
         root_id: str,
-        events: tuple[DetailEventRow, ...],
-        items: tuple[DetailItemRow, ...],
+        events: Iterable[DetailEventRow],
+        items: Iterable[DetailItemRow],
     ) -> None:
         connection.execute("DELETE FROM detail_events WHERE root_id = ?", (root_id,))
         connection.execute("DELETE FROM detail_items WHERE root_id = ?", (root_id,))
-        connection.executemany(
+        _executemany_chunked(
+            connection,
             """
             INSERT INTO detail_events(
                 event_id, root_id, session_id, source_path,
                 byte_offset, byte_end, digest
             ) VALUES(?, ?, ?, ?, ?, ?, ?)
             """,
-            [
+            (
                 (
                     row.event_id,
                     root_id,
@@ -2129,16 +2145,17 @@ class IncrementalStore:
                     row.digest,
                 )
                 for row in events
-            ],
+            ),
         )
-        connection.executemany(
+        _executemany_chunked(
+            connection,
             """
             INSERT INTO detail_items(
                 item_id, root_id, session_id, turn_id, kind, source_path,
                 spans_json, edge_targets_json
             ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [
+            (
                 (
                     row.item_id,
                     root_id,
@@ -2152,7 +2169,7 @@ class IncrementalStore:
                     _canonical_json(row.edge_targets),
                 )
                 for row in items
-            ],
+            ),
         )
 
     def _clear_detail(self, connection: sqlite3.Connection) -> None:

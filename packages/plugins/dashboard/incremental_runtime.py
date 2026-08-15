@@ -1841,8 +1841,14 @@ def _delete_graph_contributions(context: MaterializationContext, root: str) -> N
 def _detail_rows_for_graph(
     graph: Any,
     provenance_by_session: dict[str, SessionProvenance],
-) -> tuple[list[DetailEventRow], list[DetailItemRow]]:
-    """Assemble current-only detail locators for one compact session graph."""
+) -> tuple[Any, Any]:
+    """Stream current-only detail locators for one compact session graph.
+
+    Returns lazy event/item iterables over a lightweight per-session plan so a
+    large root never materializes its full pydantic locator object graph
+    before insertion.  Session provenance is popped from the shared map as it
+    is captured into the plan.
+    """
 
     root = str(graph.root_session_id)
     edge_targets: dict[Any, dict[str, str]] = {}
@@ -1851,49 +1857,61 @@ def _detail_rows_for_graph(
             edge_targets.setdefault(edge.source_item_id, {})[edge.type] = str(
                 edge.target_session_id
             )
-    events: list[DetailEventRow] = []
-    items: list[DetailItemRow] = []
+    plan: list[tuple[str, SessionProvenance, list[tuple[Any, ...]]]] = []
     for session in graph.sessions:
         prov = provenance_by_session.pop(str(session.session_id), None)
         if prov is None:
             continue
-        for event_id, span in prov.events.items():
-            events.append(
-                DetailEventRow(
+        item_metas = [
+            (
+                item.item_id,
+                item.turn_id,
+                item.kind,
+                edge_targets.get(item.item_id) or {},
+            )
+            for turn in session.turns
+            for item in turn.items
+            if item.item_id in prov.items
+        ]
+        plan.append((str(session.session_id), prov, item_metas))
+
+    def events() -> Any:
+        for session_id, prov, _ in plan:
+            for event_id, span in prov.events.items():
+                yield DetailEventRow(
                     event_id=str(event_id),
                     root_id=root,
-                    session_id=str(session.session_id),
+                    session_id=session_id,
                     source_path=prov.source_path,
                     byte_offset=span.byte_offset,
                     byte_end=span.byte_end,
                     digest=span.digest,
                 )
-            )
-        for turn in session.turns:
-            for item in turn.items:
-                spans = prov.items.get(item.item_id)
-                if not spans:
-                    continue
-                items.append(
-                    DetailItemRow(
-                        item_id=str(item.item_id),
-                        root_id=root,
-                        session_id=str(session.session_id),
-                        turn_id=str(item.turn_id),
-                        kind=item.kind,
-                        source_path=prov.source_path,
-                        spans=tuple(
-                            DetailSpan(
-                                byte_offset=span.byte_offset,
-                                byte_end=span.byte_end,
-                                digest=span.digest,
-                            )
-                            for span in spans
-                        ),
-                        edge_targets=edge_targets.get(item.item_id, {}),
-                    )
+
+    def items() -> Any:
+        for session_id, prov, item_metas in plan:
+            for item_id, turn_id, kind, targets in item_metas:
+                yield DetailItemRow(
+                    item_id=str(item_id),
+                    root_id=root,
+                    session_id=session_id,
+                    turn_id=str(turn_id),
+                    kind=kind,
+                    source_path=prov.source_path,
+                    spans=tuple(
+                        DetailSpan(
+                            byte_offset=span.byte_offset,
+                            byte_end=span.byte_end,
+                            digest=span.digest,
+                        )
+                        for span in (
+                            prov.events[event_id] for event_id in prov.items[item_id]
+                        )
+                    ),
+                    edge_targets=dict(targets),
                 )
-    return events, items
+
+    return events(), items()
 
 
 def _delete_root_facts(context: MaterializationContext, root: str) -> None:

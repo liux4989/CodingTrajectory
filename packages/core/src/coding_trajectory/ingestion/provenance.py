@@ -35,7 +35,10 @@ class SessionProvenance:
     vendor: Vendor
     source_path: str
     events: dict[UUID, RecordSpan] = field(default_factory=dict)
-    items: dict[UUID, tuple[RecordSpan, ...]] = field(default_factory=dict)
+    # Canonical item id -> ordered ids of the events whose spans produced it.
+    # Spans are resolved through ``events`` so item locators do not duplicate
+    # span objects.
+    items: dict[UUID, tuple[UUID, ...]] = field(default_factory=dict)
 
 
 __all__ = ["RecordSpan", "SessionProvenance"]
