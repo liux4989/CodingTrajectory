@@ -103,10 +103,16 @@ def item_output_text(item: Item) -> str:
 
 
 def item_input_size(item: Item) -> ContentSize:
+    measurements = getattr(item, "measurements", None)
+    if measurements is not None:
+        return _measured_size(measurements.input_chars, measurements.input_tokens)
     return visible_text_size(item_input_text(item))
 
 
 def item_output_size(item: Item) -> ContentSize:
+    measurements = getattr(item, "measurements", None)
+    if measurements is not None:
+        return _measured_size(measurements.output_chars, measurements.output_tokens)
     text = item_output_text(item)
     # Size the actual resident text. Do NOT honor "Original token count: N"
     # here: Codex emits that marker only when it truncates the output, and N is
@@ -115,6 +121,22 @@ def item_output_size(item: Item) -> ContentSize:
     # a real count. `reported_token_count` is still used for the separate
     # `output_original_tokens` stat in analysis.py.
     return visible_text_size(text)
+
+
+def item_text_size(item: Item) -> ContentSize:
+    """Visible size of an agent/reasoning item's text (or its measurement)."""
+    measurements = getattr(item, "measurements", None)
+    if measurements is not None:
+        return _measured_size(measurements.text_chars, measurements.text_tokens)
+    return visible_text_size(getattr(item, "text", None) or "")
+
+
+def _measured_size(chars: int, tokens: int) -> ContentSize:
+    return ContentSize(
+        chars=chars,
+        tokens=tokens,
+        confidence="visible_content_estimate" if chars else "no_visible_content",
+    )
 
 
 def reported_token_count(text: str) -> int | None:
@@ -129,6 +151,25 @@ def output_is_truncated(text: str) -> bool:
         or "chars → event.detail" in text
         or "tokens truncated" in text
     )
+
+
+def tool_input_summary(value: Any) -> str | None:
+    """Bounded one-line summary of a tool input (command, path, pattern...)."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        for key in ("cmd", "command", "path", "pattern", "query"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return compact_text(candidate)
+    return compact_text(str(value))
+
+
+def compact_text(value: str, *, limit: int = 240) -> str:
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 
 def _stringify(value: Any) -> str:

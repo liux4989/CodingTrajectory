@@ -312,6 +312,20 @@ def effort_change_stats(session_graph: SessionGraph) -> EffortChangeStatsFlat:
 
 
 def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:
+    def _assistant_count(session: Any) -> int:
+        measurements = getattr(session, "measurements", None)
+        if measurements is not None:
+            return measurements.llm_response_count
+        return sum(
+            1 for event in session.events if event.type == EventType.LLM_RESPONSE
+        )
+
+    def _developer_count(session: Any) -> int:
+        measurements = getattr(session, "measurements", None)
+        if measurements is not None:
+            return len(measurements.context_sources)
+        return len(session.context_sources)
+
     return MessageStatsFlat(
         user=sum(
             1
@@ -319,17 +333,8 @@ def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:
             for event in session.events
             if event.type == EventType.USER_PROMPT_SUBMITTED
         ),
-        assistant=sum(
-            1
-            for session in session_graph.sessions
-            for event in session.events
-            if event.type == EventType.LLM_RESPONSE
-        ),
-        developer=sum(
-            1
-            for session in session_graph.sessions
-            for _source in session.context_sources
-        ),
+        assistant=sum(_assistant_count(session) for session in session_graph.sessions),
+        developer=sum(_developer_count(session) for session in session_graph.sessions),
         tool_outputs=sum(
             1
             for session in session_graph.sessions

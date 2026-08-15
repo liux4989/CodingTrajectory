@@ -176,6 +176,54 @@ class Event(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class ItemMeasurements(BaseModel):
+    """Content-derived sizes and small summaries for a body-free compact item.
+
+    Computed from the transient full-fidelity item with the session graph's
+    effective tokenizer, then the bodies are discarded.  Projections consume
+    these primitives exactly as they would size the resident bodies.
+    """
+
+    input_chars: int = 0
+    input_tokens: int = 0
+    output_chars: int = 0
+    output_tokens: int = 0
+    text_chars: int = 0
+    text_tokens: int = 0
+    output_truncated: bool = False
+    output_original_tokens: int | None = None
+    input_summary: str | None = None
+    text_preview: str | None = None
+    tool_summary: dict[str, Any] | None = None
+
+
+class ContextSourceMeasurement(BaseModel):
+    """Size of one starting-context source whose text was discarded."""
+
+    timestamp: datetime
+    key: str
+    label: str
+    reported_tokens: int | None = None
+    chars: int = 0
+    tokens: int = 0
+
+
+class EventTextMeasurement(BaseModel):
+    """Text size of one dropped LLM_RESPONSE event (composition fallback)."""
+
+    timestamp: datetime
+    chars: int = 0
+    tokens: int = 0
+
+
+class SessionMeasurements(BaseModel):
+    """Session-level content primitives for body-free compact sessions."""
+
+    context_sources: list[ContextSourceMeasurement] = Field(default_factory=list)
+    llm_response_count: int = 0
+    llm_response_text_sizes: list[EventTextMeasurement] = Field(default_factory=list)
+
+
 class ItemBase(BaseModel):
     item_id: UUID = Field(default_factory=uuid4)
     session_id: UUID
@@ -186,6 +234,7 @@ class ItemBase(BaseModel):
     status: str | None = None
     event_ids: list[UUID] = Field(default_factory=list)
     vendor_data: dict[str, Any] = Field(default_factory=dict)
+    measurements: ItemMeasurements | None = None
 
 
 class AgentMessageItem(ItemBase):
@@ -305,6 +354,7 @@ class Session(BaseModel):
     context_usage: list[ContextUsageObservation] = Field(default_factory=list)
     context_sources: list[ContextSourceObservation] = Field(default_factory=list)
     runtime_observations: list[RuntimeObservation] = Field(default_factory=list)
+    measurements: SessionMeasurements | None = None
     extensions: VendorExtensions | None = None
     status: SessionStatus = SessionStatus.COMPLETED
 

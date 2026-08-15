@@ -12,9 +12,8 @@ from uuid import UUID
 
 from coding_trajectory.analysis.content_size import (
     item_input_size,
-    item_input_text,
     item_output_size,
-    item_output_text,
+    item_text_size,
     visible_text_size,
 )
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
@@ -202,9 +201,11 @@ def context_composition_anchor_outcome(
         return AnchorOutcome.NO_CONVERSATION
 
     starting_tokens = sum(
-        (visible_text_size(source.text).tokens or source.reported_tokens or 0)
+        (tokens or reported_tokens or 0)
         for session in session_graph.sessions
-        for source in session.context_sources
+        for _key, _label, _ts, reported_tokens, _chars, tokens in _context_source_sizes(
+            session
+        )
     )
     if latest.used_input_tokens - starting_tokens <= 0:
         return AnchorOutcome.OVERCOUNT
@@ -356,20 +357,28 @@ def _has_resident_conversation(
     )
     for session in session_graph.sessions:
         boundary = boundaries.get(session.session_id)
-        if not has_agent_message_items and any(
-            event.type == EventType.LLM_RESPONSE
-            and _is_resident(event.timestamp, boundary)
-            and isinstance(event.payload.get("text"), str)
-            and bool(event.payload["text"])
-            for event in session.events
-        ):
-            return True
+        session_measurements = getattr(session, "measurements", None)
+        if not has_agent_message_items:
+            if session_measurements is not None:
+                if any(
+                    _is_resident(size.timestamp, boundary)
+                    for size in session_measurements.llm_response_text_sizes
+                ):
+                    return True
+            elif any(
+                event.type == EventType.LLM_RESPONSE
+                and _is_resident(event.timestamp, boundary)
+                and isinstance(event.payload.get("text"), str)
+                and bool(event.payload["text"])
+                for event in session.events
+            ):
+                return True
         for turn in session.turns:
             for item in turn.items:
                 if not _is_resident(item.started_at, boundary):
                     continue
                 if item.kind in {"reasoning", "agent_message"}:
-                    if item.text:
+                    if item_text_size(item).chars:
                         return True
                     continue
                 if item.kind in {
@@ -377,9 +386,41 @@ def _has_resident_conversation(
                     "command_execution",
                     "file_change",
                     "plan",
-                } and (item_input_text(item) or item_output_text(item)):
+                } and (item_input_size(item).chars or item_output_size(item).chars):
                     return True
     return False
+
+
+def _context_source_sizes(
+    session: Session,
+) -> Iterable[tuple[str, str, datetime, int | None, int, int]]:
+    """Yield (key, label, timestamp, reported_tokens, chars, tokens) per source.
+
+    Compact sessions carry measurements instead of source text; both forms
+    produce identical rows.
+    """
+    measurements = getattr(session, "measurements", None)
+    if measurements is not None:
+        for source in measurements.context_sources:
+            yield (
+                source.key,
+                source.label,
+                source.timestamp,
+                source.reported_tokens,
+                source.chars,
+                source.tokens,
+            )
+        return
+    for source in session.context_sources:
+        size = visible_text_size(source.text)
+        yield (
+            source.key,
+            source.label,
+            source.timestamp,
+            source.reported_tokens,
+            size.chars,
+            size.tokens,
+        )
 
 
 def _starting_context(
@@ -391,19 +432,25 @@ def _starting_context(
     labels: dict[str, str] = {}
     usage_added_keys: set[str] = set()
     for session in session_graph.sessions:
-        for source in session.context_sources:
-            size = visible_text_size(source.text)
-            tokens = size.tokens or (source.reported_tokens or 0)
+        for (
+            key,
+            label,
+            _ts,
+            reported_tokens,
+            chars,
+            visible_tokens,
+        ) in _context_source_sizes(session):
+            tokens = visible_tokens or (reported_tokens or 0)
             allocated_usage = None
-            if source.key not in usage_added_keys:
-                allocated_usage = allocated_usage_by_context_source.get(source.key)
-                usage_added_keys.add(source.key)
-            buckets[source.key].add(
+            if key not in usage_added_keys:
+                allocated_usage = allocated_usage_by_context_source.get(key)
+                usage_added_keys.add(key)
+            buckets[key].add(
                 tokens=tokens,
-                chars=size.chars,
+                chars=chars,
                 allocated_usage=allocated_usage,
             )
-            labels[source.key] = source.label
+            labels[key] = label
     children = [
         _category(
             key,
@@ -484,17 +531,28 @@ def _agent_work(
 
     for session in session_graph.sessions:
         boundary = boundaries.get(session.session_id)
+        session_measurements = getattr(session, "measurements", None)
         if not has_agent_message_items:
-            for event in session.events:
-                if event.type != EventType.LLM_RESPONSE:
-                    continue
-                if not _is_resident(event.timestamp, boundary):
-                    continue
-                text = event.payload.get("text")
-                if not isinstance(text, str) or not text:
-                    continue
-                size = visible_text_size(text)
-                agent["assistant_messages"].add(tokens=size.tokens, chars=size.chars)
+            if session_measurements is not None:
+                for size in session_measurements.llm_response_text_sizes:
+                    if not _is_resident(size.timestamp, boundary):
+                        continue
+                    agent["assistant_messages"].add(
+                        tokens=size.tokens, chars=size.chars
+                    )
+            else:
+                for event in session.events:
+                    if event.type != EventType.LLM_RESPONSE:
+                        continue
+                    if not _is_resident(event.timestamp, boundary):
+                        continue
+                    text = event.payload.get("text")
+                    if not isinstance(text, str) or not text:
+                        continue
+                    size = visible_text_size(text)
+                    agent["assistant_messages"].add(
+                        tokens=size.tokens, chars=size.chars
+                    )
 
         for turn in session.turns:
             for item in turn.items:
@@ -507,8 +565,7 @@ def _agent_work(
                     )
                     continue
                 if item.kind == "reasoning":
-                    text = item.text or ""
-                    size = visible_text_size(text)
+                    size = item_text_size(item)
                     agent["assistant_messages"].add(
                         tokens=size.tokens,
                         chars=size.chars,
@@ -516,8 +573,7 @@ def _agent_work(
                     )
                     continue
                 if item.kind == "agent_message":
-                    text = item.text or ""
-                    size = visible_text_size(text)
+                    size = item_text_size(item)
                     agent["assistant_messages"].add(
                         tokens=size.tokens,
                         chars=size.chars,

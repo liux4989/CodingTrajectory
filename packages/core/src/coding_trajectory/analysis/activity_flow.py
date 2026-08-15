@@ -28,6 +28,17 @@ def build_flows(items: list[Item]) -> list[dict[str, Any]]:
                 result.append({"type": "tool_call", **summary})
             continue
         if isinstance(item, AgentMessageItem):
+            measurements = getattr(item, "measurements", None)
+            if measurements is not None:
+                if measurements.text_preview:
+                    result.append(
+                        {
+                            "type": "assistant_response",
+                            "text": measurements.text_preview,
+                            "item_id": str(item.item_id),
+                        }
+                    )
+                continue
             text = (item.text or "").strip()
             if text:
                 result.append(

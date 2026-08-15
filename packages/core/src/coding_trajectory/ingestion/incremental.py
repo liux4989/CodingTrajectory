@@ -558,6 +558,77 @@ def rebuild_affected_session_graphs(
     )
 
 
+def rebuild_affected_session_graphs_with_measurements(
+    *,
+    sources: Iterable[SourceInput],
+) -> IncrementalGraphBuild:
+    """Rebuild compact graphs and attach exact content measurements.
+
+    Evidence projections (exact statistics, tool attribution, composition)
+    consume precomputed primitives instead of a resident full trajectory.
+    Per source, a transient full-fidelity ingest measures bodies with the
+    graph's effective tokenizer and is discarded immediately; canonical ids
+    line up with the compact graph by construction.
+    """
+
+    from coding_trajectory.discovery import (
+        _matching_vendor_configs,
+        scan_parent_turn_ids,
+        stabilize_session,
+    )
+    from coding_trajectory.metrics.measurements import (
+        MeasurementMismatchError,
+        attach_measurements,
+    )
+    from coding_trajectory.token_counter import (
+        counter_for_session_graph,
+        scoped_counter,
+    )
+
+    build = rebuild_affected_session_graphs_from_files(
+        sources=sources, retention="measurements"
+    )
+    if not build.graphs:
+        return build
+    provenance_by_session = {str(prov.session_id): prov for prov in build.provenance}
+
+    selected = sorted(build.selected_source_paths)
+    candidates: list[tuple[Vendor, Any, Path]] = []
+    for raw_path in selected:
+        path = Path(raw_path)
+        for vendor, adapter_cls, _base_dir, _pattern in _matching_vendor_configs(path):
+            candidates.append((vendor, adapter_cls, path))
+            break
+    cut_inputs = scan_parent_turn_ids(candidates)
+    adapter_cls_by_path = {path: cls for _v, cls, path in candidates}
+
+    for graph in build.graphs:
+        counter = counter_for_session_graph(graph)
+        with scoped_counter(counter):
+            for session in graph.sessions:
+                prov = provenance_by_session.get(str(session.session_id))
+                if prov is None:
+                    raise MeasurementMismatchError(
+                        f"no provenance for session {session.session_id}"
+                    )
+                source_path = Path(prov.source_path)
+                adapter_cls = adapter_cls_by_path.get(source_path)
+                if adapter_cls is None:
+                    raise MeasurementMismatchError(
+                        f"no vendor adapter for source {prov.source_path}"
+                    )
+                adapter = adapter_cls()
+                full_session = adapter.ingest_file(
+                    source_path,
+                    parent_started_turn_ids=cut_inputs.get(source_path),
+                )
+                full_session = stabilize_session(
+                    full_session, vendor=prov.vendor, source=source_path
+                )
+                attach_measurements(session, full_session)
+    return build
+
+
 def rebuild_affected_session_graphs_from_files(
     *,
     sources: Iterable[SourceInput],

@@ -28,6 +28,9 @@ from coding_trajectory.ingestion.models import Item, ToolStatus
 
 
 def summarize_tool_call(item: Item) -> dict[str, Any] | None:
+    measurements = getattr(item, "measurements", None)
+    if measurements is not None:
+        return dict(measurements.tool_summary) if measurements.tool_summary else None
     tool_name_raw = getattr(item, "tool_name", None)
     tool_name = (tool_name_raw or "").strip() if isinstance(tool_name_raw, str) else ""
     if not tool_name:

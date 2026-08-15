@@ -14,9 +14,11 @@ from coding_trajectory.analysis.content_size import (
     item_input_size,
     item_output_size,
     item_output_text,
+    item_text_size,
     output_is_truncated,
     reported_token_count,
     scoped_content_size_cache,
+    tool_input_summary,
     visible_text_size,
 )
 from coding_trajectory.analysis.session_stats import (
@@ -1351,9 +1353,18 @@ def _sum_allocated_cost_rows(
 def _stats_cost_entries_for_session(session: Session) -> list[_ItemCostEntry]:
     entries: list[_ItemCostEntry] = []
     events_by_id = index_events_by_id(session.events)
-    for source_index, source in enumerate(session.context_sources):
-        size = visible_text_size(source.text)
-        tokens = size.tokens or (source.reported_tokens or 0)
+    source_measurements = getattr(session, "measurements", None)
+    context_sources = (
+        source_measurements.context_sources if source_measurements is not None else None
+    )
+    for source_index, source in enumerate(
+        context_sources if context_sources is not None else session.context_sources
+    ):
+        if context_sources is not None:
+            visible = source.tokens
+        else:
+            visible = visible_text_size(source.text).tokens
+        tokens = visible or (source.reported_tokens or 0)
         if tokens <= 0:
             continue
         entries.append(
@@ -2058,8 +2069,7 @@ def _effective_input_token_total(
 
 def _item_visible_token_weight(item: Any) -> int:
     if item.kind in {"agent_message", "reasoning"}:
-        text = getattr(item, "text", None) or ""
-        return max(visible_text_size(text).tokens, 0)
+        return max(item_text_size(item).tokens, 0)
     attribution = _build_token_attribution(item)
     return max(
         int(attribution.tool_input_tokens) + int(attribution.tool_output_tokens),
@@ -2153,6 +2163,19 @@ def _build_read_after_result(
 
 
 def _tool_item_flat(item: Item, *, session_id: UUID, turn_id: UUID) -> ToolItemFlat:
+    measurements = getattr(item, "measurements", None)
+    if measurements is not None:
+        return ToolItemFlat(
+            item_id=item.item_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            tool_name=getattr(item, "tool_name", None),
+            status=getattr(item, "status", None),
+            input_summary=measurements.input_summary,
+            output_chars=measurements.output_chars,
+            output_original_tokens=measurements.output_original_tokens,
+            output_truncated=measurements.output_truncated,
+        )
     output = item_output_text(item)
     return ToolItemFlat(
         item_id=item.item_id,
@@ -2160,7 +2183,7 @@ def _tool_item_flat(item: Item, *, session_id: UUID, turn_id: UUID) -> ToolItemF
         turn_id=turn_id,
         tool_name=getattr(item, "tool_name", None),
         status=getattr(item, "status", None),
-        input_summary=_tool_input_summary(
+        input_summary=tool_input_summary(
             getattr(item, "input", None)
             if item.kind != "command_execution"
             else getattr(item, "command", None)
@@ -2171,22 +2194,7 @@ def _tool_item_flat(item: Item, *, session_id: UUID, turn_id: UUID) -> ToolItemF
     )
 
 
-def _tool_input_summary(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, dict):
-        for key in ("cmd", "command", "path", "pattern", "query"):
-            candidate = value.get(key)
-            if isinstance(candidate, str) and candidate.strip():
-                return _compact_text(candidate)
-    return _compact_text(str(value))
-
-
-def _compact_text(value: str, *, limit: int = 240) -> str:
-    text = " ".join(value.split())
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "…"
+_tool_input_summary = tool_input_summary
 
 
 def _turn_model(turn: TurnMetrics) -> str | None:

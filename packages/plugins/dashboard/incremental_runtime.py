@@ -23,8 +23,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from coding_trajectory.ingestion.incremental import (
     plan_session_graph_components_from_files,
     rebuild_affected_session_graphs_from_files,
+    rebuild_affected_session_graphs_with_measurements,
 )
 from coding_trajectory.ingestion.provenance import SessionProvenance
+from coding_trajectory.metrics.measurements import MeasurementMismatchError
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 from coding_trajectory.service import project_list_metadata
 
@@ -800,7 +802,12 @@ class DashboardIncrementalRuntime:
             )
             if not sources:
                 return False
-            graph_build = rebuild_affected_session_graphs_from_files(sources=sources)
+            try:
+                graph_build = rebuild_affected_session_graphs_with_measurements(
+                    sources=sources
+                )
+            except MeasurementMismatchError as exc:
+                raise SourceFenceError(str(exc)) from exc
             if not graph_build.graphs:
                 return False
             project_items = self._project_catalog_items()
