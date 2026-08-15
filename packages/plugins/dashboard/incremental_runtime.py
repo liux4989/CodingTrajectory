@@ -43,7 +43,9 @@ try:
         CanonicalFactsCtJson,
         FACT_PROJECT,
         FACT_PROJECT_SESSION,
+        FACT_SESSION_OVERVIEW,
         FACT_SESSION_STATS,
+        FACT_SESSION_USAGE,
         FACT_TOOL_USAGE,
         MODEL_META,
         MODEL_SESSION,
@@ -82,7 +84,9 @@ except ImportError:
         CanonicalFactsCtJson,
         FACT_PROJECT,
         FACT_PROJECT_SESSION,
+        FACT_SESSION_OVERVIEW,
         FACT_SESSION_STATS,
+        FACT_SESSION_USAGE,
         FACT_TOOL_USAGE,
         MODEL_META,
         MODEL_SESSION,
@@ -112,6 +116,15 @@ READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v3"
 DEFAULT_REFRESH_SECONDS = 15.0
 RETAINED_CHANGE_REVISIONS = 96
 OBSOLETE_DATABASE_GRACE_SECONDS = 24 * 60 * 60
+
+# Context Window resolves only these session-scoped telemetry facts; every row
+# is partitioned by the graph root, so one root partition is authoritative.
+_CONTEXT_WINDOW_FACT_KINDS = (
+    FACT_SESSION_STATS,
+    FACT_SESSION_OVERVIEW,
+    FACT_SESSION_USAGE,
+    FACT_TOOL_USAGE,
+)
 
 
 class RuntimeSnapshot(BaseModel):
@@ -647,10 +660,15 @@ class DashboardIncrementalRuntime:
 
         if not self._has_canonical_facts():
             return None
-        if not self._ensure_session_evidence(session_id):
+        root_id = self._root_for_entrypoint(session_id)
+        if root_id is None:
+            return None
+        if not self._root_has_evidence(root_id) and not self._materialize_evidence(
+            {root_id}
+        ):
             return None
         revision = self.store.current_revision()
-        facts = self._canonical_fact_rows(revision=revision)
+        facts = self._canonical_fact_rows(revision=revision, partition_key=root_id)
         if not facts:
             return None
         try:
@@ -694,9 +712,9 @@ class DashboardIncrementalRuntime:
                 payload["pages"][detail][grain] = page_metadata(page, limit=limit)
         return payload
 
-    def _canonical_fact_rows(self, *, revision: int) -> list[Any]:
+    def _canonical_fact_rows(self, *, revision: int, partition_key: str) -> list[Any]:
         rows: list[Any] = []
-        for kind in canonical_fact_entity_kinds():
+        for kind in _CONTEXT_WINDOW_FACT_KINDS:
             cursor: str | None = None
             while True:
                 page = self.store.query_entities(
@@ -705,20 +723,13 @@ class DashboardIncrementalRuntime:
                     cursor=cursor,
                     revision=revision,
                     scope_key=CANONICAL_FACT_SCOPE,
+                    partition_key=partition_key,
                 )
                 rows.extend(page.items)
                 cursor = page.next_cursor
                 if cursor is None:
                     break
         return rows
-
-    def _ensure_session_evidence(self, entrypoint_id: str) -> bool:
-        root_id = self._root_for_entrypoint(entrypoint_id)
-        if root_id is None:
-            return False
-        if self._root_has_evidence(root_id):
-            return True
-        return self._materialize_evidence({root_id})
 
     def _ensure_project_evidence(self, project_name: str) -> bool:
         root_ids = {

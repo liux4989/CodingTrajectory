@@ -1902,18 +1902,10 @@ class IncrementalStore:
             keyset = ""
             if cursor_data is not None:
                 keyset = f"""
-                    AND (
-                        sort_key {comparator} ?
-                        OR (sort_key = ? AND tiebreaker {comparator} ?)
-                        OR (sort_key = ? AND tiebreaker = ?
-                            AND entity_key {comparator} ?)
-                    )
+                    AND (sort_key, tiebreaker, entity_key) {comparator} (?, ?, ?)
                 """
                 params.extend(
                     [
-                        cursor_data.sort_key,
-                        cursor_data.sort_key,
-                        cursor_data.tiebreaker,
                         cursor_data.sort_key,
                         cursor_data.tiebreaker,
                         cursor_data.entity_key,
@@ -2129,6 +2121,7 @@ class IncrementalStore:
             connection.execute(
                 "DELETE FROM revision_changes WHERE revision <= ?", (cutoff,)
             )
+            connection.execute("DELETE FROM revisions WHERE revision <= ?", (cutoff,))
             previous = int(self._metadata(connection, "changes_pruned_through") or "0")
             if cutoff > previous:
                 self._set_metadata(connection, "changes_pruned_through", str(cutoff))
