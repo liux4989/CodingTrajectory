@@ -26,13 +26,14 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - Consumer-owned derived stores are replaceable artifacts, not canonical compatibility boundaries. An incompatible SQLite format must be rebuilt from immutable logs; core vendor compatibility and versioned public API contracts remain separate responsibilities.
 
 # Evaluation Projection Layer
-- Evaluation terminology and grader selection follow the adaptation of Anthropic's [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) recorded in the session-evaluation high-level design; CodingTrajectory's versioned contracts remain authoritative.
+- The active evaluation architecture is defined in [`evaluation-design.md`](evaluation-design.md); CodingTrajectory's versioned contracts remain authoritative.
+- A dedicated evaluation plugin consumes canonical APIs and remains usable without the dashboard.
 - Raw vendor logs are reconstruction and audit inputs, not default evaluator context.
-- Evaluation starts from canonical `session.overview` and `session.items` projections and builds a versioned task contract plus bounded evidence records with stable evidence IDs.
-- Rubric compilation receives requests, material requirement changes, compact turn structure, repository instructions, and validation authority without receiving the full outcome trajectory.
-- Semantic judgment receives the final response and criterion-relevant observable evidence. It may request one bounded expansion by canonical evidence kind and turn ID; CT resolves the request and never grants unrestricted raw-log or checkout access.
-- Executable verification and final aggregation remain deterministic CT-owned operations outside the evaluator agent.
-- Evaluation artifacts record evidence selection, expansion, evaluator versions, and source fingerprints so reduced context does not weaken provenance.
+- Evaluation freezes a request-derived task contract before judging outcome evidence.
+- Task outcome and standing behavior adherence are separate result families with canonical evidence citations.
+- Observed command evidence is distinct from isolated replay, and historical work is never verified against an unrelated current checkout.
+- Semantic judgment may request one bounded evidence expansion, but it never receives unrestricted raw-log or checkout access.
+- Deterministic grading, aggregation, durable storage, and result identity remain CT-owned operations outside the evaluator model.
 
 # Infrastructural layer
 - Discover : discocer all agent logs

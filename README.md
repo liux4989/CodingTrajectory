@@ -13,6 +13,7 @@ Unified canonical models and CLI tooling for coding-agent session graphs.
 - CLI usage: [`docs/cli.md`](docs/cli.md)
 - CLI agent notebook: [`docs/cli-agent-notebook.ipynb`](docs/cli-agent-notebook.ipynb)
 - PRD & Architecture: [`docs/prd.md`](docs/prd.md)
+- Evaluation mechanism: [`docs/evaluation-design.md`](docs/evaluation-design.md)
 
 ## Checks
 

@@ -2,7 +2,10 @@
 
 ## Status
 
-Phase 2 design. Implementation begins only after the contracts and acceptance gates in [`session-evaluation-foundation-lite.md`](session-evaluation-foundation-lite.md) pass. The product and mechanism are defined in [`session-evaluation-high-level-design.md`](session-evaluation-high-level-design.md).
+Historical v2 scaling design. Its prerequisite implementation and foundation
+document were removed in commit `b178527`. The active replacement mechanism is
+defined in [`evaluation-design.md`](evaluation-design.md); this document remains
+only as background for possible later scheduling, replay, and reporting work.
 
 ## Objective
 
