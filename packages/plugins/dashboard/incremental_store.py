@@ -22,7 +22,6 @@ import os
 import secrets
 import sqlite3
 import threading
-import zlib
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -36,8 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 _CHECKSUM_BYTES: Final = 64 * 1024
 _MAX_CHANGE_PAYLOAD_BYTES: Final = 64 * 1024
 _MAX_CHANGE_IDENTIFIER_BYTES: Final = 16 * 1024
-_STORE_FORMAT_VERSION: Final = "2"
-_MAX_CANONICAL_PAYLOAD_BYTES: Final = 256 * 1024 * 1024
+_STORE_FORMAT_VERSION: Final = "3"
 _JSON_OBJECT = TypeAdapter(dict[str, Any])
 
 
@@ -252,10 +250,6 @@ class RefreshFailure(StrictModel):
     phase: str
     source_paths: tuple[str, ...]
     error: str
-
-
-class StoredPayloadError(RuntimeError):
-    """A persisted canonical payload cannot be safely decoded or validated."""
 
 
 class IncompatibleStoreError(RuntimeError):
@@ -644,9 +638,6 @@ class IncrementalStore:
                     event_timestamp TEXT,
                     root_link TEXT,
                     parent_link TEXT,
-                    normalized_json TEXT NOT NULL,
-                    canonical_json_zlib BLOB,
-                    canonical_json_size INTEGER,
                     active INTEGER NOT NULL DEFAULT 1,
                     first_revision INTEGER NOT NULL,
                     last_revision INTEGER NOT NULL,
@@ -681,13 +672,13 @@ class IncrementalStore:
                 CREATE INDEX IF NOT EXISTS idx_entity_keyset ON entity_versions(
                     entity_kind, scope_key, deleted, sort_key, tiebreaker,
                     entity_key, valid_from_revision, valid_to_revision
-                );
+                ) WHERE deleted = 0;
                 CREATE INDEX IF NOT EXISTS idx_entity_partition_keyset
                     ON entity_versions(
                         entity_kind, scope_key, partition_key, deleted, sort_key,
                         tiebreaker, entity_key, valid_from_revision,
                         valid_to_revision
-                    );
+                    ) WHERE deleted = 0;
                 CREATE TABLE IF NOT EXISTS revision_changes (
                     change_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     revision INTEGER NOT NULL REFERENCES revisions(revision),
@@ -883,6 +874,7 @@ class IncrementalStore:
                         "SELECT COUNT(*) FROM entity_versions WHERE deleted = 1"
                     ).fetchone()[0]
                 )
+                connection.execute("PRAGMA optimize")
                 connection.commit()
                 page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
                 pages_before = int(
@@ -1668,16 +1660,14 @@ class IncrementalStore:
         revision: int,
         message: SourceMessage,
     ) -> None:
-        canonical_payload, canonical_size = _compress_canonical_payload(message.payload)
         connection.execute(
             """
             INSERT INTO source_messages(
                 source_message_id, source_id, byte_offset, byte_end, digest,
                 explicit_event_id, event_type, event_timestamp, root_link,
-                parent_link, normalized_json, canonical_json_zlib,
-                canonical_json_size, active, first_revision, last_revision,
+                parent_link, active, first_revision, last_revision,
                 deleted_revision
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)
             ON CONFLICT(source_message_id) DO UPDATE SET
                 source_id = excluded.source_id,
                 byte_offset = excluded.byte_offset,
@@ -1688,9 +1678,6 @@ class IncrementalStore:
                 event_timestamp = excluded.event_timestamp,
                 root_link = excluded.root_link,
                 parent_link = excluded.parent_link,
-                normalized_json = excluded.normalized_json,
-                canonical_json_zlib = excluded.canonical_json_zlib,
-                canonical_json_size = excluded.canonical_json_size,
                 active = 1,
                 last_revision = excluded.last_revision,
                 deleted_revision = NULL
@@ -1706,30 +1693,10 @@ class IncrementalStore:
                 message.event_timestamp,
                 message.root_link,
                 message.parent_link,
-                _canonical_json(_normalized_envelope(message.payload)),
-                canonical_payload,
-                canonical_size,
                 revision,
                 revision,
             ),
         )
-
-    def _active_messages(
-        self, connection: sqlite3.Connection, source_path: str | None
-    ) -> Iterator[SourceMessage]:
-        params: tuple[Any, ...] = ()
-        sql = """
-            SELECT m.*, s.path
-              FROM source_messages AS m
-              JOIN sources AS s ON s.source_id = m.source_id
-             WHERE m.active = 1
-        """
-        if source_path is not None:
-            sql += " AND s.path = ?"
-            params = (str(Path(source_path).expanduser().resolve()),)
-        sql += " ORDER BY s.path, m.byte_offset"
-        for row in connection.execute(sql, params):
-            yield _message_from_row(row)
 
     def _message_ids(self, path: str) -> tuple[str, ...]:
         with self._connect() as connection:
@@ -2476,68 +2443,6 @@ def _source_from_row(row: sqlite3.Row) -> SourceSnapshot:
     )
 
 
-def _compress_canonical_payload(payload: dict[str, Any]) -> tuple[bytes, int]:
-    canonical = _canonical_json(payload).encode("utf-8")
-    if len(canonical) > _MAX_CANONICAL_PAYLOAD_BYTES:
-        raise ValueError(
-            "canonical source message exceeds the 268435456-byte safety bound"
-        )
-    return zlib.compress(canonical), len(canonical)
-
-
-def _stored_payload(row: sqlite3.Row) -> dict[str, Any]:
-    compressed = row["canonical_json_zlib"]
-    if compressed is None:
-        raise StoredPayloadError(
-            f"canonical payload is missing for {row['source_message_id']}"
-        )
-
-    try:
-        expected_size = row["canonical_json_size"]
-        if (
-            not isinstance(expected_size, int)
-            or isinstance(expected_size, bool)
-            or not 0 <= expected_size <= _MAX_CANONICAL_PAYLOAD_BYTES
-        ):
-            raise ValueError("invalid canonical payload size")
-        decompressor = zlib.decompressobj()
-        canonical = decompressor.decompress(bytes(compressed), expected_size + 1)
-        if decompressor.unconsumed_tail or len(canonical) > expected_size:
-            raise ValueError("canonical payload exceeds its declared size")
-        canonical += decompressor.flush()
-        if (
-            len(canonical) != expected_size
-            or not decompressor.eof
-            or decompressor.unused_data
-        ):
-            raise ValueError("canonical payload is truncated or has trailing data")
-        payload = _JSON_OBJECT.validate_json(canonical)
-        if _canonical_json(payload).encode("utf-8") != canonical:
-            raise ValueError("stored payload is not canonical JSON")
-        return payload
-    except Exception as exc:
-        raise StoredPayloadError(
-            f"invalid compressed payload for {row['source_message_id']}"
-        ) from exc
-
-
-def _message_from_row(row: sqlite3.Row) -> SourceMessage:
-    return SourceMessage(
-        source_message_id=row["source_message_id"],
-        source_path=row["path"],
-        byte_offset=row["byte_offset"],
-        byte_end=row["byte_end"],
-        digest=row["digest"],
-        explicit_event_id=row["explicit_event_id"],
-        event_type=row["event_type"],
-        event_timestamp=row["event_timestamp"],
-        root_link=row["root_link"],
-        parent_link=row["parent_link"],
-        payload=_stored_payload(row),
-        payload_complete=True,
-    )
-
-
 def _default_event_identity(payload: dict[str, Any]) -> str | None:
     """Extract only explicit top-level IDs; nested payload IDs are ambiguous."""
 
@@ -2609,46 +2514,6 @@ def _first_string(payload: dict[str, Any], *keys: str) -> str | None:
     return None
 
 
-def _normalized_envelope(payload: dict[str, Any]) -> dict[str, Any]:
-    """Keep bounded routing/metric metadata, never raw message content."""
-
-    allowed = {
-        "event_id",
-        "message_id",
-        "id",
-        "type",
-        "event_type",
-        "kind",
-        "timestamp",
-        "created_at",
-        "time",
-        "root_session_id",
-        "root_thread_id",
-        "session_id",
-        "thread_id",
-        "parent_session_id",
-        "parent_thread_id",
-        "parent_id",
-        "project_name",
-        "project_path",
-        "model",
-        "provider",
-        "role",
-        "tool_name",
-        "status",
-        "usage",
-        "token_usage",
-    }
-    envelope = {key: payload[key] for key in allowed if key in payload}
-    nested = payload.get("payload")
-    if isinstance(nested, dict):
-        envelope["payload"] = {key: nested[key] for key in allowed if key in nested}
-    # Defensive bound for unusual usage metadata; source offsets remain authoritative.
-    while len(_canonical_json(envelope).encode()) > 16 * 1024 and envelope:
-        envelope.pop(sorted(envelope)[-1])
-    return envelope
-
-
 __all__ = [
     "ChangeKind",
     "ChangesPage",
@@ -2670,5 +2535,4 @@ __all__ = [
     "SourceMessage",
     "SourceSnapshot",
     "SourceFenceError",
-    "StoredPayloadError",
 ]

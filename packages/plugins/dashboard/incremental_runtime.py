@@ -1130,15 +1130,30 @@ class DashboardIncrementalRuntime:
                 str(prov.session_id): prov for prov in graph_build.provenance
             }
             del graph_build
+            relationships_by_root: dict[Any, list[Any]] = {}
+            for relationship in component_relationships:
+                relationships_by_root.setdefault(
+                    relationship.root_session_id, []
+                ).append(relationship)
             for graph in component_graphs:
-                pending_detail[str(graph.root_session_id)] = _detail_rows_for_graph(
+                root_id = graph.root_session_id
+                graph_relationships = relationships_by_root.get(root_id, [])
+                graph_sources = tuple(
+                    snapshots_by_path[relationship.source_path]
+                    for relationship in graph_relationships
+                    if relationship.source_path in snapshots_by_path
+                )
+                # Flush inside large components so detail locators and
+                # provenance for one component never pile up in one batch.
+                pending_sources.extend(graph_sources)
+                pending_relationships.extend(graph_relationships)
+                batch_bytes += sum(snapshot.size for snapshot in graph_sources)
+                pending_detail[str(root_id)] = _detail_rows_for_graph(
                     graph, component_provenance
                 )
                 project_name = str(graph.project_identifier or "unknown")
                 source_paths = [
-                    relationship.source_path
-                    for relationship in component_relationships
-                    if relationship.root_session_id == graph.root_session_id
+                    relationship.source_path for relationship in graph_relationships
                 ]
                 core_started = perf_counter()
                 projected = materialize_graph(
@@ -1176,33 +1191,30 @@ class DashboardIncrementalRuntime:
                 fact_seconds += perf_counter() - facts_started
                 pending_facts.extend(graph_facts)
                 fact_entities += len(graph_facts)
-            if component_graphs:
                 del graph
-            # Do not keep the previous component resident while Python
-            # evaluates the next canonical rebuild call.
+                root_limit = 5 if first_batch else 10
+                if (
+                    len(pending_detail) >= root_limit
+                    or batch_bytes >= 32 * 1024 * 1024
+                    or perf_counter() - batch_started >= 2.0
+                ):
+                    publish_batch()
+                    pending_entities.clear()
+                    pending_facts.clear()
+                    pending_relationships.clear()
+                    pending_projection_issues.clear()
+                    pending_graph_issues.clear()
+                    pending_sources.clear()
+                    pending_detail.clear()
+                    batch_bytes = 0
+                    batch_started = perf_counter()
             del component_graphs
             del component_relationships
+            del relationships_by_root
             processed_components += 1
             processed_sources += len(component.source_paths)
-            pending_sources.extend(component_sources)
-            batch_bytes += component.total_bytes
-            root_limit = 5 if first_batch else 10
-            if (
-                processed_components == len(plan.components)
-                or len(pending_sources) >= root_limit
-                or batch_bytes >= 32 * 1024 * 1024
-                or perf_counter() - batch_started >= 2.0
-            ):
-                publish_batch()
-                pending_entities.clear()
-                pending_facts.clear()
-                pending_relationships.clear()
-                pending_projection_issues.clear()
-                pending_graph_issues.clear()
-                pending_sources.clear()
-                pending_detail.clear()
-                batch_bytes = 0
-                batch_started = perf_counter()
+        if pending_detail or pending_entities or pending_relationships or first_batch:
+            publish_batch()
 
         analytical_rows: list[dict[str, Any]] = []
         analytical_started = perf_counter()
@@ -1842,7 +1854,7 @@ def _detail_rows_for_graph(
     events: list[DetailEventRow] = []
     items: list[DetailItemRow] = []
     for session in graph.sessions:
-        prov = provenance_by_session.get(str(session.session_id))
+        prov = provenance_by_session.pop(str(session.session_id), None)
         if prov is None:
             continue
         for event_id, span in prov.events.items():
@@ -1980,7 +1992,7 @@ def _candidate_paths(since_days: int) -> tuple[Path, ...]:
 
 
 def _default_database_path() -> Path:
-    return Path.home() / ".coding-trajectory" / "dashboard" / "read-models-v3.sqlite3"
+    return Path.home() / ".coding-trajectory" / "dashboard" / "read-models-v4.sqlite3"
 
 
 def _remove_obsolete_dashboard_databases(*, grace_seconds: int) -> list[str]:
@@ -1989,6 +2001,7 @@ def _remove_obsolete_dashboard_databases(*, grace_seconds: int) -> list[str]:
     cutoff = datetime.now(UTC).timestamp() - grace_seconds
     obsolete = (
         Path.home() / ".coding-trajectory" / "dashboard" / "read-models-v2.sqlite3",
+        Path.home() / ".coding-trajectory" / "dashboard" / "read-models-v3.sqlite3",
     )
     removed: list[str] = []
     for database in obsolete:

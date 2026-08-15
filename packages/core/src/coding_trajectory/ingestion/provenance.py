@@ -12,33 +12,30 @@ bytes hydrated later are the same bytes that produced the canonical object.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from uuid import UUID
-
-from pydantic import BaseModel, ConfigDict, Field
 
 from coding_trajectory.ingestion.models import Vendor
 
 
-class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class RecordSpan(_Strict):
+@dataclass(frozen=True, slots=True)
+class RecordSpan:
     """Byte range + digest of one raw JSONL record in its source file."""
 
-    byte_offset: int = Field(ge=0)
-    byte_end: int = Field(gt=0)
+    byte_offset: int
+    byte_end: int
     digest: str
 
 
-class SessionProvenance(_Strict):
+@dataclass(frozen=True, slots=True)
+class SessionProvenance:
     """Canonical-id -> source-span mapping for one ingested session."""
 
     session_id: UUID
     vendor: Vendor
     source_path: str
-    events: dict[UUID, RecordSpan] = Field(default_factory=dict)
-    items: dict[UUID, tuple[RecordSpan, ...]] = Field(default_factory=dict)
+    events: dict[UUID, RecordSpan] = field(default_factory=dict)
+    items: dict[UUID, tuple[RecordSpan, ...]] = field(default_factory=dict)
 
 
 __all__ = ["RecordSpan", "SessionProvenance"]
