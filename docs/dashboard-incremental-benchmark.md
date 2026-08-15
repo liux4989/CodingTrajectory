@@ -152,11 +152,16 @@ method reports, on a slightly larger corpus:
 - SQLite derived state: 168-184 MB, dominated by the current-only detail
   locator tables (`detail_events` 258-283k rows, `detail_items` 64-70k rows)
   that carry source byte ranges and digests for lazy hydration
-- Peak resident memory during bootstrap: ~710 MB (old code, same corpus: 462
-  MB; without detail locators and provenance: ~555 MB). The residual is
-  allocator retention from per-record span tagging plus one giant root's
-  locator rows; the gated measurement-retained rebuild of the 953 MB component
-  stays at 270 MB (baseline full-trajectory rebuild: 404 MB)
+- Peak resident memory during bootstrap: 528 MB after the streamed-locator
+  follow-up (old code, same corpus: 462 MB; first compact-graph cut: ~710
+  MB). Item provenance records constituent event ids instead of duplicating
+  span objects, the stabilizer transfers its span map by ownership, and
+  detail locators stream into SQLite in 4000-row chunks, so a giant root
+  never materializes its full locator object graph. The residual over the
+  old code is the provenance span map itself — the cost of verified lazy
+  detail, which the old code did not provide. The gated measurement-retained
+  rebuild of the 953 MB component stays at 270 MB (baseline full-trajectory
+  rebuild: 404 MB)
 - Persisted source-message bodies: 0 (the `source_messages` table no longer
   has payload columns)
 - Hydrated item/event detail responses are byte-identical to full-trajectory
