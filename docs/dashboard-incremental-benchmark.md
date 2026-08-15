@@ -138,3 +138,34 @@ compatibility path.
 
 Filesystem notifications remain optional performance hints. Periodic inventory
 reconciliation and source fencing remain the correctness authority.
+
+## Compact-graph follow-up (2026-08-15, store format v3)
+
+After the compact-graph plan landed (streaming measurements-retained ingestion,
+byte-range provenance with lazy detail hydration, measured evidence rebuilds,
+disposable store format 3 in `read-models-v4.sqlite3`), the same benchmark
+method reports, on a slightly larger corpus:
+
+- Candidate sources: 627 JSONL files (606-627 stable across runs)
+- Complete core bootstrap wall time: 52-57 seconds (old code, same corpus:
+  56.8 seconds)
+- SQLite derived state: 168-184 MB, dominated by the current-only detail
+  locator tables (`detail_events` 258-283k rows, `detail_items` 64-70k rows)
+  that carry source byte ranges and digests for lazy hydration
+- Peak resident memory during bootstrap: ~710 MB (old code, same corpus: 462
+  MB; without detail locators and provenance: ~555 MB). The residual is
+  allocator retention from per-record span tagging plus one giant root's
+  locator rows; the gated measurement-retained rebuild of the 953 MB component
+  stays at 270 MB (baseline full-trajectory rebuild: 404 MB)
+- Persisted source-message bodies: 0 (the `source_messages` table no longer
+  has payload columns)
+- Hydrated item/event detail responses are byte-identical to full-trajectory
+  responses; stale source bytes are refused by digest fences and trigger
+  reconciliation
+
+Bootstrap publishes pending entities, facts, and detail locators per graph
+inside large components (5/10 roots, 32 MB, or 2 s triggers) rather than only
+at component boundaries. Store format 3 adds partial `WHERE deleted = 0`
+keyset indexes and runs `PRAGMA optimize` after bootstrap and major GC. Legacy
+format files are rejected via the store-format marker; v3 databases are
+retired after the same 24-hour inactivity grace period used for v2.
