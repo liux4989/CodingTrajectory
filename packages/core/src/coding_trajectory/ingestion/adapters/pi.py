@@ -23,6 +23,7 @@ from coding_trajectory.ingestion.models import (
     Vendor,
     VendorExtensions,
 )
+from coding_trajectory.ingestion.provenance import RecordSpan
 from coding_trajectory.ingestion.retention import (
     CanonicalRetention,
     compact_context_usage_observation,
@@ -30,6 +31,7 @@ from coding_trajectory.ingestion.retention import (
 from coding_trajectory.ingestion.transcript import (
     TranscriptRecord,
     TranscriptStabilizer,
+    build_session_provenance,
     compact_session_cwd,
     events_from_transcript,
     project_transcript,
@@ -210,7 +212,7 @@ class PiAdapter(BaseAdapter):
     def _build_session(
         self,
         source: Path,
-        records: Iterable[dict],
+        records: Iterable[tuple[dict, RecordSpan | None]],
         *,
         retention: CanonicalRetention = "trajectory",
     ) -> Session:
@@ -233,6 +235,14 @@ class PiAdapter(BaseAdapter):
             records=transcript,
             compact=compact,
         )
+        if compact is not None:
+            self.last_provenance = build_session_provenance(
+                session_id=session_id,
+                vendor=Vendor.PI,
+                source=source,
+                stabilizer=compact,
+                turns=turns,
+            )
 
         started_at = min(record.timestamp for record in transcript)
         ended_at = max(record.timestamp for record in transcript)
@@ -290,36 +300,47 @@ class PiAdapter(BaseAdapter):
             ),
         )
 
-    def _build_transcript(self, records: Iterable[dict]) -> list[TranscriptRecord]:
+    def _build_transcript(
+        self, records: Iterable[tuple[dict, RecordSpan | None]]
+    ) -> list[TranscriptRecord]:
         """Extract only CT-useful transcript facts from Pi JSONL records."""
         transcript: list[TranscriptRecord] = []
 
-        for record in records:
-            if self._handle_state_record(record):
-                continue
-
-            if record.get("type", "") != "message":
-                continue
-
-            message = record.get("message")
-            if not isinstance(message, dict):
-                continue
-
-            role = message.get("role")
-            ts = parse_iso_timestamp(record.get("timestamp"))
-            if ts is None:
-                continue
-
-            if role == "user":
-                self._handle_user_message(message, ts, transcript)
-            elif role == "assistant":
-                self._handle_assistant_message(message, ts, transcript)
-            elif role == "toolResult":
-                self._handle_tool_result_message(message, ts, transcript)
-            elif role == "bashExecution":
-                self._handle_bash_execution(message, ts, transcript)
+        for record, span in records:
+            before = len(transcript)
+            self._translate_record(record, transcript)
+            if span is not None:
+                for entry in transcript[before:]:
+                    entry.origin = span
 
         return transcript
+
+    def _translate_record(
+        self, record: dict, transcript: list[TranscriptRecord]
+    ) -> None:
+        if self._handle_state_record(record):
+            return
+
+        if record.get("type", "") != "message":
+            return
+
+        message = record.get("message")
+        if not isinstance(message, dict):
+            return
+
+        role = message.get("role")
+        ts = parse_iso_timestamp(record.get("timestamp"))
+        if ts is None:
+            return
+
+        if role == "user":
+            self._handle_user_message(message, ts, transcript)
+        elif role == "assistant":
+            self._handle_assistant_message(message, ts, transcript)
+        elif role == "toolResult":
+            self._handle_tool_result_message(message, ts, transcript)
+        elif role == "bashExecution":
+            self._handle_bash_execution(message, ts, transcript)
 
     def _handle_state_record(self, record: dict) -> bool:
         """Apply a non-message session-state record; return True if handled.

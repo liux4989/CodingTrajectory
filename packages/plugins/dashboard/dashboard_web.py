@@ -224,6 +224,23 @@ def _handler_for(
                             turn_id=_first(query, "turn_id"),
                         )
                     )
+                elif path == "/api/sessions/events":
+                    payload = self._revisioned(
+                        lambda: runtime.session_event_details(
+                            event_ids=_required(query, "event_ids").split(","),
+                            turn_id=_first(query, "turn_id"),
+                            event_type=_first(query, "type"),
+                        )
+                    )
+                elif path == "/api/sessions/items":
+                    payload = self._revisioned(
+                        lambda: runtime.session_item_details(
+                            item_ids=_required(query, "item_ids").split(","),
+                            include_content=_first(query, "include_content")
+                            in {"1", "true", "yes"},
+                            turn_id=_first(query, "turn_id"),
+                        )
+                    )
                 elif path == "/api/model-usage":
                     payload = self._revisioned(
                         lambda: runtime.model_usage(
@@ -381,7 +398,6 @@ def _handler_for(
             self.wfile.write(data)
 
     return DashboardRequestHandler
-
 
 
 def _first(query: dict[str, list[str]], key: str) -> str | None:

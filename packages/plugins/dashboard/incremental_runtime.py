@@ -24,11 +24,15 @@ from coding_trajectory.ingestion.incremental import (
     plan_session_graph_components_from_files,
     rebuild_affected_session_graphs_from_files,
 )
+from coding_trajectory.ingestion.provenance import SessionProvenance
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 from coding_trajectory.service import project_list_metadata
 
 try:
     from .incremental_store import (
+        DetailEventRow,
+        DetailItemRow,
+        DetailSpan,
         IncrementalStore,
         MaterializationContext,
         SourceFenceError,
@@ -68,8 +72,12 @@ try:
         reconstruct_token_efficiency_project,
     )
     from . import context_window
+    from .detail_hydration import DetailHydrator, DetailUnavailable
 except ImportError:
     from incremental_store import (
+        DetailEventRow,
+        DetailItemRow,
+        DetailSpan,
         IncrementalStore,
         MaterializationContext,
         SourceFenceError,
@@ -109,6 +117,7 @@ except ImportError:
         reconstruct_token_efficiency_project,
     )
     import context_window
+    from detail_hydration import DetailHydrator, DetailUnavailable
 
 
 PARSER_VERSION = "core-source-checkpoint-v3"
@@ -681,6 +690,42 @@ class DashboardIncrementalRuntime:
             return None
         return projection.model_dump(mode="json")
 
+    def session_event_details(
+        self,
+        *,
+        event_ids: list[str],
+        turn_id: str | None = None,
+        event_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Hydrate full event detail from authoritative JSONL byte ranges."""
+
+        if not self._has_canonical_facts():
+            return None
+        hydrator = DetailHydrator(self.store, reconcile=lambda: self.request_refresh())
+        try:
+            return hydrator.events(event_ids, turn_id=turn_id, event_type=event_type)
+        except DetailUnavailable:
+            return None
+
+    def session_item_details(
+        self,
+        *,
+        item_ids: list[str],
+        include_content: bool = False,
+        turn_id: str | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Hydrate full item detail from authoritative JSONL byte ranges."""
+
+        if not self._has_canonical_facts():
+            return None
+        hydrator = DetailHydrator(self.store, reconcile=lambda: self.request_refresh())
+        try:
+            return hydrator.items(
+                item_ids, include_content=include_content, turn_id=turn_id
+            )
+        except DetailUnavailable:
+            return None
+
     def _token_project_first_pages(
         self,
         *,
@@ -983,6 +1028,7 @@ class DashboardIncrementalRuntime:
         pending_projection_issues: list[Any] = []
         pending_graph_issues: list[Any] = list(plan.issues)
         pending_sources: list[Any] = []
+        pending_detail: dict[str, tuple[list[DetailEventRow], list[DetailItemRow]]] = {}
         batch_bytes = 0
         batch_started = perf_counter()
 
@@ -994,6 +1040,7 @@ class DashboardIncrementalRuntime:
             projection_issues = tuple(pending_projection_issues)
             graph_issues = tuple(pending_graph_issues)
             fenced_sources = tuple(pending_sources)
+            detail = dict(pending_detail)
             coverage = _bootstrap_coverage_payload(
                 state="catching_up",
                 processed_sources=processed_sources,
@@ -1007,10 +1054,15 @@ class DashboardIncrementalRuntime:
             def publish(context: MaterializationContext) -> None:
                 if first_batch:
                     _clear_all_entities(context)
+                    context.clear_detail()
                     context.mutate_many(catalog_rows)
                     context.mutate_many(catalog_facts)
                 context.mutate_many(entities)
                 context.mutate_many(facts)
+                for root, (detail_events, detail_items) in detail.items():
+                    context.publish_detail(
+                        root, events=detail_events, items=detail_items
+                    )
                 _publish_relationships(context, relationships)
                 _publish_build_issues(context, projection_issues, scope=scope)
                 _publish_graph_issues(context, graph_issues, scope=scope)
@@ -1067,8 +1119,14 @@ class DashboardIncrementalRuntime:
             pending_graph_issues.extend(graph_build.issues)
             issue_count += len(graph_build.issues)
             component_graphs = graph_build.graphs
+            component_provenance = {
+                str(prov.session_id): prov for prov in graph_build.provenance
+            }
             del graph_build
             for graph in component_graphs:
+                pending_detail[str(graph.root_session_id)] = _detail_rows_for_graph(
+                    graph, component_provenance
+                )
                 project_name = str(graph.project_identifier or "unknown")
                 source_paths = [
                     relationship.source_path
@@ -1135,6 +1193,7 @@ class DashboardIncrementalRuntime:
                 pending_projection_issues.clear()
                 pending_graph_issues.clear()
                 pending_sources.clear()
+                pending_detail.clear()
                 batch_bytes = 0
                 batch_started = perf_counter()
 
@@ -1390,6 +1449,11 @@ def _materialize_changed_graphs(
     for root in sorted(affected_roots):
         _delete_graph_contributions(context, root)
         _delete_root_facts(context, root)
+        context.publish_detail(root, events=(), items=())
+
+    provenance_by_session = {
+        str(prov.session_id): prov for prov in graph_build.provenance
+    }
 
     core_started = perf_counter()
     new_fact_rows: list[dict[str, Any]] = []
@@ -1401,6 +1465,10 @@ def _materialize_changed_graphs(
     }
     for graph in graph_build.graphs:
         root = str(graph.root_session_id)
+        detail_events, detail_items = _detail_rows_for_graph(
+            graph, provenance_by_session
+        )
+        context.publish_detail(root, events=detail_events, items=detail_items)
         source_paths = [
             relationship.source_path
             for relationship in graph_build.source_relationships
@@ -1749,6 +1817,64 @@ def _replace_analytical_scope_rows(
 def _delete_graph_contributions(context: MaterializationContext, root: str) -> None:
     for kind in ("session", "project_contribution", "session_timeline_contribution"):
         context.delete_entity(kind, root)
+
+
+def _detail_rows_for_graph(
+    graph: Any,
+    provenance_by_session: dict[str, SessionProvenance],
+) -> tuple[list[DetailEventRow], list[DetailItemRow]]:
+    """Assemble current-only detail locators for one compact session graph."""
+
+    root = str(graph.root_session_id)
+    edge_targets: dict[Any, dict[str, str]] = {}
+    for edge in graph.edges:
+        if edge.source_item_id is not None:
+            edge_targets.setdefault(edge.source_item_id, {})[edge.type] = str(
+                edge.target_session_id
+            )
+    events: list[DetailEventRow] = []
+    items: list[DetailItemRow] = []
+    for session in graph.sessions:
+        prov = provenance_by_session.get(str(session.session_id))
+        if prov is None:
+            continue
+        for event_id, span in prov.events.items():
+            events.append(
+                DetailEventRow(
+                    event_id=str(event_id),
+                    root_id=root,
+                    session_id=str(session.session_id),
+                    source_path=prov.source_path,
+                    byte_offset=span.byte_offset,
+                    byte_end=span.byte_end,
+                    digest=span.digest,
+                )
+            )
+        for turn in session.turns:
+            for item in turn.items:
+                spans = prov.items.get(item.item_id)
+                if not spans:
+                    continue
+                items.append(
+                    DetailItemRow(
+                        item_id=str(item.item_id),
+                        root_id=root,
+                        session_id=str(session.session_id),
+                        turn_id=str(item.turn_id),
+                        kind=item.kind,
+                        source_path=prov.source_path,
+                        spans=tuple(
+                            DetailSpan(
+                                byte_offset=span.byte_offset,
+                                byte_end=span.byte_end,
+                                digest=span.digest,
+                            )
+                            for span in spans
+                        ),
+                        edge_targets=edge_targets.get(item.item_id, {}),
+                    )
+                )
+    return events, items
 
 
 def _delete_root_facts(context: MaterializationContext, root: str) -> None:

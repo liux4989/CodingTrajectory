@@ -39,6 +39,7 @@ from coding_trajectory.ingestion.adapters.codex import (
 from coding_trajectory.ingestion.adapters.pi import PiAdapter
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.ingestion.models import Session, SessionGraph, Vendor
+from coding_trajectory.ingestion.provenance import SessionProvenance
 from coding_trajectory.ingestion.retention import CanonicalRetention
 from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
     canonical_session_ids,
@@ -132,6 +133,9 @@ class IncrementalGraphBuild(_StrictModel):
     old_root_session_ids: tuple[UUID, ...] = ()
     affected_root_session_ids: tuple[UUID, ...] = ()
     removed_root_session_ids: tuple[UUID, ...] = ()
+    # Canonical-id -> source-byte-span mappings for lazy detail hydration.
+    # Populated only on the compact (measurements) ingestion path.
+    provenance: tuple[SessionProvenance, ...] = ()
 
 
 class SourceGraphComponent(_StrictModel):
@@ -704,6 +708,7 @@ def rebuild_affected_session_graphs_from_files(
         selected=selected,
         old_roots=old_roots,
         new_roots=new_roots,
+        provenance=(discovery.provenance or {}).values(),
     )
 
 
@@ -737,6 +742,7 @@ def _graph_build_result(
     selected: set[str],
     old_roots: set[UUID],
     new_roots: set[UUID],
+    provenance: Iterable[SessionProvenance] = (),
 ) -> IncrementalGraphBuild:
     graph_rows = tuple(
         sorted(
@@ -769,6 +775,11 @@ def _graph_build_result(
         old_root_session_ids=tuple(sorted(old_roots, key=str)),
         affected_root_session_ids=tuple(sorted({*old_roots, *new_roots}, key=str)),
         removed_root_session_ids=tuple(sorted(old_roots - new_roots, key=str)),
+        provenance=tuple(
+            sorted(
+                provenance, key=lambda item: (item.source_path, str(item.session_id))
+            )
+        ),
     )
 
 

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from coding_trajectory.ingestion.models import Session, Vendor
+from coding_trajectory.ingestion.provenance import RecordSpan, SessionProvenance
 
 if TYPE_CHECKING:
     from coding_trajectory.ingestion.retention import CanonicalRetention
@@ -35,17 +36,38 @@ class BaseAdapter(ABC):
         pass
 
     def _iter_records(self, path: Path) -> Iterator[dict]:
-        with path.open(encoding="utf-8") as fh:
+        for record, _span in self._iter_record_spans(path):
+            yield record
+
+    def _iter_record_spans(self, path: Path) -> Iterator[tuple[dict, RecordSpan]]:
+        """Yield parsed records with their raw byte spans and digests.
+
+        The digest covers the exact stripped line bytes that ``json.loads``
+        parsed, so hydration can verify it re-read the same record bytes.
+        """
+        import hashlib
+
+        with path.open("rb") as fh:
+            offset = 0
             for raw_line in fh:
-                raw_line = raw_line.strip()
-                if not raw_line:
-                    continue
-                try:
-                    obj = json.loads(raw_line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(obj, dict):
-                    yield obj
+                end = offset + len(raw_line)
+                stripped = raw_line.strip()
+                if stripped:
+                    try:
+                        obj = json.loads(stripped.decode("utf-8"))
+                    except json.JSONDecodeError:
+                        offset = end
+                        continue
+                    if isinstance(obj, dict):
+                        yield (
+                            obj,
+                            RecordSpan(
+                                byte_offset=offset,
+                                byte_end=end,
+                                digest=hashlib.sha256(stripped).hexdigest(),
+                            ),
+                        )
+                offset = end
 
     def _load_records(self, path: Path) -> list[dict]:
         return list(self._iter_records(path))
@@ -64,13 +86,15 @@ class BaseAdapter(ABC):
         applies ``stabilize_session``.  With ``retention="measurements"`` the
         adapter streams records, assigns canonical stable ids inline, and
         discards message/tool bodies at translation time, so the returned
-        session is already final and compact.
+        session is already final and compact; ``self.last_provenance`` then
+        carries canonical-id -> source-byte-span mappings.
         """
         self._reset_ingest_state()
-        records: Iterable[dict] = (
-            self._iter_records(path)
+        self.last_provenance: SessionProvenance | None = None
+        records: Iterable[tuple[dict, RecordSpan | None]] = (
+            self._iter_record_spans(path)
             if retention == "measurements"
-            else self._load_records(path)
+            else ((record, None) for record in self._load_records(path))
         )
         return self._build_session(path, records, retention=retention)
 
@@ -95,7 +119,7 @@ class BaseAdapter(ABC):
     def _build_session(
         self,
         source: Path,
-        records: Iterable[dict],
+        records: Iterable[tuple[dict, RecordSpan | None]],
         *,
         retention: CanonicalRetention = "trajectory",
     ) -> Session: ...

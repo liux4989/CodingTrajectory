@@ -24,6 +24,7 @@ from coding_trajectory.ingestion.models import (
     Turn,
     Vendor,
 )
+from coding_trajectory.ingestion.provenance import SessionProvenance
 from coding_trajectory.ingestion.retention import (
     CanonicalRetention,
     compact_usage_mapping,
@@ -62,6 +63,9 @@ class DiscoverySource:
 class DiscoveryResult:
     store: DocumentStore
     sources: list[DiscoverySource]
+    # Canonical-id -> source-byte-span mappings, keyed by resolved source
+    # path.  Populated only on the compact (measurements) ingestion path.
+    provenance: dict[str, SessionProvenance] | None = None
 
 
 def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
@@ -91,7 +95,7 @@ def _ingest_sessions(
     candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
     *,
     retention: CanonicalRetention = "trajectory",
-) -> list[tuple[Vendor, Path, Session]]:
+) -> tuple[list[tuple[Vendor, Path, Session]], dict[str, SessionProvenance]]:
     """Ingest candidate files in two passes so forked files can drop the
     inherited-history segment they re-materialize.
 
@@ -99,6 +103,9 @@ def _ingest_sessions(
     ingests each file, handing a forked file's adapter its parent's turn-id set
     so it can cut the inherited copy (avoids double-counting turns/tokens and
     re-emitting inherited spawn edges). Vendors without turn-start ids are inert.
+
+    Returns the ingested sessions plus, on the compact path, per-source
+    provenance mappings for lazy detail hydration.
     """
     started_turn_ids_by_session: dict[UUID, set[str]] = {}
     parent_session_by_path: dict[Path, UUID | None] = {}
@@ -127,6 +134,7 @@ def _ingest_sessions(
             started_turn_ids_by_session[header.session_id] = started
 
     ingested: list[tuple[Vendor, Path, Session]] = []
+    provenance: dict[str, SessionProvenance] = {}
     for vendor, adapter_cls, path in candidates:
         adapter = adapter_cls()
         parent_session_id = parent_session_by_path.get(path)
@@ -158,7 +166,9 @@ def _ingest_sessions(
             )
             continue
         ingested.append((vendor, path, session))
-    return ingested
+        if adapter.last_provenance is not None:
+            provenance[str(path)] = adapter.last_provenance
+    return ingested, provenance
 
 
 def discover_store(
@@ -197,7 +207,8 @@ def discover_store(
         ):
             candidates.append((vendor, adapter_cls, path))
 
-    for vendor, path, session in _ingest_sessions(candidates):
+    ingested, _provenance = _ingest_sessions(candidates)
+    for vendor, path, session in ingested:
         project_identifier = infer_project_identifier(
             session, path, fallback=scoped_project
         )
@@ -681,7 +692,8 @@ def discover_store_from_files(
             candidates.append((vendor, adapter_cls, path))
             break
 
-    for vendor, path, session in _ingest_sessions(candidates, retention=retention):
+    ingested, provenance = _ingest_sessions(candidates, retention=retention)
+    for vendor, path, session in ingested:
         project_identifier = infer_project_identifier(session, path, fallback=path.stem)
         if not project_identifier:
             project_identifier = path.stem
@@ -713,7 +725,9 @@ def discover_store_from_files(
     ]
 
     return DiscoveryResult(
-        store=DocumentStore.from_session_graphs(session_graphs), sources=sources
+        store=DocumentStore.from_session_graphs(session_graphs),
+        sources=sources,
+        provenance=provenance,
     )
 
 

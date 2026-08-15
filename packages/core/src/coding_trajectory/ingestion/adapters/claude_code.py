@@ -30,6 +30,7 @@ from coding_trajectory.ingestion.models import (
     Turn,
     Vendor,
 )
+from coding_trajectory.ingestion.provenance import RecordSpan
 from coding_trajectory.ingestion.retention import (
     CanonicalRetention,
     compact_context_usage_observation,
@@ -37,6 +38,7 @@ from coding_trajectory.ingestion.retention import (
 from coding_trajectory.ingestion.transcript import (
     TranscriptRecord,
     TranscriptStabilizer,
+    build_session_provenance,
     compact_session_cwd,
     events_from_transcript,
     project_transcript,
@@ -549,7 +551,7 @@ class ClaudeCodeAdapter(BaseAdapter):
     def _build_session(
         self,
         source: Path,
-        records: Iterable[dict],
+        records: Iterable[tuple[dict, RecordSpan | None]],
         *,
         retention: CanonicalRetention = "trajectory",
     ) -> Session:
@@ -580,6 +582,14 @@ class ClaudeCodeAdapter(BaseAdapter):
             records=transcript,
             compact=compact,
         )
+        if compact is not None:
+            self.last_provenance = build_session_provenance(
+                session_id=session_id,
+                vendor=Vendor.CLAUDE_CODE,
+                source=source,
+                stabilizer=compact,
+                turns=turns,
+            )
         if compact is not None:
             for turn, team_state in zip(
                 turns, self._compact_team_states(turns, team_inputs), strict=False
@@ -713,7 +723,10 @@ class ClaudeCodeAdapter(BaseAdapter):
         return runtime_observations
 
     def _build_transcript(
-        self, records: Iterable[dict], *, scan: _ClaudeRecordScan | None = None
+        self,
+        records: Iterable[tuple[dict, RecordSpan | None]],
+        *,
+        scan: _ClaudeRecordScan | None = None,
     ) -> tuple[list[TranscriptRecord], list[ClaudeTeamStateInput]]:
         """Extract only CT-useful transcript facts from Claude Code JSONL records."""
         transcript: list[TranscriptRecord] = []
@@ -724,196 +737,137 @@ class ClaudeCodeAdapter(BaseAdapter):
         # re-reads only these bounded dicts instead of resident bodies.
         self._team_tool_calls: dict[str, dict[str, Any]] = {}
 
-        for record in records:
+        for record, span in records:
             if scan is not None:
                 scan.observe(record)
-            raw_type = record.get("type")
+            before = len(transcript)
+            self._translate_record(record, transcript, team_inputs)
+            if span is not None:
+                for entry in transcript[before:]:
+                    entry.origin = span
+        return transcript, team_inputs
 
-            # File-history-snapshot carries its timestamp inside snapshot.timestamp.
-            if raw_type == "file-history-snapshot":
-                snapshot = record.get("snapshot") or {}
-                ts = parse_timestamp(snapshot.get("timestamp"))
-                if ts is None:
-                    continue
-                base = _base_payload(record)
+    def _translate_record(
+        self,
+        record: dict,
+        transcript: list[TranscriptRecord],
+        team_inputs: list[ClaudeTeamStateInput],
+    ) -> None:
+        raw_type = record.get("type")
+
+        # File-history-snapshot carries its timestamp inside snapshot.timestamp.
+        if raw_type == "file-history-snapshot":
+            snapshot = record.get("snapshot") or {}
+            ts = parse_timestamp(snapshot.get("timestamp"))
+            if ts is None:
+                return
+            base = _base_payload(record)
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CLAUDE_CODE,
+                    role="runtime",
+                    kind="runtime",
+                    data={
+                        **base,
+                        "raw_type": "file-history-snapshot",
+                        "snapshot": snapshot,
+                    },
+                )
+            )
+            return
+
+        ts = parse_timestamp(record.get("timestamp"))
+        if ts is None:
+            return
+
+        sid_str = record.get("sessionId")
+        if not sid_str:
+            return
+
+        if raw_type == "user":
+            message = record.get("message", {})
+            content = message.get("content")
+            base = _base_payload(record)
+
+            if _is_real_user_prompt(record):
+                text = _extract_text(content)
+                image_blocks = _extract_image_blocks(content)
+                team_input = ClaudeTeamStateInput(messages=_parse_team_messages(text))
+                team_inputs.append(team_input)
+                team_request_summary = high_value_teammate_request(team_input.messages)
                 transcript.append(
                     TranscriptRecord(
                         sequence=len(transcript),
                         timestamp=ts,
                         vendor=Vendor.CLAUDE_CODE,
-                        role="runtime",
-                        kind="runtime",
+                        role="user",
+                        kind="user_message",
                         data={
                             **base,
-                            "raw_type": "file-history-snapshot",
-                            "snapshot": snapshot,
+                            "text": text,
+                            "image_count": len(image_blocks),
+                            "team_request_summary": team_request_summary,
                         },
                     )
                 )
-                continue
-
-            ts = parse_timestamp(record.get("timestamp"))
-            if ts is None:
-                continue
-
-            sid_str = record.get("sessionId")
-            if not sid_str:
-                continue
-
-            if raw_type == "user":
-                message = record.get("message", {})
-                content = message.get("content")
-                base = _base_payload(record)
-
-                if _is_real_user_prompt(record):
-                    text = _extract_text(content)
-                    image_blocks = _extract_image_blocks(content)
-                    team_input = ClaudeTeamStateInput(
-                        messages=_parse_team_messages(text)
+            else:
+                for block in _tool_result_blocks(content):
+                    tool_use_result = record.get("toolUseResult")
+                    success = infer_tool_success(tool_use_result)
+                    result_call_id = block.get("tool_use_id") or block.get("toolUseID")
+                    result_output = (
+                        tool_use_result
+                        if tool_use_result is not None
+                        else block.get("content")
                     )
-                    team_inputs.append(team_input)
-                    team_request_summary = high_value_teammate_request(
-                        team_input.messages
-                    )
+                    self._merge_team_tool_result(result_call_id, result_output)
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
                             timestamp=ts,
                             vendor=Vendor.CLAUDE_CODE,
-                            role="user",
-                            kind="user_message",
+                            role="tool",
+                            kind="tool_result",
                             data={
                                 **base,
-                                "text": text,
-                                "image_count": len(image_blocks),
-                                "team_request_summary": team_request_summary,
-                            },
-                        )
-                    )
-                else:
-                    for block in _tool_result_blocks(content):
-                        tool_use_result = record.get("toolUseResult")
-                        success = infer_tool_success(tool_use_result)
-                        result_call_id = block.get("tool_use_id") or block.get(
-                            "toolUseID"
-                        )
-                        result_output = (
-                            tool_use_result
-                            if tool_use_result is not None
-                            else block.get("content")
-                        )
-                        self._merge_team_tool_result(result_call_id, result_output)
-                        transcript.append(
-                            TranscriptRecord(
-                                sequence=len(transcript),
-                                timestamp=ts,
-                                vendor=Vendor.CLAUDE_CODE,
-                                role="tool",
-                                kind="tool_result",
-                                data={
-                                    **base,
-                                    "tool_call_id": block.get("tool_use_id")
-                                    or block.get("toolUseID"),
-                                    "output": tool_use_result
-                                    if tool_use_result is not None
-                                    else block.get("content"),
-                                    "source_tool_assistant_uuid": record.get(
-                                        "sourceToolAssistantUUID"
-                                    ),
-                                    "status": (
-                                        ToolStatus.FAILED.value
-                                        if block.get("is_error") or success is False
-                                        else ToolStatus.COMPLETED.value
-                                    ),
-                                },
-                                fidelity="synthetic",
-                            )
-                        )
-
-            elif raw_type == "assistant":
-                self._handle_assistant_record(record, ts, transcript)
-
-            elif raw_type == "system":
-                base = _base_payload(record)
-                subtype = record.get("subtype")
-                if subtype == "compact_boundary":
-                    # Compaction evicts (almost) all pre-boundary conversation,
-                    # preserving only the few messages named in compactMetadata.
-                    # The boundary timestamp is the signal the composition layer
-                    # uses to exclude evicted (non-resident) items; the preserved
-                    # UUIDs and dropped-token counts are carried for future
-                    # per-item preserved-segment attribution.
-                    compact_meta = record.get("compactMetadata") or {}
-                    preserved = compact_meta.get("preservedMessages") or {}
-                    preserved_uuids = (
-                        preserved.get("allUuids") or preserved.get("uuids") or []
-                    )
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CLAUDE_CODE,
-                            role="runtime",
-                            kind="runtime",
-                            data={
-                                **base,
-                                "raw_type": "compact_boundary",
-                                "content": _as_non_empty_str(record.get("content")),
-                                "compact_metadata": compact_dict(
-                                    {
-                                        "trigger": _as_non_empty_str(
-                                            compact_meta.get("trigger")
-                                        ),
-                                        "pre_tokens": _as_int_or_none(
-                                            compact_meta.get("preTokens")
-                                        ),
-                                        "post_tokens": _as_int_or_none(
-                                            compact_meta.get("postTokens")
-                                        ),
-                                        "cumulative_dropped_tokens": _as_int_or_none(
-                                            compact_meta.get("cumulativeDroppedTokens")
-                                        ),
-                                        "preserved_uuids": (
-                                            list(preserved_uuids)
-                                            if isinstance(preserved_uuids, list)
-                                            else []
-                                        ),
-                                    }
+                                "tool_call_id": block.get("tool_use_id")
+                                or block.get("toolUseID"),
+                                "output": tool_use_result
+                                if tool_use_result is not None
+                                else block.get("content"),
+                                "source_tool_assistant_uuid": record.get(
+                                    "sourceToolAssistantUUID"
+                                ),
+                                "status": (
+                                    ToolStatus.FAILED.value
+                                    if block.get("is_error") or success is False
+                                    else ToolStatus.COMPLETED.value
                                 ),
                             },
                             fidelity="synthetic",
                         )
                     )
-                    continue
-                if subtype in {"turn_duration", "local_command"}:
-                    transcript.append(
-                        TranscriptRecord(
-                            sequence=len(transcript),
-                            timestamp=ts,
-                            vendor=Vendor.CLAUDE_CODE,
-                            role="runtime",
-                            kind="runtime",
-                            data={
-                                **base,
-                                "raw_type": "system",
-                                "subtype": subtype,
-                                "duration_ms": _as_int_or_none(
-                                    record.get("durationMs")
-                                ),
-                                "message_count": _as_int_or_none(
-                                    record.get("messageCount")
-                                ),
-                                "pending_background_agent_count": _as_int_or_none(
-                                    record.get("pendingBackgroundAgentCount")
-                                ),
-                                "content": _as_non_empty_str(record.get("content")),
-                            },
-                        )
-                    )
-                continue
 
-            elif raw_type == "attachment":
-                base = _base_payload(record)
+        elif raw_type == "assistant":
+            self._handle_assistant_record(record, ts, transcript)
+
+        elif raw_type == "system":
+            base = _base_payload(record)
+            subtype = record.get("subtype")
+            if subtype == "compact_boundary":
+                # Compaction evicts (almost) all pre-boundary conversation,
+                # preserving only the few messages named in compactMetadata.
+                # The boundary timestamp is the signal the composition layer
+                # uses to exclude evicted (non-resident) items; the preserved
+                # UUIDs and dropped-token counts are carried for future
+                # per-item preserved-segment attribution.
+                compact_meta = record.get("compactMetadata") or {}
+                preserved = compact_meta.get("preservedMessages") or {}
+                preserved_uuids = (
+                    preserved.get("allUuids") or preserved.get("uuids") or []
+                )
                 transcript.append(
                     TranscriptRecord(
                         sequence=len(transcript),
@@ -923,19 +877,35 @@ class ClaudeCodeAdapter(BaseAdapter):
                         kind="runtime",
                         data={
                             **base,
-                            "raw_type": "attachment",
-                            "attachment_type": record.get("attachmentType")
-                            or record.get("subtype"),
-                            "name": _as_non_empty_str(record.get("name")),
-                            "path": _as_non_empty_str(record.get("path")),
-                            "content": record.get("content"),
+                            "raw_type": "compact_boundary",
+                            "content": _as_non_empty_str(record.get("content")),
+                            "compact_metadata": compact_dict(
+                                {
+                                    "trigger": _as_non_empty_str(
+                                        compact_meta.get("trigger")
+                                    ),
+                                    "pre_tokens": _as_int_or_none(
+                                        compact_meta.get("preTokens")
+                                    ),
+                                    "post_tokens": _as_int_or_none(
+                                        compact_meta.get("postTokens")
+                                    ),
+                                    "cumulative_dropped_tokens": _as_int_or_none(
+                                        compact_meta.get("cumulativeDroppedTokens")
+                                    ),
+                                    "preserved_uuids": (
+                                        list(preserved_uuids)
+                                        if isinstance(preserved_uuids, list)
+                                        else []
+                                    ),
+                                }
+                            ),
                         },
+                        fidelity="synthetic",
                     )
                 )
-                continue
-
-            elif raw_type == "queue-operation":
-                base = _base_payload(record)
+                return
+            if subtype in {"turn_duration", "local_command"}:
                 transcript.append(
                     TranscriptRecord(
                         sequence=len(transcript),
@@ -945,15 +915,61 @@ class ClaudeCodeAdapter(BaseAdapter):
                         kind="runtime",
                         data={
                             **base,
-                            "raw_type": "queue-operation",
-                            "operation": record.get("operation"),
-                            "task": record.get("task"),
+                            "raw_type": "system",
+                            "subtype": subtype,
+                            "duration_ms": _as_int_or_none(record.get("durationMs")),
+                            "message_count": _as_int_or_none(
+                                record.get("messageCount")
+                            ),
+                            "pending_background_agent_count": _as_int_or_none(
+                                record.get("pendingBackgroundAgentCount")
+                            ),
+                            "content": _as_non_empty_str(record.get("content")),
                         },
                     )
                 )
-                continue
+            return
 
-        return transcript, team_inputs
+        elif raw_type == "attachment":
+            base = _base_payload(record)
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CLAUDE_CODE,
+                    role="runtime",
+                    kind="runtime",
+                    data={
+                        **base,
+                        "raw_type": "attachment",
+                        "attachment_type": record.get("attachmentType")
+                        or record.get("subtype"),
+                        "name": _as_non_empty_str(record.get("name")),
+                        "path": _as_non_empty_str(record.get("path")),
+                        "content": record.get("content"),
+                    },
+                )
+            )
+            return
+
+        elif raw_type == "queue-operation":
+            base = _base_payload(record)
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=ts,
+                    vendor=Vendor.CLAUDE_CODE,
+                    role="runtime",
+                    kind="runtime",
+                    data={
+                        **base,
+                        "raw_type": "queue-operation",
+                        "operation": record.get("operation"),
+                        "task": record.get("task"),
+                    },
+                )
+            )
+            return
 
     def _merge_team_tool_result(self, tool_call_id: Any, output: Any) -> None:
         if not isinstance(tool_call_id, str) or not tool_call_id:

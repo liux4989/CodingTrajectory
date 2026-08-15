@@ -134,6 +134,39 @@ class SourceChange(StrictModel):
     error: str | None = None
 
 
+class DetailSpan(StrictModel):
+    """One verified source byte range for a canonical detail object."""
+
+    byte_offset: int = Field(ge=0)
+    byte_end: int = Field(gt=0)
+    digest: str
+
+
+class DetailEventRow(StrictModel):
+    """Current-only event locator row."""
+
+    event_id: str
+    root_id: str
+    session_id: str
+    source_path: str
+    byte_offset: int = Field(ge=0)
+    byte_end: int = Field(gt=0)
+    digest: str
+
+
+class DetailItemRow(StrictModel):
+    """Current-only item locator row, including spawn/handoff edge targets."""
+
+    item_id: str
+    root_id: str
+    session_id: str
+    turn_id: str
+    kind: str
+    source_path: str
+    spans: tuple[DetailSpan, ...]
+    edge_targets: dict[str, str] = Field(default_factory=dict)
+
+
 class RefreshResult(StrictModel):
     """Result of a complete reconciliation attempt."""
 
@@ -469,6 +502,31 @@ class MaterializationContext:
             payload,
         )
 
+    def publish_detail(
+        self,
+        root_id: str,
+        *,
+        events: Iterable[DetailEventRow],
+        items: Iterable[DetailItemRow],
+    ) -> None:
+        """Replace one root partition's current-only detail locators.
+
+        Rows are deleted and re-inserted inside the same transaction as the
+        revision that publishes the corresponding canonical facts, so a
+        locator can never point at a source range the fence would reject.
+        """
+
+        self._ensure_active()
+        self._store._replace_root_detail(
+            self._connection, root_id, tuple(events), tuple(items)
+        )
+
+    def clear_detail(self) -> None:
+        """Delete every current-only detail locator (bootstrap reset)."""
+
+        self._ensure_active()
+        self._store._clear_detail(self._connection)
+
     def _close(self) -> None:
         self._active = False
 
@@ -648,6 +706,36 @@ class IncrementalStore:
                     source_paths_json TEXT NOT NULL,
                     error TEXT NOT NULL
                 );
+
+                -- Current-only canonical-id -> source-byte-range locators.
+                -- These are not versioned: they exist to hydrate event/item
+                -- detail on demand from the authoritative JSONL, never to
+                -- serve historical snapshots.  Rows are replaced per root
+                -- partition inside the publishing transaction.
+                CREATE TABLE IF NOT EXISTS detail_events (
+                    event_id TEXT PRIMARY KEY,
+                    root_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    byte_offset INTEGER NOT NULL,
+                    byte_end INTEGER NOT NULL,
+                    digest TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_detail_events_root
+                    ON detail_events(root_id);
+
+                CREATE TABLE IF NOT EXISTS detail_items (
+                    item_id TEXT PRIMARY KEY,
+                    root_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    turn_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    spans_json TEXT NOT NULL,
+                    edge_targets_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_detail_items_root
+                    ON detail_items(root_id);
                 """
             )
             if not connection.in_transaction:
@@ -2047,6 +2135,119 @@ class IncrementalStore:
             catching_up=catching_up,
         )
 
+    def _replace_root_detail(
+        self,
+        connection: sqlite3.Connection,
+        root_id: str,
+        events: tuple[DetailEventRow, ...],
+        items: tuple[DetailItemRow, ...],
+    ) -> None:
+        connection.execute("DELETE FROM detail_events WHERE root_id = ?", (root_id,))
+        connection.execute("DELETE FROM detail_items WHERE root_id = ?", (root_id,))
+        connection.executemany(
+            """
+            INSERT INTO detail_events(
+                event_id, root_id, session_id, source_path,
+                byte_offset, byte_end, digest
+            ) VALUES(?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row.event_id,
+                    root_id,
+                    row.session_id,
+                    row.source_path,
+                    row.byte_offset,
+                    row.byte_end,
+                    row.digest,
+                )
+                for row in events
+            ],
+        )
+        connection.executemany(
+            """
+            INSERT INTO detail_items(
+                item_id, root_id, session_id, turn_id, kind, source_path,
+                spans_json, edge_targets_json
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row.item_id,
+                    root_id,
+                    row.session_id,
+                    row.turn_id,
+                    row.kind,
+                    row.source_path,
+                    _canonical_json(
+                        [span.model_dump(mode="json") for span in row.spans]
+                    ),
+                    _canonical_json(row.edge_targets),
+                )
+                for row in items
+            ],
+        )
+
+    def _clear_detail(self, connection: sqlite3.Connection) -> None:
+        connection.execute("DELETE FROM detail_events")
+        connection.execute("DELETE FROM detail_items")
+
+    def detail_events(self, event_ids: Iterable[str]) -> dict[str, DetailEventRow]:
+        """Return current event locators for the supplied canonical ids."""
+
+        ids = tuple(dict.fromkeys(str(value) for value in event_ids))
+        if not ids:
+            return {}
+        with self._connect() as connection:
+            rows: dict[str, DetailEventRow] = {}
+            for chunk_start in range(0, len(ids), 500):
+                chunk = ids[chunk_start : chunk_start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                for row in connection.execute(
+                    f"SELECT * FROM detail_events WHERE event_id IN ({placeholders})",
+                    chunk,
+                ):
+                    rows[row["event_id"]] = DetailEventRow(
+                        event_id=row["event_id"],
+                        root_id=row["root_id"],
+                        session_id=row["session_id"],
+                        source_path=row["source_path"],
+                        byte_offset=row["byte_offset"],
+                        byte_end=row["byte_end"],
+                        digest=row["digest"],
+                    )
+        return rows
+
+    def detail_items(self, item_ids: Iterable[str]) -> dict[str, DetailItemRow]:
+        """Return current item locators for the supplied canonical ids."""
+
+        ids = tuple(dict.fromkeys(str(value) for value in item_ids))
+        if not ids:
+            return {}
+        with self._connect() as connection:
+            rows: dict[str, DetailItemRow] = {}
+            for chunk_start in range(0, len(ids), 500):
+                chunk = ids[chunk_start : chunk_start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                for row in connection.execute(
+                    f"SELECT * FROM detail_items WHERE item_id IN ({placeholders})",
+                    chunk,
+                ):
+                    rows[row["item_id"]] = DetailItemRow(
+                        item_id=row["item_id"],
+                        root_id=row["root_id"],
+                        session_id=row["session_id"],
+                        turn_id=row["turn_id"],
+                        kind=row["kind"],
+                        source_path=row["source_path"],
+                        spans=tuple(
+                            DetailSpan.model_validate(span)
+                            for span in json.loads(row["spans_json"])
+                        ),
+                        edge_targets=json.loads(row["edge_targets_json"]),
+                    )
+        return rows
+
     def _record_source_change(
         self, connection: sqlite3.Connection, revision: int, change: SourceChange
     ) -> None:
@@ -2451,6 +2652,9 @@ def _normalized_envelope(payload: dict[str, Any]) -> dict[str, Any]:
 __all__ = [
     "ChangeKind",
     "ChangesPage",
+    "DetailEventRow",
+    "DetailItemRow",
+    "DetailSpan",
     "EntityMutation",
     "EntityRow",
     "IncrementalStore",

@@ -29,6 +29,7 @@ from coding_trajectory.ingestion.models import (
     TurnStatus,
     Vendor,
 )
+from coding_trajectory.ingestion.provenance import RecordSpan, SessionProvenance
 from coding_trajectory.ingestion.retention import retain_event_for_measurements
 
 TranscriptKind = Literal[
@@ -73,6 +74,8 @@ class TranscriptRecord(BaseModel):
     kind: TranscriptKind
     data: dict[str, Any] = Field(default_factory=dict)
     fidelity: TranscriptFidelity = "observed"
+    # Raw source byte span + digest, set only on the streaming compact path.
+    origin: RecordSpan | None = None
 
 
 class TranscriptStabilizer:
@@ -90,6 +93,7 @@ class TranscriptStabilizer:
         self._vendor = vendor
         self._source = source
         self.event_ids: dict[UUID, UUID] = {}
+        self.spans: dict[UUID, RecordSpan] = {}
         self._event_index = 0
         # First cwd observed in an event payload, mirroring the full-event
         # scan ``stabilize_session`` performs before retention filtering.
@@ -109,6 +113,8 @@ class TranscriptStabilizer:
         )
         self._event_index += 1
         self.event_ids[record.record_id] = stable
+        if record.origin is not None:
+            self.spans[stable] = record.origin
         if self.cwd is None:
             self.cwd = _payload_cwd(payload)
         return stable
@@ -167,6 +173,40 @@ class TranscriptStabilizer:
             started_at=started_at.isoformat(),
             tool_call_id=tool_call_id,
         )
+
+
+def build_session_provenance(
+    *,
+    session_id: UUID,
+    vendor: Vendor,
+    source: Any,
+    stabilizer: TranscriptStabilizer,
+    turns: list[Turn],
+) -> SessionProvenance:
+    """Assemble canonical-id -> source-span provenance for one compact session.
+
+    Items inherit the ordered spans of their constituent events, so merged
+    agent messages and tool call/result pairs map to every source range that
+    produced them.
+    """
+
+    item_spans: dict[UUID, tuple[RecordSpan, ...]] = {}
+    for turn in turns:
+        for item in turn.items:
+            spans = tuple(
+                stabilizer.spans[event_id]
+                for event_id in item.event_ids
+                if event_id in stabilizer.spans
+            )
+            if spans:
+                item_spans[item.item_id] = spans
+    return SessionProvenance(
+        session_id=session_id,
+        vendor=vendor,
+        source_path=str(source),
+        events=dict(stabilizer.spans),
+        items=item_spans,
+    )
 
 
 def _payload_cwd(payload: dict[str, Any]) -> str | None:

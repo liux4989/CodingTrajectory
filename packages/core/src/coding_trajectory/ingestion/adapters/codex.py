@@ -30,6 +30,7 @@ from coding_trajectory.ingestion.models import (
     ToolStatus,
     Vendor,
 )
+from coding_trajectory.ingestion.provenance import RecordSpan, SessionProvenance
 from coding_trajectory.ingestion.retention import (
     CanonicalRetention,
     compact_context_usage_observation,
@@ -37,6 +38,7 @@ from coding_trajectory.ingestion.retention import (
 from coding_trajectory.ingestion.transcript import (
     TranscriptRecord,
     TranscriptStabilizer,
+    build_session_provenance,
     compact_session_cwd,
     events_from_transcript,
     project_transcript,
@@ -301,8 +303,9 @@ def _session_forked_from_id(records: Iterable[dict]) -> str | None:
 
 
 def _iter_own_records(
-    records: Iterable[dict], parent_started_turn_ids: set[str]
-) -> Iterator[dict]:
+    records: Iterable[tuple[dict, RecordSpan]],
+    parent_started_turn_ids: set[str],
+) -> Iterator[tuple[dict, RecordSpan]]:
     """Stream ``_cut_inherited_records`` semantics without materializing records.
 
     Keeps the leading ``session_meta`` prefix, drops the inherited segment a
@@ -310,13 +313,14 @@ def _iter_own_records(
     first foreign ``task_started`` on.  Non-forks pass through unchanged.
     """
     iterator = iter(records)
-    head: list[dict] = []
+    head: list[tuple[dict, RecordSpan]] = []
     leading = 0
     prefix_open = True
     meta_seen = False
     forked_from: str | None = None
-    for record in iterator:
-        head.append(record)
+    for pair in iterator:
+        record = pair[0]
+        head.append(pair)
         if record.get("type") == "session_meta":
             if not meta_seen:
                 meta_seen = True
@@ -336,13 +340,13 @@ def _iter_own_records(
         yield from iterator
         return
     yield from head[:leading]
-    for record in chain(head[leading:], iterator):
+    for record, _span in chain(head[leading:], iterator):
         payload = record.get("payload") or {}
         if payload.get("type") != "task_started":
             continue
         turn_id = payload.get("turn_id")
         if isinstance(turn_id, str) and turn_id not in parent_started_turn_ids:
-            yield record
+            yield record, _span
             break
     else:
         # Fork has no own turns (inherited only): keep just its session_meta.
@@ -532,13 +536,19 @@ class CodexAdapter(BaseAdapter):
         retention: CanonicalRetention = "trajectory",
     ) -> Session:
         self._reset_ingest_state()
+        self.last_provenance: SessionProvenance | None = None
         if retention == "measurements":
-            records: Iterable[dict] = self._iter_records(path)
+            records: Iterable[tuple[dict, RecordSpan | None]] = self._iter_record_spans(
+                path
+            )
             if parent_started_turn_ids is not None:
                 records = _iter_own_records(records, parent_started_turn_ids)
         else:
-            records = _cut_inherited_records(
-                self._load_records(path), parent_started_turn_ids
+            records = (
+                (record, None)
+                for record in _cut_inherited_records(
+                    self._load_records(path), parent_started_turn_ids
+                )
             )
         state = self._ParseState()
         transcript = self._build_transcript(records, state)
@@ -646,6 +656,14 @@ class CodexAdapter(BaseAdapter):
             prefer_lifecycle=True,
             compact=compact,
         )
+        if compact is not None:
+            self.last_provenance = build_session_provenance(
+                session_id=state.session_id,
+                vendor=Vendor.CODEX_CLI,
+                source=source,
+                stabilizer=compact,
+                turns=turns,
+            )
         session_status = _derive_session_status(turns)
 
         context_usage = state.context_usage
@@ -687,37 +705,48 @@ class CodexAdapter(BaseAdapter):
 
     def _build_transcript(
         self,
-        records: Iterable[dict],
+        records: Iterable[tuple[dict, RecordSpan | None]],
         state: _ParseState,
     ) -> list[TranscriptRecord]:
         """Extract only CT-useful transcript facts from Codex JSONL records."""
         transcript: list[TranscriptRecord] = []
-        for record in records:
-            outer_type = record.get("type", "")
-            payload = record.get("payload") or {}
-            ts = parse_iso_timestamp(record.get("timestamp"))
-
-            if outer_type == "session_meta":
-                self._handle_session_meta(payload, ts, state, transcript)
-                continue
-
-            if outer_type == "turn_context":
-                self._handle_turn_context(payload, ts, state)
-                continue
-
-            if ts is None:
-                continue
-
-            if outer_type == "event_msg":
-                self._handle_event_msg(payload, ts, state, transcript)
-
-            elif outer_type == "response_item":
-                self._handle_response_item(payload, ts, state, transcript)
-
-            elif outer_type == "compacted":
-                self._handle_compacted(payload, ts, state, transcript)
-
+        for record, span in records:
+            before = len(transcript)
+            self._translate_record(record, state, transcript)
+            if span is not None:
+                for entry in transcript[before:]:
+                    entry.origin = span
         return transcript
+
+    def _translate_record(
+        self,
+        record: dict,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        outer_type = record.get("type", "")
+        payload = record.get("payload") or {}
+        ts = parse_iso_timestamp(record.get("timestamp"))
+
+        if outer_type == "session_meta":
+            self._handle_session_meta(payload, ts, state, transcript)
+            return
+
+        if outer_type == "turn_context":
+            self._handle_turn_context(payload, ts, state)
+            return
+
+        if ts is None:
+            return
+
+        if outer_type == "event_msg":
+            self._handle_event_msg(payload, ts, state, transcript)
+
+        elif outer_type == "response_item":
+            self._handle_response_item(payload, ts, state, transcript)
+
+        elif outer_type == "compacted":
+            self._handle_compacted(payload, ts, state, transcript)
 
     def _handle_response_item(
         self,
