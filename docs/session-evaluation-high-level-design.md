@@ -2,7 +2,11 @@
 
 ## Status
 
-Active architecture contract. The strict v2 Phase 1 backend and CLI foundation is implemented and has completed its first reduced-context turn evaluation; cohort validation is still pending. The lightweight implementation and current run record are specified in [`session-evaluation-foundation-lite.md`](session-evaluation-foundation-lite.md), and the production system is specified in [`session-evaluation-full.md`](session-evaluation-full.md).
+Historical v2 design rationale. The dashboard-owned implementation and its
+foundation document were removed in commit `b178527` before cohort validation.
+The active replacement contract is
+[`evaluation-design.md`](evaluation-design.md); where the documents conflict,
+the replacement contract is authoritative.
 
 ## Purpose
 
