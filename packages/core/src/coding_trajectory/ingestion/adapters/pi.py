@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -22,8 +23,14 @@ from coding_trajectory.ingestion.models import (
     Vendor,
     VendorExtensions,
 )
+from coding_trajectory.ingestion.retention import (
+    CanonicalRetention,
+    compact_context_usage_observation,
+)
 from coding_trajectory.ingestion.transcript import (
     TranscriptRecord,
+    TranscriptStabilizer,
+    compact_session_cwd,
     events_from_transcript,
     project_transcript,
 )
@@ -143,6 +150,7 @@ class PiAdapter(BaseAdapter):
     _current_thinking_level: str | None
     _current_cwd: str | None
     _session_title: str | None
+    _session_raw_id: str | None
     _pending_bash_tool_call_ids: list[str]
 
     def _reset_ingest_state(self) -> None:
@@ -151,6 +159,7 @@ class PiAdapter(BaseAdapter):
         self._current_thinking_level = None
         self._current_cwd = None
         self._session_title = None
+        self._session_raw_id = None
         self._pending_bash_tool_call_ids = []
 
     _TITLE_LOOKAHEAD = 50
@@ -198,17 +207,31 @@ class PiAdapter(BaseAdapter):
             cwd=cwd,
         )
 
-    def _build_session(self, source: Path, records: list[dict]) -> Session:
+    def _build_session(
+        self,
+        source: Path,
+        records: Iterable[dict],
+        *,
+        retention: CanonicalRetention = "trajectory",
+    ) -> Session:
         transcript = self._build_transcript(records)
-        session_id = self._session_id(source, records)
+        session_id = self._resolved_session_id(source)
         if not transcript:
             raise ValueError(f"PiAdapter: no transcript records parsed from {source}")
 
-        events = events_from_transcript(session_id=session_id, records=transcript)
+        compact = (
+            TranscriptStabilizer(vendor=Vendor.PI, source=source)
+            if retention == "measurements"
+            else None
+        )
+        events = events_from_transcript(
+            session_id=session_id, records=transcript, stabilizer=compact
+        )
         turns = project_transcript(
             session_id=session_id,
             vendor=Vendor.PI,
             records=transcript,
+            compact=compact,
         )
 
         started_at = min(record.timestamp for record in transcript)
@@ -228,6 +251,11 @@ class PiAdapter(BaseAdapter):
             )
             is not None
         ]
+        if compact is not None:
+            context_usage = [
+                compact_context_usage_observation(observation, compact.event_ids)
+                for observation in context_usage
+            ]
 
         extensions = VendorExtensions(
             pi=PiExtensions(
@@ -250,9 +278,19 @@ class PiAdapter(BaseAdapter):
             context_usage=context_usage,
             extensions=extensions,
             status=SessionStatus.COMPLETED,
+            cwd=(
+                compact_session_cwd(
+                    vendor=Vendor.PI,
+                    source=source,
+                    extensions=extensions,
+                    payload_cwd=compact.cwd,
+                )
+                if compact is not None
+                else None
+            ),
         )
 
-    def _build_transcript(self, records: list[dict]) -> list[TranscriptRecord]:
+    def _build_transcript(self, records: Iterable[dict]) -> list[TranscriptRecord]:
         """Extract only CT-useful transcript facts from Pi JSONL records."""
         transcript: list[TranscriptRecord] = []
 
@@ -293,6 +331,9 @@ class PiAdapter(BaseAdapter):
         entry_type = record.get("type", "")
         if entry_type == "session":
             self._current_cwd = record.get("cwd")
+            raw_id = record.get("id")
+            if self._session_raw_id is None and isinstance(raw_id, str):
+                self._session_raw_id = raw_id
             return True
         if entry_type == "model_change":
             self._current_provider = record.get("provider")
@@ -482,17 +523,13 @@ class PiAdapter(BaseAdapter):
             )
         )
 
-    def _session_id(self, source: Path, records: list[dict]) -> UUID:
-        for record in records:
-            if record.get("type") != "session":
-                continue
-            raw_id = record.get("id")
-            if isinstance(raw_id, str):
-                try:
-                    return UUID(raw_id)
-                except ValueError:
-                    return uuid5(NAMESPACE_URL, f"pi:{source}:{raw_id}")
-
+    def _resolved_session_id(self, source: Path) -> UUID:
+        raw_id = self._session_raw_id
+        if raw_id is not None:
+            try:
+                return UUID(raw_id)
+            except ValueError:
+                return uuid5(NAMESPACE_URL, f"pi:{source}:{raw_id}")
         return uuid5(NAMESPACE_URL, f"pi:{source}")
 
     def ingest_default(self) -> list[Session]:

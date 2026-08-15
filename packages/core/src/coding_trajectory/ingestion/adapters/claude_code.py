@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import json
 import re
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,14 +21,23 @@ from coding_trajectory.ingestion.models import (
     ContextSourceObservation,
     ContextUsageObservation,
     Event,
+    Item,
     RuntimeObservation,
     Session,
+    TeamTurnState,
+    ToolCallItem,
     ToolStatus,
     Turn,
     Vendor,
 )
+from coding_trajectory.ingestion.retention import (
+    CanonicalRetention,
+    compact_context_usage_observation,
+)
 from coding_trajectory.ingestion.transcript import (
     TranscriptRecord,
+    TranscriptStabilizer,
+    compact_session_cwd,
     events_from_transcript,
     project_transcript,
 )
@@ -234,6 +244,9 @@ def _starting_context_sources(
     return []
 
 
+_TEAM_TOOL_NAMES: frozenset[str] = frozenset({"Agent", "TaskCreate", "TaskUpdate"})
+
+
 def _record_title(record: dict[str, object]) -> str | None:
     for key in ("title", "sessionTitle", "conversationTitle", "threadName", "aiTitle"):
         title = _as_non_empty_str(record.get(key))
@@ -257,10 +270,17 @@ def _read_subagent_meta(source: Path) -> dict[str, object]:
 def _subagent_input(
     source: Path, records: list[dict], raw_session_id: UUID
 ) -> ClaudeSubagentInput:
-    first = next((record for record in records if record.get("sessionId")), {})
-    title = next(
-        (_record_title(record) for record in records if _record_title(record)), None
-    )
+    scan = _ClaudeRecordScan()
+    for record in records:
+        scan.observe_meta(record)
+    return _subagent_input_from_scan(source, scan, raw_session_id)
+
+
+def _subagent_input_from_scan(
+    source: Path, scan: "_ClaudeRecordScan", raw_session_id: UUID
+) -> ClaudeSubagentInput:
+    first = scan.first_session_record or {}
+    title = scan.title
     is_subagent_file = source.parent.name == "subagents"
     parent_session_id: UUID | None = None
     if is_subagent_file:
@@ -270,19 +290,7 @@ def _subagent_input(
             parent_session_id = None
     meta = _read_subagent_meta(source) if is_subagent_file else {}
 
-    mode: str | None = None
-    permission_mode: str | None = None
-    last_prompt: str | None = None
-    for record in records:
-        raw_type = record.get("type")
-        if raw_type == "mode":
-            mode = _as_non_empty_str(record.get("mode")) or mode
-        elif raw_type == "permission-mode":
-            permission_mode = (
-                _as_non_empty_str(record.get("permissionMode")) or permission_mode
-            )
-        elif raw_type == "last-prompt":
-            last_prompt = _as_non_empty_str(record.get("lastPrompt")) or last_prompt
+    permission_mode = scan.permission_mode
     if permission_mode is None:
         permission_mode = _as_non_empty_str(first.get("permissionMode"))
 
@@ -294,8 +302,8 @@ def _subagent_input(
         team_name=first.get("teamName"),
         is_sidechain=first.get("isSidechain"),
         permission_mode=permission_mode,
-        mode=mode,
-        last_prompt=last_prompt,
+        mode=scan.mode,
+        last_prompt=scan.last_prompt,
         parent_uuid=first.get("parentUuid"),
         request_id=first.get("uuid"),
         agent_name=first.get("agentId") or first.get("agentName") or first.get("slug"),
@@ -309,6 +317,81 @@ def _subagent_input(
         tool_use_id=_as_non_empty_str(meta.get("toolUseId")),
         spawn_depth=_as_int_or_none(meta.get("spawnDepth")),
     )
+
+
+class _ClaudeRecordScan:
+    """Single-pass collector for record facts used outside the transcript.
+
+    Replaces the repeated full-list scans of ``_first_session_id``,
+    ``_subagent_input``, and ``_effort_change_observations`` so ingestion can
+    stream records instead of materializing them.
+    """
+
+    def __init__(self) -> None:
+        self.first_session_record: dict | None = None
+        self.raw_session_id: UUID | None = None
+        self.title: str | None = None
+        self.mode: str | None = None
+        self.permission_mode: str | None = None
+        self.last_prompt: str | None = None
+        self._effort_prev: str | None = None
+        self.effort_observations: list[RuntimeObservation] = []
+
+    def observe_meta(self, record: dict) -> None:
+        """Capture session-id/title/mode scalars (no effort scan)."""
+        sid_str = record.get("sessionId")
+        if self.first_session_record is None and sid_str:
+            self.first_session_record = record
+        if self.raw_session_id is None and sid_str:
+            try:
+                self.raw_session_id = UUID(str(sid_str))
+            except (ValueError, AttributeError, TypeError):
+                pass
+        if self.title is None:
+            title = _record_title(record)
+            if title:
+                self.title = title
+        raw_type = record.get("type")
+        if raw_type == "mode":
+            self.mode = _as_non_empty_str(record.get("mode")) or self.mode
+        elif raw_type == "permission-mode":
+            self.permission_mode = (
+                _as_non_empty_str(record.get("permissionMode")) or self.permission_mode
+            )
+        elif raw_type == "last-prompt":
+            self.last_prompt = (
+                _as_non_empty_str(record.get("lastPrompt")) or self.last_prompt
+            )
+
+    def observe(self, record: dict) -> None:
+        """Capture all scan facts, including effort change-points."""
+        self.observe_meta(record)
+        if record.get("type") != "user":
+            return
+        message = record.get("message")
+        if not isinstance(message, dict):
+            return
+        text = _extract_text(message.get("content"))
+        if not text:
+            return
+        match = _CLAUDE_EFFORT_STDOUT_RE.search(text)
+        if match is None:
+            return
+        level = match.group(1)
+        if self._effort_prev is not None and level == self._effort_prev:
+            return
+        ts = parse_timestamp(record.get("timestamp"))
+        if ts is None:
+            return
+        self.effort_observations.append(
+            RuntimeObservation(
+                timestamp=ts,
+                kind="effort_changed",
+                effort_from=self._effort_prev,
+                effort_to=level,
+            )
+        )
+        self._effort_prev = level
 
 
 def _extract_text(content: str | list | None) -> str | None:
@@ -348,36 +431,10 @@ def _effort_change_observations(records: list[dict]) -> list[RuntimeObservation]
     from an unknown baseline (``effort_from=None``); a no-op re-set to the same
     level emits nothing.
     """
-    observations: list[RuntimeObservation] = []
-    prev_effort: str | None = None
+    scan = _ClaudeRecordScan()
     for record in records:
-        if record.get("type") != "user":
-            continue
-        message = record.get("message")
-        if not isinstance(message, dict):
-            continue
-        text = _extract_text(message.get("content"))
-        if not text:
-            continue
-        match = _CLAUDE_EFFORT_STDOUT_RE.search(text)
-        if match is None:
-            continue
-        level = match.group(1)
-        if prev_effort is not None and level == prev_effort:
-            continue
-        ts = parse_timestamp(record.get("timestamp"))
-        if ts is None:
-            continue
-        observations.append(
-            RuntimeObservation(
-                timestamp=ts,
-                kind="effort_changed",
-                effort_from=prev_effort,
-                effort_to=level,
-            )
-        )
-        prev_effort = level
-    return observations
+        scan.observe(record)
+    return scan.effort_observations
 
 
 def _extract_thinking(content: list | None) -> list[str]:
@@ -489,30 +546,53 @@ class ClaudeCodeAdapter(BaseAdapter):
             cwd=cwd,
         )
 
-    def _build_session(self, source: Path, records: list[dict]) -> Session:
-        raw_session_id = self._first_session_id(records)
+    def _build_session(
+        self,
+        source: Path,
+        records: Iterable[dict],
+        *,
+        retention: CanonicalRetention = "trajectory",
+    ) -> Session:
+        scan = _ClaudeRecordScan()
+        transcript, team_inputs = self._build_transcript(records, scan=scan)
+        raw_session_id = scan.raw_session_id
         if raw_session_id is None:
             raise ValueError(f"ClaudeCodeAdapter: no session id parsed from {source}")
 
-        mechanism = _subagent_input(source, records, raw_session_id)
+        mechanism = _subagent_input_from_scan(source, scan, raw_session_id)
         extensions = claude_extensions(mechanism)
         session_id, parent_session_id = canonical_session_ids(mechanism)
-        transcript, team_inputs = self._build_transcript(records)
         if not transcript:
             raise ValueError(
                 f"ClaudeCodeAdapter: no transcript records parsed from {source}"
             )
-        events = events_from_transcript(session_id=session_id, records=transcript)
+        compact = (
+            TranscriptStabilizer(vendor=Vendor.CLAUDE_CODE, source=source)
+            if retention == "measurements"
+            else None
+        )
+        events = events_from_transcript(
+            session_id=session_id, records=transcript, stabilizer=compact
+        )
         turns = project_transcript(
             session_id=session_id,
             vendor=Vendor.CLAUDE_CODE,
             records=transcript,
+            compact=compact,
         )
-        for turn, team_input in zip(turns, team_inputs, strict=False):
-            turn.team_state = build_turn_team_state(turn, team_input=team_input)
+        if compact is not None:
+            for turn, team_state in zip(
+                turns, self._compact_team_states(turns, team_inputs), strict=False
+            ):
+                turn.team_state = team_state
+        else:
+            for turn, team_input in zip(turns, team_inputs, strict=False):
+                turn.team_state = build_turn_team_state(turn, team_input=team_input)
         started_at = min(record.timestamp for record in transcript)
         ended_at = max(record.timestamp for record in transcript)
-        runtime_observations = self._build_runtime_observations(transcript, records)
+        runtime_observations = self._build_runtime_observations(
+            transcript, scan.effort_observations
+        )
         # A Claude Code ``uuid`` identifies one local stream event, whereas
         # ``message.id`` identifies the provider response.  One response is
         # recorded as several stream events (thinking, text, tool-use, final
@@ -554,13 +634,22 @@ class ClaudeCodeAdapter(BaseAdapter):
             )
             is not None
         ]
-        context_sources = _starting_context_sources(
-            started_at=started_at,
-            context_usage=context_usage,
-            first_prompt_text=_first_api_prompt_text(
-                turns=turns, events=events, context_usage=context_usage
-            ),
+        context_sources = (
+            []
+            if compact is not None
+            else _starting_context_sources(
+                started_at=started_at,
+                context_usage=context_usage,
+                first_prompt_text=_first_api_prompt_text(
+                    turns=turns, events=events, context_usage=context_usage
+                ),
+            )
         )
+        if compact is not None:
+            context_usage = [
+                compact_context_usage_observation(observation, compact.event_ids)
+                for observation in context_usage
+            ]
 
         return Session(
             session_id=session_id,
@@ -577,15 +666,25 @@ class ClaudeCodeAdapter(BaseAdapter):
             context_sources=context_sources,
             runtime_observations=runtime_observations,
             extensions=extensions,
+            cwd=(
+                compact_session_cwd(
+                    vendor=Vendor.CLAUDE_CODE,
+                    source=source,
+                    extensions=extensions,
+                    payload_cwd=compact.cwd,
+                )
+                if compact is not None
+                else None
+            ),
         )
 
     def _build_runtime_observations(
         self,
         transcript: list[TranscriptRecord],
-        records: list[dict],
+        effort_observations: list[RuntimeObservation],
     ) -> list[RuntimeObservation]:
         """Build runtime observations from runtime-kind transcript records,
-        plus effort change-points scanned from the raw records.
+        plus effort change-points collected during the transcript pass.
         """
         runtime_observations = [
             RuntimeObservation(
@@ -609,29 +708,25 @@ class ClaudeCodeAdapter(BaseAdapter):
         ]
         # Effort change-points are not in the transcript (the ``/effort`` command
         # and its ``<local-command-stdout>`` echo are user records, not runtime
-        # records), so scan the raw records directly and append alongside.
-        runtime_observations.extend(_effort_change_observations(records))
+        # records); they were collected during the transcript pass.
+        runtime_observations.extend(effort_observations)
         return runtime_observations
 
-    def _first_session_id(self, records: list[dict]) -> UUID | None:
-        for record in records:
-            session_id_str = record.get("sessionId")
-            if not session_id_str:
-                continue
-            try:
-                return UUID(session_id_str)
-            except (ValueError, AttributeError):
-                continue
-        return None
-
     def _build_transcript(
-        self, records: list[dict]
+        self, records: Iterable[dict], *, scan: _ClaudeRecordScan | None = None
     ) -> tuple[list[TranscriptRecord], list[ClaudeTeamStateInput]]:
         """Extract only CT-useful transcript facts from Claude Code JSONL records."""
         transcript: list[TranscriptRecord] = []
         team_inputs: list[ClaudeTeamStateInput] = []
+        # Small merged input/output dicts for team-management tools
+        # (Agent/TaskCreate/TaskUpdate), keyed by tool_call_id.  Compact
+        # sessions drop item bodies at translation; team-state reconstruction
+        # re-reads only these bounded dicts instead of resident bodies.
+        self._team_tool_calls: dict[str, dict[str, Any]] = {}
 
         for record in records:
+            if scan is not None:
+                scan.observe(record)
             raw_type = record.get("type")
 
             # File-history-snapshot carries its timestamp inside snapshot.timestamp.
@@ -699,6 +794,15 @@ class ClaudeCodeAdapter(BaseAdapter):
                     for block in _tool_result_blocks(content):
                         tool_use_result = record.get("toolUseResult")
                         success = infer_tool_success(tool_use_result)
+                        result_call_id = block.get("tool_use_id") or block.get(
+                            "toolUseID"
+                        )
+                        result_output = (
+                            tool_use_result
+                            if tool_use_result is not None
+                            else block.get("content")
+                        )
+                        self._merge_team_tool_result(result_call_id, result_output)
                         transcript.append(
                             TranscriptRecord(
                                 sequence=len(transcript),
@@ -851,6 +955,63 @@ class ClaudeCodeAdapter(BaseAdapter):
 
         return transcript, team_inputs
 
+    def _merge_team_tool_result(self, tool_call_id: Any, output: Any) -> None:
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            return
+        entry = self._team_tool_calls.get(tool_call_id)
+        if entry is not None and output is not None:
+            entry["output"] = output
+
+    def _compact_team_states(
+        self,
+        turns: list[Turn],
+        team_inputs: list[ClaudeTeamStateInput],
+    ) -> list[TeamTurnState | None]:
+        """Rebuild team state for compact turns from captured team-tool dicts.
+
+        ``build_turn_team_state`` reads merged item input/output bodies, which
+        compact items no longer carry.  The captured per-call dicts are exactly
+        the merged bodies for the three team-management tools, so transient
+        full-fidelity proxy items reproduce the same state.
+        """
+        results: list[TeamTurnState | None] = []
+        for turn, team_input in zip(turns, team_inputs, strict=False):
+            pseudo_items: list[Item] = []
+            for item in turn.items:
+                if item.kind not in {
+                    "tool_call",
+                    "command_execution",
+                    "file_change",
+                    "plan",
+                }:
+                    continue
+                call_id = getattr(item, "tool_call_id", None)
+                entry = self._team_tool_calls.get(call_id) if call_id else None
+                if entry is None:
+                    continue
+                pseudo_items.append(
+                    ToolCallItem(
+                        session_id=turn.session_id,
+                        turn_id=turn.turn_id,
+                        sequence=item.sequence,
+                        started_at=item.started_at,
+                        tool_name=entry.get("tool_name")
+                        if isinstance(entry.get("tool_name"), str)
+                        else None,
+                        tool_call_id=call_id,
+                        input=entry.get("input"),
+                        output=entry.get("output"),
+                    )
+                )
+            proxy = Turn(
+                session_id=turn.session_id,
+                sequence=turn.sequence,
+                started_at=turn.started_at,
+                items=pseudo_items,
+            )
+            results.append(build_turn_team_state(proxy, team_input=team_input))
+        return results
+
     def _handle_assistant_record(
         self,
         record: dict,
@@ -927,6 +1088,12 @@ class ClaudeCodeAdapter(BaseAdapter):
         for block in tool_uses:
             tool_id = block.get("id")
             tool_name = block.get("name")
+            if tool_name in _TEAM_TOOL_NAMES and isinstance(tool_id, str) and tool_id:
+                self._team_tool_calls[tool_id] = {
+                    "tool_name": tool_name,
+                    "input": block.get("input"),
+                    "output": None,
+                }
             transcript.append(
                 TranscriptRecord(
                     sequence=len(transcript),

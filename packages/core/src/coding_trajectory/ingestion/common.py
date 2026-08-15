@@ -7,6 +7,21 @@ import re
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Mapping
+from uuid import NAMESPACE_URL, UUID, uuid5
+
+
+def stable_uuid(vendor: Any, source: Any, **fields: object) -> UUID:
+    """Derive a deterministic UUID5 for a canonical resource.
+
+    ``sort_keys=True`` normalizes the JSON key order, so merging the common
+    ``vendor``/``source`` keys here with the per-resource ``fields`` produces a
+    byte-identical payload (and thus identical UUID) to the inline
+    ``uuid5(NAMESPACE_URL, json.dumps({...}, sort_keys=True, default=str))`` it
+    replaces.
+    """
+    vendor_value = getattr(vendor, "value", vendor)
+    payload = {"vendor": vendor_value, "source": str(source), **fields}
+    return uuid5(NAMESPACE_URL, json.dumps(payload, sort_keys=True, default=str))
 
 
 _EXIT_CODE_RE = re.compile(

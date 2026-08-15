@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from coding_trajectory.ingestion.models import Session, Vendor
+
+if TYPE_CHECKING:
+    from coding_trajectory.ingestion.retention import CanonicalRetention
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,11 +51,28 @@ class BaseAdapter(ABC):
         return list(self._iter_records(path))
 
     def ingest_file(
-        self, path: Path, *, parent_started_turn_ids: set[str] | None = None
+        self,
+        path: Path,
+        *,
+        parent_started_turn_ids: set[str] | None = None,
+        retention: CanonicalRetention = "trajectory",
     ) -> Session:
+        """Ingest one source file.
+
+        With ``retention="trajectory"`` the returned session keeps every
+        canonical body and carries random pre-stabilization ids; the caller
+        applies ``stabilize_session``.  With ``retention="measurements"`` the
+        adapter streams records, assigns canonical stable ids inline, and
+        discards message/tool bodies at translation time, so the returned
+        session is already final and compact.
+        """
         self._reset_ingest_state()
-        records = self._load_records(path)
-        return self._build_session(path, records)
+        records: Iterable[dict] = (
+            self._iter_records(path)
+            if retention == "measurements"
+            else self._load_records(path)
+        )
+        return self._build_session(path, records, retention=retention)
 
     def ingest_directory(self, directory: Path) -> list[Session]:
         sessions: list[Session] = []
@@ -71,7 +92,13 @@ class BaseAdapter(ABC):
         return None
 
     @abstractmethod
-    def _build_session(self, source: Path, records: list[dict]) -> Session: ...
+    def _build_session(
+        self,
+        source: Path,
+        records: Iterable[dict],
+        *,
+        retention: CanonicalRetention = "trajectory",
+    ) -> Session: ...
 
     @abstractmethod
     def scan_header(self, source: Path) -> SessionHeader | None:

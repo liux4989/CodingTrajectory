@@ -6,8 +6,10 @@ import json
 import logging
 import re
 import time
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import chain
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -28,8 +30,14 @@ from coding_trajectory.ingestion.models import (
     ToolStatus,
     Vendor,
 )
+from coding_trajectory.ingestion.retention import (
+    CanonicalRetention,
+    compact_context_usage_observation,
+)
 from coding_trajectory.ingestion.transcript import (
     TranscriptRecord,
+    TranscriptStabilizer,
+    compact_session_cwd,
     events_from_transcript,
     project_transcript,
 )
@@ -279,7 +287,7 @@ def _is_source_active(source: Path | None, *, active_seconds: int = 300) -> bool
         return False
 
 
-def _session_forked_from_id(records: list[dict]) -> str | None:
+def _session_forked_from_id(records: Iterable[dict]) -> str | None:
     for record in records:
         if record.get("type") != "session_meta":
             continue
@@ -290,6 +298,56 @@ def _session_forked_from_id(records: list[dict]) -> str | None:
         )
         return _extract_uuid_text(ffid)
     return None
+
+
+def _iter_own_records(
+    records: Iterable[dict], parent_started_turn_ids: set[str]
+) -> Iterator[dict]:
+    """Stream ``_cut_inherited_records`` semantics without materializing records.
+
+    Keeps the leading ``session_meta`` prefix, drops the inherited segment a
+    forked rollout re-materializes, and passes through everything from the
+    first foreign ``task_started`` on.  Non-forks pass through unchanged.
+    """
+    iterator = iter(records)
+    head: list[dict] = []
+    leading = 0
+    prefix_open = True
+    meta_seen = False
+    forked_from: str | None = None
+    for record in iterator:
+        head.append(record)
+        if record.get("type") == "session_meta":
+            if not meta_seen:
+                meta_seen = True
+                payload = record.get("payload")
+                ffid = (
+                    payload.get("forked_from_id") if isinstance(payload, dict) else None
+                )
+                forked_from = _extract_uuid_text(ffid)
+        else:
+            prefix_open = False
+        if prefix_open:
+            leading += 1
+        if meta_seen and not prefix_open:
+            break
+    if not meta_seen or forked_from is None:
+        yield from head
+        yield from iterator
+        return
+    yield from head[:leading]
+    for record in chain(head[leading:], iterator):
+        payload = record.get("payload") or {}
+        if payload.get("type") != "task_started":
+            continue
+        turn_id = payload.get("turn_id")
+        if isinstance(turn_id, str) and turn_id not in parent_started_turn_ids:
+            yield record
+            break
+    else:
+        # Fork has no own turns (inherited only): keep just its session_meta.
+        return
+    yield from iterator
 
 
 def _cut_inherited_records(
@@ -471,13 +529,20 @@ class CodexAdapter(BaseAdapter):
         path: Path,
         *,
         parent_started_turn_ids: set[str] | None = None,
+        retention: CanonicalRetention = "trajectory",
     ) -> Session:
         self._reset_ingest_state()
-        records = self._load_records(path)
-        records = _cut_inherited_records(records, parent_started_turn_ids)
+        if retention == "measurements":
+            records: Iterable[dict] = self._iter_records(path)
+            if parent_started_turn_ids is not None:
+                records = _iter_own_records(records, parent_started_turn_ids)
+        else:
+            records = _cut_inherited_records(
+                self._load_records(path), parent_started_turn_ids
+            )
         state = self._ParseState()
         transcript = self._build_transcript(records, state)
-        return self._build_session(path, transcript, state)
+        return self._build_session(path, transcript, state, retention=retention)
 
     def scan_started_turn_ids(self, source: Path) -> set[str] | None:
         started: set[str] = set()
@@ -534,6 +599,8 @@ class CodexAdapter(BaseAdapter):
         source: Path,
         transcript: list[TranscriptRecord],
         state: _ParseState | None = None,
+        *,
+        retention: CanonicalRetention = "trajectory",
     ) -> Session:
         state = state or self._ParseState()
         if not transcript:
@@ -552,7 +619,14 @@ class CodexAdapter(BaseAdapter):
         if state.multi_agent_mode is not None:
             mechanism.multi_agent_mode = state.multi_agent_mode
         parent_session_id = codex_parent_session_id(mechanism)
-        events = events_from_transcript(session_id=state.session_id, records=transcript)
+        compact = (
+            TranscriptStabilizer(vendor=Vendor.CODEX_CLI, source=source)
+            if retention == "measurements"
+            else None
+        )
+        events = events_from_transcript(
+            session_id=state.session_id, records=transcript, stabilizer=compact
+        )
         extensions = codex_extensions(mechanism)
         if extensions.codex is not None and state.spawn_links:
             extensions.codex.spawn_links = dict(state.spawn_links)
@@ -570,8 +644,16 @@ class CodexAdapter(BaseAdapter):
             # mode so turns (incl. compaction-only turns) project correctly and
             # spawn calls are turn-attributed.
             prefer_lifecycle=True,
+            compact=compact,
         )
         session_status = _derive_session_status(turns)
+
+        context_usage = state.context_usage
+        if compact is not None:
+            context_usage = [
+                compact_context_usage_observation(observation, compact.event_ids)
+                for observation in context_usage
+            ]
 
         return Session(
             session_id=state.session_id,
@@ -582,16 +664,30 @@ class CodexAdapter(BaseAdapter):
             parent_session_id=parent_session_id,
             events=events,
             turns=turns,
-            context_usage=state.context_usage,
-            context_sources=list(state.context_source_by_block.values()),
+            context_usage=context_usage,
+            context_sources=(
+                []
+                if compact is not None
+                else list(state.context_source_by_block.values())
+            ),
             runtime_observations=state.runtime_observations,
             extensions=extensions,
             status=session_status,
+            cwd=(
+                compact_session_cwd(
+                    vendor=Vendor.CODEX_CLI,
+                    source=source,
+                    extensions=extensions,
+                    payload_cwd=compact.cwd,
+                )
+                if compact is not None
+                else None
+            ),
         )
 
     def _build_transcript(
         self,
-        records: list[dict],
+        records: Iterable[dict],
         state: _ParseState,
     ) -> list[TranscriptRecord]:
         """Extract only CT-useful transcript facts from Codex JSONL records."""

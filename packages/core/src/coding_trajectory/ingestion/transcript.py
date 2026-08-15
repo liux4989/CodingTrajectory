@@ -8,12 +8,13 @@ adapter does not hand-roll the same state machine.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-from coding_trajectory.ingestion.common import compact_dict
+from coding_trajectory.ingestion.common import compact_dict, stable_uuid
 from coding_trajectory.ingestion.models import (
     AgentMessageItem,
     CommandExecutionItem,
@@ -28,6 +29,7 @@ from coding_trajectory.ingestion.models import (
     TurnStatus,
     Vendor,
 )
+from coding_trajectory.ingestion.retention import retain_event_for_measurements
 
 TranscriptKind = Literal[
     "user_message",
@@ -73,19 +75,189 @@ class TranscriptRecord(BaseModel):
     fidelity: TranscriptFidelity = "observed"
 
 
+class TranscriptStabilizer:
+    """Inline canonical ID assignment for the compact (measurements) path.
+
+    Reproduces ``discovery.stabilize_session``'s ID recipe record-by-record so
+    event payloads are hashed and discarded at translation time instead of
+    staying resident until post-assembly stabilization.  The event index,
+    timestamp, type, actor, and full event payload enter each hash exactly as
+    the post-assembly path computes them, so compact and full ingestion
+    produce identical identifiers, topology, and metric outputs.
+    """
+
+    def __init__(self, *, vendor: Vendor, source: Any) -> None:
+        self._vendor = vendor
+        self._source = source
+        self.event_ids: dict[UUID, UUID] = {}
+        self._event_index = 0
+        # First cwd observed in an event payload, mirroring the full-event
+        # scan ``stabilize_session`` performs before retention filtering.
+        self.cwd: str | None = None
+
+    def stabilize_event(self, record: TranscriptRecord) -> UUID:
+        """Assign the canonical event id for one record and capture cwd."""
+        payload = _event_payload(record)
+        stable = stable_uuid(
+            self._vendor,
+            self._source,
+            index=self._event_index,
+            timestamp=record.timestamp.isoformat(),
+            type=_event_type(record).value,
+            actor=_actor(record),
+            payload=payload,
+        )
+        self._event_index += 1
+        self.event_ids[record.record_id] = stable
+        if self.cwd is None:
+            self.cwd = _payload_cwd(payload)
+        return stable
+
+    def retained_event(
+        self, record: TranscriptRecord, *, session_id: UUID
+    ) -> Event | None:
+        """Return the retained compact event for ``record``, if any."""
+        stable = self.stabilize_event(record)
+        event = Event(
+            event_id=stable,
+            session_id=session_id,
+            timestamp=record.timestamp,
+            type=_event_type(record),
+            vendor_source=record.vendor,
+            actor=_actor(record),
+            payload=_event_payload(record),
+        )
+        return retain_event_for_measurements(event)
+
+    def map_event_id(self, raw_id: UUID) -> UUID:
+        """Resolve one record id to its stable event id (post event pass)."""
+        return self.event_ids.get(raw_id, raw_id)
+
+    def stabilize_turn(
+        self, *, turn_index: int, session_id: UUID, sequence: int, started_at: datetime
+    ) -> UUID:
+        """Assign the canonical turn id exactly as post-assembly stabilization."""
+        return stable_uuid(
+            self._vendor,
+            self._source,
+            turn_index=turn_index,
+            session_id=str(session_id),
+            sequence=sequence,
+            started_at=started_at.isoformat(),
+        )
+
+    def stabilize_item(
+        self,
+        *,
+        turn_index: int,
+        item_index: int,
+        kind: str,
+        sequence: int,
+        started_at: datetime,
+        tool_call_id: str | None,
+    ) -> UUID:
+        """Assign the canonical item id exactly as post-assembly stabilization."""
+        return stable_uuid(
+            self._vendor,
+            self._source,
+            turn_index=turn_index,
+            item_index=item_index,
+            kind=kind,
+            sequence=sequence,
+            started_at=started_at.isoformat(),
+            tool_call_id=tool_call_id,
+        )
+
+
+def _payload_cwd(payload: dict[str, Any]) -> str | None:
+    cwd = payload.get("cwd")
+    if isinstance(cwd, str) and cwd:
+        return cwd
+    raw = payload.get("raw")
+    if isinstance(raw, dict):
+        raw_cwd = raw.get("cwd")
+        if isinstance(raw_cwd, str) and raw_cwd:
+            return raw_cwd
+    return None
+
+
+def compact_session_cwd(
+    *, vendor: Vendor, source: Any, extensions: Any, payload_cwd: str | None
+) -> str | None:
+    """Resolve session cwd for the compact path identically to
+    ``discovery._extract_session_cwd``: vendor extensions first, then the cwd
+    captured from the first full event payload, then the Claude Code path
+    encoding fallback.
+    """
+
+    if extensions:
+        codex = getattr(extensions, "codex", None)
+        if codex is not None and getattr(codex, "cwd", None):
+            return codex.cwd
+        pi = getattr(extensions, "pi", None)
+        if pi is not None and getattr(pi, "cwd", None):
+            return pi.cwd
+    if payload_cwd:
+        return payload_cwd
+    if vendor == Vendor.CLAUDE_CODE:
+        from coding_trajectory.discovery_paths import _decode_claude_encoded_path
+
+        base = Path.home() / ".claude" / "projects"
+        try:
+            encoded = Path(source).relative_to(base).parts[0]
+            return _decode_claude_encoded_path(encoded)
+        except ValueError:
+            pass
+    return None
+
+
 class _TurnProjectionState:
     """Own turn lifecycle state and its ordered event-id invariants."""
 
-    def __init__(self, *, session_id: UUID) -> None:
+    def __init__(
+        self, *, session_id: UUID, compact: TranscriptStabilizer | None = None
+    ) -> None:
         self._session_id = session_id
+        self._compact = compact
         self.turns: list[Turn] = []
         self.current_turn: Turn | None = None
+        self.current_turn_index = 0
         self._current_event_ids: set[UUID] = set()
         self._last_event_ids: set[UUID] = set()
         self._turn_sequence = 0
         self._item_sequence = 0
         self.has_final_answer = False
         self.vendor_turn_id: str | None = None
+        # Shadow of the trailing agent message's real text in compact mode:
+        # merge equality is decided on the discarded text exactly as the
+        # trajectory path decides it on resident text.
+        self._last_agent_text: str | None = None
+
+    def map_event_id(self, event_id: UUID) -> UUID:
+        compact = self._compact
+        return compact.map_event_id(event_id) if compact is not None else event_id
+
+    def next_item_id(
+        self,
+        *,
+        kind: str,
+        sequence: int,
+        started_at: datetime,
+        tool_call_id: str | None,
+        item_index: int,
+    ) -> UUID | None:
+        """Assign the stable item id inline when running compact."""
+        compact = self._compact
+        if compact is None:
+            return None
+        return compact.stabilize_item(
+            turn_index=self.current_turn_index,
+            item_index=item_index,
+            kind=kind,
+            sequence=sequence,
+            started_at=started_at,
+            tool_call_id=tool_call_id,
+        )
 
     def open_turn(
         self,
@@ -103,10 +275,22 @@ class _TurnProjectionState:
             session_id=self._session_id,
             sequence=self._turn_sequence,
             started_at=started_at,
-            user_request_event_id=user_request_event_id,
+            user_request_event_id=(
+                self.map_event_id(user_request_event_id)
+                if user_request_event_id
+                else None
+            ),
             event_ids=[],
         )
+        if self._compact is not None:
+            turn.turn_id = self._compact.stabilize_turn(
+                turn_index=self._turn_sequence,
+                session_id=self._session_id,
+                sequence=self._turn_sequence,
+                started_at=started_at,
+            )
         self.current_turn = turn
+        self.current_turn_index = self._turn_sequence
         self._current_event_ids = set()
         self.append_event_id(opening_event_id)
         self._turn_sequence += 1
@@ -144,7 +328,7 @@ class _TurnProjectionState:
 
         self.append_event_id(event_id)
         if turn.user_request_event_id is None:
-            turn.user_request_event_id = event_id
+            turn.user_request_event_id = self.map_event_id(event_id)
 
     def next_item_sequence(self) -> int:
         value = self._item_sequence
@@ -157,11 +341,12 @@ class _TurnProjectionState:
         self._item_sequence = 0
         self.has_final_answer = False
         self.vendor_turn_id = None
+        self._last_agent_text = None
 
-    @staticmethod
     def _append_unique_event_id(
-        turn: Turn, known_event_ids: set[UUID], event_id: UUID
+        self, turn: Turn, known_event_ids: set[UUID], event_id: UUID
     ) -> None:
+        event_id = self.map_event_id(event_id)
         if event_id in known_event_ids:
             return
         turn.event_ids.append(event_id)
@@ -180,6 +365,7 @@ class TranscriptProjector:
         active_status: TurnStatus | None = None,
         default_previous_turn_status: TurnStatus = TurnStatus.COMPLETED,
         prefer_lifecycle: bool = False,
+        compact: TranscriptStabilizer | None = None,
     ) -> None:
         self.session_id = session_id
         self.vendor = vendor
@@ -187,8 +373,9 @@ class TranscriptProjector:
         self.active_status = active_status
         self.default_previous_turn_status = default_previous_turn_status
         self._prefer_lifecycle = prefer_lifecycle
+        self._compact = compact
 
-        self._turn_state = _TurnProjectionState(session_id=session_id)
+        self._turn_state = _TurnProjectionState(session_id=session_id, compact=compact)
         # Turn_ids that terminate (``task_complete``/``turn_aborted``) in THIS
         # file. Used to skip inherited/orphan ``turn_started`` markers carried
         # into a forked continuation window from its source - their matching
@@ -362,20 +549,34 @@ class TranscriptProjector:
             text = record.data.get("text")
             cleaned = text.strip() if isinstance(text, str) else None
             if cleaned or vendor_data:
-                current_turn.items.append(
-                    ReasoningItem(
-                        session_id=self.session_id,
-                        turn_id=current_turn.turn_id,
-                        sequence=self._next_item_sequence(),
-                        started_at=record.timestamp,
-                        completed_at=record.timestamp,
-                        text=cleaned,
-                        event_ids=[record.record_id],
-                        vendor_data=vendor_data
-                        if isinstance(vendor_data, dict)
-                        else {},
-                    )
+                items = current_turn.items
+                sequence = self._next_item_sequence()
+                compact_id = self._turn_state.next_item_id(
+                    kind="reasoning",
+                    sequence=sequence,
+                    started_at=record.timestamp,
+                    tool_call_id=None,
+                    item_index=len(items),
                 )
+                item = ReasoningItem(
+                    session_id=self.session_id,
+                    turn_id=current_turn.turn_id,
+                    sequence=sequence,
+                    started_at=record.timestamp,
+                    completed_at=record.timestamp,
+                    text=None if self._compact is not None else cleaned,
+                    event_ids=[self._turn_state.map_event_id(record.record_id)],
+                    vendor_data=(
+                        {}
+                        if self._compact is not None
+                        else vendor_data
+                        if isinstance(vendor_data, dict)
+                        else {}
+                    ),
+                )
+                if compact_id is not None:
+                    item.item_id = compact_id
+                items.append(item)
             return
 
         common = {
@@ -385,18 +586,35 @@ class TranscriptProjector:
             "started_at": record.timestamp,
             "tool_name": record.data.get("tool_name"),
             "tool_call_id": record.data.get("tool_call_id"),
-            "input": record.data.get("input"),
-            "output": record.data.get("output"),
+            "input": None if self._compact is not None else record.data.get("input"),
+            "output": None if self._compact is not None else record.data.get("output"),
             "status": status if isinstance(status, str) else "requested",
-            "event_ids": [record.record_id],
-            "vendor_data": vendor_data if isinstance(vendor_data, dict) else {},
+            "event_ids": [self._turn_state.map_event_id(record.record_id)],
+            "vendor_data": (
+                {}
+                if self._compact is not None
+                else vendor_data
+                if isinstance(vendor_data, dict)
+                else {}
+            ),
         }
+        compact_id = self._turn_state.next_item_id(
+            kind=item_kind,
+            sequence=common["sequence"],
+            started_at=record.timestamp,
+            tool_call_id=record.data.get("tool_call_id"),
+            item_index=len(current_turn.items),
+        )
 
         item: Item
         if item_kind == "command_execution":
             item = CommandExecutionItem(
                 **common,
-                command=record.data.get("command") or record.data.get("input"),
+                command=(
+                    None
+                    if self._compact is not None
+                    else record.data.get("command") or record.data.get("input")
+                ),
                 exit_code=record.data.get("exit_code"),
             )
         elif item_kind == "file_change":
@@ -409,6 +627,8 @@ class TranscriptProjector:
             item = PlanItem(**common)
         else:
             item = ToolCallItem(**common)
+        if compact_id is not None:
+            item.item_id = compact_id
 
         current_turn.items.append(item)
 
@@ -486,32 +706,47 @@ class TranscriptProjector:
     ) -> None:
         current_turn = self._turn_state.current_turn
         assert current_turn is not None
+        compact = self._compact is not None
         items = current_turn.items
         if items:
             last = items[-1]
-            if isinstance(last, AgentMessageItem) and last.text == text:
-                for event_id in event_ids:
-                    if event_id not in last.event_ids:
-                        last.event_ids.append(event_id)
-                if vendor_data:
-                    last.vendor_data.update(
-                        {k: v for k, v in vendor_data.items() if v is not None}
-                    )
-                if started_at > (last.completed_at or last.started_at):
-                    last.completed_at = started_at
-                return
+            if isinstance(last, AgentMessageItem):
+                last_text = self._turn_state._last_agent_text if compact else last.text
+                if last_text == text:
+                    for event_id in event_ids:
+                        mapped = self._turn_state.map_event_id(event_id)
+                        if mapped not in last.event_ids:
+                            last.event_ids.append(mapped)
+                    if vendor_data and not compact:
+                        last.vendor_data.update(
+                            {k: v for k, v in vendor_data.items() if v is not None}
+                        )
+                    if started_at > (last.completed_at or last.started_at):
+                        last.completed_at = started_at
+                    return
 
+        sequence = self._next_item_sequence()
         item = AgentMessageItem(
             session_id=self.session_id,
             turn_id=current_turn.turn_id,
-            sequence=self._next_item_sequence(),
+            sequence=sequence,
             started_at=started_at,
             completed_at=started_at,
-            text=text,
-            event_ids=list(event_ids),
-            vendor_data=dict(vendor_data),
+            text=None if compact else text,
+            event_ids=[self._turn_state.map_event_id(eid) for eid in event_ids],
+            vendor_data={} if compact else dict(vendor_data),
         )
+        compact_id = self._turn_state.next_item_id(
+            kind="agent_message",
+            sequence=sequence,
+            started_at=started_at,
+            tool_call_id=None,
+            item_index=len(items),
+        )
+        if compact_id is not None:
+            item.item_id = compact_id
         items.append(item)
+        self._turn_state._last_agent_text = text if compact else None
 
     def _update_tool_item(
         self,
@@ -566,15 +801,24 @@ class TranscriptProjector:
             completed_at=completed_at,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
-            output=output,
+            output=None if self._compact is not None else output,
             status=status or "completed",
-            event_ids=list(event_ids),
-            vendor_data=dict(vendor_data or {}),
+            event_ids=[self._turn_state.map_event_id(eid) for eid in event_ids],
+            vendor_data={} if self._compact is not None else dict(vendor_data or {}),
         )
+        compact_id = self._turn_state.next_item_id(
+            kind="tool_call",
+            sequence=fallback.sequence,
+            started_at=completed_at,
+            tool_call_id=tool_call_id,
+            item_index=len(items),
+        )
+        if compact_id is not None:
+            fallback.item_id = compact_id
         items.append(fallback)
 
-    @staticmethod
     def _merge_tool_shaped(
+        self,
         item: Item,
         *,
         tool_name: str | None,
@@ -588,15 +832,16 @@ class TranscriptProjector:
         event_ids: list[UUID],
         vendor_data: dict[str, Any] | None,
     ) -> None:
+        compact = self._compact is not None
         if tool_name and not getattr(item, "tool_name", None):
             item.tool_name = tool_name  # type: ignore[attr-defined]
-        if output is not None:
+        if output is not None and not compact:
             item.output = output  # type: ignore[attr-defined]
         if status is not None:
             item.status = status
         item.completed_at = completed_at
         if isinstance(item, CommandExecutionItem):
-            if command is not None and item.command is None:
+            if command is not None and item.command is None and not compact:
                 item.command = command
             if exit_code is not None and item.exit_code is None:
                 item.exit_code = exit_code
@@ -606,9 +851,10 @@ class TranscriptProjector:
             if operation is not None and item.operation is None:
                 item.operation = operation
         for event_id in event_ids:
-            if event_id not in item.event_ids:
-                item.event_ids.append(event_id)
-        if vendor_data:
+            mapped = self._turn_state.map_event_id(event_id)
+            if mapped not in item.event_ids:
+                item.event_ids.append(mapped)
+        if vendor_data and not compact:
             item.vendor_data.update(
                 {k: v for k, v in vendor_data.items() if v is not None}
             )
@@ -628,6 +874,7 @@ def project_transcript(
     active_status: TurnStatus | None = None,
     default_previous_turn_status: TurnStatus = TurnStatus.COMPLETED,
     prefer_lifecycle: bool = False,
+    compact: TranscriptStabilizer | None = None,
 ) -> list[Turn]:
     return TranscriptProjector(
         session_id=session_id,
@@ -636,12 +883,23 @@ def project_transcript(
         active_status=active_status,
         default_previous_turn_status=default_previous_turn_status,
         prefer_lifecycle=prefer_lifecycle,
+        compact=compact,
     ).project()
 
 
 def events_from_transcript(
-    *, session_id: UUID, records: list[TranscriptRecord]
+    *,
+    session_id: UUID,
+    records: list[TranscriptRecord],
+    stabilizer: TranscriptStabilizer | None = None,
 ) -> list[Event]:
+    if stabilizer is not None:
+        retained: list[Event] = []
+        for record in records:
+            event = stabilizer.retained_event(record, session_id=session_id)
+            if event is not None:
+                retained.append(event)
+        return retained
     return [
         Event(
             event_id=record.record_id,

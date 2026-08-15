@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 from coding_trajectory import debug
 from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
-from coding_trajectory.ingestion.common import normalize_project_key
+from coding_trajectory.ingestion.common import normalize_project_key, stable_uuid
 from coding_trajectory.ingestion.models import (
     Event,
     Item,
@@ -136,12 +136,18 @@ def _ingest_sessions(
             else None
         )
         try:
-            session = stabilize_session(
-                adapter.ingest_file(path, parent_started_turn_ids=parent_started),
-                vendor=vendor,
-                source=path,
+            session = adapter.ingest_file(
+                path,
+                parent_started_turn_ids=parent_started,
                 retention=retention,
             )
+            if retention != "measurements":
+                session = stabilize_session(
+                    session,
+                    vendor=vendor,
+                    source=path,
+                    retention=retention,
+                )
         except Exception as exc:
             debug.warn(
                 f"failed to ingest {vendor.value} session log: {exc}",
@@ -808,16 +814,8 @@ def format_discovery_sources(sources: list[DiscoverySource]) -> str:
 
 
 def _stable_uuid(vendor: Vendor, source: Path, **fields: object) -> UUID:
-    """Derive a deterministic UUID5 for a canonical resource.
-
-    ``sort_keys=True`` normalizes the JSON key order, so merging the common
-    ``vendor``/``source`` keys here with the per-resource ``fields`` produces a
-    byte-identical payload (and thus identical UUID) to the inline
-    ``uuid5(NAMESPACE_URL, json.dumps({...}, sort_keys=True, default=str))`` it
-    replaces.
-    """
-    payload = {"vendor": vendor.value, "source": str(source), **fields}
-    return uuid5(NAMESPACE_URL, json.dumps(payload, sort_keys=True, default=str))
+    """Derive a deterministic UUID5 for a canonical resource."""
+    return stable_uuid(vendor, source, **fields)
 
 
 def stabilize_session(
