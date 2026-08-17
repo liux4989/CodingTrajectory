@@ -47,6 +47,9 @@ try:
     from .analytical_read_models import (
         CANONICAL_FACT_SCOPE,
         CanonicalFactsCtJson,
+        FACT_GRAPH_OVERVIEW,
+        FACT_GRAPH_STATS,
+        FACT_GRAPH_USAGE,
         FACT_PROJECT,
         FACT_PROJECT_SESSION,
         FACT_SESSION_OVERVIEW,
@@ -92,6 +95,9 @@ except ImportError:
     from analytical_read_models import (
         CANONICAL_FACT_SCOPE,
         CanonicalFactsCtJson,
+        FACT_GRAPH_OVERVIEW,
+        FACT_GRAPH_STATS,
+        FACT_GRAPH_USAGE,
         FACT_PROJECT,
         FACT_PROJECT_SESSION,
         FACT_SESSION_OVERVIEW,
@@ -135,6 +141,13 @@ _CONTEXT_WINDOW_FACT_KINDS = (
     FACT_SESSION_OVERVIEW,
     FACT_SESSION_USAGE,
     FACT_TOOL_USAGE,
+)
+
+# Graph detail serves the root-partitioned graph.* facts, one row per kind.
+_GRAPH_FACT_PAYLOAD_KEYS = (
+    ("overview", FACT_GRAPH_OVERVIEW),
+    ("stats", FACT_GRAPH_STATS),
+    ("usage", FACT_GRAPH_USAGE),
 )
 
 
@@ -691,6 +704,33 @@ class DashboardIncrementalRuntime:
         except (ResourceNotFoundError, RuntimeError):
             return None
         return projection.model_dump(mode="json")
+
+    def graph_detail(self, *, session_id: str) -> dict[str, Any] | None:
+        """Serve retained graph overview/stats/usage facts for one entrypoint."""
+
+        if not self._has_canonical_facts():
+            return None
+        root_id = self._root_for_entrypoint(session_id)
+        if root_id is None:
+            return None
+        if not self._root_has_evidence(root_id) and not self._materialize_evidence(
+            {root_id}
+        ):
+            return None
+        revision = self.store.current_revision()
+        payload: dict[str, Any] = {"root_session_id": root_id}
+        for key, kind in _GRAPH_FACT_PAYLOAD_KEYS:
+            page = self.store.query_entities(
+                kind,
+                limit=1,
+                revision=revision,
+                scope_key=CANONICAL_FACT_SCOPE,
+                partition_key=root_id,
+            )
+            if not page.items:
+                return None
+            payload[key] = page.items[0].payload
+        return payload
 
     def session_event_details(
         self,

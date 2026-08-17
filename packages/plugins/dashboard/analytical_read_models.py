@@ -19,9 +19,15 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
+from coding_trajectory.analysis.graph_views import build_graph_overview
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.ingestion.common import normalize_project_key
-from coding_trajectory.metrics import iter_graph_economics_contributions
+from coding_trajectory.ingestion.models import SessionGraph
+from coding_trajectory.metrics import (
+    build_session_graph_stats,
+    build_session_graph_usage,
+    iter_graph_economics_contributions,
+)
 from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch
 
@@ -55,6 +61,9 @@ FACT_SESSION_USAGE = "analytical.fact.session_usage.v1"
 FACT_SESSION_STATS = "analytical.fact.session_stats.v1"
 FACT_SESSION_OVERVIEW = "analytical.fact.session_overview.v1"
 FACT_ECONOMICS_CORE = "analytical.fact.economics_core.v1"
+FACT_GRAPH_OVERVIEW = "analytical.fact.graph_overview.v1"
+FACT_GRAPH_STATS = "analytical.fact.graph_stats.v1"
+FACT_GRAPH_USAGE = "analytical.fact.graph_usage.v1"
 
 _FACT_METHOD_KIND = {
     "session.model_usage": FACT_MODEL_USAGE,
@@ -63,7 +72,23 @@ _FACT_METHOD_KIND = {
     "session.stats": FACT_SESSION_STATS,
     "session.overview": FACT_SESSION_OVERVIEW,
 }
-_FACT_KIND_METHOD = {kind: method for method, kind in _FACT_METHOD_KIND.items()}
+# Graph projections are retained once per root with the fixed parameter shapes
+# the dashboard renders; variants (narrative, flat_turns, turn windows) stay
+# available through live dispatch only.
+_GRAPH_FACT_METHOD_KIND = {
+    "graph.overview": FACT_GRAPH_OVERVIEW,
+    "graph.stats": FACT_GRAPH_STATS,
+    "graph.usage": FACT_GRAPH_USAGE,
+}
+_GRAPH_FACT_PARAMS: dict[str, dict[str, Any]] = {
+    "graph.overview": {},
+    "graph.stats": {"include": ["session_composition"]},
+    "graph.usage": {},
+}
+_FACT_KIND_METHOD = {
+    kind: method
+    for method, kind in {**_FACT_METHOD_KIND, **_GRAPH_FACT_METHOD_KIND}.items()
+}
 _FACT_ENTITY_KINDS = (
     FACT_PROJECT,
     FACT_PROJECT_SESSION,
@@ -73,6 +98,9 @@ _FACT_ENTITY_KINDS = (
     FACT_SESSION_STATS,
     FACT_SESSION_OVERVIEW,
     FACT_ECONOMICS_CORE,
+    FACT_GRAPH_OVERVIEW,
+    FACT_GRAPH_STATS,
+    FACT_GRAPH_USAGE,
 )
 
 DetailName = Literal["sessions", "turns", "errors", "breaks", "projects"]
@@ -158,7 +186,7 @@ class CanonicalFactsCtJson:
         self._projects: dict[str, dict[str, Any]] = {}
         self._sessions: list[dict[str, Any]] = []
         self._telemetry: dict[str, dict[str, dict[str, Any]]] = {
-            method: {} for method in _FACT_METHOD_KIND
+            method: {} for method in _FACT_KIND_METHOD.values()
         }
         for row in rows:
             if _value(row, "deleted"):
@@ -221,7 +249,27 @@ class CanonicalFactsCtJson:
                 raise ValueError(
                     "bounded session.overview is not retained in canonical facts"
                 )
+            if method == "graph.overview":
+                if (
+                    validated.get("num_turns") is not None
+                    or validated.get("drop_turns") is not None
+                ):
+                    raise ValueError(
+                        "bounded graph.overview is not retained in canonical facts"
+                    )
+                if "narrative" in set(validated.get("include") or []):
+                    raise ValueError(
+                        "graph.overview narrative is not retained in canonical facts"
+                    )
+            if method == "graph.usage" and "flat_turns" in set(
+                validated.get("include") or []
+            ):
+                raise ValueError(
+                    "graph.usage flat_turns is not retained in canonical facts"
+                )
             entrypoint = _session_entrypoint(validated)
+            if method in _GRAPH_FACT_METHOD_KIND:
+                entrypoint = self._graph_root(entrypoint)
             result = self._telemetry[method].get(entrypoint)
             if result is None:
                 raise ResourceNotFoundError(f"resource not found: {entrypoint}")
@@ -265,6 +313,16 @@ class CanonicalFactsCtJson:
                 item.pop("runtime", None)
             items.append(item)
         return {"items": items}
+
+    def _graph_root(self, entrypoint: str) -> str:
+        """Map any session entrypoint to its graph root for graph.* lookups."""
+
+        for stored in self._sessions:
+            root = str(stored.get("root_session_id") or "")
+            session_ids = {str(value) for value in stored.get("session_ids") or []}
+            if entrypoint == root or entrypoint in session_ids:
+                return root or entrypoint
+        return entrypoint
 
 
 def build_canonical_fact_rows(
@@ -420,6 +478,31 @@ def _build_canonical_fact_rows_from_store(
                 "core economics omitted session entrypoints: "
                 + ", ".join(sorted(missing_targets))
             )
+        rows.extend(_graph_fact_rows(root_id=root_id, graph=graph))
+    return rows
+
+
+def _graph_fact_rows(*, root_id: str, graph: SessionGraph) -> list[Mutation]:
+    """Build the root-partitioned graph.* facts for one session graph."""
+
+    payloads = {
+        "graph.overview": build_graph_overview(graph, include_narrative=False),
+        "graph.stats": build_session_graph_stats(
+            graph, include_session_composition=True
+        ),
+        "graph.usage": build_session_graph_usage(graph, include_graph_turns=False),
+    }
+    rows: list[Mutation] = []
+    for method, kind in _GRAPH_FACT_METHOD_KIND.items():
+        rows.append(
+            _fact_mutation(
+                kind,
+                root_id,
+                partition_key=root_id,
+                sort_key=root_id,
+                payload=service_contract(method).validate_response(payloads[method]),
+            )
+        )
     return rows
 
 
@@ -566,6 +649,17 @@ def build_canonical_fact_rows_from_ct_json(
                 }
             )
             request_facts[request_id] = (kind, root_id, target_id)
+    for root_id in dict.fromkeys(root for root, _ in targets):
+        for method, kind in _GRAPH_FACT_METHOD_KIND.items():
+            request_id = f"{method}:{root_id}:{root_id}"
+            requests.append(
+                {
+                    "id": request_id,
+                    "method": method,
+                    "params": {"session_id": root_id, **_GRAPH_FACT_PARAMS[method]},
+                }
+            )
+            request_facts[request_id] = (kind, root_id, root_id)
 
     for request_chunk in _chunks(requests, 320):
         batch = ct_json(
@@ -1250,6 +1344,9 @@ __all__ = [
     "CanonicalFactsCtJson",
     "DocumentStoreCtJson",
     "FACT_ECONOMICS_CORE",
+    "FACT_GRAPH_OVERVIEW",
+    "FACT_GRAPH_STATS",
+    "FACT_GRAPH_USAGE",
     "FACT_MODEL_USAGE",
     "FACT_PROJECT",
     "FACT_PROJECT_SESSION",

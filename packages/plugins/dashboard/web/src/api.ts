@@ -550,6 +550,121 @@ export async function fetchContextWindow(sessionId: string) {
   return fetchJson<ContextWindowPayload>(`/api/sessions/context-window?${params}`);
 }
 
+// Graph payloads mirror `ct graph overview|stats|usage` with the dashboard's
+// retained parameter shapes (no narrative, no flat turn list).
+export type GraphOrchestration = {
+  kind?: string;
+  vendors?: string[];
+  session_count?: number;
+  spawned_agent_count?: number;
+  multi_agent_versions?: string[];
+  multi_agent_modes?: string[];
+  edge_counts?: Record<string, number>;
+  agent_paths?: string[];
+};
+
+export type GraphSessionNode = {
+  session_id: string;
+  parent_session_id?: string | null;
+  edge_type?: string | null;
+  vendor?: string;
+  status?: string;
+  title?: string | null;
+  agent_name?: string | null;
+  agent_path?: string | null;
+  cwd?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  multi_agent_version?: string | null;
+  multi_agent_mode?: string | null;
+};
+
+export type GraphEdge = {
+  type?: string | null;
+  source_session_id?: string | null;
+  target_session_id?: string | null;
+  provenance?: string | null;
+  confidence?: string | null;
+};
+
+export type GraphOverviewPayload = {
+  graph_id: string;
+  root_session_id: string;
+  project?: string | null;
+  graph?: { orchestration?: GraphOrchestration };
+  summary?: {
+    session_count?: number;
+    turn_count?: number;
+    started_at?: string | null;
+    ended_at?: string | null;
+    vendors?: string[];
+  } | null;
+  sessions: GraphSessionNode[];
+  edges: GraphEdge[];
+};
+
+export type GraphStatsSession = {
+  session_id: string;
+  role?: string | null;
+  vendor?: string | null;
+  context_window?: { used_tokens?: number | null; used_percent?: number | null };
+  runtime?: { turns?: number; execution_seconds?: number };
+  usage?: { processed_tokens?: number; cached_prompt_tokens?: number };
+};
+
+export type GraphUsageSession = {
+  session_id: string;
+  parent_session_id?: string | null;
+  role?: string | null;
+  relationship?: string | null;
+  title?: string | null;
+  agent_name?: string | null;
+  total_usage?: { processed_tokens?: number };
+  estimated_cost?: CostEvidence | null;
+  runtime?: { turns?: number };
+};
+
+export type SessionGraphPayload = {
+  root_session_id: string;
+  overview: GraphOverviewPayload;
+  stats: {
+    scope?: string | null;
+    context_window?: { used_tokens?: number | null; used_percent?: number | null };
+    usage?: {
+      processed_tokens?: number;
+      prompt_tokens?: number;
+      cached_prompt_tokens?: number;
+      completion_tokens?: number;
+    };
+    runtime?: { turns?: number; execution_seconds?: number; tool_calls?: number };
+    sessions?: GraphStatsSession[] | null;
+  };
+  usage: {
+    scope?: string | null;
+    total_usage?: {
+      processed_tokens?: number;
+      prompt_tokens?: number;
+      cached_prompt_tokens?: number;
+      completion_tokens?: number;
+      reasoning_tokens?: number;
+    };
+    runtime?: { turns?: number };
+    estimated_cost?: CostEvidence | null;
+    models?: Array<{
+      provider?: string;
+      model?: string;
+      turns?: number;
+      usage?: { processed_tokens?: number };
+    }>;
+    sessions?: GraphUsageSession[] | null;
+  };
+};
+
+export async function fetchSessionGraph(sessionId: string) {
+  const params = new URLSearchParams({ session_id: sessionId });
+  return fetchJson<SessionGraphPayload>(`/api/sessions/graph?${params}`);
+}
+
 export type DashboardFreshness = {
   last_refresh_at: string | null;
   lag_seconds: number | null;

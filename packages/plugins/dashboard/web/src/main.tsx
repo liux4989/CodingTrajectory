@@ -12,6 +12,7 @@ import "@/styles.css";
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
 const SessionsRoute = React.lazy(() => import("@/routes/sessions").then((mod) => ({ default: mod.SessionsRoute })));
 const ContextWindowRoute = React.lazy(() => import("@/routes/context-window").then((mod) => ({ default: mod.ContextWindowRoute })));
+const SessionGraphRoute = React.lazy(() => import("@/routes/session-graph").then((mod) => ({ default: mod.SessionGraphRoute })));
 const ModelUsageRoute = React.lazy(() => import("@/routes/model-usage").then((mod) => ({ default: mod.ModelUsageRoute })));
 
 function RouteBoundary({ children }: { children: React.ReactNode }) {
@@ -78,6 +79,12 @@ const contextWindowRoute = createRoute({
   component: () => <RouteBoundary><ContextWindowRoute /></RouteBoundary>,
 });
 
+const sessionGraphRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions/$sessionId/graph",
+  component: () => <RouteBoundary><SessionGraphRoute /></RouteBoundary>,
+});
+
 const legacyContextWindowRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId/context-window",
@@ -127,6 +134,7 @@ const router = createRouter({
     indexRoute,
     sessionsRoute,
     contextWindowRoute,
+    sessionGraphRoute,
     legacyContextWindowRoute,
     modelUsageRoute,
   ]),

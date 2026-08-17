@@ -224,6 +224,12 @@ def _handler_for(
                             turn_id=_first(query, "turn_id"),
                         )
                     )
+                elif path == "/api/sessions/graph":
+                    payload = self._revisioned(
+                        lambda: runtime.graph_detail(
+                            session_id=_required(query, "session_id"),
+                        )
+                    )
                 elif path == "/api/sessions/events":
                     payload = self._revisioned(
                         lambda: runtime.session_event_details(

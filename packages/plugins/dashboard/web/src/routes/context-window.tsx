@@ -20,6 +20,7 @@ import {
 } from "@/lib/cache-breaks";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/loading-state";
+import { SessionViewTabs } from "@/components/session-view-tabs";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { StateBlock } from "@/components/state-block";
@@ -279,6 +280,8 @@ export function ContextWindowRoute() {
             </div>
           </div>
         </div>
+
+        <SessionViewTabs sessionId={sessionId} active="context" />
 
         {payload.session_sections.length > 1 ? (
           <section className="rounded-lg border border-border-soft bg-card p-4" aria-label="Session graph context scopes">
