@@ -25,7 +25,8 @@ def _graph_orchestration_summary(session_graph: SessionGraph) -> dict[str, Any]:
         codex = session.extensions.codex if session.extensions else None
         if codex is None:
             continue
-        spawned_agent_count += len(codex.spawn_links)
+        if codex.spawn_parent_thread_id:
+            spawned_agent_count += 1
         if codex.multi_agent_version:
             multi_agent_versions.add(codex.multi_agent_version)
         if codex.multi_agent_mode:
