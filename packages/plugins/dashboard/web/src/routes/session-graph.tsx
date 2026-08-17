@@ -3,11 +3,11 @@ import { useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchSessionGraph,
-  type GraphSessionNode,
   type GraphStatsSession,
   type GraphUsageSession,
   type SessionGraphPayload,
 } from "@/api";
+import { GraphTree } from "@/components/graph-tree";
 import { MetricCard } from "@/components/metric-card";
 import { StaggerGroup } from "@/components/stagger-group";
 import { StateBlock } from "@/components/state-block";
@@ -26,42 +26,6 @@ import {
   formatTokens,
 } from "@/lib/format";
 import { relativeTime } from "@/lib/relative-time";
-import { cn } from "@/lib/utils";
-
-type TreeNode = {
-  node: GraphSessionNode;
-  depth: number;
-};
-
-function buildSessionTree(nodes: GraphSessionNode[]): TreeNode[] {
-  const byId = new Map(nodes.map((node) => [node.session_id, node]));
-  const childrenOf = new Map<string, GraphSessionNode[]>();
-  const roots: GraphSessionNode[] = [];
-  for (const node of nodes) {
-    const parent = node.parent_session_id;
-    if (parent && byId.has(parent)) {
-      childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), node]);
-    } else {
-      roots.push(node);
-    }
-  }
-  const byStartedAt = (a: GraphSessionNode, b: GraphSessionNode) =>
-    (a.started_at ?? "").localeCompare(b.started_at ?? "");
-  roots.sort(byStartedAt);
-  for (const children of childrenOf.values()) children.sort(byStartedAt);
-
-  const ordered: TreeNode[] = [];
-  const visit = (node: GraphSessionNode, depth: number) => {
-    ordered.push({ node, depth });
-    for (const child of childrenOf.get(node.session_id) ?? []) visit(child, depth + 1);
-  };
-  for (const root of roots) visit(root, 0);
-  return ordered;
-}
-
-function nodeLabel(node: GraphSessionNode) {
-  return node.title || node.agent_name || shortSessionId(node.session_id);
-}
 
 function compositionRows(payload: SessionGraphPayload) {
   const statsBySession = new Map(
@@ -152,8 +116,15 @@ export function SessionGraphRoute() {
   const { overview, stats, usage } = payload;
   const orchestration = overview.graph?.orchestration ?? {};
   const summary = overview.summary ?? {};
-  const tree = buildSessionTree(overview.sessions);
   const rows = compositionRows(payload);
+  const tokensBySession = new Map<string, number>();
+  for (const section of usage.sessions ?? []) {
+    const value = section.total_usage?.processed_tokens;
+    if (value != null) tokensBySession.set(section.session_id, value);
+  }
+  if (!usage.sessions && usage.total_usage?.processed_tokens != null) {
+    tokensBySession.set(payload.root_session_id, usage.total_usage.processed_tokens);
+  }
   const totalUsage = usage.total_usage ?? {};
   const runtime = stats.runtime ?? {};
   const turnCount = summary.turn_count ?? runtime.turns ?? 0;
@@ -204,89 +175,23 @@ export function SessionGraphRoute() {
           </StaggerGroup>
         </section>
 
-        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
-          <Card className="min-w-0">
-            <CardHeader>
-              <CardTitle className="title-card">Topology</CardTitle>
-              <CardDescription>
-                Sessions in this graph, indented under their parent session.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-2">
-                {tree.map(({ node, depth }) => (
-                  <div
-                    key={node.session_id}
-                    className={cn(
-                      "flex min-w-0 flex-wrap items-center gap-2 rounded-lg px-2 py-1.5",
-                      node.session_id === sessionId && "bg-surface-emphasis",
-                    )}
-                    style={{ marginLeft: `${depth * 1.25}rem` }}
-                  >
-                    <SessionLink sessionId={node.session_id} className="truncate">
-                      {nodeLabel(node)}
-                    </SessionLink>
-                    {node.vendor ? <Badge variant="secondary">{node.vendor}</Badge> : null}
-                    {node.edge_type ? (
-                      <Badge variant="outline">{formatLabel(node.edge_type)}</Badge>
-                    ) : (
-                      <Badge variant="outline">Root</Badge>
-                    )}
-                    <span className="text-caption text-muted-foreground">
-                      {node.status ?? "unknown"} · {relativeTime(node.started_at)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="min-w-0">
-            <CardHeader>
-              <CardTitle className="title-card">Structural Edges</CardTitle>
-              <CardDescription>
-                Observed relationships between sessions, as reported by `ct graph overview`.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {overview.edges.length === 0 ? (
-                <p className="m-0 text-body-sm text-muted-foreground">
-                  No structural edges observed.
-                </p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Source</TableHead>
-                      <TableHead>Target</TableHead>
-                      <TableHead>Provenance</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {overview.edges.map((edge, index) => (
-                      <TableRow key={index}>
-                        <TableCell>
-                          <Badge variant="outline">{formatLabel(edge.type)}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <SessionLink sessionId={edge.source_session_id} />
-                        </TableCell>
-                        <TableCell>
-                          <SessionLink sessionId={edge.target_session_id} />
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {edge.provenance ?? "-"}
-                          {edge.confidence ? ` · ${edge.confidence}` : ""}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        <Card className="min-w-0">
+          <CardHeader>
+            <CardTitle className="title-card">Session Graph</CardTitle>
+            <CardDescription>
+              Interactive session hierarchy. The chip on each child is its observed
+              relationship to the parent session; hover it for provenance.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <GraphTree
+              nodes={overview.sessions}
+              edges={overview.edges}
+              tokensBySession={tokensBySession}
+              activeSessionId={sessionId}
+            />
+          </CardContent>
+        </Card>
 
         <Card className="min-w-0">
           <CardHeader>
@@ -313,7 +218,7 @@ export function SessionGraphRoute() {
                   <TableRow key={id}>
                     <TableCell className="max-w-[16rem]">
                       <SessionLink sessionId={id} className="truncate">
-                        {node ? nodeLabel(node) : usageSection?.title || shortSessionId(id)}
+                        {node?.title || node?.agent_name || usageSection?.title || shortSessionId(id)}
                       </SessionLink>
                     </TableCell>
                     <TableCell>
