@@ -144,7 +144,7 @@ coding-trajectory/
 │   │       └── commands/
 │   │           ├── project.py              # `ct project list|sessions`
 │   │           ├── session.py              # `ct session ...` one-thread views
-│   │           ├── graph.py                # `ct graph ...` connected-graph views
+│   │           ├── graph.py                # `ct session graph ...` orchestration-run views
 │   │           └── plugin.py               # `ct plugin list|<name>` (dispatch + index)
 │   └── plugins/                            # Built-in executable plugins
 │       ├── code_time/                      # `code-time` plugin
@@ -214,15 +214,16 @@ explicit collection of independent calls; shell pipelines and tools such as
 | Method | Purpose |
 |---|---|
 | `project.list` | List all discovered projects with vendors and paths |
-| `project.sessions` | List session graphs, optionally including bulk runtime and usage summaries |
+| `project.sessions` | List orchestration runs, optionally including bulk runtime and usage summaries |
+| `session.tree` | Ordinary conversation-fork tree with branch-owned agent counts |
 | `session.overview` | Narrative overview: hierarchy, activity keys, turn summaries |
 | `session.stats` | Provider usage plus common observed composition buckets and runtime statistics for one thread |
 | `session.usage` | Token usage and request-summed cost breakdown by turn for one thread |
 | `session.model_usage` | Detailed model and turn-level usage diagnostics for one thread |
 | `session.request_usage` | Per-provider-request usage and pricing, with opt-in context and causal diagnostics |
-| `graph.overview` | Orchestration identity, connected sessions, and structural edges, with opt-in narrative turns |
-| `graph.stats` | Aggregate provider usage and runtime, with opt-in per-session composition |
-| `graph.usage` | Aggregate token usage and cost, with opt-in flat graph turns |
+| `graph.overview` | Branch-local orchestration identity, agent sessions, and structural edges, with opt-in narrative turns |
+| `graph.stats` | Branch-local aggregate provider usage and runtime, with opt-in per-session composition |
+| `graph.usage` | Branch-local aggregate token usage and cost, with opt-in flat graph turns |
 | `session.tool_usage` | Per-tool allocation, with opt-in all-item ledger and causal diagnostics |
 | `session.items` | Turn-filterable item detail with optional full-content expansion |
 | `session.events` | Turn-filterable event query, request-usage selection, and full tool-result dereferencing |
@@ -311,12 +312,13 @@ uv sync                    # Install all workspace dependencies
 |---|---|
 | `uv run ct project list` | List discovered projects |
 | `uv run ct project sessions [PROJECT]` | List sessions for a project |
+| `uv run ct session tree SESSION_ID` | Ordinary conversation branches and their owned agent counts |
 | `uv run ct session overview SESSION_ID` | One-thread overview |
 | `uv run ct session stats SESSION_ID` | One-thread context window statistics |
 | `uv run ct session usage SESSION_ID` | One-thread token and log-reported cost breakdown |
-| `uv run ct graph overview SESSION_ID` | Connected-session tree and structural edges |
-| `uv run ct graph stats SESSION_ID` | Graph-wide context window statistics |
-| `uv run ct graph usage SESSION_ID` | Graph-wide token and log-reported cost breakdown |
+| `uv run ct session graph overview SESSION_ID` | One branch's internal agent tree and structural edges |
+| `uv run ct session graph stats SESSION_ID` | Branch-local graph context window statistics |
+| `uv run ct session graph usage SESSION_ID` | Branch-local graph token and log-reported cost breakdown |
 | `uv run ct session items SESSION_ID [ITEM_ID ...]` | Session item detail (JSON) |
 | `uv run ct session events --event-id EVENT_ID [--event-id EVENT_ID ...]` | Event detail (JSON) |
 | `uv run ct session events SESSION_ID --type TYPE` | Filtered event search |

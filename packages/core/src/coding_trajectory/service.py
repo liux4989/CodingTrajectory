@@ -710,6 +710,15 @@ def _graph_handler(
         session_graph = _resolve_session_graph(
             context.store, _session_graph_entrypoint_id(params)
         )
+        from coding_trajectory.analysis.orchestration_runs import (
+            orchestration_run_for_entrypoint,
+        )
+
+        entrypoint = _session_graph_entrypoint_id(params)
+        session_graph = orchestration_run_for_entrypoint(
+            session_graph,
+            _parse_user_id(entrypoint) if entrypoint else None,
+        )
         return _public_output_for_session_graph(
             session_graph, build(params, session_graph)
         )
@@ -787,27 +796,30 @@ def _handle_project_sessions(
     )
     include = set(params.get("include") or [])
     items: list[dict[str, Any]] = []
-    for graph in session_graphs:
-        # Match session.overview visible-turn semantics for every projection.
-        if not session_graph_has_visible_overview_content(graph):
-            continue
-        item = {
-            **serialize_session_graph_detail(graph),
-            "project": graph.project_identifier,
-        }
-        if "usage" in include:
-            from coding_trajectory.metrics import build_session_graph_usage
+    from coding_trajectory.analysis.orchestration_runs import orchestration_runs
 
-            usage = build_session_graph_usage(graph)
-            item["usage"] = usage.get("total_usage") or {}
-            item["warnings"] = usage.get("warnings") or []
-            if "runtime" in include:
-                item["runtime"] = usage.get("runtime") or {}
-        elif "runtime" in include:
-            from coding_trajectory.metrics import build_session_graph_runtime
+    for lineage_graph in session_graphs:
+        for graph in orchestration_runs(lineage_graph):
+            if not session_graph_has_visible_overview_content(graph):
+                continue
+            item = {
+                **serialize_session_graph_detail(graph),
+                "project": graph.project_identifier,
+                "lineage_root_session_id": str(lineage_graph.root_session_id),
+            }
+            if "usage" in include:
+                from coding_trajectory.metrics import build_session_graph_usage
 
-            item["runtime"] = build_session_graph_runtime(graph)
-        items.append(_public_output_for_session_graph(graph, item))
+                usage = build_session_graph_usage(graph)
+                item["usage"] = usage.get("total_usage") or {}
+                item["warnings"] = usage.get("warnings") or []
+                if "runtime" in include:
+                    item["runtime"] = usage.get("runtime") or {}
+            elif "runtime" in include:
+                from coding_trajectory.metrics import build_session_graph_runtime
+
+                item["runtime"] = build_session_graph_runtime(graph)
+            items.append(_public_output_for_session_graph(graph, item))
     return {"items": items}
 
 
@@ -840,6 +852,25 @@ def _handle_session_overview(
         num_turns=_optional_positive_int(params, "num_turns"),
         drop_turns=_optional_positive_int(params, "drop_turns"),
     )
+
+
+def _handle_session_tree(params: dict[str, Any], context: ServiceContext) -> Any:
+    from coding_trajectory.analysis.orchestration_runs import (
+        build_conversation_tree,
+        orchestration_run_for_entrypoint,
+    )
+
+    entrypoint = _session_graph_entrypoint_id(params)
+    session_graph = _resolve_session_graph(
+        context.store, entrypoint
+    )
+    tree = build_conversation_tree(session_graph)
+    run = orchestration_run_for_entrypoint(
+        session_graph,
+        _parse_user_id(entrypoint) if entrypoint else None,
+    )
+    tree["selected_branch_id"] = str(run.root_session_id)
+    return tree
 
 
 @_single_session_handler
@@ -1157,6 +1188,7 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "project.list": _handle_project_list,
     "project.sessions": _handle_project_sessions,
     "session.overview": _handle_session_overview,
+    "session.tree": _handle_session_tree,
     "graph.overview": _handle_graph_overview,
     "session.stats": _handle_session_stats,
     "graph.stats": _handle_graph_stats,

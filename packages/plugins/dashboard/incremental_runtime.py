@@ -54,6 +54,7 @@ try:
         FACT_PROJECT_SESSION,
         FACT_SESSION_OVERVIEW,
         FACT_SESSION_STATS,
+        FACT_SESSION_TREE,
         FACT_SESSION_USAGE,
         FACT_TOOL_USAGE,
         MODEL_META,
@@ -102,6 +103,7 @@ except ImportError:
         FACT_PROJECT_SESSION,
         FACT_SESSION_OVERVIEW,
         FACT_SESSION_STATS,
+        FACT_SESSION_TREE,
         FACT_SESSION_USAGE,
         FACT_TOOL_USAGE,
         MODEL_META,
@@ -129,7 +131,7 @@ except ImportError:
 
 
 PARSER_VERSION = "core-source-checkpoint-v3"
-READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v3"
+READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v4"
 DEFAULT_REFRESH_SECONDS = 15.0
 RETAINED_CHANGE_REVISIONS = 96
 OBSOLETE_DATABASE_GRACE_SECONDS = 24 * 60 * 60
@@ -149,6 +151,8 @@ _GRAPH_FACT_PAYLOAD_KEYS = (
     ("stats", FACT_GRAPH_STATS),
     ("usage", FACT_GRAPH_USAGE),
 )
+
+_SESSION_TREE_FACT_KEY = ("tree", FACT_SESSION_TREE)
 
 
 class RuntimeSnapshot(BaseModel):
@@ -732,6 +736,27 @@ class DashboardIncrementalRuntime:
             payload[key] = page.items[0].payload
         return payload
 
+    def session_tree(self, *, session_id: str) -> dict[str, Any] | None:
+        """Serve the retained ordinary conversation tree for one entrypoint."""
+
+        if not self._has_canonical_facts():
+            return None
+        root_id = self._root_for_entrypoint(session_id)
+        if root_id is None:
+            return None
+        if not self._root_has_evidence(root_id) and not self._materialize_evidence(
+            {root_id}
+        ):
+            return None
+        page = self.store.query_entities(
+            _SESSION_TREE_FACT_KEY[1],
+            limit=1,
+            revision=self.store.current_revision(),
+            scope_key=CANONICAL_FACT_SCOPE,
+            partition_key=root_id,
+        )
+        return page.items[0].payload if page.items else None
+
     def session_event_details(
         self,
         *,
@@ -877,7 +902,7 @@ class DashboardIncrementalRuntime:
 
             def publish(context: MaterializationContext) -> None:
                 for root in rebuilt_roots:
-                    _delete_root_facts(context, root)
+                    _delete_lineage_facts(context, root)
                 context.mutate_many(rows)
                 context.assert_sources_current(sources)
                 context.record_invalidation(
@@ -1507,7 +1532,7 @@ def _materialize_changed_graphs(
     affected_roots.update(old_roots)
     for root in sorted(affected_roots):
         _delete_graph_contributions(context, root)
-        _delete_root_facts(context, root)
+        _delete_lineage_facts(context, root)
         context.publish_detail(root, events=(), items=())
 
     provenance_by_session = {
@@ -1965,6 +1990,25 @@ def _delete_root_facts(context: MaterializationContext, root: str) -> None:
         context.delete_entity(row.entity_kind, row.entity_key)
 
 
+def _delete_lineage_facts(context: MaterializationContext, lineage_root: str) -> None:
+    """Delete every branch-run fact partition owned by one lineage."""
+
+    run_roots = {lineage_root}
+    for row in tuple(
+        context.current_entities(
+            entity_kinds=(FACT_PROJECT_SESSION,),
+            scope_key=CANONICAL_FACT_SCOPE,
+        )
+    ):
+        payload = row.payload
+        row_root = str(payload.get("root_session_id") or row.partition_key)
+        row_lineage = str(payload.get("lineage_root_session_id") or row_root)
+        if row_lineage == lineage_root:
+            run_roots.add(row_root)
+    for root in run_roots:
+        _delete_root_facts(context, root)
+
+
 def _record_ingestion_issue(
     context: MaterializationContext,
     *,
@@ -2025,6 +2069,8 @@ def _delivery_families() -> tuple[str, ...]:
         "model-usage",
         "token-efficiency",
         "context-window",
+        "session-tree",
+        "session-graph",
     )
 
 

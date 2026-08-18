@@ -14,7 +14,7 @@
   },
   "sanitization_version": "metrics-baseline-v1",
   "entrypoint_id": "019f17b8-d311-77f0-a163-e20701d5a150",
-  "coverage": ["provider:codex_cli", "graph:multi-session", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration", "relationship:fork"],
+  "coverage": ["provider:codex_cli", "graph:single-session", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration", "relationship:fork"],
   "expected_schema_versions": {
     "session.overview": 1,
     "session.stats": 1,

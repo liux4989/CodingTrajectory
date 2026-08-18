@@ -16,18 +16,25 @@ The parent turn spans `08:51:06.978Z` to `08:52:55.745Z` (`parent.jsonl:2,6`) = 
 
 ## Graph and runtime
 
-`source/fork.jsonl:1` names the parent through `forked_from_id`. The parent and fork each contain one completed task, so the graph contains two completed turns. Provider durations are 108.802 seconds and 0.827 seconds, rounded per turn to 109 and 1 seconds and summed to 110 seconds. The parent supplies one time-to-first-token observation of 3,392 ms.
+`source/fork.jsonl:1` names the parent only through `forked_from_id`; it has no
+`thread_spawn.parent_thread_id`. The source therefore proves an ordinary
+conversation fork, not a spawned-agent relationship. The unified lineage has
+two completed turns, while each branch-local orchestration graph contains one
+session. Provider durations are 108.802 seconds for the parent and 0.827 seconds
+for the separate fork. The parent supplies one time-to-first-token observation
+of 3,392 ms.
 
 ## Session scope
 
 The `session.*` surfaces now select the entrypoint thread. For this case that is
 the parent in `source/parent.jsonl:1`; its one turn spans 108.767 active seconds,
 rounds to 109 execution seconds, and has no subagent or tool items. The fork
-relationship and the additional one-second child duration remain available from
-the explicit `graph.*` surfaces.
+relationship remains available from `session.tree`; the separate fork's
+one-second duration is available by selecting that branch. It is not aggregated
+into the parent's `graph.*` surfaces.
 
 ## Cross-check
 
 The expected artifacts assert the parent-thread session boundary and preserve
-the graph relation through the explicit graph projection. Presentation-only text
-and generated item identifiers are intentionally omitted.
+the fork relation through the conversation-tree projection. Presentation-only
+text and generated item identifiers are intentionally omitted.

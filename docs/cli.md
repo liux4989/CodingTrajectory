@@ -92,7 +92,7 @@ as reported, while `processed_tokens` and `prompt_completion_tokens` provide
 explicit derived totals. New compact CLI JSON uses `prompt_completion` for the
 prompt-plus-completion total.
 
-Session and graph analysis commands require a session or graph entry-point ID;
+Session and nested graph analysis commands require a session entry-point ID;
 they never guess the most-recent graph. Use `project sessions` to choose one.
 Explicit session, graph, and turn entry points are located globally through the
 cache/index, so those commands have no scope flag. `--global-scope` is reserved
@@ -105,29 +105,32 @@ has no scope flag.
 ### Structured View
 
 1. `project list [--agent-vendor VENDOR] [--output markdown|json]` — find project names
-2. `project sessions [project_name] [--agent-vendor VENDOR] [--global-scope] [--output markdown|json]` — list orchestration graphs for a project, get the graph/session id to use as an entry point
+2. `project sessions [project_name] [--agent-vendor VENDOR] [--global-scope] [--output markdown|json]` — list orchestration runs for a project, get the branch session id to use as an entry point
    - omit `project_name` to use the current directory
    - known agent vendors are `claude_code`, `codex_cli`, and `pi`
-3. `session overview <SESSION_ID> [--turns N] [--drop-turns K] [--output markdown|json]` — read one thread and identify relevant turns
+3. `session tree <SESSION_ID> [--output markdown|json]` — inspect ordinary human conversation forks and see the spawned-agent count owned by each branch
+4. `session overview <SESSION_ID> [--turns N] [--drop-turns K] [--output markdown|json]` — read one thread and identify relevant turns
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
    - activity renders as grouped human labels with truncated assistant response previews
    - use `--output json` when you need full item ids for drill-down
-4. `session stats <SESSION_ID> [--output markdown|json]` — inspect session stats with compact context/token sections
-5. `session usage <SESSION_ID> [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and request-summed costs
-6. `session request-usage <SESSION_ID> [--turn TURN_ID] [--include-context] [--include-causality] [--output json]` — inspect every provider request and its exact usage buckets and estimated cost; opt into the larger context and causal diagnostics
-7. `session items <SESSION_ID> [<ITEM_ID> ...] [--turn TURN_ID] [--type ITEM_TYPE] [--include-content] [--output json]` — read scoped item evidence; repeat `--type` to filter item kinds and expand large content only when needed
+5. `session stats <SESSION_ID> [--output markdown|json]` — inspect session stats with compact context/token sections
+6. `session usage <SESSION_ID> [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and request-summed costs
+7. `session request-usage <SESSION_ID> [--turn TURN_ID] [--include-context] [--include-causality] [--output json]` — inspect every provider request and its exact usage buckets and estimated cost; opt into the larger context and causal diagnostics
+8. `session items <SESSION_ID> [<ITEM_ID> ...] [--turn TURN_ID] [--type ITEM_TYPE] [--include-content] [--output json]` — read scoped item evidence; repeat `--type` to filter item kinds and expand large content only when needed
 
-Graph-level inspection is the orchestration surface. It is the parent of the
-individual `session` resource; there is no separate top-level workflow tree:
+Graph-level inspection is nested under the branch session that owns the
+orchestration run. Ordinary human forks are boundaries and are never aggregated
+into the same multi-agent graph:
 
-1. `graph overview <SESSION_ID> [--turns N] [--drop-turns K] [--narrative] [--output markdown|json]` — inspect every connected thread and structural edge; opt into turn requests and assistant-response narrative
-2. `graph stats <SESSION_ID> [--session-composition] [--output markdown|json]` — inspect aggregate context and token statistics; opt into per-session composition
-3. `graph usage <SESSION_ID> [--turn TURN_ID] [--flat-turns] [--output markdown|json]` — inspect aggregate token usage; opt into the graph-wide flat turn list
+1. `session graph overview <SESSION_ID> [--turns N] [--drop-turns K] [--narrative] [--output markdown|json]` — inspect the branch root and its spawned-agent threads and structural edges; opt into turn requests and assistant-response narrative
+2. `session graph stats <SESSION_ID> [--session-composition] [--output markdown|json]` — inspect aggregate context and token statistics; opt into per-session composition
+3. `session graph usage <SESSION_ID> [--turn TURN_ID] [--flat-turns] [--output markdown|json]` — inspect aggregate token usage; opt into the graph-wide flat turn list
 
 The `Other command output` row in `session stats` is scoped to the selected
-thread. Use `graph stats` when child-agent or forked-thread totals are needed.
+thread. Use `session graph stats` when child-agent totals are needed; ordinary
+forked threads remain separate conversation branches.
 Unclassified shell commands are grouped by normalized command name; an
 orchestrating `exec` tool is grouped as one wrapper with its contained command
 labels. Wrapper output is kept together because the source log does not expose

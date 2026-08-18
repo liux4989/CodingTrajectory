@@ -22,6 +22,8 @@ const QUERY_FAMILIES = {
   "model-usage": [["model-usage"]],
   "token-efficiency": [["token-efficiency"]],
   "context-window": [["context-window"]],
+  "session-tree": [["session-tree"]],
+  "session-graph": [["session-graph"]],
 } as const;
 
 const ALL_QUERY_FAMILIES = Object.values(QUERY_FAMILIES).flat();

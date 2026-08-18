@@ -290,7 +290,7 @@ Only active cases participate in the required gate. Superseded cases remain avai
 
 | Case | Provider | Primary boundaries |
 | --- | --- | --- |
-| `codex-fork-runtime` | Codex CLI | Two-session fork graph, cached/uncached/reasoning usage, provider runtime, pinned estimated cost |
+| `codex-fork-runtime` | Codex CLI | Ordinary two-branch conversation fork, branch-local cached/uncached/reasoning usage, provider runtime, pinned estimated cost |
 | `claude-stream-cache` | Claude Code | Repeated stream events for one provider response, cache reads, successful tool lifecycle, pinned estimated cost |
 | `pi-reported-cost` | Pi | Five provider calls, four successful tools, cached usage, provider-reported cost |
 

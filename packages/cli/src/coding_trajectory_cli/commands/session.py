@@ -220,6 +220,55 @@ def _render_session_tree_node(
         _render_session_tree_node(child, children_by_parent, depth=depth + 1, lines=lines)
 
 
+def _render_conversation_tree_text(payload: dict[str, Any]) -> str:
+    branches = payload.get("branches") or []
+    children: dict[str, list[dict[str, Any]]] = {}
+    roots: list[dict[str, Any]] = []
+    for branch in branches:
+        parent_id = branch.get("parent_session_id")
+        if parent_id:
+            children.setdefault(str(parent_id), []).append(branch)
+        else:
+            roots.append(branch)
+    for siblings in children.values():
+        siblings.sort(
+            key=lambda item: (
+                item.get("started_at") or "",
+                item.get("session_id") or "",
+            )
+        )
+    roots.sort(
+        key=lambda item: (item.get("started_at") or "", item.get("session_id") or "")
+    )
+
+    lines = [
+        f"# Conversation tree `{payload.get('root_session_id') or '-'}`",
+        "",
+    ]
+    if not branches:
+        lines.append("No conversation branches observed.")
+        return "\n".join(lines)
+
+    def render(branch: dict[str, Any], depth: int) -> None:
+        indent = "  " * depth
+        session_id = branch.get("session_id") or "-"
+        agents = int(branch.get("spawned_agent_count") or 0)
+        turns = int(branch.get("turn_count") or 0)
+        lines.append(
+            f"{indent}- branch `{session_id}` — {turns} turns, {agents} spawned agents"
+        )
+        source_turn_id = branch.get("source_turn_id")
+        if source_turn_id:
+            lines.append(f"{indent}  forked at turn `{source_turn_id}`")
+        lines.append(f"{indent}  graph: `ct session graph overview {session_id}`")
+        for child in children.get(str(session_id), []):
+            render(child, depth + 1)
+
+    for root in roots:
+        render(root, 0)
+    return "\n".join(lines)
+
+
 def _render_context_category(
     lines: list[str],
     category: dict[str, Any],
@@ -833,6 +882,21 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     session_sub = session_parser.add_subparsers(dest="action", required=True)
 
+    session_tree = session_sub.add_parser(
+        "tree",
+        prog="ct session tree",
+        help="Show ordinary human conversation forks and their agent-run counts.",
+        formatter_class=GhFormatter,
+    )
+    add_session_source(session_tree)
+    add_output_flags(session_tree)
+    session_tree.set_defaults(
+        _method="session.tree",
+        _params=_session_stats_params,
+        _default_output="markdown",
+        _renderer=_render_conversation_tree_text,
+    )
+
     session_overview = session_sub.add_parser(
         "overview",
         prog="ct session overview",
@@ -1005,3 +1069,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _params=_session_items_params,
         _default_output="json",
     )
+
+    from coding_trajectory_cli.commands.graph import register as register_graph
+
+    register_graph(session_sub)

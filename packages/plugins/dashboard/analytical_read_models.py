@@ -64,6 +64,7 @@ FACT_ECONOMICS_CORE = "analytical.fact.economics_core.v1"
 FACT_GRAPH_OVERVIEW = "analytical.fact.graph_overview.v1"
 FACT_GRAPH_STATS = "analytical.fact.graph_stats.v1"
 FACT_GRAPH_USAGE = "analytical.fact.graph_usage.v1"
+FACT_SESSION_TREE = "analytical.fact.session_tree.v1"
 
 _FACT_METHOD_KIND = {
     "session.model_usage": FACT_MODEL_USAGE,
@@ -76,11 +77,13 @@ _FACT_METHOD_KIND = {
 # the dashboard renders; variants (narrative, flat_turns, turn windows) stay
 # available through live dispatch only.
 _GRAPH_FACT_METHOD_KIND = {
+    "session.tree": FACT_SESSION_TREE,
     "graph.overview": FACT_GRAPH_OVERVIEW,
     "graph.stats": FACT_GRAPH_STATS,
     "graph.usage": FACT_GRAPH_USAGE,
 }
 _GRAPH_FACT_PARAMS: dict[str, dict[str, Any]] = {
+    "session.tree": {},
     "graph.overview": {},
     "graph.stats": {"include": ["session_composition"]},
     "graph.usage": {},
@@ -101,6 +104,7 @@ _FACT_ENTITY_KINDS = (
     FACT_GRAPH_OVERVIEW,
     FACT_GRAPH_STATS,
     FACT_GRAPH_USAGE,
+    FACT_SESSION_TREE,
 )
 
 DetailName = Literal["sessions", "turns", "errors", "breaks", "projects"]
@@ -434,6 +438,7 @@ def _build_canonical_fact_rows_from_store(
         and (
             selected_roots is None
             or str(item.get("root_session_id") or "") in selected_roots
+            or str(item.get("lineage_root_session_id") or "") in selected_roots
         )
     ]
     for item in session_rows:
@@ -449,7 +454,13 @@ def _build_canonical_fact_rows_from_store(
                 payload=item,
             )
         )
-        graph = store.get_session_graph(UUID(root_id))
+        from coding_trajectory.analysis.orchestration_runs import (
+            build_conversation_tree,
+            orchestration_run_for_entrypoint,
+        )
+
+        lineage_graph = store.get_session_graph_for_session(UUID(root_id))
+        graph = orchestration_run_for_entrypoint(lineage_graph, UUID(root_id))
         session_ids = [
             str(value)
             for value in item.get("session_ids") or []
@@ -478,14 +489,29 @@ def _build_canonical_fact_rows_from_store(
                 "core economics omitted session entrypoints: "
                 + ", ".join(sorted(missing_targets))
             )
-        rows.extend(_graph_fact_rows(root_id=root_id, graph=graph))
+        rows.extend(
+            _graph_fact_rows(
+                root_id=root_id,
+                graph=graph,
+                conversation_tree={
+                    **build_conversation_tree(lineage_graph),
+                    "selected_branch_id": root_id,
+                },
+            )
+        )
     return rows
 
 
-def _graph_fact_rows(*, root_id: str, graph: SessionGraph) -> list[Mutation]:
+def _graph_fact_rows(
+    *,
+    root_id: str,
+    graph: SessionGraph,
+    conversation_tree: dict[str, object],
+) -> list[Mutation]:
     """Build the root-partitioned graph.* facts for one session graph."""
 
     payloads = {
+        "session.tree": conversation_tree,
         "graph.overview": build_graph_overview(graph, include_narrative=False),
         "graph.stats": build_session_graph_stats(
             graph, include_session_composition=True
@@ -592,6 +618,7 @@ def build_canonical_fact_rows_from_ct_json(
         and (
             selected_roots is None
             or str(item.get("root_session_id") or "") in selected_roots
+            or str(item.get("lineage_root_session_id") or "") in selected_roots
         )
     ]
 

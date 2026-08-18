@@ -53,6 +53,10 @@ class SessionOverviewRequest(SessionEntryRequest):
     drop_turns: int | None = Field(default=None, ge=1)
 
 
+class SessionTreeRequest(SessionEntryRequest):
+    pass
+
+
 class GraphOverviewRequest(SessionOverviewRequest):
     include: list[Literal["narrative"]] = Field(default_factory=list)
 
@@ -152,6 +156,11 @@ class ProjectSessionsResponse(ContractModel):
 class SessionOverviewResponse(ContractModel):
     root_session_id: str
     sessions: list[dict[str, Any]]
+
+
+class SessionTreeResponse(ContractModel):
+    root_session_id: str
+    branches: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class GraphOverviewResponse(ContractModel):
@@ -383,6 +392,7 @@ SERVICE_CONTRACTS = {
             SessionOverviewResponse,
             CliSessionOverviewResponse,
         ),
+        ServiceContract("session.tree", 2, SessionTreeRequest, SessionTreeResponse),
         ServiceContract(
             "graph.overview",
             2,

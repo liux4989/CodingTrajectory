@@ -6,12 +6,15 @@ entry = "dashboard.py"
 "project.list" = 2
 "project.sessions" = 2
 "session.overview" = 2
+"session.tree" = 2
 "session.stats" = 2
 "session.usage" = 2
 "session.model_usage" = 2
 "session.tool_usage" = 2
 "session.items" = 2
 "session.events" = 2
+"graph.overview" = 2
+"graph.stats" = 2
 "graph.usage" = 2
 
 [[tools]]

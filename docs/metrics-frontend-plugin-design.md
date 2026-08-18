@@ -426,7 +426,7 @@ The metrics-validation quality gate defined in `docs/metrics-validation-quality-
 ### Phase 2: Token Usage
 
 - Implement usage, distribution, cache hit rate, and input-versus-output modes.
-- Validate selected graph rows against `ct graph usage`.
+- Validate selected graph rows against `ct session graph usage`.
 
 ### Phase 3: Cost
 

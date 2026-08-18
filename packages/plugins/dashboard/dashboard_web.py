@@ -230,6 +230,12 @@ def _handler_for(
                             session_id=_required(query, "session_id"),
                         )
                     )
+                elif path == "/api/sessions/tree":
+                    payload = self._revisioned(
+                        lambda: runtime.session_tree(
+                            session_id=_required(query, "session_id"),
+                        )
+                    )
                 elif path == "/api/sessions/events":
                     payload = self._revisioned(
                         lambda: runtime.session_event_details(

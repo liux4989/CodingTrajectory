@@ -1,4 +1,4 @@
-"""Explicit graph-level command registration and renderers."""
+"""Nested session-graph command registration and renderers."""
 
 from __future__ import annotations
 
@@ -90,16 +90,16 @@ def _render_graph_overview_text(payload: dict[str, Any]) -> str:
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     graph_parser = subparsers.add_parser(
         "graph",
-        prog="ct graph",
-        usage="ct graph <command> [flags]",
-        help="Inspect an orchestration graph.",
+        prog="ct session graph",
+        usage="ct session graph <command> [flags]",
+        help="Inspect the selected branch's internal multi-agent graph.",
         formatter_class=GhFormatter,
     )
     graph_sub = graph_parser.add_subparsers(dest="action", required=True)
 
     graph_overview = graph_sub.add_parser(
         "overview",
-        prog="ct graph overview",
+        prog="ct session graph overview",
         help="Show graph capabilities, sessions, and structural edges.",
         formatter_class=GhFormatter,
     )
@@ -120,7 +120,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     graph_stats = graph_sub.add_parser(
         "stats",
-        prog="ct graph stats",
+        prog="ct session graph stats",
         help="Show aggregate context and token statistics for a graph.",
         formatter_class=GhFormatter,
     )
@@ -140,7 +140,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     graph_usage = graph_sub.add_parser(
         "usage",
-        prog="ct graph usage",
+        prog="ct session graph usage",
         help="Show aggregate turn-level token usage for a graph.",
         formatter_class=GhFormatter,
     )

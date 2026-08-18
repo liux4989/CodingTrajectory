@@ -29,8 +29,8 @@ from coding_trajectory_cli.telemetry import write_invocation_record
 EPILOG = """\
 NOTE
   Use `ct project sessions` to choose the SESSION_ID required by session and
-  graph analysis commands. `ct session events` may instead resolve one or more
-  explicit --event-id values.
+  session graph analysis commands. `ct session events` may instead resolve one
+  or more explicit --event-id values.
 """
 
 

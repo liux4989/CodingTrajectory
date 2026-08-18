@@ -152,7 +152,11 @@ def build_edges(sessions: list[Session]) -> list[SessionEdge]:
         if index is None:
             index = _EdgeOriginIndex.from_session(parent)
             parent_indexes[parent.session_id] = index
-        origin = index.origin_for(session.session_id)
+        origin = (
+            None
+            if _is_codex_fork(session) and not _is_codex_spawn(session)
+            else index.origin_for(session.session_id)
+        )
         edge = _build_edge(parent, session, origin)
         edges.append(edge)
 
@@ -229,7 +233,9 @@ def _build_edge(
     parent: Session, child: Session, origin: _EdgeOrigin | None
 ) -> SessionEdge:
     edge_type = (
-        "forked_from"
+        "spawned_subagent"
+        if _is_codex_spawn(child)
+        else "forked_from"
         if _is_codex_fork(child)
         else classify_edge_type(
             RelationEdgeInput(
@@ -301,6 +307,13 @@ def _is_sidechain(session: Session) -> bool:
 def _is_codex_fork(session: Session) -> bool:
     extensions = session.extensions
     return bool(extensions and extensions.codex and extensions.codex.forked_from_id)
+
+
+def _is_codex_spawn(session: Session) -> bool:
+    extensions = session.extensions
+    return bool(
+        extensions and extensions.codex and extensions.codex.spawn_parent_thread_id
+    )
 
 
 def _max_datetime(values: Any) -> datetime | None:

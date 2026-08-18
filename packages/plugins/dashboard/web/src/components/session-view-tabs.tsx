@@ -4,12 +4,13 @@ import { cn } from "@/lib/utils";
 
 type SessionViewTabsProps = {
   sessionId: string;
-  active: "context" | "graph";
+  active: "context" | "tree" | "graph";
 };
 
 const tabs = [
   { id: "context", label: "Context window", to: "/sessions/$sessionId" },
-  { id: "graph", label: "Graph", to: "/sessions/$sessionId/graph" },
+  { id: "tree", label: "Conversation tree", to: "/sessions/$sessionId/tree" },
+  { id: "graph", label: "Agent graph", to: "/sessions/$sessionId/graph" },
 ] as const;
 
 /** Route-level switcher between the per-session context window and graph views. */

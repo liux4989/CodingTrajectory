@@ -47,6 +47,25 @@ const columns: ColumnDef<SessionItem>[] = [
     enableSorting: false,
   },
   {
+    id: "branch",
+    accessorFn: (row) =>
+      (row.lineage_root_session_id ?? row.root_session_id) === row.root_session_id
+        ? "Root"
+        : "Fork",
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Branch" />,
+    cell: ({ getValue }) => (
+      <Badge variant="outline">{getValue<string>()}</Badge>
+    ),
+  },
+  {
+    id: "agents",
+    accessorFn: (row) => Math.max(row.session_ids.length - 1, 0),
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Agents" />,
+    cell: ({ getValue }) => (
+      <span className="tabular-nums">{getValue<number>().toLocaleString()}</span>
+    ),
+  },
+  {
     id: "vendors",
     accessorFn: (row) => sessionVendors(row).join(", "),
     header: ({ column }) => <DataTableColumnHeader column={column} label="Vendors" />,
@@ -115,7 +134,7 @@ export function SessionsRoute() {
 
   return (
     <div className="route-container">
-      <RouteHeader eyebrow="Session stream" title="Recent session entry points, kept compact for triage." />
+      <RouteHeader eyebrow="Orchestration runs" title="Conversation branches and their owned agent runs." />
       {projectName ? (
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary" className="gap-1.5">

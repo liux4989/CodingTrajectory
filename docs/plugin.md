@@ -202,10 +202,19 @@ Provider behavior remains explicit:
 - User and assistant timeline deltas estimate visible overview text.
 - Tool timeline rows do not invent token deltas when result text is unavailable.
 
-The dashboard session list links to
-`/sessions/$sessionId/context-window`. That route consumes the plugin JSON
-through `/api/sessions/context-window` and adds the composition bar, event
-selection, hover preview, and pinned detail behavior.
+The dashboard session list contains branch-local orchestration runs. It marks
+each row as the lineage root or an ordinary fork and shows the number of agents
+owned by that branch. Session detail exposes three URL-addressable views:
+
+- `/sessions/$sessionId` consumes `/api/sessions/context-window`;
+- `/sessions/$sessionId/tree` consumes `/api/sessions/tree` and shows ordinary
+  human conversation branches;
+- `/sessions/$sessionId/graph` consumes `/api/sessions/graph` and shows only the
+  selected branch plus its spawned agents.
+
+The retained dashboard facts preserve `lineage_root_session_id` so an
+incremental update replaces every branch-run partition in the affected
+conversation family without recombining those runs in graph metrics.
 
 ## Dashboard Cleanup
 

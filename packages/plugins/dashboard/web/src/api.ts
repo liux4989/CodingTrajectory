@@ -52,6 +52,7 @@ export type ProjectItem = {
 
 export type SessionItem = {
   root_session_id: string;
+  lineage_root_session_id?: string | null;
   graph_id?: string | null;
   vendors: string[];
   session_ids: string[];
@@ -550,7 +551,7 @@ export async function fetchContextWindow(sessionId: string) {
   return fetchJson<ContextWindowPayload>(`/api/sessions/context-window?${params}`);
 }
 
-// Graph payloads mirror `ct graph overview|stats|usage` with the dashboard's
+// Graph payloads mirror `ct session graph overview|stats|usage` with the dashboard's
 // retained parameter shapes (no narrative, no flat turn list).
 export type GraphOrchestration = {
   kind?: string;
@@ -663,6 +664,32 @@ export type SessionGraphPayload = {
 export async function fetchSessionGraph(sessionId: string) {
   const params = new URLSearchParams({ session_id: sessionId });
   return fetchJson<SessionGraphPayload>(`/api/sessions/graph?${params}`);
+}
+
+export type ConversationBranch = {
+  session_id: string;
+  parent_session_id?: string | null;
+  source_turn_id?: string | null;
+  vendor?: string;
+  status?: string;
+  title?: string | null;
+  agent_name?: string | null;
+  cwd?: string | null;
+  started_at?: string | null;
+  turn_count?: number;
+  graph_session_count?: number;
+  spawned_agent_count?: number;
+};
+
+export type SessionTreePayload = {
+  root_session_id: string;
+  selected_branch_id?: string;
+  branches: ConversationBranch[];
+};
+
+export async function fetchSessionTree(sessionId: string) {
+  const params = new URLSearchParams({ session_id: sessionId });
+  return fetchJson<SessionTreePayload>(`/api/sessions/tree?${params}`);
 }
 
 export type DashboardFreshness = {
@@ -795,4 +822,3 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   }
   return payload as T;
 }
-

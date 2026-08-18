@@ -135,9 +135,9 @@ export function SessionGraphRoute() {
     <div className="route-container w-full min-w-0 overflow-hidden pb-8">
       <div className="grid gap-4">
         <div className="min-w-0">
-          <h1 className="m-0 font-display text-h1 leading-tight">Session graph</h1>
+          <h1 className="m-0 font-display text-h1 leading-tight">Agent graph</h1>
           <p className="m-0 mt-1 text-body-sm text-muted-foreground">
-            {overview.project ?? "Unknown project"} · orchestration across{" "}
+            {overview.project ?? "Unknown project"} · branch-local orchestration across{" "}
             {orchestration.session_count ?? overview.sessions.length} session(s)
           </p>
         </div>
@@ -177,10 +177,10 @@ export function SessionGraphRoute() {
 
         <Card className="min-w-0">
           <CardHeader>
-            <CardTitle className="title-card">Session Graph</CardTitle>
+            <CardTitle className="title-card">Agent hierarchy</CardTitle>
             <CardDescription>
-              Interactive session hierarchy. The chip on each child is its observed
-              relationship to the parent session; hover it for provenance.
+              Only the selected conversation branch and agents spawned from it.
+              Ordinary human forks are available in Conversation tree.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -197,7 +197,7 @@ export function SessionGraphRoute() {
           <CardHeader>
             <CardTitle className="title-card">Session Composition</CardTitle>
             <CardDescription>
-              Per-session context and usage share, from `ct graph stats --session-composition`.
+              Per-session context and usage share, from `ct session graph stats --session-composition`.
             </CardDescription>
           </CardHeader>
           <CardContent className="overflow-x-auto">
@@ -263,7 +263,7 @@ export function SessionGraphRoute() {
           <CardHeader>
             <CardTitle className="title-card">Graph Usage</CardTitle>
             <CardDescription>
-              Aggregate turn-level token usage, as reported by `ct graph usage`.
+              Aggregate turn-level token usage, as reported by `ct session graph usage`.
             </CardDescription>
           </CardHeader>
           <CardContent>

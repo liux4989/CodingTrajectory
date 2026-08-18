@@ -13,6 +13,8 @@ const LABEL_FNS: Record<string, (params: Record<string, unknown>) => string> = {
     const id = String(p.sessionId ?? "");
     return id.length > 12 ? id.slice(0, 12) : id || "Session";
   },
+  "/sessions/$sessionId/tree": () => "Conversation tree",
+  "/sessions/$sessionId/graph": () => "Agent graph",
 };
 
 type Props = {

@@ -8,7 +8,7 @@ provider = "codex_cli"
 entrypoint_id = "019f17b8-d311-77f0-a163-e20701d5a150"
 source_files = ["cases/codex-fork-runtime/source/parent.jsonl", "cases/codex-fork-runtime/source/fork.jsonl"]
 expected_files = ["cases/codex-fork-runtime/expected/session-overview.json", "cases/codex-fork-runtime/expected/session-stats.json", "cases/codex-fork-runtime/expected/session-usage.json", "cases/codex-fork-runtime/expected/session-model-usage.json"]
-coverage = ["provider:codex_cli", "graph:multi-session", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration", "relationship:fork"]
+coverage = ["provider:codex_cli", "graph:single-session", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration", "relationship:fork"]
 
 [[cases]]
 id = "claude-stream-cache"
