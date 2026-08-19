@@ -18,7 +18,22 @@ from coding_trajectory.service import (
 )
 
 
+def _discovery_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Expose nested living-event scope IDs to the ordinary discovery layer."""
+
+    scope = params.get("scope")
+    if not isinstance(scope, dict):
+        return params
+    result = dict(params)
+    for key in ("session_id", "root_session_id", "turn_id"):
+        value = scope.get(key)
+        if value and key not in result:
+            result[key] = value
+    return result
+
+
 def _entrypoint_ids_from_params(params: dict[str, Any]) -> list[str]:
+    params = _discovery_params(params)
     ids: list[str] = []
     for key in ("session_id", "root_session_id", "turn_id"):
         value = params.get(key)
@@ -41,6 +56,7 @@ def _entrypoint_ids(requests: list[dict[str, Any]]) -> list[str]:
 
 
 def _store_key(params: dict[str, Any], *, global_scope: bool) -> tuple[Any, ...]:
+    params = _discovery_params(params)
     discovery_params = {
         key: params.get(key)
         for key in (
@@ -159,7 +175,7 @@ class ServiceRuntime:
         key = _store_key(params, global_scope=self.global_scope)
         if key not in self._stores:
             self._stores[key] = resolve_store(
-                params,
+                _discovery_params(params),
                 global_scope=self.global_scope,
                 current_dir=self.current_dir,
                 cache=self.cache,

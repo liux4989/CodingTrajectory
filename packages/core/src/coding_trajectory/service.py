@@ -841,6 +841,20 @@ def _handle_project_list(
     )
 
 
+def _handle_living_events(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    from coding_trajectory.living_events import query_living_events
+
+    return query_living_events(
+        params,
+        document_store=context.store,
+        cache=context.cache,
+        current_dir=context.current_dir,
+        global_scope=context.global_scope,
+    )
+
+
 @_single_session_handler
 def _handle_session_overview(
     params: dict[str, Any], session_graph: SessionGraph
@@ -1187,6 +1201,7 @@ def _event_ids_for_turn(
 SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "project.list": _handle_project_list,
     "project.sessions": _handle_project_sessions,
+    "living.events": _handle_living_events,
     "session.overview": _handle_session_overview,
     "session.tree": _handle_session_tree,
     "graph.overview": _handle_graph_overview,
