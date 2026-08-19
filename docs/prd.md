@@ -15,6 +15,76 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - Replay/UI-oriented interpretations such as sections, operations, roles, and workflow-specific labels should live in a projection or enrichment layer, not the core hierarchy.
 - Metric and context-window projections must be session-scoped first and graph-scoped second. A graph aggregate may expose totals, but it must not present child-agent turns, starting context, or provider context windows as if they belonged to the root session. Multi-session responses must expose explicit per-session sections alongside any graph totals.
 
+# Living Events Protocol
+
+## Resource structure
+- The protocol is a revisioned change feed over canonical resources, not a flat replay of vendor events and not an assertion that a session is only a linear list of newly appended events.
+- The canonical ownership hierarchy is `Session -> Turn -> Item`. Every turn has one owning session and every item has one owning turn, with stable IDs at each level.
+- A protocol response preserves that ownership hierarchy even when pagination returns only a slice. A returned turn always carries its `session_id`, and a returned item always carries both its `session_id` and `turn_id`.
+- `SessionGraph` is an orchestration overlay on the hierarchy. Its nodes reference canonical sessions and its evidence-backed edges represent relationships such as spawn, delegation, handoff, and resume. Agent sessions must not be represented only as nested children because orchestration relationships may form forks, joins, or other non-tree shapes.
+- Each session owns its context checkpoints. A context checkpoint represents an observed agent compaction or equivalent context-boundary event and may divide the session into context epochs without changing the direct `Session -> Turn -> Item` ownership hierarchy.
+- Turns should reference the effective `context_epoch_id` or preceding `context_checkpoint_id` when that relationship can be reconstructed. A checkpoint may also carry `effective_after_turn_id`, `effective_before_turn_id`, source event references, timestamps, and available token measurements.
+- A context checkpoint is distinct from a source checkpoint. `context_checkpoints` describe agent context/compaction history; `source_checkpoint` describes durable ingestion progress such as source generation, committed byte offset, and source fingerprint.
+
+The logical protocol shape is:
+
+```text
+SessionGraph
+|- session nodes ------------------------------------+
+`- orchestration edges                               |
+                                                      v
+Session
+|- source_checkpoint
+|- context_checkpoints[]
+`- turns[]
+   `- items[]
+```
+
+## Revision and change semantics
+- The protocol cursor orders observations committed by CT; it does not replace domain identity or hierarchy. An increasing revision means that CT observed and published a change, not necessarily that a new turn was appended.
+- Incremental responses use resource operations such as `upsert`, `remove`, and `reset`. Each operation carries a hierarchical resource address containing the applicable `session_id`, `turn_id`, `item_id`, `context_checkpoint_id`, or graph edge ID.
+- Existing resources may be updated when a tool result completes a prior tool call, a child-session relationship is discovered, a checkpoint is reconstructed, or a source is replaced. Consumers therefore apply changes by stable resource identity rather than assuming append-only array positions.
+- Pagination uses a stable `through` revision and keyset cursor. The same `through` value bounds hierarchy, graph edges, checkpoints, turns, and items so a consumer does not combine resources from inconsistent observations.
+- Snapshot and incremental forms describe the same resources. A snapshot returns a bounded hierarchy/graph slice; an incremental response returns operations that can be applied to that same schema.
+
+## View and details modes
+- `view` and `details` share the same resource schema and stable IDs. The mode controls content representation, not canonical identity.
+- `view` is a turn-oriented agent view. It retains complete user requests and agent response messages while replacing massive tool parameters, tool output, and patches with structured content references. It may retain useful normalized operation summaries, targets, status, counts, and item IDs, but it must not return human-only preview strings as the protocol contract.
+- `details` expands those structured references with the complete canonical item content already exposed by CT item-detail projection. It remains free of redundant vendor rollout wrappers and lifecycle noise; raw JSONL is still the immutable audit authority.
+- Truncation is never silent. Potentially large fields use a stable content envelope that indicates whether the value is inline or referenced and records its size and drill-down reference. The same envelope is used in both modes.
+- Clients may scope either mode to a graph, session, turn, item, or context checkpoint. Deep ID queries avoid forcing a consumer to retrieve the full hierarchy when it needs one operation.
+
+An illustrative response shape is:
+
+```json
+{
+  "mode": "view",
+  "through": "revision:1842",
+  "graph": {
+    "root_session_id": "session:root",
+    "nodes": [{"session_id": "session:root"}],
+    "edges": []
+  },
+  "sessions": [
+    {
+      "session_id": "session:root",
+      "source_checkpoint": {},
+      "context_checkpoints": [],
+      "turns": [
+        {
+          "turn_id": "turn:42",
+          "context_epoch_id": "epoch:2",
+          "user_request": {},
+          "items": [],
+          "assistant_responses": []
+        }
+      ]
+    }
+  ],
+  "next_cursor": null
+}
+```
+
 # Ingestion Transcript Layer
 - Each vendor adapter keeps vendor-specific parsing local, then emits a small transcript record stream: user message, assistant message, tool call, tool result, usage/runtime, and task completion.
 - Adapters deserialize only fields that contribute to hierarchy, transcript, tool reconstruction, usage, status, or session linkage.
