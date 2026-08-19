@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import re
 import shlex
 import shutil
 import subprocess
@@ -24,24 +23,6 @@ class CodexAppServerResult:
     turn_id: str | None
     text: str
 
-    def parse_json(self) -> Any:
-        """Parse the agent reply as JSON for structured-output turns.
-
-        Invokers that run a turn with an ``output_schema`` call this and then
-        validate the value with their own model; plain-text turns use ``text``.
-        """
-        stripped = self.text.strip()
-        if stripped.startswith("```"):
-            stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
-            stripped = re.sub(r"\s*```$", "", stripped)
-        try:
-            return json.loads(stripped)
-        except json.JSONDecodeError:
-            start = stripped.find("{")
-            end = stripped.rfind("}")
-            if start >= 0 and end > start:
-                return json.loads(stripped[start : end + 1])
-            raise
 
 
 class CodexAppServerClient:
@@ -414,12 +395,6 @@ def _app_server_command() -> list[str]:
     return [codex, "app-server", "--stdio"]
 
 
-def close_active_app_servers() -> None:
-    """Terminate every app-server process still owned by this Python process."""
-    with _ACTIVE_SESSIONS_LOCK:
-        sessions = list(_ACTIVE_SESSIONS)
-    for session in sessions:
-        session.close()
 
 
 def _register_session(session: CodexAppServerSession) -> None:

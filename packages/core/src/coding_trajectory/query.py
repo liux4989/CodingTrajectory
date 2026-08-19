@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -63,19 +61,6 @@ class DocumentStore:
     turns: dict[UUID, Turn]
     events: dict[UUID, Event]
     items: dict[UUID, Item] = field(default_factory=dict)
-
-    @classmethod
-    def from_path(cls, path: str | Path) -> DocumentStore:
-        source = Path(path)
-
-        try:
-            raw = json.loads(source.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            raise DocumentError(f"input file not found: {source}") from exc
-        except json.JSONDecodeError as exc:
-            raise DocumentError(f"invalid JSON in {source}: {exc}") from exc
-
-        return cls.from_data(raw)
 
     @classmethod
     def from_session_graphs(

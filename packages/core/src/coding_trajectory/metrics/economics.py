@@ -90,17 +90,6 @@ class GraphEconomicsBundle(_StrictModel):
     sessions: dict[UUID, EconomicsContribution]
     entrypoint_sessions: dict[UUID, UUID]
 
-    def contribution_for(self, entrypoint_id: str | UUID) -> EconomicsContribution:
-        """Resolve a session/turn alias without recomputing shared metrics."""
-
-        resource_id = _parse_entrypoint_id(entrypoint_id)
-        session_id = self.entrypoint_sessions.get(resource_id)
-        contribution = self.sessions.get(session_id) if session_id is not None else None
-        if contribution is None:
-            raise ValueError(
-                f"entrypoint is not present in session graph: {entrypoint_id}"
-            )
-        return contribution
 
 
 @session_scoped

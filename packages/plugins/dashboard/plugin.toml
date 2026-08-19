@@ -26,10 +26,6 @@ name = "web"
 summary = "Run the dashboard web program."
 
 [[tools]]
-name = "benchmark"
-summary = "Benchmark read-only dashboard APIs."
-
-[[tools]]
 name = "project/cleanup"
 summary = "Clean old project directories."
 
@@ -40,7 +36,3 @@ summary = "Clean orphaned or low-value session logs."
 [[tools]]
 name = "session/context-window"
 summary = "Inspect session context composition and trajectory events."
-
-[[tools]]
-name = "session/evaluate"
-summary = "Run the lightweight session or turn evaluator."

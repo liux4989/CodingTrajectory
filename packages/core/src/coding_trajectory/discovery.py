@@ -269,15 +269,6 @@ def discover_store(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class SessionMetadataGroup:
-    project_identifier: str
-    root_session_id: UUID
-    session_ids: list[UUID]
-    vendors: list[str]
-    title: str | None = None
-
-
 def discover_project_metadata(
     *,
     current_dir: Path,
@@ -653,36 +644,6 @@ def _path_matches_vendor_config(path: Path, *, base_dir: Path, pattern: str) -> 
     except ValueError:
         return False
     return fnmatch.fnmatch(relative.name, pattern)
-
-
-def discover_store_from_file(path: Path) -> DiscoveryResult:
-    """Build a store from a single explicit log file, auto-detecting the vendor."""
-    path = path.resolve()
-    if not path.exists():
-        raise DocumentError(f"log file not found: {path}")
-
-    for vendor, adapter_cls, _base_dir, _pattern in _matching_vendor_configs(path):
-        adapter = adapter_cls()
-        try:
-            session = stabilize_session(
-                adapter.ingest_file(path), vendor=vendor, source=path
-            )
-        except Exception:
-            continue
-
-        project_identifier = infer_project_identifier(session, path, fallback=path.stem)
-        if not project_identifier:
-            project_identifier = path.stem
-
-        session_graphs = assemble_project_session_graphs(project_identifier, [session])
-        store = DocumentStore.from_session_graphs(session_graphs)
-        root_session_id = session_graphs[0].root_session_id
-        source = DiscoverySource(
-            vendor=vendor, path=path, root_session_id=root_session_id
-        )
-        return DiscoveryResult(store=store, sources=[source])
-
-    raise DocumentError(f"no adapter could parse log file: {path}")
 
 
 def discover_store_from_files(

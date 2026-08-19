@@ -98,14 +98,7 @@ class BaseAdapter(ABC):
         )
         return self._build_session(path, records, retention=retention)
 
-    def ingest_directory(self, directory: Path) -> list[Session]:
-        sessions: list[Session] = []
-        for source_file in sorted(directory.glob(self._file_glob)):
-            sessions.append(self.ingest_file(source_file))
-        return sessions
 
-    def ingest(self, source: Path) -> Session:
-        return self.ingest_file(source)
 
     def scan_started_turn_ids(self, source: Path) -> set[str] | None:
         """Return the set of vendor turn_ids that begin a turn in this file, or

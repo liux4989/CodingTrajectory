@@ -1414,19 +1414,3 @@ class CodexAdapter(BaseAdapter):
         if effort is not None:
             state.prev_effort = effort
 
-    def ingest_codex_home(self, codex_dir: Path | None = None) -> list[Session]:
-        """Ingest all rollout JSONL files under the Codex home directory."""
-        if codex_dir is None:
-            codex_dir = Path.home() / ".codex"
-        sessions_dir = codex_dir / "sessions"
-        if not sessions_dir.is_dir():
-            logger.warning("Codex sessions directory not found: %s", sessions_dir)
-            return []
-
-        sessions: list[Session] = []
-        for jsonl_file in sorted(sessions_dir.rglob("*.jsonl")):
-            try:
-                sessions.append(self.ingest_file(jsonl_file))
-            except Exception:
-                logger.warning("Failed to ingest %s", jsonl_file, exc_info=True)
-        return sessions

@@ -61,7 +61,6 @@ from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_CLAUDE_DIR = Path.home() / ".claude" / "projects"
 _TEAMMATE_MESSAGE_RE = re.compile(
     r"<teammate-message(?P<attrs>[^>]*)>(?P<body>.*?)</teammate-message>", re.DOTALL
 )
@@ -324,8 +323,7 @@ def _subagent_input_from_scan(
 class _ClaudeRecordScan:
     """Single-pass collector for record facts used outside the transcript.
 
-    Replaces the repeated full-list scans of ``_first_session_id``,
-    ``_subagent_input``, and ``_effort_change_observations`` so ingestion can
+    Replaces repeated full-list scans of record facts so ingestion can
     stream records instead of materializing them.
     """
 
@@ -418,25 +416,6 @@ def _extract_image_blocks(content: str | list | None) -> list[dict]:
         for block in content
         if isinstance(block, dict) and block.get("type") == "image"
     ]
-
-
-def _effort_change_observations(records: list[dict]) -> list[RuntimeObservation]:
-    """Detect reasoning-effort change-points from ``/effort`` slash commands.
-
-    Claude Code logs an effort switch as a two-record sequence: a
-    ``<command-name>/effort</command-name>`` user record followed by a
-    ``<local-command-stdout>Set effort level to <LEVEL> ...`` user record. The
-    stdout record carries the resolved level (``max``, ``ultracode``,
-    ``high`` ...). Unlike Codex's per-turn ``turn_context.effort`` — where the
-    first turn establishes a baseline with no change — Claude Code only logs
-    effort when the user *switches* it, so the first observation marks a change
-    from an unknown baseline (``effort_from=None``); a no-op re-set to the same
-    level emits nothing.
-    """
-    scan = _ClaudeRecordScan()
-    for record in records:
-        scan.observe(record)
-    return scan.effort_observations
 
 
 def _extract_thinking(content: list | None) -> list[str]:
@@ -1127,13 +1106,3 @@ class ClaudeCodeAdapter(BaseAdapter):
                 )
             )
 
-    def ingest_default(self) -> list[Session]:
-        sessions: list[Session] = []
-        for jsonl_path in sorted(_DEFAULT_CLAUDE_DIR.rglob("*.jsonl")):
-            try:
-                sessions.append(self.ingest_file(jsonl_path))
-            except Exception as exc:
-                logger.warning(
-                    "ClaudeCodeAdapter: failed to ingest %s: %s", jsonl_path, exc
-                )
-        return sessions

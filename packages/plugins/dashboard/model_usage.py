@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from coding_trajectory.runtime import ServiceApiClient
 from pydantic import BaseModel, Field
+
+try:
+    from .stat_utils import parse_datetime as _parse_datetime
+    from .stat_utils import percentile as _percentile
+    from .stat_utils import safe_div as _safe_div
+except ImportError:  # pragma: no cover - direct plugin-directory imports
+    from stat_utils import parse_datetime as _parse_datetime
+    from stat_utils import percentile as _percentile
+    from stat_utils import safe_div as _safe_div
 
 TOKEN_KEYS = (
     "prompt_tokens",
@@ -532,18 +541,6 @@ def _bucket_key(value: datetime, grain: str) -> str:
     return value.date().isoformat()
 
 
-def _parse_datetime(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed
-
-
 def _elapsed_seconds(started_at: Any, completed_at: Any) -> int:
     start = _parse_datetime(started_at)
     end = _parse_datetime(completed_at)
@@ -612,12 +609,6 @@ def _combine_total_confidence(left: str, right: str) -> str:
     return "reported_consistent"
 
 
-def _safe_div(numerator: float, denominator: int) -> float:
-    if denominator <= 0:
-        return 0.0
-    return round(numerator / denominator, 8)
-
-
 def _distribution(values: list[float]) -> dict[str, Any]:
     clean = [float(value) for value in values if value >= 0]
     if not clean:
@@ -638,23 +629,6 @@ def _distribution(values: list[float]) -> dict[str, Any]:
         "p95": _percentile(ordered, 0.95),
         "max": round(ordered[-1], 8),
     }
-
-
-def _percentile(ordered_values: list[float], percentile: float) -> float:
-    if not ordered_values:
-        return 0.0
-    if len(ordered_values) == 1:
-        return round(ordered_values[0], 8)
-    position = (len(ordered_values) - 1) * percentile
-    lower = int(position)
-    upper = min(lower + 1, len(ordered_values) - 1)
-    if lower == upper:
-        return round(ordered_values[lower], 8)
-    weight = position - lower
-    return round(
-        ordered_values[lower] * (1 - weight) + ordered_values[upper] * weight,
-        8,
-    )
 
 
 def _number(value: Any) -> float:

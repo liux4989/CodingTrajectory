@@ -23,14 +23,18 @@ import secrets
 import sqlite3
 import threading
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
 from itertools import islice
 from pathlib import Path
-from typing import Any, BinaryIO, Final, Literal
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+from coding_trajectory.ingestion.common import (
+    canonical_json,
+    last_complete_line_offset,
+)
 
 
 _CHECKSUM_BYTES: Final = 64 * 1024
@@ -42,10 +46,6 @@ _JSON_OBJECT = TypeAdapter(dict[str, Any])
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _digest(value: bytes) -> str:
@@ -467,7 +467,7 @@ class MaterializationContext:
             (
                 root_link,
                 parent_link,
-                _canonical_json(validated_metadata),
+                canonical_json(validated_metadata),
                 self.revision,
                 str(Path(source_path).resolve()),
             ),
@@ -943,20 +943,9 @@ class IncrementalStore:
         The candidate set is an authoritative inventory for deletion detection.
         Callers should therefore pass all in-scope paths on periodic/startup
         reconciliation.  Watcher-driven partial refreshes can use
-        :meth:`refresh_paths`, which does not infer deletion of omitted paths.
         """
 
-        return self._refresh(candidates, materialize=materialize, inventory=True)
-
-    def refresh_paths(
-        self,
-        paths: Iterable[str | Path],
-        *,
-        materialize: Materializer | None = None,
-    ) -> RefreshResult:
-        """Refresh explicit paths without treating other registered paths as deleted."""
-
-        return self._refresh(paths, materialize=materialize, inventory=False)
+        return self._refresh(candidates, materialize=materialize)
 
     def materialize_revision(
         self,
@@ -1046,7 +1035,6 @@ class IncrementalStore:
         candidates: Iterable[str | Path],
         *,
         materialize: Materializer | None,
-        inventory: bool,
     ) -> RefreshResult:
         resolved = tuple(
             sorted({str(Path(path).expanduser().resolve()) for path in candidates})
@@ -1063,7 +1051,7 @@ class IncrementalStore:
                 )
 
             try:
-                plans = self._build_plans(resolved, previous, inventory=inventory)
+                plans = self._build_plans(resolved, previous)
             except Exception as exc:
                 self._record_failure(
                     phase="plan",
@@ -1097,29 +1085,26 @@ class IncrementalStore:
         self,
         paths: Sequence[str],
         previous: dict[str, SourceSnapshot],
-        *,
-        inventory: bool,
     ) -> list[_IngestionPlan]:
         plans: list[_IngestionPlan] = []
         requested = set(paths)
-        if inventory:
-            for path, snapshot in previous.items():
-                if path not in requested and not snapshot.deleted:
-                    plans.append(
-                        _IngestionPlan(
-                            path=path,
-                            kind=ChangeKind.DELETE,
-                            disk=None,
-                            previous=snapshot,
-                            invalidated_message_ids=(
-                                self._message_ids(path)
-                                if self.retain_source_messages
-                                else ()
-                            ),
-                            committed_offset=snapshot.committed_offset,
-                            omitted_from_inventory=True,
-                        )
+        for path, snapshot in previous.items():
+            if path not in requested and not snapshot.deleted:
+                plans.append(
+                    _IngestionPlan(
+                        path=path,
+                        kind=ChangeKind.DELETE,
+                        disk=None,
+                        previous=snapshot,
+                        invalidated_message_ids=(
+                            self._message_ids(path)
+                            if self.retain_source_messages
+                            else ()
+                        ),
+                        committed_offset=snapshot.committed_offset,
+                        omitted_from_inventory=True,
                     )
+                )
         for path in paths:
             snapshot = previous.get(path)
             try:
@@ -1213,7 +1198,7 @@ class IncrementalStore:
                     opened_identity = f"{opened.st_dev}:{opened.st_ino}"
                     if opened_identity != disk.file_identity:
                         raise RuntimeError("source identity changed during scan")
-                    committed = _last_complete_line_offset(source, disk.size)
+                    committed = last_complete_line_offset(source, disk.size)
                 after = _disk_metadata(path)
                 if after != disk:
                     raise RuntimeError("source metadata changed during scan")
@@ -1485,7 +1470,7 @@ class IncrementalStore:
                         occurred_at, phase, source_paths_json, error
                     ) VALUES(?, ?, ?, ?)
                     """,
-                    (_utc_now(), phase, _canonical_json(source_paths), error),
+                    (_utc_now(), phase, canonical_json(source_paths), error),
                 )
                 connection.execute(
                     """
@@ -1741,7 +1726,7 @@ class IncrementalStore:
             """,
             (mutation.entity_kind, mutation.entity_key),
         ).fetchone()
-        payload_json = _canonical_json(mutation.payload)
+        payload_json = canonical_json(mutation.payload)
         if current is not None and (
             current["scope_key"],
             current["partition_key"],
@@ -2090,7 +2075,7 @@ class IncrementalStore:
                 for row in rows[:max_changes]
             )
             payload_bytes = sum(
-                len(_canonical_json(change.model_dump(mode="json")).encode("utf-8"))
+                len(canonical_json(change.model_dump(mode="json")).encode("utf-8"))
                 for change in changes
             )
             if len(rows) > max_changes or payload_bytes > max_payload_bytes:
@@ -2163,10 +2148,10 @@ class IncrementalStore:
                     row.turn_id,
                     row.kind,
                     row.source_path,
-                    _canonical_json(
+                    canonical_json(
                         [span.model_dump(mode="json") for span in row.spans]
                     ),
-                    _canonical_json(row.edge_targets),
+                    canonical_json(row.edge_targets),
                 )
                 for row in items
             ),
@@ -2270,14 +2255,14 @@ class IncrementalStore:
         operation: str,
         payload: dict[str, Any],
     ) -> None:
-        payload_json = _canonical_json(payload)
+        payload_json = canonical_json(payload)
         identifier_bytes = len(entity_kind.encode("utf-8")) + len(
             entity_key.encode("utf-8")
         )
         if identifier_bytes > _MAX_CHANGE_IDENTIFIER_BYTES:
             operation = "invalidate"
             entity_key = "oversized:" + _digest(entity_key.encode("utf-8"))
-            payload_json = _canonical_json(
+            payload_json = canonical_json(
                 {
                     "reason": "identifier_too_large",
                     "identifier_bytes": identifier_bytes,
@@ -2285,7 +2270,7 @@ class IncrementalStore:
             )
         if len(payload_json.encode("utf-8")) > _MAX_CHANGE_PAYLOAD_BYTES:
             operation = "invalidate"
-            payload_json = _canonical_json(
+            payload_json = canonical_json(
                 {
                     "reason": "payload_too_large",
                     "payload_bytes": len(payload_json.encode("utf-8")),
@@ -2377,17 +2362,6 @@ class IncrementalStore:
             (key, value),
         )
 
-    @contextmanager
-    def read_connection(self) -> Iterator[sqlite3.Connection]:
-        """Expose a read-only-by-contract connection for custom hot SQL queries."""
-
-        connection = self._connect()
-        try:
-            connection.execute("PRAGMA query_only = ON")
-            yield connection
-        finally:
-            connection.close()
-
 
 def _table_count(
     connection: sqlite3.Connection,
@@ -2468,32 +2442,6 @@ def _default_event_identity(payload: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
-
-
-def _last_complete_line_offset(source: BinaryIO, size: int) -> int:
-    """Return the byte after the last newline without reading the transcript.
-
-    Checkpoint-only stores still expose an incomplete trailing JSONL record as
-    partial ingestion. Normal files cost one byte of I/O; only a malformed file
-    with no newline requires walking back to its beginning.
-    """
-
-    if size <= 0:
-        return 0
-    source.seek(size - 1)
-    if source.read(1) == b"\n":
-        return size
-    block_size = 64 * 1024
-    end = size
-    while end > 0:
-        start = max(0, end - block_size)
-        source.seek(start)
-        chunk = source.read(end - start)
-        newline = chunk.rfind(b"\n")
-        if newline >= 0:
-            return start + newline + 1
-        end = start
-    return 0
 
 
 def _message_identity(

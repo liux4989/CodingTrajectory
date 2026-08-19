@@ -26,7 +26,12 @@ from uuid import UUID
 from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.analysis.item_details import build_item_details
 from coding_trajectory.analysis.request_lineage import effective_user_request
-from coding_trajectory.ingestion.common import format_datetime, stable_uuid
+from coding_trajectory.ingestion.common import (
+    canonical_json,
+    format_datetime,
+    last_complete_line_offset,
+    stable_uuid,
+)
 from coding_trajectory.ingestion.indexes import build_session_graph_index
 from coding_trajectory.ingestion.models import (
     AgentMessageItem,
@@ -356,7 +361,8 @@ def _source_checkpoint(path: Path | None) -> dict[str, Any] | None:
         return None
     try:
         stat = path.stat()
-        committed = _last_complete_offset(path, stat.st_size)
+        with path.open("rb") as handle:
+            committed = last_complete_line_offset(handle, stat.st_size)
         trailing = max(stat.st_size - committed, 0)
         return {
             "path": str(path),
@@ -377,26 +383,6 @@ def _source_checkpoint(path: Path | None) -> dict[str, Any] | None:
             "status": "error",
             "error": f"{type(exc).__name__}: {exc}",
         }
-
-
-def _last_complete_offset(path: Path, size: int) -> int:
-    if size <= 0:
-        return 0
-    chunk_size = 64 * 1024
-    with path.open("rb") as handle:
-        handle.seek(size - 1)
-        if handle.read(1) == b"\n":
-            return size
-        position = size
-        while position > 0:
-            start = max(0, position - chunk_size)
-            handle.seek(start)
-            chunk = handle.read(position - start)
-            index = chunk.rfind(b"\n")
-            if index >= 0:
-                return start + index + 1
-            position = start
-    return 0
 
 
 def _context_checkpoints(session: Session) -> list[dict[str, Any]]:
@@ -491,7 +477,7 @@ def _request_content(request: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _inline_content(value: Any) -> dict[str, Any]:
-    text = value if isinstance(value, str) else _canonical_json(value)
+    text = value if isinstance(value, str) else canonical_json(value)
     return {
         "state": "inline",
         "value": value,
@@ -530,7 +516,7 @@ def _view_value(
     event_ids: list[str],
     field_path: str,
 ) -> Any:
-    serialized = value if isinstance(value, str) else _canonical_json(value)
+    serialized = value if isinstance(value, str) else canonical_json(value)
     limit = _VIEW_STRING_LIMIT if isinstance(value, str) else _VIEW_VALUE_LIMIT
     if len(serialized) > limit:
         return {
@@ -606,16 +592,6 @@ def _edge_resource(graph: SessionGraph, edge: SessionEdge) -> dict[str, Any]:
 
 def _without_nones(value: dict[str, Any]) -> dict[str, Any]:
     return {key: child for key, child in value.items() if child is not None}
-
-
-def _canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        default=str,
-    )
 
 
 class LivingEventsStore:
@@ -757,12 +733,12 @@ class LivingEventsStore:
                         resource.key,
                         revision,
                         resource.root_session_id,
-                        _canonical_json(resource.path),
+                        canonical_json(resource.path),
                         resource.sort_key,
-                        _canonical_json(resource.view),
+                        canonical_json(resource.view),
                         sqlite3.Binary(
                             zlib.compress(
-                                _canonical_json(resource.details).encode("utf-8")
+                                canonical_json(resource.details).encode("utf-8")
                             )
                         ),
                         _resource_digest(resource),
@@ -816,7 +792,7 @@ class LivingEventsStore:
     ) -> dict[str, Any]:
         if mode not in {"view", "details"}:
             raise ValueError("mode must be 'view' or 'details'")
-        scope_hash = hashlib.sha256(_canonical_json(scope).encode("utf-8")).hexdigest()
+        scope_hash = hashlib.sha256(canonical_json(scope).encode("utf-8")).hexdigest()
         with self._connect() as connection:
             current = self._current_revision(connection)
             pruned_through = int(self._metadata(connection, "pruned_through") or "0")
@@ -1192,7 +1168,7 @@ class LivingEventsStore:
                 resource_kind,
                 resource_key,
                 root_session_id,
-                _canonical_json(path),
+                canonical_json(path),
                 reason,
             ),
         )
@@ -1219,7 +1195,7 @@ class LivingEventsStore:
     def _encode_cursor(
         self, connection: sqlite3.Connection, value: dict[str, Any]
     ) -> str:
-        raw = _canonical_json(value).encode("utf-8")
+        raw = canonical_json(value).encode("utf-8")
         signature = hmac.new(
             self._metadata(connection, "cursor_secret").encode("utf-8"),
             raw,
@@ -1286,7 +1262,7 @@ class LivingEventsStore:
 
 def _resource_digest(resource: ProjectedResource) -> str:
     return hashlib.sha256(
-        _canonical_json(
+        canonical_json(
             {
                 "path": resource.path,
                 "sort_key": resource.sort_key,

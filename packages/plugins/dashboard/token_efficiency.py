@@ -13,6 +13,15 @@ from typing import Any, Literal
 from coding_trajectory.runtime import ServiceApiClient
 from pydantic import BaseModel, Field
 
+try:
+    from .stat_utils import parse_datetime as _parse_datetime
+    from .stat_utils import percentile as _percentile
+    from .stat_utils import safe_div as _safe_div
+except ImportError:  # pragma: no cover - direct plugin-directory imports
+    from stat_utils import parse_datetime as _parse_datetime
+    from stat_utils import percentile as _percentile
+    from stat_utils import safe_div as _safe_div
+
 Grain = Literal["daily", "weekly"]
 
 # A batch shares one ServiceRuntime and its resolved store.  Keep this bounded
@@ -130,9 +139,7 @@ _SEARCH_OPTIONS_WITH_VALUES = {
     "--type",
     "--type-add",
 }
-_SEARCH_RE = re.compile(
-    r"(?:\brg\b|\bgrep\b|\bripgrep\b|search_text)"
-)
+_SEARCH_RE = re.compile(r"(?:\brg\b|\bgrep\b|\bripgrep\b|search_text)")
 _READ_RE = re.compile(
     r"(?:\bsed\s+-n\b|\bcat\b|\bhead\b|\btail\b|read_file|view_file|open_file)"
 )
@@ -304,33 +311,10 @@ class Coverage(BaseModel):
     truncated_input_summaries: int = 0
 
 
-class IndexCoverage(BaseModel):
-    root_graphs: int = 0
-
-
 class ProjectOption(BaseModel):
     name: str
     path: str | None = None
     vendors: list[str] = Field(default_factory=list)
-
-
-class ProjectIndexRow(BaseModel):
-    project_name: str
-    display_name: str
-    root_graphs: int = 0
-    prompt_tokens: int = 0
-    graph_prompt: Distribution = Field(default_factory=Distribution)
-
-
-class IndexProjection(BaseModel):
-    schema_version: Literal[1] = 1
-    generated_at: datetime
-    filters: dict[str, Any]
-    attribution: dict[str, Any]
-    coverage: IndexCoverage
-    warnings: list[str] = Field(default_factory=list)
-    project_options: list[ProjectOption] = Field(default_factory=list)
-    projects: list[ProjectIndexRow] = Field(default_factory=list)
 
 
 class ProjectProjection(BaseModel):
@@ -346,66 +330,6 @@ class ProjectProjection(BaseModel):
     patterns: dict[str, list[PatternRow]] = Field(default_factory=dict)
     hotspots: dict[str, list[HotspotRow]] = Field(default_factory=dict)
     outliers: dict[str, list[OutlierRow]] = Field(default_factory=dict)
-
-
-def build_index_projection(
-    *,
-    client: ServiceApiClient,
-    since_days: int = 30,
-) -> dict[str, Any]:
-    since_days = max(int(since_days), 1)
-    projects_payload = client.call("project.list", {})
-    sessions_payload = client.call(
-        "project.sessions",
-        {"since_days": since_days, "include": ["usage"]},
-    )
-    options = _project_options(projects_payload)
-    option_by_key = {item.name.casefold(): item for item in options}
-    options_by_compact: dict[str, list[ProjectOption]] = defaultdict(list)
-    for item in options:
-        options_by_compact[_compact_project_key(item.name)].append(item)
-    grouped: dict[str, list[int]] = defaultdict(list)
-    project_names: dict[str, str] = {}
-    display_names: dict[str, str] = {}
-    warnings: list[str] = []
-    for item in sessions_payload.get("items") or []:
-        if not isinstance(item, dict):
-            continue
-        raw_name = str(item.get("project") or "unknown")
-        raw_key = raw_name.casefold()
-        option = option_by_key.get(raw_key)
-        if option is None:
-            compact_matches = options_by_compact.get(
-                _compact_project_key(raw_name), []
-            )
-            option = compact_matches[0] if len(compact_matches) == 1 else None
-        key = option.name.casefold() if option else raw_key
-        project_names[key] = option.name if option else raw_name
-        display_names[key] = (
-            _project_display_name(option) if option else raw_name
-        )
-        grouped[key].append(_prompt_tokens(item.get("usage")))
-        warnings.extend(str(value) for value in item.get("warnings") or [])
-    rows = [
-        ProjectIndexRow(
-            project_name=project_names[key],
-            display_name=display_names[key],
-            root_graphs=len(values),
-            prompt_tokens=sum(values),
-            graph_prompt=_distribution(values),
-        )
-        for key, values in grouped.items()
-    ]
-    rows.sort(key=lambda row: row.prompt_tokens, reverse=True)
-    return IndexProjection(
-        generated_at=datetime.now(UTC),
-        filters={"since_days": since_days},
-        attribution=_attribution(),
-        coverage=IndexCoverage(root_graphs=sum(row.root_graphs for row in rows)),
-        warnings=list(dict.fromkeys(warnings)),
-        project_options=options,
-        projects=rows,
-    ).model_dump(mode="json")
 
 
 def build_project_projection(
@@ -526,9 +450,7 @@ def build_project_projection(
     truncated_summaries = sum(
         1 for row in tool_records if str(row.get("input_summary") or "").endswith("…")
     )
-    undated_tools = sum(
-        1 for row in tool_records if row.get("completed_at") is None
-    )
+    undated_tools = sum(1 for row in tool_records if row.get("completed_at") is None)
     if truncated_summaries:
         warnings.append(
             f"{truncated_summaries} tool input summaries were truncated; "
@@ -579,9 +501,7 @@ def _batch_methods(
     telemetry_targets: list[tuple[str, str]],
     methods: tuple[str, ...],
 ) -> tuple[dict[str, dict[str, dict[str, Any]]], list[str]]:
-    rows: dict[str, dict[str, dict[str, Any]]] = {
-        method: {} for method in methods
-    }
+    rows: dict[str, dict[str, dict[str, Any]]] = {method: {} for method in methods}
     warnings: list[str] = []
 
     def load_chunk(chunk: list[tuple[str, str]]) -> None:
@@ -596,9 +516,7 @@ def _batch_methods(
             for session_id in session_ids
         ]
         anchors = {
-            root_id
-            for _session_id, root_id in chunk
-            if root_id not in session_ids
+            root_id for _session_id, root_id in chunk if root_id not in session_ids
         }
         requests.extend(
             {
@@ -649,9 +567,7 @@ def _batch_methods(
                         detail = str(warning)
                     warnings.append(f"{method} warning for {root_id}: {detail}")
         expected = {
-            (method, session_id)
-            for method in methods
-            for session_id in session_ids
+            (method, session_id) for method in methods for session_id in session_ids
         }
         for method, root_id in expected - seen:
             warnings.append(f"{method} omitted response for {root_id}")
@@ -668,7 +584,11 @@ def _project_options(payload: dict[str, Any]) -> list[ProjectOption]:
     return [
         ProjectOption(
             name=str(name),
-            path=(str(item.get("path")) if isinstance(item, dict) and item.get("path") else None),
+            path=(
+                str(item.get("path"))
+                if isinstance(item, dict) and item.get("path")
+                else None
+            ),
             vendors=(
                 [str(value) for value in item.get("vendors") or []]
                 if isinstance(item, dict)
@@ -688,9 +608,7 @@ def _resolve_project_option(
             return option
     wanted = _compact_project_key(project_name)
     matches = [
-        option
-        for option in options
-        if _compact_project_key(option.name) == wanted
+        option for option in options if _compact_project_key(option.name) == wanted
     ]
     if len(matches) == 1:
         return matches[0]
@@ -715,16 +633,16 @@ def _usage_units(
     model_rows: dict[str, dict[str, Any]],
     *,
     tz: Any,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
+) -> tuple[
+    list[dict[str, Any]], list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]]
+]:
     turns: list[dict[str, Any]] = []
     sessions: dict[str, dict[str, Any]] = {}
     turn_by_id: dict[tuple[str, str], dict[str, Any]] = {}
     for root_id, payload in model_rows.items():
         title = _optional_text(payload.get("title"))
         payload_turns = [
-            turn
-            for turn in payload.get("turns") or []
-            if isinstance(turn, dict)
+            turn for turn in payload.get("turns") or [] if isinstance(turn, dict)
         ]
         session_id = str(
             next(
@@ -907,15 +825,10 @@ def _search_command_details(
                 paths.append(cleaned)
             index += 1
         explicit_file_paths = [
-            value
-            for value in paths
-            if _looks_like_file_operand(value)
+            value for value in paths if _looks_like_file_operand(value)
         ]
         broad_scope = (
-            recursive
-            or not paths
-            or len(paths) != 1
-            or len(explicit_file_paths) != 1
+            recursive or not paths or len(paths) != 1 or len(explicit_file_paths) != 1
         )
         scopes.append("broad" if broad_scope else "targeted")
     if not scopes:
@@ -947,10 +860,10 @@ def _classify_tool(
         or text.count('"cmd"') > 1
         or text.count("cmd:") > 1
     )
-    if (
-        normalized_tool.startswith(("web.", "browser.", "chrome."))
-        or tool_key in {"web_search", "web_fetch"}
-    ):
+    if normalized_tool.startswith(("web.", "browser.", "chrome.")) or tool_key in {
+        "web_search",
+        "web_fetch",
+    }:
         return "web", parallel
     if tool_key in _EDIT_TOOL_NAMES:
         return "editing", parallel
@@ -965,8 +878,7 @@ def _classify_tool(
     search_scope, _patterns = _search_command_details(summary)
     search = bool(
         search_scope
-        or
-        _SEARCH_RE.search(text)
+        or _SEARCH_RE.search(text)
         or "rg --files" in text
         or re.search(r"\bfind\b.+(?:-type|-name|-exec)", text)
         or re.search(r"\bls\b", text)
@@ -982,10 +894,7 @@ def _classify_tool(
             or search_scope == "broad"
             or (
                 search_scope is None
-                and (
-                    resource_count > 1
-                    or (search and resource_count == 0)
-                )
+                and (resource_count > 1 or (search and resource_count == 0))
             )
             or (search_scope is None and search_read_signals > 1)
             or "rg --files" in text
@@ -1092,9 +1001,7 @@ def _latest_periods(
 def _required_discovery_days(since_days: int, now_local: datetime) -> int:
     """Cover the requested trend and both latest completed weekly buckets."""
     _current, previous = _latest_periods("weekly", now_local)
-    weekly_lookback = math.ceil(
-        (now_local - previous[0]).total_seconds() / 86_400
-    )
+    weekly_lookback = math.ceil((now_local - previous[0]).total_seconds() / 86_400)
     return max(since_days, weekly_lookback + 1)
 
 
@@ -1145,12 +1052,8 @@ def _period_summary(
     sessions = [
         row for row in session_records if _in_period(row.get("completed_at"), period)
     ]
-    turns = [
-        row for row in turn_records if _in_period(row.get("completed_at"), period)
-    ]
-    turn_keys = {
-        (str(row["session_id"]), str(row["turn_id"])) for row in turns
-    }
+    turns = [row for row in turn_records if _in_period(row.get("completed_at"), period)]
+    turn_keys = {(str(row["session_id"]), str(row["turn_id"])) for row in turns}
     tools = [
         row
         for row in tool_records
@@ -1223,9 +1126,7 @@ def _comparison(
             turn_median_pct=_pct_change(
                 current.turn_prompt.median, previous.turn_prompt.median
             ),
-            turn_p90_pct=_pct_change(
-                current.turn_prompt.p90, previous.turn_prompt.p90
-            ),
+            turn_p90_pct=_pct_change(current.turn_prompt.p90, previous.turn_prompt.p90),
         ),
     )
 
@@ -1296,9 +1197,7 @@ def _pattern_rows(
                 contributors=contributors[:30],
             )
         )
-    return sorted(
-        rows, key=lambda row: row.current.total_prompt_tokens, reverse=True
-    )
+    return sorted(rows, key=lambda row: row.current.total_prompt_tokens, reverse=True)
 
 
 def _pattern_metrics(
@@ -1313,13 +1212,9 @@ def _pattern_metrics(
         row for row in session_records if _in_period(row.get("completed_at"), period)
     ]
     session_ids = {str(row["session_id"]) for row in sessions}
-    turns = [
-        row for row in turn_records if _in_period(row.get("completed_at"), period)
-    ]
+    turns = [row for row in turn_records if _in_period(row.get("completed_at"), period)]
     active_session_ids = {str(row["session_id"]) for row in turns}
-    turn_keys = {
-        (str(row["session_id"]), str(row["turn_id"])) for row in turns
-    }
+    turn_keys = {(str(row["session_id"]), str(row["turn_id"])) for row in turns}
     session_tools = [
         row
         for row in tool_records
@@ -1365,13 +1260,10 @@ def _pattern_metrics(
         target["repeated_calls"] += int(bool(row.get("repeated_read")))
     session_values = [by_session.get(str(row["session_id"]), 0) for row in sessions]
     turn_values = [
-        by_turn.get((str(row["session_id"]), str(row["turn_id"])), 0)
-        for row in turns
+        by_turn.get((str(row["session_id"]), str(row["turn_id"])), 0) for row in turns
     ]
     total_prompt = sum(int(row.get("prompt_tokens") or 0) for row in turns)
-    activity_pattern_sessions = {
-        str(row.get("session_id") or "") for row in turn_tools
-    }
+    activity_pattern_sessions = {str(row.get("session_id") or "") for row in turn_tools}
     activity_pattern_tokens = sum(by_turn.values())
     metrics = PatternMetrics(
         incidence_count=len(activity_pattern_sessions),
@@ -1534,9 +1426,9 @@ def _hotspot_rows(
                 ],
             )
         )
-    return sorted(
-        hotspots, key=lambda row: row.enclosing_prompt_tokens, reverse=True
-    )[:60]
+    return sorted(hotspots, key=lambda row: row.enclosing_prompt_tokens, reverse=True)[
+        :60
+    ]
 
 
 def _outlier_rows(
@@ -1546,16 +1438,12 @@ def _outlier_rows(
     turn_records: list[dict[str, Any]],
     tool_records: list[dict[str, Any]],
 ) -> list[OutlierRow]:
-    turns = [
-        row for row in turn_records if _in_period(row.get("completed_at"), period)
-    ]
+    turns = [row for row in turn_records if _in_period(row.get("completed_at"), period)]
     session_prompt = {
         str(row["session_id"]): int(row.get("prompt_tokens") or 0)
         for row in session_records
     }
-    p90 = _distribution(
-        [int(row.get("prompt_tokens") or 0) for row in turns]
-    ).p90
+    p90 = _distribution([int(row.get("prompt_tokens") or 0) for row in turns]).p90
     pattern_totals: dict[tuple[str, str], dict[str, int]] = defaultdict(
         lambda: defaultdict(int)
     )
@@ -1617,44 +1505,16 @@ def _distribution(values: list[int | float]) -> Distribution:
     )
 
 
-def _percentile(values: list[float], percentile: float) -> float:
-    if len(values) == 1:
-        return round(values[0], 8)
-    position = (len(values) - 1) * percentile
-    lower = int(position)
-    upper = min(lower + 1, len(values) - 1)
-    weight = position - lower
-    return round(values[lower] * (1 - weight) + values[upper] * weight, 8)
-
-
 def _pct_change(current: int | float, previous: int | float) -> float | None:
     if previous == 0:
         return None
     return round(((float(current) - float(previous)) / float(previous)) * 100, 2)
 
 
-def _safe_div(numerator: int | float, denominator: int | float) -> float:
-    if denominator <= 0:
-        return 0
-    return round(float(numerator) / float(denominator), 8)
-
-
 def _prompt_tokens(value: Any) -> int:
     if not isinstance(value, dict):
         return 0
     return int(value.get("prompt_tokens") or value.get("input_tokens") or 0)
-
-
-def _parse_datetime(value: Any, *, tz: Any) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(tz)
 
 
 def _optional_int(value: Any) -> int | None:

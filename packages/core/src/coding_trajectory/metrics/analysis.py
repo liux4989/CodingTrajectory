@@ -1162,14 +1162,6 @@ def build_session_graph_billed_token_usage(
     return _allocated_cost_usage_dict(billed)
 
 
-def _sum_item_real_token_costs(
-    items: list[ItemRealTokenCostFlat],
-) -> AllocatedRealTokenCost | None:
-    return _sum_allocated_real_token_costs(
-        item.allocated_real_token_cost for item in items
-    )
-
-
 def _sum_allocated_real_token_costs(
     costs: Iterable[AllocatedRealTokenCost | None],
 ) -> AllocatedRealTokenCost | None:
@@ -1389,21 +1381,6 @@ def _stats_cost_entries_for_session(session: Session) -> list[_ItemCostEntry]:
         for entry in _item_cost_entries_for_turn(turn, events_by_id=events_by_id)
     )
     return entries
-
-
-def _build_item_real_token_costs_for_session(
-    session: Session,
-    *,
-    pricing_rule_cache: dict[tuple[str | None, str], PriceRule | None] | None = None,
-) -> list[ItemRealTokenCostFlat]:
-    """Build the complete, legacy-ordered item ledger for one session."""
-    return _build_item_real_token_cost_projection_for_session(
-        session,
-        selected_turn_ids=None,
-        selected_item_ids=set(),
-        include_items=True,
-        pricing_rule_cache=pricing_rule_cache,
-    ).items
 
 
 def _build_item_real_token_cost_projection_for_session(
@@ -2077,10 +2054,6 @@ def _item_visible_token_weight(item: Any) -> int:
     )
 
 
-def _allocate_int(total: int, weights: list[int]) -> list[int]:
-    return _allocate_int_batch([total], weights)[0]
-
-
 def _allocate_int_batch(
     totals: list[int], weights: list[int] | "np.ndarray", *, as_array: bool = False
 ) -> list[list[int]] | np.ndarray:
@@ -2193,12 +2166,3 @@ def _tool_item_flat(item: Item, *, session_id: UUID, turn_id: UUID) -> ToolItemF
         output_truncated=output_is_truncated(output),
     )
 
-
-_tool_input_summary = tool_input_summary
-
-
-def _turn_model(turn: TurnMetrics) -> str | None:
-    for obs in turn.observations:
-        if obs.model:
-            return obs.model
-    return None

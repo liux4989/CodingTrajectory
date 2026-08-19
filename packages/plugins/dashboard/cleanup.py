@@ -42,14 +42,6 @@ class ProjectTarget(CleanupTarget):
     def display_label(self) -> str:
         return self.project
 
-    @property
-    def display_detail(self) -> str:
-        parts = [f"path: {self.path}"]
-        if self.vendors:
-            parts.append(f"vendors: {', '.join(self.vendors)}")
-        if self.reason:
-            parts.append(f"reasons: {', '.join(self.reason)}")
-        return "  ".join(parts)
 
 
 class SessionTarget(CleanupTarget):
@@ -60,16 +52,6 @@ class SessionTarget(CleanupTarget):
     @property
     def display_label(self) -> str:
         return self.vendor or "session"
-
-    @property
-    def display_detail(self) -> str:
-        parts = [f"path: {self.path}"]
-        if self.session_id:
-            parts.append(f"id: {self.session_id}")
-        if self.modified_at:
-            parts.append(f"modified: {self.modified_at}")
-        return "  ".join(parts)
-
 
 type AnyTarget = ProjectTarget | SessionTarget
 

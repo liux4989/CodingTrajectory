@@ -11,8 +11,7 @@ with Pydantic again.
 from __future__ import annotations
 
 import hashlib
-import json
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 from uuid import UUID
@@ -23,6 +22,7 @@ from coding_trajectory.analysis.graph_views import build_graph_overview
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import SessionGraph
+from coding_trajectory.ingestion.common import canonical_json
 from coding_trajectory.metrics import (
     build_session_graph_stats,
     build_session_graph_usage,
@@ -45,8 +45,6 @@ PersistedRow: TypeAlias = Mapping[str, Any] | Any
 MODEL_META = "analytical.model_usage.meta.v1"
 MODEL_SESSION = "analytical.model_usage.session.v1"
 MODEL_TURN = "analytical.model_usage.turn.v1"
-TOKEN_INDEX_META = "analytical.token_efficiency.index_meta.v1"
-TOKEN_PROJECT = "analytical.token_efficiency.project.v1"
 TOKEN_PROJECT_META = "analytical.token_efficiency.project_meta.v1"
 TOKEN_PATTERN = "analytical.token_efficiency.pattern.v1"
 TOKEN_HOTSPOT = "analytical.token_efficiency.hotspot.v1"
@@ -692,16 +690,6 @@ def reconstruct_model_usage(
     return _reconstruct(meta_row, detail=detail, rows=rows, page=page, limit=limit)
 
 
-def reconstruct_token_efficiency_index(
-    meta_row: PersistedRow,
-    *,
-    rows: Iterable[PersistedRow],
-    page: Any,
-    limit: int,
-) -> dict[str, Any]:
-    return _reconstruct(meta_row, detail="projects", rows=rows, page=page, limit=limit)
-
-
 def reconstruct_token_efficiency_project(
     meta_row: PersistedRow,
     *,
@@ -738,70 +726,6 @@ def analytical_scope_key(route: str, **filters: Any) -> str:
     """Return the stable scope used by builders and indexed queries."""
 
     return _scope_key(route, **filters)
-
-
-def tombstone_stale_rows(
-    existing_rows: Iterable[PersistedRow],
-    replacements: Sequence[Mutation],
-    *,
-    scope_key: str,
-    entity_kinds: Iterable[str],
-    partition_key: str | None = None,
-) -> list[Mutation]:
-    """Return tombstones for rows absent from a complete replacement slice.
-
-    Builders describe the complete output for one route/filter scope.  A
-    transaction-scoped materializer can query the previous rows in that scope,
-    pass them here, and apply the returned tombstones with the replacements.
-    This keeps disappearing errors/breaks/outliers from surviving a rebuild.
-    """
-
-    kinds = set(entity_kinds)
-    retained = {
-        str(row["entity_key"])
-        for row in replacements
-        if row.get("scope_key") == scope_key and row.get("entity_kind") in kinds
-    }
-    tombstones: list[Mutation] = []
-    for row in existing_rows:
-        if _value(row, "scope_key") != scope_key:
-            continue
-        if partition_key is not None and _value(row, "partition_key") != partition_key:
-            continue
-        entity_kind = str(_value(row, "entity_kind") or "")
-        entity_key = str(_value(row, "entity_key") or "")
-        if entity_kind not in kinds or not entity_key or entity_key in retained:
-            continue
-        tombstones.append(
-            {
-                "entity_kind": entity_kind,
-                "entity_key": entity_key,
-                "scope_key": scope_key,
-                "partition_key": str(_value(row, "partition_key") or ""),
-                "sort_key": str(_value(row, "sort_key") or ""),
-                "tiebreaker": str(_value(row, "tiebreaker") or entity_key),
-                "payload": {},
-                "deleted": True,
-            }
-        )
-    return tombstones
-
-
-def tombstone_canonical_root_facts(
-    existing_rows: Iterable[PersistedRow],
-    replacements: Sequence[Mutation],
-    *,
-    root_session_id: str,
-) -> list[Mutation]:
-    """Tombstone facts removed from one complete root replacement."""
-
-    return tombstone_stale_rows(
-        existing_rows,
-        replacements,
-        scope_key=CANONICAL_FACT_SCOPE,
-        entity_kinds=canonical_fact_entity_kinds(include_projects=False),
-        partition_key=root_session_id,
-    )
 
 
 def _reconstruct(
@@ -925,7 +849,7 @@ def _error_item(request_id: Any, method: Any, message: str) -> dict[str, Any]:
 
 def _scope_key(route: str, **filters: Any) -> str:
     normalized = {key: value for key, value in filters.items() if value is not None}
-    raw = json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str)
+    raw = canonical_json(normalized)
     digest = hashlib.sha256(raw.encode()).hexdigest()[:16]
     return f"{route}:{digest}"
 
@@ -1024,10 +948,8 @@ __all__ = [
     "MODEL_SESSION",
     "MODEL_TURN",
     "TOKEN_HOTSPOT",
-    "TOKEN_INDEX_META",
     "TOKEN_OUTLIER",
     "TOKEN_PATTERN",
-    "TOKEN_PROJECT",
     "TOKEN_PROJECT_META",
     "build_canonical_fact_rows",
     "build_canonical_root_fact_rows",
@@ -1037,8 +959,5 @@ __all__ = [
     "analytical_scope_key",
     "page_metadata",
     "reconstruct_model_usage",
-    "reconstruct_token_efficiency_index",
     "reconstruct_token_efficiency_project",
-    "tombstone_stale_rows",
-    "tombstone_canonical_root_facts",
 ]

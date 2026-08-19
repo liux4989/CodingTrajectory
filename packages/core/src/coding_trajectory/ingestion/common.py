@@ -6,8 +6,46 @@ import json
 import re
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, BinaryIO, Mapping
 from uuid import NAMESPACE_URL, UUID, uuid5
+
+
+def canonical_json(value: Any) -> str:
+    """Serialize one value as canonical compact JSON for digests and keys."""
+
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+def last_complete_line_offset(source: BinaryIO, size: int) -> int:
+    """Return the byte after the last newline without reading the transcript.
+
+    Checkpoint-only stores still expose an incomplete trailing JSONL record as
+    partial ingestion. Normal files cost one byte of I/O; only a malformed file
+    with no newline requires walking back to its beginning.
+    """
+
+    if size <= 0:
+        return 0
+    source.seek(size - 1)
+    if source.read(1) == b"\n":
+        return size
+    block_size = 64 * 1024
+    end = size
+    while end > 0:
+        start = max(0, end - block_size)
+        source.seek(start)
+        chunk = source.read(end - start)
+        newline = chunk.rfind(b"\n")
+        if newline >= 0:
+            return start + newline + 1
+        end = start
+    return 0
 
 
 def stable_uuid(vendor: Any, source: Any, **fields: object) -> UUID:

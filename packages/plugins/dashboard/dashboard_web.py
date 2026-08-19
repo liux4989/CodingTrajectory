@@ -265,14 +265,6 @@ def _handler_for(
                             revision=_optional_revision(query),
                         )
                     )
-                elif path == "/api/token-efficiency":
-                    payload = self._revisioned(
-                        lambda: runtime.token_efficiency_index(
-                            since_days=self._window_days(query),
-                            limit=limit,
-                            cursor=cursor,
-                        )
-                    )
                 elif path == "/api/token-efficiency/project":
                     payload = self._revisioned(
                         lambda: runtime.token_efficiency_project(

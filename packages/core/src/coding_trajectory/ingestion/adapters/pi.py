@@ -43,7 +43,6 @@ from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_PI_SESSIONS_DIR = Path.home() / ".pi" / "agent" / "sessions"
 
 _PI_FILE_TOOL_NAMES: frozenset[str] = frozenset(
     {
@@ -553,11 +552,3 @@ class PiAdapter(BaseAdapter):
                 return uuid5(NAMESPACE_URL, f"pi:{source}:{raw_id}")
         return uuid5(NAMESPACE_URL, f"pi:{source}")
 
-    def ingest_default(self) -> list[Session]:
-        sessions: list[Session] = []
-        for jsonl_path in sorted(_DEFAULT_PI_SESSIONS_DIR.rglob("*.jsonl")):
-            try:
-                sessions.append(self.ingest_file(jsonl_path))
-            except Exception as exc:
-                logger.warning("PiAdapter: failed to ingest %s: %s", jsonl_path, exc)
-        return sessions

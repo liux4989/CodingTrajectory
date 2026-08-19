@@ -60,11 +60,9 @@ try:
         MODEL_META,
         MODEL_SESSION,
         MODEL_TURN,
-        TOKEN_INDEX_META,
         TOKEN_HOTSPOT,
         TOKEN_OUTLIER,
         TOKEN_PATTERN,
-        TOKEN_PROJECT,
         TOKEN_PROJECT_META,
         analytical_scope_key,
         build_canonical_fact_rows,
@@ -74,7 +72,6 @@ try:
         canonical_fact_entity_kinds,
         page_metadata,
         reconstruct_model_usage,
-        reconstruct_token_efficiency_index,
         reconstruct_token_efficiency_project,
     )
     from . import context_window
@@ -109,11 +106,9 @@ except ImportError:
         MODEL_META,
         MODEL_SESSION,
         MODEL_TURN,
-        TOKEN_INDEX_META,
         TOKEN_HOTSPOT,
         TOKEN_OUTLIER,
         TOKEN_PATTERN,
-        TOKEN_PROJECT,
         TOKEN_PROJECT_META,
         analytical_scope_key,
         build_canonical_fact_rows,
@@ -123,7 +118,6 @@ except ImportError:
         canonical_fact_entity_kinds,
         page_metadata,
         reconstruct_model_usage,
-        reconstruct_token_efficiency_index,
         reconstruct_token_efficiency_project,
     )
     import context_window
@@ -238,13 +232,6 @@ class DashboardIncrementalRuntime:
             "revision": self.store.current_revision(),
             "reused": False,
         }
-
-    def wait_until_idle(self, *, timeout: float | None = None) -> dict[str, Any] | None:
-        """Wait for the current refresh; intended for CLI/bootstrap benchmarks."""
-
-        with self._lock:
-            future = self._future
-        return future.result(timeout=timeout) if future is not None else None
 
     def is_ready(self) -> bool:
         """Return whether the minimum product core is revisioned and publishable."""
@@ -548,41 +535,6 @@ class DashboardIncrementalRuntime:
         return reconstruct_model_usage(
             meta,
             detail=detail,
-            rows=page.items,
-            page=page,
-            limit=limit,
-        )
-
-    def token_efficiency_index(
-        self,
-        *,
-        since_days: int,
-        limit: int = 50,
-        cursor: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Serve the default-scope Token Efficiency project index from SQLite."""
-
-        if since_days != self.since_days:
-            return None
-        if not self._has_canonical_facts():
-            return None
-        scope = analytical_scope_key(
-            "token_efficiency_index", since_days=self.since_days
-        )
-        if self._analytical_meta(TOKEN_INDEX_META, scope) is None:
-            return None
-        page = self.store.query_entities(
-            TOKEN_PROJECT,
-            limit=limit,
-            cursor=cursor,
-            scope_key=scope,
-            partition_key="projects",
-        )
-        meta = self._analytical_meta(TOKEN_INDEX_META, scope, revision=page.revision)
-        if meta is None:
-            return None
-        return reconstruct_token_efficiency_index(
-            meta,
             rows=page.items,
             page=page,
             limit=limit,
@@ -1457,20 +1409,6 @@ class DashboardIncrementalRuntime:
             ).items
         )
 
-    def _has_evidence_facts(self) -> bool:
-        return bool(
-            self.store.query_entities(
-                FACT_TOOL_USAGE,
-                limit=1,
-                scope_key=CANONICAL_FACT_SCOPE,
-            ).items
-            and self.store.query_entities(
-                FACT_SESSION_STATS,
-                limit=1,
-                scope_key=CANONICAL_FACT_SCOPE,
-            ).items
-        )
-
     def _monitor_loop(self) -> None:
         while not self._stop.wait(self.refresh_seconds):
             self.request_refresh()
@@ -2052,8 +1990,6 @@ def _default_analytical_entity_kinds() -> tuple[str, ...]:
         MODEL_META,
         MODEL_SESSION,
         MODEL_TURN,
-        TOKEN_INDEX_META,
-        TOKEN_PROJECT,
     )
 
 
