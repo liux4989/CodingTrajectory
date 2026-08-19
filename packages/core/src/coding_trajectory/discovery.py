@@ -68,6 +68,15 @@ class DiscoveryResult:
     provenance: dict[str, SessionProvenance] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class DiscoveryCandidate:
+    """One source selected by cheap path/project discovery, before ingestion."""
+
+    vendor: Vendor
+    adapter_cls: type[BaseAdapter]
+    path: Path
+
+
 def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     home = Path.home()
     return [
@@ -267,6 +276,42 @@ def discover_store(
     return DiscoveryResult(
         store=DocumentStore.from_session_graphs(session_graphs), sources=sources
     )
+
+
+def discover_source_candidates(
+    *,
+    current_dir: Path,
+    global_scope: bool = False,
+    project_name: str | None = None,
+    since_days: int | None = None,
+    modified_since: datetime | None = None,
+    agent_vendor: str | None = None,
+) -> list[DiscoveryCandidate]:
+    """List matching JSONL sources without projecting canonical sessions."""
+
+    current_dir = current_dir.resolve()
+    scoped_project = project_name or (None if global_scope else current_dir.name)
+    scoped_project_key = (
+        normalize_project_key(scoped_project) if scoped_project else None
+    )
+    cutoff = _modified_since(since_days, modified_since=modified_since)
+    candidates: list[DiscoveryCandidate] = []
+    for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(
+        agent_vendor
+    ):
+        candidates.extend(
+            DiscoveryCandidate(vendor=vendor, adapter_cls=adapter_cls, path=path)
+            for path in _candidate_files(
+                vendor,
+                base_dir,
+                pattern,
+                current_dir=current_dir,
+                scoped_project=scoped_project,
+                scoped_project_key=scoped_project_key,
+                modified_since=cutoff,
+            )
+        )
+    return sorted(candidates, key=lambda value: str(value.path))
 
 
 def discover_project_metadata(

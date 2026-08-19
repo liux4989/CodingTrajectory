@@ -564,6 +564,29 @@ class CodexAdapter(BaseAdapter):
                 started.add(payload["turn_id"])
         return started
 
+    def scan_identity(self, source: Path) -> SessionHeader | None:
+        """Read the leading ``session_meta`` without searching for a title."""
+
+        for record in self._iter_records(source):
+            if record.get("type") != "session_meta":
+                continue
+            meta = record.get("payload") or {}
+            if not isinstance(meta, dict):
+                return None
+            try:
+                session_id = UUID(meta.get("id"))
+            except (ValueError, TypeError):
+                return None
+            mechanism = _codex_multi_agent_input(meta, {}, session_id=session_id)
+            return SessionHeader(
+                session_id=session_id,
+                vendor=Vendor.CODEX_CLI,
+                parent_session_id=codex_parent_session_id(mechanism),
+                title=mechanism.title,
+                cwd=mechanism.cwd,
+            )
+        return None
+
     def scan_header(self, source: Path) -> SessionHeader | None:
         header: SessionHeader | None = None
         for record in self._iter_records(source):
@@ -1413,4 +1436,3 @@ class CodexAdapter(BaseAdapter):
             )
         if effort is not None:
             state.prev_effort = effort
-

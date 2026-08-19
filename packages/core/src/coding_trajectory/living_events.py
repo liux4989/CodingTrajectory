@@ -26,6 +26,10 @@ from uuid import UUID
 from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.analysis.item_details import build_item_details
 from coding_trajectory.analysis.request_lineage import effective_user_request
+from coding_trajectory.discovery import (
+    discover_source_candidates,
+    discover_store_from_files,
+)
 from coding_trajectory.ingestion.common import (
     canonical_json,
     format_datetime,
@@ -41,6 +45,10 @@ from coding_trajectory.ingestion.models import (
     SessionEdge,
     SessionGraph,
     Turn,
+)
+from coding_trajectory.living_sources import (
+    LivingSourceSnapshot,
+    inventory_source_changes,
 )
 from coding_trajectory.query import DocumentStore
 
@@ -78,6 +86,279 @@ def default_database_path(*, current_dir: Path, global_scope: bool) -> Path:
         else hashlib.sha256(str(current_dir.resolve()).encode("utf-8")).hexdigest()[:16]
     )
     return Path.home() / ".coding-trajectory" / "living-events" / f"{scope}.sqlite3"
+
+
+def serve_living_events(
+    params: dict[str, Any],
+    *,
+    cache: Any,
+    current_dir: Path,
+    global_scope: bool,
+) -> dict[str, Any]:
+    """Reconcile cheap source checkpoints, then serve one cursor page."""
+
+    scope = dict(params.get("scope") or {})
+    database = LivingEventsStore(
+        default_database_path(current_dir=current_dir, global_scope=global_scope)
+    )
+    if params.get("through") is not None:
+        return _page_living_events(database, params, scope=scope)
+    routing_scope = database.routing_scope(scope)
+
+    candidates = discover_source_candidates(
+        current_dir=current_dir,
+        global_scope=global_scope,
+    )
+    previous = database.source_snapshots()
+    inventory = inventory_source_changes(candidates, previous)
+    states = dict(previous)
+    candidate_by_path = {
+        str(value.path.expanduser().resolve()): value for value in candidates
+    }
+    for change in inventory.changes:
+        states[change.current.path] = change.current
+
+    rebuild_paths = {
+        change.current.path for change in inventory.changes if change.needs_rebuild
+    }
+    rebuild_paths.update(
+        path
+        for path, state in states.items()
+        if state.status in {"ready", "partial"} and state.materialized_revision is None
+    )
+    issues: list[dict[str, Any]] = [
+        {
+            "severity": "error",
+            "code": "living.source_scan_failed",
+            "message": f"{change.current.path}: {change.current.error}",
+        }
+        for change in inventory.changes
+        if change.current.status == "error"
+    ]
+
+    groups = _affected_source_groups(
+        states=states,
+        previous=previous,
+        rebuild_paths=rebuild_paths,
+    )
+    scoped_groups = _groups_for_scope(
+        groups,
+        states=states,
+        scope=routing_scope,
+        cache=cache,
+    )
+    if _scope_has_source_hint(routing_scope, cache=cache):
+        groups = scoped_groups
+
+    for paths in groups:
+        old_roots = {
+            value.root_session_id
+            for path in paths
+            if (value := previous.get(path)) is not None
+            and value.root_session_id is not None
+        }
+        live_paths = sorted(
+            path
+            for path in paths
+            if (state := states.get(path)) is not None
+            and state.status in {"ready", "partial"}
+            and path in candidate_by_path
+        )
+        try:
+            resources: list[ProjectedResource] = []
+            roots = set(old_roots)
+            root_by_path: dict[str, str] = {}
+            if live_paths:
+                discovery = discover_store_from_files(
+                    [Path(path) for path in live_paths]
+                )
+                cache.index_discovery(sources=discovery.sources, store=discovery.store)
+                for graph in discovery.store.session_graphs.values():
+                    root_id = str(graph.root_session_id)
+                    roots.add(root_id)
+                    graph_paths = tuple(
+                        str(source.path)
+                        for source in discovery.sources
+                        if source.root_session_id == graph.root_session_id
+                    )
+                    resources.extend(_project_graph(graph, source_paths=graph_paths))
+                root_by_path = {
+                    str(source.path.expanduser().resolve()): str(source.root_session_id)
+                    for source in discovery.sources
+                    if source.root_session_id is not None
+                }
+            revision = database.publish(
+                resources,
+                affected_roots=sorted(roots),
+            )
+            for path in paths:
+                state = states.get(path)
+                if state is None:
+                    continue
+                states[path] = state.model_copy(
+                    update={
+                        "root_session_id": root_by_path.get(
+                            path, state.root_session_id
+                        ),
+                        "materialized_revision": revision,
+                    }
+                )
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            for path in live_paths:
+                state = states.get(path)
+                if state is not None:
+                    states[path] = state.model_copy(
+                        update={"status": "error", "error": error}
+                    )
+            issues.append(
+                {
+                    "severity": "error",
+                    "code": "living.source_rebuild_failed",
+                    "message": (
+                        f"failed to rebuild {len(live_paths)} source(s): {error}"
+                    ),
+                }
+            )
+
+    changed_paths = {value.current.path for value in inventory.changes}
+    changed_paths.update(rebuild_paths)
+    database.save_source_snapshots(
+        [states[path] for path in sorted(changed_paths) if path in states]
+    )
+    result = _page_living_events(database, params, scope=scope)
+    result["issues"].extend(issues)
+    return result
+
+
+def _affected_source_groups(
+    *,
+    states: dict[str, LivingSourceSnapshot],
+    previous: dict[str, LivingSourceSnapshot],
+    rebuild_paths: set[str],
+) -> list[set[str]]:
+    active = {
+        path: value
+        for path, value in states.items()
+        if value.status in {"ready", "partial"} and value.session_id is not None
+    }
+    path_by_session = {
+        value.session_id: path for path, value in active.items() if value.session_id
+    }
+    neighbours: dict[str, set[str]] = {path: set() for path in active}
+    for path, value in active.items():
+        parent_path = path_by_session.get(value.parent_session_id or "")
+        if parent_path is None:
+            continue
+        neighbours[path].add(parent_path)
+        neighbours[parent_path].add(path)
+
+    component_by_path: dict[str, set[str]] = {}
+    visited: set[str] = set()
+    for path in sorted(active):
+        if path in visited:
+            continue
+        component: set[str] = set()
+        stack = [path]
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            component.add(current)
+            stack.extend(neighbours.get(current, ()))
+        for member in component:
+            component_by_path[member] = component
+
+    raw_groups: list[set[str]] = []
+    for seed in sorted(rebuild_paths):
+        group = {seed}
+        group.update(component_by_path.get(seed, ()))
+        old = previous.get(seed)
+        if old is not None and old.root_session_id is not None:
+            group.update(
+                path
+                for path, state in active.items()
+                if state.root_session_id == old.root_session_id
+            )
+        raw_groups.append(group)
+
+    merged: list[set[str]] = []
+    for group in raw_groups:
+        overlaps = [value for value in merged if value & group]
+        if not overlaps:
+            merged.append(set(group))
+            continue
+        combined = set(group)
+        for value in overlaps:
+            combined.update(value)
+            merged.remove(value)
+        merged.append(combined)
+    return sorted(
+        merged,
+        key=lambda group: (
+            sum(states[path].size for path in group if path in states),
+            min(group),
+        ),
+    )
+
+
+def _groups_for_scope(
+    groups: list[set[str]],
+    *,
+    states: dict[str, LivingSourceSnapshot],
+    scope: dict[str, Any],
+    cache: Any,
+) -> list[set[str]]:
+    raw_ids = {
+        str(value)
+        for key in ("root_session_id", "session_id")
+        if (value := scope.get(key))
+    }
+    for key in ("turn_id", "item_id"):
+        value = scope.get(key)
+        if not value:
+            continue
+        raw_ids.add(str(value))
+        mapped = cache.root_for_entrypoint(str(value))
+        if mapped:
+            raw_ids.add(str(mapped))
+    if not raw_ids:
+        return []
+    return [
+        group
+        for group in groups
+        if any(
+            (state := states.get(path)) is not None
+            and (state.session_id in raw_ids or state.root_session_id in raw_ids)
+            for path in group
+        )
+    ]
+
+
+def _scope_has_source_hint(scope: dict[str, Any], *, cache: Any) -> bool:
+    if scope.get("root_session_id") or scope.get("session_id"):
+        return True
+    for key in ("turn_id", "item_id"):
+        value = scope.get(key)
+        if value and cache.root_for_entrypoint(str(value)) != str(value):
+            return True
+    return False
+
+
+def _page_living_events(
+    database: LivingEventsStore,
+    params: dict[str, Any],
+    *,
+    scope: dict[str, Any],
+) -> dict[str, Any]:
+    return database.page(
+        mode=str(params.get("mode") or "view"),
+        scope=scope,
+        after=params.get("after"),
+        through=params.get("through"),
+        limit=int(params.get("limit") or 50),
+    )
 
 
 def query_living_events(
@@ -628,6 +909,11 @@ class LivingEventsStore:
                     valid_from_revision INTEGER NOT NULL,
                     valid_to_revision INTEGER,
                     root_session_id TEXT NOT NULL,
+                    session_id TEXT,
+                    turn_id TEXT,
+                    item_id TEXT,
+                    source_session_id TEXT,
+                    target_session_id TEXT,
                     path_json TEXT NOT NULL,
                     sort_key TEXT NOT NULL,
                     view_payload_json TEXT NOT NULL,
@@ -650,11 +936,66 @@ class LivingEventsStore:
                     resource_kind TEXT NOT NULL,
                     resource_key TEXT NOT NULL,
                     root_session_id TEXT NOT NULL,
+                    session_id TEXT,
+                    turn_id TEXT,
+                    item_id TEXT,
+                    source_session_id TEXT,
+                    target_session_id TEXT,
                     path_json TEXT NOT NULL,
                     reason TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_living_changes_revision
                     ON living_changes(revision, change_id);
+                CREATE TABLE IF NOT EXISTS living_sources (
+                    path TEXT PRIMARY KEY,
+                    vendor TEXT NOT NULL,
+                    file_identity TEXT,
+                    size INTEGER NOT NULL,
+                    mtime_ns INTEGER NOT NULL,
+                    ctime_ns INTEGER NOT NULL,
+                    committed_offset INTEGER NOT NULL,
+                    prefix_checksum TEXT,
+                    tail_checksum TEXT,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    session_id TEXT,
+                    parent_session_id TEXT,
+                    root_session_id TEXT,
+                    materialized_revision INTEGER,
+                    cwd TEXT,
+                    title TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_living_sources_root
+                    ON living_sources(root_session_id, session_id);
+                """
+            )
+            for table in ("living_resource_versions", "living_changes"):
+                for column in (
+                    "session_id",
+                    "turn_id",
+                    "item_id",
+                    "source_session_id",
+                    "target_session_id",
+                ):
+                    self._ensure_column(connection, table, column, "TEXT")
+                self._backfill_path_columns(connection, table)
+            connection.executescript(
+                """
+                CREATE INDEX IF NOT EXISTS idx_living_resource_scope
+                    ON living_resource_versions(
+                        root_session_id, session_id, turn_id, item_id,
+                        valid_from_revision, valid_to_revision, sort_key
+                    );
+                CREATE INDEX IF NOT EXISTS idx_living_resource_order
+                    ON living_resource_versions(
+                        sort_key, resource_kind, resource_key,
+                        valid_from_revision, valid_to_revision
+                    );
+                CREATE INDEX IF NOT EXISTS idx_living_change_scope
+                    ON living_changes(
+                        root_session_id, session_id, turn_id, item_id,
+                        revision, change_id
+                    );
                 """
             )
             self._set_default(connection, "store_format_version", _STORE_FORMAT_VERSION)
@@ -724,15 +1065,22 @@ class LivingEventsStore:
                     """
                     INSERT INTO living_resource_versions(
                         resource_kind, resource_key, valid_from_revision,
-                        valid_to_revision, root_session_id, path_json, sort_key,
+                        valid_to_revision, root_session_id, session_id, turn_id,
+                        item_id, source_session_id, target_session_id,
+                        path_json, sort_key,
                         view_payload_json, detail_payload_z, payload_digest
-                    ) VALUES(?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                    ) VALUES(?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         resource.kind,
                         resource.key,
                         revision,
                         resource.root_session_id,
+                        resource.path.get("session_id"),
+                        resource.path.get("turn_id"),
+                        resource.path.get("item_id"),
+                        resource.path.get("source_session_id"),
+                        resource.path.get("target_session_id"),
                         canonical_json(resource.path),
                         resource.sort_key,
                         canonical_json(resource.view),
@@ -780,6 +1128,80 @@ class LivingEventsStore:
     def current_revision(self) -> int:
         with self._connect() as connection:
             return self._current_revision(connection)
+
+    def routing_scope(self, scope: dict[str, Any]) -> dict[str, Any]:
+        """Resolve persisted ancestors without changing the cursor-bound scope."""
+
+        with self._connect() as connection:
+            return self._expand_scope(
+                connection,
+                scope,
+                self._current_revision(connection),
+            )
+
+    def source_snapshots(self) -> dict[str, LivingSourceSnapshot]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM living_sources ORDER BY path"
+            ).fetchall()
+        return {
+            str(row["path"]): LivingSourceSnapshot.model_validate(dict(row))
+            for row in rows
+        }
+
+    def save_source_snapshots(self, snapshots: list[LivingSourceSnapshot]) -> None:
+        if not snapshots:
+            return
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO living_sources(
+                    path, vendor, file_identity, size, mtime_ns, ctime_ns,
+                    committed_offset, prefix_checksum, tail_checksum, status,
+                    error, session_id, parent_session_id, root_session_id,
+                    materialized_revision, cwd, title
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    vendor = excluded.vendor,
+                    file_identity = excluded.file_identity,
+                    size = excluded.size,
+                    mtime_ns = excluded.mtime_ns,
+                    ctime_ns = excluded.ctime_ns,
+                    committed_offset = excluded.committed_offset,
+                    prefix_checksum = excluded.prefix_checksum,
+                    tail_checksum = excluded.tail_checksum,
+                    status = excluded.status,
+                    error = excluded.error,
+                    session_id = excluded.session_id,
+                    parent_session_id = excluded.parent_session_id,
+                    root_session_id = excluded.root_session_id,
+                    materialized_revision = excluded.materialized_revision,
+                    cwd = excluded.cwd,
+                    title = excluded.title
+                """,
+                [
+                    (
+                        value.path,
+                        value.vendor,
+                        value.file_identity,
+                        value.size,
+                        value.mtime_ns,
+                        value.ctime_ns,
+                        value.committed_offset,
+                        value.prefix_checksum,
+                        value.tail_checksum,
+                        value.status,
+                        value.error,
+                        value.session_id,
+                        value.parent_session_id,
+                        value.root_session_id,
+                        value.materialized_revision,
+                        value.cwd,
+                        value.title,
+                    )
+                    for value in snapshots
+                ],
+            )
 
     def page(
         self,
@@ -885,23 +1307,33 @@ class LivingEventsStore:
         watermark: str,
         limit: int,
     ) -> dict[str, Any]:
-        rows = connection.execute(
-            """
-            SELECT * FROM living_resource_versions
-             WHERE valid_from_revision <= ?
-               AND (valid_to_revision IS NULL OR valid_to_revision > ?)
-             ORDER BY sort_key, resource_kind, resource_key
-            """,
-            (revision, revision),
-        ).fetchall()
         position = str(after_cursor.get("position") or "") if after_cursor else ""
-        matched = [
-            row
-            for row in rows
-            if _row_position(row) > position and self._matches_scope(row, scope)
+        conditions = [
+            "valid_from_revision <= ?",
+            "(valid_to_revision IS NULL OR valid_to_revision > ?)",
         ]
-        page_rows = matched[:limit]
-        has_more = len(matched) > limit
+        bindings: list[Any] = [revision, revision]
+        scope_sql, scope_bindings = _scope_sql(scope)
+        conditions.extend(scope_sql)
+        bindings.extend(scope_bindings)
+        if position:
+            position_parts = position.split("\x00", 2)
+            if len(position_parts) != 3:
+                raise ValueError("snapshot cursor position is invalid")
+            conditions.append("(sort_key, resource_kind, resource_key) > (?, ?, ?)")
+            bindings.extend(position_parts)
+        bindings.append(limit + 1)
+        rows = connection.execute(
+            f"""
+            SELECT * FROM living_resource_versions
+             WHERE {" AND ".join(conditions)}
+             ORDER BY sort_key, resource_kind, resource_key
+             LIMIT ?
+            """,
+            bindings,
+        ).fetchall()
+        page_rows = rows[:limit]
+        has_more = len(rows) > limit
         changes = []
         for row in page_rows:
             cursor = self._encode_cursor(
@@ -941,17 +1373,23 @@ class LivingEventsStore:
         watermark: str,
         limit: int,
     ) -> dict[str, Any]:
+        conditions = ["revision > ?", "revision <= ?", "change_id > ?"]
+        bindings: list[Any] = [base_revision, through_revision, after_change_id]
+        scope_sql, scope_bindings = _scope_sql(scope)
+        conditions.extend(scope_sql)
+        bindings.extend(scope_bindings)
+        bindings.append(limit + 1)
         rows = connection.execute(
-            """
+            f"""
             SELECT * FROM living_changes
-             WHERE revision > ? AND revision <= ? AND change_id > ?
+             WHERE {" AND ".join(conditions)}
              ORDER BY change_id
+             LIMIT ?
             """,
-            (base_revision, through_revision, after_change_id),
+            bindings,
         ).fetchall()
-        matched = [row for row in rows if self._matches_scope(row, scope)]
-        page_rows = matched[:limit]
-        has_more = len(matched) > limit
+        page_rows = rows[:limit]
+        has_more = len(rows) > limit
         changes: list[dict[str, Any]] = []
         for row in page_rows:
             cursor = self._encode_cursor(
@@ -1108,41 +1546,6 @@ class LivingEventsStore:
                     expanded.setdefault(key, value)
         return expanded
 
-    def _matches_scope(self, row: sqlite3.Row, scope: dict[str, Any]) -> bool:
-        path = json.loads(row["path_json"])
-        root_id = scope.get("root_session_id")
-        if root_id and path.get("root_session_id") != root_id:
-            return False
-        kind = row["resource_kind"]
-        session_id = scope.get("session_id")
-        if session_id:
-            if kind == "session_edge":
-                if session_id not in {
-                    path.get("source_session_id"),
-                    path.get("target_session_id"),
-                }:
-                    return False
-            elif path.get("session_id") != session_id:
-                return False
-        turn_id = scope.get("turn_id")
-        if turn_id:
-            if kind not in {"session", "context_checkpoint", "session_edge"} and (
-                path.get("turn_id") != turn_id
-            ):
-                return False
-        item_id = scope.get("item_id")
-        if item_id:
-            if kind == "turn" and path.get("turn_id") != turn_id:
-                return False
-            if kind not in {
-                "session",
-                "turn",
-                "context_checkpoint",
-                "session_edge",
-            } and (path.get("item_id") != item_id):
-                return False
-        return True
-
     def _insert_change(
         self,
         connection: sqlite3.Connection,
@@ -1159,8 +1562,9 @@ class LivingEventsStore:
             """
             INSERT INTO living_changes(
                 revision, operation, resource_kind, resource_key,
-                root_session_id, path_json, reason
-            ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                root_session_id, session_id, turn_id, item_id,
+                source_session_id, target_session_id, path_json, reason
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 revision,
@@ -1168,6 +1572,11 @@ class LivingEventsStore:
                 resource_kind,
                 resource_key,
                 root_session_id,
+                path.get("session_id"),
+                path.get("turn_id"),
+                path.get("item_id"),
+                path.get("source_session_id"),
+                path.get("target_session_id"),
                 canonical_json(path),
                 reason,
             ),
@@ -1239,6 +1648,52 @@ class LivingEventsStore:
         )
 
     @staticmethod
+    def _ensure_column(
+        connection: sqlite3.Connection, table: str, column: str, definition: str
+    ) -> None:
+        existing = {
+            str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")
+        }
+        if column not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _backfill_path_columns(connection: sqlite3.Connection, table: str) -> None:
+        rows = connection.execute(
+            f"""
+            SELECT rowid, path_json FROM {table}
+             WHERE session_id IS NULL
+               AND turn_id IS NULL
+               AND item_id IS NULL
+               AND source_session_id IS NULL
+               AND target_session_id IS NULL
+            """
+        ).fetchall()
+        updates = []
+        for row in rows:
+            path = json.loads(row["path_json"])
+            updates.append(
+                (
+                    path.get("session_id"),
+                    path.get("turn_id"),
+                    path.get("item_id"),
+                    path.get("source_session_id"),
+                    path.get("target_session_id"),
+                    row["rowid"],
+                )
+            )
+        if updates:
+            connection.executemany(
+                f"""
+                UPDATE {table}
+                   SET session_id = ?, turn_id = ?, item_id = ?,
+                       source_session_id = ?, target_session_id = ?
+                 WHERE rowid = ?
+                """,
+                updates,
+            )
+
+    @staticmethod
     def _set_metadata(connection: sqlite3.Connection, key: str, value: str) -> None:
         connection.execute(
             """
@@ -1273,6 +1728,53 @@ def _resource_digest(resource: ProjectedResource) -> str:
     ).hexdigest()
 
 
+def _scope_sql(scope: dict[str, Any]) -> tuple[list[str], list[Any]]:
+    conditions: list[str] = []
+    bindings: list[Any] = []
+    root_id = scope.get("root_session_id")
+    if root_id:
+        conditions.append("root_session_id = ?")
+        bindings.append(root_id)
+    session_id = scope.get("session_id")
+    if session_id:
+        conditions.append(
+            """
+            (
+                (resource_kind = 'session_edge' AND
+                    (source_session_id = ? OR target_session_id = ?))
+                OR
+                (resource_kind != 'session_edge' AND session_id = ?)
+            )
+            """
+        )
+        bindings.extend((session_id, session_id, session_id))
+    turn_id = scope.get("turn_id")
+    if turn_id:
+        conditions.append(
+            """
+            (
+                resource_kind IN ('session', 'context_checkpoint', 'session_edge')
+                OR turn_id = ?
+            )
+            """
+        )
+        bindings.append(turn_id)
+    item_id = scope.get("item_id")
+    if item_id:
+        conditions.append(
+            """
+            (
+                resource_kind IN (
+                    'session', 'turn', 'context_checkpoint', 'session_edge'
+                )
+                OR item_id = ?
+            )
+            """
+        )
+        bindings.append(item_id)
+    return conditions, bindings
+
+
 def _row_position(row: sqlite3.Row) -> str:
     return "\x00".join((row["sort_key"], row["resource_kind"], row["resource_key"]))
 
@@ -1282,4 +1784,5 @@ __all__ = [
     "ProjectedResource",
     "default_database_path",
     "query_living_events",
+    "serve_living_events",
 ]
