@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
+from coding_trajectory.runtime import ServiceApiClient
 from pydantic import BaseModel, Field
 
 TOKEN_KEYS = (
@@ -24,7 +24,7 @@ class ModelUsageFilters(BaseModel):
 
 def build_projection(
     *,
-    ct_json: Callable[[list[str]], dict[str, Any]],
+    client: ServiceApiClient,
     since_days: int = 7,
     project_name: str | None = None,
     model_key: str | None = None,
@@ -35,7 +35,7 @@ def build_projection(
         model_key=model_key,
     )
     scope = _load_scope_model_usage(
-        ct_json=ct_json,
+        client=client,
         filters=filters,
     )
     projects = _project_options(scope["projects_payload"])
@@ -55,16 +55,16 @@ def build_projection(
 
 def _load_scope_model_usage(
     *,
-    ct_json: Callable[[list[str]], dict[str, Any]],
+    client: ServiceApiClient,
     filters: ModelUsageFilters,
 ) -> dict[str, Any]:
-    projects_payload = _api_call(ct_json, "project.list", {})
+    projects_payload = client.call("project.list", {})
     session_params: dict[str, Any] = {
         "since_days": filters.since_days,
     }
     if filters.project_name:
         session_params["project_name"] = filters.project_name
-    sessions_payload = _api_call(ct_json, "project.sessions", session_params)
+    sessions_payload = client.call("project.sessions", session_params)
     session_items = [
         item for item in sessions_payload.get("items") or [] if isinstance(item, dict)
     ]
@@ -73,7 +73,7 @@ def _load_scope_model_usage(
         for item in session_items
         if item.get("root_session_id") or item.get("id")
     ]
-    usage_payloads = _model_usage_batch(ct_json, session_ids)
+    usage_payloads = _model_usage_batch(client, session_ids)
     return {
         "projects_payload": projects_payload,
         "usage_payloads": usage_payloads,
@@ -158,57 +158,21 @@ def _projection_payload(
     }
 
 
-def _api_call(
-    ct_json: Callable[[list[str]], dict[str, Any]],
-    method: str,
-    params: dict[str, Any],
-) -> dict[str, Any]:
-    payload = ct_json(
-        [
-            "api",
-            "call",
-            method,
-            "--global-scope",
-            "--params",
-            json.dumps(params),
-        ]
-    )
-    if not payload.get("ok"):
-        error = payload.get("error") or {}
-        raise RuntimeError(
-            str(error.get("message") or f"ct api request failed: {method}")
-        )
-    result = payload.get("result") or {}
-    if not isinstance(result, dict):
-        raise RuntimeError(f"ct api request returned invalid result: {method}")
-    return result
-
-
 def _model_usage_batch(
-    ct_json: Callable[[list[str]], dict[str, Any]],
+    client: ServiceApiClient,
     session_ids: list[str],
 ) -> list[dict[str, Any]]:
     if not session_ids:
         return []
-    requests = [
-        {
-            "id": session_id,
-            "method": "session.model_usage",
-            "params": {"session_id": session_id},
-        }
-        for session_id in session_ids
-    ]
-    payload = ct_json(
-        [
-            "api",
-            "batch",
-            "--global-scope",
-            "--requests",
-            json.dumps(requests),
-        ]
-    )
     rows: list[dict[str, Any]] = []
-    for item in payload.get("items") or []:
+    for session_id in session_ids:
+        item = client.execute(
+            {
+                "id": session_id,
+                "method": "session.model_usage",
+                "params": {"session_id": session_id},
+            }
+        )
         if not isinstance(item, dict) or not item.get("ok"):
             continue
         result = item.get("result")

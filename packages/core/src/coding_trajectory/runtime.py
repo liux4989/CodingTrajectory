@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import atexit
 import json
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Protocol
 
 from pydantic import ValidationError
 
@@ -85,6 +87,94 @@ def _error_item(request_id: Any, method: Any, message: str) -> dict[str, Any]:
         "ok": False,
         "error": {"message": message},
     }
+
+
+class ServiceApiClient(Protocol):
+    """In-process service API surface shared by plugin-facing adapters."""
+
+    def call(self, method: str, params: Mapping[str, Any]) -> Any:
+        """Validate and execute one service method, raising on failure."""
+
+    def execute(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Execute one request, returning the ``ct api`` envelope shape."""
+
+
+class PluginApiError(RuntimeError):
+    """Raised when an in-process service call fails."""
+
+
+class PluginApiClient:
+    """In-process equivalent of ``ct api call/batch --global-scope``.
+
+    Owns one lazily created :class:`ServiceRuntime` so stores and the index
+    cache are reused across calls instead of paying subprocess and discovery
+    cost per request.  A lock keeps the shared runtime safe for plugin
+    callers that fan out work over a thread pool.
+    """
+
+    def __init__(
+        self, *, global_scope: bool = True, current_dir: Path | None = None
+    ) -> None:
+        self._global_scope = global_scope
+        self._current_dir = current_dir or Path.cwd()
+        self._lock = threading.Lock()
+        self._runtime: ServiceRuntime | None = None
+
+    def _get_runtime(self) -> ServiceRuntime:
+        if self._runtime is None:
+            self._runtime = ServiceRuntime(
+                global_scope=self._global_scope,
+                current_dir=self._current_dir,
+            )
+        return self._runtime
+
+    def call(self, method: str, params: Mapping[str, Any] | None = None) -> Any:
+        """Call one service method, raising :class:`PluginApiError` on failure."""
+
+        try:
+            with self._lock:
+                return self._get_runtime().call(method, dict(params or {}))
+        except (
+            KeyError,
+            ValueError,
+            ValidationError,
+            ResourceNotFoundError,
+            DocumentError,
+        ) as exc:
+            raise PluginApiError(str(exc)) from exc
+
+    def execute(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Execute one request, returning the ``ct api`` envelope shape."""
+
+        with self._lock:
+            return self._get_runtime().execute(dict(request))
+
+    def close(self) -> None:
+        with self._lock:
+            if self._runtime is not None:
+                self._runtime.close()
+                self._runtime = None
+
+    def __enter__(self) -> PluginApiClient:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
+_default_client: PluginApiClient | None = None
+_default_client_lock = threading.Lock()
+
+
+def default_plugin_client() -> PluginApiClient:
+    """Return the process-wide client for plugin entry-point scripts."""
+
+    global _default_client
+    with _default_client_lock:
+        if _default_client is None:
+            _default_client = PluginApiClient()
+            atexit.register(_default_client.close)
+        return _default_client
 
 
 class ServiceRuntime:

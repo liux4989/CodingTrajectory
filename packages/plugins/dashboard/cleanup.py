@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -15,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from coding_trajectory.runtime import PluginApiError, default_plugin_client
 from pydantic import BaseModel, Field
 
 try:
@@ -254,38 +254,13 @@ def _load_project_sessions(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_api_result(method: str, params: dict[str, Any]) -> dict[str, Any]:
-    payload = _ct_json(
-        [
-            "api",
-            "call",
-            method,
-            "--global-scope",
-            "--params",
-            json.dumps(params),
-        ]
-    )
-    if not payload.get("ok"):
-        error = payload.get("error") or {}
-        raise SystemExit(str(error.get("message") or f"ct api request failed: {method}"))
-    result = payload.get("result")
+    try:
+        result = default_plugin_client().call(method, params)
+    except PluginApiError as exc:
+        raise SystemExit(str(exc)) from exc
     if not isinstance(result, dict):
         raise SystemExit(f"ct api call {method} returned a non-object result")
     return result
-
-
-def _ct_json(args: list[str]) -> dict[str, Any]:
-    ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
-    if not ct:
-        raise SystemExit("ct executable not found; set CT_COMMAND to the ct command path")
-    command = [*shlex.split(ct), *args]
-    try:
-        completed = subprocess.run(command, check=False, text=True, capture_output=True, timeout=30)
-    except subprocess.TimeoutExpired as exc:
-        raise SystemExit(f"ct command timed out: {' '.join(command)}") from exc
-    if completed.returncode != 0:
-        sys.stderr.write(completed.stderr or completed.stdout)
-        raise SystemExit(completed.returncode)
-    return json.loads(completed.stdout)
 
 
 def _visible_session_ids(vendor_filter: str | None) -> set[str]:

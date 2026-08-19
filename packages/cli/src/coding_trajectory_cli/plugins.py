@@ -5,10 +5,12 @@ Plugins are independently packaged command extensions mounted under the
 in its source directory; core discovers plugins by scanning the configured
 plugin root instead of hardcoding a command table.
 
-Plugins run as separate executables and never import ``coding_trajectory`` or
-``coding_trajectory_cli``. They call the ``ct`` CLI or the documented service
-API surface. The only core<->plugin coupling is the ``requires_methods``
-contract version check.
+Plugin processes run from the same environment as the ``ct`` CLI and call the
+versioned service API in process through
+:class:`coding_trajectory.runtime.PluginApiClient`, which reuses one
+``ServiceRuntime`` (shared stores and index cache) instead of paying
+subprocess and rediscovery cost per call. The only core<->plugin coupling is
+the service contract surface plus the ``requires_methods`` version check.
 """
 
 from __future__ import annotations

@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import shlex
-import shutil
-import subprocess
 import sys
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
+
+from coding_trajectory.runtime import (
+    PluginApiClient,
+    PluginApiError,
+    default_plugin_client,
+)
 
 WINDOW_SINCE_DAYS = {
     "today": 1,
@@ -74,21 +76,12 @@ def build_report(
         return cached
 
     since_days = WINDOW_SINCE_DAYS[window]
-    ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
-    if not ct:
-        raise SystemExit(
-            "ct executable not found; set CT_COMMAND to the ct command path"
-        )
+    client = default_plugin_client()
 
     project_names = (
         [project_filter]
         if project_filter
-        else sorted(
-            (
-                _ct_api_result_with_command(ct, "project.list", {}).get("items")
-                or {}
-            )
-        )
+        else sorted((_api_result(client, "project.list", {}).get("items") or {}))
     )
 
     project_sessions: dict[str, list[dict[str, Any]]] = {}
@@ -99,12 +92,7 @@ def build_report(
         params: dict[str, Any] = {"since_days": since_days, "project_name": name}
         if agent_vendor:
             params["agent_vendor"] = agent_vendor
-        payload = _ct_api_result_safe(
-            ct,
-            "project.sessions",
-            params,
-            global_scope=True,
-        )
+        payload = _api_result_safe(client, "project.sessions", params)
         return name, (payload or {}).get("items") or []
 
     with ThreadPoolExecutor(max_workers=min(8, len(project_names) or 1)) as pool:
@@ -123,7 +111,7 @@ def build_report(
                     all_session_ids.append(root_id)
                     session_meta[root_id] = session
 
-    session_data_map = _fetch_session_data_bulk(ct, all_session_ids)
+    session_data_map = _fetch_session_data_bulk(client, all_session_ids)
 
     project_slices: list[dict[str, Any]] = []
     for project_name, sessions in sorted(project_sessions.items()):
@@ -176,7 +164,7 @@ def _empty_tokens() -> dict[str, int]:
 
 
 def _fetch_session_data_bulk(
-    ct: str,
+    client: PluginApiClient,
     session_ids: list[str],
 ) -> dict[str, dict[str, Any]]:
     if not session_ids:
@@ -196,17 +184,8 @@ def _fetch_session_data_bulk(
             }
             for root_id in chunk
         ]
-        payload = _ct_json_with_command(
-            ct,
-            [
-                "api",
-                "batch",
-                "--global-scope",
-                "--requests",
-                json.dumps(requests),
-            ],
-        )
-        for item in payload.get("items") or []:
+        for request in requests:
+            item = client.execute(request)
             if not item.get("ok"):
                 continue
             root_id = item.get("id")
@@ -444,74 +423,29 @@ def _one_line(value: str, limit: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# ct subprocess helpers
+# ct service helpers
 # ---------------------------------------------------------------------------
 
 
-def _ct_json_with_command(ct: str, args: list[str]) -> dict[str, Any]:
-    command = [*shlex.split(ct), *args]
-    try:
-        completed = subprocess.run(
-            command, check=False, text=True, capture_output=True, timeout=60
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise SystemExit(f"ct command timed out: {' '.join(command)}") from exc
-    if completed.returncode != 0:
-        sys.stderr.write(completed.stderr or completed.stdout)
-        raise SystemExit(completed.returncode)
-    return json.loads(completed.stdout)
-
-
-def _ct_api_result_with_command(
-    ct: str,
-    method: str,
-    params: dict[str, Any],
-    *,
-    global_scope: bool = False,
+def _api_result(
+    client: PluginApiClient, method: str, params: dict[str, Any]
 ) -> dict[str, Any]:
-    args = ["api", "call", method, "--params", json.dumps(params)]
-    if global_scope:
-        args.append("--global-scope")
-    payload = _ct_json_with_command(ct, args)
-    if not payload.get("ok"):
-        error = payload.get("error") or {}
-        raise SystemExit(str(error.get("message") or f"ct api request failed: {method}"))
-    result = payload.get("result")
+    try:
+        result = client.call(method, params)
+    except PluginApiError as exc:
+        raise SystemExit(str(exc)) from exc
     if not isinstance(result, dict):
         raise SystemExit(f"ct api call {method} returned a non-object result")
     return result
 
 
-def _ct_json_safe_with_command(ct: str, args: list[str]) -> dict[str, Any] | None:
-    command = [*shlex.split(ct), *args]
-    try:
-        completed = subprocess.run(
-            command, check=False, text=True, capture_output=True, timeout=60
-        )
-    except subprocess.TimeoutExpired:
-        return None
-    if completed.returncode != 0:
-        return None
-    try:
-        return json.loads(completed.stdout)
-    except json.JSONDecodeError:
-        return None
-
-
-def _ct_api_result_safe(
-    ct: str,
-    method: str,
-    params: dict[str, Any],
-    *,
-    global_scope: bool = False,
+def _api_result_safe(
+    client: PluginApiClient, method: str, params: dict[str, Any]
 ) -> dict[str, Any] | None:
-    args = ["api", "call", method, "--params", json.dumps(params)]
-    if global_scope:
-        args.append("--global-scope")
-    payload = _ct_json_safe_with_command(ct, args)
-    if not payload or not payload.get("ok"):
+    try:
+        result = client.call(method, params)
+    except PluginApiError:
         return None
-    result = payload.get("result")
     return result if isinstance(result, dict) else None
 
 

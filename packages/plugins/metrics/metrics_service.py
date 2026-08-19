@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import json
 import math
-import os
-import shutil
 import statistics
-import subprocess
 import threading
 import time
 from collections import defaultdict
@@ -13,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from coding_trajectory.runtime import PluginApiError, default_plugin_client
 from pydantic import BaseModel, Field
 
 TOKEN_KEYS = (
@@ -310,20 +307,10 @@ def _load_graphs(since_days: int) -> list[GraphRecord]:
 
 
 def _api_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
-    payload = _ct_json(
-        [
-            "api",
-            "call",
-            method,
-            "--global-scope",
-            "--params",
-            json.dumps(params),
-        ]
-    )
-    if not payload.get("ok"):
-        error = payload.get("error") or {}
-        raise RuntimeError(str(error.get("message") or f"ct api request failed: {method}"))
-    result = payload.get("result")
+    try:
+        result = default_plugin_client().call(method, params)
+    except PluginApiError as exc:
+        raise RuntimeError(str(exc)) from exc
     if not isinstance(result, dict):
         raise RuntimeError(f"ct api request returned invalid result: {method}")
     return result
@@ -332,44 +319,16 @@ def _api_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
 def _batch_results(requests: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     if not requests:
         return {}
-    payload = _ct_json(
-        [
-            "api",
-            "batch",
-            "--global-scope",
-            "--requests",
-            json.dumps(requests),
-        ]
-    )
+    client = default_plugin_client()
     results: dict[str, dict[str, Any]] = {}
-    for item in payload.get("items") or []:
+    for request in requests:
+        item = client.execute(request)
         if not isinstance(item, dict) or not item.get("ok"):
             continue
         result = item.get("result")
         if isinstance(result, dict):
             results[str(item.get("id"))] = result
     return results
-
-
-def _ct_json(args: list[str]) -> dict[str, Any]:
-    command = os.environ.get("CT_COMMAND") or shutil.which("ct")
-    if not command:
-        raise RuntimeError("ct executable not found; set CT_COMMAND to the ct command path")
-    completed = subprocess.run(
-        [command, *args],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode:
-        raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "ct command failed")
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("ct command returned invalid JSON") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("ct command returned a non-object JSON payload")
-    return payload
 
 
 def _cohort_summary(graphs: tuple[GraphRecord, ...], since_days: int) -> CohortSummary:

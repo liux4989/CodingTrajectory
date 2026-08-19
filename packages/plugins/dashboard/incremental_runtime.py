@@ -46,7 +46,7 @@ try:
     )
     from .analytical_read_models import (
         CANONICAL_FACT_SCOPE,
-        CanonicalFactsCtJson,
+        CanonicalFactsApiClient,
         FACT_GRAPH_OVERVIEW,
         FACT_GRAPH_STATS,
         FACT_GRAPH_USAGE,
@@ -69,8 +69,8 @@ try:
         analytical_scope_key,
         build_canonical_fact_rows,
         build_canonical_root_fact_rows,
-        build_model_usage_rows_from_ct_json,
-        build_token_efficiency_project_rows_from_ct_json,
+        build_model_usage_rows,
+        build_token_efficiency_project_rows,
         canonical_fact_entity_kinds,
         page_metadata,
         reconstruct_model_usage,
@@ -95,7 +95,7 @@ except ImportError:
     )
     from analytical_read_models import (
         CANONICAL_FACT_SCOPE,
-        CanonicalFactsCtJson,
+        CanonicalFactsApiClient,
         FACT_GRAPH_OVERVIEW,
         FACT_GRAPH_STATS,
         FACT_GRAPH_USAGE,
@@ -118,8 +118,8 @@ except ImportError:
         analytical_scope_key,
         build_canonical_fact_rows,
         build_canonical_root_fact_rows,
-        build_model_usage_rows_from_ct_json,
-        build_token_efficiency_project_rows_from_ct_json,
+        build_model_usage_rows,
+        build_token_efficiency_project_rows,
         canonical_fact_entity_kinds,
         page_metadata,
         reconstruct_model_usage,
@@ -622,15 +622,15 @@ class DashboardIncrementalRuntime:
         if self._analytical_meta(TOKEN_PROJECT_META, scope) is None:
 
             def publish(context: MaterializationContext) -> None:
-                adapter = CanonicalFactsCtJson(
+                adapter = CanonicalFactsApiClient(
                     context.current_entities(
                         entity_kinds=canonical_fact_entity_kinds(),
                         scope_key=CANONICAL_FACT_SCOPE,
                     )
                 )
                 try:
-                    rows = build_token_efficiency_project_rows_from_ct_json(
-                        ct_json=adapter,
+                    rows = build_token_efficiency_project_rows(
+                        client=adapter,
                         project_name=project_name,
                         since_days=since_days,
                     )
@@ -703,7 +703,7 @@ class DashboardIncrementalRuntime:
             projection = context_window.build_projection(
                 session_id,
                 turn_id=turn_id,
-                ct_json=CanonicalFactsCtJson(facts),
+                client=CanonicalFactsApiClient(facts),
             )
         except (ResourceNotFoundError, RuntimeError):
             return None
@@ -1004,15 +1004,15 @@ class DashboardIncrementalRuntime:
                 context.current_entities(entity_kinds=(meta_kind,), scope_key=scope)
             ):
                 return
-            adapter = CanonicalFactsCtJson(
+            adapter = CanonicalFactsApiClient(
                 context.current_entities(
                     entity_kinds=canonical_fact_entity_kinds(),
                     scope_key=CANONICAL_FACT_SCOPE,
                 )
             )
             if route == "model_usage":
-                rows = build_model_usage_rows_from_ct_json(
-                    ct_json=adapter,
+                rows = build_model_usage_rows(
+                    client=adapter,
                     since_days=self.since_days,
                     project_name=project_name,
                     model_key=model_key,
@@ -1307,14 +1307,14 @@ class DashboardIncrementalRuntime:
                     ),
                     scope_key=scope,
                 )
-            fact_adapter = CanonicalFactsCtJson(
+            fact_adapter = CanonicalFactsApiClient(
                 context.current_entities(
                     entity_kinds=canonical_fact_entity_kinds(),
                     scope_key=CANONICAL_FACT_SCOPE,
                 )
             )
-            analytical_rows = build_model_usage_rows_from_ct_json(
-                ct_json=fact_adapter,
+            analytical_rows = build_model_usage_rows(
+                client=fact_adapter,
                 since_days=self.since_days,
             )
             _replace_analytical_rows(
@@ -1648,14 +1648,14 @@ def _materialize_changed_graphs(
     core_seconds = perf_counter() - core_started
 
     analytical_started = perf_counter()
-    fact_adapter = CanonicalFactsCtJson(
+    fact_adapter = CanonicalFactsApiClient(
         context.current_entities(
             entity_kinds=canonical_fact_entity_kinds(),
             scope_key=CANONICAL_FACT_SCOPE,
         )
     )
-    analytical_rows = build_model_usage_rows_from_ct_json(
-        ct_json=fact_adapter,
+    analytical_rows = build_model_usage_rows(
+        client=fact_adapter,
         since_days=since_days,
     )
     _replace_analytical_rows(

@@ -29,6 +29,7 @@ from coding_trajectory.metrics import (
     iter_graph_economics_contributions,
 )
 from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
+from coding_trajectory.runtime import ServiceApiClient
 from coding_trajectory.service import IndexCache, dispatch
 
 try:
@@ -38,7 +39,6 @@ except ImportError:  # pragma: no cover - direct plugin-directory imports
     import token_efficiency  # type: ignore[no-redef]
 
 
-CtJson: TypeAlias = Callable[[list[str]], dict[str, Any]]
 Mutation: TypeAlias = dict[str, Any]
 PersistedRow: TypeAlias = Mapping[str, Any] | Any
 
@@ -111,11 +111,10 @@ DetailName = Literal["sessions", "turns", "errors", "breaks", "projects"]
 TokenDetailName = Literal["patterns", "hotspots", "outliers"]
 
 
-class DocumentStoreCtJson:
-    """Small ``ct --json``-compatible adapter over a supplied store.
+class DocumentStoreApiClient:
+    """In-process :class:`ServiceApiClient` over a supplied store.
 
-    Only the ``api call`` and ``api batch`` argv forms used by dashboard modules
-    are accepted.  The adapter owns one in-memory ``IndexCache`` and never calls
+    The adapter owns one in-memory ``IndexCache`` and never calls
     ``resolve_store``, project discovery, or a subprocess.
 
     ``project.list`` cannot recover filesystem paths from ``DocumentStore``.
@@ -147,9 +146,6 @@ class DocumentStoreCtJson:
             raw_project_list
         )
 
-    def __call__(self, argv: list[str]) -> dict[str, Any]:
-        return _adapter_argv(self, argv)
-
     def execute(self, request: Any) -> dict[str, Any]:
         return _adapter_execute(self, request)
 
@@ -171,8 +167,8 @@ class DocumentStoreCtJson:
         )
 
 
-class CanonicalFactsCtJson:
-    """``ct --json`` adapter backed only by persisted canonical fact rows.
+class CanonicalFactsApiClient:
+    """In-process :class:`ServiceApiClient` backed by persisted fact rows.
 
     Construction is a single linear pass over current ``EntityRow`` objects or
     not-yet-persisted mutation dictionaries.  Calls do not touch a
@@ -225,9 +221,6 @@ class CanonicalFactsCtJson:
         )
         if not self._projects:
             self._projects = _project_items_from_session_facts(self._sessions)
-
-    def __call__(self, argv: list[str]) -> dict[str, Any]:
-        return _adapter_argv(self, argv)
 
     def execute(self, request: Any) -> dict[str, Any]:
         return _adapter_execute(self, request)
@@ -340,10 +333,10 @@ def build_canonical_fact_rows(
 
     Every fact payload is the output of a versioned canonical service contract.
     The builder never discovers sources.  All graph/session telemetry is
-    dispatched in process through :class:`DocumentStoreCtJson`.
+    dispatched in process through :class:`DocumentStoreApiClient`.
     """
 
-    adapter = DocumentStoreCtJson(
+    adapter = DocumentStoreApiClient(
         store, current_dir=current_dir, project_list=project_list
     )
     return _build_canonical_fact_rows_from_store(
@@ -375,7 +368,7 @@ def build_canonical_root_fact_rows(
     if graph is None:
         raise ResourceNotFoundError(f"resource not found: {root_session_id}")
     root_store = DocumentStore.from_session_graphs([graph])
-    adapter = DocumentStoreCtJson(
+    adapter = DocumentStoreApiClient(
         root_store, current_dir=current_dir, project_list=project_list
     )
     rows = _build_canonical_fact_rows_from_store(
@@ -393,7 +386,7 @@ def build_canonical_root_fact_rows(
 def _build_canonical_fact_rows_from_store(
     *,
     store: DocumentStore,
-    adapter: DocumentStoreCtJson,
+    adapter: DocumentStoreApiClient,
     root_session_ids: Iterable[str] | None = None,
     include_projects: bool = True,
     economics_detail: Literal["core", "evidence"] = "evidence",
@@ -584,160 +577,6 @@ def _economics_fact_rows(
     return rows
 
 
-def build_canonical_fact_rows_from_ct_json(
-    *,
-    ct_json: CtJson,
-    root_session_ids: Iterable[str] | None = None,
-    include_projects: bool = True,
-) -> list[Mutation]:
-    """Build normalized fact mutations through a canonical ``ct_json`` seam.
-
-    ``root_session_ids`` limits graph facts without changing their keys or
-    partitions.  This makes a targeted repair equivalent to deleting the
-    affected root partition and applying this result.  Project-list facts are
-    global and are normally replaced only during a full rebuild.
-    """
-
-    selected_roots = (
-        {str(value) for value in root_session_ids}
-        if root_session_ids is not None
-        else None
-    )
-    projects_payload = (
-        _ct_api_call(ct_json, "project.list", {}) if include_projects else None
-    )
-    sessions_payload = _ct_api_call(
-        ct_json,
-        "project.sessions",
-        {"include": ["runtime", "usage"]},
-    )
-    session_rows = [
-        item
-        for item in sessions_payload.get("items") or []
-        if isinstance(item, dict)
-        and (
-            selected_roots is None
-            or str(item.get("root_session_id") or "") in selected_roots
-            or str(item.get("lineage_root_session_id") or "") in selected_roots
-        )
-    ]
-
-    rows: list[Mutation] = []
-    if include_projects:
-        assert projects_payload is not None
-        project_items = projects_payload.get("items") or {}
-        if not isinstance(project_items, dict):
-            raise RuntimeError("project.list fact payload has invalid items")
-        for name, item in sorted(project_items.items()):
-            if not isinstance(item, dict):
-                continue
-            rows.append(
-                _fact_mutation(
-                    FACT_PROJECT,
-                    str(name),
-                    partition_key="projects",
-                    sort_key=str(name),
-                    payload={"name": str(name), "item": item},
-                )
-            )
-
-    targets: list[tuple[str, str]] = []
-    for item in session_rows:
-        root_id = str(item.get("root_session_id") or "")
-        if not root_id:
-            raise RuntimeError("project.sessions fact row is missing root_session_id")
-        rows.append(
-            _fact_mutation(
-                FACT_PROJECT_SESSION,
-                root_id,
-                partition_key=root_id,
-                sort_key=f"{item.get('project') or ''}\0{root_id}",
-                payload=item,
-            )
-        )
-        session_ids = [
-            str(value)
-            for value in item.get("session_ids") or []
-            if value is not None and str(value)
-        ]
-        for target_id in dict.fromkeys((root_id, *session_ids)):
-            targets.append((root_id, target_id))
-
-    requests: list[dict[str, Any]] = []
-    request_facts: dict[str, tuple[str, str, str]] = {}
-    for root_id, target_id in targets:
-        for method, kind in _FACT_METHOD_KIND.items():
-            request_id = f"{method}:{root_id}:{target_id}"
-            requests.append(
-                {
-                    "id": request_id,
-                    "method": method,
-                    "params": {"session_id": target_id},
-                }
-            )
-            request_facts[request_id] = (kind, root_id, target_id)
-    for root_id in dict.fromkeys(root for root, _ in targets):
-        for method, kind in _GRAPH_FACT_METHOD_KIND.items():
-            request_id = f"{method}:{root_id}:{root_id}"
-            requests.append(
-                {
-                    "id": request_id,
-                    "method": method,
-                    "params": {"session_id": root_id, **_GRAPH_FACT_PARAMS[method]},
-                }
-            )
-            request_facts[request_id] = (kind, root_id, root_id)
-
-    for request_chunk in _chunks(requests, 320):
-        batch = ct_json(
-            [
-                "api",
-                "batch",
-                "--global-scope",
-                "--requests",
-                json.dumps(request_chunk),
-            ]
-        )
-        returned_ids: set[str] = set()
-        for response in batch.get("items") or []:
-            if not isinstance(response, dict):
-                continue
-            request_id = str(response.get("id") or "")
-            fact = request_facts.get(request_id)
-            if fact is None:
-                raise RuntimeError(
-                    f"canonical fact batch returned unknown id: {request_id}"
-                )
-            returned_ids.add(request_id)
-            if not response.get("ok"):
-                error = response.get("error") or {}
-                message = error.get("message") if isinstance(error, dict) else error
-                raise RuntimeError(
-                    str(message or f"canonical fact dispatch failed: {request_id}")
-                )
-            result = response.get("result")
-            if not isinstance(result, dict):
-                raise RuntimeError(
-                    f"canonical fact dispatch returned invalid result: {request_id}"
-                )
-            kind, root_id, target_id = fact
-            rows.append(
-                _fact_mutation(
-                    kind,
-                    target_id,
-                    partition_key=root_id,
-                    sort_key=target_id,
-                    payload=result,
-                )
-            )
-        missing = {str(item["id"]) for item in request_chunk} - returned_ids
-        if missing:
-            raise RuntimeError(
-                "canonical fact batch omitted responses: " + ", ".join(sorted(missing))
-            )
-    return rows
-
-
 def canonical_fact_entity_kinds(*, include_projects: bool = True) -> tuple[str, ...]:
     """Return kinds used to gather or replace canonical fact rows."""
 
@@ -746,37 +585,15 @@ def canonical_fact_entity_kinds(*, include_projects: bool = True) -> tuple[str, 
 
 def build_model_usage_rows(
     *,
-    store: DocumentStore,
-    current_dir: Path,
-    since_days: int = 7,
-    project_name: str | None = None,
-    model_key: str | None = None,
-    project_list: Mapping[str, Any] | None = None,
-) -> list[Mutation]:
-    """Run the existing Model Usage projection once and normalize its details."""
-
-    adapter = DocumentStoreCtJson(
-        store, current_dir=current_dir, project_list=project_list
-    )
-    return build_model_usage_rows_from_ct_json(
-        ct_json=adapter,
-        since_days=since_days,
-        project_name=project_name,
-        model_key=model_key,
-    )
-
-
-def build_model_usage_rows_from_ct_json(
-    *,
-    ct_json: CtJson,
+    client: ServiceApiClient,
     since_days: int = 7,
     project_name: str | None = None,
     model_key: str | None = None,
 ) -> list[Mutation]:
-    """Normalize Model Usage through any contract-compatible adapter."""
+    """Normalize the Model Usage projection through the in-process client."""
 
     projection = model_usage.build_projection(
-        ct_json=ct_json,
+        client=client,
         since_days=since_days,
         project_name=project_name,
         model_key=model_key,
@@ -812,127 +629,16 @@ def build_model_usage_rows_from_ct_json(
     return rows
 
 
-def build_standard_analytical_rows(
-    *,
-    store: DocumentStore,
-    current_dir: Path,
-    since_days: int = 7,
-    project_name: str | None = None,
-    project_list: Mapping[str, Any] | None = None,
-) -> list[Mutation]:
-    """Build the standard analytical projections from one store.
-
-    Each existing projection is called exactly once through one adapter and one
-    canonical index cache over the supplied authoritative store.
-    """
-
-    adapter = DocumentStoreCtJson(
-        store, current_dir=current_dir, project_list=project_list
-    )
-    return build_standard_analytical_rows_from_ct_json(
-        ct_json=adapter,
-        since_days=since_days,
-        project_name=project_name,
-    )
-
-
-def build_standard_analytical_rows_from_ct_json(
-    *,
-    ct_json: CtJson,
-    since_days: int = 7,
-    project_name: str | None = None,
-) -> list[Mutation]:
-    """Build standard analytical materializations without a source/store scan."""
-
-    return [
-        *build_model_usage_rows_from_ct_json(
-            ct_json=ct_json,
-            since_days=since_days,
-            project_name=project_name,
-        ),
-    ]
-
-
-def build_token_efficiency_index_rows(
-    *,
-    store: DocumentStore,
-    current_dir: Path,
-    since_days: int = 30,
-    project_list: Mapping[str, Any] | None = None,
-) -> list[Mutation]:
-    """Run the Token Efficiency index once and normalize project rows."""
-
-    adapter = DocumentStoreCtJson(
-        store, current_dir=current_dir, project_list=project_list
-    )
-    return build_token_efficiency_index_rows_from_ct_json(
-        ct_json=adapter,
-        since_days=since_days,
-    )
-
-
-def build_token_efficiency_index_rows_from_ct_json(
-    *,
-    ct_json: CtJson,
-    since_days: int = 30,
-) -> list[Mutation]:
-    """Normalize the Token Efficiency index from persisted canonical facts."""
-
-    projection = token_efficiency.build_index_projection(
-        ct_json=ct_json, since_days=since_days
-    )
-    scope = _scope_key("token_efficiency_index", since_days=since_days)
-    rows = [
-        _mutation(
-            TOKEN_INDEX_META,
-            scope,
-            scope,
-            "",
-            _without(projection, "projects"),
-        )
-    ]
-    rows.extend(
-        _detail_mutations(
-            TOKEN_PROJECT,
-            scope,
-            projection.get("projects") or [],
-            id_of=lambda row, index: str(row.get("project_name") or index),
-            partition="projects",
-        )
-    )
-    return rows
-
-
 def build_token_efficiency_project_rows(
     *,
-    store: DocumentStore,
-    current_dir: Path,
-    project_name: str,
-    since_days: int = 30,
-    project_list: Mapping[str, Any] | None = None,
-) -> list[Mutation]:
-    """Run one existing Token Efficiency project projection once."""
-
-    adapter = DocumentStoreCtJson(
-        store, current_dir=current_dir, project_list=project_list
-    )
-    return build_token_efficiency_project_rows_from_ct_json(
-        ct_json=adapter,
-        project_name=project_name,
-        since_days=since_days,
-    )
-
-
-def build_token_efficiency_project_rows_from_ct_json(
-    *,
-    ct_json: CtJson,
+    client: ServiceApiClient,
     project_name: str,
     since_days: int = 30,
 ) -> list[Mutation]:
     """Normalize one Token Efficiency project from canonical persisted facts."""
 
     projection = token_efficiency.build_project_projection(
-        ct_json=ct_json,
+        client=client,
         project_name=project_name,
         since_days=since_days,
     )
@@ -1130,25 +836,6 @@ def _project_list_from_store(store: DocumentStore) -> dict[str, Any]:
     }
 
 
-def _adapter_argv(adapter: Any, argv: list[str]) -> dict[str, Any]:
-    if len(argv) < 2 or argv[0] != "api":
-        raise ValueError("only ct api call/batch argv is supported")
-    action = argv[1]
-    if action == "call":
-        if len(argv) < 3:
-            raise ValueError("api call requires a method")
-        method = argv[2]
-        params = _json_flag(argv[3:], "--params", default={})
-        request_id = _flag(argv[3:], "--id")
-        return adapter.execute({"id": request_id, "method": method, "params": params})
-    if action == "batch":
-        requests = _json_flag(argv[2:], "--requests", default=None)
-        if not isinstance(requests, list):
-            raise ValueError("api batch requires a JSON request array")
-        return {"items": [adapter.execute(item) for item in requests]}
-    raise ValueError(f"unsupported ct api action: {action}")
-
-
 def _adapter_execute(adapter: Any, request: Any) -> dict[str, Any]:
     if not isinstance(request, dict):
         return _error_item(None, None, "request must be an object")
@@ -1175,29 +862,6 @@ def _adapter_execute(adapter: Any, request: Any) -> dict[str, Any]:
         "ok": True,
         "result": result,
     }
-
-
-def _ct_api_call(
-    ct_json: CtJson, method: str, params: Mapping[str, Any]
-) -> dict[str, Any]:
-    response = ct_json(
-        [
-            "api",
-            "call",
-            method,
-            "--global-scope",
-            "--params",
-            json.dumps(dict(params)),
-        ]
-    )
-    if not response.get("ok"):
-        error = response.get("error") or {}
-        message = error.get("message") if isinstance(error, dict) else error
-        raise RuntimeError(str(message or f"ct api request failed: {method}"))
-    result = response.get("result")
-    if not isinstance(result, dict):
-        raise RuntimeError(f"ct api request returned invalid result: {method}")
-    return result
 
 
 def _fact_mutation(
@@ -1248,31 +912,6 @@ def _project_items_from_session_facts(
             | {str(value) for value in session.get("vendors") or []}
         )
     return projects
-
-
-def _chunks(values: Sequence[Any], size: int) -> Iterable[Sequence[Any]]:
-    for start in range(0, len(values), size):
-        yield values[start : start + size]
-
-
-def _json_flag(argv: Sequence[str], name: str, *, default: Any) -> Any:
-    raw = _flag(argv, name)
-    if raw is None:
-        return default
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid JSON for {name}: {exc.msg}") from exc
-
-
-def _flag(argv: Sequence[str], name: str) -> str | None:
-    try:
-        index = argv.index(name)
-    except ValueError:
-        return None
-    if index + 1 >= len(argv):
-        raise ValueError(f"{name} requires a value")
-    return argv[index + 1]
 
 
 def _error_item(request_id: Any, method: Any, message: str) -> dict[str, Any]:
@@ -1368,8 +1007,8 @@ def _value(value: Any, key: str) -> Any:
 
 __all__ = [
     "CANONICAL_FACT_SCOPE",
-    "CanonicalFactsCtJson",
-    "DocumentStoreCtJson",
+    "CanonicalFactsApiClient",
+    "DocumentStoreApiClient",
     "FACT_ECONOMICS_CORE",
     "FACT_GRAPH_OVERVIEW",
     "FACT_GRAPH_STATS",
@@ -1391,16 +1030,9 @@ __all__ = [
     "TOKEN_PROJECT",
     "TOKEN_PROJECT_META",
     "build_canonical_fact_rows",
-    "build_canonical_fact_rows_from_ct_json",
     "build_canonical_root_fact_rows",
     "build_model_usage_rows",
-    "build_model_usage_rows_from_ct_json",
-    "build_standard_analytical_rows",
-    "build_standard_analytical_rows_from_ct_json",
-    "build_token_efficiency_index_rows",
-    "build_token_efficiency_index_rows_from_ct_json",
     "build_token_efficiency_project_rows",
-    "build_token_efficiency_project_rows_from_ct_json",
     "canonical_fact_entity_kinds",
     "analytical_scope_key",
     "page_metadata",

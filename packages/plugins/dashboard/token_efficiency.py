@@ -8,8 +8,9 @@ import shlex
 from collections import defaultdict
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
+from coding_trajectory.runtime import ServiceApiClient
 from pydantic import BaseModel, Field
 
 Grain = Literal["daily", "weekly"]
@@ -349,13 +350,12 @@ class ProjectProjection(BaseModel):
 
 def build_index_projection(
     *,
-    ct_json: Callable[[list[str]], dict[str, Any]],
+    client: ServiceApiClient,
     since_days: int = 30,
 ) -> dict[str, Any]:
     since_days = max(int(since_days), 1)
-    projects_payload = _api_call(ct_json, "project.list", {})
-    sessions_payload = _api_call(
-        ct_json,
+    projects_payload = client.call("project.list", {})
+    sessions_payload = client.call(
         "project.sessions",
         {"since_days": since_days, "include": ["usage"]},
     )
@@ -410,17 +410,16 @@ def build_index_projection(
 
 def build_project_projection(
     *,
-    ct_json: Callable[[list[str]], dict[str, Any]],
+    client: ServiceApiClient,
     project_name: str,
     since_days: int = 30,
 ) -> dict[str, Any]:
     since_days = max(int(since_days), 1)
     now_local = datetime.now().astimezone()
     discovery_days = _required_discovery_days(since_days, now_local)
-    projects_payload = _api_call(ct_json, "project.list", {})
+    projects_payload = client.call("project.list", {})
     option = _resolve_project_option(projects_payload, project_name)
-    sessions_payload = _api_call(
-        ct_json,
+    sessions_payload = client.call(
         "project.sessions",
         {"project_name": option.name, "since_days": discovery_days},
     )
@@ -445,7 +444,7 @@ def build_project_projection(
             seen_session_ids.add(session_id)
             telemetry_targets.append((session_id, root_id))
     telemetry_rows, telemetry_warnings = _batch_methods(
-        ct_json,
+        client,
         telemetry_targets,
         ("session.model_usage", "session.tool_usage"),
     )
@@ -575,34 +574,8 @@ def build_project_projection(
     return projection.model_dump(mode="json")
 
 
-def _api_call(
-    ct_json: Callable[[list[str]], dict[str, Any]],
-    method: str,
-    params: dict[str, Any],
-) -> dict[str, Any]:
-    payload = ct_json(
-        [
-            "api",
-            "call",
-            method,
-            "--global-scope",
-            "--params",
-            json.dumps(params),
-        ]
-    )
-    if not payload.get("ok"):
-        error = payload.get("error") or {}
-        raise RuntimeError(
-            str(error.get("message") or f"ct api request failed: {method}")
-        )
-    result = payload.get("result") or {}
-    if not isinstance(result, dict):
-        raise RuntimeError(f"ct api request returned invalid result: {method}")
-    return result
-
-
 def _batch_methods(
-    ct_json: Callable[[list[str]], dict[str, Any]],
+    client: ServiceApiClient,
     telemetry_targets: list[tuple[str, str]],
     methods: tuple[str, ...],
 ) -> tuple[dict[str, dict[str, dict[str, Any]]], list[str]]:
@@ -635,28 +608,9 @@ def _batch_methods(
             }
             for root_id in sorted(anchors)
         )
-        try:
-            payload = ct_json(
-                [
-                    "api",
-                    "batch",
-                    "--global-scope",
-                    "--requests",
-                    json.dumps(requests),
-                ]
-            )
-        except RuntimeError as exc:
-            if len(chunk) > 1:
-                middle = len(chunk) // 2
-                load_chunk(chunk[:middle])
-                load_chunk(chunk[middle:])
-            else:
-                warnings.append(
-                    f"telemetry failed for {chunk[0][0]} after batch retries: {exc}"
-                )
-            return
         seen: set[tuple[str, str]] = set()
-        for item in payload.get("items") or []:
+        for request in requests:
+            item = client.execute(request)
             if not isinstance(item, dict):
                 continue
             request_id = str(item.get("id") or "")

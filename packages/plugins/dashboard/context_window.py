@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import shlex
-import shutil
-import subprocess
-import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
+from coding_trajectory.runtime import ServiceApiClient, default_plugin_client
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -249,10 +246,10 @@ def build_projection(
     session_id: str,
     *,
     turn_id: str | None = None,
-    ct_json: Callable[[list[str]], dict[str, Any]] | None = None,
+    client: ServiceApiClient | None = None,
 ) -> ContextWindowProjection:
-    run = ct_json or _ct_json
-    stats, overview, usage, tool_usage = _load_projection_inputs(session_id, run)
+    client = client or default_plugin_client()
+    stats, overview, usage, tool_usage = _load_projection_inputs(session_id, client)
 
     selected_stats = _selected_session_stats(stats, session_id)
     active_session_id = str(
@@ -357,7 +354,7 @@ def build_projection(
 
 def _load_projection_inputs(
     session_id: str,
-    run: Callable[[list[str]], dict[str, Any]],
+    client: ServiceApiClient,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     # ``ct api batch`` returns internal service shapes, while the dedicated
     # commands apply CLI display compaction. Keep that compatibility boundary
@@ -375,15 +372,9 @@ def _load_projection_inputs(
             ("tool_usage", "session.tool_usage"),
         )
     ]
-    payload = run(
-        [
-            "api",
-            "batch",
-            "--global-scope",
-            "--requests",
-            json.dumps(requests),
-        ]
-    )
+    payload = {
+        "items": [client.execute(request) for request in requests]
+    }
     rows = {
         str(item.get("id")): item
         for item in payload.get("items") or []
@@ -2399,35 +2390,6 @@ def _overview_vendor(overview: dict[str, Any]) -> str | None:
         if isinstance(session, dict) and session.get("vendor"):
             return str(session["vendor"])
     return None
-
-
-def _ct_json(args: list[str]) -> dict[str, Any]:
-    ct = os.environ.get("CT_COMMAND") or shutil.which("ct")
-    if not ct:
-        raise SystemExit(
-            "ct executable not found; set CT_COMMAND to the ct command path"
-        )
-    command = [*shlex.split(ct), *args]
-    try:
-        completed = subprocess.run(
-            command, check=False, text=True, capture_output=True, timeout=60
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise SystemExit(f"ct command timed out: {' '.join(command)}") from exc
-    if completed.returncode != 0:
-        sys.stderr.write(completed.stderr or completed.stdout)
-        raise SystemExit(completed.returncode)
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(
-            f"ct command returned invalid JSON: {' '.join(command)}"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise SystemExit(
-            f"ct command returned a non-object payload: {' '.join(command)}"
-        )
-    return payload
 
 
 def _token_evidence(
