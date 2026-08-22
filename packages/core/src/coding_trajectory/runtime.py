@@ -59,7 +59,12 @@ def _entrypoint_ids(requests: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
-def _store_key(params: dict[str, Any], *, global_scope: bool) -> tuple[Any, ...]:
+def _store_key(
+    params: dict[str, Any],
+    *,
+    global_scope: bool,
+    include_descendants: bool,
+) -> tuple[Any, ...]:
     params = _discovery_params(params)
     discovery_params = {
         key: params.get(key)
@@ -78,8 +83,15 @@ def _store_key(params: dict[str, Any], *, global_scope: bool) -> tuple[Any, ...]
     return (
         "discovery",
         global_scope,
+        include_descendants,
         json.dumps(discovery_params, sort_keys=True, default=str),
     )
+
+
+def _requires_session_component(method: str) -> bool:
+    """Return whether a method needs descendant sessions in its source store."""
+
+    return method.startswith("graph.") or method == "session.tree"
 
 
 def _error_item(request_id: Any, method: Any, message: str) -> dict[str, Any]:
@@ -232,7 +244,7 @@ class ServiceRuntime:
                 )
             )
 
-        store, discovery_note = self._store_for(validated_params)
+        store, discovery_note = self._store_for(method, validated_params)
         return dispatch(
             method,
             validated_params,
@@ -272,15 +284,21 @@ class ServiceRuntime:
         self.prepare_batch(requests)
         return {"items": [self.execute(request) for request in requests]}
 
-    def _store_for(self, params: dict[str, Any]) -> tuple[Any, str]:
+    def _store_for(self, method: str, params: dict[str, Any]) -> tuple[Any, str]:
         if self._batch_store is not None and _entrypoint_ids_from_params(params):
             return self._batch_store
-        key = _store_key(params, global_scope=self.global_scope)
+        include_descendants = _requires_session_component(method)
+        key = _store_key(
+            params,
+            global_scope=self.global_scope,
+            include_descendants=include_descendants,
+        )
         if key not in self._stores:
             self._stores[key] = resolve_store(
                 _discovery_params(params),
                 global_scope=self.global_scope,
                 current_dir=self.current_dir,
                 cache=self.cache,
+                include_descendants=include_descendants,
             )
         return self._stores[key]

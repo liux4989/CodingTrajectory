@@ -520,9 +520,32 @@ def resolve_store(
     global_scope: bool,
     current_dir: Path,
     cache: IndexCache,
+    include_descendants: bool = True,
 ) -> tuple[DocumentStore, str]:
     """Build a store: use cached path index for targeted load, fall back to full discovery."""
     entrypoint_id = _session_graph_entrypoint_id(params)
+    if entrypoint_id and not include_descendants:
+        normalized_entrypoint_id = _normalize_user_id(entrypoint_id)
+        target_session_graph_id = cache.root_for_entrypoint(normalized_entrypoint_id)
+        cached_paths = cache.paths_for_session_graph(target_session_graph_id)
+        filename_match = any(
+            normalized_entrypoint_id in Path(path).stem.lower()
+            for path in cached_paths
+        )
+        if target_session_graph_id == normalized_entrypoint_id or filename_match:
+            try:
+                located = locate_session_files(
+                    session_id=_parse_user_id(entrypoint_id),
+                    current_dir=current_dir,
+                    global_scope=True,
+                    agent_vendor=params.get("agent_vendor"),
+                    include_descendants=False,
+                )
+            except ValueError:
+                located = []
+            if located:
+                return _build_store_targeted([str(path) for path in located], cache)
+
     if entrypoint_id and cache.path_to_session_graph:
         normalized_entrypoint_id = _normalize_user_id(entrypoint_id)
         target_session_graph_id = cache.root_for_entrypoint(normalized_entrypoint_id)
@@ -543,6 +566,7 @@ def resolve_store(
                 current_dir=current_dir,
                 global_scope=True,
                 agent_vendor=params.get("agent_vendor"),
+                include_descendants=include_descendants,
             )
         except ValueError:
             located = []
