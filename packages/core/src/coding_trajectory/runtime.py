@@ -50,7 +50,7 @@ def _entrypoint_ids_from_params(params: dict[str, Any]) -> list[str]:
 def _entrypoint_ids(requests: list[dict[str, Any]]) -> list[str]:
     ids: list[str] = []
     for request in requests:
-        if request.get("method") in {"living.events", "project.list"}:
+        if request.get("method") in {"living.events", "living.sessions", "project.list"}:
             continue
         params = request.get("params") or {}
         if not isinstance(params, dict):
@@ -239,6 +239,16 @@ class ServiceRuntime:
                 serve_living_events(
                     validated_params,
                     cache=self.cache,
+                    current_dir=self.current_dir,
+                    global_scope=self.global_scope,
+                )
+            )
+        if method == "living.sessions":
+            from coding_trajectory.living_sessions import serve_living_sessions
+
+            return contract.validate_response(
+                serve_living_sessions(
+                    validated_params,
                     current_dir=self.current_dir,
                     global_scope=self.global_scope,
                 )

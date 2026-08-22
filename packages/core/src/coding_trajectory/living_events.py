@@ -878,8 +878,16 @@ def _without_nones(value: dict[str, Any]) -> dict[str, Any]:
 class LivingEventsStore:
     """Versioned SQLite resource store with signed snapshot/delta cursors."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        schema_version: str = SCHEMA_VERSION,
+        store_format_version: str = _STORE_FORMAT_VERSION,
+    ) -> None:
         self.path = path.expanduser().resolve()
+        self.schema_version = schema_version
+        self.store_format_version = store_format_version
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -998,15 +1006,15 @@ class LivingEventsStore:
                     );
                 """
             )
-            self._set_default(connection, "store_format_version", _STORE_FORMAT_VERSION)
+            self._set_default(connection, "store_format_version", self.store_format_version)
             self._set_default(connection, "revision", "0")
             self._set_default(connection, "pruned_through", "0")
             self._set_default(connection, "cursor_secret", secrets.token_hex(32))
             actual = self._metadata(connection, "store_format_version")
-            if actual != _STORE_FORMAT_VERSION:
+            if actual != self.store_format_version:
                 raise ValueError(
                     "living-events store format is incompatible: "
-                    f"expected {_STORE_FORMAT_VERSION}, found {actual}"
+                    f"expected {self.store_format_version}, found {actual}"
                 )
 
     def publish(
@@ -1350,7 +1358,7 @@ class LivingEventsStore:
             )
         next_cursor = changes[-1]["cursor"] if has_more and changes else None
         return {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": self.schema_version,
             "mode": mode,
             "page_kind": "snapshot",
             "through": watermark,
@@ -1416,7 +1424,7 @@ class LivingEventsStore:
             )
         next_cursor = changes[-1]["cursor"] if has_more and changes else None
         return {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": self.schema_version,
             "mode": mode,
             "page_kind": "delta",
             "through": watermark,
@@ -1447,7 +1455,7 @@ class LivingEventsStore:
             },
         )
         return {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": self.schema_version,
             "mode": mode,
             "page_kind": "delta",
             "through": watermark,
@@ -1661,7 +1669,7 @@ class LivingEventsStore:
     def _backfill_path_columns(connection: sqlite3.Connection, table: str) -> None:
         rows = connection.execute(
             f"""
-            SELECT rowid, path_json FROM {table}
+            SELECT rowid AS source_rowid, path_json FROM {table}
              WHERE session_id IS NULL
                AND turn_id IS NULL
                AND item_id IS NULL
@@ -1679,7 +1687,7 @@ class LivingEventsStore:
                     path.get("item_id"),
                     path.get("source_session_id"),
                     path.get("target_session_id"),
-                    row["rowid"],
+                    row["source_rowid"],
                 )
             )
         if updates:

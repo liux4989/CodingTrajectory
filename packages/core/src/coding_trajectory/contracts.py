@@ -146,6 +146,14 @@ class LivingEventsRequest(RequestModel):
     limit: int = Field(default=50, ge=1, le=200)
 
 
+class LivingSessionsRequest(RequestModel):
+    """Frozen ``ct.living_sessions.v1`` global inventory request contract."""
+
+    after: str | None = Field(default=None, max_length=4096)
+    through: str | None = Field(default=None, max_length=4096)
+    limit: int = Field(default=50, ge=1, le=200)
+
+
 class ProjectSummary(ContractModel):
     path: str | None = None
     vendors: list[str] = Field(default_factory=list)
@@ -440,6 +448,46 @@ class LivingEventsResponse(ContractModel):
     issues: list[LivingProtocolIssue] = Field(default_factory=list)
 
 
+class LivingSessionReadiness(ContractModel):
+    status: Literal["ready", "partial", "error", "deleted", "unknown"]
+    committed_offset: int | None = Field(default=None, ge=0)
+    size: int | None = Field(default=None, ge=0)
+    mtime_ns: int | None = Field(default=None, ge=0)
+
+
+class LivingSessionInventoryResource(ContractModel):
+    session_id: str
+    root_session_id: str
+    vendor: str
+    cwd: str | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    latest_activity_at: datetime | None = None
+    state: Literal["active_turn", "completed_turn", "unknown"]
+    source_readiness: LivingSessionReadiness
+
+
+class LivingSessionsChange(ContractModel):
+    cursor: str
+    revision: int = Field(ge=0)
+    operation: Literal["upsert", "remove", "reset"]
+    resource_kind: Literal["session"]
+    path: LivingResourcePath
+    resource: LivingSessionInventoryResource | None = None
+    reason: str | None = None
+
+
+class LivingSessionsResponse(ContractModel):
+    schema_version: Literal["ct.living_sessions.v1"]
+    mode: Literal["view"]
+    page_kind: Literal["snapshot", "delta"]
+    through: str
+    next_cursor: str | None = None
+    has_more: bool
+    changes: list[LivingSessionsChange] = Field(default_factory=list)
+    issues: list[LivingProtocolIssue] = Field(default_factory=list)
+
+
 class CliSessionGraphSummary(ContractModel):
     graph_id: str | None = None
     id: str
@@ -633,6 +681,12 @@ SERVICE_CONTRACTS = {
             1,
             LivingEventsRequest,
             LivingEventsResponse,
+        ),
+        ServiceContract(
+            "living.sessions",
+            1,
+            LivingSessionsRequest,
+            LivingSessionsResponse,
         ),
     )
 }
