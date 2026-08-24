@@ -43,15 +43,24 @@ def main(argv: list[str] | None = None) -> int:
 def serve(config: CodeTimeWebConfig) -> int:
     handler = _handler_for(config.static_dir)
     ThreadingHTTPServer.allow_reuse_address = True
-    try:
-        server = ThreadingHTTPServer((config.host, config.port), handler)
-    except OSError as exc:
+    server: ThreadingHTTPServer | None = None
+    last_exc: OSError | None = None
+    for port in range(config.port, config.port + 20):
+        try:
+            server = ThreadingHTTPServer((config.host, port), handler)
+            break
+        except OSError as exc:
+            last_exc = exc
+    if server is None:
         print(
-            f"error: could not bind to {config.host}:{config.port} ({exc}); "
-            "stop the other process or use --port to pick a different port",
+            f"error: could not bind to any port on {config.host} in "
+            f"{config.port}-{config.port + 19} ({last_exc}); "
+            "stop the other processes or use --port to pick a different range",
             file=sys.stderr,
         )
         return 1
+    if server.server_port != config.port:
+        print(f"port {config.port} in use; using {server.server_port} instead")
     url = f"http://{config.host}:{server.server_port}"
     print(f"Code Time web running at {url}")
     if config.open_browser:
