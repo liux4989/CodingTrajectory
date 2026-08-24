@@ -71,7 +71,8 @@ consumers. No new plugin is introduced.
 session-api.json (contract)        — gains versioned estimate.* methods
 coding_trajectory/estimation/      — new backend module
   extractor.py   — turn → task candidate
-  estimator.py   — LLM prediction, retrieval-augmented
+  estimator.py   — one Codex app-server turn per prediction,
+                   retrieval-augmented prompt
   compare.py     — prediction vs actual, realized complexity
   store.py       — SQLite derived store
 packages/plugins/code_time/        — existing frontend surface, renders
@@ -82,10 +83,11 @@ Boundary rules, consistent with the PRD:
 
 - The canonical layer is untouched. Turn timestamps, user messages, usage, and
   runtime are already canonical facts.
-- The estimator is the first non-deterministic backend component. It only
-  *proposes* `{complexity, minutes}`. Comparison, realized complexity, and
-  calibration statistics are deterministic CT-owned computations over canonical
-  timestamps and evaluation scores.
+- The estimator is the first non-deterministic backend component, delegated
+  to Codex app-server. It only *proposes* `{complexity, minutes}`.
+  Comparison, realized complexity, and calibration statistics are
+  deterministic CT-owned computations over canonical timestamps and
+  evaluation scores.
 - The prediction store is a consumer-owned derived artifact. It is rebuildable
   from immutable logs plus recorded estimator versions, and carries no
   canonical compatibility burden. It is global-scope, since calibration
@@ -113,14 +115,27 @@ data from first deployment rather than after an instrumentation period.
 
 ## Estimator
 
-The estimator is an LLM call with retrieval augmentation:
+The estimator backend is Codex app-server directly, reusing the existing
+client (`codex_app_server.py`: ephemeral thread, read-only sandbox, fixed
+model and effort, strict output schema) — the same pattern the evaluation
+layer uses for its semantic judge. One stateless turn produces one
+prediction; the original task thread is never resumed for estimation.
+
+CT-owned code stays thin: extraction, retrieval, prompt assembly, schema
+validation, and storage. No custom LLM client, retry, or concurrency
+machinery is introduced. The backend sits behind an interface so a future
+estimator provider does not change the `estimate.*` contract.
+
+Per prediction:
 
 1. Retrieve the k most similar past task candidates (same project and vendor
    preferred, similar task text) **with their actual execution durations and
-   realized outcomes**.
-2. Predict `{predicted_complexity, predicted_minutes}` from the task text,
-   prefix context, and retrieved base rates.
-3. Emit one prediction record.
+   realized outcomes**. Retrieval is deterministic and CT-owned; the app
+   server receives only the assembled prompt.
+2. Run one app-server turn with a strict output schema producing
+   `{predicted_complexity, predicted_minutes}` from the task text, prefix
+   context, and retrieved base rates.
+3. Validate the schema response and emit one prediction record.
 
 The retrieval step is mandatory. Without observed base rates the estimator
 inherits the flat-prior failure mode documented in the research, and the
@@ -159,7 +174,7 @@ One record per prediction:
 | `project_name`, `agent_vendor`, model identity | canonical session |
 | `predicted_complexity`, `predicted_minutes` | estimator |
 | `evidence_turn_ids` (retrieval base rates used) | estimator |
-| `estimator_model`, `estimator_version`, prompt version | estimator config |
+| `estimator_model`, `estimator_version`, prompt version | app-server turn config |
 | `actual_execution_seconds` | canonical runtime, joined post-session |
 | `realized_complexity`, evaluation score | compare + evaluation layer |
 | `created_at`, `compared_at` | CT |
