@@ -460,6 +460,11 @@ def _project_graph(
             "root_session_id": root_id,
             "vendor": session.vendor.value,
             "status": session.status.value,
+            "latest_turn_status": (
+                session.latest_turn_status.value
+                if session.latest_turn_status is not None
+                else None
+            ),
             "agent_name": session.agent_name,
             "cwd": session.cwd,
             "started_at": format_datetime(session.started_at),

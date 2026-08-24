@@ -14,7 +14,7 @@ The same five records report USD totals 0.00385740, 0.00253140, 0.00144436, 0.00
 
 ## Lifecycle
 
-The user message starts one turn. Four assistant `bash` calls are paired with four successful `toolResult` records, followed by a final assistant response. The visible timestamps span 91 seconds after whole-second rounding.
+The user message starts one turn. Four assistant `bash` calls are paired with four successful `toolResult` records, followed by a final assistant response with `stopReason: stop`. The session itself is `not_living`: session status now means whether a current turn is running, rather than whether an earlier turn completed. The visible timestamps span 91 seconds after whole-second rounding.
 
 ## Model throughput
 

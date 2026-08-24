@@ -18,7 +18,6 @@ from coding_trajectory.ingestion.common import (
 from coding_trajectory.ingestion.models import (
     PiExtensions,
     Session,
-    SessionStatus,
     ToolStatus,
     Vendor,
     VendorExtensions,
@@ -286,7 +285,6 @@ class PiAdapter(BaseAdapter):
             turns=turns,
             context_usage=context_usage,
             extensions=extensions,
-            status=SessionStatus.COMPLETED,
             cwd=(
                 compact_session_cwd(
                     vendor=Vendor.PI,
@@ -551,4 +549,3 @@ class PiAdapter(BaseAdapter):
             except ValueError:
                 return uuid5(NAMESPACE_URL, f"pi:{source}:{raw_id}")
         return uuid5(NAMESPACE_URL, f"pi:{source}")
-

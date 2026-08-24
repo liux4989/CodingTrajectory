@@ -147,7 +147,7 @@ class LivingEventsRequest(RequestModel):
 
 
 class LivingSessionsRequest(RequestModel):
-    """Frozen ``ct.living_sessions.v1`` global inventory request contract."""
+    """``ct.living_sessions.v2`` global inventory request contract."""
 
     after: str | None = Field(default=None, max_length=4096)
     through: str | None = Field(default=None, max_length=4096)
@@ -341,6 +341,7 @@ class LivingSessionResource(ContractModel):
     root_session_id: str
     vendor: str
     status: str
+    latest_turn_status: str | None = None
     agent_name: str | None = None
     cwd: str | None = None
     started_at: datetime
@@ -463,7 +464,8 @@ class LivingSessionInventoryResource(ContractModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     latest_activity_at: datetime | None = None
-    state: Literal["active_turn", "completed_turn", "unknown"]
+    state: Literal["living", "not_living"]
+    latest_turn_status: Literal["running", "interrupted", "completed", "incomplete"] | None = None
     source_readiness: LivingSessionReadiness
 
 
@@ -478,7 +480,7 @@ class LivingSessionsChange(ContractModel):
 
 
 class LivingSessionsResponse(ContractModel):
-    schema_version: Literal["ct.living_sessions.v1"]
+    schema_version: Literal["ct.living_sessions.v2"]
     mode: Literal["view"]
     page_kind: Literal["snapshot", "delta"]
     through: str
@@ -684,7 +686,7 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "living.sessions",
-            1,
+            2,
             LivingSessionsRequest,
             LivingSessionsResponse,
         ),

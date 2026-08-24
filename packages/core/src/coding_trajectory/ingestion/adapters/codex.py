@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -19,6 +18,7 @@ from coding_trajectory.ingestion.common import (
     extract_exit_code,
     infer_tool_success,
     parse_iso_timestamp,
+    source_is_living,
 )
 from coding_trajectory.ingestion.models import (
     ContextSourceObservation,
@@ -280,15 +280,6 @@ def _codex_multi_agent_input(
     )
 
 
-def _is_source_active(source: Path | None, *, active_seconds: int = 300) -> bool:
-    if source is None:
-        return False
-    try:
-        return time.time() - source.stat().st_mtime <= active_seconds
-    except OSError:
-        return False
-
-
 def _session_forked_from_id(records: Iterable[dict]) -> str | None:
     for record in records:
         if record.get("type") != "session_meta":
@@ -398,11 +389,13 @@ def _cut_inherited_records(
 
 
 def _derive_session_status(turns: list) -> SessionStatus:
-    if any(turn.status == TurnStatus.RUNNING for turn in turns):
-        return SessionStatus.ACTIVE
-    if turns and turns[-1].status == TurnStatus.INCOMPLETE:
-        return SessionStatus.INCOMPLETE
-    return SessionStatus.COMPLETED
+    """Map a thread's current turn state to reversible session liveness."""
+
+    return (
+        SessionStatus.LIVING
+        if any(turn.status == TurnStatus.RUNNING for turn in turns)
+        else SessionStatus.NOT_LIVING
+    )
 
 
 def _codex_prompt_block_name(text: str, index: int) -> str:
@@ -668,9 +661,11 @@ class CodexAdapter(BaseAdapter):
             session_id=state.session_id,
             vendor=Vendor.CODEX_CLI,
             records=transcript,
-            active_status=TurnStatus.RUNNING
-            if _is_source_active(source)
-            else TurnStatus.INCOMPLETE,
+            active_status=(
+                TurnStatus.RUNNING
+                if source_is_living(source)
+                else TurnStatus.INCOMPLETE
+            ),
             default_previous_turn_status=TurnStatus.INTERRUPTED,
             # Codex's authoritative turn delimiter is the task_started/task_complete
             # lifecycle boundary; user_message is an in-turn item. Prefer lifecycle

@@ -1105,4 +1105,3 @@ class ClaudeCodeAdapter(BaseAdapter):
                     },
                 )
             )
-

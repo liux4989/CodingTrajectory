@@ -4,10 +4,32 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, BinaryIO, Mapping
 from uuid import NAMESPACE_URL, UUID, uuid5
+
+
+LIVING_ACTIVITY_SECONDS = 300
+
+
+def source_is_living(
+    source: Path | None, *, active_seconds: int = LIVING_ACTIVITY_SECONDS
+) -> bool:
+    """Return whether an agent transcript has received a recent append.
+
+    This is freshness evidence for an unclosed turn, not the session's public
+    liveness state or a task-success signal.
+    """
+
+    if source is None:
+        return False
+    try:
+        return time.time() - source.stat().st_mtime <= active_seconds
+    except OSError:
+        return False
 
 
 def canonical_json(value: Any) -> str:

@@ -517,14 +517,14 @@ class TranscriptProjector:
         vendor_turn_id = _non_empty_str(record.data.get("turn_id_raw"))
         # Skip inherited/orphan turn-start markers whose completion lives in
         # another file (forked continuation windows carry these from the fork
-        # source). Only open a turn when it completes in this file. A live
-        # in-flight turn whose task_complete has not been written yet is also
-        # skipped, mirroring the prior user_message-based behavior where the
-        # in-flight turn was not reconstructed until it terminated.
+        # source). A fresh source can also contain its own currently running
+        # turn; preserve that unmatched start so a resumed thread becomes
+        # living before its next terminal event arrives.
         if (
             self._completable_turn_ids is not None
             and vendor_turn_id is not None
             and vendor_turn_id not in self._completable_turn_ids
+            and self.active_status != TurnStatus.RUNNING
         ):
             if self._turn_state.current_turn is not None:
                 self._append_turn_event_id(record.record_id)

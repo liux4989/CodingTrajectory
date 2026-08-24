@@ -1,4 +1,4 @@
-"""Compact, request-driven ``ct.living_sessions.v1`` session inventory.
+"""Compact, request-driven ``ct.living_sessions.v2`` session inventory.
 
 This projection is intentionally narrower than ``living.events``: it persists
 only session metadata and source checkpoints, never transcript, prompt,
@@ -15,12 +15,12 @@ from typing import Any
 
 from coding_trajectory.discovery import discover_source_candidates, discover_store_from_files
 from coding_trajectory.ingestion.common import format_datetime
-from coding_trajectory.ingestion.models import Session, SessionGraph, TurnStatus
+from coding_trajectory.ingestion.models import Session, SessionGraph, SessionStatus
 from coding_trajectory.living_events import LivingEventsStore, ProjectedResource
 from coding_trajectory.living_sources import LivingSourceSnapshot, inventory_source_changes
 
-SCHEMA_VERSION = "ct.living_sessions.v1"
-_STORE_FORMAT_VERSION = "living-sessions-store-v1"
+SCHEMA_VERSION = "ct.living_sessions.v2"
+_STORE_FORMAT_VERSION = "living-sessions-store-v2"
 
 
 def default_database_path(*, current_dir: Path, global_scope: bool) -> Path:
@@ -30,7 +30,7 @@ def default_database_path(*, current_dir: Path, global_scope: bool) -> Path:
     scope = "global" if global_scope else hashlib.sha256(
         str(current_dir.resolve()).encode("utf-8")
     ).hexdigest()[:16]
-    return Path.home() / ".coding-trajectory" / "living-sessions" / f"{scope}.sqlite3"
+    return Path.home() / ".coding-trajectory" / "living-sessions" / f"{scope}-v2.sqlite3"
 
 
 def serve_living_sessions(
@@ -177,16 +177,21 @@ def _project_graph(
 
 def _session_payload(session: Session, *, root_id: str, snapshot: LivingSourceSnapshot | None) -> dict[str, Any]:
     latest = max((turn.ended_at or turn.started_at for turn in session.turns), default=session.ended_at or session.started_at)
-    state = "unknown"
-    if session.turns:
-        state = "active_turn" if session.turns[-1].status == TurnStatus.RUNNING else "completed_turn"
-        if session.turns[-1].status in {TurnStatus.INCOMPLETE, TurnStatus.INTERRUPTED}:
-            state = "unknown"
+    state = (
+        "living"
+        if session.status == SessionStatus.LIVING
+        else "not_living"
+    )
     payload: dict[str, Any] = {
         "session_id": str(session.session_id), "root_session_id": root_id,
         "vendor": session.vendor.value, "cwd": session.cwd,
         "started_at": format_datetime(session.started_at), "ended_at": format_datetime(session.ended_at),
         "latest_activity_at": format_datetime(latest), "state": state,
+        "latest_turn_status": (
+            session.latest_turn_status.value
+            if session.latest_turn_status is not None
+            else None
+        ),
         "source_readiness": _readiness(snapshot),
     }
     return {key: value for key, value in payload.items() if value is not None}

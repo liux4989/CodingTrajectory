@@ -94,6 +94,7 @@ def build_graph_overview(
                     {
                         "vendor": session.vendor.value,
                         "status": session.status,
+                        "latest_turn_status": session.latest_turn_status,
                         "agent_name": session.agent_name,
                         "title": session_title(session),
                         "cwd": session.cwd,
