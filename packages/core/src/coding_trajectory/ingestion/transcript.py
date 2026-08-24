@@ -52,7 +52,7 @@ def _non_empty_str(value: Any) -> str | None:
 
 
 TranscriptRole = Literal["user", "assistant", "tool", "runtime"]
-TranscriptFidelity = Literal["observed", "synthetic", "lossy"]
+TranscriptFidelity = Literal["observed", "synthetic", "lossy", "derived"]
 TranscriptItemKind = Literal[
     "agent_message",
     "tool_call",

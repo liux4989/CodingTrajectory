@@ -164,8 +164,10 @@ def _merge_tool_item(
     tasks: dict[str, dict[str, object]],
     item: Item,
 ) -> None:
-    tool_input = item.input if isinstance(item.input, dict) else {}  # type: ignore[attr-defined]
-    tool_output = item.output if isinstance(item.output, dict) else {}  # type: ignore[attr-defined]
+    item_input = getattr(item, "input", None)
+    tool_input = item_input if isinstance(item_input, dict) else {}
+    item_output = getattr(item, "output", None)
+    tool_output = item_output if isinstance(item_output, dict) else {}
     tool_name = getattr(item, "tool_name", None)
 
     if tool_name == "Agent":

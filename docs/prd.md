@@ -34,6 +34,13 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - Executable verification and final aggregation remain deterministic CT-owned operations outside the evaluator agent.
 - Evaluation artifacts record evidence selection, expansion, evaluator versions, and source fingerprints so reduced context does not weaken provenance.
 
+# Activity Projection Layer
+- Activity projections have three separate layers: immutable vendor evidence, canonical item lifecycle reconstruction, and compact presentation. A presentation summary never replaces its underlying item evidence.
+- The projector owns an active activity cell and flushes it at every hard boundary. Consecutive successful read/list/search operations become one `Explore` cell; consecutive successful command executions become one `RunCommand` cell; web activity, mutations, external tools, failures, assistant messages, and unresolved item ownership remain distinct. Every cell keeps its item IDs for drill-down.
+- A compact command count requires canonical evidence that every command is agent-produced and succeeded. Codex native `CommandExecution` lifecycle events provide that evidence directly. Older Codex JSONL can add a derived-static command only for an unconditional literal `await tools.exec_command({...})`; its outcome stays `unknown` unless an exact child completion proves success, so it never joins a `Ran N commands` cell merely because the outer `exec` wrapper completed.
+- The same cell state machine applies after every vendor adapter emits canonical lifecycle facts. Vendor-specific parsing, static-fallback provenance, and raw wrapper preservation remain adapter-local.
+- The Codex-reference mapping, historical fallback boundary, and cross-agent contract are recorded in [`docs/codex-activity-reconstruction.md`](codex-activity-reconstruction.md).
+
 # Infrastructural layer
 - Discover : discocer all agent logs
 

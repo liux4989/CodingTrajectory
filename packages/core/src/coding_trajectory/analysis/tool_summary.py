@@ -13,6 +13,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     EDIT_FILE,
     LIST_FILES,
     READ_FILE,
+    RUN_COMMAND,
     SEARCH_TEXT,
     SHELL_TOOL_NAMES,
     SUBAGENT_TASK,
@@ -25,6 +26,51 @@ from coding_trajectory.analysis.tool_summary_shared import (
     short_path,
 )
 from coding_trajectory.ingestion.models import Item, ToolStatus
+
+
+def _activity_metadata(item: Item) -> dict[str, str | bool]:
+    """Return outcome-bearing activity facts retained into compact sessions.
+
+    Adapters may supply a stricter provenance record.  In its absence a
+    canonical command/tool item is agent-produced, and a completed/failed
+    lifecycle is the provider's direct completion evidence.  A static Codex
+    wrapper deliberately supplies ``outcome=unknown`` and therefore wins over
+    the generic lifecycle fallback.
+    """
+
+    vendor_data = getattr(item, "vendor_data", None)
+    raw_activity = (
+        vendor_data.get("activity")
+        if isinstance(vendor_data, dict)
+        and isinstance(vendor_data.get("activity"), dict)
+        else {}
+    )
+    metadata: dict[str, str | bool] = {}
+    if raw_activity.get("hidden_from_overview") is True:
+        metadata["hidden"] = True
+    if item.kind == "command_execution":
+        metadata["kind"] = "command"
+    source = raw_activity.get("source")
+    metadata["source"] = source if isinstance(source, str) else "agent"
+
+    outcome = raw_activity.get("outcome")
+    if outcome not in {"succeeded", "failed", "unknown"}:
+        status = getattr(item, "status", None)
+        if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
+            outcome = "failed"
+        elif status in {ToolStatus.COMPLETED, ToolStatus.COMPLETED.value, "completed"}:
+            outcome = "succeeded"
+        else:
+            outcome = "unknown"
+    metadata["outcome"] = outcome
+
+    fidelity = raw_activity.get("fidelity")
+    if isinstance(fidelity, str):
+        metadata["fidelity"] = fidelity
+    wrapper_status = raw_activity.get("wrapper_status")
+    if isinstance(wrapper_status, str):
+        metadata["wrapper_status"] = wrapper_status
+    return metadata
 
 
 def summarize_tool_call(item: Item) -> dict[str, Any] | None:
@@ -54,7 +100,7 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         result["optimization_profile"] = optimization_profile
     if description:
         result["description"] = description
-    if concept == "RunCommand":
+    if item.kind == "command_execution" or concept == RUN_COMMAND:
         family, command = classify_command_family(tool_input)
         result["command_family"] = family
         result["command"] = command
@@ -63,6 +109,19 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
     status = getattr(item, "status", None)
     if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
         result["status"] = "failed"
+    activity = _activity_metadata(item)
+    if activity.get("hidden") is True:
+        result["activity_hidden"] = True
+    if isinstance(activity.get("kind"), str):
+        result["activity_kind"] = activity["kind"]
+    if isinstance(activity.get("source"), str):
+        result["activity_source"] = activity["source"]
+    if isinstance(activity.get("outcome"), str):
+        result["activity_outcome"] = activity["outcome"]
+    if isinstance(activity.get("fidelity"), str):
+        result["activity_fidelity"] = activity["fidelity"]
+    if isinstance(activity.get("wrapper_status"), str):
+        result["activity_wrapper_status"] = activity["wrapper_status"]
     return result
 
 

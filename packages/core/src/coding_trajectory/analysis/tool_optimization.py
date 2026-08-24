@@ -75,19 +75,24 @@ TOOL_OPTIMIZATION_PROFILES: tuple[ToolOptimizationProfile, ...] = (
     ),
     ToolOptimizationProfile(
         concept=WEB_FETCH,
-        group_repeated=True,
         detail_key="url",
         detail_list_key="urls",
     ),
     ToolOptimizationProfile(
         concept=WEB_SEARCH,
-        group_repeated=True,
         detail_key="query",
         detail_list_key="queries",
     ),
     ToolOptimizationProfile(concept=EDIT_FILE, detail_key="path"),
     ToolOptimizationProfile(concept=WRITE_FILE, detail_key="path"),
     ToolOptimizationProfile(concept=RUN_COMMAND, detail_key="cmd"),
+    ToolOptimizationProfile(
+        concept=RUN_COMMAND,
+        profile="activity:command",
+        group_repeated=True,
+        detail_key="cmd",
+        detail_list_key="commands",
+    ),
     ToolOptimizationProfile(
         concept=RUN_COMMAND, profile="shell:command", detail_key="cmd"
     ),
