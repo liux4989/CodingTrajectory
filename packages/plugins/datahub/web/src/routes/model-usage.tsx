@@ -22,6 +22,8 @@ import { SessionLink, shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
 import { LoadingShell } from "@/components/loading-shell";
 import { UsageTimelineChart } from "@/components/charts";
+import { ApexChart, escapeHtml, tooltipRow, useApexTheme } from "@/components/ui/apex-chart";
+import type { ApexOptions } from "apexcharts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -296,8 +298,8 @@ function OverviewView({ data }: { data: ModelUsagePayload }) {
   return (
     <>
       <SummaryCards data={data} view="overview" />
-      <OverviewModelTable data={data} />
-      <OverviewSessionTable data={data} />
+      <ModelMixChart data={data} />
+      <SessionScatterChart data={data} />
     </>
   );
 }
@@ -374,7 +376,7 @@ function TokensView({
       summary={
         <>
           <SummaryCards data={data} view="tokens" />
-          <TokenBucketCards data={data} />
+          <TokenMixChart data={data} />
         </>
       }
       activeTab={activeTab}
@@ -483,115 +485,293 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
   );
 }
 
-function TokenBucketCards({ data }: { data: ModelUsagePayload }) {
+// Composition buckets only: processed_tokens is the sum shown as the donut
+// center total, not a slice.
+const TOKEN_MIX_BUCKETS = TOKEN_BUCKET_DEFS.filter(({ key }) => key !== "processed_tokens");
+
+/**
+ * Token bucket composition donut replacing the five-card bucket bento. The
+ * center shows total processed tokens; slice tooltips carry the session/turn
+ * distribution stats the cards used to show.
+ */
+function TokenMixChart({ data }: { data: ModelUsagePayload }) {
+  const theme = useApexTheme();
+  const buckets = React.useMemo(
+    () =>
+      TOKEN_MIX_BUCKETS.map(({ key, label }) => ({
+        key,
+        label,
+        value: sum(data.sessions.map((session) => usageValue(session.usage, key))),
+        stats: data.summary.token_stats.buckets[key],
+      })),
+    [data.sessions, data.summary.token_stats.buckets],
+  );
+
+  const options = React.useMemo<ApexOptions>(
+    () => ({
+      labels: buckets.map((bucket) => bucket.label),
+      stroke: { width: 2, colors: [theme.card] },
+      dataLabels: { enabled: false },
+      legend: { show: true, position: "right", fontSize: "12px" },
+      plotOptions: {
+        pie: {
+          donut: {
+            size: "66%",
+            labels: {
+              show: true,
+              name: { show: true, color: theme.axis, fontSize: "0.7rem" },
+              value: {
+                show: true,
+                fontSize: "1.5rem",
+                fontFamily: theme.bodyFont,
+                fontWeight: 800,
+                color: theme.foreground,
+                formatter: () => formatCompactNumber(data.summary.processed_tokens),
+              },
+              total: {
+                show: true,
+                showAlways: true,
+                label: "Processed tokens",
+                fontSize: "0.7rem",
+                color: theme.axis,
+                formatter: () => formatCompactNumber(data.summary.processed_tokens),
+              },
+            },
+          },
+        },
+      },
+      tooltip: {
+        custom: ({ seriesIndex }) => {
+          const bucket = buckets[seriesIndex];
+          if (!bucket) return "";
+          const rows = [
+            tooltipRow("Total", formatCompactNumber(bucket.value), theme.axis),
+            tooltipRow("Session", distributionDetail(bucket.stats.session), theme.axis),
+            tooltipRow("Turn", distributionDetail(bucket.stats.turn), theme.axis),
+          ].join("");
+          return `<div style="padding:10px 12px;min-width:220px"><div style="font-weight:700;margin-bottom:6px">${bucket.label} tokens</div>${rows}</div>`;
+        },
+      },
+    }),
+    [buckets, theme, data.summary.processed_tokens],
+  );
+
   return (
-    <section className="stat-grid-5 min-w-0">
-      {TOKEN_BUCKET_DEFS.map(({ key, label }) => {
-        const sessionValues = data.sessions.map((session) => usageValue(session.usage, key));
-        const bucketStats = data.summary.token_stats.buckets[key];
-        return (
-          <MetricCard
-            key={key}
-            label={`${label} Tokens`}
-            value={formatCompactNumber(sum(sessionValues))}
-            detail={`session ${distributionDetail(bucketStats.session)} · turn ${distributionDetail(bucketStats.turn)}`}
-          />
-        );
-      })}
-    </section>
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="title-card">Token Bucket Mix</CardTitle>
+        <CardDescription>Composition of observed token buckets across the selected scope.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ApexChart
+          type="donut"
+          series={buckets.map((bucket) => bucket.value)}
+          options={options}
+          height={260}
+          ariaLabel="Token bucket composition"
+        />
+      </CardContent>
+    </Card>
   );
 }
 
-const overviewModelColumns: ColumnDef<ModelUsageModel>[] = [
-  {
-    accessorKey: "model_key",
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Model" />,
-    cell: ({ getValue }) => <span className="font-medium">{getValue<string>()}</span>,
-  },
-  {
-    accessorKey: "sessions",
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Sessions" />,
-    cell: ({ getValue }) => getValue<number>().toLocaleString(),
-  },
-  {
-    accessorKey: "turns",
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Turns" />,
-    cell: ({ getValue }) => getValue<number>().toLocaleString(),
-  },
-  {
-    id: "avg_turn_tokens",
-    accessorFn: (row) => average(totalTokens(row.usage), row.turns),
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Turn Tokens" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
-  },
-  {
-    accessorKey: "avg_turn_elapsed_seconds",
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Turn Time" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatDuration(getValue<number>())}</RightCell>,
-  },
-  {
-    id: "tokens",
-    accessorFn: (row) => totalTokens(row.usage),
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Processed Tokens" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
-  },
-  {
-    id: "token_confidence",
-    accessorFn: (row) => row.usage.total_confidence,
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Token Total" />,
-    cell: ({ getValue }) => <TokenConfidenceBadge confidence={getValue<string>()} />,
-  },
-  {
-    accessorKey: "estimated_cost_usd",
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Total Cost" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
-  },
-  {
-    id: "pricing",
-    accessorFn: (row) => row.pricing.confidence,
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Pricing" />,
-    cell: ({ getValue }) => <PricingBadge confidence={getValue<string>()} />,
-  },
-];
-
-function OverviewModelTable({ data }: { data: ModelUsagePayload }) {
-  const [sorting, setSorting] = React.useState<SortingState>([]);
-  const rows = React.useMemo(
-    () => [...data.models].sort((left, right) => totalTokens(right.usage) - totalTokens(left.usage)),
+/**
+ * Treemap of model mix by processed tokens. Tile size encodes token volume;
+ * clicking a tile applies the model filter. Tooltips carry the volume, time,
+ * and cost context the former table showed.
+ */
+function ModelMixChart({ data }: { data: ModelUsagePayload }) {
+  const theme = useApexTheme();
+  const navigate = useNavigate({ from: "/model-usage" });
+  const models = React.useMemo(
+    () =>
+      [...data.models]
+        .filter((model) => totalTokens(model.usage) > 0)
+        .sort((left, right) => totalTokens(right.usage) - totalTokens(left.usage))
+        .slice(0, 12),
     [data.models],
   );
-  const table = useReactTable({
-    data: rows,
-    columns: overviewModelColumns,
-    state: { sorting },
-    onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
+
+  const options = React.useMemo<ApexOptions>(
+    () => ({
+      chart: {
+        events: {
+          dataPointSelection: (_event, _chartContext, config) => {
+            const model = config ? models[config.dataPointIndex] : undefined;
+            if (model) {
+              void navigate({
+                search: (current) => ({ ...current, modelKey: model.model_key }),
+              });
+            }
+          },
+        },
+      },
+      legend: { show: false },
+      plotOptions: { treemap: { distributed: true, enableShades: false, borderRadius: 4 } },
+      dataLabels: {
+        enabled: true,
+        style: { fontSize: "12px", fontFamily: theme.bodyFont },
+        formatter: (text, op) => [String(text), formatCompactNumber(Number(op?.value ?? 0))],
+      },
+      tooltip: {
+        custom: ({ dataPointIndex }) => {
+          const model = models[dataPointIndex];
+          if (!model) return "";
+          const rows = [
+            tooltipRow("Sessions", model.sessions.toLocaleString(), theme.axis),
+            tooltipRow("Turns", model.turns.toLocaleString(), theme.axis),
+            tooltipRow("Avg turn tokens", formatCompactNumber(average(totalTokens(model.usage), model.turns)), theme.axis),
+            tooltipRow("Avg turn time", formatDuration(model.avg_turn_elapsed_seconds), theme.axis),
+            tooltipRow("Tokens", formatCompactNumber(totalTokens(model.usage)), theme.axis),
+            tooltipRow("Cost", formatCostUsd(model.estimated_cost_usd), theme.axis),
+            tooltipRow("Pricing", model.pricing.confidence === "estimated" ? "estimated" : "missing price", theme.axis),
+          ].join("");
+          return `<div style="padding:10px 12px;min-width:230px"><div style="font-weight:700;margin-bottom:6px">${escapeHtml(model.model_key)}</div>${rows}</div>`;
+        },
+      },
+    }),
+    [models, theme, navigate],
+  );
 
   return (
     <Card className="min-w-0">
       <CardHeader>
         <CardTitle className="title-card">Model Mix Overview</CardTitle>
-        <CardDescription>General model comparison across volume, allocated time, and estimated cost.</CardDescription>
+        <CardDescription>Model share of processed tokens. Select a tile to filter by that model.</CardDescription>
       </CardHeader>
       <CardContent>
-        <DataTable
-          table={table}
-          columnCount={overviewModelColumns.length}
-          emptyMessage="No model usage found for this scope."
-          emptyHint="Try selecting a different project or model filter."
-          showColumnToggle
-          showDensityToggle
-          showExport
-          exportFilename="model-usage-overview-models"
-        />
-        <DataTablePagination table={table} />
+        {models.length ? (
+          <>
+            <ApexChart
+              type="treemap"
+              series={[{ name: "Tokens", data: models.map((model) => ({ x: model.model_key, y: totalTokens(model.usage) })) }]}
+              options={options}
+              height={320}
+              ariaLabel="Model mix treemap by processed tokens"
+            />
+            <ul className="sr-only">
+              {models.map((model) => (
+                <li key={model.model_key}>
+                  {model.model_key}: {formatCompactNumber(totalTokens(model.usage))} tokens, {model.sessions.toLocaleString()} sessions, {formatCostUsd(model.estimated_cost_usd)}
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <p className="py-8 text-center text-muted-foreground">No model usage found for this scope. Try selecting a different project or model filter.</p>
+        )}
       </CardContent>
     </Card>
   );
 }
+
+/**
+ * Sessions scattered by elapsed time vs processed tokens, colored by dominant
+ * model. Clicking a point opens the session detail.
+ */
+function SessionScatterChart({ data }: { data: ModelUsagePayload }) {
+  const theme = useApexTheme();
+  const navigate = useNavigate();
+  const groups = React.useMemo(() => {
+    const byModel = new Map<string, ModelUsageSession[]>();
+    for (const session of data.sessions) {
+      const label = modelLabel(session.dominant_model);
+      const entry = byModel.get(label) ?? [];
+      entry.push(session);
+      byModel.set(label, entry);
+    }
+    const ranked = [...byModel.entries()].sort(
+      (left, right) =>
+        sum(right[1].map((session) => totalTokens(session.usage))) -
+        sum(left[1].map((session) => totalTokens(session.usage))),
+    );
+    const top = ranked.slice(0, TOP_SCATTER_GROUPS);
+    const rest = ranked.slice(TOP_SCATTER_GROUPS).flatMap(([, sessions]) => sessions);
+    return rest.length ? [...top, ["Other", rest] as [string, ModelUsageSession[]]] : top;
+  }, [data.sessions]);
+
+  const totalSessions = data.sessions.length;
+
+  const options = React.useMemo<ApexOptions>(
+    () => ({
+      chart: {
+        events: {
+          dataPointSelection: (_event, _chartContext, config) => {
+            const session = config ? groups[config.seriesIndex ?? 0]?.[1][config.dataPointIndex ?? 0] : undefined;
+            if (session) {
+              void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
+            }
+          },
+        },
+      },
+      markers: { size: 5 },
+      xaxis: {
+        type: "numeric",
+        tickAmount: 8,
+        title: { text: "Elapsed time", style: { fontSize: "11px" } },
+        labels: { formatter: (value) => formatDuration(Number(value)) },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+      },
+      yaxis: {
+        title: { text: "Tokens", style: { fontSize: "11px" } },
+        labels: { formatter: (value) => formatCompactNumber(Number(value)) },
+      },
+      legend: { show: true, position: "bottom", horizontalAlign: "left" },
+      tooltip: {
+        custom: ({ seriesIndex, dataPointIndex }) => {
+          const session = groups[seriesIndex]?.[1][dataPointIndex];
+          if (!session) return "";
+          const rows = [
+            tooltipRow("Project", escapeHtml(session.project ?? "Unknown"), theme.axis),
+            tooltipRow("Elapsed", formatDuration(session.elapsed_seconds), theme.axis),
+            tooltipRow("Tokens", formatCompactNumber(totalTokens(session.usage)), theme.axis),
+            tooltipRow("Cost", formatCostUsd(session.estimated_cost_usd), theme.axis),
+            tooltipRow("Context", formatPercent(session.context?.max_used_percent), theme.axis),
+          ].join("");
+          return `<div style="padding:10px 12px;min-width:220px"><div style="font-weight:700;margin-bottom:6px">${escapeHtml(session.title || shortSessionId(session.id))}</div>${rows}</div>`;
+        },
+      },
+    }),
+    [groups, theme, navigate],
+  );
+
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="title-card">Session Overview</CardTitle>
+        <CardDescription>Elapsed time versus token volume per session, colored by dominant model. Select a point to open the session.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {totalSessions ? (
+          <>
+            <ApexChart
+              type="scatter"
+              series={groups.map(([label, sessions]) => ({
+                name: label,
+                data: sessions.map((session) => ({ x: session.elapsed_seconds, y: totalTokens(session.usage) })),
+              }))}
+              options={options}
+              height={340}
+              ariaLabel="Session elapsed time versus tokens by dominant model"
+            />
+            <ul className="sr-only">
+              {data.sessions.map((session) => (
+                <li key={session.id}>
+                  {session.title || shortSessionId(session.id)}: {formatDuration(session.elapsed_seconds)}, {formatCompactNumber(totalTokens(session.usage))} tokens, {formatCostUsd(session.estimated_cost_usd)}
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <p className="py-8 text-center text-muted-foreground">No sessions found for this scope. Try selecting a different project or model filter.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const TOP_SCATTER_GROUPS = 6;
 
 function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
   const tokenBucketColumns: ColumnDef<ModelUsageModel>[] = [
@@ -762,34 +942,6 @@ function TimeBuckets({ data, view }: { data: ModelUsagePayload; view: "cost" | "
   return <UsageTimelineChart buckets={data.time_buckets} view={view} />;
 }
 
-const overviewSessionColumns: ColumnDef<ModelUsageSession>[] = [
-  sessionLinkColumn(),
-  projectColumn(),
-  dominantModelColumn(),
-  {
-    accessorKey: "elapsed_seconds",
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Elapsed" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatDuration(getValue<number>())}</RightCell>,
-  },
-  {
-    id: "tokens",
-    accessorFn: (row) => totalTokens(row.usage),
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Tokens" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
-  },
-  {
-    accessorKey: "estimated_cost_usd",
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Cost" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
-  },
-  {
-    id: "context",
-    accessorFn: (row) => formatPercent(row.context?.max_used_percent),
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Context" className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{getValue<string>()}</RightCell>,
-  },
-];
-
 function SessionModelsDetail({ session }: { session: ModelUsageSession }) {
   return (
     <div className="grid gap-1.5">
@@ -819,45 +971,6 @@ function SessionModelsDetail({ session }: { session: ModelUsageSession }) {
         </Table>
       )}
     </div>
-  );
-}
-
-function OverviewSessionTable({ data }: { data: ModelUsagePayload }) {
-  const [sorting, setSorting] = React.useState<SortingState>([]);
-  const rows = React.useMemo(
-    () => [...data.sessions].sort((left, right) => totalTokens(right.usage) - totalTokens(left.usage)),
-    [data.sessions],
-  );
-  const table = useReactTable({
-    data: rows,
-    columns: overviewSessionColumns,
-    state: { sorting },
-    onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
-
-  return (
-    <Card className="min-w-0">
-      <CardHeader>
-        <CardTitle className="title-card">Session Overview</CardTitle>
-        <CardDescription>Broad session comparison across time, tokens, cost, and context.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <DataTable
-          table={table}
-          columnCount={overviewSessionColumns.length}
-          emptyMessage="No sessions found for this scope."
-          emptyHint="Try selecting a different project or model filter."
-          showDensityToggle
-          showExport
-          exportFilename="model-usage-sessions"
-          renderRowDetail={(session) => <SessionModelsDetail session={session} />}
-        />
-        <DataTablePagination table={table} />
-      </CardContent>
-    </Card>
   );
 }
 
@@ -1179,16 +1292,6 @@ function PricingBadge({ confidence }: { confidence: string }) {
       {confidence === "estimated" ? "estimated" : "missing price"}
     </Badge>
   );
-}
-
-function TokenConfidenceBadge({ confidence }: { confidence?: string }) {
-  if (confidence === "reported_inconsistent") {
-    return <Badge variant="secondary">derived</Badge>;
-  }
-  if (confidence === "reported_consistent") {
-    return <Badge variant="default">reported</Badge>;
-  }
-  return <Badge variant="secondary">derived</Badge>;
 }
 
 function modelLabel(value: ModelUsageSession["dominant_model"]) {

@@ -20,9 +20,9 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
-          // clsx is imported by both the entry (via cn()) and recharts; without
-          // an explicit bucket Rollup merges it into vendor-charts, making the
-          // 366KB charts chunk load eagerly on every route.
+          // clsx is imported by both the entry (via cn()) and react-apexcharts;
+          // without an explicit bucket Rollup merges it into vendor-charts,
+          // making the charts chunk load eagerly on every route.
           if (id.includes("/clsx/")) return "vendor-react";
           if (
             id.includes("/react-dom/") || id.includes("/react/") || id.includes("/scheduler/") ||
@@ -33,11 +33,10 @@ export default defineConfig({
           if (id.includes("/motion-dom/") || id.includes("/motion-utils/") || id.includes("/framer-motion/") || id.includes("/motion/")) return "vendor-motion";
           if (id.includes("@tanstack/")) return "vendor-tanstack";
           if (
-            id.includes("/recharts/") || id.includes("/d3-") || id.includes("/victory-vendor/") ||
-            id.includes("/decimal.js") || id.includes("/internmap/") || id.includes("/react-redux/") ||
-            id.includes("/redux") || id.includes("/immer/") || id.includes("/reselect/") ||
-            id.includes("/es-toolkit/") || id.includes("/eventemitter3/") || id.includes("/tiny-invariant/") ||
-            id.includes("/react-is/")
+            id.includes("/apexcharts/") || id.includes("/react-apexcharts/") ||
+            id.includes("/svg.draggable.js/") || id.includes("/svg.easing.js/") ||
+            id.includes("/svg.filter.js/") || id.includes("/svg.pathmorphing.js/") ||
+            id.includes("/svg.resize.js/") || id.includes("/svg.select.js/")
           ) return "vendor-charts";
         },
       },

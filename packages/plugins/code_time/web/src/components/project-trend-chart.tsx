@@ -1,4 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import type { ApexOptions } from "apexcharts";
+import { ApexChart, useApexTheme, withAlpha } from "@/components/ui/apex-chart";
 import type { ProjectTrend } from "@/api";
 
 type Props = {
@@ -18,23 +20,12 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function intensityColor(seconds: number, maxSeconds: number): string {
-  if (!seconds || !maxSeconds) return "var(--muted-color)";
-  const ratio = Math.min(seconds / maxSeconds, 1);
-  const alpha = 0.15 + ratio * 0.85;
-  return `color-mix(in srgb, var(--primary) ${Math.round(alpha * 100)}%, var(--muted-color))`;
-}
+const HEAT_STEPS = 5;
 
 export function ProjectTrendChart({ data }: Props) {
-  const [hovered, setHovered] = useState<{
-    project: string;
-    date: string;
-    seconds: number;
-    x: number;
-    y: number;
-  } | null>(null);
+  const theme = useApexTheme();
 
-  const { allDates, maxSeconds } = useMemo(() => {
+  const { allDates, maxSeconds, series } = useMemo(() => {
     const dates = new Set<string>();
     let max = 0;
     for (const p of data) {
@@ -43,16 +34,53 @@ export function ProjectTrendChart({ data }: Props) {
         if (d.seconds > max) max = d.seconds;
       }
     }
-    return { allDates: Array.from(dates).sort(), maxSeconds: max };
+    const ordered = Array.from(dates).sort();
+    const rows = data.map((project) => {
+      const dayMap = new Map(project.days.map((d) => [d.date, d.seconds]));
+      return {
+        name: project.project_name,
+        data: ordered.map((date) => ({ x: formatDate(date), y: dayMap.get(date) ?? 0 })),
+      };
+    });
+    return { allDates: ordered, maxSeconds: max, series: rows };
   }, [data]);
 
-  const dateTicks = useMemo(() => {
-    if (allDates.length <= 8) return allDates;
-    const step = Math.ceil(allDates.length / 8);
-    const ticks: string[] = [];
-    for (let i = 0; i < allDates.length; i += step) ticks.push(allDates[i]);
-    return ticks;
-  }, [allDates]);
+  const options = useMemo<ApexOptions>(() => {
+    // Even ranges from muted (no activity) to full primary, mirroring the
+    // intensity ramp of the former hand-rolled grid.
+    const ranges = [
+      { from: 0, to: 0, color: theme.grid, name: "none" },
+      ...Array.from({ length: HEAT_STEPS }, (_, index) => ({
+        from: index === 0 ? 1 : Math.round((maxSeconds * index) / HEAT_STEPS),
+        to: Math.round((maxSeconds * (index + 1)) / HEAT_STEPS),
+        color: withAlpha(theme.primary, 0.2 + (0.8 * (index + 1)) / HEAT_STEPS),
+        name: `level ${index + 1}`,
+      })),
+    ];
+    return {
+      chart: { type: "heatmap" },
+      plotOptions: { heatmap: { radius: 2, enableShades: false, colorScale: { ranges } } },
+      dataLabels: { enabled: false },
+      stroke: { width: 2, colors: [theme.card] },
+      xaxis: {
+        type: "category",
+        tickAmount: Math.min(8, allDates.length),
+        labels: { style: { fontSize: "10px", fontFamily: theme.monoFont } },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+      },
+      yaxis: {
+        labels: {
+          maxWidth: 140,
+          style: { fontSize: "11px", fontFamily: theme.monoFont, colors: theme.foreground },
+        },
+      },
+      legend: { show: false },
+      tooltip: {
+        y: { formatter: (value) => formatDuration(Number(value)) },
+      },
+    };
+  }, [allDates.length, maxSeconds, theme]);
 
   return (
     <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
@@ -65,80 +93,13 @@ export function ProjectTrendChart({ data }: Props) {
         </div>
       </div>
 
-      <div className="relative overflow-x-auto">
-        <div className="min-w-[600px]">
-          {data.map((project) => {
-            const dayMap = new Map(
-              project.days.map((d) => [d.date, d.seconds]),
-            );
-            return (
-              <div key={project.project_name} className="flex items-center gap-2 mb-1">
-                <div className="w-32 shrink-0 truncate text-right text-caption font-mono text-foreground">
-                  {project.project_name}
-                </div>
-                <div className="flex flex-1 gap-px">
-                  {allDates.map((date) => {
-                    const seconds = dayMap.get(date) ?? 0;
-                    return (
-                      <div
-                        key={date}
-                        className="h-5 flex-1 min-w-[3px] rounded-[2px] cursor-pointer transition-opacity hover:opacity-80"
-                        style={{
-                          backgroundColor: intensityColor(seconds, maxSeconds),
-                        }}
-                        onMouseEnter={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setHovered({
-                            project: project.project_name,
-                            date,
-                            seconds,
-                            x: rect.left + rect.width / 2,
-                            y: rect.top,
-                          });
-                        }}
-                        onMouseLeave={() => setHovered(null)}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-
-          <div className="flex items-center gap-2 mt-2">
-            <div className="w-32 shrink-0" />
-            <div className="flex flex-1 justify-between">
-              {dateTicks.map((date) => (
-                <span
-                  key={date}
-                  className="text-[10px] text-muted-foreground font-mono"
-                >
-                  {formatDate(date)}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {hovered && (
-          <div
-            className="fixed z-50 pointer-events-none rounded-lg border border-border bg-popover p-3 shadow-lg text-caption font-mono"
-            style={{
-              left: hovered.x,
-              top: hovered.y - 8,
-              transform: "translate(-50%, -100%)",
-            }}
-          >
-            <p className="font-semibold">{hovered.project}</p>
-            <p className="text-muted-foreground">
-              Duration: {formatDuration(hovered.seconds)}
-            </p>
-            <p className="text-muted-foreground">
-              Date: {formatDate(hovered.date)}
-            </p>
-          </div>
-        )}
-      </div>
+      <ApexChart
+        type="heatmap"
+        series={series}
+        options={options}
+        height={Math.max(200, data.length * 34 + 80)}
+        ariaLabel="Coding time heatmap by project and day"
+      />
     </div>
   );
 }

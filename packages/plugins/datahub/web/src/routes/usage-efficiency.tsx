@@ -1,8 +1,9 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
+import type { ApexOptions } from "apexcharts";
 import {
   fetchTokenEfficiencyProject,
+  type TokenEfficiencyDistribution,
   type TokenEfficiencyGrain,
   type TokenEfficiencyPatternRow,
   type TokenEfficiencyPeriodComparison,
@@ -26,12 +27,7 @@ import {
 } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-  type ChartConfig,
-} from "@/components/ui/chart";
+import { ApexChart } from "@/components/ui/apex-chart";
 import {
   Table,
   TableBody,
@@ -306,23 +302,40 @@ function TrendChart({
   unit: TokenEfficiencyUnit;
   grain: TokenEfficiencyGrain;
 }) {
-  const chartConfig: ChartConfig = {
-    median: { label: "Median", color: "var(--chart-1)" },
-    p90: { label: "P90", color: "var(--chart-2)" },
-    p95: { label: "P95", color: "var(--chart-3)" },
-    max: { label: "Max", color: "var(--chart-3)" },
-  };
-  const rows = summaries.map((summary) => {
-    const distribution = distributionFor(summary, unit);
-    return {
-      bucket: summary.bucket,
-      label: summary.label,
-      median: distribution.median,
-      p90: distribution.p90,
-      p95: distribution.p95,
-      max: distribution.max,
-    };
-  });
+  const categories = summaries.map((summary) => summary.label);
+  const valuesFor = (pick: (distribution: TokenEfficiencyDistribution) => number) =>
+    summaries.map((summary) => pick(distributionFor(summary, unit)));
+
+  const series = [
+    { name: "Median", data: valuesFor((distribution) => distribution.median) },
+    { name: "P90", data: valuesFor((distribution) => distribution.p90) },
+    { name: "P95", data: valuesFor((distribution) => distribution.p95) },
+    { name: "Max", data: valuesFor((distribution) => distribution.max) },
+  ];
+
+  const options = React.useMemo<ApexOptions>(
+    () => ({
+      stroke: { curve: "smooth", width: [2.5, 2, 1.5, 1], dashArray: [0, 0, 4, 4] },
+      markers: { size: 0 },
+      xaxis: {
+        categories,
+        labels: { hideOverlappingLabels: true },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+      },
+      yaxis: {
+        labels: { formatter: (value) => formatTokens(Number(value)) },
+      },
+      legend: { show: true, position: "bottom", horizontalAlign: "left" },
+      tooltip: {
+        shared: true,
+        intersect: false,
+        y: { formatter: (value) => (value == null ? "—" : formatExactTokens(Number(value))) },
+      },
+    }),
+    // categories is derived from summaries, which is the stable query payload
+    [summaries, unit],
+  );
 
   return (
     <Card className="min-w-0">
@@ -337,107 +350,14 @@ function TrendChart({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
-        {rows.length ? (
-          <>
-            <ChartContainer
-              config={chartConfig}
-              className="h-[18rem] w-full"
-              aria-label={`${grain} ${unit} prompt-token distribution trend`}
-            >
-              <LineChart accessibilityLayer data={rows} margin={{ left: 8, right: 16 }}>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} />
-                <YAxis
-                  tickLine={false}
-                  axisLine={false}
-                  width={56}
-                  tickFormatter={(value) => formatTokens(Number(value))}
-                />
-                <ChartTooltip
-                  cursor={false}
-                  content={
-                    <ChartTooltipContent
-                      formatter={(value, name) => (
-                        <div className="flex min-w-[9rem] items-center justify-between gap-3">
-                          <span className="text-muted-foreground">
-                            {chartConfig[String(name)]?.label ?? String(name)}
-                          </span>
-                          <span className="font-mono font-medium">
-                            {formatExactTokens(Number(value))}
-                          </span>
-                        </div>
-                      )}
-                    />
-                  }
-                />
-                <Line
-                  type="monotone"
-                  dataKey="max"
-                  stroke="var(--color-max)"
-                  strokeWidth={1}
-                  strokeDasharray="4 4"
-                  strokeOpacity={0.3}
-                  dot={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="p95"
-                  stroke="var(--color-p95)"
-                  strokeWidth={1.5}
-                  strokeDasharray="4 4"
-                  strokeOpacity={0.5}
-                  dot={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="p90"
-                  stroke="var(--color-p90)"
-                  strokeWidth={2}
-                  dot={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="median"
-                  stroke="var(--color-median)"
-                  strokeWidth={2.5}
-                  dot={false}
-                />
-              </LineChart>
-            </ChartContainer>
-            <Table>
-              <TableCaption>
-                Exact values for the {grain} {unit} trend chart.
-              </TableCaption>
-              <TableHeader>
-                <TableRow>
-                  <TableHead scope="col">Period</TableHead>
-                  <TableHead scope="col" className="text-right">Median</TableHead>
-                  <TableHead scope="col" className="text-right">P90</TableHead>
-                  <TableHead scope="col" className="text-right">P95</TableHead>
-                  <TableHead scope="col" className="text-right">Max</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((row) => (
-                  <TableRow key={row.bucket}>
-                    <TableCell>{row.label}</TableCell>
-                    <TableCell className="text-right font-mono">
-                      {formatExactTokens(row.median)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono">
-                      {formatExactTokens(row.p90)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono">
-                      {formatExactTokens(row.p95)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono">
-                      {formatExactTokens(row.max)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </>
+        {summaries.length ? (
+          <ApexChart
+            type="line"
+            series={series}
+            options={options}
+            height={288}
+            ariaLabel={`${grain} ${unit} prompt-token distribution trend`}
+          />
         ) : (
           <StateBlock title="No trend data" detail="No completed periods are available in this range." />
         )}

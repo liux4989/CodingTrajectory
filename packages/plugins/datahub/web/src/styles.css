@@ -438,22 +438,6 @@
     .stat-grid { grid-template-columns: minmax(0, 1fr); }
   }
 
-  /* Five-column variant for token bucket cards: 5→3→2→1. */
-  .stat-grid-5 {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: var(--gap-section);
-  }
-  @media (max-width: 110rem) {
-    .stat-grid-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  }
-  @media (max-width: 64rem) {
-    .stat-grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  }
-  @media (max-width: 48rem) {
-    .stat-grid-5 { grid-template-columns: minmax(0, 1fr); }
-  }
-
   /* Compact bordered panel: cards, list items, detail blocks. */
   .panel {
     border-radius: var(--radius-lg);
