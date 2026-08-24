@@ -26,7 +26,7 @@ import { ApexChart, escapeHtml, tooltipRow, useApexTheme } from "@/components/ui
 import type { ApexOptions } from "apexcharts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -42,6 +42,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
 import { FilterLabel, RightCell } from "@/components/table-cells";
 import { useDateRange } from "@/hooks/use-date-range";
 import {
@@ -330,7 +334,7 @@ function CostView({
           label: "Models",
           content: (
             <>
-              <ModelTable data={data} view="cost" />
+              <ModelTable data={data} />
               <TimeBuckets data={data} view="cost" />
             </>
           ),
@@ -387,7 +391,8 @@ function TokensView({
           label: "Models",
           content: (
             <>
-              <ModelTable data={data} view="tokens" />
+              <ModelCompositionChart data={data} />
+              <ModelDistributionChart data={data} />
               <TimeBuckets data={data} view="tokens" />
             </>
           ),
@@ -773,13 +778,188 @@ function SessionScatterChart({ data }: { data: ModelUsagePayload }) {
 
 const TOP_SCATTER_GROUPS = 6;
 
-function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
-  const tokenBucketColumns: ColumnDef<ModelUsageModel>[] = [
-    tokenColumn("prompt_tokens", "Prompt"),
-    tokenColumn("cached_prompt_tokens", "Cached"),
-    tokenColumn("completion_tokens", "Completion"),
-    tokenColumn("reasoning_tokens", "Reasoning"),
-  ];
+/**
+ * Per-model token bucket composition (horizontal stacked bar). Replaces the
+ * Prompt/Cached/Completion/Reasoning columns of the former Model Mix by
+ * Tokens table; the tooltip carries absolute values and shares.
+ */
+function ModelCompositionChart({ data }: { data: ModelUsagePayload }) {
+  const theme = useApexTheme();
+  const models = React.useMemo(
+    () => [...data.models].sort((left, right) => totalTokens(right.usage) - totalTokens(left.usage)),
+    [data.models],
+  );
+
+  const options = React.useMemo<ApexOptions>(
+    () => ({
+      chart: { stacked: true },
+      plotOptions: { bar: { horizontal: true, barHeight: "58%", borderRadius: 3 } },
+      dataLabels: { enabled: false },
+      xaxis: {
+        categories: models.map((model) => model.model_key),
+        labels: { formatter: (value) => formatCompactNumber(Number(value)) },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+      },
+      yaxis: { labels: { style: { fontSize: "11px" }, maxWidth: 220 } },
+      legend: { show: true, position: "bottom", horizontalAlign: "left" },
+      tooltip: {
+        custom: ({ dataPointIndex }) => {
+          const model = models[dataPointIndex];
+          if (!model) return "";
+          const total = totalTokens(model.usage) || 1;
+          const bucketRows = TOKEN_MIX_BUCKETS.map(({ key, label }) => {
+            const value = usageValue(model.usage, key);
+            return tooltipRow(label, `${formatCompactNumber(value)} (${Math.round((value / total) * 100)}%)`, theme.axis);
+          }).join("");
+          const rows = bucketRows + tooltipRow("Processed", formatCompactNumber(totalTokens(model.usage)), theme.axis);
+          return `<div style="padding:10px 12px;min-width:230px"><div style="font-weight:700;margin-bottom:6px">${escapeHtml(model.model_key)}</div>${rows}</div>`;
+        },
+      },
+    }),
+    [models, theme],
+  );
+
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="title-card">Model Mix by Tokens</CardTitle>
+        <CardDescription>Token bucket composition per model across the selected scope.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {models.length ? (
+          <>
+            <ApexChart
+              type="bar"
+              series={TOKEN_MIX_BUCKETS.map(({ key, label }) => ({
+                name: label,
+                data: models.map((model) => usageValue(model.usage, key)),
+              }))}
+              options={options}
+              height={Math.max(220, models.length * 64)}
+              ariaLabel="Token bucket composition by model"
+            />
+            <ul className="sr-only">
+              {models.map((model) => (
+                <li key={model.model_key}>
+                  {model.model_key}: {TOKEN_MIX_BUCKETS.map(({ key, label }) => `${label} ${formatCompactNumber(usageValue(model.usage, key))}`).join(", ")}, processed {formatCompactNumber(totalTokens(model.usage))}
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <p className="py-8 text-center text-muted-foreground">No model usage found for this scope. Try selecting a different project or model filter.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const DISTRIBUTION_SERIES = [
+  { key: "avg", label: "Average" },
+  { key: "median", label: "Median" },
+  { key: "p90", label: "P90" },
+  { key: "p95", label: "P95" },
+] as const;
+
+/**
+ * Per-model token distribution (Avg / Median / P90 / P95 as grouped bars)
+ * with a session/turn unit toggle. Replaces the sixteen statistic columns of
+ * the former Model Mix by Tokens table.
+ */
+function ModelDistributionChart({ data }: { data: ModelUsagePayload }) {
+  const [unit, setUnit] = React.useState<"session" | "turn">("session");
+  const models = React.useMemo(
+    () => [...data.models].sort((left, right) => totalTokens(right.usage) - totalTokens(left.usage)),
+    [data.models],
+  );
+
+  const options = React.useMemo<ApexOptions>(
+    () => ({
+      plotOptions: { bar: { columnWidth: "62%", borderRadius: 3 } },
+      dataLabels: { enabled: false },
+      xaxis: {
+        categories: models.map((model) => model.model_key),
+        labels: { style: { fontSize: "11px" }, rotate: -20, hideOverlappingLabels: false, trim: true, maxHeight: 80 },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+      },
+      yaxis: { labels: { formatter: (value) => formatCompactNumber(Number(value)) } },
+      legend: { show: true, position: "bottom", horizontalAlign: "left" },
+      tooltip: {
+        shared: true,
+        intersect: false,
+        y: { formatter: (value) => (value == null ? "—" : formatCompactNumber(Number(value))) },
+      },
+    }),
+    [models],
+  );
+
+  return (
+    <Card className="@container/card min-w-0">
+      <CardHeader>
+        <CardTitle className="title-card">Token Distribution by Model</CardTitle>
+        <CardDescription>Average, median, P90, and P95 tokens per {unit}, grouped by model.</CardDescription>
+        <CardAction>
+          <ToggleGroup
+            type="single"
+            value={unit}
+            onValueChange={(value) => {
+              if (value === "session" || value === "turn") setUnit(value);
+            }}
+            variant="outline"
+            className="hidden *:data-[slot=toggle-group-item]:px-3! @[480px]/card:flex"
+          >
+            <ToggleGroupItem value="session">Session</ToggleGroupItem>
+            <ToggleGroupItem value="turn">Turn</ToggleGroupItem>
+          </ToggleGroup>
+          <Select
+            value={unit}
+            onValueChange={(value) => setUnit(value as "session" | "turn")}
+          >
+            <SelectTrigger className="flex w-28 @[480px]/card:hidden" size="sm" aria-label="Select a distribution unit">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="rounded-xl">
+              <SelectItem value="session" className="rounded-lg">Session</SelectItem>
+              <SelectItem value="turn" className="rounded-lg">Turn</SelectItem>
+            </SelectContent>
+          </Select>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {models.length ? (
+          <>
+            <ApexChart
+              type="bar"
+              series={DISTRIBUTION_SERIES.map(({ key, label }) => ({
+                name: label,
+                data: models.map((model) => model.token_stats[unit][key]),
+              }))}
+              options={options}
+              height={300}
+              ariaLabel={`Token distribution by model per ${unit}`}
+            />
+            <ul className="sr-only">
+              {models.map((model) => {
+                const stats = model.token_stats[unit];
+                return (
+                  <li key={model.model_key}>
+                    {model.model_key} per {unit}: avg {formatCompactNumber(stats.avg)}, median {formatCompactNumber(stats.median)}, p90 {formatCompactNumber(stats.p90)}, p95 {formatCompactNumber(stats.p95)}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        ) : (
+          <p className="py-8 text-center text-muted-foreground">No model usage found for this scope. Try selecting a different project or model filter.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function modelColumns(): ColumnDef<ModelUsageModel>[] {
   return [
     {
       accessorKey: "model_key",
@@ -796,84 +976,40 @@ function modelColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageModel>[] {
       header: ({ column }) => <DataTableColumnHeader column={column} label="Turns" />,
       cell: ({ getValue }) => getValue<number>().toLocaleString(),
     },
-    ...(view === "tokens" ? tokenBucketColumns : []),
     {
       id: "tokens",
       accessorFn: (row) => totalTokens(row.usage),
       header: ({ column }) => <DataTableColumnHeader column={column} label="Tokens" className="text-right" />,
       cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
     },
-    ...(view === "tokens"
-      ? [
-          {
-            id: "avg_session_tokens",
-            accessorFn: (row) => row.token_stats.session.avg,
-            header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Session Tokens" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
-          } satisfies ColumnDef<ModelUsageModel>,
-          {
-            id: "median_session_tokens",
-            accessorFn: (row) => row.token_stats.session.median,
-            header: ({ column }) => <DataTableColumnHeader column={column} label="Median Session Tokens" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
-          } satisfies ColumnDef<ModelUsageModel>,
-          modelStatColumn("p90_session_tokens", "P90 Session Tokens", (row) => row.token_stats.session.p90),
-          modelStatColumn("p95_session_tokens", "P95 Session Tokens", (row) => row.token_stats.session.p95),
-          modelStatColumn("avg_turn_tokens", "Avg Turn Tokens", (row) => row.token_stats.turn.avg),
-          modelStatColumn("median_turn_tokens", "Median Turn Tokens", (row) => row.token_stats.turn.median),
-          modelStatColumn("p90_turn_tokens", "P90 Turn Tokens", (row) => row.token_stats.turn.p90),
-          modelStatColumn("p95_turn_tokens", "P95 Turn Tokens", (row) => row.token_stats.turn.p95),
-        ]
-      : []),
-    ...(view === "tokens"
-      ? []
-      : [
-          {
-            accessorKey: "estimated_cost_usd",
-            header: ({ column }) => <DataTableColumnHeader column={column} label="Total Cost" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
-          } satisfies ColumnDef<ModelUsageModel>,
-        ]),
-    ...(view === "cost"
-      ? [
-          {
-            accessorKey: "avg_session_cost_usd",
-            header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Session Cost" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
-          } satisfies ColumnDef<ModelUsageModel>,
-          costStatColumn("median_session_cost_usd", "Median Session Cost", (row) => row.cost_stats.session.median),
-          costStatColumn("p90_session_cost_usd", "P90 Session Cost", (row) => row.cost_stats.session.p90),
-          costStatColumn("p95_session_cost_usd", "P95 Session Cost", (row) => row.cost_stats.session.p95),
-          {
-            accessorKey: "avg_turn_cost_usd",
-            header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Turn Cost" className="text-right" />,
-            cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
-          } satisfies ColumnDef<ModelUsageModel>,
-          costStatColumn("median_turn_cost_usd", "Median Turn Cost", (row) => row.cost_stats.turn.median),
-          costStatColumn("p90_turn_cost_usd", "P90 Turn Cost", (row) => row.cost_stats.turn.p90),
-          costStatColumn("p95_turn_cost_usd", "P95 Turn Cost", (row) => row.cost_stats.turn.p95),
-          {
-            id: "pricing",
-            accessorFn: (row) => row.pricing.confidence,
-            header: ({ column }) => <DataTableColumnHeader column={column} label="Pricing" />,
-            cell: ({ getValue }) => <PricingBadge confidence={getValue<string>()} />,
-          } satisfies ColumnDef<ModelUsageModel>,
-        ]
-      : []),
+    {
+      accessorKey: "estimated_cost_usd",
+      header: ({ column }) => <DataTableColumnHeader column={column} label="Total Cost" className="text-right" />,
+      cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
+    },
+    {
+      accessorKey: "avg_session_cost_usd",
+      header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Session Cost" className="text-right" />,
+      cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
+    },
+    costStatColumn("median_session_cost_usd", "Median Session Cost", (row) => row.cost_stats.session.median),
+    costStatColumn("p90_session_cost_usd", "P90 Session Cost", (row) => row.cost_stats.session.p90),
+    costStatColumn("p95_session_cost_usd", "P95 Session Cost", (row) => row.cost_stats.session.p95),
+    {
+      accessorKey: "avg_turn_cost_usd",
+      header: ({ column }) => <DataTableColumnHeader column={column} label="Avg Turn Cost" className="text-right" />,
+      cell: ({ getValue }) => <RightCell>{formatCostUsd(getValue<number>())}</RightCell>,
+    },
+    costStatColumn("median_turn_cost_usd", "Median Turn Cost", (row) => row.cost_stats.turn.median),
+    costStatColumn("p90_turn_cost_usd", "P90 Turn Cost", (row) => row.cost_stats.turn.p90),
+    costStatColumn("p95_turn_cost_usd", "P95 Turn Cost", (row) => row.cost_stats.turn.p95),
+    {
+      id: "pricing",
+      accessorFn: (row) => row.pricing.confidence,
+      header: ({ column }) => <DataTableColumnHeader column={column} label="Pricing" />,
+      cell: ({ getValue }) => <PricingBadge confidence={getValue<string>()} />,
+    },
   ];
-}
-
-function modelStatColumn(
-  id: string,
-  label: string,
-  accessorFn: (row: ModelUsageModel) => number,
-): ColumnDef<ModelUsageModel> {
-  return {
-    id,
-    accessorFn,
-    header: ({ column }) => <DataTableColumnHeader column={column} label={label} className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
-  };
 }
 
 function costStatColumn(
@@ -889,22 +1025,13 @@ function costStatColumn(
   };
 }
 
-function tokenColumn(key: keyof UsageBuckets, label: string): ColumnDef<ModelUsageModel> {
-  return {
-    id: key,
-    accessorFn: (row) => row.usage[key] ?? 0,
-    header: ({ column }) => <DataTableColumnHeader column={column} label={label} className="text-right" />,
-    cell: ({ getValue }) => <RightCell>{formatCompactNumber(getValue<number>())}</RightCell>,
-  };
-}
-
-function ModelTable({ data, view }: { data: ModelUsagePayload; view: "cost" | "tokens" }) {
+function ModelTable({ data }: { data: ModelUsagePayload }) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const rows = React.useMemo(
-    () => [...data.models].sort((left, right) => sortByLens(left, right, view)),
-    [data.models, view],
+    () => [...data.models].sort((left, right) => sortByLens(left, right, "cost")),
+    [data.models],
   );
-  const columns = React.useMemo(() => modelColumns(view), [view]);
+  const columns = React.useMemo(() => modelColumns(), []);
   const table = useReactTable({
     data: rows,
     columns,
@@ -918,8 +1045,8 @@ function ModelTable({ data, view }: { data: ModelUsagePayload; view: "cost" | "t
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle className="title-card">Model Mix by {viewLabel(view)}</CardTitle>
-        <CardDescription>{modelTableDescription(view)}</CardDescription>
+        <CardTitle className="title-card">Model Mix by Cost</CardTitle>
+        <CardDescription>Cost is estimated in the dashboard from observed core usage buckets.</CardDescription>
       </CardHeader>
       <CardContent>
         <DataTable
@@ -1339,17 +1466,6 @@ function tokensPerMinute(tokens: number, seconds: number) {
   return Math.round((tokens / seconds) * 60);
 }
 
-function viewLabel(view: UsageView) {
-  if (view === "tokens") return "Tokens";
-  if (view === "time") return "Time";
-  return "Cost";
-}
-
-function modelTableDescription(view: "cost" | "tokens") {
-  if (view === "tokens") return "Model-price-neutral token volume with bucket breakdown.";
-  if (view === "cost") return "Cost is estimated in the datahub from observed core usage buckets.";
-  return "Cost, volume, and pricing status across models in the selected scope.";
-}
 
 function sessionTableDescription(view: UsageView) {
   if (view === "time") return "Elapsed time is session-level; token throughput reflects the selected model filter.";
