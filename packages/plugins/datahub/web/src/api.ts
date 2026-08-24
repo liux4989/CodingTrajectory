@@ -569,6 +569,8 @@ export type GraphSessionNode = {
   parent_session_id?: string | null;
   edge_type?: string | null;
   vendor?: string;
+  model?: string | null;
+  reasoning_effort?: string | null;
   status?: string;
   title?: string | null;
   agent_name?: string | null;

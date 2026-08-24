@@ -459,6 +459,8 @@ def _project_graph(
             "session_id": session_id,
             "root_session_id": root_id,
             "vendor": session.vendor.value,
+            "model": session.model,
+            "reasoning_effort": session.reasoning_effort,
             "status": session.status.value,
             "latest_turn_status": (
                 session.latest_turn_status.value

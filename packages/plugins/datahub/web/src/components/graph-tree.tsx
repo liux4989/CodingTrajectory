@@ -120,6 +120,10 @@ export function GraphTree({ nodes, edges, tokensBySession, activeSessionId }: Gr
           {nodeLabel(node)}
         </SessionLink>
         {node.vendor ? <Badge variant="secondary">{node.vendor}</Badge> : null}
+        {node.model ? <Badge variant="secondary">{node.model}</Badge> : null}
+        {node.reasoning_effort ? (
+          <Badge variant="outline">{formatLabel(node.reasoning_effort)}</Badge>
+        ) : null}
         {nodeEdges.length > 0 ? (
           <Tooltip>
             <TooltipTrigger asChild>

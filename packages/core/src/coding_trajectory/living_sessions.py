@@ -184,7 +184,8 @@ def _session_payload(session: Session, *, root_id: str, snapshot: LivingSourceSn
     )
     payload: dict[str, Any] = {
         "session_id": str(session.session_id), "root_session_id": root_id,
-        "vendor": session.vendor.value, "cwd": session.cwd,
+        "vendor": session.vendor.value, "model": session.model,
+        "reasoning_effort": session.reasoning_effort, "cwd": session.cwd,
         "started_at": format_datetime(session.started_at), "ended_at": format_datetime(session.ended_at),
         "latest_activity_at": format_datetime(latest), "state": state,
         "latest_turn_status": (

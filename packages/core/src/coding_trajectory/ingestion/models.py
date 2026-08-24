@@ -349,6 +349,11 @@ class Turn(BaseModel):
 class Session(BaseModel):
     session_id: UUID = Field(default_factory=uuid4)
     vendor: Vendor
+    # Most recently observed model configuration for this session. These are
+    # configuration facts, not aggregate usage attribution; model changes
+    # remain represented in the underlying turn/event evidence.
+    model: str | None = None
+    reasoning_effort: str | None = None
     agent_name: str | None = None
     started_at: datetime
     ended_at: datetime | None = None

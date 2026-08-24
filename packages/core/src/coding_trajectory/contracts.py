@@ -340,6 +340,8 @@ class LivingSessionResource(ContractModel):
     session_id: str
     root_session_id: str
     vendor: str
+    model: str | None = None
+    reasoning_effort: str | None = None
     status: str
     latest_turn_status: str | None = None
     agent_name: str | None = None
@@ -460,6 +462,8 @@ class LivingSessionInventoryResource(ContractModel):
     session_id: str
     root_session_id: str
     vendor: str
+    model: str | None = None
+    reasoning_effort: str | None = None
     cwd: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None

@@ -1353,6 +1353,8 @@ class CodexAdapter(BaseAdapter):
         return Session(
             session_id=state.session_id,
             vendor=Vendor.CODEX_CLI,
+            model=_as_non_empty_str(ctx.get("model")),
+            reasoning_effort=_as_non_empty_str(ctx.get("effort")),
             agent_name=extensions.codex.agent_nickname if extensions.codex else None,
             started_at=started_at,
             ended_at=ended_at,
