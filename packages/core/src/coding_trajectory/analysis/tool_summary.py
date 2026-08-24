@@ -195,12 +195,30 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
         return None
 
     if concept in {READ_FILE, EDIT_FILE, WRITE_FILE}:
-        return short_path(
+        direct_path = short_path(
             first_str(
                 tool_input,
                 ("file_path", "path", "target_file", "absolute_path", "file"),
             )
         )
+        if direct_path is not None:
+            return direct_path
+        paths = tool_input.get("paths")
+        if isinstance(paths, list):
+            visible_paths = [
+                short_path(path)
+                for path in paths
+                if isinstance(path, str) and path.strip()
+            ]
+            if len(visible_paths) == 1:
+                return visible_paths[0]
+            if visible_paths:
+                shown = ", ".join(visible_paths[:2])
+                suffix = (
+                    f", +{len(visible_paths) - 2}" if len(visible_paths) > 2 else ""
+                )
+                return f"{len(visible_paths)} files: {shown}{suffix}"
+        return None
 
     if concept == SEARCH_TEXT:
         pattern = first_str(tool_input, ("pattern", "query", "regex"))
@@ -219,10 +237,36 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
         )
 
     if concept == WEB_FETCH:
-        return first_str(tool_input, ("url", "uri"))
+        direct_url = first_str(tool_input, ("url", "uri"))
+        if direct_url is not None:
+            return direct_url
+        for key in ("open", "click", "find", "screenshot"):
+            operations = tool_input.get(key)
+            if not isinstance(operations, list):
+                continue
+            for operation in operations:
+                if not isinstance(operation, dict):
+                    continue
+                target = first_str(operation, ("url", "uri", "ref_id", "pattern"))
+                if target is not None:
+                    return target
+        return None
 
     if concept == WEB_SEARCH:
-        return first_str(tool_input, ("query", "q"))
+        direct_query = first_str(tool_input, ("query", "q"))
+        if direct_query is not None:
+            return direct_query
+        for key in ("search_query", "image_query"):
+            queries = tool_input.get(key)
+            if not isinstance(queries, list):
+                continue
+            for query in queries:
+                if not isinstance(query, dict):
+                    continue
+                nested_query = first_str(query, ("query", "q"))
+                if nested_query is not None:
+                    return nested_query
+        return None
 
     if concept == TODO_LIST:
         todos = (
@@ -230,11 +274,14 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
         )
         if isinstance(todos, list):
             return f"{len(todos)} item(s)"
-        return None
+        return first_str(tool_input, ("explanation", "text"))
 
     if concept == SUBAGENT_TASK:
-        return first_str(
+        detail = first_str(
             tool_input, ("subagent_type", "agent_type", "description", "prompt")
         )
+        if detail is not None:
+            return detail
+        return first_str(tool_input, ("action", "task_name", "target"))
 
     return None

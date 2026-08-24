@@ -353,7 +353,7 @@ def compact_activity(activity: Any) -> Any:
             "outcome": activity.get("outcome"),
             "wrapper_status": activity.get("wrapper_status"),
         }
-        for key in ("cmd", "path", "query", "url", "text"):
+        for key in ("cmd", "path", "query", "url", "items", "task", "session", "text"):
             if activity.get(key) is not None:
                 compact[key] = activity.get(key)
         for key in ("commands", "paths", "queries", "urls", "targets"):

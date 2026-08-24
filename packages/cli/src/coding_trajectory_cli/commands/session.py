@@ -122,7 +122,25 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
         if tool == "RunCommand" and count and count != 1:
             command_word = "command" if count == 1 else "commands"
             return f"Ran {count} {command_word}{annotation}"
-        for key in ("cmd", "path", "query", "url"):
+        if tool == "WebSearch":
+            query = activity.get("query")
+            if query:
+                return f"Searched the web for {one_line(query, limit=72)}{annotation}"
+            return f"Searched the web{annotation}"
+        if tool == "WebFetch":
+            target = activity.get("url")
+            if target:
+                return f"Browsed the web: {one_line(target, limit=72)}{annotation}"
+            return f"Browsed the web{annotation}"
+        if tool == "TodoList" and activity.get("items"):
+            return f"Updated plan: {one_line(activity['items'], limit=72)}{annotation}"
+        if tool == "EditFile" and activity.get("path"):
+            return f"Edited files: {one_line(activity['path'], limit=72)}{annotation}"
+        if tool == "SubagentTask" and activity.get("task"):
+            return (
+                f"Subagent activity: {one_line(activity['task'], limit=72)}{annotation}"
+            )
+        for key in ("cmd", "path", "query", "url", "items", "task", "session"):
             if activity.get(key):
                 return (
                     f"{tool}{suffix}: {one_line(activity[key], limit=72)}{annotation}"
