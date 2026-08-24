@@ -552,7 +552,13 @@ class DashboardIncrementalRuntime:
             return None
         if not self._has_canonical_facts():
             return None
-        if not self._ensure_project_evidence(project_name):
+        try:
+            if not self._ensure_project_evidence(project_name):
+                return None
+        except SourceFenceError:
+            # Live transcripts may append while evidence is being rebuilt.  The
+            # request has no stable revision yet, so let the HTTP layer return
+            # its normal retryable bootstrap response rather than a raw 500.
             return None
         if (detail is None) != (grain is None):
             raise ValueError("token project detail and grain must be supplied together")
@@ -593,7 +599,10 @@ class DashboardIncrementalRuntime:
                 context.assert_sources_current()
                 context.record_invalidation("token-efficiency", scope)
 
-            self._materialize_on_demand(publish)
+            try:
+                self._materialize_on_demand(publish)
+            except SourceFenceError:
+                return None
 
         revision = self.store.current_revision()
         meta = self._analytical_meta(TOKEN_PROJECT_META, scope, revision=revision)
@@ -804,6 +813,10 @@ class DashboardIncrementalRuntime:
         return not missing or self._materialize_evidence(missing)
 
     def _materialize_evidence(self, root_ids: set[str]) -> bool:
+        from coding_trajectory.analysis.session_graph_views import (
+            session_graph_has_visible_overview_content,
+        )
+
         with self._evidence_lock:
             missing = {root for root in root_ids if not self._root_has_evidence(root)}
             if not missing:
@@ -826,27 +839,33 @@ class DashboardIncrementalRuntime:
             project_items = self._project_catalog_items()
             rows: list[dict[str, Any]] = []
             rebuilt_roots: set[str] = set()
+            skipped_roots: set[str] = set()
             for graph in graph_build.graphs:
                 root = str(graph.root_session_id)
-                rebuilt_roots.add(root)
+                if not session_graph_has_visible_overview_content(graph):
+                    # A source can retain project metadata while its graph has
+                    # no visible session content.  It contributes no telemetry
+                    # facts, so it must not block a project's other roots.
+                    skipped_roots.add(root)
+                    continue
                 project_name = str(graph.project_identifier or "unknown")
-                rows.extend(
-                    build_canonical_root_fact_rows(
-                        store=DocumentStore.from_session_graphs([graph]),
-                        root_session_id=root,
-                        current_dir=self.current_dir,
-                        project_list={
-                            "items": {
-                                project_name: project_items.get(
-                                    project_name,
-                                    {"path": None, "vendors": []},
-                                )
-                            }
-                        },
-                        include_projects=False,
-                        economics_detail="evidence",
-                    )
+                root_rows = build_canonical_root_fact_rows(
+                    store=DocumentStore.from_session_graphs([graph]),
+                    root_session_id=root,
+                    current_dir=self.current_dir,
+                    project_list={
+                        "items": {
+                            project_name: project_items.get(
+                                project_name,
+                                {"path": None, "vendors": []},
+                            )
+                        }
+                    },
+                    include_projects=False,
+                    economics_detail="evidence",
                 )
+                rebuilt_roots.add(root)
+                rows.extend(root_rows)
 
             def publish(context: MaterializationContext) -> None:
                 for root in rebuilt_roots:
@@ -864,8 +883,9 @@ class DashboardIncrementalRuntime:
                     {"detail": "evidence"},
                 )
 
-            self._materialize_on_demand(publish)
-            return missing <= rebuilt_roots
+            if rows:
+                self._materialize_on_demand(publish)
+            return missing <= (rebuilt_roots | skipped_roots)
 
     def _root_for_entrypoint(self, entrypoint_id: str) -> str | None:
         cursor: str | None = None

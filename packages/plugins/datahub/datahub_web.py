@@ -6,6 +6,7 @@ import json
 import mimetypes
 import re
 import sys
+import traceback
 import webbrowser
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -279,6 +280,7 @@ def _handler_for(
                 else:
                     self._json_error(HTTPStatus.NOT_FOUND, "not found")
                     return
+                self._json_response(payload)
             except DashboardBootstrapPending as exc:
                 self._json_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
                 return
@@ -288,7 +290,15 @@ def _handler_for(
             except ValueError as exc:
                 self._json_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
-            self._json_response(payload)
+            except Exception:
+                # Keep the API contract JSON-shaped even if an unexpected
+                # on-demand materialization or serialization failure occurs.
+                traceback.print_exc()
+                self._json_error(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    "unexpected dashboard API error",
+                )
+                return
 
         def _window_days(self, query: dict[str, list[str]]) -> int:
             since_days = _bounded_positive_int(query, "since_days", 7)

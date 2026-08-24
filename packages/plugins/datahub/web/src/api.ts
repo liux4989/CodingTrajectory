@@ -809,7 +809,17 @@ export async function refreshDatahubData() {
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
-  const payload = (await response.json()) as T | { error?: { message?: string } };
+  const body = await response.text();
+  let payload: T | { error?: { message?: string } } | undefined;
+  if (body) {
+    try {
+      payload = JSON.parse(body) as T | { error?: { message?: string } };
+    } catch {
+      if (response.ok) {
+        throw new Error("The dashboard returned an invalid JSON response.");
+      }
+    }
+  }
   if (!response.ok) {
     const message =
       typeof payload === "object" &&
@@ -819,6 +829,9 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
         ? payload.error.message
         : `Request failed: ${response.status}`;
     throw new Error(message);
+  }
+  if (payload === undefined) {
+    throw new Error("The dashboard returned an empty response.");
   }
   return payload as T;
 }
