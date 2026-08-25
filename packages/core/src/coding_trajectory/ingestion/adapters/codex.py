@@ -59,7 +59,7 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
-_CODEX_FALLBACK_TITLE_MAX_LEN = 96
+_CODEX_PREVIEW_MAX_LEN = 96
 
 _CODEX_FILE_TOOL_NAMES: frozenset[str] = frozenset(
     {
@@ -890,17 +890,13 @@ def _extract_uuid_text(value: Any) -> str | None:
 
 def _codex_session_title(
     session_id: UUID,
-    meta: dict[str, Any],
     index_path: Path = _DEFAULT_CODEX_SESSION_INDEX,
 ) -> str | None:
-    title = _as_non_empty_str(meta.get("title")) or _as_non_empty_str(
-        meta.get("thread_name")
-    )
-    if title is not None:
-        return title
+    """Return the explicit Codex thread name from its local name index only."""
     if not index_path.is_file():
         return None
 
+    title: str | None = None
     try:
         with index_path.open(encoding="utf-8") as f:
             for line in f:
@@ -910,22 +906,55 @@ def _codex_session_title(
                     continue
                 if record.get("id") != str(session_id):
                     continue
-                return _as_non_empty_str(
+                candidate = _as_non_empty_str(
                     record.get("thread_name")
                 ) or _as_non_empty_str(record.get("title"))
+                if candidate is not None:
+                    title = candidate
     except OSError:
         return None
+    return title
+
+
+def _codex_session_preview(transcript: Iterable[TranscriptRecord]) -> str | None:
+    """Return a bounded first-user-message preview without inventing a title."""
+    for record in transcript:
+        if record.kind != "user_message":
+            continue
+        text = _as_non_empty_str(record.data.get("text"))
+        if text is None:
+            continue
+        text = " ".join(text.split())
+        if len(text) <= _CODEX_PREVIEW_MAX_LEN:
+            return text
+        return f"{text[: _CODEX_PREVIEW_MAX_LEN - 3].rstrip()}..."
     return None
 
 
-def _codex_fallback_title(value: Any) -> str | None:
+def _codex_preview_text(value: Any) -> str | None:
     text = _as_non_empty_str(value)
     if text is None:
         return None
     text = " ".join(text.split())
-    if len(text) <= _CODEX_FALLBACK_TITLE_MAX_LEN:
+    if len(text) <= _CODEX_PREVIEW_MAX_LEN:
         return text
-    return f"{text[: _CODEX_FALLBACK_TITLE_MAX_LEN - 3].rstrip()}..."
+    return f"{text[: _CODEX_PREVIEW_MAX_LEN - 3].rstrip()}..."
+
+
+def _extract_content_text(value: Any) -> str | None:
+    if not isinstance(value, list):
+        return None
+    texts = [
+        part.get("text")
+        for part in value
+        if isinstance(part, dict) and isinstance(part.get("text"), str)
+    ]
+    return " ".join(text for text in texts if text).strip() or None
+
+
+def _capture_codex_session_preview(state: Any, value: Any) -> None:
+    if state.session_preview is None:
+        state.session_preview = _codex_preview_text(value)
 
 
 def _codex_multi_agent_input(
@@ -967,7 +996,7 @@ def _codex_multi_agent_input(
         or _as_non_empty_str(meta.get("agent_nickname")),
         agent_role=_as_non_empty_str(meta.get("agent_role")) or source_name,
         cwd=_as_non_empty_str(meta.get("cwd")),
-        title=_codex_session_title(session_id, meta),
+        title=_codex_session_title(session_id),
         forked_from_id=_extract_uuid_text(meta.get("forked_from_id")),
         thread_spawn=(
             CodexThreadSpawn(
@@ -1206,6 +1235,10 @@ class CodexAdapter(BaseAdapter):
         context_window_tokens: int | None = None
         context_usage: list[ContextUsageObservation] = field(default_factory=list)
         runtime_observations: list[RuntimeObservation] = field(default_factory=list)
+        # The first persisted user message is a display preview, never an
+        # inferred thread name. Current Codex rollouts can encode it as either
+        # a legacy user_message event or a native UserMessage item.
+        session_preview: str | None = None
         projected_turn_ids: set[str] = field(default_factory=set)
         # Most recent reasoning effort seen on a turn_context record (real
         # string only). Drives effort_changed observation emission: a new turn
@@ -1328,44 +1361,8 @@ class CodexAdapter(BaseAdapter):
         return None
 
     def scan_header(self, source: Path) -> SessionHeader | None:
-        header: SessionHeader | None = None
-        for record in self._iter_records(source):
-            outer_type = record.get("type")
-            if outer_type == "session_meta" and header is None:
-                meta = record.get("payload") or {}
-                if not isinstance(meta, dict):
-                    return None
-                try:
-                    session_id = UUID(meta.get("id"))
-                except (ValueError, TypeError):
-                    return None
-                mechanism = _codex_multi_agent_input(meta, {}, session_id=session_id)
-                header = SessionHeader(
-                    session_id=session_id,
-                    vendor=Vendor.CODEX_CLI,
-                    parent_session_id=codex_parent_session_id(mechanism),
-                    title=mechanism.title,
-                    cwd=mechanism.cwd,
-                )
-                if header.title:
-                    return header
-                continue
-
-            if header is None or outer_type != "event_msg":
-                continue
-            payload = record.get("payload") or {}
-            if not isinstance(payload, dict) or payload.get("type") != "user_message":
-                continue
-            title = _codex_fallback_title(_extract_message_text(payload))
-            if title is not None:
-                return SessionHeader(
-                    session_id=header.session_id,
-                    vendor=header.vendor,
-                    parent_session_id=header.parent_session_id,
-                    title=title,
-                    cwd=header.cwd,
-                )
-        return header
+        """Read static identity and explicit title without deriving one from a message."""
+        return self.scan_identity(source)
 
     def _build_session(
         self,
@@ -1401,8 +1398,12 @@ class CodexAdapter(BaseAdapter):
             session_id=state.session_id, records=transcript, stabilizer=compact
         )
         extensions = codex_extensions(mechanism)
-        if extensions.codex is not None and state.spawn_links:
-            extensions.codex.spawn_links = dict(state.spawn_links)
+        if extensions.codex is not None:
+            extensions.codex.preview = state.session_preview or _codex_session_preview(
+                transcript
+            )
+            if state.spawn_links:
+                extensions.codex.spawn_links = dict(state.spawn_links)
 
         turns = project_transcript(
             session_id=state.session_id,
@@ -3283,6 +3284,11 @@ class CodexAdapter(BaseAdapter):
             )
 
         elif inner_type == "item_completed":
+            item = payload.get("item")
+            if isinstance(item, dict) and item.get("type") == "UserMessage":
+                _capture_codex_session_preview(
+                    state, _extract_content_text(item.get("content"))
+                )
             self._handle_native_command_execution(
                 payload,
                 ts,
@@ -3333,6 +3339,7 @@ class CodexAdapter(BaseAdapter):
             )
 
         elif inner_type == "user_message":
+            _capture_codex_session_preview(state, _extract_message_text(payload))
             turn_id_text = _as_non_empty_str(turn_id)
             starts_turn = (
                 turn_id_text is None or turn_id_text not in state.projected_turn_ids

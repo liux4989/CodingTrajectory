@@ -68,6 +68,7 @@ class SessionPayload(BaseModel):
     graph_id: str | None = None
     project: str | None = None
     title: str | None = None
+    preview: str | None = None
     vendors: list[str] = Field(default_factory=list)
     session_ids: list[str] = Field(default_factory=list)
     runtime: dict[str, Any] = Field(default_factory=dict)
@@ -958,6 +959,7 @@ def _datahub_session_item(item: Mapping[str, Any]) -> dict[str, Any]:
         "id": item.get("root_session_id"),
         "project": item.get("project"),
         "title": item.get("title"),
+        "preview": item.get("preview"),
         "vendors": list(item.get("vendors") or []),
         "sessions": list(item.get("session_ids") or []),
         "runtime": dict(item.get("runtime") or {}),

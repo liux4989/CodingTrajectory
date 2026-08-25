@@ -72,15 +72,28 @@ const columns: ColumnDef<SessionItem>[] = [
     cell: ({ row }) => <VendorBadges vendors={sessionVendors(row.original)} />,
   },
   {
-    accessorKey: "title",
-    header: ({ column }) => <DataTableColumnHeader column={column} label="Title" />,
-    cell: ({ getValue }) => {
-      const value = getValue<string | null>();
-      if (!value) return "-";
+    id: "title",
+    accessorFn: (row) => row.title ?? row.preview ?? "",
+    header: ({ column }) => <DataTableColumnHeader column={column} label="Title / preview" />,
+    cell: ({ row }) => {
+      const { preview, title } = row.original;
+      if (title) {
+        return (
+          <span className="max-w-[28ch] truncate inline-block" title={title}>
+            {title}
+          </span>
+        );
+      }
+      if (!preview) return <span className="text-muted-foreground">Untitled</span>;
       return (
-        <span className="max-w-[28ch] truncate inline-block" title={value}>
-          {value}
-        </span>
+        <div className="flex max-w-[28ch] items-center gap-1.5">
+          <Badge variant="outline" className="shrink-0 text-[0.65rem] uppercase tracking-wide">
+            Preview
+          </Badge>
+          <span className="truncate italic text-muted-foreground" title={preview}>
+            {preview}
+          </span>
+        </div>
       );
     },
   },
@@ -123,7 +136,7 @@ export function SessionsRoute() {
     globalFilterFn: (row, _columnId, filterValue: string) => {
       const term = filterValue.toLowerCase();
       const item = row.original;
-      return `${sessionId(item)} ${item.title ?? ""} ${sessionVendors(item).join(" ")} ${item.project ?? ""}`.toLowerCase().includes(term);
+      return `${sessionId(item)} ${item.title ?? ""} ${item.preview ?? ""} ${sessionVendors(item).join(" ")} ${item.project ?? ""}`.toLowerCase().includes(term);
     },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -152,7 +165,7 @@ export function SessionsRoute() {
           </Badge>
         </div>
       ) : null}
-      <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, vendor, project, or id" />
+      <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, preview, vendor, project, or id" />
       {sessions.isPending ? <TableSkeleton rows={6} cols={3} /> : null}
       {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} onRetry={() => sessions.refetch()} /> : null}
       {sessions.data ? (

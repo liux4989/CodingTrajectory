@@ -48,6 +48,14 @@ def session_title(session: Session) -> str | None:
     return None
 
 
+def session_preview(session: Session) -> str | None:
+    """Return a vendor-provided session preview, distinct from its title."""
+    extensions = session.extensions
+    if extensions and extensions.codex and extensions.codex.preview:
+        return extensions.codex.preview
+    return None
+
+
 def session_graph_title(session_graph: SessionGraph) -> str | None:
     """Return the first available title across the graph's sessions (root first)."""
     by_id = {session.session_id: session for session in session_graph.sessions}
@@ -60,6 +68,21 @@ def session_graph_title(session_graph: SessionGraph) -> str | None:
         title = session_title(session)
         if title:
             return title
+    return None
+
+
+def session_graph_preview(session_graph: SessionGraph) -> str | None:
+    """Return the root preview, otherwise the first available graph preview."""
+    by_id = {session.session_id: session for session in session_graph.sessions}
+    root = by_id.get(session_graph.root_session_id)
+    if root is not None:
+        preview = session_preview(root)
+        if preview:
+            return preview
+    for session in session_graph.sessions:
+        preview = session_preview(session)
+        if preview:
+            return preview
     return None
 
 

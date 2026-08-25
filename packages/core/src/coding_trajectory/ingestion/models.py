@@ -82,6 +82,7 @@ class CodexExtensions(BaseModel):
     multi_agent_mode: str | None = None
     agent_path: str | None = None
     cwd: str | None = None
+    preview: str | None = None
     title: str | None = None
     forked_from_id: str | None = None
     spawn_parent_thread_id: str | None = None

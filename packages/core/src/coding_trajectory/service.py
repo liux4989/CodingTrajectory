@@ -12,6 +12,7 @@ from uuid import UUID
 
 from coding_trajectory import debug
 from coding_trajectory.analysis.session_stats import (
+    session_graph_preview,
     session_graph_title,
 )
 from coding_trajectory.contracts import service_contract
@@ -76,6 +77,7 @@ def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any
             "graph_id": str(session_graph.root_session_id),
             "root_session_id": str(session_graph.root_session_id),
             "title": session_graph_title(session_graph),
+            "preview": session_graph_preview(session_graph),
             "vendors": vendors or None,
             "session_ids": [
                 str(session.session_id) for session in session_graph.sessions

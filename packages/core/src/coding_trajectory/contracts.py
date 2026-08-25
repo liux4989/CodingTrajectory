@@ -173,6 +173,7 @@ class SessionGraphSummary(ContractModel):
     root_session_id: str
     project: str | None = None
     title: str | None = None
+    preview: str | None = None
     vendors: list[str] = Field(default_factory=list)
     session_ids: list[str] = Field(default_factory=list)
     runtime: dict[str, Any] | None = None
