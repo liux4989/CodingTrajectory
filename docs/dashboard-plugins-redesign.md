@@ -485,6 +485,15 @@ covered. Avoid mechanical file moves during feature migration.
 - [Done] Add evidence-type, agent/branch, and outcome filters to the canonical
   session workspace while preserving legacy timeline links with redirects.
 
+### Phase 7: Make investigations restorable
+
+- [Done] Encode timeline evidence type, agent/branch, outcome, and selected
+  evidence entry in validated URL search state.
+- [Done] Restore selected entries beyond the first progressively rendered page
+  and report when a retained revision no longer contains a linked entry.
+- [Done] Present timeline revision, refresh lag, retained source-reference
+  coverage, and source ingestion failures beside the evidence view.
+
 ## Acceptance Criteria
 
 - One command starts every Datahub browser view.

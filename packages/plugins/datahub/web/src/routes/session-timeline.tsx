@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { AlertCircle, Bot, Box, MessageSquare, User, Wrench } from "lucide-react";
 
 import {
@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FilterLabel } from "@/components/table-cells";
+import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
 import { relativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
@@ -29,11 +30,13 @@ type OutcomeFilter = "all" | "failed" | "succeeded";
 
 export function SessionTimelineRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId" });
-  const [kind, setKind] = React.useState<TimelineKind | "all">("all");
-  const [agent, setAgent] = React.useState("all");
-  const [outcome, setOutcome] = React.useState<OutcomeFilter>("all");
+  const search = useSearch({ from: "/sessions/$sessionId" });
+  const navigate = useNavigate({ from: "/sessions/$sessionId" });
+  const delivery = useDatahubDelivery();
+  const kind = search.kind ?? "all";
+  const agent = search.agent ?? "all";
+  const outcome = search.outcome ?? "all";
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
-  const [selected, setSelected] = React.useState<SessionTimelineEntry | null>(null);
   const query = useQuery({
     queryKey: ["session-timeline", sessionId],
     queryFn: () => fetchSessionEvidenceTimeline(sessionId),
@@ -43,8 +46,17 @@ export function SessionTimelineRoute() {
 
   React.useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-    setSelected(null);
   }, [kind, agent, outcome, sessionId]);
+
+  const updateSearch = React.useCallback(
+    (updates: { kind?: TimelineKind; agent?: string; outcome?: Exclude<OutcomeFilter, "all">; entry?: string }) => {
+      void navigate({
+        search: (current) => ({ ...current, ...updates, view: "timeline" }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   if (query.isPending) {
     return (
@@ -74,11 +86,21 @@ export function SessionTimelineRoute() {
     if (outcome === "succeeded" && (entry.failed || !isTerminalSuccess(entry.status))) return false;
     return true;
   });
-  const visible = filtered.slice(0, visibleCount);
+  const selected = search.entry
+    ? payload.entries.find((entry) => entry.id === search.entry) ?? null
+    : null;
+  const selectedIndex = selected ? filtered.findIndex((entry) => entry.id === selected.id) : -1;
+  const effectiveVisibleCount = selectedIndex >= visibleCount ? selectedIndex + 1 : visibleCount;
+  const visible = filtered.slice(0, effectiveVisibleCount);
   const failed = payload.entries.filter((entry) => entry.failed).length;
   const subagents = new Set(
     payload.entries.map((entry) => entry.target_session_id).filter(Boolean),
   ).size;
+  const linkedEntries = payload.entries.filter(
+    (entry) => entry.item_ids.length > 0 || entry.event_ids.length > 0,
+  ).length;
+  const sourceFailures = delivery.sourceStatus?.failed ?? 0;
+  const incompleteSources = delivery.sourceStatus?.incomplete ?? 0;
 
   return (
     <div className="route-container w-full min-w-0 overflow-hidden pb-8">
@@ -96,6 +118,11 @@ export function SessionTimelineRoute() {
           <MetricCard label="Turns" value={new Set(payload.entries.map((entry) => entry.turn_id)).size} detail={`${agents.length} session branch(es)`} />
           <MetricCard label="Failures" value={failed} detail="Observed failed or error outcomes" />
           <MetricCard label="Child agents" value={subagents} detail="Linked through canonical graph edges" />
+          <MetricCard
+            label="Source linked"
+            value={`${linkedEntries}/${payload.entries.length}`}
+            detail={`${sourceFailures} failed · ${incompleteSources} incomplete source(s)`}
+          />
         </section>
 
         <Card className="min-w-0">
@@ -105,7 +132,7 @@ export function SessionTimelineRoute() {
           </CardHeader>
           <CardContent className="flex flex-wrap items-end gap-3">
             <FilterLabel label="Evidence type">
-              <Select value={kind} onValueChange={(value) => setKind(value as TimelineKind | "all")}>
+              <Select value={kind} onValueChange={(value) => updateSearch({ kind: value === "all" ? undefined : value as TimelineKind, entry: undefined })}>
                 <SelectTrigger className="min-w-44"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All evidence</SelectItem>
@@ -118,7 +145,7 @@ export function SessionTimelineRoute() {
               </Select>
             </FilterLabel>
             <FilterLabel label="Agent / branch">
-              <Select value={agent} onValueChange={setAgent}>
+              <Select value={agent} onValueChange={(value) => updateSearch({ agent: value === "all" ? undefined : value, entry: undefined })}>
                 <SelectTrigger className="min-w-52"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All agents</SelectItem>
@@ -127,7 +154,7 @@ export function SessionTimelineRoute() {
               </Select>
             </FilterLabel>
             <FilterLabel label="Outcome">
-              <Select value={outcome} onValueChange={(value) => setOutcome(value as OutcomeFilter)}>
+              <Select value={outcome} onValueChange={(value) => updateSearch({ outcome: value === "all" ? undefined : value as Exclude<OutcomeFilter, "all">, entry: undefined })}>
                 <SelectTrigger className="min-w-40"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All outcomes</SelectItem>
@@ -136,8 +163,19 @@ export function SessionTimelineRoute() {
                 </SelectContent>
               </Select>
             </FilterLabel>
+            {kind !== "all" || agent !== "all" || outcome !== "all" ? (
+              <Button variant="ghost" onClick={() => updateSearch({ kind: undefined, agent: undefined, outcome: undefined, entry: undefined })}>
+                Clear filters
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
+
+        <div className="panel flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-muted-foreground">
+          <span>Timeline revision {payload.revision}</span>
+          <span>{delivery.freshness?.lag_seconds == null ? "Refresh lag unavailable" : `${Math.round(delivery.freshness.lag_seconds)}s refresh lag`}</span>
+          <span>{linkedEntries} entries retain verified item/event references</span>
+        </div>
 
         {payload.warnings.map((warning) => (
           <div key={warning} className="panel flex items-start gap-2 border-warning/40 text-body-sm">
@@ -145,6 +183,12 @@ export function SessionTimelineRoute() {
             <span>{warning}</span>
           </div>
         ))}
+        {search.entry && !selected ? (
+          <div className="panel flex items-start gap-2 border-warning/40 text-body-sm">
+            <AlertCircle aria-hidden="true" className="mt-0.5 text-warning" />
+            <span>The selected evidence entry is not present in revision {payload.revision}.</span>
+          </div>
+        ) : null}
 
         <section aria-label="Session evidence" className="relative grid gap-3 pl-5 before:absolute before:bottom-4 before:left-[0.45rem] before:top-4 before:w-px before:bg-border-soft">
           {visible.map((entry) => (
@@ -152,7 +196,7 @@ export function SessionTimelineRoute() {
               key={entry.id}
               entry={entry}
               selected={selected?.id === entry.id}
-              onSelect={() => setSelected((current) => current?.id === entry.id ? null : entry)}
+              onSelect={() => updateSearch({ entry: selected?.id === entry.id ? undefined : entry.id })}
             />
           ))}
           {!filtered.length ? (

@@ -84,12 +84,32 @@ const todayRoute = createRoute({
   component: () => <RouteBoundary><OverviewRoute /></RouteBoundary>,
 });
 
+type SessionWorkspaceSearch = {
+  view: "timeline" | "context" | "tree" | "graph";
+  kind?: "user" | "assistant" | "tool" | "subagent" | "compaction";
+  agent?: string;
+  outcome?: "failed" | "succeeded";
+  entry?: string;
+};
+
 const contextWindowRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId",
-  validateSearch: (search: Record<string, unknown>): { view: "timeline" | "context" | "tree" | "graph" } => ({
-    view: search.view === "timeline" || search.view === "tree" || search.view === "graph" ? search.view : "context",
-  }),
+  validateSearch: (search: Record<string, unknown>): SessionWorkspaceSearch => {
+    const view = search.view === "timeline" || search.view === "tree" || search.view === "graph"
+      ? search.view
+      : "context";
+    const kind = search.kind === "user" || search.kind === "assistant" || search.kind === "tool" || search.kind === "subagent" || search.kind === "compaction"
+      ? search.kind
+      : undefined;
+    return {
+      view,
+      kind: view === "timeline" ? kind : undefined,
+      agent: view === "timeline" && typeof search.agent === "string" && search.agent ? search.agent : undefined,
+      outcome: view === "timeline" && (search.outcome === "failed" || search.outcome === "succeeded") ? search.outcome : undefined,
+      entry: view === "timeline" && typeof search.entry === "string" && search.entry ? search.entry : undefined,
+    };
+  },
   component: () => <RouteBoundary><SessionWorkspaceRoute /></RouteBoundary>,
 });
 
