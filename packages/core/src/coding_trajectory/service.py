@@ -529,8 +529,7 @@ def resolve_store(
         target_session_graph_id = cache.root_for_entrypoint(normalized_entrypoint_id)
         cached_paths = cache.paths_for_session_graph(target_session_graph_id)
         filename_match = any(
-            normalized_entrypoint_id in Path(path).stem.lower()
-            for path in cached_paths
+            normalized_entrypoint_id in Path(path).stem.lower() for path in cached_paths
         )
         if target_session_graph_id == normalized_entrypoint_id or filename_match:
             try:
@@ -899,9 +898,7 @@ def _handle_session_tree(params: dict[str, Any], context: ServiceContext) -> Any
     )
 
     entrypoint = _session_graph_entrypoint_id(params)
-    session_graph = _resolve_session_graph(
-        context.store, entrypoint
-    )
+    session_graph = _resolve_session_graph(context.store, entrypoint)
     tree = build_conversation_tree(session_graph)
     run = orchestration_run_for_entrypoint(
         session_graph,
@@ -1222,6 +1219,29 @@ def _event_ids_for_turn(
     raise ResourceNotFoundError(f"turn not found in selected session: {turn_id}")
 
 
+def _estimate_handler(method: str) -> ServiceHandler:
+    """Dispatch adapter for ``estimate.*`` methods.
+
+    Production traffic is short-circuited in :meth:`ServiceRuntime.call` (the
+    ledger-only methods never build a store). This handler keeps
+    ``dispatch(method, ...)`` consistent with that path, the same pattern as
+    ``project.list``.
+    """
+
+    def handler(params: dict[str, Any], context: ServiceContext) -> Any:
+        from coding_trajectory.estimation import serve_estimate
+
+        return serve_estimate(
+            method,
+            params,
+            global_scope=context.global_scope,
+            current_dir=context.current_dir,
+            cache=context.cache,
+        )
+
+    return handler
+
+
 SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "project.list": _handle_project_list,
     "project.sessions": _handle_project_sessions,
@@ -1238,4 +1258,11 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "session.tool_usage": _handle_session_tool_usage,
     "session.events": _handle_session_events,
     "session.items": _handle_session_items,
+    "estimate.predict": _estimate_handler("estimate.predict"),
+    "estimate.bind": _estimate_handler("estimate.bind"),
+    "estimate.get": _estimate_handler("estimate.get"),
+    "estimate.list": _estimate_handler("estimate.list"),
+    "estimate.calibration": _estimate_handler("estimate.calibration"),
+    "estimate.backfill.start": _estimate_handler("estimate.backfill.start"),
+    "estimate.backfill.status": _estimate_handler("estimate.backfill.status"),
 }

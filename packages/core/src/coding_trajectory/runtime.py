@@ -50,7 +50,11 @@ def _entrypoint_ids_from_params(params: dict[str, Any]) -> list[str]:
 def _entrypoint_ids(requests: list[dict[str, Any]]) -> list[str]:
     ids: list[str] = []
     for request in requests:
-        if request.get("method") in {"living.events", "living.sessions", "project.list"}:
+        if request.get("method") in {
+            "living.events",
+            "living.sessions",
+            "project.list",
+        }:
             continue
         params = request.get("params") or {}
         if not isinstance(params, dict):
@@ -251,6 +255,18 @@ class ServiceRuntime:
                     validated_params,
                     current_dir=self.current_dir,
                     global_scope=self.global_scope,
+                )
+            )
+        if method.startswith("estimate."):
+            from coding_trajectory.estimation import serve_estimate
+
+            return contract.validate_response(
+                serve_estimate(
+                    method,
+                    validated_params,
+                    global_scope=self.global_scope,
+                    current_dir=self.current_dir,
+                    cache=self.cache,
                 )
             )
 
