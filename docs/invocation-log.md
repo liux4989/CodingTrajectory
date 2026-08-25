@@ -172,7 +172,7 @@ invocation, failure, warning, and latency sections.
 Outside the CLI, the log remains open to ad-hoc tooling:
 
 - Standard JSONL pipelines (`jq`, `pandas`, SQL-over-JSONL).
-- The dashboard plugin, as a future visualization source (usage over time,
+- The datahub plugin, as a future visualization source (usage over time,
   warnings by vendor, latency regressions across versions).
 - Periodic maintenance reports summarizing which commands run, which vendors
   produce the most degraded output, and where adapter work should be focused.

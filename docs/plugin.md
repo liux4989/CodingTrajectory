@@ -95,9 +95,9 @@ Dispatch rules:
   unchanged so the plugin owns its full help text. Core renders only the
   brief `ct plugin` index (names + descriptions).
 
-For example, `ct plugin dashboard session context-window abc123` dispatches
-the dashboard entry script with `session context-window abc123`. Bare
-`dashboard project` and `dashboard session` are help namespaces, not aliases
+For example, `ct plugin datahub session context-window abc123` dispatches
+the datahub entry script with `session context-window abc123`. Bare
+`datahub project` and `datahub session` are help namespaces, not aliases
 for core navigation commands.
 
 Plugins that need first-party one-shot reports should call stable CLI surfaces,
@@ -165,22 +165,22 @@ tool environment.
 
 ## Dashboard Context Window
 
-The dashboard plugin's `session context-window` subcommand projects the existing
+The datahub plugin's `session context-window` subcommand projects the existing
 session overview, stats, and usage JSON surfaces into one context-composition
 report:
 
 ```text
-ct plugin dashboard session context-window SESSION_ID
-ct plugin dashboard session context-window SESSION_ID --turn TURN_ID
-ct plugin dashboard session context-window SESSION_ID --output json
+ct plugin datahub session context-window SESSION_ID
+ct plugin datahub session context-window SESSION_ID --turn TURN_ID
+ct plugin datahub session context-window SESSION_ID --output json
 ```
 
 The default report is compact text. JSON preserves token evidence as an object
-with `value`, `confidence`, and `source`, so dashboards and agents do not need
+with `value`, `confidence`, and `source`, so datahubs and agents do not need
 to infer whether a number is exact or estimated.
 
 Core owns optional models.dev enrichment and emits request-summed price
-evidence next to normalized usage. The dashboard consumes that evidence rather
+evidence next to normalized usage. The datahub consumes that evidence rather
 than repricing aggregate turn or session buckets.
 
 Plugin consumers may call `session.tool_usage` for estimated visible-content
@@ -202,7 +202,7 @@ Provider behavior remains explicit:
 - User and assistant timeline deltas estimate visible overview text.
 - Tool timeline rows do not invent token deltas when result text is unavailable.
 
-The dashboard session list contains branch-local orchestration runs. It marks
+The datahub session list contains branch-local orchestration runs. It marks
 each row as the lineage root or an ordinary fork and shows the number of agents
 owned by that branch. Session detail exposes three URL-addressable views:
 
@@ -212,7 +212,7 @@ owned by that branch. Session detail exposes three URL-addressable views:
 - `/sessions/$sessionId/graph` consumes `/api/sessions/graph` and shows only the
   selected branch plus its spawned agents.
 
-The retained dashboard facts preserve `lineage_root_session_id` so an
+The retained datahub facts preserve `lineage_root_session_id` so an
 incremental update replaces every branch-run partition in the affected
 conversation family without recombining those runs in graph metrics.
 
@@ -220,8 +220,8 @@ conversation family without recombining those runs in graph metrics.
 
 ### Goal
 
-Add cleanup operations to the `dashboard` plugin so destructive actions live
-under the dashboard's `project` and `session` command families. The first
+Add cleanup operations to the `datahub` plugin so destructive actions live
+under the datahub's `project` and `session` command families. The first
 version should stay narrow: clean up old projects and clean up empty session
 logs.
 
@@ -239,10 +239,10 @@ uses local policy about what is safe to delete.
 ### Command Shape
 
 ```text
-ct plugin dashboard web [--host 127.0.0.1] [--port 8765] [--open]
-ct plugin dashboard project cleanup [--dry-run] [--older-than 30d] [--path PATH] [--detail]
-ct plugin dashboard session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm]
-ct plugin dashboard session context-window SESSION_ID [flags]
+ct plugin datahub web [--host 127.0.0.1] [--port 8765] [--open]
+ct plugin datahub project cleanup [--dry-run] [--older-than 30d] [--path PATH] [--detail]
+ct plugin datahub session cleanup [--agent-vendor codex|pi] [--trash|--delete] [--confirm]
+ct plugin datahub session context-window SESSION_ID [flags]
 ```
 
 Project cleanup behavior:
@@ -256,7 +256,7 @@ Project cleanup behavior:
   terminal UI modes.
 
 The first command surface should remain this small. Cleanup is CLI-only; the
-web dashboard stays read-only.
+web datahub stays read-only.
 
 ### Project Cleanup Rules
 
@@ -306,16 +306,16 @@ instead of a large flag surface. The interactive flow can guide the user through
 review, selection, and execution while keeping the simple CLI useful for
 automation.
 
-The dashboard also provides a plugin-local web program:
+The datahub also provides a plugin-local web program:
 
-- `ct plugin dashboard web` starts a local HTTP server for the built React
-  dashboard.
+- `ct plugin datahub web` starts a local HTTP server for the built React
+  datahub.
 - The Python server serves every read route from the persistent incremental
   read models (SQLite) and serves the built frontend from
-  `packages/plugins/dashboard/web/dist`.
-- The frontend package lives under `packages/plugins/dashboard/web` and uses
+  `packages/plugins/datahub/web/dist`.
+- The frontend package lives under `packages/plugins/datahub/web` and uses
   React, TanStack Query, TanStack Router, and local shadcn-style UI primitives.
-- Cleanup is CLI-only; the web dashboard stays read-only.
+- Cleanup is CLI-only; the web datahub stays read-only.
 
 ### Safety Model
 

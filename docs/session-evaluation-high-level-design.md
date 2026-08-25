@@ -179,7 +179,7 @@ Canonical ct session graph
   -> project/category/difficulty model reports
 ```
 
-The canonical core remains the source of truth for sessions, turns, items, usage, and tool evidence. Evaluation is a versioned derived analysis. The dashboard server owns evaluation jobs and Codex app-server lifecycle. Raw app-server thread IDs do not become evaluation identities.
+The canonical core remains the source of truth for sessions, turns, items, usage, and tool evidence. Evaluation is a versioned derived analysis. The datahub server owns evaluation jobs and Codex app-server lifecycle. Raw app-server thread IDs do not become evaluation identities.
 
 CT owns scheduling, evidence budgets, expansion authorization, executable safety, aggregation, and persistence. Codex app-server owns the semantic reasoning turn. The system does not implement a second general-purpose agent loop, and production evaluation does not depend on implicit skill discovery.
 

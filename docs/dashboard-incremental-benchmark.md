@@ -39,7 +39,7 @@ RSS. The original transcript-copying bootstrap took 533.631 seconds, persisted
 a 2.41 GB database, and peaked near 4.93 GB RSS.
 
 Core adapters still perform canonical vendor parsing. After stable identifiers
-are assigned, dashboard readiness requests the neutral `measurements` retention
+are assigned, datahub readiness requests the neutral `measurements` retention
 policy, which releases message text, reasoning text, tool bodies, unused event
 payloads, context source text, and composition categories before sessions
 accumulate into a component. It retains hierarchy, turn/item timing, tool
@@ -61,7 +61,7 @@ On a real 229-session component backed by 953,200,289 source bytes:
 On the same component, comparing the current full and measurement-retained
 paths in fresh processes:
 
-- all three dashboard route entities and all 688 canonical fact rows had the
+- all three datahub route entities and all 688 canonical fact rows had the
   identical SHA-256 digest
   `15ca207fd57432ec92ab005ffdd6bcd22faf486aa0f84dc2b904ba541c33ebdb`;
 - peak resident memory fell from 672,284,672 to 404,062,208 bytes;
@@ -112,17 +112,17 @@ with the bounded revision window; lazy evidence and browser query caches use
 shorter TTLs than core economics. Garbage collection now runs after both cold
 bootstrap and normal inventory reconciliation, so an already-ready database
 also removes legacy source-message copies and compacts only when at least 64 MB
-and one quarter of its pages are reclaimable. The dashboard retains 96 change
+and one quarter of its pages are reclaimable. The datahub retains 96 change
 revisions (about 24 minutes at the normal 15-second reconciliation interval);
 older browser cursors receive the existing reset-required response instead of
 keeping unbounded entity and delivery history.
 
-Applying the same GC to the existing long-lived dashboard database reduced the
+Applying the same GC to the existing long-lived datahub database reduced the
 main file from 2,640,257,024 to 189,976,576 bytes. A post-vacuum WAL checkpoint
 left the WAL at zero bytes. This operation removed only disposable derived
 history; immutable JSONL sources were not modified.
 
-The dashboard now writes `read-models-v3.sqlite3` with a strict store-format
+The datahub now writes `read-models-v3.sqlite3` with a strict store-format
 marker. Store initialization does not migrate old columns or decode legacy
 payload envelopes. An obsolete v2 database is never opened as a fallback; v3
 bootstraps progressively from immutable JSONL. After v3 completes, normal

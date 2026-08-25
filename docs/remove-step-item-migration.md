@@ -322,7 +322,7 @@ Do not retain a `step-detail` alias.
 Update:
 
 - `packages/plugins/review/review.py`
-- dashboard context-window projections and web UI
+- datahub context-window projections and web UI
 - any plugin consuming step categories or step IDs
 
 Replace labels such as:
@@ -360,7 +360,7 @@ runtime help must not describe `Step` as canonical.
 5. Rewrite overview, activity, teammate, and lineage projections.
 6. Replace `step-detail` with `item-detail`.
 7. Redesign metrics around turn usage and explicit usage attribution.
-8. Update plugins and dashboard labels/payload consumers.
+8. Update plugins and datahub labels/payload consumers.
 9. Update active documentation.
 10. Run repository-wide stale-reference checks and real-session validation.
 

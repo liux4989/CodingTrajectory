@@ -151,10 +151,10 @@ coding-trajectory/
 │       │   ├── pyproject.toml
 │       │   ├── code_time.py
 │       │   ├── code_time_web.py
-│       ├── dashboard/                      # `dashboard` plugin
+│       ├── dashboard/                      # `datahub` plugin
 │       │   ├── pyproject.toml
-│       │   ├── dashboard.py                # Dashboard CLI entry point
-│       │   ├── dashboard_web.py            # Python HTTP server for web dashboard
+│       │   ├── datahub.py                # Datahub CLI entry point
+│       │   ├── datahub_web.py            # Python HTTP server for web datahub
 │       │   ├── context_window.py           # Context composition projection
 │       │   ├── token_pricing.py             # models.dev pricing and model metadata
 │       │   ├── cleanup.py                  # Project/session cleanup logic
@@ -323,8 +323,8 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct session events --event-id EVENT_ID [--event-id EVENT_ID ...]` | Event detail (JSON) |
 | `uv run ct session events SESSION_ID --type TYPE` | Filtered event search |
 | `uv run ct plugin list` | List available plugins |
-| `uv run ct plugin dashboard web` | Start web dashboard |
-| `uv run ct plugin dashboard benchmark` | Benchmark read-only dashboard API projections |
+| `uv run ct plugin datahub web` | Start web datahub |
+| `uv run ct plugin datahub benchmark` | Benchmark read-only datahub API projections |
 | `uv run ct plugin code-time` | Today's coding time summary |
 
 ### Testing

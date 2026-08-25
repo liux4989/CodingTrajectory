@@ -1,0 +1,38 @@
+name = "datahub"
+description = "Project and session data hub with analytics and management."
+entry = "datahub.py"
+
+[requires]
+"project.list" = 2
+"project.sessions" = 2
+"session.overview" = 2
+"session.tree" = 2
+"session.stats" = 2
+"session.usage" = 2
+"session.model_usage" = 2
+"session.tool_usage" = 2
+"session.items" = 2
+"session.events" = 2
+"graph.overview" = 2
+"graph.stats" = 2
+"graph.usage" = 2
+
+[[tools]]
+name = "."
+summary = "Show dashboard entry information."
+
+[[tools]]
+name = "web"
+summary = "Run the dashboard web program."
+
+[[tools]]
+name = "project/cleanup"
+summary = "Clean old project directories."
+
+[[tools]]
+name = "session/cleanup"
+summary = "Clean orphaned or low-value session logs."
+
+[[tools]]
+name = "session/context-window"
+summary = "Inspect session context composition and trajectory events."
