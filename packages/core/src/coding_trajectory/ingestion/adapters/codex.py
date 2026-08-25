@@ -157,6 +157,7 @@ class _PendingExecWrapper:
     started_at: datetime
     call_record: TranscriptRecord
     invocations: list[_StaticExecInvocation]
+    turn_id: str | None = None
     matched_native_indices: set[int] = field(default_factory=set)
     derived_records: dict[int, TranscriptRecord] = field(default_factory=dict)
     closed: bool = False
@@ -744,23 +745,95 @@ def _parse_json_blob(raw: Any) -> Any:
 def _tool_status(
     value: Any, *, default: ToolStatus = ToolStatus.REQUESTED
 ) -> ToolStatus:
-    if value == "completed":
+    normalized = (
+        re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value).replace("-", "_").lower()
+        if isinstance(value, str)
+        else None
+    )
+    if normalized == "completed":
         return ToolStatus.COMPLETED
-    if value in {"failed", "declined"}:
+    if normalized in {"failed", "declined"}:
         return ToolStatus.FAILED
-    if value == "in_progress":
+    if normalized == "in_progress":
         return ToolStatus.IN_PROGRESS
     return default
 
 
-def _tool_result_status(payload: dict[str, Any], output: Any) -> ToolStatus:
+def _tool_result_status(
+    payload: dict[str, Any], output: Any, *, exec_wrapper: bool = False
+) -> ToolStatus:
     if isinstance(payload.get("success"), bool):
         return ToolStatus.COMPLETED if payload["success"] else ToolStatus.FAILED
     status = _tool_status(payload.get("status"), default=ToolStatus.COMPLETED)
     if status != ToolStatus.COMPLETED:
         return status
+    # Custom ``exec`` cells often keep their own transport status as
+    # ``completed`` even when the JavaScript body failed.  This establishes
+    # only the wrapper's result—it must never be applied to a statically
+    # reconstructed nested action.
+    if exec_wrapper and _is_exec_wrapper_failure(output):
+        return ToolStatus.FAILED
     success = infer_tool_success(output)
     return ToolStatus.FAILED if success is False else ToolStatus.COMPLETED
+
+
+def _walk_text_values(value: Any) -> Iterator[str]:
+    """Yield text leaves from a JSON-like tool result without coercing data."""
+
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for nested in value.values():
+            yield from _walk_text_values(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _walk_text_values(nested)
+
+
+def _is_exec_syntax_error(output: Any) -> bool:
+    """Return whether a failed exec wrapper could not parse before running.
+
+    A failed wrapper normally cannot establish the outcome of a nested call:
+    post-processing such as ``text(r.content)`` can fail after a native action
+    succeeded. A JavaScript syntax error is different—the body never executes,
+    so the raw ``exec`` failure must remain visible rather than becoming a
+    derived unknown action.
+    """
+
+    return any(
+        "script error" in text.lower() and "syntaxerror" in text.lower()
+        for text in _walk_text_values(output)
+    )
+
+
+def _is_exec_wrapper_failure(output: Any) -> bool:
+    """Return whether a custom exec wrapper reports its own failure."""
+
+    return any(
+        "script failed" in text.lower() or "script error:" in text.lower()
+        for text in _walk_text_values(output)
+    )
+
+
+def _has_explicit_exec_wrapper_result(output: Any) -> bool:
+    """Return whether an exec wrapper carries result content beyond its banner.
+
+    ``Script completed`` is a runtime status for the JavaScript wrapper, not
+    outcome evidence for a nested call.  A single lexically known nested call
+    can instead use its wrapper output as a historical fallback only when the
+    wrapper also persisted actual result content.
+    """
+
+    for text in _walk_text_values(output):
+        cleaned = re.sub(
+            r"^\s*script completed\s*\n(?:wall time[^\n]*\n)?output:\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+        if cleaned:
+            return True
+    return False
 
 
 def _extract_message_text(payload: dict[str, Any]) -> str | None:
@@ -1163,6 +1236,21 @@ class CodexAdapter(BaseAdapter):
         pending_exec_wrappers: dict[str, _PendingExecWrapper] = field(
             default_factory=dict
         )
+        # Every custom ``exec`` call, including cells whose JavaScript cannot
+        # be statically parsed. Its wrapper result can still be failed even
+        # though it gives no nested-tool outcome.
+        exec_wrapper_call_ids: set[str] = field(default_factory=set)
+        # Direct function calls sometimes receive a terminal ThreadItem whose
+        # item id is exactly the response-item call id (for example,
+        # ``spawn_agent`` -> ``SubAgentActivity``). Keep the original call as
+        # the canonical action and enrich it from that stronger terminal fact.
+        direct_function_calls: dict[str, TranscriptRecord] = field(
+            default_factory=dict
+        )
+        native_direct_result_records: dict[str, TranscriptRecord] = field(
+            default_factory=dict
+        )
+        native_direct_output_authoritative: set[str] = field(default_factory=set)
         # Native CommandExecution ids already emitted from item_started. A
         # later item_completed updates the same canonical item rather than
         # creating a second command activity.
@@ -1466,14 +1554,70 @@ class CodexAdapter(BaseAdapter):
         return "unknown"
 
     @staticmethod
+    def _native_terminal_status(item: dict[str, Any], *, completed: bool) -> ToolStatus:
+        """Normalize explicit native terminal status without wrapper inference."""
+
+        if isinstance(item.get("success"), bool):
+            return ToolStatus.COMPLETED if item["success"] else ToolStatus.FAILED
+        return _tool_status(
+            item.get("status"),
+            default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
+        )
+
+    @staticmethod
+    def _native_item_timing(
+        payload: dict[str, Any], timestamp: datetime
+    ) -> tuple[datetime, datetime, dict[str, int]]:
+        """Normalize optional rollout timing while retaining raw evidence.
+
+        Historical terminal items often carry both epoch-millisecond endpoints
+        on the enclosing event. The canonical item interval uses those values;
+        provenance retains the original numbers for lossless inspection.
+        """
+
+        raw_started = payload.get("started_at_ms")
+        raw_completed = payload.get("completed_at_ms")
+        started_at = parse_timestamp(raw_started) or timestamp
+        completed_at = parse_timestamp(raw_completed) or timestamp
+        if completed_at < started_at:
+            # Do not manufacture a negative canonical interval from malformed
+            # telemetry. The raw values remain available in provenance below.
+            started_at = completed_at
+        timing = {
+            key: value
+            for key, value in (
+                ("started_at_ms", raw_started),
+                ("completed_at_ms", raw_completed),
+            )
+            if isinstance(value, int) and not isinstance(value, bool)
+        }
+        if len(timing) == 2:
+            duration = timing["completed_at_ms"] - timing["started_at_ms"]
+            if duration >= 0:
+                timing["duration_ms"] = duration
+        return started_at, completed_at, timing
+
+    @staticmethod
     def _pending_exec_wrapper_candidates(
         state: _ParseState,
         *,
         timestamp: datetime,
         predicate: Callable[[_StaticExecInvocation], bool],
+        turn_id: str | None = None,
     ) -> list[tuple[_PendingExecWrapper, int]]:
         candidates: list[tuple[_PendingExecWrapper, int]] = []
         for wrapper in state.pending_exec_wrappers.values():
+            # A native item cannot precede the wrapper that lexically contains
+            # it. When both records carry a turn id, crossing turns is likewise
+            # not evidence of the same nested call.
+            if timestamp < wrapper.started_at:
+                continue
+            if (
+                turn_id is not None
+                and wrapper.turn_id is not None
+                and turn_id != wrapper.turn_id
+            ):
+                continue
             if (
                 wrapper.closed
                 and wrapper.completed_at is not None
@@ -1494,6 +1638,7 @@ class CodexAdapter(BaseAdapter):
         *,
         command: str | None,
         timestamp: datetime,
+        turn_id: str | None = None,
     ) -> tuple[_PendingExecWrapper, int] | None:
         key = _command_match_key(command)
         if key is None:
@@ -1502,6 +1647,7 @@ class CodexAdapter(BaseAdapter):
             state,
             timestamp=timestamp,
             predicate=lambda invocation: _command_match_key(invocation.command) == key,
+            turn_id=turn_id,
         )
         if len(candidates) != 1:
             return None
@@ -1515,11 +1661,13 @@ class CodexAdapter(BaseAdapter):
         *,
         timestamp: datetime,
         predicate: Callable[[_StaticExecInvocation], bool],
+        turn_id: str | None = None,
     ) -> tuple[_PendingExecWrapper, int] | None:
         candidates = self._pending_exec_wrapper_candidates(
             state,
             timestamp=timestamp,
             predicate=predicate,
+            turn_id=turn_id,
         )
         if len(candidates) != 1:
             return None
@@ -1558,9 +1706,19 @@ class CodexAdapter(BaseAdapter):
         *,
         timestamp: datetime,
         wrapper_status: ToolStatus,
+        wrapper_output: Any,
         transcript: list[TranscriptRecord],
     ) -> None:
-        """Emit typed facts that old JSONL proves lexically, not by outcome."""
+        """Emit typed fallback facts only where source evidence permits it."""
+
+        # A single static invocation plus result payload is an observed wrapper
+        # outcome. Multiple invocations remain ambiguous even when their shared
+        # code cell completed, because the output cannot safely be attributed.
+        observed_wrapper_result = (
+            len(wrapper.invocations) == 1
+            and wrapper_status == ToolStatus.COMPLETED
+            and _has_explicit_exec_wrapper_result(wrapper_output)
+        )
 
         for index, invocation in enumerate(wrapper.invocations):
             if index in wrapper.matched_native_indices:
@@ -1571,13 +1729,19 @@ class CodexAdapter(BaseAdapter):
                 "tool_name": invocation.tool_name,
                 "tool_call_id": tool_call_id,
                 "input": input_data,
-                # A completed outer code cell says nothing about a nested
-                # command exit code or non-command tool result.
-                "status": ToolStatus.REQUESTED.value,
+                "status": (
+                    ToolStatus.COMPLETED.value
+                    if observed_wrapper_result
+                    else ToolStatus.REQUESTED.value
+                ),
                 "item_kind": invocation.item_kind,
                 "vendor_data": self._activity_data(
-                    outcome="unknown",
-                    fidelity="derived_static",
+                    outcome=("succeeded" if observed_wrapper_result else "unknown"),
+                    fidelity=(
+                        "observed_wrapper"
+                        if observed_wrapper_result
+                        else "derived_static"
+                    ),
                     activity_kind=(
                         "command"
                         if invocation.item_kind == "command_execution"
@@ -1595,6 +1759,11 @@ class CodexAdapter(BaseAdapter):
                         "nested_index": index,
                         "source_offset": invocation.source_offset,
                         "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+                        **(
+                            {"wrapper_result_observed": True}
+                            if observed_wrapper_result
+                            else {}
+                        ),
                     },
                 ),
             }
@@ -1611,6 +1780,23 @@ class CodexAdapter(BaseAdapter):
             )
             transcript.append(activity_record)
             wrapper.derived_records[index] = activity_record
+            if observed_wrapper_result:
+                transcript.append(
+                    TranscriptRecord(
+                        sequence=len(transcript),
+                        timestamp=timestamp,
+                        vendor=Vendor.CODEX_CLI,
+                        role="tool",
+                        kind="tool_result",
+                        data={
+                            "tool_call_id": tool_call_id,
+                            "tool_name": invocation.tool_name,
+                            "output": wrapper_output,
+                            "status": ToolStatus.COMPLETED.value,
+                        },
+                        fidelity="derived",
+                    )
+                )
 
     def _handle_static_exec_wrapper_output(
         self,
@@ -1627,13 +1813,39 @@ class CodexAdapter(BaseAdapter):
             return
         wrapper.closed = True
         wrapper.completed_at = timestamp
-        wrapper_status = _tool_result_status(payload, payload.get("output"))
+        wrapper_status = _tool_result_status(
+            payload,
+            payload.get("output"),
+            exec_wrapper=True,
+        )
+        if wrapper_status == ToolStatus.FAILED and _is_exec_syntax_error(
+            payload.get("output")
+        ):
+            # A parse failure occurs before any nested tools can execute. Keep
+            # the raw failed exec row instead of hiding it behind a lexical
+            # WebSearch/command fallback that never ran.
+            vendor_data = wrapper.call_record.data.setdefault("vendor_data", {})
+            if isinstance(vendor_data, dict):
+                vendor_data.update(
+                    self._activity_data(
+                        outcome="failed",
+                        fidelity="observed_wrapper",
+                        activity_kind=None,
+                        provenance={
+                            "tool_call_id": wrapper.call_id,
+                            "reason": "exec_syntax_error_before_nested_execution",
+                            "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+                        },
+                    )
+                )
+            return
         # The public wrapper is evidence, not a parallel visible action, once
         # every statically proven nested activity has its own canonical row.
         self._append_derived_exec_activities(
             wrapper,
             timestamp=timestamp,
             wrapper_status=wrapper_status,
+            wrapper_output=payload.get("output"),
             transcript=transcript,
         )
         self._hide_expanded_exec_wrapper(wrapper)
@@ -1661,13 +1873,16 @@ class CodexAdapter(BaseAdapter):
             item.get("status"),
             default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
         )
+        started_at, completed_at, timing = self._native_item_timing(payload, timestamp)
+        turn_id = _as_non_empty_str(payload.get("turn_id"))
         outcome = self._native_command_outcome(status=status, exit_code=exit_code)
         matching = state.native_command_bindings.get(command_id)
         if matching is None:
             matching = self._match_pending_exec_wrapper(
                 state,
                 command=command,
-                timestamp=timestamp,
+                timestamp=completed_at,
+                turn_id=turn_id,
             )
             if matching is not None:
                 state.native_command_bindings[command_id] = matching
@@ -1687,8 +1902,10 @@ class CodexAdapter(BaseAdapter):
                         "nested_index": index,
                         "native_command_id": command_id,
                         "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+                        **timing,
                     },
                 )
+                derived.timestamp = started_at
                 derived.data.update(
                     {
                         "status": status.value,
@@ -1701,7 +1918,7 @@ class CodexAdapter(BaseAdapter):
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
-                            timestamp=timestamp,
+                            timestamp=completed_at,
                             vendor=Vendor.CODEX_CLI,
                             role="tool",
                             kind="tool_result",
@@ -1734,6 +1951,7 @@ class CodexAdapter(BaseAdapter):
                 if completed
                 else "event_msg.item_started",
                 "source_kind": _as_non_empty_str(item.get("source")),
+                **timing,
             },
         )
         if command_id in state.native_command_ids:
@@ -1741,7 +1959,7 @@ class CodexAdapter(BaseAdapter):
                 transcript.append(
                     TranscriptRecord(
                         sequence=len(transcript),
-                        timestamp=timestamp,
+                        timestamp=completed_at,
                         vendor=Vendor.CODEX_CLI,
                         role="tool",
                         kind="tool_result",
@@ -1759,7 +1977,6 @@ class CodexAdapter(BaseAdapter):
             return
 
         state.native_command_ids.add(command_id)
-        started_at = parse_timestamp(payload.get("started_at_ms")) or timestamp
         transcript.append(
             TranscriptRecord(
                 sequence=len(transcript),
@@ -1785,7 +2002,7 @@ class CodexAdapter(BaseAdapter):
             transcript.append(
                 TranscriptRecord(
                     sequence=len(transcript),
-                    timestamp=timestamp,
+                    timestamp=completed_at,
                     vendor=Vendor.CODEX_CLI,
                     role="tool",
                     kind="tool_result",
@@ -1818,12 +2035,17 @@ class CodexAdapter(BaseAdapter):
         output: Any = None,
         path: str | None = None,
         operation: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+        provenance: dict[str, Any] | None = None,
     ) -> bool:
         """Resolve a late native item onto its prior static wrapper child."""
 
         derived = wrapper.derived_records.get(index)
         if derived is None:
             return False
+        canonical_started_at = started_at or timestamp
+        canonical_completed_at = completed_at or timestamp
         activity = self._activity_data(
             outcome=outcome,
             fidelity="derived_matched_native",
@@ -1835,8 +2057,10 @@ class CodexAdapter(BaseAdapter):
                 "native_item_id": native_id,
                 "native_item_type": native_type,
                 "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+                **(provenance or {}),
             },
         )
+        derived.timestamp = canonical_started_at
         derived.data.update(
             {
                 "tool_name": tool_name,
@@ -1857,7 +2081,7 @@ class CodexAdapter(BaseAdapter):
         transcript.append(
             TranscriptRecord(
                 sequence=len(transcript),
-                timestamp=timestamp,
+                timestamp=canonical_completed_at,
                 vendor=Vendor.CODEX_CLI,
                 role="tool",
                 kind="tool_result",
@@ -1891,17 +2115,24 @@ class CodexAdapter(BaseAdapter):
         output: Any = None,
         path: str | None = None,
         operation: str | None = None,
+        turn_id: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+        provenance: dict[str, Any] | None = None,
     ) -> None:
         """Project a non-command Codex ThreadItem and bind a static fallback."""
 
         native_key = (native_type, native_id)
         outcome = self._native_activity_outcome(status=status)
+        canonical_started_at = started_at or timestamp
+        canonical_completed_at = completed_at or timestamp
         matching = state.native_activity_bindings.get(native_key)
         if matching is None:
             matching = self._match_pending_exec_wrapper_invocation(
                 state,
-                timestamp=timestamp,
+                timestamp=canonical_completed_at,
                 predicate=predicate,
+                turn_id=turn_id,
             )
             if matching is not None:
                 state.native_activity_bindings[native_key] = matching
@@ -1924,6 +2155,9 @@ class CodexAdapter(BaseAdapter):
                 output=output,
                 path=path,
                 operation=operation,
+                started_at=canonical_started_at,
+                completed_at=canonical_completed_at,
+                provenance=provenance,
             ):
                 state.native_activity_ids.add(native_key)
                 return
@@ -1940,6 +2174,7 @@ class CodexAdapter(BaseAdapter):
                     if completed
                     else "event_msg.item_started"
                 ),
+                **(provenance or {}),
             },
         )
         if native_key in state.native_activity_ids:
@@ -1947,7 +2182,7 @@ class CodexAdapter(BaseAdapter):
                 transcript.append(
                     TranscriptRecord(
                         sequence=len(transcript),
-                        timestamp=timestamp,
+                        timestamp=canonical_completed_at,
                         vendor=Vendor.CODEX_CLI,
                         role="tool",
                         kind="tool_result",
@@ -1965,11 +2200,10 @@ class CodexAdapter(BaseAdapter):
             return
 
         state.native_activity_ids.add(native_key)
-        started_at = timestamp
         transcript.append(
             TranscriptRecord(
                 sequence=len(transcript),
-                timestamp=started_at,
+                timestamp=canonical_started_at,
                 vendor=Vendor.CODEX_CLI,
                 role="assistant",
                 kind="tool_call",
@@ -1992,7 +2226,7 @@ class CodexAdapter(BaseAdapter):
             transcript.append(
                 TranscriptRecord(
                     sequence=len(transcript),
-                    timestamp=timestamp,
+                    timestamp=canonical_completed_at,
                     vendor=Vendor.CODEX_CLI,
                     role="tool",
                     kind="tool_result",
@@ -2079,6 +2313,7 @@ class CodexAdapter(BaseAdapter):
             item.get("status"),
             default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
         )
+        started_at, completed_at, timing = self._native_item_timing(payload, timestamp)
         self._record_native_activity(
             state=state,
             transcript=transcript,
@@ -2094,17 +2329,35 @@ class CodexAdapter(BaseAdapter):
             output=output,
             path=path,
             operation=operation,
+            turn_id=_as_non_empty_str(payload.get("turn_id")),
+            started_at=started_at,
+            completed_at=completed_at,
+            provenance={"native_item_kind": "FileChange", **timing},
         )
 
     @staticmethod
-    def _static_web_query(input_data: Any) -> str | None:
-        if not isinstance(input_data, dict):
+    def _normalize_web_correlation_value(value: Any) -> str | None:
+        """Normalize query/pattern values without evaluating wrapper code."""
+
+        text = _as_non_empty_str(value)
+        if text is None:
             return None
-        direct = _as_non_empty_str(input_data.get("query")) or _as_non_empty_str(
-            input_data.get("q")
-        )
-        if direct is not None:
-            return direct
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+            text = text[1:-1].strip()
+        return text or None
+
+    @classmethod
+    def _static_web_search_queries(cls, input_data: Any) -> set[str]:
+        if not isinstance(input_data, dict):
+            return set()
+        queries = {
+            query
+            for query in (
+                cls._normalize_web_correlation_value(input_data.get("query")),
+                cls._normalize_web_correlation_value(input_data.get("q")),
+            )
+            if query is not None
+        }
         for key in ("search_query", "image_query"):
             entries = input_data.get(key)
             if not isinstance(entries, list):
@@ -2112,12 +2365,95 @@ class CodexAdapter(BaseAdapter):
             for entry in entries:
                 if not isinstance(entry, dict):
                     continue
-                query = _as_non_empty_str(entry.get("q")) or _as_non_empty_str(
-                    entry.get("query")
+                query = cls._normalize_web_correlation_value(
+                    entry.get("q") or entry.get("query")
                 )
                 if query is not None:
-                    return query
-        return None
+                    queries.add(query)
+        return queries
+
+    @classmethod
+    def _static_web_operation_values(
+        cls,
+        input_data: Any,
+        operation: str,
+        fields: tuple[str, ...],
+    ) -> set[str]:
+        if not isinstance(input_data, dict):
+            return set()
+        entries = input_data.get(operation)
+        if not isinstance(entries, list):
+            return set()
+        values: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for field_name in fields:
+                value = cls._normalize_web_correlation_value(entry.get(field_name))
+                if value is not None:
+                    values.add(value)
+        return values
+
+    @classmethod
+    def _extension_web_correlation_values(
+        cls,
+        query: str | None,
+        action: dict[str, Any],
+    ) -> set[str]:
+        """Collect every query/pattern value carried by an Extension item."""
+
+        values = {
+            value
+            for value in (
+                cls._normalize_web_correlation_value(query),
+                cls._normalize_web_correlation_value(action.get("query")),
+                cls._normalize_web_correlation_value(action.get("pattern")),
+                cls._normalize_web_correlation_value(action.get("url")),
+            )
+            if value is not None
+        }
+        action_queries = action.get("queries")
+        if isinstance(action_queries, list):
+            for raw_query in action_queries:
+                value = cls._normalize_web_correlation_value(raw_query)
+                if value is not None:
+                    values.add(value)
+        return values
+
+    @classmethod
+    def _static_web_matches_extension(
+        cls,
+        invocation: _StaticExecInvocation,
+        *,
+        action_type: str | None,
+        query_values: set[str],
+    ) -> bool:
+        """Match a native Extension item only on compatible static evidence."""
+
+        if invocation.method != "web__run" or not isinstance(invocation.input, dict):
+            return False
+        if action_type == "search":
+            return bool(query_values & cls._static_web_search_queries(invocation.input))
+        if action_type == "openPage":
+            return bool(
+                query_values
+                & cls._static_web_operation_values(
+                    invocation.input, "open", ("ref_id", "url", "uri")
+                )
+            )
+        if action_type == "findInPage":
+            return bool(
+                query_values
+                & cls._static_web_operation_values(
+                    invocation.input, "find", ("pattern",)
+                )
+            )
+        if action_type == "other":
+            # Codex's historical Extension schema does not expose a more
+            # specific action for click/screenshot; timestamps + turn scope
+            # still make a single pending matching wrapper unambiguous.
+            return "click" in invocation.input or "screenshot" in invocation.input
+        return False
 
     def _handle_native_web_search(
         self,
@@ -2138,10 +2474,12 @@ class CodexAdapter(BaseAdapter):
         input_data: dict[str, Any] = {"query": query}
         if item.get("action") is not None:
             input_data["action"] = item["action"]
+        output = {"results": item["results"]} if "results" in item else None
         status = _tool_status(
             item.get("status"),
             default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
         )
+        started_at, completed_at, timing = self._native_item_timing(payload, timestamp)
         self._record_native_activity(
             state=state,
             transcript=transcript,
@@ -2156,8 +2494,257 @@ class CodexAdapter(BaseAdapter):
             predicate=lambda invocation: (
                 invocation.method == "web__run"
                 and invocation.tool_name == "web_search"
-                and self._static_web_query(invocation.input) == query
+                and self._normalize_web_correlation_value(query)
+                in self._static_web_search_queries(invocation.input)
             ),
+            output=output,
+            turn_id=_as_non_empty_str(payload.get("turn_id")),
+            started_at=started_at,
+            completed_at=completed_at,
+            provenance={"native_item_kind": "WebSearch", **timing},
+        )
+
+    def _handle_native_extension_web_search(
+        self,
+        payload: dict,
+        timestamp: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+        *,
+        completed: bool,
+    ) -> None:
+        """Normalize the historical Extension spelling of Codex web activity.
+
+        Older Desktop JSONL persists web actions as an ``Extension`` item with
+        ``kind=web.search`` rather than a ``WebSearch`` ThreadItem. Its
+        terminal record is authoritative: the action, query, result cards, and
+        timing all come from the provider event, not the JavaScript wrapper.
+        """
+
+        item = payload.get("item")
+        if (
+            not isinstance(item, dict)
+            or item.get("type") != "Extension"
+            or item.get("kind") != "web.search"
+        ):
+            return
+        native_id = _as_non_empty_str(item.get("id"))
+        if native_id is None:
+            return
+        action = item.get("action")
+        action_data = action if isinstance(action, dict) else {}
+        action_type = _as_non_empty_str(action_data.get("type"))
+        query = _as_non_empty_str(item.get("query"))
+        query_values = self._extension_web_correlation_values(query, action_data)
+        input_data: dict[str, Any] = {
+            "kind": "web.search",
+            "action": action_data,
+        }
+        if query is not None:
+            input_data["query"] = query
+        output = {"results": item.get("results")} if "results" in item else None
+        started_at, completed_at, timing = self._native_item_timing(payload, timestamp)
+        self._record_native_activity(
+            state=state,
+            transcript=transcript,
+            timestamp=timestamp,
+            native_type="Extension:web.search",
+            native_id=native_id,
+            tool_name="web_search" if action_type == "search" else "web_fetch",
+            item_kind="tool_call",
+            input_data=input_data,
+            # Extension/web.search has no per-item status field. A terminal
+            # record carrying its result cards is Codex's direct completion
+            # evidence, including when wrapper output later fails to render.
+            status=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
+            completed=completed,
+            predicate=lambda invocation: self._static_web_matches_extension(
+                invocation,
+                action_type=action_type,
+                query_values=query_values,
+            ),
+            output=output,
+            turn_id=_as_non_empty_str(payload.get("turn_id")),
+            started_at=started_at,
+            completed_at=completed_at,
+            provenance={
+                "native_item_type": "Extension",
+                "native_item_kind": "web.search",
+                "native_action_type": action_type,
+                **timing,
+            },
+        )
+
+    def _handle_native_terminal_item(
+        self,
+        payload: dict,
+        timestamp: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Project other completed Codex ThreadItems without wrapper guessing.
+
+        This is intentionally terminal-only. These historical item spellings
+        often have no ``item_started`` counterpart, and their completed record
+        already contains the authoritative input, output, status, and timing.
+        Message/reasoning/runtime item types retain their dedicated transcript
+        paths below so this decoder does not manufacture duplicate content.
+        """
+
+        item = payload.get("item")
+        if not isinstance(item, dict):
+            return
+        item_type = _as_non_empty_str(item.get("type"))
+        native_id = _as_non_empty_str(item.get("id"))
+        if item_type is None or native_id is None:
+            return
+
+        # These either have a dedicated handler above or are content/runtime
+        # records rather than standalone user-visible actions.
+        if item_type in {
+            "AgentMessage",
+            "CommandExecution",
+            "ContextCompaction",
+            "FileChange",
+            "Plan",
+            "Reasoning",
+            "UserMessage",
+            "WebSearch",
+            "CollabAgentToolCall",
+        }:
+            return
+
+        started_at, completed_at, timing = self._native_item_timing(payload, timestamp)
+        turn_id = _as_non_empty_str(payload.get("turn_id"))
+        status = self._native_terminal_status(item, completed=True)
+        input_data: dict[str, Any]
+        output: Any = None
+        tool_name: str
+        native_type = item_type
+        provenance: dict[str, Any] = {
+            "native_item_type": item_type,
+            **timing,
+        }
+
+        if item_type == "Extension":
+            kind = _as_non_empty_str(item.get("kind"))
+            if kind == "web.search":
+                # Handled above with action-specific correlation semantics.
+                return
+            native_type = f"Extension:{kind or 'unknown'}"
+            tool_name = f"extension.{kind}" if kind is not None else "extension"
+            input_data = {
+                key: item[key]
+                for key in ("kind", "query", "action")
+                if item.get(key) is not None
+            }
+            output = {
+                key: item[key]
+                for key in ("results", "result", "error")
+                if item.get(key) is not None
+            } or None
+            provenance["native_item_kind"] = kind
+
+        elif item_type == "McpToolCall":
+            server = _as_non_empty_str(item.get("server"))
+            tool = _as_non_empty_str(item.get("tool"))
+            tool_name = (
+                f"mcp__{server}__{tool}"
+                if server is not None and tool is not None
+                else "mcp_tool_call"
+            )
+            input_data = {
+                key: item[key]
+                for key in ("server", "tool", "arguments", "read_only_hint")
+                if item.get(key) is not None
+            }
+            output = {
+                key: item[key]
+                for key in ("result", "error")
+                if item.get(key) is not None
+            } or None
+
+        elif item_type == "DynamicToolCall":
+            namespace = _as_non_empty_str(item.get("namespace"))
+            tool = _as_non_empty_str(item.get("tool"))
+            tool_name = (
+                f"dynamic__{namespace}__{tool}"
+                if namespace is not None and tool is not None
+                else "dynamic_tool_call"
+            )
+            input_data = {
+                key: item[key]
+                for key in ("namespace", "tool", "arguments")
+                if item.get(key) is not None
+            }
+            output = {
+                key: item[key]
+                for key in ("content_items", "error")
+                if item.get(key) is not None
+            } or None
+
+        elif item_type == "ImageView":
+            tool_name = "view_image"
+            input_data = {"path": item["path"]} if item.get("path") is not None else {}
+
+        elif item_type == "SubAgentActivity":
+            kind = _as_non_empty_str(item.get("kind"))
+            agent_thread_id = _as_non_empty_str(item.get("agent_thread_id"))
+            tool_name = "collab_agent"
+            input_data = {
+                key: value
+                for key, value in {
+                    "action": kind,
+                    "session": agent_thread_id,
+                    "agent_path": item.get("agent_path"),
+                }.items()
+                if value is not None
+            }
+            if kind == "started" and agent_thread_id is not None:
+                state.spawn_links.setdefault(agent_thread_id, native_id)
+            provenance["native_item_kind"] = kind
+
+        else:
+            # Preserve a future terminal action rather than silently dropping
+            # it. Content/runtime variants above stay excluded deliberately.
+            tool_name = f"codex_native.{item_type}"
+            input_data = {
+                key: value
+                for key, value in item.items()
+                if key
+                not in {
+                    "id",
+                    "status",
+                    "success",
+                    "result",
+                    "results",
+                    "error",
+                    "content_items",
+                }
+            }
+            output = {
+                key: item[key]
+                for key in ("result", "results", "error", "content_items")
+                if item.get(key) is not None
+            } or None
+
+        self._record_native_activity(
+            state=state,
+            transcript=transcript,
+            timestamp=timestamp,
+            native_type=native_type,
+            native_id=native_id,
+            tool_name=tool_name,
+            item_kind="tool_call",
+            input_data=input_data,
+            status=status,
+            completed=True,
+            predicate=lambda _invocation: False,
+            output=output,
+            turn_id=turn_id,
+            started_at=started_at,
+            completed_at=completed_at,
+            provenance=provenance,
         )
 
     def _handle_native_plan(
@@ -2181,6 +2768,7 @@ class CodexAdapter(BaseAdapter):
             item.get("status"),
             default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
         )
+        started_at, completed_at, timing = self._native_item_timing(payload, timestamp)
         self._record_native_activity(
             state=state,
             transcript=transcript,
@@ -2193,6 +2781,10 @@ class CodexAdapter(BaseAdapter):
             status=status,
             completed=completed,
             predicate=lambda invocation: invocation.method == "update_plan",
+            turn_id=_as_non_empty_str(payload.get("turn_id")),
+            started_at=started_at,
+            completed_at=completed_at,
+            provenance={"native_item_kind": "Plan", **timing},
         )
 
     def _handle_native_collab_agent_tool_call(
@@ -2216,6 +2808,7 @@ class CodexAdapter(BaseAdapter):
             "sender_thread_id",
             "receiver_thread_ids",
             "receiver_agents",
+            "agents_states",
             "prompt",
             "model",
             "reasoning_effort",
@@ -2226,6 +2819,7 @@ class CodexAdapter(BaseAdapter):
             item.get("status"),
             default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
         )
+        started_at, completed_at, timing = self._native_item_timing(payload, timestamp)
         self._record_native_activity(
             state=state,
             transcript=transcript,
@@ -2241,6 +2835,10 @@ class CodexAdapter(BaseAdapter):
                 action
                 in _CODEX_STATIC_COLLAB_NATIVE_TOOLS.get(invocation.method, frozenset())
             ),
+            turn_id=_as_non_empty_str(payload.get("turn_id")),
+            started_at=started_at,
+            completed_at=completed_at,
+            provenance={"native_item_kind": "CollabAgentToolCall", **timing},
         )
 
     def _handle_response_item(
@@ -2313,6 +2911,8 @@ class CodexAdapter(BaseAdapter):
             )
             transcript.append(call_record)
             call_id = _as_non_empty_str(payload.get("call_id"))
+            if tool_name == "exec" and call_id is not None:
+                state.exec_wrapper_call_ids.add(call_id)
             invocations = (
                 _extract_static_exec_invocations(tool_input)
                 if tool_name == "exec"
@@ -2324,10 +2924,19 @@ class CodexAdapter(BaseAdapter):
                     started_at=ts,
                     call_record=call_record,
                     invocations=invocations,
+                    turn_id=_as_non_empty_str(state.turn_context.get("turn_id")),
                 )
 
         elif inner_type == "custom_tool_call_output":
             raw_output = payload.get("output")
+            call_id = _as_non_empty_str(payload.get("call_id"))
+            wrapper_status = _tool_result_status(
+                payload,
+                raw_output,
+                exec_wrapper=(
+                    call_id is not None and call_id in state.exec_wrapper_call_ids
+                ),
+            )
             transcript.append(
                 TranscriptRecord(
                     sequence=len(transcript),
@@ -2340,7 +2949,7 @@ class CodexAdapter(BaseAdapter):
                         "tool_call_id": payload.get("call_id"),
                         "exit_code": extract_exit_code(raw_output),
                         "output": _parse_json_blob(raw_output),
-                        "status": _tool_result_status(payload, raw_output).value,
+                        "status": wrapper_status.value,
                     },
                 )
             )
@@ -2651,6 +3260,13 @@ class CodexAdapter(BaseAdapter):
                 transcript,
                 completed=False,
             )
+            self._handle_native_extension_web_search(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=False,
+            )
             self._handle_native_plan(
                 payload,
                 ts,
@@ -2688,6 +3304,13 @@ class CodexAdapter(BaseAdapter):
                 transcript,
                 completed=True,
             )
+            self._handle_native_extension_web_search(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=True,
+            )
             self._handle_native_plan(
                 payload,
                 ts,
@@ -2701,6 +3324,12 @@ class CodexAdapter(BaseAdapter):
                 state,
                 transcript,
                 completed=True,
+            )
+            self._handle_native_terminal_item(
+                payload,
+                ts,
+                state,
+                transcript,
             )
 
         elif inner_type == "user_message":

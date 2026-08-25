@@ -15,7 +15,11 @@ from uuid import UUID
 from coding_trajectory import debug
 from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
-from coding_trajectory.ingestion.common import normalize_project_key, stable_uuid
+from coding_trajectory.ingestion.common import (
+    canonical_json,
+    normalize_project_key,
+    stable_uuid,
+)
 from coding_trajectory.ingestion.models import (
     Event,
     Item,
@@ -23,6 +27,7 @@ from coding_trajectory.ingestion.models import (
     SessionGraph,
     Turn,
     Vendor,
+    VendorExtensions,
 )
 from coding_trajectory.ingestion.provenance import SessionProvenance
 from coding_trajectory.ingestion.retention import (
@@ -77,6 +82,15 @@ class DiscoveryCandidate:
     path: Path
 
 
+@dataclass(frozen=True, slots=True)
+class _IngestedSession:
+    """One logical session reconstructed from one or more source segments."""
+
+    vendor: Vendor
+    paths: tuple[Path, ...]
+    session: Session
+
+
 def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     home = Path.home()
     return [
@@ -104,7 +118,7 @@ def _ingest_sessions(
     candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
     *,
     retention: CanonicalRetention = "trajectory",
-) -> tuple[list[tuple[Vendor, Path, Session]], dict[str, SessionProvenance]]:
+) -> tuple[list[_IngestedSession], dict[str, SessionProvenance]]:
     """Ingest candidate files in two passes so forked files can drop the
     inherited-history segment they re-materialize.
 
@@ -148,7 +162,172 @@ def _ingest_sessions(
         ingested.append((vendor, path, session))
         if adapter.last_provenance is not None:
             provenance[str(path)] = adapter.last_provenance
-    return ingested, provenance
+    return _coalesce_session_segments(ingested), provenance
+
+
+def _coalesce_session_segments(
+    ingested: list[tuple[Vendor, Path, Session]],
+) -> list[_IngestedSession]:
+    """Collapse physical rollout segments into one logical session.
+
+    Codex can persist a resumed thread in a new JSONL while retaining the
+    original session id.  The files are consecutive source segments, not two
+    sessions or a parent/child edge.  Keep their source identity for evidence
+    lookup, but provide graph assembly a single canonical ``Session``.
+    """
+
+    grouped: dict[tuple[Vendor, UUID], list[tuple[Path, Session]]] = {}
+    for vendor, path, session in ingested:
+        grouped.setdefault((vendor, session.session_id), []).append((path, session))
+
+    coalesced: list[_IngestedSession] = []
+    for (vendor, _session_id), segments in grouped.items():
+        ordered = sorted(
+            segments, key=lambda entry: (entry[1].started_at, str(entry[0]))
+        )
+        coalesced.append(
+            _IngestedSession(
+                vendor=vendor,
+                paths=tuple(path for path, _session in ordered),
+                session=(
+                    ordered[0][1]
+                    if len(ordered) == 1
+                    else _merge_session_segments(ordered)
+                ),
+            )
+        )
+    return coalesced
+
+
+def _merge_session_segments(segments: list[tuple[Path, Session]]) -> Session:
+    """Combine consecutive source segments without inventing a new identity."""
+
+    ordered_sessions = [session for _path, session in segments]
+    first = ordered_sessions[0]
+    parent_ids = {
+        session.parent_session_id
+        for session in ordered_sessions
+        if session.parent_session_id is not None
+    }
+    if len(parent_ids) > 1:
+        debug.warn(
+            "same-session source segments disagree on parent identity",
+            code="discovery.session_segment_parent_conflict",
+            severity="warning",
+            session_id=str(first.session_id),
+            source_paths=[str(path) for path, _session in segments],
+        )
+
+    events = _dedupe_by_id(
+        (event for session in ordered_sessions for event in session.events),
+        id_getter=lambda event: event.event_id,
+    )
+    turns = _dedupe_by_id(
+        (turn for session in ordered_sessions for turn in session.turns),
+        id_getter=lambda turn: turn.turn_id,
+    )
+    turns.sort(key=lambda turn: (turn.started_at, turn.sequence, str(turn.turn_id)))
+    normalized_turns = [
+        turn.model_copy(update={"session_id": first.session_id, "sequence": index})
+        for index, turn in enumerate(turns)
+    ]
+    events.sort(key=lambda event: (event.timestamp, str(event.event_id)))
+
+    return first.model_copy(
+        update={
+            "model": _last_non_none(session.model for session in ordered_sessions),
+            "reasoning_effort": _last_non_none(
+                session.reasoning_effort for session in ordered_sessions
+            ),
+            "agent_name": _last_non_none(
+                session.agent_name for session in ordered_sessions
+            ),
+            "started_at": min(session.started_at for session in ordered_sessions),
+            "ended_at": _latest_segment_end(ordered_sessions),
+            "parent_session_id": next(iter(parent_ids), None),
+            "cwd": _last_non_none(session.cwd for session in ordered_sessions),
+            "events": events,
+            "turns": normalized_turns,
+            "context_usage": _dedupe_model_values(
+                observation
+                for session in ordered_sessions
+                for observation in session.context_usage
+            ),
+            "context_sources": _dedupe_model_values(
+                observation
+                for session in ordered_sessions
+                for observation in session.context_sources
+            ),
+            "runtime_observations": _dedupe_model_values(
+                observation
+                for session in ordered_sessions
+                for observation in session.runtime_observations
+            ),
+            "extensions": _merge_vendor_extensions(ordered_sessions),
+            "status": ordered_sessions[-1].status,
+        }
+    )
+
+
+def _dedupe_by_id(values, *, id_getter):  # type: ignore[no-untyped-def]
+    """Keep the first canonical record for an identical stable id."""
+
+    retained = []
+    seen: set[object] = set()
+    for value in values:
+        identifier = id_getter(value)
+        if identifier in seen:
+            continue
+        seen.add(identifier)
+        retained.append(value)
+    return retained
+
+
+def _dedupe_model_values(values):  # type: ignore[no-untyped-def]
+    """Deduplicate repeated session-level observations deterministically."""
+
+    retained = []
+    seen: set[str] = set()
+    for value in values:
+        key = canonical_json(value.model_dump(mode="json"))
+        if key in seen:
+            continue
+        seen.add(key)
+        retained.append(value)
+    return retained
+
+
+def _last_non_none(values):  # type: ignore[no-untyped-def]
+    for value in reversed(list(values)):
+        if value is not None:
+            return value
+    return None
+
+
+def _latest_segment_end(segments: list[Session]) -> datetime | None:
+    ends = [session.ended_at for session in segments if session.ended_at is not None]
+    return max(ends) if ends else None
+
+
+def _merge_vendor_extensions(segments: list[Session]) -> VendorExtensions | None:
+    merged: dict[str, object] = {}
+    for session in segments:
+        if session.extensions is None:
+            continue
+        _deep_merge_mappings(
+            merged,
+            session.extensions.model_dump(exclude_none=True),
+        )
+    return VendorExtensions.model_validate(merged) if merged else None
+
+
+def _deep_merge_mappings(target: dict[str, object], source: dict[str, object]) -> None:
+    for key, value in source.items():
+        current = target.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            _deep_merge_mappings(current, value)
+        else:
+            target[key] = value
 
 
 def scan_parent_turn_ids(
@@ -233,9 +412,12 @@ def discover_store(
             candidates.append((vendor, adapter_cls, path))
 
     ingested, _provenance = _ingest_sessions(candidates)
-    for vendor, path, session in ingested:
+    for ingested_session in ingested:
+        vendor = ingested_session.vendor
+        session = ingested_session.session
+        source_path = ingested_session.paths[0]
         project_identifier = infer_project_identifier(
-            session, path, fallback=scoped_project
+            session, source_path, fallback=scoped_project
         )
         if project_identifier is None:
             if scoped_project is None:
@@ -250,7 +432,9 @@ def discover_store(
             continue
 
         sessions_by_project.setdefault(project_identifier, []).append(session)
-        path_session_meta.append((vendor, path, session.session_id))
+        path_session_meta.extend(
+            (vendor, path, session.session_id) for path in ingested_session.paths
+        )
 
     if not sessions_by_project:
         raise DocumentError(f"no matching coding-agent logs found for {current_dir}")
@@ -715,13 +899,20 @@ def discover_store_from_files(
             break
 
     ingested, provenance = _ingest_sessions(candidates, retention=retention)
-    for vendor, path, session in ingested:
-        project_identifier = infer_project_identifier(session, path, fallback=path.stem)
+    for ingested_session in ingested:
+        vendor = ingested_session.vendor
+        session = ingested_session.session
+        source_path = ingested_session.paths[0]
+        project_identifier = infer_project_identifier(
+            session, source_path, fallback=source_path.stem
+        )
         if not project_identifier:
-            project_identifier = path.stem
+            project_identifier = source_path.stem
 
         sessions_by_project.setdefault(project_identifier, []).append(session)
-        path_session_meta.append((vendor, path, session.session_id))
+        path_session_meta.extend(
+            (vendor, path, session.session_id) for path in ingested_session.paths
+        )
 
     if not sessions_by_project:
         raise DocumentError(
@@ -805,25 +996,51 @@ def locate_session_files(
         if target_text in candidate[2].stem.lower()
     ]
     remaining = [candidate for candidate in candidates if candidate not in direct]
+    # A resumed Codex thread can have several physical rollout files with the
+    # same canonical session id. Keep one representative for topology and all
+    # source paths for historical reconstruction.
     file_by_session: dict[UUID, tuple[Path, UUID | None]] = {}
+    paths_by_session: dict[UUID, list[Path]] = {}
 
-    _scan_session_identities(direct, file_by_session=file_by_session)
+    _scan_session_identities(
+        direct,
+        file_by_session=file_by_session,
+        paths_by_session=paths_by_session,
+    )
     if session_id in file_by_session and not include_descendants:
         chain = _resolve_direct_parent_chain(
             remaining,
             file_by_session=file_by_session,
+            paths_by_session=paths_by_session,
             session_id=session_id,
         )
         if chain is not None:
-            return chain
+            return _expand_session_segment_paths(
+                chain,
+                file_by_session=file_by_session,
+                paths_by_session=paths_by_session,
+            )
 
-    _scan_session_identities(remaining, file_by_session=file_by_session)
+    _scan_session_identities(
+        remaining,
+        file_by_session=file_by_session,
+        paths_by_session=paths_by_session,
+    )
 
     if session_id not in file_by_session:
         return []
 
     if not include_descendants:
-        return _session_parent_chain(file_by_session, session_id) or []
+        chain = _session_parent_chain(file_by_session, session_id)
+        return (
+            _expand_session_segment_paths(
+                chain,
+                file_by_session=file_by_session,
+                paths_by_session=paths_by_session,
+            )
+            if chain is not None
+            else []
+        )
 
     # Walk parent links up to the graph root.
     root = session_id
@@ -851,13 +1068,18 @@ def locate_session_files(
         visited.add(sid)
         component.append(file_by_session[sid][0])
         stack.extend(children.get(sid, []))
-    return component
+    return _expand_session_segment_paths(
+        component,
+        file_by_session=file_by_session,
+        paths_by_session=paths_by_session,
+    )
 
 
 def _scan_session_identities(
     candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
     *,
     file_by_session: dict[UUID, tuple[Path, UUID | None]],
+    paths_by_session: dict[UUID, list[Path]],
 ) -> None:
     """Populate routing identities without projecting titles or transcripts."""
 
@@ -875,9 +1097,10 @@ def _scan_session_identities(
             continue
         if header is None:
             continue
-        file_by_session.setdefault(
-            header.session_id, (path, header.parent_session_id)
-        )
+        paths = paths_by_session.setdefault(header.session_id, [])
+        if path not in paths:
+            paths.append(path)
+        file_by_session.setdefault(header.session_id, (path, header.parent_session_id))
 
 
 def _session_parent_chain(
@@ -906,6 +1129,7 @@ def _resolve_direct_parent_chain(
     candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
     *,
     file_by_session: dict[UUID, tuple[Path, UUID | None]],
+    paths_by_session: dict[UUID, list[Path]],
     session_id: UUID,
 ) -> list[Path] | None:
     """Resolve filename-addressable parents without scanning unrelated sources."""
@@ -927,13 +1151,40 @@ def _resolve_direct_parent_chain(
         ]
         if not direct:
             return None
-        _scan_session_identities(direct, file_by_session=file_by_session)
+        _scan_session_identities(
+            direct,
+            file_by_session=file_by_session,
+            paths_by_session=paths_by_session,
+        )
         if missing not in file_by_session:
             return None
         direct_paths = {candidate[2] for candidate in direct}
         remaining = [
             candidate for candidate in remaining if candidate[2] not in direct_paths
         ]
+
+
+def _expand_session_segment_paths(
+    representative_paths: list[Path],
+    *,
+    file_by_session: dict[UUID, tuple[Path, UUID | None]],
+    paths_by_session: dict[UUID, list[Path]],
+) -> list[Path]:
+    """Expand a topology path into its physical source segments."""
+
+    session_by_representative = {
+        path: session_id for session_id, (path, _parent) in file_by_session.items()
+    }
+    expanded: list[Path] = []
+    for representative in representative_paths:
+        session_id = session_by_representative.get(representative)
+        segments = (
+            paths_by_session.get(session_id, [representative])
+            if session_id is not None
+            else [representative]
+        )
+        expanded.extend(sorted(segments, key=str))
+    return expanded
 
 
 def _first_unresolved_parent(

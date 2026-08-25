@@ -240,6 +240,11 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
         direct_url = first_str(tool_input, ("url", "uri"))
         if direct_url is not None:
             return direct_url
+        action = tool_input.get("action")
+        if isinstance(action, dict):
+            target = first_str(action, ("url", "uri", "ref_id", "pattern", "query"))
+            if target is not None:
+                return target
         for key in ("open", "click", "find", "screenshot"):
             operations = tool_input.get(key)
             if not isinstance(operations, list):
