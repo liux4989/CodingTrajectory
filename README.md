@@ -12,6 +12,7 @@ Unified canonical models and CLI tooling for coding-agent session graphs.
 
 - CLI usage: [`docs/cli.md`](docs/cli.md)
 - CLI agent notebook: [`docs/cli-agent-notebook.ipynb`](docs/cli-agent-notebook.ipynb)
+- Amp local collector: [`docs/amp-collector.md`](docs/amp-collector.md)
 - PRD & Architecture: [`docs/prd.md`](docs/prd.md)
 
 ## Checks
