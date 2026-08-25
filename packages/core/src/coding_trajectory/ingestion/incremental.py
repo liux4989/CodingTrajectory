@@ -221,18 +221,10 @@ def plan_session_graph_components_from_files(
 
     canonical_path_by_session: dict[UUID, str] = {}
     for session_id, paths in paths_by_session.items():
+        # One resumed Codex thread can own several rollout files. Keep a
+        # representative only for parent/child topology; the component below
+        # carries every source segment into canonical reconstruction.
         canonical_path_by_session[session_id] = min(paths)
-        if len(paths) > 1:
-            issues.append(
-                _issue(
-                    "error",
-                    "header",
-                    "incremental_graph.duplicate_session_id",
-                    "multiple active sources identify the same canonical session",
-                    session_id=str(session_id),
-                    details={"source_paths": sorted(paths)},
-                )
-            )
 
     neighbours: dict[UUID, set[UUID]] = defaultdict(set)
     for header in headers.values():
@@ -257,7 +249,9 @@ def plan_session_graph_components_from_files(
             component_sessions.add(current)
             queue.extend(sorted(neighbours.get(current, ()), key=str))
         component_paths = tuple(
-            sorted(canonical_path_by_session[value] for value in component_sessions)
+            sorted(
+                path for value in component_sessions for path in paths_by_session[value]
+            )
         )
         roots = sorted(
             (
@@ -373,25 +367,6 @@ def rebuild_affected_session_graphs(
             )
             continue
         headers[path] = header
-
-    paths_by_session: dict[UUID, list[str]] = defaultdict(list)
-    for path, header in headers.items():
-        paths_by_session[header.session_id].append(path)
-    for session_id, paths in sorted(
-        paths_by_session.items(), key=lambda item: str(item[0])
-    ):
-        if len(paths) <= 1:
-            continue
-        issues.append(
-            _issue(
-                "error",
-                "header",
-                "incremental_graph.duplicate_session_id",
-                "multiple active sources identify the same canonical session",
-                session_id=str(session_id),
-                details={"source_paths": sorted(paths)},
-            )
-        )
 
     selected = _select_component_paths(
         active=active,
@@ -965,7 +940,12 @@ def _select_component_paths(
                 if candidate.root_link == root
             )
 
-    path_by_session = {header.session_id: path for path, header in headers.items()}
+    paths_by_session: dict[UUID, set[str]] = defaultdict(set)
+    for path, header in headers.items():
+        paths_by_session[header.session_id].add(path)
+    path_by_session = {
+        session_id: min(paths) for session_id, paths in paths_by_session.items()
+    }
     children: dict[UUID, set[UUID]] = defaultdict(set)
     parent: dict[UUID, UUID] = {}
     for header in headers.values():
@@ -978,6 +958,8 @@ def _select_component_paths(
         headers[path].session_id for path in selected if path in headers
     )
     seen_sessions = set(queue)
+    for session_id in seen_sessions:
+        selected.update(paths_by_session.get(session_id, ()))
     while queue:
         session_id = queue.popleft()
         neighbours = set(children.get(session_id, ()))
@@ -991,7 +973,7 @@ def _select_component_paths(
             if neighbour_path is None:
                 continue
             seen_sessions.add(neighbour)
-            selected.add(neighbour_path)
+            selected.update(paths_by_session[neighbour])
             queue.append(neighbour)
     return selected
 

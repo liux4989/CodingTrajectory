@@ -26,10 +26,15 @@ cell.
 ## Historical Codex paths
 
 1. `event_msg.item_started` / `item_completed` carrying a Codex ThreadItem is
-   the exact path. CT directly reconstructs `CommandExecution`, `FileChange`,
-   `WebSearch`, `Plan`, and `CollabAgentToolCall` into their corresponding CT
-   items. Eligible adjacent command successes use the same 32-item cell state
-   machine as the TUI.
+   the exact path. CT runs every terminal `item_completed.item.type` through a
+   native-item decoder: established content/runtime types retain their
+   dedicated paths, and tool-shaped types normalize to canonical actions with
+   input, output, status, timing, and native provenance. This includes the
+   historical `Extension(kind="web.search")` spelling, whose action/query and
+   result cards are an observed web result—not an unknown `exec` child.
+   `CommandExecution`, `FileChange`, `WebSearch`, `Plan`, and
+   `CollabAgentToolCall` retain their specialized mappings. Eligible adjacent
+   command successes use the same 32-item cell state machine as the TUI.
 2. Older JSONL may retain only a `custom_tool_call(name="exec")` JavaScript
    wrapper. CT recognizes direct literal calls to `tools.exec_command`,
    `tools.web__run` search/image-query and browse operations,
@@ -39,24 +44,39 @@ cell.
    unknown web operation or direct `tools.*` reference keeps the raw wrapper
    visible. Once every direct tool reference has been recognized, an opaque
    display tail is ignored.
-3. A native item binds to the single matching open static wrapper child when
-   the evidence is unambiguous. Native data wins: for example, `FileChange`
-   contributes its real changed paths and result rather than a guessed patch
-   summary. If an older source has no native child, CT emits a typed
-   `derived_static` item instead.
+3. A native terminal item binds to the single matching open static wrapper
+   child only when turn scope, time ordering, and the action-specific input
+   agree unambiguously. Native data wins: for example, `FileChange` contributes
+   its real changed paths and result rather than a guessed patch summary. If an
+   older source has no native child, CT emits a typed `derived_static` item as
+   a fallback.
 4. Wrapper completion never proves a nested command exit code or generic tool
-   result. Static children therefore retain `outcome=unknown`; only native
-   evidence can make a command eligible for `Ran N commands`.
+   result. Static children therefore retain `outcome=unknown` unless one
+   lexically known nested action has an explicit persisted wrapper result
+   payload. The `Script completed` / `Script failed` banner alone is never
+   nested-outcome evidence; only the wrapper itself can be marked failed from
+   it. A JavaScript syntax error remains a visible failed `exec`, because no
+   nested action could have started.
 5. The raw `exec` wrapper remains canonical evidence. It is hidden only from
    the compact activity view when every nested activity was safely
-   reconstructed or bound to native evidence; unresolved or unsupported
-   wrappers remain visible as `exec`.
+   reconstructed or bound to native or explicit wrapper-result evidence;
+   unresolved or unsupported wrappers remain visible as `exec`.
 
 Consequently a legacy session can show `Searched the web for …` or `Updated
 plan: 4 item(s)` with its nested outcome marked unavailable, rather than a raw
 `exec` code cell. A legacy command remains `RunCommand: rg [outcome
 unavailable]` instead of a misleading `Ran N commands`. A newer session with
 native exit-zero facts shows `Ran N commands`.
+
+## Physical session segments
+
+Codex can persist a resumed thread into a new rollout JSONL while retaining the
+same session ID. Discovery retains every matching source path, orders the
+segments by their observed start time, and collapses them into one canonical
+session before graph assembly. They are source evidence for one session, not
+duplicate graph nodes or a parent/child relationship. This ensures that an
+overview reconstructs the complete historical thread rather than only its last
+rollout file.
 
 ## Cross-agent contract
 
