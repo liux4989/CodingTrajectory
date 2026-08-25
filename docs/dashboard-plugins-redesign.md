@@ -494,6 +494,15 @@ covered. Avoid mechanical file moves during feature migration.
 - [Done] Present timeline revision, refresh lag, retained source-reference
   coverage, and source ingestion failures beside the evidence view.
 
+### Phase 8: Add an artifact evidence lens
+
+- [Done] Classify retained file changes, commands, checks, commits, and fetched
+  links without inferring artifacts absent from canonical tool evidence.
+- [Done] Preserve command, path, and URL summaries plus lazy source detail for
+  each artifact entry.
+- [Done] Add URL-restorable artifact filtering and artifact badges to the
+  evidence timeline.
+
 ## Acceptance Criteria
 
 - One command starts every Datahub browser view.

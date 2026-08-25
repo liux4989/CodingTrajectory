@@ -87,6 +87,7 @@ const todayRoute = createRoute({
 type SessionWorkspaceSearch = {
   view: "timeline" | "context" | "tree" | "graph";
   kind?: "user" | "assistant" | "tool" | "subagent" | "compaction";
+  artifact?: "file" | "command" | "check" | "commit" | "link";
   agent?: string;
   outcome?: "failed" | "succeeded";
   entry?: string;
@@ -102,9 +103,13 @@ const contextWindowRoute = createRoute({
     const kind = search.kind === "user" || search.kind === "assistant" || search.kind === "tool" || search.kind === "subagent" || search.kind === "compaction"
       ? search.kind
       : undefined;
+    const artifact = search.artifact === "file" || search.artifact === "command" || search.artifact === "check" || search.artifact === "commit" || search.artifact === "link"
+      ? search.artifact
+      : undefined;
     return {
       view,
       kind: view === "timeline" ? kind : undefined,
+      artifact: view === "timeline" ? artifact : undefined,
       agent: view === "timeline" && typeof search.agent === "string" && search.agent ? search.agent : undefined,
       outcome: view === "timeline" && (search.outcome === "failed" || search.outcome === "succeeded") ? search.outcome : undefined,
       entry: view === "timeline" && typeof search.entry === "string" && search.entry ? search.entry : undefined,

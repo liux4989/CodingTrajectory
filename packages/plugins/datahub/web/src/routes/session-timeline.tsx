@@ -8,6 +8,7 @@ import {
   fetchSessionEvidenceTimeline,
   fetchSessionItemDetails,
   type SessionTimelineEntry,
+  type TimelineArtifactKind,
   type TimelineKind,
 } from "@/api";
 import { LoadingState } from "@/components/loading-state";
@@ -34,6 +35,7 @@ export function SessionTimelineRoute() {
   const navigate = useNavigate({ from: "/sessions/$sessionId" });
   const delivery = useDatahubDelivery();
   const kind = search.kind ?? "all";
+  const artifact = search.artifact ?? "all";
   const agent = search.agent ?? "all";
   const outcome = search.outcome ?? "all";
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
@@ -46,10 +48,10 @@ export function SessionTimelineRoute() {
 
   React.useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [kind, agent, outcome, sessionId]);
+  }, [kind, artifact, agent, outcome, sessionId]);
 
   const updateSearch = React.useCallback(
-    (updates: { kind?: TimelineKind; agent?: string; outcome?: Exclude<OutcomeFilter, "all">; entry?: string }) => {
+    (updates: { kind?: TimelineKind; artifact?: TimelineArtifactKind; agent?: string; outcome?: Exclude<OutcomeFilter, "all">; entry?: string }) => {
       void navigate({
         search: (current) => ({ ...current, ...updates, view: "timeline" }),
         replace: true,
@@ -81,6 +83,7 @@ export function SessionTimelineRoute() {
   );
   const filtered = payload.entries.filter((entry) => {
     if (kind !== "all" && entry.kind !== kind) return false;
+    if (artifact !== "all" && entry.artifact_kind !== artifact) return false;
     if (agent !== "all" && entry.session_id !== agent) return false;
     if (outcome === "failed" && !entry.failed) return false;
     if (outcome === "succeeded" && (entry.failed || !isTerminalSuccess(entry.status))) return false;
@@ -144,6 +147,19 @@ export function SessionTimelineRoute() {
                 </SelectContent>
               </Select>
             </FilterLabel>
+            <FilterLabel label="Artifact">
+              <Select value={artifact} onValueChange={(value) => updateSearch({ artifact: value === "all" ? undefined : value as TimelineArtifactKind, entry: undefined })}>
+                <SelectTrigger className="min-w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All artifacts</SelectItem>
+                  <SelectItem value="file">File changes</SelectItem>
+                  <SelectItem value="command">Commands</SelectItem>
+                  <SelectItem value="check">Checks</SelectItem>
+                  <SelectItem value="commit">Commits</SelectItem>
+                  <SelectItem value="link">Links</SelectItem>
+                </SelectContent>
+              </Select>
+            </FilterLabel>
             <FilterLabel label="Agent / branch">
               <Select value={agent} onValueChange={(value) => updateSearch({ agent: value === "all" ? undefined : value, entry: undefined })}>
                 <SelectTrigger className="min-w-52"><SelectValue /></SelectTrigger>
@@ -163,8 +179,8 @@ export function SessionTimelineRoute() {
                 </SelectContent>
               </Select>
             </FilterLabel>
-            {kind !== "all" || agent !== "all" || outcome !== "all" ? (
-              <Button variant="ghost" onClick={() => updateSearch({ kind: undefined, agent: undefined, outcome: undefined, entry: undefined })}>
+            {kind !== "all" || artifact !== "all" || agent !== "all" || outcome !== "all" ? (
+              <Button variant="ghost" onClick={() => updateSearch({ kind: undefined, artifact: undefined, agent: undefined, outcome: undefined, entry: undefined })}>
                 Clear filters
               </Button>
             ) : null}
@@ -228,6 +244,7 @@ function TimelineRow({ entry, selected, onSelect }: { entry: SessionTimelineEntr
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <CardTitle className="title-card text-base">{entry.label}</CardTitle>
             <Badge variant="secondary">{entry.kind}</Badge>
+            {entry.artifact_kind ? <Badge variant="outline">{entry.artifact_kind}</Badge> : null}
             {entry.status ? <Badge variant={entry.failed ? "destructive" : "outline"}>{entry.status}</Badge> : null}
             <span className="ml-auto text-caption text-muted-foreground" title={entry.timestamp ?? undefined}>{formatWhen(entry.timestamp)}</span>
           </div>

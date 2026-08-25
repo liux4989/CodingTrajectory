@@ -730,6 +730,7 @@ export async function fetchSessionTree(sessionId: string) {
 }
 
 export type TimelineKind = "user" | "assistant" | "tool" | "subagent" | "compaction";
+export type TimelineArtifactKind = "file" | "command" | "check" | "commit" | "link";
 
 export type SessionTimelineEntry = {
   id: string;
@@ -746,6 +747,7 @@ export type SessionTimelineEntry = {
   summary: string | null;
   status: string | null;
   failed: boolean;
+  artifact_kind: TimelineArtifactKind | null;
   item_ids: string[];
   event_ids: string[];
   target_session_id: string | null;

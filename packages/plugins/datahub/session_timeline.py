@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 TimelineKind = Literal["user", "assistant", "tool", "subagent", "compaction"]
+ArtifactKind = Literal["file", "command", "check", "commit", "link"]
 
 
 class _StrictModel(BaseModel):
@@ -30,6 +31,7 @@ class TimelineEntry(_StrictModel):
     summary: str | None = None
     status: str | None = None
     failed: bool = False
+    artifact_kind: ArtifactKind | None = None
     item_ids: list[str] = Field(default_factory=list)
     event_ids: list[str] = Field(default_factory=list)
     target_session_id: str | None = None
@@ -123,6 +125,7 @@ def build_session_evidence_timeline(
                     None,
                 )
                 kind = _activity_kind(activity, target_session_id=target)
+                artifact_kind = _artifact_kind(activity) if kind == "tool" else None
                 status = _text(
                     activity.get("status")
                     or activity.get("outcome")
@@ -134,10 +137,15 @@ def build_session_evidence_timeline(
                         id=f"{session_id}:{turn_id}:{position}",
                         position=position,
                         kind=kind,
-                        label=_activity_label(activity, kind=kind),
+                        label=_activity_label(
+                            activity,
+                            kind=kind,
+                            artifact_kind=artifact_kind,
+                        ),
                         summary=_activity_summary(activity),
                         status=status,
                         failed=_failed(status),
+                        artifact_kind=artifact_kind,
                         item_ids=item_ids,
                         target_session_id=target,
                         **common,
@@ -186,13 +194,22 @@ def _activity_kind(
     return "tool"
 
 
-def _activity_label(activity: Mapping[str, Any], *, kind: TimelineKind) -> str:
+def _activity_label(
+    activity: Mapping[str, Any],
+    *,
+    kind: TimelineKind,
+    artifact_kind: ArtifactKind | None,
+) -> str:
     if kind == "assistant":
         return "Assistant response"
     if kind == "subagent":
         return "Subagent activity"
     if kind == "compaction":
         return "Context compaction"
+    if artifact_kind == "check":
+        return "Check run"
+    if artifact_kind == "commit":
+        return "Git commit"
     return _text(activity.get("tool")) or "Tool activity"
 
 
@@ -210,18 +227,61 @@ def _activity_summary(activity: Mapping[str, Any]) -> str | None:
         activity.get("summary")
         or activity.get("description")
         or activity.get("command")
+        or activity.get("cmd")
         or activity.get("path")
+        or activity.get("url")
         or activity.get("text")
     )
     if direct:
         return direct
-    for key in ("descriptions", "paths", "commands", "queries"):
+    for key in ("descriptions", "paths", "commands", "queries", "urls"):
         values = activity.get(key)
         if isinstance(values, list):
             text = ", ".join(str(value) for value in values[:4] if value)
             if text:
                 return text
     return None
+
+
+def _artifact_kind(activity: Mapping[str, Any]) -> ArtifactKind | None:
+    tool = (_text(activity.get("tool")) or "").casefold()
+    if tool in {"editfile", "writefile"}:
+        return "file"
+    if tool == "webfetch":
+        return "link"
+    if tool != "runcommand":
+        return None
+    command = _text(
+        activity.get("cmd")
+        or activity.get("command")
+        or " && ".join(str(value) for value in activity.get("commands") or [])
+    )
+    if command is None:
+        return "command"
+    normalized = " ".join(command.casefold().split())
+    if "git commit" in normalized:
+        return "commit"
+    if any(
+        marker in normalized
+        for marker in (
+            "pytest",
+            "ruff check",
+            "py_compile",
+            "mypy",
+            "tsc ",
+            "tsc -",
+            "bun run build",
+            "npm run build",
+            "npm test",
+            "pnpm test",
+            "cargo test",
+            "go test",
+            "validate-metrics-baselines.py",
+            "check-metrics-quality-gate.sh",
+        )
+    ):
+        return "check"
+    return "command"
 
 
 def _failed(status: str | None) -> bool:
@@ -238,6 +298,7 @@ def _text(value: Any) -> str | None:
 
 
 __all__ = [
+    "ArtifactKind",
     "SessionEvidenceTimeline",
     "TimelineEntry",
     "build_session_evidence_timeline",
