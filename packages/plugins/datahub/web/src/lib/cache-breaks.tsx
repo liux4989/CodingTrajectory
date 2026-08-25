@@ -23,7 +23,7 @@ export function formatIdleSeconds(seconds: number | null | undefined) {
   return `${Math.round(seconds)}s`;
 }
 
-export type CacheBreakType = "ttl_confirmed" | "ttl_likely" | "effort_switch";
+export type CacheBreakType = "ttl_confirmed" | "ttl_likely" | "effort_switch" | "unattributed";
 
 // Effort changes are actionable (amber); TTL breaks are age evictions
 // (neutral). ``ttl_likely`` remains explicitly tentative.
@@ -41,6 +41,13 @@ export function cacheBreakTone(type: CacheBreakType, effortFrom: string | null, 
       className: "border-warning/45 bg-warning/10 text-warning",
     };
   }
+  if (type === "unattributed") {
+    return {
+      icon: <Hourglass size={12} />,
+      label: "Unattributed",
+      className: "border-border-soft bg-surface-emphasis text-muted-foreground",
+    };
+  }
   const confirmed = type === "ttl_confirmed";
   return {
     icon: <Hourglass size={12} />,
@@ -53,4 +60,5 @@ export const CACHE_BREAK_TYPE_ORDER: CacheBreakType[] = [
   "effort_switch",
   "ttl_confirmed",
   "ttl_likely",
+  "unattributed",
 ];

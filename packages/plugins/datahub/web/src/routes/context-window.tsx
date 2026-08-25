@@ -18,6 +18,8 @@ import {
   formatIdleSeconds,
   formatTokens,
 } from "@/lib/cache-breaks";
+import type { ApexOptions } from "apexcharts";
+import { ApexChart, escapeHtml, resolveCssColor, tooltipRow, useApexTheme } from "@/components/ui/apex-chart";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/loading-state";
 import { SessionViewTabs } from "@/components/session-view-tabs";
@@ -643,7 +645,48 @@ export function ContextWindowRoute() {
 }
 
 function CompactionTimeline({ compaction }: { compaction: CompactionSummary }) {
+  const theme = useApexTheme();
   const totalDropped = compaction.cumulative_dropped_tokens ?? 0;
+  const hasDeltas = compaction.events.some(
+    (event) => event.pre_tokens != null || event.post_tokens != null,
+  );
+
+  const options = React.useMemo<ApexOptions>(
+    () => ({
+      stroke: { curve: "smooth", width: 2 },
+      markers: { size: 4 },
+      dataLabels: { enabled: false },
+      xaxis: {
+        categories: compaction.events.map((event) => formatCompactionTimestamp(event.timestamp)),
+        labels: { hideOverlappingLabels: true, style: { fontSize: "11px" } },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+      },
+      yaxis: { labels: { formatter: (value) => formatTokens(Number(value)) } },
+      legend: { show: true, position: "bottom", horizontalAlign: "left" },
+      tooltip: {
+        custom: ({ dataPointIndex }) => {
+          const event = compaction.events[dataPointIndex];
+          if (!event) return "";
+          const rows = [
+            tooltipRow("Trigger", escapeHtml(event.trigger ?? "auto"), theme.axis),
+            tooltipRow("Mechanism", escapeHtml(event.mechanism.replaceAll("_", " ")), theme.axis),
+            tooltipRow(
+              "Window",
+              event.pre_tokens != null && event.post_tokens != null
+                ? `${formatTokens(event.pre_tokens)} → ${formatTokens(event.post_tokens)}`
+                : "-",
+              theme.axis,
+            ),
+            tooltipRow("Dropped", event.dropped_tokens != null ? formatTokens(event.dropped_tokens) : "-", theme.axis),
+          ].join("");
+          return `<div style="padding:10px 12px;min-width:210px"><div style="font-weight:700;margin-bottom:6px">${escapeHtml(formatCompactionTimestamp(event.timestamp))}</div>${rows}</div>`;
+        },
+      },
+    }),
+    [compaction.events, theme],
+  );
+
   return (
     <section
       className="rounded-xl border border-border-soft bg-card px-4 py-3"
@@ -663,6 +706,31 @@ function CompactionTimeline({ compaction }: { compaction: CompactionSummary }) {
         </div>
       </div>
 
+      {hasDeltas ? (
+        <div className="mt-3">
+          <ApexChart
+            type="line"
+            series={[
+              { name: "Before", data: compaction.events.map((event) => event.pre_tokens ?? null) },
+              { name: "After", data: compaction.events.map((event) => event.post_tokens ?? null) },
+            ]}
+            options={options}
+            height={220}
+            ariaLabel="Context tokens before and after each compaction"
+          />
+          <ul className="sr-only">
+            {compaction.events.map((event, index) => (
+              <li key={`${event.timestamp}-${index}`}>
+                {formatCompactionTimestamp(event.timestamp)}: {event.trigger ?? "auto"},{" "}
+                {event.pre_tokens != null && event.post_tokens != null
+                  ? `${formatTokens(event.pre_tokens)} to ${formatTokens(event.post_tokens)}`
+                  : "size not exposed"}
+                {event.dropped_tokens != null ? `, ${formatTokens(event.dropped_tokens)} dropped` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
       <ol className="m-0 mt-3 grid list-none gap-2 p-0">
         {compaction.events.map((event, index) => {
           const pre = event.pre_tokens;
@@ -723,6 +791,7 @@ function CompactionTimeline({ compaction }: { compaction: CompactionSummary }) {
           );
         })}
       </ol>
+      )}
     </section>
   );
 }
@@ -737,14 +806,68 @@ const CACHE_BREAK_TYPE_ORDER: CacheBreakRecord["type"][] = [
   "effort_switch",
   "ttl_confirmed",
   "ttl_likely",
+  "unattributed",
 ];
 
 function CacheBreaksPanel({ cacheBreaks }: { cacheBreaks: CacheBreakSummary }) {
+  const theme = useApexTheme();
   const confirmedCount = cacheBreaks.events.filter((record) => record.effort_to).length;
   const typeSummary = CACHE_BREAK_TYPE_ORDER
     .filter((key) => cacheBreaks.by_type[key])
     .map((key) => `${cacheBreaks.by_type[key]} ${key}`)
     .join(", ");
+
+  // Break types reuse the cache-break tone palette: confirmed TTL in ember,
+  // ambiguous TTL in warning, effort switches in violet, unattributed neutral.
+  const typeColors = React.useMemo<Record<CacheBreakRecord["type"], string>>(
+    () => ({
+      ttl_confirmed: theme.palette[2],
+      ttl_likely: resolveCssColor("var(--warning)", theme.palette[1]),
+      effort_switch: theme.palette[3],
+      unattributed: resolveCssColor("var(--category-unattributed)", theme.palette[5]),
+    }),
+    [theme],
+  );
+
+  const options = React.useMemo<ApexOptions>(
+    () => ({
+      colors: cacheBreaks.events.map((record) => typeColors[record.type]),
+      plotOptions: { bar: { horizontal: true, barHeight: "58%", borderRadius: 4, distributed: true } },
+      dataLabels: { enabled: false },
+      xaxis: {
+        categories: cacheBreaks.events.map((record) => `turn ${record.turn_id.slice(0, 10)}`),
+        labels: { formatter: (value) => formatTokens(Number(value)) },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+      },
+      yaxis: { labels: { style: { fontSize: "11px" }, maxWidth: 160 } },
+      legend: { show: false },
+      tooltip: {
+        custom: ({ dataPointIndex }) => {
+          const record = cacheBreaks.events[dataPointIndex];
+          if (!record) return "";
+          const tone = cacheBreakTone(record.type, record.effort_from, record.effort_to);
+          const effort = record.effort_to
+            ? record.effort_from
+              ? `${record.effort_from} → ${record.effort_to}`
+              : `→ ${record.effort_to}`
+            : null;
+          const rows = [
+            tooltipRow("Type", escapeHtml(tone.label), theme.axis),
+            tooltipRow("Cache-hit loss", formatTokens(record.re_read_tokens), theme.axis),
+            tooltipRow("Idle", formatIdleSeconds(record.idle_seconds), theme.axis),
+            ...(effort ? [tooltipRow("Effort", escapeHtml(effort), theme.axis)] : []),
+            ...(record.est_cost_usd != null
+              ? [tooltipRow("Est. premium", formatCostUsd(record.est_cost_usd), theme.axis)]
+              : []),
+          ].join("");
+          return `<div style="padding:10px 12px;min-width:220px"><div style="font-weight:700;margin-bottom:6px">turn ${escapeHtml(record.turn_id.slice(0, 10))}</div>${rows}</div>`;
+        },
+      },
+    }),
+    [cacheBreaks.events, theme, typeColors],
+  );
+
   return (
     <section
       className="rounded-xl border border-border-soft bg-card px-4 py-3"
@@ -769,53 +892,23 @@ function CacheBreaksPanel({ cacheBreaks }: { cacheBreaks: CacheBreakSummary }) {
         </div>
       </div>
 
-      <ol className="m-0 mt-3 grid list-none gap-2 p-0">
-        {cacheBreaks.events.map((record, index) => {
-          const tone = cacheBreakTone(record.type, record.effort_from, record.effort_to);
-          const effort = record.effort_to
-            ? record.effort_from
-              ? `${record.effort_from}->${record.effort_to}`
-              : `->${record.effort_to}`
-            : null;
-          return (
-            <li
-              key={`${record.turn_id}-${index}`}
-              className="event-row"
-              style={{ cursor: "default" }}
-            >
-              <span
-                className={cn(
-                  "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md border px-1",
-                  tone.className,
-                )}
-                title={tone.label}
-              >
-                {tone.icon}
-              </span>
-              <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-caption text-foreground">
-                {tone.label}
-              </Badge>
-              <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-body-sm text-muted-foreground">
-                <span className="mono text-caption">turn {record.turn_id.slice(0, 10)}</span>
-                {effort ? <span className="mono text-caption text-warning"> · {effort}</span> : null}
-              </span>
-              <span className="event-row-meta">
-                <span className="event-row-token mono text-body-sm font-medium">
-                  {formatTokens(record.re_read_tokens)}
-                </span>
-                <span className="mono text-caption text-muted-foreground">
-                  {formatIdleSeconds(record.idle_seconds)} idle
-                </span>
-                {record.est_cost_usd != null ? (
-                  <span className="mono text-caption text-muted-foreground">
-                    {formatCostUsd(record.est_cost_usd)}
-                  </span>
-                ) : null}
-              </span>
+      <div className="mt-3">
+        <ApexChart
+          type="bar"
+          series={[{ name: "Cache-hit loss", data: cacheBreaks.events.map((record) => record.re_read_tokens) }]}
+          options={options}
+          height={Math.max(160, cacheBreaks.events.length * 48)}
+          ariaLabel="Cache-hit loss per flagged turn"
+        />
+        <ul className="sr-only">
+          {cacheBreaks.events.map((record, index) => (
+            <li key={`${record.turn_id}-${index}`}>
+              turn {record.turn_id.slice(0, 10)}: {formatTokens(record.re_read_tokens)} cache-hit loss, {formatIdleSeconds(record.idle_seconds)} idle
+              {record.est_cost_usd != null ? `, ${formatCostUsd(record.est_cost_usd)} estimated premium` : ""}
             </li>
-          );
-        })}
-      </ol>
+          ))}
+        </ul>
+      </div>
     </section>
   );
 }

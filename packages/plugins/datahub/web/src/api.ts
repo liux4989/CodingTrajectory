@@ -136,9 +136,10 @@ export type CompactionSummary = {
 // - ttl_confirmed: idle gap >= vendor TTL max (OpenAI >=600s, Anthropic >=300s)
 // - ttl_likely: idle in the ambiguous OpenAI 300-600s band
 // - effort_switch: an observed reasoning-effort change aligns with the loss.
+// - unattributed: loss measured but no supported cause observed.
 export type CacheBreakRecord = {
   turn_id: string;
-  type: "ttl_confirmed" | "ttl_likely" | "effort_switch";
+  type: "ttl_confirmed" | "ttl_likely" | "effort_switch" | "unattributed";
   idle_seconds: number;
   re_read_tokens: number;
   cached_after_tokens: number | null;

@@ -1,6 +1,7 @@
 import * as React from "react";
-import { useParams } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import type { ApexOptions } from "apexcharts";
 import {
   fetchSessionGraph,
   type GraphStatsSession,
@@ -13,10 +14,10 @@ import { StaggerGroup } from "@/components/stagger-group";
 import { StateBlock } from "@/components/state-block";
 import { LoadingState } from "@/components/loading-state";
 import { SessionViewTabs } from "@/components/session-view-tabs";
-import { SessionLink, shortSessionId } from "@/components/session-link";
-import { Badge } from "@/components/ui/badge";
+import { shortSessionId } from "@/components/session-link";
+import { DonutChart } from "@/components/charts";
+import { ApexChart, escapeHtml, tooltipRow, useApexTheme } from "@/components/ui/apex-chart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   formatCompactNumber,
   formatCostUsd,
@@ -197,65 +198,11 @@ export function SessionGraphRoute() {
           <CardHeader>
             <CardTitle className="title-card">Session Composition</CardTitle>
             <CardDescription>
-              Per-session context and usage share, from `ct session graph stats --session-composition`.
+              Per-session processed tokens, split into cached and fresh portions. Select a bar to open the session.
             </CardDescription>
           </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Session</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead className="text-right">Context used</TableHead>
-                  <TableHead className="text-right">Processed</TableHead>
-                  <TableHead className="text-right">Cached share</TableHead>
-                  <TableHead className="text-right">Turns</TableHead>
-                  <TableHead className="text-right">Est. cost</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map(({ id, node, stats: section, usage: usageSection }) => (
-                  <TableRow key={id}>
-                    <TableCell className="max-w-[16rem]">
-                      <SessionLink sessionId={id} className="truncate">
-                        {node?.title || node?.agent_name || usageSection?.title || shortSessionId(id)}
-                      </SessionLink>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {formatLabel(section?.role ?? usageSection?.role ?? (id === payload.root_session_id ? "main" : undefined))}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {section?.context_window?.used_tokens != null
-                        ? `${formatTokens(section.context_window.used_tokens)}${
-                            section.context_window.used_percent != null
-                              ? ` (${formatPercent(section.context_window.used_percent)})`
-                              : ""
-                          }`
-                        : "-"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatTokens(
-                        usageSection?.total_usage?.processed_tokens ??
-                          section?.usage?.processed_tokens,
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {cachedShare(section) != null
-                        ? formatPercent((cachedShare(section) ?? 0) * 100)
-                        : "-"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {section?.runtime?.turns ?? usageSection?.runtime?.turns ?? "-"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCostUsd(usageSection?.estimated_cost?.value_usd)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          <CardContent>
+            <SessionCompositionChart rows={rows} rootId={payload.root_session_id} />
           </CardContent>
         </Card>
 
@@ -263,68 +210,196 @@ export function SessionGraphRoute() {
           <CardHeader>
             <CardTitle className="title-card">Graph Usage</CardTitle>
             <CardDescription>
-              Aggregate turn-level token usage, as reported by `ct session graph usage`.
+              Aggregate turn-level token usage, as reported by `ct session graph usage`
+              {runtime.execution_seconds != null ? ` · ${formatDuration(runtime.execution_seconds)} execution` : ""}.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4">
-              <div className="flex flex-wrap gap-x-6 gap-y-2 text-body-sm">
-                <span>
-                  <strong className="tabular-nums">{formatTokens(totalUsage.prompt_tokens)}</strong>{" "}
-                  <span className="text-muted-foreground">prompt</span>
-                </span>
-                <span>
-                  <strong className="tabular-nums">{formatTokens(totalUsage.cached_prompt_tokens)}</strong>{" "}
-                  <span className="text-muted-foreground">cached</span>
-                </span>
-                <span>
-                  <strong className="tabular-nums">{formatTokens(totalUsage.completion_tokens)}</strong>{" "}
-                  <span className="text-muted-foreground">completion</span>
-                </span>
-                <span>
-                  <strong className="tabular-nums">{formatTokens(totalUsage.reasoning_tokens)}</strong>{" "}
-                  <span className="text-muted-foreground">reasoning</span>
-                </span>
-                {runtime.execution_seconds != null ? (
-                  <span>
-                    <strong>{formatDuration(runtime.execution_seconds)}</strong>{" "}
-                    <span className="text-muted-foreground">execution</span>
-                  </span>
-                ) : null}
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="min-w-0">
+                <p className="m-0 mb-2 heading-section">Bucket mix</p>
+                {bucketMix(totalUsage).some((bucket) => bucket.value > 0) ? (
+                  <DonutChart
+                    data={bucketMix(totalUsage)}
+                    ariaLabel="Graph token bucket mix"
+                    centerLabel={formatTokens(totalUsage.processed_tokens)}
+                    centerSubLabel="Processed"
+                    formatValue={formatTokens}
+                    height={240}
+                  />
+                ) : (
+                  <p className="text-muted-foreground">No token usage reported for this graph.</p>
+                )}
               </div>
               {(usage.models ?? []).length > 0 ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Model</TableHead>
-                      <TableHead className="text-right">Turns</TableHead>
-                      <TableHead className="text-right">Processed</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {(usage.models ?? []).map((model, index) => (
-                      <TableRow key={`${model.provider}-${model.model}-${index}`}>
-                        <TableCell className="font-medium">
-                          {model.model ?? "Unknown model"}
-                          {model.provider ? (
-                            <span className="text-muted-foreground"> · {model.provider}</span>
-                          ) : null}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {model.turns ?? "-"}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatTokens(model.usage?.processed_tokens)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <div className="min-w-0">
+                  <p className="m-0 mb-2 heading-section">By model</p>
+                  <GraphModelChart models={usage.models ?? []} />
+                </div>
               ) : null}
             </div>
           </CardContent>
         </Card>
       </div>
     </div>
+  );
+}
+
+type CompositionRow = ReturnType<typeof compositionRows>[number];
+
+type GraphModel = NonNullable<SessionGraphPayload["usage"]["models"]>[number];
+
+function bucketMix(totalUsage: SessionGraphPayload["usage"]["total_usage"]) {
+  const buckets = totalUsage ?? {};
+  return [
+    { label: "Prompt", value: Math.max((buckets.prompt_tokens ?? 0) - (buckets.cached_prompt_tokens ?? 0), 0) },
+    { label: "Cached", value: buckets.cached_prompt_tokens ?? 0 },
+    { label: "Completion", value: buckets.completion_tokens ?? 0 },
+    { label: "Reasoning", value: buckets.reasoning_tokens ?? 0 },
+  ];
+}
+
+/**
+ * Per-session processed tokens, stacked into cached and fresh portions.
+ * Context usage, cached share, turns, and cost from the former table move
+ * into the tooltip; clicking a bar opens the session detail.
+ */
+function SessionCompositionChart({ rows, rootId }: { rows: CompositionRow[]; rootId: string }) {
+  const theme = useApexTheme();
+  const navigate = useNavigate();
+
+  const rowLabel = React.useCallback(
+    (row: CompositionRow) => row.node?.title || row.node?.agent_name || row.usage?.title || shortSessionId(row.id),
+    [],
+  );
+
+  const options = React.useMemo<ApexOptions>(
+    () => ({
+      chart: {
+        stacked: true,
+        events: {
+          dataPointSelection: (_event, _chartContext, config) => {
+            const row = config ? rows[config.dataPointIndex] : undefined;
+            if (row) {
+              void navigate({ to: "/sessions/$sessionId", params: { sessionId: row.id } });
+            }
+          },
+        },
+      },
+      plotOptions: { bar: { horizontal: true, barHeight: "58%", borderRadius: 3 } },
+      dataLabels: { enabled: false },
+      xaxis: {
+        categories: rows.map((row) => {
+          const label = rowLabel(row);
+          return label.length > 24 ? `${label.slice(0, 23)}…` : label;
+        }),
+        labels: { formatter: (value) => formatCompactNumber(Number(value)) },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+      },
+      yaxis: { labels: { style: { fontSize: "11px" }, maxWidth: 220 } },
+      legend: { show: true, position: "bottom", horizontalAlign: "left" },
+      tooltip: {
+        custom: ({ dataPointIndex }) => {
+          const row = rows[dataPointIndex];
+          if (!row) return "";
+          const role = formatLabel(row.stats?.role ?? row.usage?.role ?? (row.id === rootId ? "main" : undefined));
+          const context = row.stats?.context_window?.used_tokens != null
+            ? `${formatTokens(row.stats.context_window.used_tokens)}${row.stats.context_window.used_percent != null ? ` (${formatPercent(row.stats.context_window.used_percent)})` : ""}`
+            : "-";
+          const processed = row.usage?.total_usage?.processed_tokens ?? row.stats?.usage?.processed_tokens;
+          const share = cachedShare(row.stats);
+          const tooltipRows = [
+            tooltipRow("Role", escapeHtml(role), theme.axis),
+            tooltipRow("Context used", context, theme.axis),
+            tooltipRow("Processed", formatTokens(processed), theme.axis),
+            tooltipRow("Cached share", share != null ? formatPercent(share * 100) : "-", theme.axis),
+            tooltipRow("Turns", String(row.stats?.runtime?.turns ?? row.usage?.runtime?.turns ?? "-"), theme.axis),
+            tooltipRow("Est. cost", formatCostUsd(row.usage?.estimated_cost?.value_usd), theme.axis),
+          ].join("");
+          return `<div style="padding:10px 12px;min-width:220px"><div style="font-weight:700;margin-bottom:6px">${escapeHtml(rowLabel(row))}</div>${tooltipRows}</div>`;
+        },
+      },
+    }),
+    [rows, rootId, theme, navigate, rowLabel],
+  );
+
+  if (!rows.length) {
+    return <p className="text-muted-foreground">No session composition data for this graph.</p>;
+  }
+
+  return (
+    <>
+      <ApexChart
+        type="bar"
+        series={[
+          { name: "Cached", data: rows.map((row) => row.stats?.usage?.cached_prompt_tokens ?? 0) },
+          {
+            name: "Fresh prompt + output",
+            data: rows.map((row) =>
+              Math.max(
+                (row.usage?.total_usage?.processed_tokens ?? row.stats?.usage?.processed_tokens ?? 0) -
+                  (row.stats?.usage?.cached_prompt_tokens ?? 0),
+                0,
+              ),
+            ),
+          },
+        ]}
+        options={options}
+        height={Math.max(180, rows.length * 48)}
+        ariaLabel="Session composition: processed tokens per session split by cached share"
+      />
+      <ul className="sr-only">
+        {rows.map((row) => (
+          <li key={row.id}>
+            {rowLabel(row)}: {formatTokens(row.usage?.total_usage?.processed_tokens ?? row.stats?.usage?.processed_tokens)} processed,{" "}
+            {cachedShare(row.stats) != null ? formatPercent((cachedShare(row.stats) ?? 0) * 100) : "unknown"} cached
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+/** Processed tokens per model in this graph, replacing the model table. */
+function GraphModelChart({ models }: { models: GraphModel[] }) {
+  const theme = useApexTheme();
+
+  const options = React.useMemo<ApexOptions>(
+    () => ({
+      colors: [theme.palette[0]],
+      plotOptions: { bar: { horizontal: true, barHeight: "58%", borderRadius: 4 } },
+      dataLabels: { enabled: false },
+      xaxis: {
+        categories: models.map((model) => `${model.model ?? "Unknown model"}${model.provider ? ` · ${model.provider}` : ""}`),
+        labels: { formatter: (value) => formatCompactNumber(Number(value)) },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+      },
+      yaxis: { labels: { style: { fontSize: "11px" }, maxWidth: 220 } },
+      legend: { show: false },
+      tooltip: {
+        custom: ({ dataPointIndex }) => {
+          const model = models[dataPointIndex];
+          if (!model) return "";
+          const rows = [
+            tooltipRow("Turns", String(model.turns ?? "-"), theme.axis),
+            tooltipRow("Processed", formatTokens(model.usage?.processed_tokens), theme.axis),
+          ].join("");
+          return `<div style="padding:10px 12px;min-width:200px"><div style="font-weight:700;margin-bottom:6px">${escapeHtml(model.model ?? "Unknown model")}</div>${rows}</div>`;
+        },
+      },
+    }),
+    [models, theme],
+  );
+
+  return (
+    <ApexChart
+      type="bar"
+      series={[{ name: "Processed", data: models.map((model) => model.usage?.processed_tokens ?? 0) }]}
+      options={options}
+      height={Math.max(160, models.length * 44)}
+      ariaLabel="Processed tokens per model in this graph"
+    />
   );
 }
