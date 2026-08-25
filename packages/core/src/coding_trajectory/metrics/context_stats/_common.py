@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from coding_trajectory.analysis.request_lineage import is_low_value_turn
@@ -13,12 +14,10 @@ from coding_trajectory.metrics.models import (
     EffortChangeStatsFlat,
     MessageStatsFlat,
     RuntimeStatsFlat,
+    SessionMetrics,
     TokenUsage,
 )
-from coding_trajectory.metrics.throughput import (
-    aggregate_model_active_seconds,
-    processed_tokens_per_second,
-)
+from coding_trajectory.metrics.throughput import processed_tokens_per_second
 
 
 def root_session(session_graph: SessionGraph) -> Session:
@@ -46,23 +45,34 @@ _COMPACTION_MECHANISMS = {
     "context_compacted": "context_compacted",
 }
 
-_UNSET = object()
-
 
 def runtime_stats(
     session_graph: SessionGraph,
     *,
-    processed_tokens: int | None = None,
-    model_active_seconds: float | None | object = _UNSET,
+    session_metrics: Iterable[SessionMetrics],
 ) -> RuntimeStatsFlat:
-    started = min(
-        (session.started_at for session in session_graph.sessions), default=None
+    """Return primary-session runtime plus graph-wide complexity counts.
+
+    Subagent turn intervals commonly overlap the primary session while the
+    primary agent waits for their results. Adding those durations reports
+    agent-seconds, not the elapsed execution experienced by the user. Runtime
+    duration and latency fields therefore come exclusively from the graph's
+    root session. Structural counts below remain graph-wide by design.
+    """
+    primary = root_session(session_graph)
+    primary_metrics = next(
+        (
+            metrics
+            for metrics in session_metrics
+            if metrics.session_id == primary.session_id
+        ),
+        None,
     )
-    ended = max(
-        (session.ended_at or session.started_at for session in session_graph.sessions),
-        default=None,
-    )
-    status_value = root_session(session_graph).status
+    if primary_metrics is None:
+        raise ValueError("runtime metrics omit the graph's root session")
+    started = primary.started_at
+    ended = primary.ended_at or primary.started_at
+    status_value = primary.status
     status = status_value.value if status_value else None
     tool_calls = sum(
         1
@@ -89,25 +99,15 @@ def runtime_stats(
     ]
     execution_seconds = sum(
         value
-        for session in session_graph.sessions
-        for turn in session.turns
+        for turn in primary.turns
         if (value := _turn_duration_seconds(turn)) is not None
     )
-    wait_seconds = sum(
-        value
-        for session in session_graph.sessions
-        for value in _turn_wait_seconds(session)
-    )
-    model_active = (
-        aggregate_model_active_seconds(
-            turn for session in session_graph.sessions for turn in session.turns
-        )
-        if model_active_seconds is _UNSET
-        else model_active_seconds
-    )
+    wait_seconds = sum(_turn_wait_seconds(primary))
+    model_active = primary_metrics.model_active_seconds
+    processed_tokens = primary_metrics.token_usage.processed_token_total()
     first_token_durations = [
         observation.time_to_first_token_ms
-        for observation in runtime_observations
+        for observation in primary.runtime_observations
         if observation.kind == "turn_completed"
         and observation.time_to_first_token_ms is not None
     ]

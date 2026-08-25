@@ -60,8 +60,8 @@ The plugin uses the following stable terms:
 | Mixed models | A graph or turn containing more than one provider/model group |
 | Processed tokens | The canonical normalized processed-token total defined by core accounting |
 | Cost evidence | A core-emitted USD value labeled `reported` or `estimated` |
-| Active execution | Sum of measurable turn execution durations |
-| Wait time | Measurable time between turns, kept separate from active execution |
+| Active execution | Sum of measurable turn execution durations in the parent session; subagent intervals are excluded to avoid double-counting parallel work |
+| Wait time | Measurable time between parent-session turns, kept separate from active execution |
 
 ## Plugin Boundary
 
@@ -292,7 +292,7 @@ The plugin accepts the core `CostEvidenceFlat` value and confidence. It does not
 
 ### Active Time
 
-Show active turn execution per session graph. It must not be labeled end-to-end task time because the current core metric sums observed turn durations.
+Show active turn execution from the parent session only. It must not be labeled end-to-end task time: it excludes unobserved time and cannot represent a task's full first-to-last wall-clock span. Subagent duration remains available through drill-down, but is never added to the parent runtime.
 
 ### Distribution
 
@@ -300,7 +300,7 @@ Show per-graph active-time distribution with median, p75, p90, and sample count.
 
 ### Active vs Wait
 
-Compare active execution and measurable wait time without summing them into an ambiguous runtime label. The explanation notes that missing or interrupted intervals may prevent the two values from reproducing the full first-to-last timestamp span.
+Compare parent-session active execution and measurable parent-session wait time without summing them into an ambiguous runtime label. The explanation notes that missing or interrupted intervals may prevent the two values from reproducing the full first-to-last timestamp span.
 
 ### Turns
 

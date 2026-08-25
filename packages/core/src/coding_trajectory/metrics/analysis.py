@@ -186,8 +186,7 @@ def build_session_graph_usage(
             "title": session_title(source_session),
             "runtime": runtime_stats(
                 single,
-                processed_tokens=session_usage.processed_token_total(),
-                model_active_seconds=session.model_active_seconds,
+                session_metrics=(session,),
             ).model_dump(mode="json"),
             "compaction": _optional_model_dump(compaction_stats(single)),
             "effort_changes": effort_change_stats(single).model_dump(mode="json"),
@@ -208,8 +207,7 @@ def build_session_graph_usage(
         session_id=full.root_session_id,
         runtime=runtime_stats(
             session_graph,
-            processed_tokens=selected_usage.processed_token_total(),
-            model_active_seconds=full.model_active_seconds,
+            session_metrics=full.sessions,
         ),
         turns=turns,
         total_usage=selected_usage,
@@ -475,8 +473,7 @@ def build_session_graph_runtime(session_graph: SessionGraph) -> dict[str, Any]:
     full = _build_full_metrics(session_graph)
     return runtime_stats(
         session_graph,
-        processed_tokens=full.token_usage.processed_token_total(),
-        model_active_seconds=full.model_active_seconds,
+        session_metrics=full.sessions,
     ).model_dump(mode="json")
 
 

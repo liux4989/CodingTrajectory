@@ -50,8 +50,9 @@ def build_session_graph_context_stats(
     full = precomputed_metrics or _build_full_metrics(session_graph)
     runtime = runtime_stats(
         session_graph,
-        processed_tokens=full.token_usage.processed_token_total(),
-        model_active_seconds=full.model_active_seconds,
+        session_metrics=(
+            full.sessions if isinstance(full, SessionGraphMetrics) else (full,)
+        ),
     )
     messages = message_stats(session_graph)
     compaction = compaction_stats(session_graph)
