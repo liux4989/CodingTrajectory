@@ -14,8 +14,8 @@
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  CLI (`ct`)                          │  Plugins                         │
 │  ┌─────────────┐ ┌──────────────┐    │  ┌──────┐ ┌───────┐             │
-│  │ project     │ │ session      │    │  │ dash │ │ code- │             │
-│  │ list/sess.  │ │ over./stats/ │    │  │board │ │ time  │             │
+│  │ project     │ │ session      │    │  │ data │ │ code- │             │
+│  │ list/sess.  │ │ over./stats/ │    │  │ hub  │ │ time  │             │
 │  │             │ │ usage/item   │    │  └───┬──┘ └───┬───┘             │
 └─────────┼───────────────┼────────────┼──────┼──────────┼───────────────┘
                                         │
@@ -83,10 +83,7 @@
 | Build system | Hatchling | Per-package wheel builds |
 | Package manager | uv workspace | Core, CLI, independent plugins, benchmarks |
 | Linting | Ruff | Formatter + linter |
-| Web dashboard | React + TanStack | Served by Python HTTP server |
-
-Dashboard agent workflows and server-side lifecycle rules are documented in
-[`docs/dashboard-agent-architecture.md`](dashboard-agent-architecture.md).
+| Datahub web app | React + TanStack | Served by Python HTTP server |
 
 ## Project Structure
 
@@ -151,10 +148,10 @@ coding-trajectory/
 │       │   ├── pyproject.toml
 │       │   ├── code_time.py
 │       │   ├── code_time_web.py
-│       ├── dashboard/                      # `dashboard` plugin
+│       ├── datahub/                        # `datahub` plugin
 │       │   ├── pyproject.toml
-│       │   ├── dashboard.py                # Dashboard CLI entry point
-│       │   ├── dashboard_web.py            # Python HTTP server for web dashboard
+│       │   ├── datahub.py                # Datahub CLI entry point
+│       │   ├── datahub_web.py            # Python HTTP server for web datahub
 │       │   ├── context_window.py           # Context composition projection
 │       │   ├── token_pricing.py             # models.dev pricing and model metadata
 │       │   ├── cleanup.py                  # Project/session cleanup logic
@@ -193,9 +190,9 @@ coding-trajectory/
 | CLI (`ct`) | Progressive-disclosure command surface with markdown + JSON output |
 | Plugin system | Source-dispatched plugins via `plugin.toml` discovery, no core imports |
 | Command schema | Cheap `ct api schema METHOD` request/response introspection |
-| Dashboard plugin | Web visualization plus models.dev pricing and model metadata enrichment |
+| Datahub plugin | Web visualization plus models.dev pricing and model metadata enrichment |
 | Context window view | Context composition bar with event selection and hover preview |
-| Dashboard cleanup | Project/session cleanup with dry-run, trash, and interactive workflow |
+| Datahub cleanup | Project/session cleanup with dry-run, trash, and interactive workflow |
 
 ## Service API
 
@@ -323,8 +320,7 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct session events --event-id EVENT_ID [--event-id EVENT_ID ...]` | Event detail (JSON) |
 | `uv run ct session events SESSION_ID --type TYPE` | Filtered event search |
 | `uv run ct plugin list` | List available plugins |
-| `uv run ct plugin dashboard web` | Start web dashboard |
-| `uv run ct plugin dashboard benchmark` | Benchmark read-only dashboard API projections |
+| `uv run ct plugin datahub web` | Start web datahub |
 | `uv run ct plugin code-time` | Today's coding time summary |
 
 ### Testing

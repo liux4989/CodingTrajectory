@@ -6,14 +6,32 @@ from typing import Any
 
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.tool_optimization import tool_optimization_profile
+from coding_trajectory.analysis.tool_summary_shared import (
+    LIST_FILES,
+    READ_FILE,
+    RUN_COMMAND,
+    SEARCH_TEXT,
+)
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.models import AgentMessageItem, Item
+from pydantic import BaseModel
 
 _OVERVIEW_TEXT_PREVIEW_LEN = 220
 
 _TOOL_SHAPED_KINDS: frozenset[str] = frozenset(
     {"tool_call", "command_execution", "file_change", "plan"}
 )
+_EXPLORATION_CONCEPTS: frozenset[str] = frozenset({READ_FILE, SEARCH_TEXT, LIST_FILES})
+_EXPLORATION_CELL_KEY = ("exploration", None, None)
+_COMMAND_CELL_KEY = ("command", None, None)
+_MAX_ACTIVITY_CELL_ITEMS = 32
+
+
+class _ToolActivityCell(BaseModel):
+    """One compactable, temporally contiguous activity cell."""
+
+    group_key: tuple[str, str | None, str | None]
+    items: list[dict[str, Any]]
 
 
 def build_flows(items: list[Item]) -> list[dict[str, Any]]:
@@ -24,6 +42,18 @@ def build_flows(items: list[Item]) -> list[dict[str, Any]]:
         if item.kind in _TOOL_SHAPED_KINDS:
             summary = summarize_tool_call(item)
             if summary is not None:
+                if summary.get("activity_hidden") is True:
+                    continue
+                if summary.get("activity_kind") == "command":
+                    # TUI cells represent an executed command as a command even
+                    # when CT's deeper semantic classifier recognizes its shell
+                    # intent as read/search/list.  Keep that semantic evidence
+                    # in the item summary while the overview mirrors the cell.
+                    summary["name"] = RUN_COMMAND
+                    summary["optimization_profile"] = "activity:command"
+                    summary["description"] = summary.get("command") or summary.get(
+                        "description"
+                    )
                 summary.setdefault("item_id", str(item.item_id))
                 result.append({"type": "tool_call", **summary})
             continue
@@ -48,39 +78,19 @@ def build_flows(items: list[Item]) -> list[dict[str, Any]]:
                         "item_id": str(item.item_id),
                     }
                 )
-    return _group_consecutive_tool_calls(result)
+    return _project_activity_cells(result)
 
 
 def build_overview_flows(items: list[Item]) -> list[dict[str, Any]]:
-    return _compact_overview_items(build_flows(items))
-
-
-def _compact_overview_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
-    tool_groups: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
-
-    for item in items:
+    for item in build_flows(items):
         if item.get("type") == "assistant_response":
             text = _truncate_text(item.get("text"))
             if text:
                 compacted.append({"text": text})
             continue
 
-        if item.get("type") not in {"tool_call", "tool_call_group"}:
-            compacted.append(_compact_flow_item(item))
-            continue
-
-        key = (
-            str(item.get("name") or ""),
-            item.get("status") if isinstance(item.get("status"), str) else None,
-            _profile_name(item),
-        )
-        if key not in tool_groups:
-            group = _new_overview_tool_group(item)
-            tool_groups[key] = group
-            compacted.append(group)
-            continue
-        _merge_overview_tool_group(tool_groups[key], item)
+        compacted.append(_compact_flow_item(item))
 
     return [prune_nones(item) for item in compacted]
 
@@ -102,6 +112,8 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
                 profile.detail_list_key: item.get("descriptions"),
                 profile.detail_counts_key or "": item.get("description_counts"),
                 "item_ids": item.get("item_ids"),
+                "outcome": item.get("activity_outcome"),
+                "wrapper_status": item.get("activity_wrapper_status"),
             }
         )
 
@@ -118,64 +130,12 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
                 "item_ids": [item.get("item_id")]
                 if isinstance(item.get("item_id"), str)
                 else None,
+                "outcome": item.get("activity_outcome"),
+                "wrapper_status": item.get("activity_wrapper_status"),
             }
         )
 
     return item
-
-
-def _new_overview_tool_group(item: dict[str, Any]) -> dict[str, Any]:
-    profile = tool_optimization_profile(
-        str(item.get("name") or ""),
-        _profile_name(item),
-    )
-    descriptions = _tool_descriptions(item)
-    group: dict[str, Any] = {
-        "tool": item.get("name"),
-        "status": item.get("status"),
-        "count": int(item.get("count") or 1),
-        profile.detail_list_key: descriptions or None,
-        "item_ids": [item["item_id"]] if isinstance(item.get("item_id"), str) else [],
-    }
-    return group
-
-
-def _merge_overview_tool_group(group: dict[str, Any], item: dict[str, Any]) -> None:
-    profile = tool_optimization_profile(
-        str(item.get("name") or ""),
-        _profile_name(item),
-    )
-    group["count"] = int(group.get("count") or 0) + int(item.get("count") or 1)
-    detail_key = profile.detail_list_key
-    existing = group.get(detail_key)
-    if not isinstance(existing, list):
-        existing = []
-        group[detail_key] = existing
-    descriptions = _tool_descriptions(item)
-    existing.extend(
-        description for description in descriptions if description not in existing
-    )
-    item_ids = group.get("item_ids")
-    if isinstance(item_ids, list):
-        incoming = item.get("item_id")
-        if isinstance(incoming, str) and incoming not in item_ids:
-            item_ids.append(incoming)
-
-
-def _tool_descriptions(item: dict[str, Any]) -> list[str]:
-    if item.get("type") == "tool_call_group":
-        descriptions = item.get("descriptions")
-        if isinstance(descriptions, list):
-            return [
-                description
-                for description in descriptions
-                if isinstance(description, str) and description
-            ]
-        return []
-    description = item.get("description")
-    if isinstance(description, str) and description:
-        return [description]
-    return []
 
 
 def _truncate_text(
@@ -187,48 +147,138 @@ def _truncate_text(
     return text
 
 
-def _group_consecutive_tool_calls(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: list[dict[str, Any]] = []
-    pending: list[dict[str, Any]] = []
+def _project_activity_cells(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project ordered tool facts into Codex-style activity cells.
 
-    def flush_pending() -> None:
-        if not pending:
+    The active cell only accepts compatible, agent-originated successful tool
+    facts. Every other item flushes it, preserving the temporal boundary for
+    messages, commands, web activity, mutations, failures, and unknown forms.
+    """
+
+    projected: list[dict[str, Any]] = []
+    active: _ToolActivityCell | None = None
+
+    def flush_active() -> None:
+        nonlocal active
+        if active is None:
             return
-        grouped.extend(_project_tool_run(pending))
-        pending.clear()
+        projected.extend(_project_tool_activity_cell(active))
+        active = None
 
     for item in items:
-        if item.get("type") != "tool_call":
-            flush_pending()
-            grouped.append(item)
+        group_key = _tool_activity_group_key(item)
+        if group_key is None:
+            flush_active()
+            projected.append(item)
             continue
 
-        if pending and not _same_groupable_tool_call(pending[-1], item):
-            flush_pending()
-        pending.append(item)
+        if (
+            active is not None
+            and active.group_key == group_key
+            and len(active.items) < _MAX_ACTIVITY_CELL_ITEMS
+        ):
+            active.items.append(item)
+            continue
 
-    flush_pending()
-    return grouped
+        flush_active()
+        active = _ToolActivityCell(group_key=group_key, items=[item])
+
+    flush_active()
+    return projected
 
 
-def _same_groupable_tool_call(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    profile = tool_optimization_profile(
-        str(left.get("name") or ""),
-        _profile_name(left),
-    )
+def _tool_activity_group_key(
+    item: dict[str, Any],
+) -> tuple[str, str | None, str | None] | None:
+    if item.get("type") != "tool_call":
+        return None
+    if item.get("activity_source") != "agent":
+        return None
+    if item.get("activity_outcome") != "succeeded":
+        return None
+
+    if item.get("activity_kind") == "command":
+        return _COMMAND_CELL_KEY
+
+    name = str(item.get("name") or "")
+    profile_name = _profile_name(item)
+    profile = tool_optimization_profile(name, profile_name)
     if not profile.group_repeated:
-        return False
-    return (
-        left.get("name") == right.get("name")
-        and left.get("status") == right.get("status")
-        and _profile_name(left) == _profile_name(right)
+        return None
+    if name in _EXPLORATION_CONCEPTS:
+        return _EXPLORATION_CELL_KEY
+    return ("repeated", name, profile_name)
+
+
+def _project_tool_activity_cell(cell: _ToolActivityCell) -> list[dict[str, Any]]:
+    if len(cell.items) == 1:
+        return [cell.items[0]]
+    if cell.group_key == _COMMAND_CELL_KEY:
+        return [_project_command_cell(cell.items)]
+    if cell.group_key == _EXPLORATION_CELL_KEY:
+        return [_project_exploration_cell(cell.items)]
+    return [_project_repeated_tool_cell(cell.items)]
+
+
+def _project_exploration_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
+    targets: list[str] = []
+    for item in items:
+        target = _exploration_target(item)
+        if target is not None:
+            targets.append(target)
+    item_ids = [
+        item["item_id"]
+        for item in items
+        if isinstance(item.get("item_id"), str) and item.get("item_id")
+    ]
+    return prune_nones(
+        {
+            "type": "tool_call_group",
+            "name": "Explore",
+            "optimization_profile": "activity:exploration",
+            "count": len(items),
+            "descriptions": targets or None,
+            "item_ids": item_ids or None,
+        }
     )
 
 
-def _project_tool_run(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if len(items) == 1:
-        return [items[0]]
+def _project_command_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
+    commands = [
+        item["description"]
+        for item in items
+        if isinstance(item.get("description"), str) and item.get("description")
+    ]
+    item_ids = [
+        item["item_id"]
+        for item in items
+        if isinstance(item.get("item_id"), str) and item.get("item_id")
+    ]
+    return prune_nones(
+        {
+            "type": "tool_call_group",
+            "name": RUN_COMMAND,
+            "optimization_profile": "activity:command",
+            "count": len(items),
+            "descriptions": commands or None,
+            "item_ids": item_ids or None,
+        }
+    )
 
+
+def _exploration_target(item: dict[str, Any]) -> str | None:
+    description = item.get("description")
+    if not isinstance(description, str) or not description:
+        return None
+    verb = {
+        READ_FILE: "read",
+        SEARCH_TEXT: "search",
+        LIST_FILES: "list",
+    }.get(str(item.get("name") or ""), "explore")
+    return f"{verb} {description}"
+
+
+def _project_repeated_tool_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
     profile = tool_optimization_profile(
         str(items[0].get("name") or ""),
         _profile_name(items[0]),

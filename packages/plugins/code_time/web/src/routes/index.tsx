@@ -5,10 +5,6 @@ import { StatCard } from "@/components/stat-card";
 import { ProjectTable } from "@/components/project-table";
 import { DailyDistributionChart } from "@/components/daily-distribution-chart";
 import { ProjectTrendChart } from "@/components/project-trend-chart";
-import {
-  generateSampleHourlyDensity,
-  generateSampleProjectTrend,
-} from "@/lib/sample-data";
 
 function formatDuration(seconds: number): string {
   if (!seconds) return "-";
@@ -30,6 +26,19 @@ function formatCost(cost: number | null): string {
   if (cost == null) return "-";
   if (cost < 0.01) return `$${cost.toFixed(4)}`;
   return `$${cost.toFixed(2)}`;
+}
+
+function UnavailableChart({ title }: { title: string }) {
+  return (
+    <section className="grid min-h-72 place-items-center rounded-xl border border-border bg-card p-6 text-center shadow-sm">
+      <div>
+        <h2 className="font-display text-body-sm font-medium tracking-wide">{title}</h2>
+        <p className="mt-2 max-w-sm text-caption text-muted-foreground">
+          This activity distribution is unavailable because the report does not include observed bucket data.
+        </p>
+      </div>
+    </section>
+  );
 }
 
 function WindowSelector({
@@ -109,7 +118,7 @@ export function OverviewRoute() {
                   <div
                     key={i}
                     className="flex-1 rounded-t bg-muted-foreground/10"
-                    style={{ height: `${20 + Math.sin(i * 0.5) * 40 + Math.random() * 30}%` }}
+                    style={{ height: `${30 + (i % 6) * 8}%` }}
                   />
                 ))}
               </div>
@@ -204,18 +213,16 @@ export function OverviewRoute() {
           </div>
 
           <div className="mt-8 grid gap-6 lg:grid-cols-2">
-            <DailyDistributionChart
-              data={
-                data.hourly_density ??
-                generateSampleHourlyDensity(data.projects)
-              }
-            />
-            <ProjectTrendChart
-              data={
-                data.project_trend ??
-                generateSampleProjectTrend(data.projects)
-              }
-            />
+            {data.hourly_density ? (
+              <DailyDistributionChart data={data.hourly_density} />
+            ) : (
+              <UnavailableChart title="Daily distribution" />
+            )}
+            {data.project_trend ? (
+              <ProjectTrendChart data={data.project_trend} />
+            ) : (
+              <UnavailableChart title="Project trend" />
+            )}
           </div>
 
           <div className="mt-8 rounded-xl border border-border bg-card shadow-sm">

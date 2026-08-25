@@ -68,6 +68,15 @@ class DiscoveryResult:
     provenance: dict[str, SessionProvenance] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class DiscoveryCandidate:
+    """One source selected by cheap path/project discovery, before ingestion."""
+
+    vendor: Vendor
+    adapter_cls: type[BaseAdapter]
+    path: Path
+
+
 def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     home = Path.home()
     return [
@@ -267,6 +276,42 @@ def discover_store(
     return DiscoveryResult(
         store=DocumentStore.from_session_graphs(session_graphs), sources=sources
     )
+
+
+def discover_source_candidates(
+    *,
+    current_dir: Path,
+    global_scope: bool = False,
+    project_name: str | None = None,
+    since_days: int | None = None,
+    modified_since: datetime | None = None,
+    agent_vendor: str | None = None,
+) -> list[DiscoveryCandidate]:
+    """List matching JSONL sources without projecting canonical sessions."""
+
+    current_dir = current_dir.resolve()
+    scoped_project = project_name or (None if global_scope else current_dir.name)
+    scoped_project_key = (
+        normalize_project_key(scoped_project) if scoped_project else None
+    )
+    cutoff = _modified_since(since_days, modified_since=modified_since)
+    candidates: list[DiscoveryCandidate] = []
+    for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(
+        agent_vendor
+    ):
+        candidates.extend(
+            DiscoveryCandidate(vendor=vendor, adapter_cls=adapter_cls, path=path)
+            for path in _candidate_files(
+                vendor,
+                base_dir,
+                pattern,
+                current_dir=current_dir,
+                scoped_project=scoped_project,
+                scoped_project_key=scoped_project_key,
+                modified_since=cutoff,
+            )
+        )
+    return sorted(candidates, key=lambda value: str(value.path))
 
 
 def discover_project_metadata(
@@ -717,13 +762,19 @@ def locate_session_files(
     since_days: int | None = None,
     modified_since: datetime | None = None,
     agent_vendor: str | None = None,
+    include_descendants: bool = True,
 ) -> list[Path]:
-    """Locate every log file in a session graph via header-only scan.
+    """Locate the source chain or full component for a session id.
 
-    Scans candidate headers (no transcript projection) to map session ids to
-    source files, then returns the target file plus its parent chain and any
-    descendant forks so :func:`discover_store_from_files` can ingest them with
-    fork trimming. Returns an empty list when the session is not in scope.
+    Filename matches are tried first because supported providers normally embed
+    the session UUID in the source name.  Sources are validated with the
+    identity-only adapter path; titles and other display metadata are irrelevant
+    to routing.  A corpus identity scan remains as the compatibility fallback
+    for providers whose filenames do not expose canonical session ids.
+
+    The target's parent chain is always retained for correct fork trimming.
+    Descendants are included only when the caller needs a graph projection.
+    Returns an empty list when the session is not in scope.
     """
     current_dir = current_dir.resolve()
     scoped_project = project_name or (None if global_scope else current_dir.name)
@@ -732,7 +783,7 @@ def locate_session_files(
     )
     modified_since = _modified_since(since_days, modified_since=modified_since)
 
-    file_by_session: dict[UUID, tuple[Path, UUID | None]] = {}
+    candidates: list[tuple[Vendor, type[BaseAdapter], Path]] = []
     for vendor, adapter_cls, base_dir, pattern in _selected_vendor_configs(
         agent_vendor
     ):
@@ -745,26 +796,34 @@ def locate_session_files(
             scoped_project_key=scoped_project_key,
             modified_since=modified_since,
         ):
-            adapter = adapter_cls()
-            try:
-                header = adapter.scan_header(path)
-            except Exception as exc:
-                debug.warn(
-                    f"failed to scan session header for {vendor.value} log: {exc}",
-                    code="discovery.scan_header_failed",
-                    severity="warning",
-                    vendor=vendor.value,
-                    source=str(path),
-                )
-                continue
-            if header is None:
-                continue
-            file_by_session.setdefault(
-                header.session_id, (path, header.parent_session_id)
-            )
+            candidates.append((vendor, adapter_cls, path))
+
+    target_text = str(session_id).lower()
+    direct = [
+        candidate
+        for candidate in candidates
+        if target_text in candidate[2].stem.lower()
+    ]
+    remaining = [candidate for candidate in candidates if candidate not in direct]
+    file_by_session: dict[UUID, tuple[Path, UUID | None]] = {}
+
+    _scan_session_identities(direct, file_by_session=file_by_session)
+    if session_id in file_by_session and not include_descendants:
+        chain = _resolve_direct_parent_chain(
+            remaining,
+            file_by_session=file_by_session,
+            session_id=session_id,
+        )
+        if chain is not None:
+            return chain
+
+    _scan_session_identities(remaining, file_by_session=file_by_session)
 
     if session_id not in file_by_session:
         return []
+
+    if not include_descendants:
+        return _session_parent_chain(file_by_session, session_id) or []
 
     # Walk parent links up to the graph root.
     root = session_id
@@ -793,6 +852,103 @@ def locate_session_files(
         component.append(file_by_session[sid][0])
         stack.extend(children.get(sid, []))
     return component
+
+
+def _scan_session_identities(
+    candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
+    *,
+    file_by_session: dict[UUID, tuple[Path, UUID | None]],
+) -> None:
+    """Populate routing identities without projecting titles or transcripts."""
+
+    for vendor, adapter_cls, path in candidates:
+        try:
+            header = adapter_cls().scan_identity(path)
+        except Exception as exc:
+            debug.warn(
+                f"failed to scan session identity for {vendor.value} log: {exc}",
+                code="discovery.scan_identity_failed",
+                severity="warning",
+                vendor=vendor.value,
+                source=str(path),
+            )
+            continue
+        if header is None:
+            continue
+        file_by_session.setdefault(
+            header.session_id, (path, header.parent_session_id)
+        )
+
+
+def _session_parent_chain(
+    file_by_session: dict[UUID, tuple[Path, UUID | None]],
+    session_id: UUID,
+) -> list[Path] | None:
+    """Return root-to-target paths, or ``None`` when a parent is unresolved."""
+
+    chain: list[Path] = []
+    current: UUID | None = session_id
+    seen: set[UUID] = set()
+    while current is not None:
+        if current in seen:
+            return None
+        seen.add(current)
+        located = file_by_session.get(current)
+        if located is None:
+            return None
+        path, current = located
+        chain.append(path)
+    chain.reverse()
+    return chain
+
+
+def _resolve_direct_parent_chain(
+    candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
+    *,
+    file_by_session: dict[UUID, tuple[Path, UUID | None]],
+    session_id: UUID,
+) -> list[Path] | None:
+    """Resolve filename-addressable parents without scanning unrelated sources."""
+
+    remaining = candidates
+    while True:
+        chain = _session_parent_chain(file_by_session, session_id)
+        if chain is not None:
+            return chain
+
+        missing = _first_unresolved_parent(file_by_session, session_id)
+        if missing is None:
+            return None
+        missing_text = str(missing).lower()
+        direct = [
+            candidate
+            for candidate in remaining
+            if missing_text in candidate[2].stem.lower()
+        ]
+        if not direct:
+            return None
+        _scan_session_identities(direct, file_by_session=file_by_session)
+        if missing not in file_by_session:
+            return None
+        direct_paths = {candidate[2] for candidate in direct}
+        remaining = [
+            candidate for candidate in remaining if candidate[2] not in direct_paths
+        ]
+
+
+def _first_unresolved_parent(
+    file_by_session: dict[UUID, tuple[Path, UUID | None]],
+    session_id: UUID,
+) -> UUID | None:
+    current: UUID | None = session_id
+    seen: set[UUID] = set()
+    while current is not None and current not in seen:
+        seen.add(current)
+        located = file_by_session.get(current)
+        if located is None:
+            return current
+        current = located[1]
+    return None
 
 
 def format_discovery_sources(sources: list[DiscoverySource]) -> str:

@@ -40,9 +40,14 @@ class TurnStatus(str, Enum):
 
 
 class SessionStatus(str, Enum):
-    ACTIVE = "active"
-    COMPLETED = "completed"
-    INCOMPLETE = "incomplete"
+    """Whether the session currently has a running canonical turn.
+
+    This is intentionally not a task outcome: an ended Codex turn is
+    ``not_living`` until a resumed or follow-up turn begins in the same thread.
+    """
+
+    LIVING = "living"
+    NOT_LIVING = "not_living"
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +349,11 @@ class Turn(BaseModel):
 class Session(BaseModel):
     session_id: UUID = Field(default_factory=uuid4)
     vendor: Vendor
+    # Most recently observed model configuration for this session. These are
+    # configuration facts, not aggregate usage attribution; model changes
+    # remain represented in the underlying turn/event evidence.
+    model: str | None = None
+    reasoning_effort: str | None = None
     agent_name: str | None = None
     started_at: datetime
     ended_at: datetime | None = None
@@ -356,7 +366,13 @@ class Session(BaseModel):
     runtime_observations: list[RuntimeObservation] = Field(default_factory=list)
     measurements: SessionMeasurements | None = None
     extensions: VendorExtensions | None = None
-    status: SessionStatus = SessionStatus.COMPLETED
+    status: SessionStatus = SessionStatus.NOT_LIVING
+
+    @property
+    def latest_turn_status(self) -> TurnStatus | None:
+        """Preserve the latest turn terminal/running state beside liveness."""
+
+        return self.turns[-1].status if self.turns else None
 
 
 class SessionEdge(BaseModel):

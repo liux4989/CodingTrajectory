@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import chain
@@ -19,6 +18,8 @@ from coding_trajectory.ingestion.common import (
     extract_exit_code,
     infer_tool_success,
     parse_iso_timestamp,
+    parse_timestamp,
+    source_is_living,
 )
 from coding_trajectory.ingestion.models import (
     ContextSourceObservation,
@@ -53,6 +54,7 @@ from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
     context_usage_observation,
     normalize_codex_token_count,
 )
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,640 @@ _CODEX_PLAN_TOOL_NAMES: frozenset[str] = frozenset(
         "update_plan",
     }
 )
+
+_CODEX_EXEC_STATIC_EXTRACTOR = "codex_exec_static_v2"
+_NATIVE_EXEC_MATCH_GRACE_SECONDS = 2
+_CODEX_GROUPABLE_COMMAND_SOURCES: frozenset[str] = frozenset(
+    {"agent", "unified_exec_startup"}
+)
+_CODEX_STATIC_EXEC_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "apply_patch",
+        "exec_command",
+        "followup_task",
+        "interrupt_agent",
+        "send_message",
+        "spawn_agent",
+        "update_plan",
+        "wait_agent",
+        "web__run",
+    }
+)
+_CODEX_STATIC_COLLAB_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "followup_task",
+        "interrupt_agent",
+        "send_message",
+        "spawn_agent",
+        "wait_agent",
+    }
+)
+_CODEX_STATIC_COLLAB_NATIVE_TOOLS: dict[str, frozenset[str]] = {
+    "followup_task": frozenset({"resume_agent", "send_input"}),
+    "interrupt_agent": frozenset({"close_agent"}),
+    "send_message": frozenset({"send_input"}),
+    "spawn_agent": frozenset({"spawn_agent"}),
+    "wait_agent": frozenset({"wait"}),
+}
+_CODEX_WEB_BROWSE_OPERATIONS: frozenset[str] = frozenset(
+    {"click", "find", "open", "screenshot"}
+)
+_JS_CONTROL_WORDS: frozenset[str] = frozenset(
+    {
+        "catch",
+        "do",
+        "finally",
+        "for",
+        "function",
+        "if",
+        "switch",
+        "try",
+        "while",
+    }
+)
+
+
+class _StaticExecInvocation(BaseModel):
+    """One non-evaluated nested tool call inside a Codex ``exec`` wrapper."""
+
+    method: str
+    tool_name: str
+    item_kind: str
+    input: Any = None
+    command: str | None = None
+    cwd: str | None = None
+    source_offset: int
+
+
+@dataclass
+class _PendingExecWrapper:
+    """A static ``exec`` code cell awaiting its wrapper result."""
+
+    call_id: str
+    started_at: datetime
+    call_record: TranscriptRecord
+    invocations: list[_StaticExecInvocation]
+    matched_native_indices: set[int] = field(default_factory=set)
+    derived_records: dict[int, TranscriptRecord] = field(default_factory=dict)
+    closed: bool = False
+    completed_at: datetime | None = None
+
+
+def _is_js_identifier_start(value: str) -> bool:
+    return value == "_" or value == "$" or value.isalpha()
+
+
+def _is_js_identifier_part(value: str) -> bool:
+    return _is_js_identifier_start(value) or value.isdigit()
+
+
+def _skip_js_trivia(source: str, offset: int) -> int | None:
+    """Advance over whitespace and comments without interpreting JavaScript."""
+
+    while offset < len(source):
+        if source[offset].isspace():
+            offset += 1
+            continue
+        if source.startswith("//", offset):
+            newline = source.find("\n", offset + 2)
+            return len(source) if newline < 0 else _skip_js_trivia(source, newline + 1)
+        if source.startswith("/*", offset):
+            close = source.find("*/", offset + 2)
+            if close < 0:
+                return None
+            offset = close + 2
+            continue
+        break
+    return offset
+
+
+def _read_js_identifier(source: str, offset: int) -> tuple[str, int] | None:
+    if offset >= len(source) or not _is_js_identifier_start(source[offset]):
+        return None
+    end = offset + 1
+    while end < len(source) and _is_js_identifier_part(source[end]):
+        end += 1
+    return source[offset:end], end
+
+
+def _read_js_string(source: str, offset: int) -> tuple[str, int] | None:
+    """Read a strict single- or double-quoted JavaScript literal.
+
+    Template literals are deliberately unsupported: interpolations would turn a
+    historical reconstruction into code evaluation.
+    """
+
+    if offset >= len(source) or source[offset] not in {"'", '"'}:
+        return None
+    quote = source[offset]
+    value: list[str] = []
+    cursor = offset + 1
+    simple_escapes = {
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "v": "\v",
+        "0": "\0",
+    }
+    while cursor < len(source):
+        character = source[cursor]
+        if character == quote:
+            return "".join(value), cursor + 1
+        if character != "\\":
+            value.append(character)
+            cursor += 1
+            continue
+        cursor += 1
+        if cursor >= len(source):
+            return None
+        escaped = source[cursor]
+        if escaped == "u":
+            digits = source[cursor + 1 : cursor + 5]
+            if len(digits) != 4 or any(
+                digit not in "0123456789abcdefABCDEF" for digit in digits
+            ):
+                return None
+            value.append(chr(int(digits, 16)))
+            cursor += 5
+            continue
+        if escaped == "x":
+            digits = source[cursor + 1 : cursor + 3]
+            if len(digits) != 2 or any(
+                digit not in "0123456789abcdefABCDEF" for digit in digits
+            ):
+                return None
+            value.append(chr(int(digits, 16)))
+            cursor += 3
+            continue
+        value.append(simple_escapes.get(escaped, escaped))
+        cursor += 1
+    return None
+
+
+def _read_js_literal(source: str, offset: int) -> tuple[Any, int] | None:
+    offset = _skip_js_trivia(source, offset)
+    if offset is None or offset >= len(source):
+        return None
+    string = _read_js_string(source, offset)
+    if string is not None:
+        return string
+    for token, value in (("true", True), ("false", False), ("null", None)):
+        if source.startswith(token, offset):
+            end = offset + len(token)
+            if end == len(source) or not _is_js_identifier_part(source[end]):
+                return value, end
+    match = re.match(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", source[offset:])
+    if match is None:
+        return None
+    end = offset + len(match.group(0))
+    literal = match.group(0)
+    return (float(literal) if "." in literal else int(literal)), end
+
+
+def _read_js_static_value(source: str, offset: int) -> tuple[Any, int] | None:
+    """Read a JSON-shaped JavaScript literal without evaluating source code."""
+
+    offset = _skip_js_trivia(source, offset)
+    if offset is None or offset >= len(source):
+        return None
+    literal = _read_js_literal(source, offset)
+    if literal is not None:
+        return literal
+    if source[offset] == "{":
+        return _read_js_static_object(source, offset)
+    if source[offset] == "[":
+        return _read_js_static_array(source, offset)
+    return None
+
+
+def _read_js_static_object(
+    source: str, offset: int
+) -> tuple[dict[str, Any], int] | None:
+    """Read a strict object literal whose keys and values are static literals."""
+
+    offset = _skip_js_trivia(source, offset)
+    if offset is None or offset >= len(source) or source[offset] != "{":
+        return None
+    offset += 1
+    values: dict[str, Any] = {}
+    while True:
+        offset = _skip_js_trivia(source, offset)
+        if offset is None or offset >= len(source):
+            return None
+        if source[offset] == "}":
+            return values, offset + 1
+        key_string = _read_js_string(source, offset)
+        if key_string is not None:
+            key, offset = key_string
+        else:
+            key_identifier = _read_js_identifier(source, offset)
+            if key_identifier is None:
+                return None
+            key, offset = key_identifier
+        if key in values:
+            return None
+        offset = _skip_js_trivia(source, offset)
+        if offset is None or offset >= len(source) or source[offset] != ":":
+            return None
+        parsed = _read_js_static_value(source, offset + 1)
+        if parsed is None:
+            return None
+        nested_value, offset = parsed
+        values[key] = nested_value
+        offset = _skip_js_trivia(source, offset)
+        if offset is None or offset >= len(source):
+            return None
+        if source[offset] == "}":
+            return values, offset + 1
+        if source[offset] != ",":
+            return None
+        offset += 1
+
+
+def _read_js_static_array(source: str, offset: int) -> tuple[list[Any], int] | None:
+    """Read a strict array literal whose elements are static literals."""
+
+    offset = _skip_js_trivia(source, offset)
+    if offset is None or offset >= len(source) or source[offset] != "[":
+        return None
+    offset += 1
+    values: list[Any] = []
+    while True:
+        offset = _skip_js_trivia(source, offset)
+        if offset is None or offset >= len(source):
+            return None
+        if source[offset] == "]":
+            return values, offset + 1
+        parsed = _read_js_static_value(source, offset)
+        if parsed is None:
+            return None
+        nested_value, offset = parsed
+        values.append(nested_value)
+        offset = _skip_js_trivia(source, offset)
+        if offset is None or offset >= len(source):
+            return None
+        if source[offset] == "]":
+            return values, offset + 1
+        if source[offset] != ",":
+            return None
+        offset += 1
+
+
+def _read_static_exec_call_argument(
+    source: str,
+    offset: int,
+    *,
+    allow_identifier: bool,
+) -> tuple[Any, int] | None:
+    """Read one static tool argument and its closing call parenthesis.
+
+    ``apply_patch`` commonly receives a literal patch stored in a local
+    variable. The variable name is deliberately retained only as an opaque
+    reference: CT can prove the tool call, not evaluate the variable.
+    """
+
+    offset = _skip_js_trivia(source, offset)
+    if offset is None or offset >= len(source):
+        return None
+    parsed = _read_js_static_value(source, offset)
+    if parsed is not None:
+        argument, offset = parsed
+    elif allow_identifier:
+        identifier = _read_js_identifier(source, offset)
+        if identifier is None:
+            return None
+        name, offset = identifier
+        argument = {"_static_reference": name}
+    else:
+        return None
+    offset = _skip_js_trivia(source, offset)
+    if offset is None or offset >= len(source) or source[offset] != ")":
+        return None
+    return argument, offset + 1
+
+
+def _static_web_tool_name(argument: dict[str, Any]) -> str | None:
+    if "search_query" in argument or "image_query" in argument:
+        return "web_search"
+    if any(operation in argument for operation in _CODEX_WEB_BROWSE_OPERATIONS):
+        return "web_fetch"
+    # Weather, finance, and future operation shapes are not interchangeable
+    # with a TUI WebSearchCell. Keep their raw wrapper visible until CT gains
+    # an evidence-preserving activity type for them.
+    return None
+
+
+def _build_static_exec_invocation(
+    method: str,
+    argument: Any,
+    *,
+    source_offset: int,
+) -> _StaticExecInvocation | None:
+    """Normalize one statically proven nested tool invocation.
+
+    This registry intentionally recognizes only tools with a stable CT item
+    shape. Unknown nested tools keep their outer ``exec`` wrapper visible.
+    """
+
+    if method == "exec_command":
+        if not isinstance(argument, dict):
+            return None
+        command = argument.get("cmd")
+        cwd = argument.get("workdir")
+        if not isinstance(command, str) or not command.strip():
+            return None
+        if cwd is not None and not isinstance(cwd, str):
+            return None
+        command_input: dict[str, Any] = {"cmd": command}
+        if cwd is not None:
+            command_input["workdir"] = cwd
+        return _StaticExecInvocation(
+            method=method,
+            tool_name="exec_command",
+            item_kind="command_execution",
+            input=command_input,
+            command=command,
+            cwd=cwd,
+            source_offset=source_offset,
+        )
+
+    if method == "web__run":
+        if not isinstance(argument, dict):
+            return None
+        tool_name = _static_web_tool_name(argument)
+        if tool_name is None:
+            return None
+        return _StaticExecInvocation(
+            method=method,
+            tool_name=tool_name,
+            item_kind="tool_call",
+            input=argument,
+            source_offset=source_offset,
+        )
+
+    if method == "apply_patch":
+        patch_input = argument if isinstance(argument, dict) else {"patch": argument}
+        return _StaticExecInvocation(
+            method=method,
+            tool_name="apply_patch",
+            item_kind="file_change",
+            input=patch_input,
+            source_offset=source_offset,
+        )
+
+    if method == "update_plan":
+        if not isinstance(argument, dict):
+            return None
+        return _StaticExecInvocation(
+            method=method,
+            tool_name="update_plan",
+            item_kind="plan",
+            input=argument,
+            source_offset=source_offset,
+        )
+
+    if method in _CODEX_STATIC_COLLAB_TOOL_NAMES:
+        if not isinstance(argument, dict):
+            return None
+        input_data = {"action": method, **argument}
+        return _StaticExecInvocation(
+            method=method,
+            tool_name="spawn_agent" if method == "spawn_agent" else "collab_agent",
+            item_kind="tool_call",
+            input=input_data,
+            source_offset=source_offset,
+        )
+
+    return None
+
+
+def _parse_static_exec_tool_call(
+    source: str, offset: int
+) -> tuple[_StaticExecInvocation, int] | None:
+    """Read one known ``tools.<method>(literal)`` call at ``offset``."""
+
+    tools = _read_js_identifier(source, offset)
+    if tools is None or tools[0] != "tools":
+        return None
+    _, cursor = tools
+    cursor = _skip_js_trivia(source, cursor)
+    if cursor is None or cursor >= len(source) or source[cursor] != ".":
+        return None
+    method = _read_js_identifier(source, cursor + 1)
+    if method is None:
+        return None
+    method_name, cursor = method
+    if method_name not in _CODEX_STATIC_EXEC_TOOL_NAMES:
+        return None
+    cursor = _skip_js_trivia(source, cursor)
+    if cursor is None or cursor >= len(source) or source[cursor] != "(":
+        return None
+    parsed_argument = _read_static_exec_call_argument(
+        source,
+        cursor + 1,
+        allow_identifier=method_name == "apply_patch",
+    )
+    if parsed_argument is None:
+        return None
+    argument, cursor = parsed_argument
+    invocation = _build_static_exec_invocation(
+        method_name,
+        argument,
+        source_offset=offset,
+    )
+    if invocation is None:
+        return None
+    return invocation, cursor
+
+
+def _parse_static_exec_promise_all(
+    source: str, offset: int
+) -> tuple[list[_StaticExecInvocation], int] | None:
+    """Read a literal ``await Promise.all([tools.<method>(...), ...])``."""
+
+    promise = _read_js_identifier(source, offset)
+    if promise is None or promise[0] != "Promise":
+        return None
+    _, cursor = promise
+    cursor = _skip_js_trivia(source, cursor)
+    if cursor is None or cursor >= len(source) or source[cursor] != ".":
+        return None
+    method = _read_js_identifier(source, cursor + 1)
+    if method is None or method[0] != "all":
+        return None
+    _, cursor = method
+    cursor = _skip_js_trivia(source, cursor)
+    if cursor is None or cursor >= len(source) or source[cursor] != "(":
+        return None
+    cursor = _skip_js_trivia(source, cursor + 1)
+    if cursor is None or cursor >= len(source) or source[cursor] != "[":
+        return None
+    cursor += 1
+    invocations: list[_StaticExecInvocation] = []
+    while True:
+        cursor = _skip_js_trivia(source, cursor)
+        if cursor is None or cursor >= len(source):
+            return None
+        if source[cursor] == "]":
+            cursor += 1
+            break
+        parsed = _parse_static_exec_tool_call(source, cursor)
+        if parsed is None:
+            return None
+        invocation, cursor = parsed
+        invocations.append(invocation)
+        cursor = _skip_js_trivia(source, cursor)
+        if cursor is None or cursor >= len(source):
+            return None
+        if source[cursor] == "]":
+            cursor += 1
+            break
+        if source[cursor] != ",":
+            return None
+        cursor += 1
+    cursor = _skip_js_trivia(source, cursor)
+    if cursor is None or cursor >= len(source) or source[cursor] != ")":
+        return None
+    if not invocations:
+        return None
+    return invocations, cursor + 1
+
+
+def _previous_non_trivia_character(source: str, offset: int) -> str | None:
+    cursor = offset - 1
+    while cursor >= 0 and source[cursor].isspace():
+        cursor -= 1
+    return source[cursor] if cursor >= 0 else None
+
+
+def _has_possible_tool_reference(source: str, offset: int) -> bool:
+    """Conservatively identify a remaining tool/alias reference in tail code."""
+
+    return re.search(r"\btools\b", source[offset:]) is not None
+
+
+def _extract_static_exec_invocations(value: Any) -> list[_StaticExecInvocation] | None:
+    """Extract statically proven nested calls from a historical ``exec`` cell.
+
+    This is intentionally a recognizer, not a JavaScript evaluator. It accepts
+    direct awaited calls and a literal ``await Promise.all([...])`` list. Inputs
+    must be static literals except an opaque local variable passed to
+    ``apply_patch``. Control flow, callbacks, aliases, unknown tools, and any
+    unrecognized call form fail closed. An opaque display tail after the last
+    proven invocation is ignored only when it contains no further ``tools.``
+    reference. This preserves common ``text(result.output)`` and
+    ``for (...) text(...)`` wrappers without treating their output formatting
+    as another activity.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    invocations: list[_StaticExecInvocation] = []
+    tokens: list[tuple[str, int, int]] = []
+    offset = 0
+    while offset < len(value):
+        skipped = _skip_js_trivia(value, offset)
+        if skipped is None:
+            return None
+        offset = skipped
+        if offset >= len(value):
+            break
+        if value[offset] in {"'", '"'}:
+            string = _read_js_string(value, offset)
+            if string is None:
+                return None
+            _, offset = string
+            continue
+        if value[offset] == "`":
+            if invocations and not _has_possible_tool_reference(value, offset + 1):
+                break
+            return None
+        if (
+            value.startswith("=>", offset)
+            or value.startswith("&&", offset)
+            or value.startswith("||", offset)
+        ):
+            if invocations and not _has_possible_tool_reference(value, offset + 2):
+                break
+            return None
+        if value[offset] == "?":
+            if invocations and not _has_possible_tool_reference(value, offset + 1):
+                break
+            return None
+        identifier = _read_js_identifier(value, offset)
+        if identifier is None:
+            offset += 1
+            continue
+        token, end = identifier
+        if token in _JS_CONTROL_WORDS:
+            if invocations and not _has_possible_tool_reference(value, end):
+                break
+            return None
+        tokens.append((token, offset, end))
+        offset = end
+        if token == "Promise" and len(tokens) >= 2 and tokens[-2][0] == "await":
+            if _previous_non_trivia_character(value, tokens[-2][1]) not in {
+                None,
+                "=",
+                ";",
+            }:
+                return None
+            parsed_promise_all = _parse_static_exec_promise_all(value, tokens[-1][1])
+            if parsed_promise_all is None:
+                return None
+            nested, offset = parsed_promise_all
+            invocations.extend(nested)
+            continue
+        if token != "tools":
+            continue
+        if len(tokens) < 2 or tokens[-2][0] != "await":
+            return None
+        if _previous_non_trivia_character(value, tokens[-2][1]) not in {None, "=", ";"}:
+            return None
+        parsed = _parse_static_exec_tool_call(value, tokens[-1][1])
+        if parsed is None:
+            return None
+        invocation, offset = parsed
+        invocations.append(invocation)
+
+    return invocations or None
+
+
+def _native_command_text(value: Any) -> str | None:
+    """Normalize a native CommandExecution payload to its shell command text."""
+
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if not isinstance(value, list):
+        return None
+    parts = [part for part in value if isinstance(part, str)]
+    for index, part in enumerate(parts[:-1]):
+        if part == "-lc" and parts[index + 1].strip():
+            return parts[index + 1].strip()
+    return " ".join(parts).strip() or None
+
+
+def _command_match_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _codex_command_activity_source(value: Any) -> str:
+    """Map Codex's native command origin to the shared cell authority.
+
+    Codex TUI groups only agent and unified-exec-startup commands. Historical
+    user-shell and unrecognized sources remain individual boundaries.
+    """
+
+    source = _as_non_empty_str(value)
+    if source is not None and source.lower() in _CODEX_GROUPABLE_COMMAND_SOURCES:
+        return "agent"
+    return "unknown"
 
 
 def _codex_item_kind(*, tool_name: str | None, inner_type: str) -> str:
@@ -280,15 +916,6 @@ def _codex_multi_agent_input(
     )
 
 
-def _is_source_active(source: Path | None, *, active_seconds: int = 300) -> bool:
-    if source is None:
-        return False
-    try:
-        return time.time() - source.stat().st_mtime <= active_seconds
-    except OSError:
-        return False
-
-
 def _session_forked_from_id(records: Iterable[dict]) -> str | None:
     for record in records:
         if record.get("type") != "session_meta":
@@ -398,11 +1025,13 @@ def _cut_inherited_records(
 
 
 def _derive_session_status(turns: list) -> SessionStatus:
-    if any(turn.status == TurnStatus.RUNNING for turn in turns):
-        return SessionStatus.ACTIVE
-    if turns and turns[-1].status == TurnStatus.INCOMPLETE:
-        return SessionStatus.INCOMPLETE
-    return SessionStatus.COMPLETED
+    """Map a thread's current turn state to reversible session liveness."""
+
+    return (
+        SessionStatus.LIVING
+        if any(turn.status == TurnStatus.RUNNING for turn in turns)
+        else SessionStatus.NOT_LIVING
+    )
 
 
 def _codex_prompt_block_name(text: str, index: int) -> str:
@@ -527,6 +1156,29 @@ class CodexAdapter(BaseAdapter):
         # sub_agent_activity{kind:started} events. Backs the forked_from edge
         # origin with the real spawn call instead of the parent's last tool call.
         spawn_links: dict[str, str] = field(default_factory=dict)
+        # Open ``custom_tool_call(name=exec)`` wrapper cells that passed the
+        # strict static recognizer. Native Codex items can attach before the
+        # wrapper output arrives; older JSONL falls back to derived-static
+        # activities at wrapper completion.
+        pending_exec_wrappers: dict[str, _PendingExecWrapper] = field(
+            default_factory=dict
+        )
+        # Native CommandExecution ids already emitted from item_started. A
+        # later item_completed updates the same canonical item rather than
+        # creating a second command activity.
+        native_command_ids: set[str] = field(default_factory=set)
+        # Native CommandExecution id -> static wrapper invocation. Needed when
+        # an item_started arrives after an old wrapper's derived placeholder.
+        native_command_bindings: dict[str, tuple[_PendingExecWrapper, int]] = field(
+            default_factory=dict
+        )
+        # Native non-command item ids and their optional static-wrapper child
+        # binding. The tuple key keeps FileChange/Plan/WebSearch ids separate
+        # even if a provider reuses an identifier across item variants.
+        native_activity_ids: set[tuple[str, str]] = field(default_factory=set)
+        native_activity_bindings: dict[
+            tuple[str, str], tuple[_PendingExecWrapper, int]
+        ] = field(default_factory=dict)
 
     def ingest_file(
         self,
@@ -563,6 +1215,29 @@ class CodexAdapter(BaseAdapter):
             ):
                 started.add(payload["turn_id"])
         return started
+
+    def scan_identity(self, source: Path) -> SessionHeader | None:
+        """Read the leading ``session_meta`` without searching for a title."""
+
+        for record in self._iter_records(source):
+            if record.get("type") != "session_meta":
+                continue
+            meta = record.get("payload") or {}
+            if not isinstance(meta, dict):
+                return None
+            try:
+                session_id = UUID(meta.get("id"))
+            except (ValueError, TypeError):
+                return None
+            mechanism = _codex_multi_agent_input(meta, {}, session_id=session_id)
+            return SessionHeader(
+                session_id=session_id,
+                vendor=Vendor.CODEX_CLI,
+                parent_session_id=codex_parent_session_id(mechanism),
+                title=mechanism.title,
+                cwd=mechanism.cwd,
+            )
+        return None
 
     def scan_header(self, source: Path) -> SessionHeader | None:
         header: SessionHeader | None = None
@@ -645,9 +1320,11 @@ class CodexAdapter(BaseAdapter):
             session_id=state.session_id,
             vendor=Vendor.CODEX_CLI,
             records=transcript,
-            active_status=TurnStatus.RUNNING
-            if _is_source_active(source)
-            else TurnStatus.INCOMPLETE,
+            active_status=(
+                TurnStatus.RUNNING
+                if source_is_living(source)
+                else TurnStatus.INCOMPLETE
+            ),
             default_previous_turn_status=TurnStatus.INTERRUPTED,
             # Codex's authoritative turn delimiter is the task_started/task_complete
             # lifecycle boundary; user_message is an in-turn item. Prefer lifecycle
@@ -676,6 +1353,8 @@ class CodexAdapter(BaseAdapter):
         return Session(
             session_id=state.session_id,
             vendor=Vendor.CODEX_CLI,
+            model=_as_non_empty_str(ctx.get("model")),
+            reasoning_effort=_as_non_empty_str(ctx.get("effort")),
             agent_name=extensions.codex.agent_nickname if extensions.codex else None,
             started_at=started_at,
             ended_at=ended_at,
@@ -748,6 +1427,822 @@ class CodexAdapter(BaseAdapter):
         elif outer_type == "compacted":
             self._handle_compacted(payload, ts, state, transcript)
 
+    @staticmethod
+    def _activity_data(
+        *,
+        outcome: str,
+        fidelity: str,
+        provenance: dict[str, Any],
+        source: str = "agent",
+        activity_kind: str | None = "command",
+        wrapper_status: str | None = None,
+    ) -> dict[str, Any]:
+        activity: dict[str, Any] = {
+            "source": source,
+            "outcome": outcome,
+            "fidelity": fidelity,
+            "provenance": provenance,
+        }
+        if activity_kind is not None:
+            activity["kind"] = activity_kind
+        if wrapper_status is not None:
+            activity["wrapper_status"] = wrapper_status
+        return {"activity": activity}
+
+    @staticmethod
+    def _native_command_outcome(*, status: ToolStatus, exit_code: int | None) -> str:
+        if exit_code == 0:
+            return "succeeded"
+        if exit_code is not None or status == ToolStatus.FAILED:
+            return "failed"
+        return "unknown"
+
+    @staticmethod
+    def _native_activity_outcome(*, status: ToolStatus) -> str:
+        if status == ToolStatus.COMPLETED:
+            return "succeeded"
+        if status == ToolStatus.FAILED:
+            return "failed"
+        return "unknown"
+
+    @staticmethod
+    def _pending_exec_wrapper_candidates(
+        state: _ParseState,
+        *,
+        timestamp: datetime,
+        predicate: Callable[[_StaticExecInvocation], bool],
+    ) -> list[tuple[_PendingExecWrapper, int]]:
+        candidates: list[tuple[_PendingExecWrapper, int]] = []
+        for wrapper in state.pending_exec_wrappers.values():
+            if (
+                wrapper.closed
+                and wrapper.completed_at is not None
+                and (timestamp - wrapper.completed_at).total_seconds()
+                > _NATIVE_EXEC_MATCH_GRACE_SECONDS
+            ):
+                continue
+            for index, invocation in enumerate(wrapper.invocations):
+                if index in wrapper.matched_native_indices:
+                    continue
+                if predicate(invocation):
+                    candidates.append((wrapper, index))
+        return candidates
+
+    def _match_pending_exec_wrapper(
+        self,
+        state: _ParseState,
+        *,
+        command: str | None,
+        timestamp: datetime,
+    ) -> tuple[_PendingExecWrapper, int] | None:
+        key = _command_match_key(command)
+        if key is None:
+            return None
+        candidates = self._pending_exec_wrapper_candidates(
+            state,
+            timestamp=timestamp,
+            predicate=lambda invocation: _command_match_key(invocation.command) == key,
+        )
+        if len(candidates) != 1:
+            return None
+        wrapper, index = candidates[0]
+        wrapper.matched_native_indices.add(index)
+        return wrapper, index
+
+    def _match_pending_exec_wrapper_invocation(
+        self,
+        state: _ParseState,
+        *,
+        timestamp: datetime,
+        predicate: Callable[[_StaticExecInvocation], bool],
+    ) -> tuple[_PendingExecWrapper, int] | None:
+        candidates = self._pending_exec_wrapper_candidates(
+            state,
+            timestamp=timestamp,
+            predicate=predicate,
+        )
+        if len(candidates) != 1:
+            return None
+        wrapper, index = candidates[0]
+        wrapper.matched_native_indices.add(index)
+        return wrapper, index
+
+    @staticmethod
+    def _hide_expanded_exec_wrapper(wrapper: _PendingExecWrapper) -> None:
+        vendor_data = wrapper.call_record.data.setdefault("vendor_data", {})
+        if not isinstance(vendor_data, dict):
+            return
+        vendor_data["activity"] = {
+            "hidden_from_overview": True,
+            "fidelity": "observed_wrapper",
+            "reason": "static_exec_expansion",
+            "child_count": len(wrapper.invocations),
+            "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+        }
+
+    @staticmethod
+    def _static_activity_input(invocation: _StaticExecInvocation) -> Any:
+        """Keep fallback activity useful without copying a full patch payload."""
+
+        if invocation.method != "apply_patch":
+            return invocation.input
+        if isinstance(invocation.input, dict):
+            reference = invocation.input.get("_static_reference")
+            if isinstance(reference, str) and reference:
+                return {"patch_reference": reference}
+        return {"patch_reference": "literal"}
+
+    def _append_derived_exec_activities(
+        self,
+        wrapper: _PendingExecWrapper,
+        *,
+        timestamp: datetime,
+        wrapper_status: ToolStatus,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Emit typed facts that old JSONL proves lexically, not by outcome."""
+
+        for index, invocation in enumerate(wrapper.invocations):
+            if index in wrapper.matched_native_indices:
+                continue
+            tool_call_id = f"{wrapper.call_id}:nested:{index}"
+            input_data = self._static_activity_input(invocation)
+            record_data: dict[str, Any] = {
+                "tool_name": invocation.tool_name,
+                "tool_call_id": tool_call_id,
+                "input": input_data,
+                # A completed outer code cell says nothing about a nested
+                # command exit code or non-command tool result.
+                "status": ToolStatus.REQUESTED.value,
+                "item_kind": invocation.item_kind,
+                "vendor_data": self._activity_data(
+                    outcome="unknown",
+                    fidelity="derived_static",
+                    activity_kind=(
+                        "command"
+                        if invocation.item_kind == "command_execution"
+                        else None
+                    ),
+                    wrapper_status=(
+                        ToolStatus.FAILED.value
+                        if wrapper_status == ToolStatus.FAILED
+                        else None
+                    ),
+                    provenance={
+                        "parent_tool_call_id": wrapper.call_id,
+                        "parent_tool_name": "exec",
+                        "nested_method": invocation.method,
+                        "nested_index": index,
+                        "source_offset": invocation.source_offset,
+                        "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+                    },
+                ),
+            }
+            if invocation.command is not None:
+                record_data["command"] = input_data
+            activity_record = TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=timestamp,
+                vendor=Vendor.CODEX_CLI,
+                role="assistant",
+                kind="tool_call",
+                data=record_data,
+                fidelity="derived",
+            )
+            transcript.append(activity_record)
+            wrapper.derived_records[index] = activity_record
+
+    def _handle_static_exec_wrapper_output(
+        self,
+        payload: dict,
+        timestamp: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        call_id = _as_non_empty_str(payload.get("call_id"))
+        if call_id is None:
+            return
+        wrapper = state.pending_exec_wrappers.get(call_id)
+        if wrapper is None:
+            return
+        wrapper.closed = True
+        wrapper.completed_at = timestamp
+        wrapper_status = _tool_result_status(payload, payload.get("output"))
+        # The public wrapper is evidence, not a parallel visible action, once
+        # every statically proven nested activity has its own canonical row.
+        self._append_derived_exec_activities(
+            wrapper,
+            timestamp=timestamp,
+            wrapper_status=wrapper_status,
+            transcript=transcript,
+        )
+        self._hide_expanded_exec_wrapper(wrapper)
+
+    def _handle_native_command_execution(
+        self,
+        payload: dict,
+        timestamp: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+        *,
+        completed: bool,
+    ) -> None:
+        item = payload.get("item")
+        if not isinstance(item, dict) or item.get("type") != "CommandExecution":
+            return
+        command_id = _as_non_empty_str(item.get("id"))
+        if command_id is None:
+            return
+        command = _native_command_text(item.get("command"))
+        exit_code = item.get("exit_code")
+        if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+            exit_code = None
+        status = _tool_status(
+            item.get("status"),
+            default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
+        )
+        outcome = self._native_command_outcome(status=status, exit_code=exit_code)
+        matching = state.native_command_bindings.get(command_id)
+        if matching is None:
+            matching = self._match_pending_exec_wrapper(
+                state,
+                command=command,
+                timestamp=timestamp,
+            )
+            if matching is not None:
+                state.native_command_bindings[command_id] = matching
+
+        if matching is not None:
+            wrapper, index = matching
+            derived = wrapper.derived_records.get(index)
+            if derived is not None:
+                # A late native lifecycle resolves a prior derived placeholder
+                # without creating a duplicate command item.
+                activity = self._activity_data(
+                    outcome=outcome,
+                    fidelity="derived_matched_native",
+                    provenance={
+                        "parent_tool_call_id": wrapper.call_id,
+                        "parent_tool_name": "exec",
+                        "nested_index": index,
+                        "native_command_id": command_id,
+                        "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+                    },
+                )
+                derived.data.update(
+                    {
+                        "status": status.value,
+                        "exit_code": exit_code,
+                        "output": item.get("formatted_output") or item.get("stdout"),
+                        "vendor_data": activity,
+                    }
+                )
+                if completed:
+                    transcript.append(
+                        TranscriptRecord(
+                            sequence=len(transcript),
+                            timestamp=timestamp,
+                            vendor=Vendor.CODEX_CLI,
+                            role="tool",
+                            kind="tool_result",
+                            data={
+                                "tool_call_id": derived.data["tool_call_id"],
+                                "tool_name": "exec_command",
+                                "output": item.get("formatted_output")
+                                or item.get("stdout"),
+                                "exit_code": exit_code,
+                                "status": status.value,
+                                "vendor_data": activity,
+                            },
+                        )
+                    )
+                return
+
+        command_input: dict[str, Any] = {}
+        if command is not None:
+            command_input["cmd"] = command
+        cwd = _as_non_empty_str(item.get("cwd"))
+        if cwd is not None:
+            command_input["workdir"] = cwd.removeprefix("file://")
+        native_data = self._activity_data(
+            outcome=outcome,
+            fidelity="observed_native",
+            source=_codex_command_activity_source(item.get("source")),
+            provenance={
+                "native_command_id": command_id,
+                "source": "event_msg.item_completed"
+                if completed
+                else "event_msg.item_started",
+                "source_kind": _as_non_empty_str(item.get("source")),
+            },
+        )
+        if command_id in state.native_command_ids:
+            if completed:
+                transcript.append(
+                    TranscriptRecord(
+                        sequence=len(transcript),
+                        timestamp=timestamp,
+                        vendor=Vendor.CODEX_CLI,
+                        role="tool",
+                        kind="tool_result",
+                        data={
+                            "tool_call_id": command_id,
+                            "tool_name": "exec_command",
+                            "output": item.get("formatted_output")
+                            or item.get("stdout"),
+                            "exit_code": exit_code,
+                            "status": status.value,
+                            "vendor_data": native_data,
+                        },
+                    )
+                )
+            return
+
+        state.native_command_ids.add(command_id)
+        started_at = parse_timestamp(payload.get("started_at_ms")) or timestamp
+        transcript.append(
+            TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=started_at,
+                vendor=Vendor.CODEX_CLI,
+                role="assistant",
+                kind="tool_call",
+                data={
+                    "tool_name": "exec_command",
+                    "tool_call_id": command_id,
+                    "input": command_input,
+                    "command": command_input,
+                    "status": (
+                        ToolStatus.IN_PROGRESS.value if completed else status.value
+                    ),
+                    "item_kind": "command_execution",
+                    "vendor_data": native_data,
+                },
+                fidelity="derived" if completed else "observed",
+            )
+        )
+        if completed:
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=timestamp,
+                    vendor=Vendor.CODEX_CLI,
+                    role="tool",
+                    kind="tool_result",
+                    data={
+                        "tool_call_id": command_id,
+                        "tool_name": "exec_command",
+                        "output": item.get("formatted_output") or item.get("stdout"),
+                        "exit_code": exit_code,
+                        "status": status.value,
+                        "vendor_data": native_data,
+                    },
+                )
+            )
+
+    def _resolve_derived_exec_activity(
+        self,
+        wrapper: _PendingExecWrapper,
+        index: int,
+        *,
+        timestamp: datetime,
+        native_type: str,
+        native_id: str,
+        tool_name: str,
+        item_kind: str,
+        input_data: Any,
+        status: ToolStatus,
+        outcome: str,
+        transcript: list[TranscriptRecord],
+        completed: bool,
+        output: Any = None,
+        path: str | None = None,
+        operation: str | None = None,
+    ) -> bool:
+        """Resolve a late native item onto its prior static wrapper child."""
+
+        derived = wrapper.derived_records.get(index)
+        if derived is None:
+            return False
+        activity = self._activity_data(
+            outcome=outcome,
+            fidelity="derived_matched_native",
+            activity_kind=None,
+            provenance={
+                "parent_tool_call_id": wrapper.call_id,
+                "parent_tool_name": "exec",
+                "nested_index": index,
+                "native_item_id": native_id,
+                "native_item_type": native_type,
+                "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+            },
+        )
+        derived.data.update(
+            {
+                "tool_name": tool_name,
+                "input": input_data,
+                "item_kind": item_kind,
+                "status": status.value,
+                "vendor_data": activity,
+            }
+        )
+        if output is not None:
+            derived.data["output"] = output
+        if path is not None:
+            derived.data["path"] = path
+        if operation is not None:
+            derived.data["operation"] = operation
+        if not completed:
+            return True
+        transcript.append(
+            TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=timestamp,
+                vendor=Vendor.CODEX_CLI,
+                role="tool",
+                kind="tool_result",
+                data={
+                    "tool_call_id": derived.data["tool_call_id"],
+                    "tool_name": tool_name,
+                    "output": output,
+                    "status": status.value,
+                    "path": path,
+                    "operation": operation,
+                    "vendor_data": activity,
+                },
+            )
+        )
+        return True
+
+    def _record_native_activity(
+        self,
+        *,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+        timestamp: datetime,
+        native_type: str,
+        native_id: str,
+        tool_name: str,
+        item_kind: str,
+        input_data: Any,
+        status: ToolStatus,
+        completed: bool,
+        predicate: Callable[[_StaticExecInvocation], bool],
+        output: Any = None,
+        path: str | None = None,
+        operation: str | None = None,
+    ) -> None:
+        """Project a non-command Codex ThreadItem and bind a static fallback."""
+
+        native_key = (native_type, native_id)
+        outcome = self._native_activity_outcome(status=status)
+        matching = state.native_activity_bindings.get(native_key)
+        if matching is None:
+            matching = self._match_pending_exec_wrapper_invocation(
+                state,
+                timestamp=timestamp,
+                predicate=predicate,
+            )
+            if matching is not None:
+                state.native_activity_bindings[native_key] = matching
+
+        if matching is not None:
+            wrapper, index = matching
+            if self._resolve_derived_exec_activity(
+                wrapper,
+                index,
+                timestamp=timestamp,
+                native_type=native_type,
+                native_id=native_id,
+                tool_name=tool_name,
+                item_kind=item_kind,
+                input_data=input_data,
+                status=status,
+                outcome=outcome,
+                transcript=transcript,
+                completed=completed,
+                output=output,
+                path=path,
+                operation=operation,
+            ):
+                state.native_activity_ids.add(native_key)
+                return
+
+        activity = self._activity_data(
+            outcome=outcome,
+            fidelity="observed_native",
+            activity_kind=None,
+            provenance={
+                "native_item_id": native_id,
+                "native_item_type": native_type,
+                "source": (
+                    "event_msg.item_completed"
+                    if completed
+                    else "event_msg.item_started"
+                ),
+            },
+        )
+        if native_key in state.native_activity_ids:
+            if completed:
+                transcript.append(
+                    TranscriptRecord(
+                        sequence=len(transcript),
+                        timestamp=timestamp,
+                        vendor=Vendor.CODEX_CLI,
+                        role="tool",
+                        kind="tool_result",
+                        data={
+                            "tool_call_id": native_id,
+                            "tool_name": tool_name,
+                            "output": output,
+                            "status": status.value,
+                            "path": path,
+                            "operation": operation,
+                            "vendor_data": activity,
+                        },
+                    )
+                )
+            return
+
+        state.native_activity_ids.add(native_key)
+        started_at = timestamp
+        transcript.append(
+            TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=started_at,
+                vendor=Vendor.CODEX_CLI,
+                role="assistant",
+                kind="tool_call",
+                data={
+                    "tool_name": tool_name,
+                    "tool_call_id": native_id,
+                    "input": input_data,
+                    "status": (
+                        ToolStatus.IN_PROGRESS.value if completed else status.value
+                    ),
+                    "item_kind": item_kind,
+                    "path": path,
+                    "operation": operation,
+                    "vendor_data": activity,
+                },
+                fidelity="derived" if completed else "observed",
+            )
+        )
+        if completed:
+            transcript.append(
+                TranscriptRecord(
+                    sequence=len(transcript),
+                    timestamp=timestamp,
+                    vendor=Vendor.CODEX_CLI,
+                    role="tool",
+                    kind="tool_result",
+                    data={
+                        "tool_call_id": native_id,
+                        "tool_name": tool_name,
+                        "output": output,
+                        "status": status.value,
+                        "path": path,
+                        "operation": operation,
+                        "vendor_data": activity,
+                    },
+                )
+            )
+
+    @staticmethod
+    def _native_file_change_input(
+        item: dict[str, Any],
+    ) -> tuple[dict[str, Any], str | None, str | None]:
+        changes = item.get("changes")
+        rows: list[tuple[str, str | None]] = []
+        if isinstance(changes, dict):
+            # Historical rollout JSONL stores a path-indexed change object.
+            for raw_path, raw_change in changes.items():
+                if not isinstance(raw_path, str) or not raw_path:
+                    continue
+                operation = (
+                    _as_non_empty_str(raw_change.get("type"))
+                    if isinstance(raw_change, dict)
+                    else None
+                )
+                rows.append((raw_path, operation))
+        elif isinstance(changes, list):
+            # The app-server ThreadItem schema uses a list of FileUpdateChange
+            # objects with ``path`` and ``kind`` fields.
+            for raw_change in changes:
+                if not isinstance(raw_change, dict):
+                    continue
+                raw_path = _as_non_empty_str(raw_change.get("path"))
+                if raw_path is None:
+                    continue
+                operation = _as_non_empty_str(
+                    raw_change.get("kind") or raw_change.get("type")
+                )
+                rows.append((raw_path, operation))
+        else:
+            return {}, None, None
+        rows.sort(key=lambda row: row[0])
+        paths = [path for path, _ in rows]
+        operations = [operation for _, operation in rows if operation is not None]
+        input_data: dict[str, Any] = {}
+        if paths:
+            input_data["paths"] = paths
+        if operations:
+            input_data["operations"] = operations
+        return (
+            input_data,
+            paths[0] if len(paths) == 1 else None,
+            operations[0] if len(operations) == 1 else None,
+        )
+
+    def _handle_native_file_change(
+        self,
+        payload: dict,
+        timestamp: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+        *,
+        completed: bool,
+    ) -> None:
+        item = payload.get("item")
+        if not isinstance(item, dict) or item.get("type") != "FileChange":
+            return
+        native_id = _as_non_empty_str(item.get("id"))
+        if native_id is None:
+            return
+        input_data, path, operation = self._native_file_change_input(item)
+        output = {
+            key: item[key]
+            for key in ("stdout", "stderr")
+            if _as_non_empty_str(item.get(key)) is not None
+        } or None
+        status = _tool_status(
+            item.get("status"),
+            default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
+        )
+        self._record_native_activity(
+            state=state,
+            transcript=transcript,
+            timestamp=timestamp,
+            native_type="FileChange",
+            native_id=native_id,
+            tool_name="apply_patch",
+            item_kind="file_change",
+            input_data=input_data,
+            status=status,
+            completed=completed,
+            predicate=lambda invocation: invocation.method == "apply_patch",
+            output=output,
+            path=path,
+            operation=operation,
+        )
+
+    @staticmethod
+    def _static_web_query(input_data: Any) -> str | None:
+        if not isinstance(input_data, dict):
+            return None
+        direct = _as_non_empty_str(input_data.get("query")) or _as_non_empty_str(
+            input_data.get("q")
+        )
+        if direct is not None:
+            return direct
+        for key in ("search_query", "image_query"):
+            entries = input_data.get(key)
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                query = _as_non_empty_str(entry.get("q")) or _as_non_empty_str(
+                    entry.get("query")
+                )
+                if query is not None:
+                    return query
+        return None
+
+    def _handle_native_web_search(
+        self,
+        payload: dict,
+        timestamp: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+        *,
+        completed: bool,
+    ) -> None:
+        item = payload.get("item")
+        if not isinstance(item, dict) or item.get("type") != "WebSearch":
+            return
+        native_id = _as_non_empty_str(item.get("id"))
+        query = _as_non_empty_str(item.get("query"))
+        if native_id is None or query is None:
+            return
+        input_data: dict[str, Any] = {"query": query}
+        if item.get("action") is not None:
+            input_data["action"] = item["action"]
+        status = _tool_status(
+            item.get("status"),
+            default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
+        )
+        self._record_native_activity(
+            state=state,
+            transcript=transcript,
+            timestamp=timestamp,
+            native_type="WebSearch",
+            native_id=native_id,
+            tool_name="web_search",
+            item_kind="tool_call",
+            input_data=input_data,
+            status=status,
+            completed=completed,
+            predicate=lambda invocation: (
+                invocation.method == "web__run"
+                and invocation.tool_name == "web_search"
+                and self._static_web_query(invocation.input) == query
+            ),
+        )
+
+    def _handle_native_plan(
+        self,
+        payload: dict,
+        timestamp: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+        *,
+        completed: bool,
+    ) -> None:
+        item = payload.get("item")
+        if not isinstance(item, dict) or item.get("type") != "Plan":
+            return
+        native_id = _as_non_empty_str(item.get("id"))
+        text = _as_non_empty_str(item.get("text"))
+        if native_id is None:
+            return
+        input_data = {"text": text} if text is not None else {}
+        status = _tool_status(
+            item.get("status"),
+            default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
+        )
+        self._record_native_activity(
+            state=state,
+            transcript=transcript,
+            timestamp=timestamp,
+            native_type="Plan",
+            native_id=native_id,
+            tool_name="update_plan",
+            item_kind="plan",
+            input_data=input_data,
+            status=status,
+            completed=completed,
+            predicate=lambda invocation: invocation.method == "update_plan",
+        )
+
+    def _handle_native_collab_agent_tool_call(
+        self,
+        payload: dict,
+        timestamp: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+        *,
+        completed: bool,
+    ) -> None:
+        item = payload.get("item")
+        if not isinstance(item, dict) or item.get("type") != "CollabAgentToolCall":
+            return
+        native_id = _as_non_empty_str(item.get("id"))
+        action = _as_non_empty_str(item.get("tool"))
+        if native_id is None or action is None:
+            return
+        input_data: dict[str, Any] = {"action": action}
+        for key in (
+            "sender_thread_id",
+            "receiver_thread_ids",
+            "receiver_agents",
+            "prompt",
+            "model",
+            "reasoning_effort",
+        ):
+            if item.get(key) is not None:
+                input_data[key] = item[key]
+        status = _tool_status(
+            item.get("status"),
+            default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
+        )
+        self._record_native_activity(
+            state=state,
+            transcript=transcript,
+            timestamp=timestamp,
+            native_type="CollabAgentToolCall",
+            native_id=native_id,
+            tool_name="spawn_agent" if action == "spawn_agent" else "collab_agent",
+            item_kind="tool_call",
+            input_data=input_data,
+            status=status,
+            completed=completed,
+            predicate=lambda invocation: (
+                action
+                in _CODEX_STATIC_COLLAB_NATIVE_TOOLS.get(invocation.method, frozenset())
+            ),
+        )
+
     def _handle_response_item(
         self,
         payload: dict,
@@ -800,23 +2295,36 @@ class CodexAdapter(BaseAdapter):
 
         elif inner_type == "custom_tool_call":
             tool_name = payload.get("name")
-            transcript.append(
-                TranscriptRecord(
-                    sequence=len(transcript),
-                    timestamp=ts,
-                    vendor=Vendor.CODEX_CLI,
-                    role="assistant",
-                    kind="tool_call",
-                    data={
-                        "tool_name": tool_name,
-                        "tool_call_id": payload.get("call_id"),
-                        "input": _parse_json_blob(payload.get("input")),
-                        "item_kind": _codex_item_kind(
-                            tool_name=tool_name, inner_type=inner_type
-                        ),
-                    },
-                )
+            tool_input = _parse_json_blob(payload.get("input"))
+            call_record = TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=ts,
+                vendor=Vendor.CODEX_CLI,
+                role="assistant",
+                kind="tool_call",
+                data={
+                    "tool_name": tool_name,
+                    "tool_call_id": payload.get("call_id"),
+                    "input": tool_input,
+                    "item_kind": _codex_item_kind(
+                        tool_name=tool_name, inner_type=inner_type
+                    ),
+                },
             )
+            transcript.append(call_record)
+            call_id = _as_non_empty_str(payload.get("call_id"))
+            invocations = (
+                _extract_static_exec_invocations(tool_input)
+                if tool_name == "exec"
+                else None
+            )
+            if call_id is not None and invocations is not None:
+                state.pending_exec_wrappers[call_id] = _PendingExecWrapper(
+                    call_id=call_id,
+                    started_at=ts,
+                    call_record=call_record,
+                    invocations=invocations,
+                )
 
         elif inner_type == "custom_tool_call_output":
             raw_output = payload.get("output")
@@ -836,6 +2344,7 @@ class CodexAdapter(BaseAdapter):
                     },
                 )
             )
+            self._handle_static_exec_wrapper_output(payload, ts, state, transcript)
 
         elif inner_type == "tool_search_call":
             transcript.append(
@@ -896,6 +2405,7 @@ class CodexAdapter(BaseAdapter):
             )
 
         elif inner_type == "local_shell_call":
+            command_source = _codex_command_activity_source(payload.get("source"))
             transcript.append(
                 TranscriptRecord(
                     sequence=len(transcript),
@@ -910,6 +2420,19 @@ class CodexAdapter(BaseAdapter):
                         "command": payload.get("action"),
                         "status": _tool_status(payload.get("status")).value,
                         "item_kind": "command_execution",
+                        "vendor_data": {
+                            "activity": {
+                                "kind": "command",
+                                "source": command_source,
+                                "fidelity": "observed_native",
+                                "provenance": {
+                                    "source": "response_item.local_shell_call",
+                                    "source_kind": _as_non_empty_str(
+                                        payload.get("source")
+                                    ),
+                                },
+                            }
+                        },
                     },
                 )
             )
@@ -1106,7 +2629,81 @@ class CodexAdapter(BaseAdapter):
         inner_type = payload.get("type", "")
         turn_id = payload.get("turn_id") or state.turn_context.get("turn_id")
 
-        if inner_type == "user_message":
+        if inner_type == "item_started":
+            self._handle_native_command_execution(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=False,
+            )
+            self._handle_native_file_change(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=False,
+            )
+            self._handle_native_web_search(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=False,
+            )
+            self._handle_native_plan(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=False,
+            )
+            self._handle_native_collab_agent_tool_call(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=False,
+            )
+
+        elif inner_type == "item_completed":
+            self._handle_native_command_execution(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=True,
+            )
+            self._handle_native_file_change(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=True,
+            )
+            self._handle_native_web_search(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=True,
+            )
+            self._handle_native_plan(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=True,
+            )
+            self._handle_native_collab_agent_tool_call(
+                payload,
+                ts,
+                state,
+                transcript,
+                completed=True,
+            )
+
+        elif inner_type == "user_message":
             turn_id_text = _as_non_empty_str(turn_id)
             starts_turn = (
                 turn_id_text is None or turn_id_text not in state.projected_turn_ids
@@ -1413,4 +3010,3 @@ class CodexAdapter(BaseAdapter):
             )
         if effort is not None:
             state.prev_effort = effort
-

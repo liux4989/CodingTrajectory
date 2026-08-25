@@ -17,4 +17,4 @@ Unified canonical models and CLI tooling for coding-agent session graphs.
 ## Checks
 
 - `uv run ruff check .` for repo-wide Python static analysis
-- `scripts/check-dashboard-static.sh` for dashboard backend undefined-name and import-time checks
+- `scripts/check-datahub-static.sh` for datahub backend undefined-name and import-time checks

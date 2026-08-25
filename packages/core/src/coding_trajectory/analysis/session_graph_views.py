@@ -183,6 +183,7 @@ def _session_narrative_node(
             "relationship": _session_connection(session, index=index),
             "vendor": session.vendor.value,
             "status": session.status,
+            "latest_turn_status": session.latest_turn_status,
             "agent_name": session.agent_name,
             "cwd": session.cwd,
             "turns": turns,
@@ -251,6 +252,7 @@ def _session_nav_node(
             "relationship": _session_connection(session, index=index),
             "vendor": session.vendor.value,
             "status": session.status,
+            "latest_turn_status": session.latest_turn_status,
             "agent_name": session.agent_name,
             "cwd": session.cwd,
             "compactions": len(compaction_activities)

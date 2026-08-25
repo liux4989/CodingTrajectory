@@ -111,16 +111,47 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
         tool = str(activity.get("tool") or "tool")
         count = activity.get("count")
         suffix = f" x{count}" if count and count != 1 else ""
-        for key in ("cmd", "path", "query", "url"):
+        annotations: list[str] = []
+        if activity.get("status") == "failed":
+            annotations.append("failed")
+        if activity.get("wrapper_status") == "failed":
+            annotations.append("wrapper failed")
+        if activity.get("outcome") == "unknown":
+            annotations.append("outcome unavailable")
+        annotation = f" [{'; '.join(annotations)}]" if annotations else ""
+        if tool == "RunCommand" and count and count != 1:
+            command_word = "command" if count == 1 else "commands"
+            return f"Ran {count} {command_word}{annotation}"
+        if tool == "WebSearch":
+            query = activity.get("query")
+            if query:
+                return f"Searched the web for {one_line(query, limit=72)}{annotation}"
+            return f"Searched the web{annotation}"
+        if tool == "WebFetch":
+            target = activity.get("url")
+            if target:
+                return f"Browsed the web: {one_line(target, limit=72)}{annotation}"
+            return f"Browsed the web{annotation}"
+        if tool == "TodoList" and activity.get("items"):
+            return f"Updated plan: {one_line(activity['items'], limit=72)}{annotation}"
+        if tool == "EditFile" and activity.get("path"):
+            return f"Edited files: {one_line(activity['path'], limit=72)}{annotation}"
+        if tool == "SubagentTask" and activity.get("task"):
+            return (
+                f"Subagent activity: {one_line(activity['task'], limit=72)}{annotation}"
+            )
+        for key in ("cmd", "path", "query", "url", "items", "task", "session"):
             if activity.get(key):
-                return f"{tool}{suffix}: {one_line(activity[key], limit=72)}"
-        for key in ("paths", "queries", "urls", "targets"):
+                return (
+                    f"{tool}{suffix}: {one_line(activity[key], limit=72)}{annotation}"
+                )
+        for key in ("commands", "paths", "queries", "urls", "targets"):
             values = activity.get(key)
             if isinstance(values, list) and values:
                 joined = ", ".join(one_line(item, limit=32) for item in values[:3])
                 more = f" +{len(values) - 3}" if len(values) > 3 else ""
-                return f"{tool}{suffix}: {joined}{more}"
-        return f"{tool}{suffix}"
+                return f"{tool}{suffix}: {joined}{more}{annotation}"
+        return f"{tool}{suffix}{annotation}"
     if "teammate_summary" in activity:
         return "teammate summary"
     if "text" in activity:
@@ -217,7 +248,9 @@ def _render_session_tree_node(
                 lines.append(f"{indent}    - {_overview_activity_label(activity)}")
 
     for child in children_by_parent.get(str(session.get("session_id")), []):
-        _render_session_tree_node(child, children_by_parent, depth=depth + 1, lines=lines)
+        _render_session_tree_node(
+            child, children_by_parent, depth=depth + 1, lines=lines
+        )
 
 
 def _render_conversation_tree_text(payload: dict[str, Any]) -> str:
@@ -591,9 +624,7 @@ def _render_session_stats_sections(
             f"{format_percent(used_percent)} of context window"
         )
         if billed_token_usage:
-            lines.append(
-                f"- Billed tokens: {render_usage_line(billed_token_usage)}"
-            )
+            lines.append(f"- Billed tokens: {render_usage_line(billed_token_usage)}")
         lines.append(
             "- Runtime: "
             f"{runtime.get('turns') or 0} turns, "
@@ -610,9 +641,7 @@ def _render_session_stats_sections(
         f"tokens {format_percent(graph_context.get('used_percent'))}"
     )
     if graph_billed:
-        lines.append(
-            f"- Aggregate billed tokens: {render_usage_line(graph_billed)}"
-        )
+        lines.append(f"- Aggregate billed tokens: {render_usage_line(graph_billed)}")
     lines.append(
         "- Graph runtime: "
         f"{runtime.get('turns') or 0} turns, "
@@ -766,9 +795,7 @@ def _render_session_usage_sections(
     return "\n".join(lines).rstrip()
 
 
-def _append_model_usage(
-    lines: list[str], models: Any, *, indent: str
-) -> None:
+def _append_model_usage(lines: list[str], models: Any, *, indent: str) -> None:
     rows = [row for row in models or [] if isinstance(row, dict)]
     if not rows:
         return
@@ -790,7 +817,9 @@ def _section_label_maps(
     """Precompute parent display-name and depth per session for section labels."""
     name_by_id = {
         str(section.get("session_id")): (
-            section.get("agent_name") or section.get("title") or str(section.get("session_id"))[:8]
+            section.get("agent_name")
+            or section.get("title")
+            or str(section.get("session_id"))[:8]
         )
         for section in sections
         if section.get("session_id")
@@ -801,9 +830,10 @@ def _section_label_maps(
         depth = 0
         current = section
         while True:
-            parent_id = str(
-                current.get("parent") or current.get("parent_session_id") or ""
-            ) or None
+            parent_id = (
+                str(current.get("parent") or current.get("parent_session_id") or "")
+                or None
+            )
             if not parent_id or parent_id in seen or parent_id not in name_by_id:
                 break
             seen.add(parent_id)
@@ -840,9 +870,9 @@ def _session_section_label(
         or role
     )
     text = f"{role}: {label} ({session_id[:8]})"
-    parent_id = str(
-        section.get("parent") or section.get("parent_session_id") or ""
-    ) or None
+    parent_id = (
+        str(section.get("parent") or section.get("parent_session_id") or "") or None
+    )
     if parent_id and name_by_id:
         parent_label = name_by_id.get(parent_id)
         if parent_label:

@@ -1,7 +1,7 @@
 """Reusable economics contribution for one canonical session graph.
 
 The contribution is the core-owned seam between immutable transcript ingestion
-and derived consumers such as the dashboard.  It computes shared token metrics
+and derived consumers such as the datahub.  It computes shared token metrics
 and graph indexes once, preserves the existing public projection payloads, and
 keeps expensive item/context evidence behind an explicit detail level.
 """

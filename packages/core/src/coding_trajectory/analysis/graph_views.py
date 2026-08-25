@@ -93,7 +93,10 @@ def build_graph_overview(
                 prune_nones(
                     {
                         "vendor": session.vendor.value,
+                        "model": session.model,
+                        "reasoning_effort": session.reasoning_effort,
                         "status": session.status,
+                        "latest_turn_status": session.latest_turn_status,
                         "agent_name": session.agent_name,
                         "title": session_title(session),
                         "cwd": session.cwd,
@@ -105,6 +108,8 @@ def build_graph_overview(
             prune_nones(
                 {
                     "session_id": str(session.session_id),
+                    "model": session.model,
+                    "reasoning_effort": session.reasoning_effort,
                     "parent_session_id": (
                         str(index.parent[session.session_id])
                         if index.parent.get(session.session_id)

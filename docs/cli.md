@@ -100,6 +100,15 @@ for collection discovery and event-ID queries that do not supply a session
 entry point. `project list` always uses the global project index and therefore
 has no scope flag.
 
+Session `status` is a reversible liveness signal, with only `living` and
+`not_living` values. A session is `living` only while its current canonical
+turn is running; completed, interrupted, and stale incomplete turns are all
+`not_living`. A resumed or follow-up turn changes the same session back to
+`living`. This status does not evaluate task success, acceptance, or outcome.
+Use `latest_turn_status` to retain the current/last turn's `running`,
+`completed`, `interrupted`, or `incomplete` evidence alongside that liveness
+signal.
+
 ## Intended Reading Flow
 
 ### Structured View

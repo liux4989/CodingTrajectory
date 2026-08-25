@@ -26,7 +26,7 @@ provider = "pi"
 entrypoint_id = "019f1862-7c7e-7b61-b0f2-be002e4d5922"
 source_files = ["cases/pi-reported-cost/source/session.jsonl"]
 expected_files = ["cases/pi-reported-cost/expected/session-overview.json", "cases/pi-reported-cost/expected/session-stats.json", "cases/pi-reported-cost/expected/session-usage.json", "cases/pi-reported-cost/expected/session-model-usage.json"]
-coverage = ["provider:pi", "graph:single-session", "tokens:cached-input", "cost:provider-reported", "tool:success", "model:single"]
+coverage = ["provider:pi", "graph:single-session", "tokens:cached-input", "cost:provider-reported", "tool:success", "activity:run-command-group", "model:single"]
 
 [[cases]]
 id = "codex-interagent-turn"

@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
     if raw_args and raw_args[0] in {"web", "--web"}:
         return _run_web(raw_args[1:])
+    if raw_args and raw_args[0] == "forecast":
+        return _run_forecast(raw_args[1:])
 
     parser = argparse.ArgumentParser(
         prog="ct plugin code-time",
@@ -447,6 +449,350 @@ def _api_result_safe(
     except PluginApiError:
         return None
     return result if isinstance(result, dict) else None
+
+
+# ---------------------------------------------------------------------------
+# forecast — agent temporality forecasts and calibration
+# ---------------------------------------------------------------------------
+
+_KIND_LABELS = {
+    "historical_backcast": "backcast",
+    "prospective": "prospective",
+    "prospective_unbound": "unbound",
+    "runtime_advisory": "advisory",
+}
+
+
+def _run_forecast(args: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="ct plugin code-time forecast",
+        description=(
+            "Agent temporality: duration forecasts versus measured actuals. "
+            "Evidence is always labeled by forecast kind; historical backcasts "
+            "are not prospective calibration."
+        ),
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_predict = sub.add_parser("predict", help="One forecast for a turn or task text.")
+    p_predict.add_argument("--turn-id", default=None)
+    p_predict.add_argument("--task-text", default=None)
+    p_predict.add_argument("--project", default=None)
+    p_predict.add_argument("--target-agent-vendor", default=None)
+    p_predict.add_argument("--target-harness-name", default=None)
+    p_predict.add_argument("--target-model", default=None)
+    p_predict.add_argument("--target-effort", default=None)
+    p_predict.add_argument("--estimator-model", default=None)
+    p_predict.add_argument("--estimator-effort", default=None)
+    p_predict.add_argument("--max-examples", type=int, default=8)
+
+    p_bind = sub.add_parser("bind", help="Bind an unbound forecast to a turn once.")
+    p_bind.add_argument("prediction_id")
+    p_bind.add_argument("turn_id")
+
+    p_get = sub.add_parser("get", help="Show one forecast record.")
+    p_get.add_argument("prediction_id")
+
+    p_list = sub.add_parser("list", help="List forecasts.")
+    p_list.add_argument("--kind", default=None)
+    p_list.add_argument("--project", default=None)
+    p_list.add_argument("--target-harness-name", default=None)
+    p_list.add_argument("--status", default=None)
+    p_list.add_argument("--limit", type=int, default=50)
+
+    p_cal = sub.add_parser("calibration", help="Cohort calibration statistics.")
+    p_cal.add_argument("--kind", default=None)
+    p_cal.add_argument("--project", default=None)
+    p_cal.add_argument("--target-harness-name", default=None)
+    p_cal.add_argument("--target-model", default=None)
+    p_cal.add_argument("--estimator-model", default=None)
+
+    p_backfill = sub.add_parser(
+        "backfill", help="Run or resume a resumable historical-backcast job."
+    )
+    p_backfill.add_argument("--project", default=None)
+    p_backfill.add_argument("--since-days", type=int, default=None)
+    p_backfill.add_argument("--agent-vendor", default=None)
+    p_backfill.add_argument("--max", dest="max_forecasts", type=int, default=25)
+    p_backfill.add_argument("--max-examples", type=int, default=8)
+    p_backfill.add_argument("--estimator-model", default=None)
+    p_backfill.add_argument("--estimator-effort", default=None)
+    p_backfill.add_argument("--job-id", default=None, help="Resume an existing job.")
+
+    p_job = sub.add_parser("job", help="Show one backfill job status.")
+    p_job.add_argument("job_id")
+
+    parsed = parser.parse_args(args)
+    client = default_plugin_client()
+
+    if parsed.command == "predict":
+        params: dict[str, Any] = {
+            "max_examples": parsed.max_examples,
+        }
+        if parsed.turn_id:
+            params["turn_id"] = parsed.turn_id
+        if parsed.task_text:
+            params["task_text"] = parsed.task_text
+        for arg_key, param_key in (
+            ("project", "project_name"),
+            ("target_agent_vendor", "target_agent_vendor"),
+            ("target_harness_name", "target_harness_name"),
+            ("target_model", "target_model"),
+            ("target_effort", "target_effort"),
+            ("estimator_model", "estimator_model"),
+            ("estimator_effort", "estimator_effort"),
+        ):
+            value = getattr(parsed, arg_key)
+            if value:
+                params[param_key] = value
+        result = _forecast_api(client, "estimate.predict", params)
+        return _render_predict(result)
+
+    if parsed.command == "bind":
+        result = _forecast_api(
+            client,
+            "estimate.bind",
+            {"prediction_id": parsed.prediction_id, "turn_id": parsed.turn_id},
+        )
+        return _render_predict(result)
+
+    if parsed.command == "get":
+        result = _forecast_api(
+            client, "estimate.get", {"prediction_id": parsed.prediction_id}
+        )
+        forecast = result.get("forecast")
+        if not forecast:
+            print("Forecast not found.")
+            return 1
+        print(json.dumps(forecast, indent=2, default=str))
+        return 0
+
+    if parsed.command == "list":
+        params = {}
+        for arg_key, param_key in (
+            ("kind", "forecast_kind"),
+            ("project", "project_name"),
+            ("target_harness_name", "target_harness_name"),
+            ("status", "status"),
+        ):
+            value = getattr(parsed, arg_key)
+            if value:
+                params[param_key] = value
+        params["limit"] = parsed.limit
+        result = _forecast_api(client, "estimate.list", params)
+        print(_render_forecast_table(result.get("items") or []))
+        return 0
+
+    if parsed.command == "calibration":
+        params = {}
+        for arg_key, param_key in (
+            ("kind", "forecast_kind"),
+            ("project", "project_name"),
+            ("target_harness_name", "target_harness_name"),
+            ("target_model", "target_model"),
+            ("estimator_model", "estimator_model"),
+        ):
+            value = getattr(parsed, arg_key)
+            if value:
+                params[param_key] = value
+        result = _forecast_api(client, "estimate.calibration", params)
+        print(_render_calibration(result))
+        return 0
+
+    if parsed.command == "backfill":
+        params = {
+            "max_forecasts": parsed.max_forecasts,
+            "max_examples": parsed.max_examples,
+        }
+        for arg_key, param_key in (
+            ("project", "project_name"),
+            ("since_days", "since_days"),
+            ("agent_vendor", "agent_vendor"),
+            ("estimator_model", "estimator_model"),
+            ("estimator_effort", "estimator_effort"),
+            ("job_id", "job_id"),
+        ):
+            value = getattr(parsed, arg_key)
+            if value is not None:
+                params[param_key] = value
+        result = _forecast_api(client, "estimate.backfill.start", params)
+        print(_render_job(result.get("job") or {}))
+        return 0
+
+    if parsed.command == "job":
+        result = _forecast_api(
+            client, "estimate.backfill.status", {"job_id": parsed.job_id}
+        )
+        print(_render_job(result.get("job") or {}))
+        return 0
+
+    return 2
+
+
+def _forecast_api(client, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    try:
+        result = client.call(method, params)
+    except PluginApiError as exc:
+        raise SystemExit(str(exc)) from exc
+    if not isinstance(result, dict):
+        raise SystemExit(f"ct api call {method} returned a non-object result")
+    return result
+
+
+def _render_predict(result: dict[str, Any]) -> int:
+    failure = result.get("failure")
+    forecast = result.get("forecast")
+    if failure and not forecast:
+        print(
+            f"Forecast failed ({failure.get('state')}): {failure.get('reason')}"
+            + (f" — {failure.get('detail')}" if failure.get("detail") else "")
+        )
+        return 1
+    if failure:
+        print(
+            f"Note ({failure.get('state')}): {failure.get('reason')}"
+            + (f" — {failure.get('detail')}" if failure.get("detail") else "")
+        )
+    if not forecast:
+        print("No forecast record.")
+        return 1
+    if result.get("reused_existing"):
+        print("(existing forecast reused; idempotent)")
+    print(_render_forecast_table([forecast]))
+    return 0
+
+
+def _render_forecast_table(items: list[dict[str, Any]]) -> str:
+    lines = [
+        "Forecasts (kind-labeled; backcasts are not prospective evidence)",
+        "=" * 72,
+    ]
+    if not items:
+        lines.append("No forecasts found.")
+        return "\n".join(lines)
+    header = (
+        f"  {'ID':<10} {'Kind':<12} {'Project':<18} {'Target':<22} "
+        f"{'p50':>7} {'p80':>7} {'Actual':>8} {'Ratio':>6}  Status"
+    )
+    lines.append(header)
+    lines.append("  " + "-" * (len(header) - 2))
+    for item in items:
+        kind = _KIND_LABELS.get(item.get("forecast_kind"), item.get("forecast_kind"))
+        target = item.get("target") or {}
+        target_label = (
+            "/".join(
+                part
+                for part in (target.get("harness_name"), target.get("model"))
+                if part
+            )
+            or "-"
+        )
+        comparison = item.get("comparison") or {}
+        actual_seconds = comparison.get("actual_execution_seconds")
+        p50 = item.get("p50_minutes")
+        actual_minutes = actual_seconds / 60.0 if actual_seconds else None
+        ratio = (
+            f"{p50 / actual_minutes:.2f}x"
+            if p50 and actual_minutes and actual_minutes > 0
+            else "-"
+        )
+        lines.append(
+            f"  {str(item.get('prediction_id'))[:8]:<10} {kind:<12} "
+            f"{_one_line(item.get('project_name') or '-', 18):<18} "
+            f"{_one_line(target_label, 22):<22} "
+            f"{_fmt_minutes(p50):>7} {_fmt_minutes(item.get('p80_minutes')):>7} "
+            f"{_fmt_minutes(actual_minutes):>8} {ratio:>6}  {item.get('status')}"
+        )
+    return "\n".join(lines)
+
+
+def _render_calibration(result: dict[str, Any]) -> str:
+    policy = result.get("policy") or {}
+    cohorts = result.get("cohorts") or []
+    lines = [
+        f"Calibration (policy {policy.get('version', '?')})",
+        "=" * 72,
+    ]
+    if not cohorts:
+        lines.append("No cohorts match the filters.")
+        return "\n".join(lines)
+    for cohort in cohorts:
+        key = cohort.get("cohort") or {}
+        kind = _KIND_LABELS.get(key.get("forecast_kind"), key.get("forecast_kind"))
+        lines.append(
+            f"\nCohort: kind={kind} estimator={key.get('estimator_provider')}"
+            f"/{key.get('estimator_model') or 'default'}"
+            f" prompt={key.get('prompt_version')}"
+            f" retrieval={key.get('retrieval_policy_version')}"
+        )
+        lines.append(
+            f"  eligible={cohort.get('eligible_count')} "
+            f"primary={cohort.get('primary_count')} "
+            f"exclusions={cohort.get('exclusions') or {}}"
+        )
+        stats = cohort.get("statistics") or {}
+        lines.append(f"  usable samples: {stats.get('sample_count')}")
+        ratio = stats.get("calibration_ratio")
+        if isinstance(ratio, dict):
+            if ratio.get("value") == "undefined":
+                lines.append(f"  calibration ratio: undefined ({ratio.get('reason')})")
+            else:
+                lines.append(
+                    f"  calibration ratio (geo mean p50/actual): {ratio.get('value')}"
+                    f"  95% interval {ratio.get('interval_95')}"
+                )
+        lines.append(f"  median |log error|: {stats.get('median_absolute_log_error')}")
+        lines.append(f"  within 1.5x of actual: {stats.get('within_1_5x_share')}")
+        lines.append(f"  p80 coverage: {stats.get('p80_coverage')}")
+        compression = stats.get("compression_exponent")
+        if isinstance(compression, dict):
+            if compression.get("value") == "undefined":
+                lines.append(
+                    f"  compression exponent: undefined ({compression.get('reason')})"
+                )
+            else:
+                lines.append(f"  compression exponent: {compression.get('value')}")
+        buckets = [b for b in (cohort.get("buckets") or []) if b.get("sample_count")]
+        if buckets:
+            lines.append("  duration buckets (diagnostic, not difficulty):")
+            for bucket in buckets:
+                lines.append(
+                    f"    {bucket.get('bucket'):<10} n={bucket.get('sample_count')}"
+                    f" ratio={bucket.get('calibration_ratio')}"
+                    f" within1.5x={bucket.get('within_1_5x_share')}"
+                )
+    return "\n".join(lines)
+
+
+def _render_job(job: dict[str, Any]) -> str:
+    counts = job.get("counts") or {}
+    lines = [
+        f"Backfill job {job.get('job_id')}",
+        "=" * 72,
+        f"  status: {job.get('status')}  stop: {job.get('stop_reason') or '-'}",
+        f"  eligible: {counts.get('eligible', 0)}  "
+        f"succeeded: {counts.get('succeeded', 0)}  "
+        f"skipped existing: {counts.get('skipped_existing', 0)}  "
+        f"retryable failed: {counts.get('retryable_failed', 0)}  "
+        f"permanent failed: {counts.get('permanent_failed', 0)}",
+    ]
+    excluded = counts.get("excluded") or {}
+    if excluded:
+        lines.append(
+            "  excluded: "
+            + ", ".join(
+                f"{reason}={count}" for reason, count in sorted(excluded.items())
+            )
+        )
+    return "\n".join(lines)
+
+
+def _fmt_minutes(minutes: float | None) -> str:
+    if minutes is None:
+        return "-"
+    if minutes < 60:
+        return f"{minutes:.0f}m"
+    return f"{minutes / 60:.1f}h"
 
 
 def _run_web(args: list[str]) -> int:

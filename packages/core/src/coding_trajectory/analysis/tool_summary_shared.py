@@ -48,6 +48,7 @@ VENDOR_TOOL_CONCEPT: dict[str, str] = {
     "apply_patch": EDIT_FILE,
     "update_plan": TODO_LIST,
     "spawn_agent": SUBAGENT_TASK,
+    "collab_agent": SUBAGENT_TASK,
     "web_search": WEB_SEARCH,
     "edit_file": EDIT_FILE,
     "create_file": WRITE_FILE,

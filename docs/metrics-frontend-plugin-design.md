@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed Phase 1 design. This document defines the new frontend plugin before implementation.
+Implemented experimental plugin. Its validated cohort and reconciliation behavior is being retained while browser analytics migrate into Datahub's Compare route; see [`dashboard-plugins-redesign.md`](dashboard-plugins-redesign.md).
 
 ## Purpose
 
@@ -36,7 +36,7 @@ The plugin answers three questions about real daily coding sessions:
 - No benchmark or task-quality score in Phase 1.
 - No claim that higher token use, cost, or runtime means better or worse model intelligence.
 - No direct import of `coding_trajectory` or `coding_trajectory_cli` from the plugin.
-- No replacement or in-place refactor of `packages/plugins/dashboard` during the first release.
+- No replacement or in-place refactor of `packages/plugins/datahub` during the first release.
 - No repricing of tokens in TypeScript or the plugin server.
 - No attribution of an entire mixed-model session's runtime to its dominant model.
 - No copying of Artificial Analysis source code, proprietary datasets, or branded design system.
@@ -357,7 +357,7 @@ The new web package follows the current repository frontend foundation:
 - Recharts through the shadcn `Chart` wrapper;
 - Lucide icons.
 
-The plugin initializes its own `components.json` with the same aliases and semantic-token approach. It does not import source files from the dashboard plugin or create a shared web package during Phase 1.
+The plugin initializes its own `components.json` with the same aliases and semantic-token approach. It does not import source files from the datahub plugin or create a shared web package during Phase 1.
 
 Use existing shadcn compositions first:
 

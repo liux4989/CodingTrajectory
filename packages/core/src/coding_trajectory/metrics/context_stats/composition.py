@@ -221,7 +221,7 @@ def _attach_estimated_cost(
     """Walk the composition tree and price each category's allocated usage.
 
     Cost is the pricing SoT's estimate over the category's allocated usage
-    bucket; the dashboard reads it instead of repricing. Parent categories
+    bucket; the datahub reads it instead of repricing. Parent categories
     inherit their children's allocated usage sum, so their cost reflects the
     whole subtree.
     """

@@ -85,6 +85,7 @@ def build_conversation_tree(session_graph: SessionGraph) -> dict[str, object]:
                 ),
                 "vendor": root.vendor.value,
                 "status": root.status,
+                "latest_turn_status": root.latest_turn_status,
                 "title": session_title(root),
                 "agent_name": root.agent_name,
                 "cwd": root.cwd,

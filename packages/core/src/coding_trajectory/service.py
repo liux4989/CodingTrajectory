@@ -520,9 +520,31 @@ def resolve_store(
     global_scope: bool,
     current_dir: Path,
     cache: IndexCache,
+    include_descendants: bool = True,
 ) -> tuple[DocumentStore, str]:
     """Build a store: use cached path index for targeted load, fall back to full discovery."""
     entrypoint_id = _session_graph_entrypoint_id(params)
+    if entrypoint_id and not include_descendants:
+        normalized_entrypoint_id = _normalize_user_id(entrypoint_id)
+        target_session_graph_id = cache.root_for_entrypoint(normalized_entrypoint_id)
+        cached_paths = cache.paths_for_session_graph(target_session_graph_id)
+        filename_match = any(
+            normalized_entrypoint_id in Path(path).stem.lower() for path in cached_paths
+        )
+        if target_session_graph_id == normalized_entrypoint_id or filename_match:
+            try:
+                located = locate_session_files(
+                    session_id=_parse_user_id(entrypoint_id),
+                    current_dir=current_dir,
+                    global_scope=True,
+                    agent_vendor=params.get("agent_vendor"),
+                    include_descendants=False,
+                )
+            except ValueError:
+                located = []
+            if located:
+                return _build_store_targeted([str(path) for path in located], cache)
+
     if entrypoint_id and cache.path_to_session_graph:
         normalized_entrypoint_id = _normalize_user_id(entrypoint_id)
         target_session_graph_id = cache.root_for_entrypoint(normalized_entrypoint_id)
@@ -543,6 +565,7 @@ def resolve_store(
                 current_dir=current_dir,
                 global_scope=True,
                 agent_vendor=params.get("agent_vendor"),
+                include_descendants=include_descendants,
             )
         except ValueError:
             located = []
@@ -875,9 +898,7 @@ def _handle_session_tree(params: dict[str, Any], context: ServiceContext) -> Any
     )
 
     entrypoint = _session_graph_entrypoint_id(params)
-    session_graph = _resolve_session_graph(
-        context.store, entrypoint
-    )
+    session_graph = _resolve_session_graph(context.store, entrypoint)
     tree = build_conversation_tree(session_graph)
     run = orchestration_run_for_entrypoint(
         session_graph,
@@ -1198,6 +1219,29 @@ def _event_ids_for_turn(
     raise ResourceNotFoundError(f"turn not found in selected session: {turn_id}")
 
 
+def _estimate_handler(method: str) -> ServiceHandler:
+    """Dispatch adapter for ``estimate.*`` methods.
+
+    Production traffic is short-circuited in :meth:`ServiceRuntime.call` (the
+    ledger-only methods never build a store). This handler keeps
+    ``dispatch(method, ...)`` consistent with that path, the same pattern as
+    ``project.list``.
+    """
+
+    def handler(params: dict[str, Any], context: ServiceContext) -> Any:
+        from coding_trajectory.estimation import serve_estimate
+
+        return serve_estimate(
+            method,
+            params,
+            global_scope=context.global_scope,
+            current_dir=context.current_dir,
+            cache=context.cache,
+        )
+
+    return handler
+
+
 SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "project.list": _handle_project_list,
     "project.sessions": _handle_project_sessions,
@@ -1214,4 +1258,11 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "session.tool_usage": _handle_session_tool_usage,
     "session.events": _handle_session_events,
     "session.items": _handle_session_items,
+    "estimate.predict": _estimate_handler("estimate.predict"),
+    "estimate.bind": _estimate_handler("estimate.bind"),
+    "estimate.get": _estimate_handler("estimate.get"),
+    "estimate.list": _estimate_handler("estimate.list"),
+    "estimate.calibration": _estimate_handler("estimate.calibration"),
+    "estimate.backfill.start": _estimate_handler("estimate.backfill.start"),
+    "estimate.backfill.status": _estimate_handler("estimate.backfill.status"),
 }

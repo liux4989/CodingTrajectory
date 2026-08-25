@@ -350,11 +350,13 @@ def compact_activity(activity: Any) -> Any:
             "tool": activity.get("tool"),
             "count": activity.get("count"),
             "status": activity.get("status"),
+            "outcome": activity.get("outcome"),
+            "wrapper_status": activity.get("wrapper_status"),
         }
-        for key in ("cmd", "path", "query", "url", "text"):
+        for key in ("cmd", "path", "query", "url", "items", "task", "session", "text"):
             if activity.get(key) is not None:
                 compact[key] = activity.get(key)
-        for key in ("paths", "queries", "urls", "targets"):
+        for key in ("commands", "paths", "queries", "urls", "targets"):
             if activity.get(key) is not None:
                 compact[key] = activity.get(key)
         if activity.get("item_ids") is not None:
@@ -446,7 +448,9 @@ def compact_usage_turn(turn: Any) -> Any:
             "cache_break_waste_usd": turn.get("cache_break_waste_usd"),
             "cache_break_re_read_tokens": turn.get("cache_break_re_read_tokens"),
             "cache_boundary_loss_tokens": turn.get("cache_boundary_loss_tokens"),
-            "cache_first_call_cached_tokens": turn.get("cache_first_call_cached_tokens"),
+            "cache_first_call_cached_tokens": turn.get(
+                "cache_first_call_cached_tokens"
+            ),
             "cache_intra_turn_loss_tokens": turn.get("cache_intra_turn_loss_tokens"),
             "cache_intra_turn_waste_usd": turn.get("cache_intra_turn_waste_usd"),
         }
@@ -524,9 +528,7 @@ def compact_usage_models(models: Any) -> list[dict[str, Any]] | None:
                 "model": model.get("model"),
                 "turns": model.get("turns"),
                 "model_active_seconds": model.get("model_active_seconds"),
-                "processed_tokens_per_second": model.get(
-                    "processed_tokens_per_second"
-                ),
+                "processed_tokens_per_second": model.get("processed_tokens_per_second"),
                 "usage": compact_usage(model.get("usage")),
                 "cost": evidence_value(model.get("estimated_cost")),
                 "pricing": evidence_to_pricing(model.get("estimated_cost")),
@@ -604,9 +606,7 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "compaction": drop_none(
                 {
                     "count": compaction.get("count"),
-                    "cumulative_dropped": compaction.get(
-                        "cumulative_dropped_tokens"
-                    ),
+                    "cumulative_dropped": compaction.get("cumulative_dropped_tokens"),
                     "last": drop_none(
                         {
                             "mechanism": (compaction.get("last") or {}).get(
@@ -615,13 +615,9 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
                             "timestamp": (compaction.get("last") or {}).get(
                                 "timestamp"
                             ),
-                            "trigger": (compaction.get("last") or {}).get(
-                                "trigger"
-                            ),
+                            "trigger": (compaction.get("last") or {}).get("trigger"),
                             "pre": (compaction.get("last") or {}).get("pre_tokens"),
-                            "post": (compaction.get("last") or {}).get(
-                                "post_tokens"
-                            ),
+                            "post": (compaction.get("last") or {}).get("post_tokens"),
                             "dropped": (compaction.get("last") or {}).get(
                                 "dropped_tokens"
                             ),
@@ -793,9 +789,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                                 "trigger": (compaction.get("last") or {}).get(
                                     "trigger"
                                 ),
-                                "pre": (compaction.get("last") or {}).get(
-                                    "pre_tokens"
-                                ),
+                                "pre": (compaction.get("last") or {}).get("pre_tokens"),
                                 "post": (compaction.get("last") or {}).get(
                                     "post_tokens"
                                 ),
@@ -828,7 +822,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                         # ``count`` defaults to 0 (never None) so the block is
                         # always emitted — even for sessions that never changed
                         # effort. The key's presence is a capability marker: the
-                        # dashboard throws when it is absent (stale/incomplete ct
+                        # datahub throws when it is absent (stale/incomplete ct
                         # install) instead of silently falling back to the
                         # cache-break heuristic.
                         "count": effort_changes.get("count") or 0,
@@ -987,13 +981,16 @@ def evidence_to_pricing(evidence: Any) -> dict[str, Any] | None:
     """Project a cost-evidence dict to the ``pricing`` summary shape."""
     if not isinstance(evidence, dict):
         return None
-    return drop_none(
-        {
-            "confidence": evidence.get("confidence"),
-            "source": evidence.get("source"),
-            "effective_date": evidence.get("effective_date"),
-        }
-    ) or None
+    return (
+        drop_none(
+            {
+                "confidence": evidence.get("confidence"),
+                "source": evidence.get("source"),
+                "effective_date": evidence.get("effective_date"),
+            }
+        )
+        or None
+    )
 
 
 def render_usage_line(usage: dict[str, Any]) -> str:

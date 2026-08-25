@@ -98,8 +98,6 @@ class BaseAdapter(ABC):
         )
         return self._build_session(path, records, retention=retention)
 
-
-
     def scan_started_turn_ids(self, source: Path) -> set[str] | None:
         """Return the set of vendor turn_ids that begin a turn in this file, or
         ``None`` when the vendor has no such concept. Used by multi-file
@@ -107,6 +105,16 @@ class BaseAdapter(ABC):
         can drop the inherited-history segment it re-materializes.
         """
         return None
+
+    def scan_identity(self, source: Path) -> SessionHeader | None:
+        """Extract only the fields needed to route a source to its component.
+
+        Vendors may override this with a first-record fast path.  The default
+        retains the bounded header behavior for formats whose parent identity
+        needs a small amount of lookahead.
+        """
+
+        return self.scan_header(source)
 
     @abstractmethod
     def _build_session(

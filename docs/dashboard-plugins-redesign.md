@@ -1,8 +1,14 @@
-# Dashboard Plugins Survey and Redesign
+# Browser Plugins Survey and Datahub Redesign
 
 ## Status
 
-Proposed consolidation plan based on the repository state on 2026-08-25.
+Accepted consolidation plan based on the repository state on 2026-08-25.
+
+The first implementation slice is complete: Datahub now defaults to Sessions,
+exposes Today and Compare as the other first-level routes, preserves old route
+links with redirects, and no longer presents generated code-time data as
+telemetry. The standalone metrics and code-time applications remain available
+until Datahub reaches behavioral parity.
 
 This document surveys the three browser-facing plugins, decides their product
 boundaries, and defines an incremental migration. It does not propose a new
@@ -12,7 +18,7 @@ general-purpose plugin framework.
 
 CodingTrajectory currently has three independent dashboard experiments:
 
-- `dashboard`: project/session exploration, model usage, context analysis, and
+- `datahub`: project/session exploration, model usage, context analysis, and
   cleanup commands;
 - `metrics`: cohort comparisons for tokens, cost, and execution time;
 - `code-time`: a compact recent-work report with a separate web page.
@@ -25,13 +31,13 @@ analytics.
 
 The redesign is:
 
-1. Make `dashboard` the only browser application and web server.
-2. Move the useful `metrics` and `code-time` views into dashboard feature
-   routes backed by the dashboard's existing read-model runtime.
+1. Make `datahub` the only browser application and web server.
+2. Move the useful `metrics` and `code-time` views into Datahub feature
+   routes backed by Datahub's existing read-model runtime.
 3. Keep `ct plugin code-time` as a small text/JSON command if the command remains
    useful, but remove its browser mode after route parity.
 4. Retire the `metrics` plugin after its validation and comparison behavior has
-   equivalent dashboard owners.
+   equivalent Datahub owners.
 5. Keep cleanup as CLI-only policy. Do not add mutation to the web application.
 6. Do not build a shared frontend package merely to support applications that
    should no longer be separate.
@@ -50,18 +56,18 @@ The measured source inventory excludes lockfiles and generated assets.
 
 | Plugin | Python lines | Frontend lines | Components | Routes | Default port |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `dashboard` | 14,581 | 10,934 | 44 | 7 | 8765 |
+| `datahub` | 14,581 | 10,934 | 44 | 7 | 8765 |
 | `metrics` | 921 | 1,225 | 15 | 1 route module / 3 paths | 8767 |
 | `code-time` | 649 | 1,171 | 4 | 1 | 8766 |
 
 All three use Python's `ThreadingHTTPServer`, serve a Vite/React build, expose a
 local JSON API, and independently configure TanStack Query and Router. The
-dashboard and metrics applications also duplicate app shells, metric cards,
+Datahub and metrics applications also duplicate app shells, metric cards,
 chart wrappers, formatting utilities, and shadcn components.
 
 ### Capability Matrix
 
-| Capability | `dashboard` | `metrics` | `code-time` |
+| Capability | `datahub` | `metrics` | `code-time` |
 | --- | --- | --- | --- |
 | Recent project/session overview | Yes | Cohort inventory | Yes |
 | Token and cost summaries | Yes | Yes | Yes |
@@ -78,8 +84,8 @@ chart wrappers, formatting utilities, and shadcn components.
 ### Current Data Flows
 
 ```diagram
-┌──────────────────── dashboard ────────────────────┐
-│ React app ─▶ dashboard HTTP API ─▶ SQLite models │
+┌───────────────────── datahub ─────────────────────┐
+│ React app ─▶ Datahub HTTP API ───▶ SQLite models │
 │                                      │            │
 │                                      ▼            │
 │                              core internals/files │
@@ -104,9 +110,9 @@ chart wrappers, formatting utilities, and shadcn components.
 
 ### 1. The plugin split follows experiments, not product boundaries
 
-`metrics` was intentionally created without refactoring dashboard for its first
+`metrics` was intentionally created without refactoring Datahub for its first
 release. That was a reasonable experiment boundary, but its token, cost,
-execution, model, cohort, and session concepts now overlap dashboard's model
+execution, model, cohort, and session concepts now overlap Datahub's model
 usage route. `code-time` is a compact dashboard home view rather than a
 separately deployable capability.
 
@@ -115,13 +121,13 @@ for which one owns a question.
 
 ### 2. Data semantics and freshness differ for the same facts
 
-Dashboard retains revisioned SQLite read models and polls for changes. Metrics
+Datahub retains revisioned SQLite read models and polls for changes. Metrics
 and code-time call the service runtime and cache complete responses in memory
 for 30 seconds. The same session can therefore have different freshness,
 coverage, grouping, and loading behavior depending on the selected plugin.
 
 The separate applications also repeat cohort aggregation instead of reusing
-dashboard's retained canonical graph facts.
+Datahub's retained canonical graph facts.
 
 ### 3. `code-time` can visualize invented data
 
@@ -131,7 +137,7 @@ and `generateSampleProjectTrend`, both of which use `Math.random()`. As a
 result, the two primary charts change across renders and can be mistaken for
 observed activity.
 
-The production dashboard must never substitute demo data for missing evidence.
+The production Datahub must never substitute demo data for missing evidence.
 An unavailable projection needs an explicit unavailable or empty state.
 
 ### 4. The documented plugin boundary does not match first-party practice
@@ -139,7 +145,7 @@ An unavailable projection needs an explicit unavailable or empty state.
 `docs/plugin.md` says plugins are separate executables that do not import
 `coding_trajectory`, but all three browser plugins declare
 `coding-trajectory-core` dependencies and import its runtime or internal
-modules. Dashboard depends especially deeply on ingestion, discovery, query,
+modules. Datahub depends especially deeply on ingestion, discovery, query,
 analysis, and service internals.
 
 This redesign does not hide that mismatch behind another adapter. A later
@@ -147,27 +153,27 @@ plugin-contract decision should choose and document one of two honest models:
 
 - first-party integrated applications may use a versioned Python SDK while
   external plugins use executable service contracts; or
-- every plugin, including dashboard, consumes only process-isolated public
+- every plugin, including Datahub, consumes only process-isolated public
   contracts.
 
-The dashboard consolidation works with either decision. Rewriting the mature
+The Datahub consolidation works with either decision. Rewriting the mature
 incremental runtime solely to claim process isolation is not part of this
 migration.
 
 ### 5. Manifest compatibility is too coarse for optional features
 
-Dashboard declares every required service method at plugin startup. One missing
+Datahub declares every required service method at plugin startup. One missing
 method prevents all commands, including unrelated cleanup or web views, from
 running. As features consolidate, this all-or-nothing list becomes less useful.
 
 The generic plugin system should eventually support command- or capability-level
-requirements. Until then, dashboard should require only contracts needed to
+requirements. Until then, Datahub should require only contracts needed to
 start and report feature-specific unavailable states for optional views.
 
 ### 6. Documentation describes historical states
 
 The metrics design still says "Proposed Phase 1" although the plugin exists.
-Architecture documentation advertises a dashboard `benchmark` command that is
+Architecture documentation advertises a Datahub `benchmark` command that is
 not registered by the manifest or CLI. These are symptoms of experiments being
 documented independently instead of one product owning its current state.
 
@@ -264,7 +270,7 @@ events.
 
 ## Product Boundary
 
-### Dashboard owns
+### Datahub owns
 
 - one browser shell and navigation model;
 - recent-work overview;
@@ -287,13 +293,13 @@ events.
 - confirmation, deletion/trash behavior, and audit manifests;
 - metrics reconciliation used as a development or release quality gate.
 
-Cleanup can remain under `ct plugin dashboard` during consolidation to avoid an
+Cleanup can remain under `ct plugin datahub` during consolidation to avoid an
 unrelated command migration. It must remain absent from the web API.
 
 ## Target Information Architecture
 
 ```text
-Dashboard
+Datahub
 ├── Sessions                      default cross-agent history
 │   └── Session workspace
 │       ├── Timeline / conversation
@@ -313,20 +319,20 @@ Recommended stable routes:
 /sessions
 /sessions/$sessionId
 /today
-/compare?metric=usage|cost|execution
+/compare?view=overview|cost|tokens|time|efficiency
 ```
 
 `/` should redirect to `/sessions`. The session workspace should eventually use
 URL state for selected branch, agent, event, and view; the current `/graph` and
 `/tree` routes should redirect to that workspace only after view parity. The
-existing `/model-usage` route should similarly redirect to `/compare` after
-parity. Filters and chart modes belong in validated URL search state so links
+existing `/model-usage` route redirects to `/compare` while preserving validated
+search state. Filters and chart modes belong in validated URL search state so links
 restore the same cohort.
 
 ## Target Architecture
 
 ```diagram
-┌──────────────────────── dashboard plugin ────────────────────────┐
+┌───────────────────────── datahub plugin ─────────────────────────┐
 │                                                                  │
 │  ┌──────────────────── React application ─────────────────────┐  │
 │  │ Sessions │ Today │ Compare │ Session workspace            │  │
@@ -385,9 +391,9 @@ Keep the implementation in one plugin and organize by feature, not by a new
 package hierarchy:
 
 ```text
-packages/plugins/dashboard/
-  dashboard.py
-  dashboard_web.py
+packages/plugins/datahub/
+  datahub.py
+  datahub_web.py
   runtime/
     store.py
     refresh.py
@@ -416,33 +422,33 @@ covered. Avoid mechanical file moves during feature migration.
 
 ### Phase 0: Stop misleading experimental behavior
 
-- Remove random sample-data fallbacks from the code-time web page.
-- Show explicit unavailable states until real hourly and daily projections
+- [Done] Remove random sample-data fallbacks from the code-time web page.
+- [Done] Show explicit unavailable states until real hourly and daily projections
   exist.
-- Mark the metrics design as implemented/experimental and remove the stale
-  dashboard benchmark command from architecture documentation.
+- [Done] Mark the metrics design as implemented/experimental and remove the stale
+  Datahub benchmark command from architecture documentation.
 
 ### Phase 1: Establish one shell and route contract
 
-- Make `Sessions`, `Today`, and `Compare` the first-level navigation.
-- Add validated URL state shared by analytics routes.
+- [Done] Make `Sessions`, `Today`, and `Compare` the first-level navigation.
+- [Done] Add validated URL state shared by analytics routes.
 - Define response metadata shared by the new overview and analytics APIs:
   `schema_version`, `revision`, `cohort`, `coverage`, and `warnings`.
 - Keep the existing applications available during comparison.
 
 ### Phase 2: Move metrics projections
 
-- Port the metrics cohort and grouping behavior into a dashboard analytics
+- Port the metrics cohort and grouping behavior into a Datahub analytics
   query over retained canonical facts.
-- Move token, cost, and execution category pages into dashboard.
+- Move token, cost, and execution category pages into Datahub.
 - Preserve reported/estimated/unavailable cost evidence and mixed-model runtime
   attribution rules.
-- Move `metrics validate` reconciliation to a script or dashboard development
+- Move `metrics validate` reconciliation to a script or Datahub development
   command before deleting the plugin.
 
 ### Phase 3: Move the recent-work view
 
-- Implement observed daily/hourly buckets in the dashboard read model.
+- Implement observed daily/hourly buckets in the Datahub read model.
 - Add the compact Today route using those projections.
 - Reconcile totals with the existing `ct plugin code-time --output json` report.
 - Remove `code-time web`; retain the text/JSON command as a thin public-contract
@@ -454,7 +460,7 @@ covered. Avoid mechanical file moves during feature migration.
   validation parity.
 - Remove the code-time server and frontend after Today parity.
 - Remove duplicated frontend dependencies and build instructions.
-- Redirect documented user workflows to `ct plugin dashboard web`.
+- Redirect documented user workflows to `ct plugin datahub web`.
 
 ### Phase 5: Clarify the plugin contract
 
@@ -467,7 +473,7 @@ covered. Avoid mechanical file moves during feature migration.
 
 ## Acceptance Criteria
 
-- One command starts every browser dashboard view.
+- One command starts every Datahub browser view.
 - Today, usage, cost, execution, sessions, graphs, trees, and context views use
   one shell and one refresh lifecycle.
 - A given source revision yields identical graph totals across overview,
@@ -478,25 +484,25 @@ covered. Avoid mechanical file moves during feature migration.
 - Metrics reconciliation remains available as a quality gate.
 - Cleanup remains CLI-only and requires its existing safety controls.
 - The duplicate metrics and code-time web servers are removed only after parity.
-- Dashboard startup, a production frontend build, and representative route
+- Datahub startup, a production frontend build, and representative route
   responses are verified for each migration phase.
 
 ## Non-goals
 
 - A plugin marketplace or remote plugin loading protocol.
-- Arbitrary third-party React routes mounted into the dashboard process.
+- Arbitrary third-party React routes mounted into the Datahub process.
 - A shared frontend package for unrelated future plugins.
-- Moving canonical metric semantics from core into dashboard.
+- Moving canonical metric semantics from core into Datahub.
 - Rewriting the incremental store before consolidating product behavior.
 - Adding web-based destructive cleanup.
 
 ## Recommended Boundary Decisions
 
 1. Keep `ct plugin code-time` as a compact CLI after its web view is merged.
-2. Allow dashboard, as a trusted and co-released first-party application, to use
+2. Allow Datahub, as a trusted and co-released first-party application, to use
    a narrow versioned in-process core SDK. Keep executable JSON/service
    contracts as the ordinary and third-party plugin boundary.
-3. Put dashboard's current core imports behind one high-level SDK facade before
+3. Put Datahub's current core imports behind one high-level SDK facade before
    attempting to reorganize the incremental runtime. The facade should expose
    source planning, canonical graph/fact materialization, provenance, and the
    project catalog—not raw ingestion internals.
@@ -504,4 +510,4 @@ covered. Avoid mechanical file moves during feature migration.
    standalone applications over executable contracts. Reconsider declarative
    read-only panels or sandboxed frames only after concrete demand exists.
 5. Make capability checks feature-specific so one unavailable optional
-   projection does not block dashboard startup.
+   projection does not block Datahub startup.

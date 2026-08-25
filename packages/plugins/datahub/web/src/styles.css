@@ -1,0 +1,742 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
+ * Design token architecture (three tiers):
+ *
+ *   1. Primitive palette  — raw brand colors, defined per theme (light/dark).
+ *   2. Semantic tokens     — map primitives to roles, defined ONCE on :root
+ *                            so light/dark share the same mapping.
+ *   3. Tailwind utilities  — `@theme inline` exposes semantic tokens as
+ *                            `bg-*`, `text-*`, `border-*`, `shadow-*`, etc.
+ *
+ * Components only ever reference tier 3 utilities (or the component classes
+ * in `@layer components` below). To restyle the whole UI, edit tier 1/2.
+ */
+
+@theme inline {
+  --font-display: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", "Cascadia Code", "JetBrains Mono", monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted-color);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent-color);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-ink: var(--ink);
+  --color-paper: var(--paper);
+  --color-paper-strong: var(--paper-strong);
+  --color-line: var(--line);
+  --color-ember: var(--ember);
+  --color-moss: var(--moss);
+  --color-accent-ink: var(--accent-ink);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+
+  --color-border-soft: var(--border-soft);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-surface-emphasis: var(--surface-emphasis);
+  --color-table-head: var(--table-head);
+
+  --color-category-starting-context: var(--category-starting-context);
+  --color-category-user-input: var(--category-user-input);
+  --color-category-files: var(--category-files);
+  --color-category-output: var(--category-output);
+  --color-category-agent: var(--category-agent);
+  --color-category-unattributed: var(--category-unattributed);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+
+  --text-eyebrow: 0.75rem;
+  --text-caption: 0.8125rem;
+  --text-body-sm: 0.875rem;
+  --text-body: 1rem;
+  --text-heading: 1.25rem;
+  --text-h1: 1.5rem;
+  --text-display: clamp(1.875rem, 3vw, 2.5rem);
+  --text-metric: 1.875rem;
+
+  --tracking-tight: -0.03em;
+  --tracking-wide: 0.08em;
+  --tracking-wider: 0.14em;
+
+  --leading-tight: 0.95;
+  --leading-snug: 1.25;
+  --leading-relaxed: 1.625;
+
+  /* ---- Layout scale (spacing tokens) ----
+   * Route container, section gaps, panel padding — one source of truth. */
+  --container-route: 96rem;
+  --gap-route: 1.25rem;     /* gap-5: top-level route stack */
+  --gap-section: 1rem;     /* gap-4: between cards in a section */
+  --gap-tile: 0.75rem;     /* gap-3: within a card / list */
+  --pad-panel: 0.75rem;    /* p-3: compact panel */
+  --pad-panel-lg: 1.25rem; /* p-5: detail aside */
+
+  --shadow-md: 0 1px 2px rgb(0 0 0 / 4%), 0 4px 12px rgb(0 0 0 / 5%);
+  --shadow-lg: 0 8px 24px rgb(0 0 0 / 8%);
+  --shadow-popover: 0 12px 32px rgb(0 0 0 / 10%);
+
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 20px);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --animate-rise-in: rise-in 420ms ease both;
+  --animate-shimmer: skeleton-shimmer 1.8s ease-in-out infinite;
+  --animate-toast-in: toast-in 300ms ease both;
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+}
+
+/* Reduced-motion switch (see CSS best-practice guide §9 Accessibility).
+   Per-element reduced variants opt in via --animation-reduced. */
+@property --animation-reduced {
+  syntax: "*";
+  inherits: false;
+  initial-value: none;
+}
+
+@layer base {
+  /* ---- Tier 1: primitive palette (light defaults) ---- */
+  :root {
+    --ink: #171717;
+    --muted-color-text: #737373;
+    --paper: #fafafa;
+    --paper-strong: #ffffff;
+    --line: #e5e5e5;
+    --accent-teal: #0f766e;
+    --accent-ink: #fafafa;
+    --ember: #be123c;
+    --moss: #0f766e;
+
+    --chart-1: var(--accent-teal);
+    --chart-2: #b45309;
+    --chart-3: var(--ember);
+    --chart-4: var(--category-starting-context);
+    --chart-5: #0369a1;
+    --chart-6: var(--category-agent);
+
+    --category-starting-context: #6d28d9;
+    --category-user-input: #0f766e;
+    --category-files: #b45309;
+    --category-output: #be123c;
+    --category-agent: #475569;
+    --category-unattributed: #737373;
+
+    color-scheme: light;
+  }
+
+  /* ---- Tier 1: primitive palette (dark) ---- */
+  [data-theme="dark"] {
+    --ink: #fafafa;
+    --muted-color-text: #a3a3a3;
+    --paper: #0a0a0a;
+    --paper-strong: #171717;
+    --line: #262626;
+    --accent-teal: #2dd4bf;
+    --accent-ink: #0a0a0a;
+    --ember: #fb7185;
+    --moss: #2dd4bf;
+
+    --chart-2: #fbbf24;
+    --chart-5: #38bdf8;
+
+    --category-starting-context: #a78bfa;
+    --category-user-input: #2dd4bf;
+    --category-files: #fbbf24;
+    --category-output: #fb7185;
+    --category-agent: #94a3b8;
+    --category-unattributed: #737373;
+
+    color-scheme: dark;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #fafafa;
+      --muted-color-text: #a3a3a3;
+      --paper: #0a0a0a;
+      --paper-strong: #171717;
+      --line: #262626;
+      --accent-teal: #2dd4bf;
+      --accent-ink: #0a0a0a;
+      --ember: #fb7185;
+      --moss: #2dd4bf;
+
+      --chart-2: #fbbf24;
+      --chart-5: #38bdf8;
+
+      --category-starting-context: #a78bfa;
+      --category-user-input: #2dd4bf;
+      --category-files: #fbbf24;
+      --category-output: #fb7185;
+      --category-agent: #94a3b8;
+      --category-unattributed: #737373;
+
+      color-scheme: dark;
+    }
+  }
+
+  /* ---- Tier 2: semantic role tokens (defined once, theme-agnostic) ----
+   * These reference the primitives above; swapping a primitive value
+   * propagates to every semantic consumer automatically. */
+  :root {
+    --background: var(--paper);
+    --foreground: var(--ink);
+    --card: var(--paper-strong);
+    --card-foreground: var(--ink);
+    --popover: var(--paper-strong);
+    --popover-foreground: var(--ink);
+    --primary: #171717;
+    --primary-foreground: #fafafa;
+    --secondary: #f5f5f5;
+    --secondary-foreground: var(--ink);
+    --muted-color: #f5f5f5;
+    --muted-foreground: var(--muted-color-text);
+    --accent-color: #f5f5f5;
+    --accent-foreground: var(--ink);
+    --destructive: #dc2626;
+    --destructive-foreground: #fafafa;
+    --border: #e5e5e5;
+    --input: #e5e5e5;
+    --ring: #a3a3a3;
+    --radius: 0.75rem;
+
+    --sidebar: #ffffff;
+    --sidebar-border: rgb(23 23 23 / 8%);
+    --sidebar-foreground: var(--ink);
+    --sidebar-primary: var(--accent-teal);
+    --sidebar-primary-foreground: var(--accent-ink);
+    --sidebar-accent: var(--secondary);
+    --sidebar-accent-foreground: var(--ink);
+    --sidebar-ring: var(--accent-teal);
+
+    /* Translucent surface + border roles (light). Dark overrides below. */
+    --surface-subtle: rgb(23 23 23 / 4%);
+    --surface-emphasis: rgb(23 23 23 / 7%);
+    --border-soft: rgb(23 23 23 / 10%);
+    --border-subtle: rgb(23 23 23 / 6%);
+    --border-strong: rgb(23 23 23 / 15%);
+    --table-head: #f5f5f5;
+    --warning: #b45309;
+    --success: var(--moss);
+  }
+
+  [data-theme="dark"] {
+    --primary: #fafafa;
+    --primary-foreground: #0a0a0a;
+    --secondary: #262626;
+    --muted-color: #262626;
+    --accent-color: #262626;
+    --destructive: #f87171;
+    --destructive-foreground: #0a0a0a;
+    --border: #262626;
+    --input: #262626;
+    --ring: #525252;
+
+    --sidebar: #111111;
+    --sidebar-border: rgb(255 255 255 / 8%);
+
+    --surface-subtle: rgb(255 255 255 / 5%);
+    --surface-emphasis: rgb(255 255 255 / 8%);
+    --border-soft: rgb(255 255 255 / 10%);
+    --border-subtle: rgb(255 255 255 / 5%);
+    --border-strong: rgb(255 255 255 / 18%);
+    --table-head: #1c1c1c;
+    --warning: #fbbf24;
+    --success: var(--moss);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --primary: #fafafa;
+      --primary-foreground: #0a0a0a;
+      --secondary: #262626;
+      --muted-color: #262626;
+      --accent-color: #262626;
+      --destructive: #f87171;
+      --destructive-foreground: #0a0a0a;
+      --border: #262626;
+      --input: #262626;
+      --ring: #525252;
+
+      --sidebar: #111111;
+      --sidebar-border: rgb(255 255 255 / 8%);
+
+      --surface-subtle: rgb(255 255 255 / 5%);
+      --surface-emphasis: rgb(255 255 255 / 8%);
+      --border-soft: rgb(255 255 255 / 10%);
+      --border-subtle: rgb(255 255 255 / 5%);
+      --border-strong: rgb(255 255 255 / 18%);
+      --table-head: #1c1c1c;
+      --warning: #fbbf24;
+      --success: var(--moss);
+    }
+  }
+
+  body {
+    margin: 0;
+    min-block-size: 100dvh;
+    font-family: var(--font-body);
+    color: var(--foreground);
+    background: var(--paper);
+  }
+
+  button, input, select {
+    font: inherit;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--accent-teal) 22%, transparent);
+  }
+}
+
+/* ---- Reusable typographic + layout primitives (component layer) ----
+ * Composed from tier-3 tokens so they stay overrideable by utilities. */
+@layer components {
+  .eyebrow {
+    font-family: var(--font-display);
+    font-size: var(--text-eyebrow);
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wider);
+  }
+
+  .eyebrow-soft {
+    font-family: var(--font-display);
+    font-size: var(--text-caption);
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
+  }
+
+  .label-uppercase {
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
+  }
+
+  /* Card title idiom: display font, compact heading, tight tracking. */
+  .title-card {
+    font-family: var(--font-display);
+    font-size: 1.125rem;
+    line-height: var(--leading-snug);
+    letter-spacing: -0.01em;
+    font-weight: 600;
+  }
+
+  /* Section heading inside a card body (findings, buckets). */
+  .heading-section {
+    font-family: var(--font-display);
+    font-size: 0.9375rem;
+    font-weight: 600;
+  }
+
+  /* Title for transient state surfaces (loading, error). */
+  .title-state {
+    font-family: var(--font-display);
+    font-size: 1.125rem;
+    font-weight: 600;
+  }
+
+  /* Large standalone metric number (kind cards, metric tiles). */
+  .metric-hero {
+    font-family: var(--font-display);
+    font-size: var(--text-heading);
+    font-weight: 700;
+    line-height: var(--leading-tight);
+  }
+
+  /* Inline navigation link: accent color, subtle underline geometry. */
+  .link {
+    color: var(--accent-teal);
+    text-decoration-thickness: 0.08em;
+    text-underline-offset: 0.2em;
+  }
+
+  /* Mono numerals for IDs, counts, token figures. */
+  .mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- Layout containers ---- */
+
+  /* Route scroll body: centered, max width, vertical rhythm. */
+  .route-container {
+    margin-inline: auto;
+    display: grid;
+    gap: var(--gap-route);
+    max-width: var(--container-route);
+  }
+
+  /* Auto-fit stat grid that collapses 4→2→1 columns. */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--gap-section);
+  }
+  @media (max-width: 80rem) {
+    .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 48rem) {
+    .stat-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* Compact bordered panel: cards, list items, detail blocks. */
+  .panel {
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-soft);
+    padding: var(--pad-panel);
+  }
+  .panel-subtle {
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-soft);
+    background: var(--surface-subtle);
+    padding: var(--pad-panel);
+  }
+
+  /* ---- Alert / callout tones ----
+   * Use .alert as the base, then a tone modifier. Composed from semantic
+   * color tokens with low-opacity backgrounds. */
+  .alert {
+    border-radius: var(--radius-lg);
+    border: 1px solid;
+    padding: 0.75rem 1rem;
+  }
+  .alert-destructive {
+    border-color: color-mix(in srgb, var(--destructive) 30%, transparent);
+    background: color-mix(in srgb, var(--destructive) 8%, transparent);
+  }
+  .alert-warning {
+    border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+    background: color-mix(in srgb, var(--warning) 8%, transparent);
+  }
+  .alert-success {
+    border-color: color-mix(in srgb, var(--success) 35%, transparent);
+    background: color-mix(in srgb, var(--success) 8%, transparent);
+  }
+  .alert-info {
+    border-color: var(--border-soft);
+    background: var(--surface-subtle);
+  }
+
+  /* ---- Event stream row (context window) ----
+   * Interactive list item with hover / active / selected / highlight states.
+   * State is driven by data-attributes so the class stays static. */
+  .event-row {
+    position: relative;
+    display: flex;
+    box-sizing: border-box;
+    width: 100%;
+    max-inline-size: 100%;
+    min-inline-size: 0;
+    align-items: center;
+    gap: 0.75rem;
+    overflow: hidden;
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border-soft);
+    background: var(--surface-subtle);
+    padding: 0.625rem 0.75rem;
+    text-align: start;
+    color: var(--foreground);
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s;
+  }
+  .event-row:hover {
+    border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+    background: var(--surface-emphasis);
+  }
+  .event-row[data-active] {
+    border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+    background: var(--surface-emphasis);
+  }
+  .event-row[data-selected] {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+  .event-row[data-highlight] {
+    background: var(--surface-emphasis);
+  }
+  .event-row-meta {
+    display: flex;
+    min-inline-size: 0;
+    max-inline-size: 11rem;
+    flex: 0 1 auto;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    overflow: hidden;
+  }
+  .event-row-token {
+    flex: 0 1 auto;
+    min-inline-size: 0;
+    white-space: nowrap;
+  }
+  .event-row-meter {
+    display: block;
+    height: 0.25rem;
+    width: 3rem;
+    flex: 0 0 auto;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--surface-emphasis);
+  }
+  /* Token waterfall: wider track so bar position reads at a glance. */
+  .event-row-waterfall {
+    width: 4.5rem;
+  }
+  @media (max-width: 72rem) {
+    .event-row-meta {
+      max-inline-size: 6rem;
+    }
+    .event-row-meter {
+      display: none;
+    }
+  }
+
+  /* ---- Context window grouped layout ----
+   * One explorer surface: header, composition bar, event stream, inspector,
+   * and playback rail share one stable grid. */
+  .context-window-shell {
+    display: grid;
+    gap: 1rem;
+    border-radius: var(--radius-2xl);
+    border: 1px solid var(--border-soft);
+    background: var(--card);
+    padding: clamp(1rem, 1.6vw, 1.5rem);
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+  }
+  .context-window-topbar {
+    display: grid;
+    gap: 0.75rem;
+    border-block-end: 1px solid var(--border-subtle);
+    padding-block-end: 0.875rem;
+  }
+  .context-window-title-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    align-items: end;
+    gap: 1rem;
+  }
+  .context-window-layout {
+    display: grid;
+    grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 24rem);
+    gap: 1rem;
+    block-size: clamp(28rem, calc(100dvh - 21rem), 42rem);
+    inline-size: 100%;
+    max-inline-size: 100%;
+    min-block-size: 0;
+    min-inline-size: 0;
+    align-items: stretch;
+  }
+  .context-window-layout > section {
+    display: flex;
+    flex-direction: column;
+    min-block-size: 0;
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+  .context-window-layout ol,
+  .context-window-layout li {
+    min-inline-size: 0;
+  }
+  /* The event stream scroll container is whichever direct child <section>
+   * holds the list — an <ol> for the empty state, or the Accordion
+   * (<div data-slot="accordion">) for the turn tree. */
+  .context-window-layout > section > ol,
+  .context-window-layout > section > [data-slot="accordion"] {
+    flex: 1 1 auto;
+    min-block-size: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-inline-end: 0.35rem;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--foreground) 28%, transparent) var(--surface-subtle);
+  }
+  @supports not (scrollbar-color: auto) {
+    .context-window-layout > section > ol::-webkit-scrollbar,
+    .context-window-layout > section > [data-slot="accordion"]::-webkit-scrollbar {
+      width: 11px;
+    }
+    .context-window-layout > section > ol::-webkit-scrollbar-thumb,
+    .context-window-layout > section > [data-slot="accordion"]::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--foreground) 28%, transparent);
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    .context-window-layout > section > ol::-webkit-scrollbar-track,
+    .context-window-layout > section > [data-slot="accordion"]::-webkit-scrollbar-track {
+      background: var(--surface-subtle);
+      border-radius: 999px;
+    }
+  }
+
+  /* ---- Context window detail pane ----
+   * Sticky inspector with a single internal scroll region. */
+  .context-detail-rail {
+    align-self: stretch;
+    block-size: 100%;
+    min-inline-size: 0;
+  }
+  .context-detail-pane {
+    display: flex;
+    flex-direction: column;
+    block-size: 100%;
+    min-inline-size: 0;
+    inline-size: 100%;
+    overflow: hidden;
+    border: 1px solid var(--border-soft);
+    background: color-mix(in srgb, var(--card) 94%, white 6%);
+  }
+  .context-detail-scroll {
+    flex: 1 1 auto;
+    min-block-size: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--foreground) 28%, transparent) var(--surface-subtle);
+    padding-inline-end: 0.5rem;
+  }
+  @supports not (scrollbar-color: auto) {
+    .context-detail-scroll::-webkit-scrollbar {
+      width: 11px;
+    }
+    .context-detail-scroll::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--foreground) 28%, transparent);
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    .context-detail-scroll::-webkit-scrollbar-track {
+      background: var(--surface-subtle);
+      border-radius: 999px;
+    }
+  }
+  @media (min-width: 48rem) {
+    .context-detail-rail {
+      position: sticky;
+      top: 1rem;
+    }
+  }
+  @media (max-width: 64rem) {
+    .context-window-title-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .context-window-title-row > :last-child {
+      justify-content: flex-start;
+    }
+    .context-window-layout {
+      block-size: auto;
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .context-window-layout > section {
+      max-block-size: min(32rem, calc(100dvh - 14rem));
+    }
+    .context-detail-rail {
+      position: static;
+    }
+    .context-detail-pane {
+      block-size: auto;
+      max-block-size: 24rem;
+    }
+  }
+  @media (max-width: 48rem) {
+    .context-window-shell {
+      padding: 0.875rem;
+    }
+    .context-window-title-row > :last-child {
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+  }
+}
+
+@keyframes rise-in {
+  from { opacity: 0; translate: 0 0.8rem; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+@keyframes skeleton-shimmer {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; translate: 0 0.5rem; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+@keyframes accordion-down {
+  from { height: 0; }
+  to { height: var(--radix-accordion-content-height); }
+}
+
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); }
+  to { height: 0; }
+}
+
+/* Skeleton: keep a slow breathing pulse for reduced-motion users so the
+   loading state stays legible without distracting motion. */
+[data-slot="skeleton"] {
+  --animation-reduced: skeleton-shimmer 6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: var(--animation-reduced) !important;
+  }
+}

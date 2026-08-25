@@ -86,9 +86,12 @@ _CLAUDE_PLAN_TOOL_NAMES: frozenset[str] = frozenset(
         "TaskUpdate",
     }
 )
+_CLAUDE_COMMAND_TOOL_NAMES: frozenset[str] = frozenset({"Bash", "bash"})
 
 
 def _claude_item_kind(tool_name: str | None) -> str:
+    if tool_name in _CLAUDE_COMMAND_TOOL_NAMES:
+        return "command_execution"
     if tool_name in _CLAUDE_PLAN_TOOL_NAMES:
         return "plan"
     if tool_name in _CLAUDE_FILE_TOOL_NAMES:
@@ -1105,4 +1108,3 @@ class ClaudeCodeAdapter(BaseAdapter):
                     },
                 )
             )
-

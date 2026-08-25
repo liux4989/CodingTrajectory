@@ -12,7 +12,7 @@ Pinned cost is `35,117 * 1.4 / 1,000,000 + 43,328 * 0.26 / 1,000,000 + 370 * 4.4
 
 ## Lifecycle
 
-The user prompt begins one turn. The duplicated first provider response emits reasoning plus one `WebSearch` request, line 4 completes that tool, and response 2 completes the turn. The timestamps span 75 seconds after whole-second rounding.
+The user prompt begins one turn. The duplicated first provider response emits reasoning plus one `WebSearch` request, line 4 completes that tool, and response 2 has `stop_reason: end_turn`, completing the turn. The session itself is `not_living`: session status now means whether a current turn is running, rather than whether an earlier turn completed. The timestamps span 75 seconds after whole-second rounding.
 
 ## Model throughput
 
