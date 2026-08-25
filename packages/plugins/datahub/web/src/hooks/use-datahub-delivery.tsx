@@ -206,15 +206,30 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
     }
 
     if (payload.to_revision <= currentRevision) {
-      setDelivery((current) => ({
-        ...current,
-        freshness: payload.freshness,
-        catchingUp: payload.catching_up,
-        sourceStatus: payload.source_status,
-        isLoading: false,
-        isRefreshing: false,
-        error: null,
-      }));
+      setDelivery((current) => {
+        const status = current.sourceStatus;
+        if (
+          current.catchingUp === payload.catching_up &&
+          status != null &&
+          status.ready === payload.source_status.ready &&
+          status.ingesting === payload.source_status.ingesting &&
+          status.failed === payload.source_status.failed &&
+          status.incomplete === payload.source_status.incomplete &&
+          !current.isLoading &&
+          !current.isRefreshing &&
+          current.error == null
+        ) {
+          return current;
+        }
+        return {
+          ...current,
+          catchingUp: payload.catching_up,
+          sourceStatus: payload.source_status,
+          isLoading: false,
+          isRefreshing: false,
+          error: null,
+        };
+      });
       return;
     }
 
@@ -234,12 +249,18 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
   }, [changes.data, queryClient]);
 
   const error = snapshot.error ?? changes.error;
-  const value: DatahubDeliveryState = {
-    ...delivery,
-    isLoading: snapshot.isLoading,
-    isRefreshing: snapshot.isRefetching || changes.isFetching,
-    error: error instanceof Error ? error.message : error ? String(error) : null,
-  };
+  const errorMessage = error instanceof Error ? error.message : error ? String(error) : null;
+  const value = React.useMemo<DatahubDeliveryState>(
+    () => ({
+      ...delivery,
+      isLoading: snapshot.isLoading,
+      // Background change detection should remain invisible. Only a snapshot
+      // recovery is a user-visible refresh; a new revision updates route data.
+      isRefreshing: snapshot.isRefetching,
+      error: errorMessage,
+    }),
+    [delivery, errorMessage, snapshot.isLoading, snapshot.isRefetching],
+  );
 
   return (
     <DatahubDeliveryContext.Provider value={value}>
