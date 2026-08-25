@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -38,17 +39,16 @@ def run_backfill(
     the same idempotency key are never regenerated.
     """
 
-    with ledger.transaction():
-        return _run_backfill_locked(
-            params,
-            store=store,
-            ledger=ledger,
-            forecast_one=forecast_one,
-            spec=spec,
-        )
+    return _run_backfill(
+        params,
+        store=store,
+        ledger=ledger,
+        forecast_one=forecast_one,
+        spec=spec,
+    )
 
 
-def _run_backfill_locked(
+def _run_backfill(
     params: dict[str, Any],
     *,
     store: DocumentStore,
@@ -56,55 +56,86 @@ def _run_backfill_locked(
     forecast_one: ForecastOne,
     spec: dict[str, Any],
 ) -> dict[str, Any]:
-    ledger_jobs = ledger.jobs()
-    resume_job_id = params.get("job_id")
-    if resume_job_id:
-        job = ledger_jobs.get(resume_job_id)
-        if job is None:
-            raise ValueError(f"backfill job not found: {resume_job_id}")
-        if job.get("spec") != spec:
-            raise ValueError(
-                "backfill resume parameters do not match the original job spec"
+    with ledger.transaction():
+        ledger_jobs = ledger.jobs()
+        resume_job_id = params.get("job_id")
+        if resume_job_id:
+            job = ledger_jobs.get(resume_job_id)
+            if job is None:
+                raise ValueError(f"backfill job not found: {resume_job_id}")
+            if not _same_backfill_spec(job.get("spec") or {}, spec):
+                raise ValueError(
+                    "backfill resume parameters do not match the original job spec"
+                )
+            job_id = resume_job_id
+            processed = set(job.get("processed_turn_ids") or [])
+            counts = _resume_counts(job)
+        else:
+            job_id = uuid4().hex
+            processed = set()
+            counts = _fresh_counts()
+            ledger.append_job_event(
+                "job_created",
+                {
+                    "job_id": job_id,
+                    "created_at": _utcnow(),
+                    "spec": spec,
+                },
             )
-        job_id = resume_job_id
-        processed = set(job.get("processed_turn_ids") or [])
-        counts = _resume_counts(job)
-    else:
-        job_id = uuid4().hex
-        processed = set()
-        counts = _fresh_counts()
-        ledger.append_job_event(
-            "job_created",
-            {
-                "job_id": job_id,
-                "created_at": _utcnow(),
-                "spec": spec,
-            },
-        )
 
     max_forecasts = int(params.get("max_forecasts") or 25)
+    concurrency = int(params.get("concurrency") or 4)
     inventory = _candidate_inventory(store)
 
     stop_reason = "inventory_exhausted"
     status = "completed"
-    for turn_id in inventory:
-        if str(turn_id) in processed:
-            continue
-        if counts["succeeded"] >= max_forecasts:
-            status = "stopped"
-            stop_reason = "budget_exhausted:max_forecasts"
-            break
-        outcome = _process_candidate(
-            store,
-            ledger=ledger,
-            forecast_one=forecast_one,
-            turn_id=turn_id,
-            job_id=job_id,
-        )
-        if not outcome.startswith("excluded:"):
-            counts["eligible"] += 1
-        _count(counts, outcome)
-        processed.add(str(turn_id))
+    indexes = SessionGraphIndexCache(store)
+    remaining = iter(inventory)
+    in_flight: dict[Future[str], UUID] = {}
+    inventory_exhausted = False
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        while True:
+            while (
+                not inventory_exhausted
+                and len(in_flight) < concurrency
+                and counts["succeeded"] + len(in_flight) < max_forecasts
+            ):
+                try:
+                    turn_id = next(remaining)
+                except StopIteration:
+                    inventory_exhausted = True
+                    break
+                if str(turn_id) in processed:
+                    continue
+                eligibility = _eligibility_outcome(store, turn_id, indexes=indexes)
+                if eligibility != "eligible":
+                    _record_candidate(
+                        ledger, job_id=job_id, turn_id=turn_id, outcome=eligibility
+                    )
+                    _count(counts, eligibility)
+                    processed.add(str(turn_id))
+                    continue
+                future = executor.submit(
+                    _forecast_eligible_candidate,
+                    forecast_one=forecast_one,
+                    turn_id=turn_id,
+                )
+                in_flight[future] = turn_id
+
+            if not in_flight:
+                if counts["succeeded"] >= max_forecasts:
+                    status = "stopped"
+                    stop_reason = "budget_exhausted:max_forecasts"
+                break
+
+            done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            future = next(iter(done))
+            turn_id = in_flight.pop(future)
+            outcome = future.result()
+            _record_candidate(ledger, job_id=job_id, turn_id=turn_id, outcome=outcome)
+            _count(counts, outcome)
+            processed.add(str(turn_id))
 
     ledger.append_job_event(
         "job_finished",
@@ -135,37 +166,43 @@ def _candidate_inventory(store: DocumentStore) -> list[UUID]:
     return [turn.turn_id for turn in turns]
 
 
-def _process_candidate(
+def _eligibility_outcome(
     store: DocumentStore,
     *,
-    ledger: ForecastLedger,
-    forecast_one: ForecastOne,
     turn_id: UUID,
-    job_id: str,
+    indexes: SessionGraphIndexCache,
 ) -> str:
-    indexes = SessionGraphIndexCache(store)
     candidate = candidate_for_turn(store, turn_id, indexes=indexes)
     if isinstance(candidate, TaskExclusion):
-        outcome = f"excluded:{candidate.reason}"
-    else:
-        episode_exclusion = turn_episode_exclusion(candidate)
-        if episode_exclusion is not None:
-            outcome = f"excluded:{episode_exclusion.reason}"
-        else:
-            outcome = "eligible"
-    if outcome == "eligible":
+        return f"excluded:{candidate.reason}"
+    episode_exclusion = turn_episode_exclusion(candidate)
+    if episode_exclusion is not None:
+        return f"excluded:{episode_exclusion.reason}"
+    return "eligible"
+
+
+def _forecast_eligible_candidate(*, forecast_one: ForecastOne, turn_id: UUID) -> str:
+    result = forecast_one(turn_id)
+    outcome = str(result.get("outcome") or "permanent_failed")
+    attempts = 1
+    while outcome == "retryable_failed" and attempts < MAX_ATTEMPTS:
         result = forecast_one(turn_id)
         outcome = str(result.get("outcome") or "permanent_failed")
-        attempts = 1
-        while outcome == "retryable_failed" and attempts < MAX_ATTEMPTS:
-            result = forecast_one(turn_id)
-            outcome = str(result.get("outcome") or "permanent_failed")
-            attempts += 1
+        attempts += 1
+    return outcome
+
+
+def _record_candidate(
+    ledger: ForecastLedger,
+    *,
+    job_id: str,
+    turn_id: UUID,
+    outcome: str,
+) -> None:
     ledger.append_job_event(
         "candidate_processed",
         {"job_id": job_id, "turn_id": str(turn_id), "outcome": outcome},
     )
-    return outcome
 
 
 def _count(counts: dict[str, Any], outcome: str) -> None:
@@ -186,6 +223,22 @@ def _fresh_counts() -> dict[str, Any]:
         "permanent_failed": 0,
         "excluded": {},
     }
+
+
+def _same_backfill_spec(existing: dict[str, Any], requested: dict[str, Any]) -> bool:
+    """Allow scheduler parallelism to change when resuming a durable job.
+
+    Concurrency affects only how many independent stateless estimator turns are
+    in flight. It is not part of the retrieval or estimator cohort that gives
+    forecast artifacts their meaning, and older job receipts predate this
+    setting entirely.
+    """
+
+    existing_identity = dict(existing)
+    requested_identity = dict(requested)
+    existing_identity.pop("concurrency", None)
+    requested_identity.pop("concurrency", None)
+    return existing_identity == requested_identity
 
 
 def _resume_counts(job: dict[str, Any]) -> dict[str, Any]:

@@ -513,6 +513,12 @@ def _run_forecast(args: list[str]) -> int:
     p_backfill.add_argument("--agent-vendor", default=None)
     p_backfill.add_argument("--max", dest="max_forecasts", type=int, default=25)
     p_backfill.add_argument("--max-examples", type=int, default=8)
+    p_backfill.add_argument(
+        "--concurrency",
+        type=int,
+        default=4,
+        help="Independent estimator turns to run at once (1-8; default: 4).",
+    )
     p_backfill.add_argument("--estimator-model", default=None)
     p_backfill.add_argument("--estimator-effort", default=None)
     p_backfill.add_argument("--job-id", default=None, help="Resume an existing job.")
@@ -601,6 +607,7 @@ def _run_forecast(args: list[str]) -> int:
         params = {
             "max_forecasts": parsed.max_forecasts,
             "max_examples": parsed.max_examples,
+            "concurrency": parsed.concurrency,
         }
         for arg_key, param_key in (
             ("project", "project_name"),

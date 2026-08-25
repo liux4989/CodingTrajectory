@@ -171,18 +171,22 @@ def run_forecast_for_turn(
     max_examples: int,
     cache: Any,
 ) -> dict[str, Any]:
-    """Single-turn pipeline: eligibility, retrieval, estimate, record, compare."""
+    """Single-turn pipeline: eligibility, retrieval, estimate, record, compare.
 
-    with ledger.transaction():
-        return _run_forecast_for_turn(
-            store,
-            ledger=ledger,
-            provider=provider,
-            estimator=estimator,
-            turn_id=turn_id,
-            max_examples=max_examples,
-            cache=cache,
-        )
+    The provider call deliberately runs outside a ledger transaction.  Backfill
+    workers may use independent app-server connections concurrently; only the
+    durable read/check/write boundary is serialized below.
+    """
+
+    return _run_forecast_for_turn(
+        store,
+        ledger=ledger,
+        provider=provider,
+        estimator=estimator,
+        turn_id=turn_id,
+        max_examples=max_examples,
+        cache=cache,
+    )
 
 
 def _run_forecast_for_turn(
@@ -309,19 +313,27 @@ def _run_forecast_for_turn(
         "p80_minutes": result.p80_minutes,
         "created_at": issued_iso,
     }
-    ledger.append_forecast(record)
+    # A second worker can form the same deterministic plan while this worker is
+    # waiting on the estimator.  Re-check and write under the ledger lock so we
+    # never retain two forecast artifacts for one idempotency key.
+    with ledger.transaction():
+        existing = ledger.find_by_idempotency_key(key)
+        if existing is not None:
+            return {
+                "outcome": "skipped_existing",
+                "record": existing,
+                "reused_existing": True,
+            }
+        ledger.append_forecast(record)
+        comparison = join_actual(
+            store,
+            turn_id=turn_id,
+            source_paths=_source_paths(cache, candidate),
+        )
+        _append_terminal_comparison(ledger, record["prediction_id"], comparison)
+        persisted = ledger.find_forecast(record["prediction_id"])
 
-    comparison = join_actual(
-        store,
-        turn_id=turn_id,
-        source_paths=_source_paths(cache, candidate),
-    )
-    _append_terminal_comparison(ledger, record["prediction_id"], comparison)
-
-    return {
-        "outcome": "succeeded",
-        "record": ledger.find_forecast(record["prediction_id"]),
-    }
+    return {"outcome": "succeeded", "record": persisted}
 
 
 def _predict_unbound(
@@ -719,6 +731,7 @@ def _backfill_start(
         "agent_vendor": params.get("agent_vendor"),
         "max_forecasts": params.get("max_forecasts"),
         "max_examples": max_examples,
+        "concurrency": int(params.get("concurrency") or 4),
         "estimator": estimator,
         "retrieval_policy_version": RETRIEVAL_POLICY_VERSION,
     }

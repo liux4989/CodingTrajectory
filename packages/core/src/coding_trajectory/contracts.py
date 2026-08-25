@@ -616,6 +616,7 @@ class EstimateBackfillStartRequest(RequestModel):
     agent_vendor: str | None = None
     max_forecasts: int = Field(default=25, ge=1, le=1000)
     max_examples: int = Field(default=8, ge=0, le=32)
+    concurrency: int = Field(default=4, ge=1, le=8)
     estimator_model: str | None = None
     estimator_effort: str | None = None
     job_id: str | None = None

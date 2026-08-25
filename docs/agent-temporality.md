@@ -321,9 +321,12 @@ The job layer provides:
 - Progress counts by eligible, excluded, succeeded, failed, and uncompared.
 
 The existing app-server manager serializes turns on one connection. Backfill
-workers may use a bounded pool of independent provider sessions, but scheduling
-and budgets remain CT-owned. A process restart resumes from the ledger instead
-of regenerating successful forecasts.
+uses a configured bounded pool of independent provider sessions (four by
+default, one through eight allowed); each forecast is still one stateless,
+schema-validated estimator turn. The durable ledger serializes the final
+idempotency check and append, so concurrent workers cannot retain duplicate
+forecast artifacts. A process restart resumes from the ledger instead of
+regenerating successful forecasts.
 
 ## Contract Methods
 
