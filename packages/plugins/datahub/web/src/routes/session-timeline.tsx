@@ -30,6 +30,16 @@ const PAGE_SIZE = 300;
 
 type OutcomeFilter = "all" | "failed" | "succeeded";
 
+type WaterfallTurn = {
+  id: string;
+  sessionId: string;
+  agent: string;
+  entryId: string;
+  startedAt: number;
+  endedAt: number;
+  failed: boolean;
+};
+
 export function SessionTimelineRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId" });
   const search = useSearch({ from: "/sessions/$sessionId" });
@@ -105,6 +115,7 @@ export function SessionTimelineRoute() {
   ).length;
   const sourceFailures = delivery.sourceStatus?.failed ?? 0;
   const incompleteSources = delivery.sourceStatus?.incomplete ?? 0;
+  const waterfall = buildWaterfall(payload.entries);
 
   return (
     <div className="route-container w-full min-w-0 overflow-hidden pb-8">
@@ -126,6 +137,11 @@ export function SessionTimelineRoute() {
             label="Source linked"
             value={`${linkedEntries}/${payload.entries.length}`}
             detail={`${sourceFailures} failed · ${incompleteSources} incomplete source(s)`}
+          />
+          <MetricCard
+            label="Peak concurrency"
+            value={waterfall.peakConcurrency}
+            detail={`${waterfall.turns.length} source-timed turn(s)`}
           />
         </section>
 
@@ -207,6 +223,12 @@ export function SessionTimelineRoute() {
           </div>
         ) : null}
 
+        <TurnWaterfall
+          turns={waterfall.turns}
+          omittedTurns={waterfall.omittedTurns}
+          onSelect={(turn) => updateSearch({ kind: undefined, artifact: undefined, agent: turn.sessionId, outcome: undefined, entry: turn.entryId })}
+        />
+
         <section aria-label="Session evidence" className="relative grid gap-3 pl-5 before:absolute before:bottom-4 before:left-[0.45rem] before:top-4 before:w-px before:bg-border-soft">
           {visible.map((entry) => (
             <TimelineRow
@@ -230,6 +252,79 @@ export function SessionTimelineRoute() {
         ) : null}
       </div>
     </div>
+  );
+}
+
+function TurnWaterfall({
+  turns,
+  omittedTurns,
+  onSelect,
+}: {
+  turns: WaterfallTurn[];
+  omittedTurns: number;
+  onSelect: (turn: WaterfallTurn) => void;
+}) {
+  if (!turns.length) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="title-card">Turn waterfall</CardTitle>
+          <CardDescription>No turns retain both start and end timing; no intervals were estimated.</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+  const startedAt = Math.min(...turns.map((turn) => turn.startedAt));
+  const endedAt = Math.max(...turns.map((turn) => turn.endedAt));
+  const duration = Math.max(endedAt - startedAt, 1);
+  const laneMap = new Map<string, { agent: string; turns: WaterfallTurn[] }>();
+  for (const turn of turns) {
+    const lane = laneMap.get(turn.sessionId);
+    if (lane) lane.turns.push(turn);
+    else laneMap.set(turn.sessionId, { agent: turn.agent, turns: [turn] });
+  }
+  const lanes = Array.from(laneMap.entries());
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="title-card">Turn waterfall</CardTitle>
+        <CardDescription>
+          Observed turn intervals across agent branches. Select a bar to filter and inspect its first evidence entry.
+          {omittedTurns ? ` ${omittedTurns} turn(s) without complete timing are omitted.` : ""}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3 overflow-x-auto">
+        {lanes.map(([sessionId, lane]) => {
+          return (
+            <div key={sessionId} className="grid min-w-[42rem] grid-cols-[9rem_1fr] items-center gap-3">
+              <span className="truncate text-caption font-medium" title={sessionId}>{lane.agent}</span>
+              <div className="relative h-8 rounded-md bg-surface-emphasis" aria-label={`${lane.agent} turn intervals`}>
+                {lane.turns.map((turn) => {
+                  const left = ((turn.startedAt - startedAt) / duration) * 100;
+                  const width = Math.max(((turn.endedAt - turn.startedAt) / duration) * 100, 1.2);
+                  return (
+                    <button
+                      key={turn.id}
+                      type="button"
+                      className={cn("absolute top-1 h-6 rounded-sm border border-primary/50 bg-primary/70 hover:bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", turn.failed && "border-destructive bg-destructive/70 hover:bg-destructive")}
+                      style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }}
+                      title={`${turn.agent} · ${formatDuration((turn.endedAt - turn.startedAt) / 1000)}`}
+                      aria-label={`Inspect ${turn.agent} turn lasting ${formatDuration((turn.endedAt - turn.startedAt) / 1000)}`}
+                      onClick={() => onSelect(turn)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+        <div className="flex min-w-[42rem] justify-between pl-[9.75rem] text-caption text-muted-foreground">
+          <span>{new Date(startedAt).toLocaleTimeString()}</span>
+          <span>{formatDuration(duration / 1000)} observed span</span>
+          <span>{new Date(endedAt).toLocaleTimeString()}</span>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -307,6 +402,43 @@ function EvidenceDetail({ entry }: { entry: SessionTimelineEntry }) {
 
 function agentLabel(entry: SessionTimelineEntry) {
   return entry.agent_name || entry.vendor || shortSessionId(entry.session_id);
+}
+
+function buildWaterfall(entries: SessionTimelineEntry[]) {
+  const seen = new Set<string>();
+  const turns: WaterfallTurn[] = [];
+  let omittedTurns = 0;
+  for (const entry of entries) {
+    const id = `${entry.session_id}:${entry.turn_id}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const startedAt = entry.timestamp ? Date.parse(entry.timestamp) : Number.NaN;
+    const endedAt = entry.ended_at ? Date.parse(entry.ended_at) : Number.NaN;
+    if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt < startedAt) {
+      omittedTurns += 1;
+      continue;
+    }
+    turns.push({
+      id,
+      sessionId: entry.session_id,
+      agent: agentLabel(entry),
+      entryId: entry.id,
+      startedAt,
+      endedAt,
+      failed: entry.failed,
+    });
+  }
+  const boundaries = turns.flatMap((turn) => [
+    { at: turn.startedAt, change: 1 },
+    { at: turn.endedAt, change: -1 },
+  ]).sort((left, right) => left.at - right.at || left.change - right.change);
+  let active = 0;
+  let peakConcurrency = 0;
+  for (const boundary of boundaries) {
+    active += boundary.change;
+    peakConcurrency = Math.max(peakConcurrency, active);
+  }
+  return { turns, omittedTurns, peakConcurrency };
 }
 
 function isTerminalSuccess(status: string | null) {

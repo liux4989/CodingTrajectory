@@ -121,6 +121,7 @@ def build_session_evidence_timeline(
                         label="User request",
                         summary=_request_summary(request),
                         status=_text(raw_turn.get("status")),
+                        failed=_failed(_text(raw_turn.get("status"))),
                         turn_accounting=turn_accounting,
                         event_ids=[event_id] if event_id else [],
                         **common,

@@ -512,6 +512,14 @@ covered. Avoid mechanical file moves during feature migration.
 - [Done] Keep unavailable accounting values explicit and avoid attributing
   turn totals to individual tool or message entries.
 
+### Phase 10: Visualize observed concurrency
+
+- [Done] Add a per-agent turn waterfall using only retained start/end timing.
+- [Done] Compute peak concurrency from observed intervals and explicitly report
+  turns omitted because timing evidence is incomplete.
+- [Done] Synchronize waterfall selection with URL-restorable agent filtering,
+  evidence selection, and lazy source detail.
+
 ## Acceptance Criteria
 
 - One command starts every Datahub browser view.
