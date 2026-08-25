@@ -732,6 +732,17 @@ export async function fetchSessionTree(sessionId: string) {
 export type TimelineKind = "user" | "assistant" | "tool" | "subagent" | "compaction";
 export type TimelineArtifactKind = "file" | "command" | "check" | "commit" | "link";
 
+export type TimelineTurnAccounting = {
+  processed_tokens: number;
+  cost_usd: number | null;
+  cost_confidence: "reported" | "estimated" | null;
+  execution_seconds: number | null;
+  model_active_seconds: number | null;
+  wait_before_seconds: number | null;
+  provider: string | null;
+  model: string | null;
+};
+
 export type SessionTimelineEntry = {
   id: string;
   timestamp: string | null;
@@ -748,6 +759,7 @@ export type SessionTimelineEntry = {
   status: string | null;
   failed: boolean;
   artifact_kind: TimelineArtifactKind | null;
+  turn_accounting: TimelineTurnAccounting | null;
   item_ids: string[];
   event_ids: string[];
   target_session_id: string | null;

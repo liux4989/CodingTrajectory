@@ -22,6 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FilterLabel } from "@/components/table-cells";
 import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
+import { formatCostUsd, formatDuration, formatTokens } from "@/lib/format";
 import { relativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
@@ -257,6 +258,16 @@ function TimelineRow({ entry, selected, onSelect }: { entry: SessionTimelineEntr
               </Link>
             ) : null}
           </CardDescription>
+          {entry.turn_accounting ? (
+            <div className="flex flex-wrap gap-2 text-caption text-muted-foreground" aria-label="Turn accounting">
+              <span>{formatTokens(entry.turn_accounting.processed_tokens)} tokens</span>
+              <span>{entry.turn_accounting.cost_usd == null ? "Cost unavailable" : `${formatCostUsd(entry.turn_accounting.cost_usd)} ${entry.turn_accounting.cost_confidence ?? "unknown"}`}</span>
+              {entry.turn_accounting.execution_seconds == null ? null : <span>{formatDuration(entry.turn_accounting.execution_seconds)} elapsed</span>}
+              {entry.turn_accounting.model_active_seconds == null ? null : <span>{formatDuration(entry.turn_accounting.model_active_seconds)} active</span>}
+              {entry.turn_accounting.wait_before_seconds == null ? null : <span>{formatDuration(entry.turn_accounting.wait_before_seconds)} waiting</span>}
+              {entry.turn_accounting.model ? <span>{entry.turn_accounting.model}</span> : null}
+            </div>
+          ) : null}
         </CardHeader>
         <CardContent className="grid gap-3">
           {entry.summary ? <p className="m-0 whitespace-pre-wrap break-words text-body-sm">{entry.summary}</p> : null}

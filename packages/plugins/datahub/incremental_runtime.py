@@ -799,12 +799,28 @@ class DatahubIncrementalRuntime:
             partition_key=root_id,
         )
         graph_overview = graph_page.items[0].payload if graph_page.items else None
+        usage_payloads: list[dict[str, Any]] = []
+        cursor = None
+        while True:
+            usage_page = self.store.query_entities(
+                FACT_SESSION_USAGE,
+                limit=500,
+                cursor=cursor,
+                revision=revision,
+                scope_key=CANONICAL_FACT_SCOPE,
+                partition_key=root_id,
+            )
+            usage_payloads.extend(row.payload for row in usage_page.items)
+            cursor = usage_page.next_cursor
+            if cursor is None:
+                break
         return build_session_evidence_timeline(
             overview_payloads,
             revision=revision,
             root_session_id=root_id,
             entrypoint_session_id=session_id,
             graph_overview=graph_overview,
+            usage_payloads=usage_payloads,
         ).model_dump(mode="json")
 
     def session_event_details(

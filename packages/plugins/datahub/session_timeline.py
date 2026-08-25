@@ -16,6 +16,17 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class TimelineTurnAccounting(_StrictModel):
+    processed_tokens: int = Field(ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)
+    cost_confidence: Literal["reported", "estimated"] | None = None
+    execution_seconds: float | None = Field(default=None, ge=0)
+    model_active_seconds: float | None = Field(default=None, ge=0)
+    wait_before_seconds: float | None = Field(default=None, ge=0)
+    provider: str | None = None
+    model: str | None = None
+
+
 class TimelineEntry(_StrictModel):
     id: str
     timestamp: datetime | None = None
@@ -32,6 +43,7 @@ class TimelineEntry(_StrictModel):
     status: str | None = None
     failed: bool = False
     artifact_kind: ArtifactKind | None = None
+    turn_accounting: TimelineTurnAccounting | None = None
     item_ids: list[str] = Field(default_factory=list)
     event_ids: list[str] = Field(default_factory=list)
     target_session_id: str | None = None
@@ -53,10 +65,12 @@ def build_session_evidence_timeline(
     root_session_id: str,
     entrypoint_session_id: str,
     graph_overview: Mapping[str, Any] | None = None,
+    usage_payloads: Sequence[Mapping[str, Any]] = (),
 ) -> SessionEvidenceTimeline:
     """Flatten retained overview turns without inventing evidence or timing."""
 
     target_by_item = _target_sessions_by_item(graph_overview or {})
+    accounting_by_turn = _accounting_by_turn(usage_payloads)
     sessions: dict[str, Mapping[str, Any]] = {}
     for payload in overview_payloads:
         for raw_session in payload.get("sessions") or []:
@@ -88,6 +102,7 @@ def build_session_evidence_timeline(
                 "agent_name": agent_name,
             }
             request = raw_turn.get("user_request")
+            turn_accounting = accounting_by_turn.get(turn_id)
             if isinstance(request, Mapping):
                 refs = raw_turn.get("refs")
                 event_id = _text(
@@ -106,6 +121,7 @@ def build_session_evidence_timeline(
                         label="User request",
                         summary=_request_summary(request),
                         status=_text(raw_turn.get("status")),
+                        turn_accounting=turn_accounting,
                         event_ids=[event_id] if event_id else [],
                         **common,
                     )
@@ -146,6 +162,11 @@ def build_session_evidence_timeline(
                         status=status,
                         failed=_failed(status),
                         artifact_kind=artifact_kind,
+                        turn_accounting=(
+                            turn_accounting
+                            if not isinstance(request, Mapping) and position == 1
+                            else None
+                        ),
                         item_ids=item_ids,
                         target_session_id=target,
                         **common,
@@ -180,6 +201,48 @@ def _target_sessions_by_item(graph_overview: Mapping[str, Any]) -> dict[str, str
         if source_item_id and target_session_id:
             targets[source_item_id] = target_session_id
     return targets
+
+
+def _accounting_by_turn(
+    usage_payloads: Sequence[Mapping[str, Any]],
+) -> dict[str, TimelineTurnAccounting]:
+    accounting: dict[str, TimelineTurnAccounting] = {}
+    for payload in usage_payloads:
+        for turn in payload.get("turns") or []:
+            if not isinstance(turn, Mapping):
+                continue
+            turn_id = _text(turn.get("turn_id"))
+            usage = turn.get("usage")
+            runtime = turn.get("runtime")
+            cost = turn.get("estimated_cost")
+            if turn_id is None or not isinstance(usage, Mapping):
+                continue
+            accounting[turn_id] = TimelineTurnAccounting(
+                processed_tokens=_nonnegative_int(usage.get("processed_tokens")),
+                cost_usd=_nonnegative_float(
+                    cost.get("value_usd") if isinstance(cost, Mapping) else None
+                ),
+                cost_confidence=(
+                    value
+                    if (value := _text(cost.get("confidence")))
+                    in {"reported", "estimated"}
+                    else None
+                )
+                if isinstance(cost, Mapping)
+                else None,
+                execution_seconds=_mapping_nonnegative_float(
+                    runtime, "execution_seconds"
+                ),
+                model_active_seconds=_mapping_nonnegative_float(
+                    runtime, "model_active_seconds"
+                ),
+                wait_before_seconds=_mapping_nonnegative_float(
+                    runtime, "wait_before_seconds"
+                ),
+                provider=_text(turn.get("provider")),
+                model=_text(turn.get("model")),
+            )
+    return accounting
 
 
 def _activity_kind(
@@ -290,6 +353,24 @@ def _failed(status: str | None) -> bool:
     )
 
 
+def _mapping_nonnegative_float(value: Any, key: str) -> float | None:
+    if not isinstance(value, Mapping):
+        return None
+    return _nonnegative_float(value.get(key))
+
+
+def _nonnegative_float(value: Any) -> float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+        return None
+    return float(value)
+
+
+def _nonnegative_int(value: Any) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return 0
+    return value
+
+
 def _text(value: Any) -> str | None:
     if value is None:
         return None
@@ -301,5 +382,6 @@ __all__ = [
     "ArtifactKind",
     "SessionEvidenceTimeline",
     "TimelineEntry",
+    "TimelineTurnAccounting",
     "build_session_evidence_timeline",
 ]

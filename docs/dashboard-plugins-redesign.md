@@ -503,6 +503,15 @@ covered. Avoid mechanical file moves during feature migration.
 - [Done] Add URL-restorable artifact filtering and artifact badges to the
   evidence timeline.
 
+### Phase 9: Join turn accounting to evidence
+
+- [Done] Join retained `session.usage` turns to timeline turns by canonical
+  turn ID at the same read-model revision.
+- [Done] Show processed tokens, reported or estimated cost evidence, elapsed
+  runtime, model-active runtime, and preceding wait once per turn.
+- [Done] Keep unavailable accounting values explicit and avoid attributing
+  turn totals to individual tool or message entries.
+
 ## Acceptance Criteria
 
 - One command starts every Datahub browser view.
