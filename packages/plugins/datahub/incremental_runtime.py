@@ -74,6 +74,7 @@ try:
         materialize_graph,
         reconstruct_recent_work,
     )
+    from .session_timeline import build_session_evidence_timeline
 except ImportError:
     import context_window
     from analytical_read_models import (
@@ -120,10 +121,11 @@ except ImportError:
         materialize_graph,
         reconstruct_recent_work,
     )
+    from session_timeline import build_session_evidence_timeline
 
 
 PARSER_VERSION = "core-source-checkpoint-v3"
-READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v5"
+READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v6"
 DEFAULT_REFRESH_SECONDS = 15.0
 RETAINED_CHANGE_REVISIONS = 96
 OBSOLETE_DATABASE_GRACE_SECONDS = 24 * 60 * 60
@@ -760,6 +762,50 @@ class DatahubIncrementalRuntime:
             partition_key=root_id,
         )
         return page.items[0].payload if page.items else None
+
+    def session_evidence_timeline(self, *, session_id: str) -> dict[str, Any] | None:
+        """Serve ordered, source-linked session evidence from retained facts."""
+
+        if not self._has_canonical_facts():
+            return None
+        root_id = self._root_for_entrypoint(session_id)
+        if root_id is None:
+            return None
+        if not self._root_has_evidence(root_id) and not self._materialize_evidence(
+            {root_id}
+        ):
+            return None
+        revision = self.store.current_revision()
+        overview_payloads: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            page = self.store.query_entities(
+                FACT_SESSION_OVERVIEW,
+                limit=500,
+                cursor=cursor,
+                revision=revision,
+                scope_key=CANONICAL_FACT_SCOPE,
+                partition_key=root_id,
+            )
+            overview_payloads.extend(row.payload for row in page.items)
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+        graph_page = self.store.query_entities(
+            FACT_GRAPH_OVERVIEW,
+            limit=1,
+            revision=revision,
+            scope_key=CANONICAL_FACT_SCOPE,
+            partition_key=root_id,
+        )
+        graph_overview = graph_page.items[0].payload if graph_page.items else None
+        return build_session_evidence_timeline(
+            overview_payloads,
+            revision=revision,
+            root_session_id=root_id,
+            entrypoint_session_id=session_id,
+            graph_overview=graph_overview,
+        ).model_dump(mode="json")
 
     def session_event_details(
         self,

@@ -658,6 +658,7 @@ def _delivery_families() -> tuple[str, ...]:
         "model-usage",
         "token-efficiency",
         "context-window",
+        "session-timeline",
         "session-tree",
         "session-graph",
     )

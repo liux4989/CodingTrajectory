@@ -4,10 +4,11 @@ import { cn } from "@/lib/utils";
 
 type SessionViewTabsProps = {
   sessionId: string;
-  active: "context" | "tree" | "graph";
+  active: "timeline" | "context" | "tree" | "graph";
 };
 
 const tabs = [
+  { id: "timeline", label: "Timeline" },
   { id: "context", label: "Context window" },
   { id: "tree", label: "Conversation tree" },
   { id: "graph", label: "Agent graph" },

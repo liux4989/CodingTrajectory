@@ -8,7 +8,10 @@ The first implementation slice is complete: Datahub now defaults to Sessions,
 exposes Today and Compare as the other first-level routes, preserves old route
 links with redirects, and no longer presents generated code-time data as
 telemetry. The standalone metrics and code-time browser applications were
-retired after the consolidated routes reached behavioral parity.
+retired after the consolidated routes reached behavioral parity. The canonical
+session workspace now also includes a chronological, source-linked evidence
+timeline with evidence-type, agent, and outcome filters plus lazy detail
+hydration from verified source ranges.
 
 This document surveys the three browser-facing plugins, decides their product
 boundaries, and defines an incremental migration. It does not propose a new
@@ -472,6 +475,15 @@ covered. Avoid mechanical file moves during feature migration.
   checks to match that decision.
 - [Done] Keep capability-level requirements deferred; the consolidated product
   does not need a general extension surface.
+
+### Phase 6: Add the session evidence timeline
+
+- [Done] Project requests, assistant responses, tools, compactions, failures,
+  and child-agent links from retained canonical facts without synthesized data.
+- [Done] Preserve source item/event references and hydrate their verified detail
+  only when a user asks to inspect an entry.
+- [Done] Add evidence-type, agent/branch, and outcome filters to the canonical
+  session workspace while preserving legacy timeline links with redirects.
 
 ## Acceptance Criteria
 

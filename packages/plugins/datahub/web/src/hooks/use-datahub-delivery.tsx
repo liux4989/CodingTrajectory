@@ -22,6 +22,7 @@ const QUERY_FAMILIES = {
   "model-usage": [["model-usage"]],
   "token-efficiency": [["token-efficiency"]],
   "context-window": [["context-window"]],
+  "session-timeline": [["session-timeline"]],
   "session-tree": [["session-tree"]],
   "session-graph": [["session-graph"]],
 } as const;

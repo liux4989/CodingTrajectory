@@ -87,8 +87,8 @@ const todayRoute = createRoute({
 const contextWindowRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId",
-  validateSearch: (search: Record<string, unknown>): { view: "context" | "tree" | "graph" } => ({
-    view: search.view === "tree" || search.view === "graph" ? search.view : "context",
+  validateSearch: (search: Record<string, unknown>): { view: "timeline" | "context" | "tree" | "graph" } => ({
+    view: search.view === "timeline" || search.view === "tree" || search.view === "graph" ? search.view : "context",
   }),
   component: () => <RouteBoundary><SessionWorkspaceRoute /></RouteBoundary>,
 });
@@ -101,6 +101,19 @@ const sessionGraphRoute = createRoute({
       to: "/sessions/$sessionId",
       params: { sessionId: params.sessionId },
       search: { view: "graph" },
+      replace: true,
+    });
+  },
+});
+
+const sessionTimelineRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions/$sessionId/timeline",
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: "/sessions/$sessionId",
+      params: { sessionId: params.sessionId },
+      search: { view: "timeline" },
       replace: true,
     });
   },
@@ -190,6 +203,7 @@ const router = createRouter({
     todayRoute,
     contextWindowRoute,
     sessionGraphRoute,
+    sessionTimelineRoute,
     sessionTreeRoute,
     legacyContextWindowRoute,
     compareRoute,

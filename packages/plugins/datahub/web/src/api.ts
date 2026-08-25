@@ -729,6 +729,76 @@ export async function fetchSessionTree(sessionId: string) {
   return fetchJson<SessionTreePayload>(`/api/sessions/tree?${params}`);
 }
 
+export type TimelineKind = "user" | "assistant" | "tool" | "subagent" | "compaction";
+
+export type SessionTimelineEntry = {
+  id: string;
+  timestamp: string | null;
+  ended_at: string | null;
+  session_id: string;
+  turn_id: string;
+  turn_sequence: number;
+  position: number;
+  vendor: string | null;
+  agent_name: string | null;
+  kind: TimelineKind;
+  label: string;
+  summary: string | null;
+  status: string | null;
+  failed: boolean;
+  item_ids: string[];
+  event_ids: string[];
+  target_session_id: string | null;
+};
+
+export type SessionEvidenceTimelinePayload = {
+  schema_version: 1;
+  revision: number;
+  root_session_id: string;
+  entrypoint_session_id: string;
+  entries: SessionTimelineEntry[];
+  warnings: string[];
+};
+
+export type SessionItemDetail = {
+  item_id: string;
+  session_id: string;
+  turn_id: string;
+  kind: string;
+  type: string;
+  operations?: string[];
+  shape?: Record<string, unknown>;
+  event_ids?: string[];
+};
+
+export type SessionEventDetail = {
+  event_id: string;
+  session_id: string;
+  timestamp: string;
+  type: string;
+  tool_call?: Record<string, unknown>;
+  llm?: Record<string, unknown>;
+  usage?: Record<string, unknown>;
+  text?: { text: string };
+};
+
+export async function fetchSessionEvidenceTimeline(sessionId: string) {
+  const params = new URLSearchParams({ session_id: sessionId });
+  return fetchJson<SessionEvidenceTimelinePayload>(`/api/sessions/evidence-timeline?${params}`);
+}
+
+export async function fetchSessionItemDetails(itemIds: string[]) {
+  const params = new URLSearchParams({ item_ids: itemIds.join(",") });
+  return fetchJson<SessionItemDetail[]>(`/api/sessions/items?${params}`);
+}
+
+export async function fetchSessionEventDetails(eventIds: string[]) {
+  const params = new URLSearchParams({ event_ids: eventIds.join(",") });
+  return fetchJson<{ root_session_id: string | null; matches: SessionEventDetail[] }>(
+    `/api/sessions/events?${params}`,
+  );
+}
+
 export type DatahubFreshness = {
   last_refresh_at: string | null;
   lag_seconds: number | null;

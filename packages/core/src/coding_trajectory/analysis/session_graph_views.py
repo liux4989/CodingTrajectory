@@ -211,6 +211,9 @@ def _turn_narrative_node(
     return prune_nones(
         {
             "turn_id": str(turn.turn_id),
+            "sequence": turn.sequence,
+            "started_at": turn.started_at,
+            "ended_at": turn.ended_at,
             "status": turn.status,
             "user_request": user_request,
             "assistant_responses": assistant_responses or None,
@@ -464,6 +467,9 @@ def _turn_nav_node(
         return prune_nones(
             {
                 "turn_id": str(turn.turn_id),
+                "sequence": turn.sequence,
+                "started_at": turn.started_at,
+                "ended_at": turn.ended_at,
                 "status": turn.status,
                 "user_request": visible_user_request,
                 "teammate_summary": build_teammate_summary(
@@ -476,11 +482,17 @@ def _turn_nav_node(
     return prune_nones(
         {
             "turn_id": str(turn.turn_id),
+            "sequence": turn.sequence,
+            "started_at": turn.started_at,
+            "ended_at": turn.ended_at,
             "status": turn.status,
             "user_request": user_request,
             "activity": build_overview_flows(turn.items),
             "refs": {
                 "item_ids": [str(item.item_id) for item in turn.items],
+                "user_request_event_id": str(turn.user_request_event_id)
+                if turn.user_request_event_id
+                else None,
             },
         }
     )

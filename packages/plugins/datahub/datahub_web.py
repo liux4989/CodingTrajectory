@@ -239,6 +239,12 @@ def _handler_for(
                             session_id=_required(query, "session_id"),
                         )
                     )
+                elif path == "/api/sessions/evidence-timeline":
+                    payload = self._revisioned(
+                        lambda: runtime.session_evidence_timeline(
+                            session_id=_required(query, "session_id"),
+                        )
+                    )
                 elif path == "/api/sessions/events":
                     payload = self._revisioned(
                         lambda: runtime.session_event_details(

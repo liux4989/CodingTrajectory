@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.tool_optimization import tool_optimization_profile
 from coding_trajectory.analysis.tool_summary_shared import (
@@ -14,7 +16,6 @@ from coding_trajectory.analysis.tool_summary_shared import (
 )
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.models import AgentMessageItem, Item
-from pydantic import BaseModel
 
 _OVERVIEW_TEXT_PREVIEW_LEN = 220
 
@@ -87,7 +88,15 @@ def build_overview_flows(items: list[Item]) -> list[dict[str, Any]]:
         if item.get("type") == "assistant_response":
             text = _truncate_text(item.get("text"))
             if text:
-                compacted.append({"text": text})
+                item_id = item.get("item_id")
+                compacted.append(
+                    prune_nones(
+                        {
+                            "text": text,
+                            "item_ids": [item_id] if isinstance(item_id, str) else None,
+                        }
+                    )
+                )
             continue
 
         compacted.append(_compact_flow_item(item))
