@@ -3,9 +3,9 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme inline {
-  --font-display: "Avenir Next", "Trebuchet MS", sans-serif;
-  --font-body: "Iowan Old Style", "Palatino Linotype", serif;
-  --font-mono: "SFMono-Regular", "Cascadia Code", monospace;
+  --font-display: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", "Cascadia Code", "JetBrains Mono", monospace;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -41,64 +41,64 @@
 @layer base {
   :root {
     color-scheme: light dark;
-    --background: #f8f1df;
-    --foreground: #18211c;
-    --card: #fff9ea;
-    --primary: #0d5c63;
-    --primary-foreground: #f8fff8;
-    --secondary: #f0e8d4;
-    --muted: #ebe3cf;
-    --muted-foreground: #687267;
-    --accent: #e0f0ee;
-    --destructive: #b9472b;
-    --border: #d7c8a4;
-    --chart-1: #0d5c63;
-    --chart-2: #7a8c45;
-    --chart-3: #b9472b;
+    --background: #fafafa;
+    --foreground: #171717;
+    --card: #ffffff;
+    --primary: #171717;
+    --primary-foreground: #fafafa;
+    --secondary: #f5f5f5;
+    --muted: #f5f5f5;
+    --muted-foreground: #737373;
+    --accent: #f5f5f5;
+    --destructive: #dc2626;
+    --border: #e5e5e5;
+    --chart-1: #0f766e;
+    --chart-2: #b45309;
+    --chart-3: #be123c;
     --chart-4: #6d28d9;
-    --chart-5: #334155;
+    --chart-5: #0369a1;
     --radius: 0.75rem;
   }
 
   @media (prefers-color-scheme: dark) {
     :root {
-      --background: #1a1814;
-      --foreground: #e8e0d0;
-      --card: #222019;
-      --primary: #4db8b0;
-      --primary-foreground: #0a1a18;
-      --secondary: #2a2820;
-      --muted: #2e2c24;
-      --muted-foreground: #aaa391;
-      --accent: #1e3530;
-      --destructive: #e87050;
-      --border: #3a362c;
-      --chart-1: #4db8b0;
-      --chart-2: #a8c060;
-      --chart-3: #e87050;
-      --chart-4: #8b5cf6;
-      --chart-5: #64748b;
+      --background: #0a0a0a;
+      --foreground: #fafafa;
+      --card: #171717;
+      --primary: #fafafa;
+      --primary-foreground: #0a0a0a;
+      --secondary: #262626;
+      --muted: #262626;
+      --muted-foreground: #a3a3a3;
+      --accent: #262626;
+      --destructive: #f87171;
+      --border: #262626;
+      --chart-1: #2dd4bf;
+      --chart-2: #fbbf24;
+      --chart-3: #fb7185;
+      --chart-4: #a78bfa;
+      --chart-5: #38bdf8;
     }
   }
 
   @supports (color: light-dark(white, black)) {
     :root {
-      --background: light-dark(#f8f1df, #1a1814);
-      --foreground: light-dark(#18211c, #e8e0d0);
-      --card: light-dark(#fff9ea, #222019);
-      --primary: light-dark(#0d5c63, #4db8b0);
-      --primary-foreground: light-dark(#f8fff8, #0a1a18);
-      --secondary: light-dark(#f0e8d4, #2a2820);
-      --muted: light-dark(#ebe3cf, #2e2c24);
-      --muted-foreground: light-dark(#687267, #aaa391);
-      --accent: light-dark(#e0f0ee, #1e3530);
-      --destructive: light-dark(#b9472b, #e87050);
-      --border: light-dark(#d7c8a4, #3a362c);
-      --chart-1: light-dark(#0d5c63, #4db8b0);
-      --chart-2: light-dark(#7a8c45, #a8c060);
-      --chart-3: light-dark(#b9472b, #e87050);
-      --chart-4: light-dark(#6d28d9, #8b5cf6);
-      --chart-5: light-dark(#334155, #64748b);
+      --background: light-dark(#fafafa, #0a0a0a);
+      --foreground: light-dark(#171717, #fafafa);
+      --card: light-dark(#ffffff, #171717);
+      --primary: light-dark(#171717, #fafafa);
+      --primary-foreground: light-dark(#fafafa, #0a0a0a);
+      --secondary: light-dark(#f5f5f5, #262626);
+      --muted: light-dark(#f5f5f5, #262626);
+      --muted-foreground: light-dark(#737373, #a3a3a3);
+      --accent: light-dark(#f5f5f5, #262626);
+      --destructive: light-dark(#dc2626, #f87171);
+      --border: light-dark(#e5e5e5, #262626);
+      --chart-1: light-dark(#0f766e, #2dd4bf);
+      --chart-2: light-dark(#b45309, #fbbf24);
+      --chart-3: light-dark(#be123c, #fb7185);
+      --chart-4: light-dark(#6d28d9, #a78bfa);
+      --chart-5: light-dark(#0369a1, #38bdf8);
     }
   }
 
@@ -108,10 +108,7 @@
     overflow-x: clip;
     font-family: var(--font-body);
     color: var(--foreground);
-    background:
-      radial-gradient(circle at 12% 4%, color-mix(in oklab, var(--chart-3) 18%, transparent), transparent 28rem),
-      radial-gradient(circle at 88% 0%, color-mix(in oklab, var(--primary) 16%, transparent), transparent 26rem),
-      var(--background);
+    background: var(--background);
   }
 
   :where(a, button, [role="button"]):focus-visible {

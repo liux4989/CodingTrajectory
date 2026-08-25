@@ -35,7 +35,7 @@ export function MetricCard({ label, value, detail, sparklineEntries, ratio, tren
     <Card className="@container/card metric-card min-w-0 gap-0 overflow-hidden">
       <CardHeader>
         <CardDescription>{label}</CardDescription>
-        <CardTitle className="font-display text-metric font-extrabold tabular-nums leading-tight">
+        <CardTitle className="font-display text-metric font-semibold tabular-nums leading-tight tracking-tight">
           {typeof value === "number" ? (
             <AnimatedNumber value={value} />
           ) : (
