@@ -83,7 +83,7 @@ function cachedShare(section?: GraphStatsSession) {
 }
 
 export function SessionGraphRoute() {
-  const { sessionId } = useParams({ from: "/sessions/$sessionId/graph" });
+  const { sessionId } = useParams({ from: "/sessions/$sessionId" });
   const query = useQuery({
     queryKey: ["session-graph", sessionId],
     queryFn: () => fetchSessionGraph(sessionId),
@@ -281,7 +281,11 @@ function SessionCompositionChart({ rows, rootId }: { rows: CompositionRow[]; roo
           dataPointSelection: (_event, _chartContext, config) => {
             const row = config ? rows[config.dataPointIndex] : undefined;
             if (row) {
-              void navigate({ to: "/sessions/$sessionId", params: { sessionId: row.id } });
+              void navigate({
+                to: "/sessions/$sessionId",
+                params: { sessionId: row.id },
+                search: { view: "context" },
+              });
             }
           },
         },

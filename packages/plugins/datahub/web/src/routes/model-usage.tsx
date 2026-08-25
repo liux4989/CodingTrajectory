@@ -445,10 +445,10 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     const sessionStats = data.summary.elapsed_stats.session;
     return (
       <section className="stat-grid min-w-0">
-        <MetricCard label="Elapsed Time" value={formatDuration(data.summary.total_elapsed_seconds)} detail={`${data.summary.sessions.toLocaleString()} completed sessions`} />
-        <MetricCard label="Session Time" value={formatDuration(sessionStats.avg)} detail={distributionDetail(sessionStats, formatDuration)} />
-        <MetricCard label="Turns" value={formatCompactNumber(data.summary.turns)} detail={`${formatCompactNumber(data.summary.processed_tokens)} filtered tokens`} />
-        <MetricCard label="Throughput" value={formatCompactNumber(tokensPerMinute(data.summary.processed_tokens, data.summary.total_elapsed_seconds))} detail="tokens/min across elapsed time" />
+        <MetricCard label="Active Execution" value={formatDuration(data.summary.total_execution_seconds)} detail={`${data.summary.runtime_eligible}/${data.summary.sessions} sessions with runtime telemetry`} />
+        <MetricCard label="Waiting" value={formatDuration(data.summary.total_wait_seconds)} detail="Observed non-execution time" />
+        <MetricCard label="Elapsed Time" value={formatDuration(data.summary.total_elapsed_seconds)} detail={distributionDetail(sessionStats, formatDuration)} />
+        <MetricCard label="Throughput" value={formatCompactNumber(tokensPerMinute(data.summary.processed_tokens, data.summary.total_execution_seconds))} detail="tokens/min across active execution" />
       </section>
     );
   }
@@ -704,7 +704,11 @@ function SessionScatterChart({ data }: { data: ModelUsagePayload }) {
           dataPointSelection: (_event, _chartContext, config) => {
             const session = config ? groups[config.seriesIndex ?? 0]?.[1][config.dataPointIndex ?? 0] : undefined;
             if (session) {
-              void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
+              void navigate({
+                to: "/sessions/$sessionId",
+                params: { sessionId: session.id },
+                search: { view: "context" },
+              });
             }
           },
         },
@@ -1160,7 +1164,7 @@ function TimeOverviewTable({ data }: { data: ModelUsagePayload }) {
     <Card className="min-w-0">
       <CardHeader>
         <CardTitle className="title-card">Model Time Overview</CardTitle>
-        <CardDescription>Elapsed-time comparison across models, sessions, and turns.</CardDescription>
+        <CardDescription>Model elapsed time is descriptive only; mixed-model active runtime remains attributed to its session below.</CardDescription>
       </CardHeader>
       <CardContent>
         <DataTable
@@ -1189,6 +1193,16 @@ function sessionColumns(view: UsageView): ColumnDef<ModelUsageSession>[] {
             accessorKey: "elapsed_seconds",
             header: ({ column }) => <DataTableColumnHeader column={column} label="Elapsed" className="text-right" />,
             cell: ({ getValue }) => <RightCell>{formatDuration(getValue<number>())}</RightCell>,
+          } satisfies ColumnDef<ModelUsageSession>,
+          {
+            accessorKey: "execution_seconds",
+            header: ({ column }) => <DataTableColumnHeader column={column} label="Active" className="text-right" />,
+            cell: ({ row, getValue }) => <RightCell>{row.original.runtime_available ? formatDuration(getValue<number>()) : "Unavailable"}</RightCell>,
+          } satisfies ColumnDef<ModelUsageSession>,
+          {
+            accessorKey: "wait_seconds",
+            header: ({ column }) => <DataTableColumnHeader column={column} label="Wait" className="text-right" />,
+            cell: ({ row, getValue }) => <RightCell>{row.original.runtime_available ? formatDuration(getValue<number>()) : "Unavailable"}</RightCell>,
           } satisfies ColumnDef<ModelUsageSession>,
           {
             id: "tokens_per_min",
@@ -1257,6 +1271,12 @@ function dominantModelColumn(): ColumnDef<ModelUsageSession> {
     id: "dominant_model",
     accessorFn: (row) => modelLabel(row.dominant_model),
     header: ({ column }) => <DataTableColumnHeader column={column} label="Dominant Model" />,
+    cell: ({ row, getValue }) => (
+      <span className="flex flex-wrap items-center gap-1">
+        <span>{getValue<string>()}</span>
+        {row.original.mixed_models ? <Badge variant="outline">Mixed runtime</Badge> : null}
+      </span>
+    ),
   };
 }
 

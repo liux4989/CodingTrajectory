@@ -183,6 +183,8 @@ def _handler_for(
                     payload = self._revisioned(
                         lambda: runtime.overview(since_days=self._window_days(query))
                     )
+                elif path == "/api/today":
+                    payload = self._revisioned(runtime.today)
                 elif path == "/api/projects":
                     payload = self._revisioned(
                         lambda: runtime.projects(

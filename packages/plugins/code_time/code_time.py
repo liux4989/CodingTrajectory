@@ -25,8 +25,6 @@ WINDOW_SINCE_DAYS = {
 
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
-    if raw_args and raw_args[0] in {"web", "--web"}:
-        return _run_web(raw_args[1:])
     if raw_args and raw_args[0] == "forecast":
         return _run_forecast(raw_args[1:])
 
@@ -793,21 +791,6 @@ def _fmt_minutes(minutes: float | None) -> str:
     if minutes < 60:
         return f"{minutes:.0f}m"
     return f"{minutes / 60:.1f}h"
-
-
-def _run_web(args: list[str]) -> int:
-    try:
-        from . import code_time_web
-    except ImportError:
-        try:
-            import code_time_web
-        except ImportError:
-            print(
-                "error: code_time_web module not found; ensure the web module is available.",
-                file=sys.stderr,
-            )
-            return 2
-    return code_time_web.main(args)
 
 
 if __name__ == "__main__":

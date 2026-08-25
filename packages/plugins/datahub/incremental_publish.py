@@ -9,11 +9,11 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from coding_trajectory.ingestion.incremental import (
+from coding_trajectory.datahub import (
+    DocumentStore,
+    SessionProvenance,
     rebuild_affected_session_graphs_from_files,
 )
-from coding_trajectory.ingestion.provenance import SessionProvenance
-from coding_trajectory.query import DocumentStore
 
 try:
     from .analytical_read_models import (

@@ -2,8 +2,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import type { ApexOptions } from "apexcharts";
-import { fetchOverview, type OverviewPayload } from "@/api";
-import { useDateRange } from "@/hooks/use-date-range";
+import { fetchToday, type OverviewPayload, type TodayPayload } from "@/api";
 import { formatCompactNumber, formatCostUsd, formatDuration } from "@/lib/format";
 import { LoadingShell } from "@/components/loading-shell";
 import { RouteHeader } from "@/components/route-header";
@@ -18,10 +17,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 export function OverviewRoute() {
   const [activeTab, setActiveTab] = React.useState("sessions");
-  const { days: sinceDays } = useDateRange();
+  const sinceDays = 1;
   const overview = useQuery({
-    queryKey: ["overview", sinceDays],
-    queryFn: () => fetchOverview({ sinceDays }),
+    queryKey: ["today"],
+    queryFn: fetchToday,
     placeholderData: (previous) => previous,
   });
 
@@ -69,6 +68,7 @@ export function OverviewRoute() {
         />
         </StaggerGroup>
       </section>
+      <HourlyActivityChart buckets={data.hourly} />
       <section className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(22rem,0.8fr)] gap-4 max-xl:grid-cols-1">
         <Card className="min-w-0">
           <CardHeader>
@@ -173,6 +173,32 @@ export function OverviewRoute() {
         </Card>
       )}
     </div>
+  );
+}
+
+function HourlyActivityChart({ buckets }: { buckets: TodayPayload["hourly"] }) {
+  const options: ApexOptions = {
+    chart: { stacked: false },
+    plotOptions: { bar: { borderRadius: 3, columnWidth: "58%" } },
+    dataLabels: { enabled: false },
+    xaxis: {
+      categories: buckets.map((bucket) => new Date(bucket.bucket).toLocaleTimeString([], { hour: "2-digit" })),
+    },
+    yaxis: { labels: { formatter: (value) => formatCompactNumber(value) } },
+    tooltip: { x: { formatter: (_value, options) => buckets[options?.dataPointIndex ?? -1]?.bucket ?? "" } },
+  };
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="title-card">Observed hourly activity</CardTitle>
+        <CardDescription>Processed tokens grouped by the recorded UTC session start hour.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {buckets.length ? (
+          <ApexChart type="bar" series={[{ name: "Processed tokens", data: buckets.map((bucket) => bucket.processed_tokens) }]} options={options} height={240} ariaLabel="Processed tokens by session start hour" />
+        ) : <p className="text-muted-foreground">No sessions started in the last 24 hours.</p>}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -297,7 +323,11 @@ function TopSessionsChart({ sessions }: { sessions: TopSession[] }) {
         dataPointSelection: (_event, _chartContext, config) => {
           const session = config ? ranked[config.dataPointIndex] : undefined;
           if (session?.id) {
-            void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
+            void navigate({
+              to: "/sessions/$sessionId",
+              params: { sessionId: session.id },
+              search: { view: "context" },
+            });
           }
         },
       },

@@ -164,7 +164,11 @@ export function SessionsRoute() {
             emptyHint="Try adjusting the filter."
             onRowClick={(item) => {
               const id = sessionId(item);
-              if (id) router.navigate({ to: "/sessions/$sessionId", params: { sessionId: id } });
+              if (id) router.navigate({
+                to: "/sessions/$sessionId",
+                params: { sessionId: id },
+                search: { view: "context" },
+              });
             }}
           />
           <DataTablePagination table={table} />

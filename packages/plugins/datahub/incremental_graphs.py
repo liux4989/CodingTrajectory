@@ -1,6 +1,6 @@
 """Compatibility re-export for core-owned incremental graph assembly."""
 
-from coding_trajectory.ingestion.incremental import (
+from coding_trajectory.datahub import (
     GraphBuildIssue,
     IncrementalGraphBuild,
     MessagesForPath,

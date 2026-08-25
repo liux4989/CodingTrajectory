@@ -1,4 +1,9 @@
 export type OverviewPayload = {
+  schema_version: 1;
+  revision: number;
+  generated_at: string;
+  cohort: { since_days: number; session_graph_count: number };
+  coverage: Record<string, number>;
   projects: { count: number; vendors: Record<string, number> };
   sessions: {
     count: number;
@@ -42,6 +47,20 @@ export type OverviewPayload = {
     warnings: Array<{ session_id?: string | null; project: string; message: string }>;
     errors: unknown[];
   };
+};
+
+export type ActivityBucket = {
+  bucket: string;
+  sessions: number;
+  execution_seconds: number;
+  processed_tokens: number;
+  cost_usd: number;
+};
+
+export type TodayPayload = OverviewPayload & {
+  hourly: ActivityBucket[];
+  daily: ActivityBucket[];
+  warnings: OverviewPayload["sessions"]["warnings"];
 };
 
 export type ProjectItem = {
@@ -270,6 +289,10 @@ export type ModelUsageSession = {
   started_at: string | null;
   completed_at: string | null;
   elapsed_seconds: number;
+  execution_seconds: number;
+  wait_seconds: number;
+  runtime_available: boolean;
+  mixed_models: boolean;
   usage: UsageBuckets;
   context: ModelUsageContext | null;
   dominant_model: { provider: string | null; model: string | null; basis: string } | null;
@@ -308,6 +331,10 @@ export type ModelUsageTurn = {
 
 export type ModelUsagePayload = {
   schema_version: 1;
+  revision: number;
+  generated_at: string;
+  cohort: { since_days: number; session_graph_count: number; turn_count: number };
+  coverage: { total_models: number; missing_pricing: number };
   filters: { since_days: number; project_name: string | null; model_key: string | null };
   project_options: ProjectItem[];
   model_options: ModelUsageOption[];
@@ -317,6 +344,9 @@ export type ModelUsagePayload = {
     models: number;
     processed_tokens: number;
     total_elapsed_seconds: number;
+    total_execution_seconds: number;
+    total_wait_seconds: number;
+    runtime_eligible: number;
     avg_tokens_per_session: number;
     avg_tokens_per_turn: number;
     avg_elapsed_seconds_per_session: number;
@@ -522,6 +552,10 @@ export async function fetchOverview(params?: { sinceDays?: number }) {
   const query = search.toString();
   const suffix = query ? `?${query}` : "";
   return fetchJson<OverviewPayload>(`/api/overview${suffix}`);
+}
+
+export async function fetchToday() {
+  return fetchJson<TodayPayload>("/api/today");
 }
 
 export async function fetchProjects() {

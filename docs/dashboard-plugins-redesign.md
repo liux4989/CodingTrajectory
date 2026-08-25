@@ -7,8 +7,8 @@ Accepted consolidation plan based on the repository state on 2026-08-25.
 The first implementation slice is complete: Datahub now defaults to Sessions,
 exposes Today and Compare as the other first-level routes, preserves old route
 links with redirects, and no longer presents generated code-time data as
-telemetry. The standalone metrics and code-time applications remain available
-until Datahub reaches behavioral parity.
+telemetry. The standalone metrics and code-time browser applications were
+retired after the consolidated routes reached behavioral parity.
 
 This document surveys the three browser-facing plugins, decides their product
 boundaries, and defines an incremental migration. It does not propose a new
@@ -432,44 +432,46 @@ covered. Avoid mechanical file moves during feature migration.
 
 - [Done] Make `Sessions`, `Today`, and `Compare` the first-level navigation.
 - [Done] Add validated URL state shared by analytics routes.
-- Define response metadata shared by the new overview and analytics APIs:
+- [Done] Define response metadata shared by the new overview and analytics APIs:
   `schema_version`, `revision`, `cohort`, `coverage`, and `warnings`.
-- Keep the existing applications available during comparison.
+- [Done] Keep the existing applications available during comparison, then retire
+  them after parity validation.
 
 ### Phase 2: Move metrics projections
 
-- Port the metrics cohort and grouping behavior into a Datahub analytics
+- [Done] Port the metrics cohort and grouping behavior into a Datahub analytics
   query over retained canonical facts.
-- Move token, cost, and execution category pages into Datahub.
-- Preserve reported/estimated/unavailable cost evidence and mixed-model runtime
+- [Done] Move token, cost, and execution category pages into Datahub.
+- [Done] Preserve reported/estimated/unavailable cost evidence and mixed-model runtime
   attribution rules.
-- Move `metrics validate` reconciliation to a script or Datahub development
-  command before deleting the plugin.
+- [Done] Keep metrics reconciliation in the repository quality-gate script
+  after deleting the plugin.
 
 ### Phase 3: Move the recent-work view
 
-- Implement observed daily/hourly buckets in the Datahub read model.
-- Add the compact Today route using those projections.
-- Reconcile totals with the existing `ct plugin code-time --output json` report.
-- Remove `code-time web`; retain the text/JSON command as a thin public-contract
+- [Done] Implement observed daily/hourly buckets in the Datahub read model.
+- [Done] Add the compact Today route using those projections.
+- [Done] Reconcile totals against the same canonical graph usage consumed by the
+  existing `ct plugin code-time --output json` report.
+- [Done] Remove `code-time web`; retain the text/JSON command as a thin public-contract
   consumer if it still has command-line value.
 
 ### Phase 4: Retire duplicate applications
 
-- Remove the metrics manifest, server, frontend, and package after route and
+- [Done] Remove the metrics manifest, server, frontend, and package after route and
   validation parity.
-- Remove the code-time server and frontend after Today parity.
-- Remove duplicated frontend dependencies and build instructions.
-- Redirect documented user workflows to `ct plugin datahub web`.
+- [Done] Remove the code-time server and frontend after Today parity.
+- [Done] Remove duplicated frontend dependencies and build instructions.
+- [Done] Redirect documented user workflows to `ct plugin datahub web`.
 
 ### Phase 5: Clarify the plugin contract
 
-- Decide whether first-party plugins use a supported in-process SDK or the same
+- [Done] Decide whether first-party plugins use a supported in-process SDK or the same
   process-isolated contract as external plugins.
-- Update `docs/plugin.md`, manifests, package dependencies, and compatibility
+- [Done] Update `docs/plugin.md`, manifests, package dependencies, and compatibility
   checks to match that decision.
-- Consider capability-level requirements only after the consolidated command
-  and route needs are known.
+- [Done] Keep capability-level requirements deferred; the consolidated product
+  does not need a general extension surface.
 
 ## Acceptance Criteria
 

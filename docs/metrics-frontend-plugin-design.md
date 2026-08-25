@@ -1,4 +1,9 @@
-# Metrics Frontend Plugin Design
+# Metrics Frontend Plugin Design (Retired)
+
+> Historical design record. The experimental standalone metrics application
+> was retired after its token, cost, execution, distribution, cohort metadata,
+> and session comparison behavior moved into Datahub's `/compare` route.
+> Canonical reconciliation remains in `scripts/validate-metrics-baselines.py`.
 
 ## Status
 

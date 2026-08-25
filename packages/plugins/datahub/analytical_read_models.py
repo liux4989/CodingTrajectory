@@ -16,18 +16,24 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
-from coding_trajectory.analysis.graph_views import build_graph_overview
-from coding_trajectory.contracts import service_contract
-from coding_trajectory.ingestion.common import canonical_json, normalize_project_key
-from coding_trajectory.ingestion.models import SessionGraph
+from coding_trajectory.datahub import (
+    DocumentError,
+    DocumentStore,
+    IndexCache,
+    ResourceNotFoundError,
+    SessionGraph,
+    build_graph_overview,
+    canonical_json,
+    dispatch,
+    normalize_project_key,
+    service_contract,
+)
 from coding_trajectory.metrics import (
     build_session_graph_stats,
     build_session_graph_usage,
     iter_graph_economics_contributions,
 )
-from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
 from coding_trajectory.runtime import ServiceApiClient
-from coding_trajectory.service import IndexCache, dispatch
 from pydantic import ValidationError
 
 try:

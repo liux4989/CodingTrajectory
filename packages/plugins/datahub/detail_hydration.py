@@ -18,23 +18,18 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from coding_trajectory.analysis.projections import build_item_details
-from coding_trajectory.discovery import stabilize_session
-from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
-from coding_trajectory.ingestion.adapters.codex import CodexAdapter
-from coding_trajectory.ingestion.adapters.pi import PiAdapter
-from coding_trajectory.ingestion.indexes import (
-    SessionGraphIndex,
-    build_session_graph_index,
-)
-from coding_trajectory.ingestion.models import (
+from coding_trajectory.datahub import (
     PlanItem,
     Session,
     SessionEdge,
     SessionGraph,
+    SessionGraphIndex,
     Vendor,
+    build_item_details,
+    build_session_graph_index,
+    hydrate_retained_session,
+    serialize_event_detail,
 )
-from coding_trajectory.service import serialize_event_detail
 
 try:
     from .incremental_store import (
@@ -54,13 +49,6 @@ except ImportError:
 
 class DetailUnavailable(RuntimeError):
     """The requested detail could not be verified against its source."""
-
-
-_ADAPTER_BY_VENDOR = {
-    Vendor.CODEX_CLI: CodexAdapter,
-    Vendor.CLAUDE_CODE: ClaudeCodeAdapter,
-    Vendor.PI: PiAdapter,
-}
 
 
 class _HydratedFile:
@@ -200,13 +188,11 @@ class DetailHydrator:
         vendor_value = snapshot.metadata.get("vendor")
         try:
             vendor = Vendor(str(vendor_value))
-            adapter_cls = _ADAPTER_BY_VENDOR[vendor]
-        except (ValueError, KeyError) as exc:
+        except ValueError as exc:
             raise DetailUnavailable(
                 f"source {source_path} has unsupported vendor: {vendor_value}"
             ) from exc
-        adapter = adapter_cls()
-        parent_started: set[str] | None = None
+        parent_source_path: Path | None = None
         if snapshot.parent_link:
             parent_source = next(
                 (
@@ -217,11 +203,12 @@ class DetailHydrator:
                 None,
             )
             if parent_source is not None:
-                parent_started = adapter.scan_started_turn_ids(parent_source.path)
-        session = adapter.ingest_file(
-            Path(source_path), parent_started_turn_ids=parent_started
+                parent_source_path = Path(parent_source.path)
+        session = hydrate_retained_session(
+            Path(source_path),
+            vendor=vendor,
+            parent_source=parent_source_path,
         )
-        session = stabilize_session(session, vendor=vendor, source=Path(source_path))
         graph = SessionGraph(
             root_session_id=session.session_id,
             sessions=[session],

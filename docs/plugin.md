@@ -11,10 +11,17 @@ The public namespace for these commands is `ct plugin ...`.
 
 - First-party infrastructure stays under `ct project ...` and `ct session ...`.
 - Plugin manifests register commands under `ct plugin ...`.
-- Plugins run as separate executables. They do not import `coding_trajectory`
-  or `coding_trajectory_cli`.
+- Ordinary and third-party plugins run as separate executables and use the
+  versioned service API rather than importing core internals.
 - Plugins may call the `ct` CLI or read documented machine-readable outputs.
 - Plugins should not patch core discovery, ingestion, or canonical models.
+
+Datahub is the deliberate exception: it is a trusted, co-released first-party
+application and imports the narrow `coding_trajectory.datahub` projection
+facade for incremental source planning, canonical materialization, project
+catalogs, provenance, and lazy retained detail. That module is not a general
+third-party plugin SDK. Transport clients remain the boundary for other
+plugins, including code-time.
 
 This keeps the core query surface stable while allowing package-specific command
 packs to ship independently.
@@ -150,8 +157,9 @@ separate installation or wheel packaging. Each plugin advertises itself with
 a `plugin.toml` manifest in its source directory; `ct` discovers plugins by
 scanning the plugin root rather than maintaining a built-in command table.
 
-Plugin packages own their dependencies and do not import `coding_trajectory`
-or `coding_trajectory_cli`.
+Plugin packages own their dependencies. Third-party plugins do not import
+`coding_trajectory` or `coding_trajectory_cli`; the trusted Datahub exception
+uses only the first-party projection facade described above.
 
 For local user-level publishing (installing `ct` as a global uv tool):
 

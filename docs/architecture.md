@@ -147,7 +147,6 @@ coding-trajectory/
 │       ├── code_time/                      # `code-time` plugin
 │       │   ├── pyproject.toml
 │       │   ├── code_time.py
-│       │   ├── code_time_web.py
 │       ├── datahub/                        # `datahub` plugin
 │       │   ├── pyproject.toml
 │       │   ├── datahub.py                # Datahub CLI entry point

@@ -48,7 +48,10 @@ def build_projection(
         filters=filters,
     )
     projects = _project_options(scope["projects_payload"])
-    all_session_rows = [_session_row(payload) for payload in scope["usage_payloads"]]
+    all_session_rows = [
+        _session_row(payload, runtime_by_id=scope["runtime_by_id"])
+        for payload in scope["usage_payloads"]
+    ]
     model_options = _model_options(_model_rows(all_session_rows))
     session_rows = _filter_session_rows_by_model(
         all_session_rows,
@@ -70,6 +73,7 @@ def _load_scope_model_usage(
     projects_payload = client.call("project.list", {})
     session_params: dict[str, Any] = {
         "since_days": filters.since_days,
+        "include": ["runtime"],
     }
     if filters.project_name:
         session_params["project_name"] = filters.project_name
@@ -86,6 +90,13 @@ def _load_scope_model_usage(
     return {
         "projects_payload": projects_payload,
         "usage_payloads": usage_payloads,
+        "runtime_by_id": {
+            str(item.get("root_session_id") or item.get("id")): dict(
+                item.get("runtime") or {}
+            )
+            for item in session_items
+            if item.get("root_session_id") or item.get("id")
+        },
     }
 
 
@@ -102,6 +113,12 @@ def _projection_payload(
     processed_tokens = sum(_usage_total(row.get("usage")) for row in session_rows)
     total_elapsed_seconds = sum(
         int(_number(row.get("elapsed_seconds"))) for row in session_rows
+    )
+    total_execution_seconds = sum(
+        int(_number(row.get("execution_seconds"))) for row in session_rows
+    )
+    total_wait_seconds = sum(
+        int(_number(row.get("wait_seconds"))) for row in session_rows
     )
     token_stats = _summary_token_stats(session_rows, turn_rows)
     cost_stats = {
@@ -129,6 +146,11 @@ def _projection_payload(
             "models": len(model_rows),
             "processed_tokens": processed_tokens,
             "total_elapsed_seconds": total_elapsed_seconds,
+            "total_execution_seconds": total_execution_seconds,
+            "total_wait_seconds": total_wait_seconds,
+            "runtime_eligible": sum(
+                row.get("runtime_available") is True for row in session_rows
+            ),
             "avg_tokens_per_session": _safe_div(processed_tokens, len(session_rows)),
             "avg_tokens_per_turn": _safe_div(processed_tokens, len(turn_rows)),
             "avg_elapsed_seconds_per_session": _safe_div(
@@ -190,9 +212,12 @@ def _model_usage_batch(
     return rows
 
 
-def _session_row(payload: dict[str, Any]) -> dict[str, Any]:
+def _session_row(
+    payload: dict[str, Any], *, runtime_by_id: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     session_id = str(payload.get("id") or payload.get("root_session_id") or "")
     models = [_priced_model(row) for row in payload.get("models") or []]
+    runtime = runtime_by_id.get(session_id) or {}
     total_cost = sum(_number(row["estimated_cost_usd"]) for row in models)
     turns = [
         _priced_turn(row, session_id=session_id) for row in payload.get("turns") or []
@@ -208,6 +233,10 @@ def _session_row(payload: dict[str, Any]) -> dict[str, Any]:
             payload.get("started_at"),
             payload.get("completed_at"),
         ),
+        "execution_seconds": int(_number(runtime.get("execution_seconds"))),
+        "wait_seconds": int(_number(runtime.get("wait_seconds"))),
+        "runtime_available": runtime.get("execution_seconds") is not None,
+        "mixed_models": len({row["model_key"] for row in models}) > 1,
         "usage": payload.get("usage") or {},
         "context": payload.get("context"),
         "dominant_model": payload.get("dominant_model"),

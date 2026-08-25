@@ -8,9 +8,9 @@ type SessionViewTabsProps = {
 };
 
 const tabs = [
-  { id: "context", label: "Context window", to: "/sessions/$sessionId" },
-  { id: "tree", label: "Conversation tree", to: "/sessions/$sessionId/tree" },
-  { id: "graph", label: "Agent graph", to: "/sessions/$sessionId/graph" },
+  { id: "context", label: "Context window" },
+  { id: "tree", label: "Conversation tree" },
+  { id: "graph", label: "Agent graph" },
 ] as const;
 
 /** Route-level switcher between the per-session context window and graph views. */
@@ -23,8 +23,9 @@ export function SessionViewTabs({ sessionId, active }: SessionViewTabsProps) {
           return (
             <Link
               key={tab.id}
-              to={tab.to}
+              to="/sessions/$sessionId"
               params={{ sessionId }}
+              search={{ view: tab.id }}
               role="tab"
               aria-selected={isActive}
               className={cn(

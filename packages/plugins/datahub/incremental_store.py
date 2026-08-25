@@ -28,7 +28,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from coding_trajectory.ingestion.common import (
+from coding_trajectory.datahub import (
     canonical_json,
     last_complete_line_offset,
 )

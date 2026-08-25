@@ -90,14 +90,16 @@ function ConversationTree({
               <Link
                 to="/sessions/$sessionId"
                 params={{ sessionId: branch.session_id }}
+                search={{ view: "context" }}
               >
                 Open session
               </Link>
             </Button>
             <Button asChild size="sm">
               <Link
-                to="/sessions/$sessionId/graph"
+                to="/sessions/$sessionId"
                 params={{ sessionId: branch.session_id }}
+                search={{ view: "graph" }}
               >
                 <Bot data-icon="inline-start" />
                 Agent graph
@@ -122,7 +124,7 @@ function ConversationTree({
 }
 
 export function SessionTreeRoute() {
-  const { sessionId } = useParams({ from: "/sessions/$sessionId/tree" });
+  const { sessionId } = useParams({ from: "/sessions/$sessionId" });
   const query = useQuery({
     queryKey: ["session-tree", sessionId],
     queryFn: () => fetchSessionTree(sessionId),

@@ -17,14 +17,15 @@ from time import perf_counter
 from typing import Any, Literal
 from urllib.parse import quote
 
-from coding_trajectory.ingestion.incremental import (
+from coding_trajectory.datahub import (
+    DocumentStore,
+    ResourceNotFoundError,
     plan_session_graph_components_from_files,
+    project_list_metadata,
     rebuild_affected_session_graphs_from_files,
     rebuild_affected_session_graphs_with_measurements,
 )
 from coding_trajectory.metrics.measurements import MeasurementMismatchError
-from coding_trajectory.query import DocumentStore, ResourceNotFoundError
-from coding_trajectory.service import project_list_metadata
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
@@ -71,6 +72,7 @@ try:
         DEFAULT_RECENT_HORIZON_DAYS,
         aggregate_read_models,
         materialize_graph,
+        reconstruct_recent_work,
     )
 except ImportError:
     import context_window
@@ -116,11 +118,12 @@ except ImportError:
         DEFAULT_RECENT_HORIZON_DAYS,
         aggregate_read_models,
         materialize_graph,
+        reconstruct_recent_work,
     )
 
 
 PARSER_VERSION = "core-source-checkpoint-v3"
-READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v4"
+READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v5"
 DEFAULT_REFRESH_SECONDS = 15.0
 RETAINED_CHANGE_REVISIONS = 96
 OBSOLETE_DATABASE_GRACE_SECONDS = 24 * 60 * 60
@@ -326,7 +329,51 @@ class DatahubIncrementalRuntime:
 
     def overview(self, *, since_days: int) -> dict[str, Any] | None:
         row = self._singleton("overview", f"recent:{since_days}d")
-        return row.payload if row is not None else None
+        if row is None:
+            return None
+        payload = dict(row.payload)
+        sessions = payload.get("sessions") or {}
+        usage = sessions.get("usage") or {}
+        payload.update(
+            {
+                "schema_version": 1,
+                "revision": self.store.current_revision(),
+                "generated_at": datetime.now(UTC).isoformat(),
+                "cohort": {
+                    "since_days": since_days,
+                    "session_graph_count": int(sessions.get("count") or 0),
+                },
+                "coverage": {
+                    "total": int(sessions.get("count") or 0),
+                    "pricing": int(usage.get("known_cost_count") or 0),
+                    "missing_pricing": int(usage.get("missing_cost_count") or 0),
+                },
+                "warnings": list(sessions.get("warnings") or []),
+            }
+        )
+        return payload
+
+    def today(self) -> dict[str, Any] | None:
+        """Serve the trailing-day work projection from retained session rows."""
+
+        if not self._has_route_models():
+            return None
+        rows: list[Any] = []
+        cursor: str | None = None
+        while True:
+            page = self.store.query_entities(
+                "session",
+                limit=500,
+                cursor=cursor,
+                scope_key=f"recent:{self.since_days}d",
+            )
+            rows.extend(page.items)
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+        payload = reconstruct_recent_work(rows, since_days=1)
+        payload["revision"] = self.store.current_revision()
+        return payload
 
     def projects(
         self, *, agent_vendor: str | None, limit: int, cursor: str | None
@@ -510,7 +557,7 @@ class DatahubIncrementalRuntime:
                 "sessions": page_metadata(sessions_page, limit=limit),
                 "turns": page_metadata(turns_page, limit=limit),
             }
-            return payload
+            return _model_usage_contract(payload, revision=sessions_page.revision)
         entity_kind, partition = (
             (MODEL_SESSION, "sessions")
             if detail == "sessions"
@@ -527,13 +574,14 @@ class DatahubIncrementalRuntime:
         meta = self._analytical_meta(MODEL_META, scope, revision=page.revision)
         if meta is None:
             return None
-        return reconstruct_model_usage(
+        payload = reconstruct_model_usage(
             meta,
             detail=detail,
             rows=page.items,
             page=page,
             limit=limit,
         )
+        return _model_usage_contract(payload, revision=page.revision)
 
     def token_efficiency_project(
         self,
@@ -1481,5 +1529,27 @@ except ImportError:  # pragma: no cover - direct plugin-directory imports
         _session_inventory_payload,
         _token_project_entity_kinds,
     )
+
+
+def _model_usage_contract(payload: dict[str, Any], *, revision: int) -> dict[str, Any]:
+    summary = payload.get("summary") or {}
+    filters = payload.get("filters") or {}
+    payload.update(
+        {
+            "revision": revision,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "cohort": {
+                "since_days": int(filters.get("since_days") or 0),
+                "session_graph_count": int(summary.get("sessions") or 0),
+                "turn_count": int(summary.get("turns") or 0),
+            },
+            "coverage": {
+                "total_models": int(summary.get("models") or 0),
+                "missing_pricing": int(summary.get("missing_price_count") or 0),
+            },
+        }
+    )
+    return payload
+
 
 __all__ = ["DatahubIncrementalRuntime", "RuntimeSnapshot"]

@@ -11,16 +11,22 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
 from coding_trajectory import debug
-from coding_trajectory.discovery import DiscoveryResult, DiscoverySource, discover_store
-from coding_trajectory.ingestion.models import SessionGraph
-from coding_trajectory.query import DocumentError, DocumentStore
-from coding_trajectory.service import IndexCache, dispatch
+from coding_trajectory.datahub import (
+    DiscoveryResult,
+    DiscoverySource,
+    DocumentError,
+    DocumentStore,
+    IndexCache,
+    SessionGraph,
+    discover_store,
+    dispatch,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 DEFAULT_RECENT_HORIZON_DAYS = 7
@@ -593,6 +599,58 @@ def reconstruct_overview(
     }
 
 
+def reconstruct_recent_work(
+    session_rows: Iterable[Any],
+    *,
+    since_days: int = 1,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Build the compact recent-work projection from retained session rows."""
+
+    if since_days < 1:
+        raise ValueError("since_days must be a positive integer")
+    generated_at = (now or datetime.now(UTC)).astimezone(UTC)
+    cutoff = generated_at - timedelta(days=since_days)
+    items = []
+    for row in session_rows:
+        if _row_kind(row) != "session":
+            continue
+        item = _datahub_session_item(_row_payload(row))
+        started_at = _parse_utc_datetime((item.get("runtime") or {}).get("started_at"))
+        if started_at is not None and started_at >= cutoff:
+            items.append(item)
+    activity = _overview_activity(items)
+    vendors: dict[str, int] = {}
+    for item in items:
+        for vendor in item.get("vendors") or []:
+            key = str(vendor)
+            vendors[key] = vendors.get(key, 0) + 1
+    project_count = len({str(item.get("project") or "unknown") for item in items})
+    return {
+        "schema_version": 1,
+        "generated_at": generated_at.isoformat(),
+        "cohort": {
+            "since_days": since_days,
+            "session_graph_count": len(items),
+        },
+        "coverage": _overview_coverage(items),
+        "projects": {"count": project_count, "vendors": vendors},
+        "sessions": {
+            "count": len(items),
+            "window_days": since_days,
+            "runtime": activity["runtime"],
+            "usage": activity["usage"],
+            "top_projects": activity["top_projects"],
+            "top_sessions": activity["top_sessions"],
+            "warnings": activity["warnings"],
+            "errors": [],
+        },
+        "hourly": _activity_buckets(items, grain="hour"),
+        "daily": _activity_buckets(items, grain="day"),
+        "warnings": activity["warnings"],
+    }
+
+
 def aggregate_read_models(
     rows: Iterable[Any],
     *,
@@ -996,6 +1054,65 @@ def _overview_activity(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "top_sessions": top_sessions,
         "warnings": warnings,
     }
+
+
+def _overview_coverage(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    return {
+        "total": len(items),
+        "runtime": sum(
+            bool((item.get("runtime") or {}).get("started_at")) for item in items
+        ),
+        "usage": sum(
+            (item.get("usage") or {}).get("processed_tokens") is not None
+            for item in items
+        ),
+        "pricing": sum(item.get("cost_usd") is not None for item in items),
+    }
+
+
+def _activity_buckets(
+    items: Sequence[Mapping[str, Any]], *, grain: Literal["hour", "day"]
+) -> list[dict[str, Any]]:
+    buckets: dict[str, dict[str, Any]] = {}
+    for item in items:
+        runtime = item.get("runtime") or {}
+        started_at = _parse_utc_datetime(runtime.get("started_at"))
+        if started_at is None:
+            continue
+        key = (
+            started_at.strftime("%Y-%m-%dT%H:00:00Z")
+            if grain == "hour"
+            else started_at.date().isoformat()
+        )
+        bucket = buckets.setdefault(
+            key,
+            {
+                "bucket": key,
+                "sessions": 0,
+                "execution_seconds": 0,
+                "processed_tokens": 0,
+                "cost_usd": 0.0,
+            },
+        )
+        bucket["sessions"] += 1
+        bucket["execution_seconds"] += int(_number(runtime.get("execution_seconds")))
+        bucket["processed_tokens"] += int(
+            _number((item.get("usage") or {}).get("processed_tokens"))
+        )
+        bucket["cost_usd"] += float(_number(item.get("cost_usd")))
+    return [buckets[key] for key in sorted(buckets)]
+
+
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _overview_session(item: Mapping[str, Any]) -> dict[str, Any]:

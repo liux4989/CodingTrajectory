@@ -11,9 +11,7 @@ import "@/styles.css";
 
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
 const SessionsRoute = React.lazy(() => import("@/routes/sessions").then((mod) => ({ default: mod.SessionsRoute })));
-const ContextWindowRoute = React.lazy(() => import("@/routes/context-window").then((mod) => ({ default: mod.ContextWindowRoute })));
-const SessionGraphRoute = React.lazy(() => import("@/routes/session-graph").then((mod) => ({ default: mod.SessionGraphRoute })));
-const SessionTreeRoute = React.lazy(() => import("@/routes/session-tree").then((mod) => ({ default: mod.SessionTreeRoute })));
+const SessionWorkspaceRoute = React.lazy(() => import("@/routes/session-workspace").then((mod) => ({ default: mod.SessionWorkspaceRoute })));
 const ModelUsageRoute = React.lazy(() => import("@/routes/model-usage").then((mod) => ({ default: mod.ModelUsageRoute })));
 
 function RouteBoundary({ children }: { children: React.ReactNode }) {
@@ -89,19 +87,36 @@ const todayRoute = createRoute({
 const contextWindowRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId",
-  component: () => <RouteBoundary><ContextWindowRoute /></RouteBoundary>,
+  validateSearch: (search: Record<string, unknown>): { view: "context" | "tree" | "graph" } => ({
+    view: search.view === "tree" || search.view === "graph" ? search.view : "context",
+  }),
+  component: () => <RouteBoundary><SessionWorkspaceRoute /></RouteBoundary>,
 });
 
 const sessionGraphRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId/graph",
-  component: () => <RouteBoundary><SessionGraphRoute /></RouteBoundary>,
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: "/sessions/$sessionId",
+      params: { sessionId: params.sessionId },
+      search: { view: "graph" },
+      replace: true,
+    });
+  },
 });
 
 const sessionTreeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId/tree",
-  component: () => <RouteBoundary><SessionTreeRoute /></RouteBoundary>,
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: "/sessions/$sessionId",
+      params: { sessionId: params.sessionId },
+      search: { view: "tree" },
+      replace: true,
+    });
+  },
 });
 
 const legacyContextWindowRoute = createRoute({
@@ -111,6 +126,7 @@ const legacyContextWindowRoute = createRoute({
     throw redirect({
       to: "/sessions/$sessionId",
       params: { sessionId: params.sessionId },
+      search: { view: "context" },
       replace: true,
     });
   },

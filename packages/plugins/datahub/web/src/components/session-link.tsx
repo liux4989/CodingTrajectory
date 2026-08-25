@@ -21,6 +21,7 @@ export function SessionLink({ sessionId, className, children }: SessionLinkProps
     <Link
       to="/sessions/$sessionId"
       params={{ sessionId }}
+      search={{ view: "context" }}
       className={cn("link font-display font-extrabold", className)}
     >
       {children ?? shortSessionId(sessionId)}
