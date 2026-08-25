@@ -32,3 +32,6 @@ bun.lock
 
 # Claude Code
 .claude/
+
+# Amp orb portals
+.amp/portals/*

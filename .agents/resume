@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# .agents/resume — fast, idempotent checks run on every orb wake.
+# Target: under 10 seconds. No installs here.
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+# Ensure uv is on PATH.
+export PATH="$HOME/.local/bin:$PATH"
+
+# Verify uv and the virtualenv exist; re-sync only if the venv is missing.
+if ! command -v uv >/dev/null 2>&1; then
+  echo "resume: uv not found — setup may have failed or was skipped" >&2
+  exit 1
+fi
+
+if [[ ! -d .venv ]]; then
+  echo "resume: .venv missing — running uv sync"
+  uv sync
+else
+  echo "resume: uv and .venv present — ready"
+fi

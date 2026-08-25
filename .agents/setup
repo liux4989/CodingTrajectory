@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# .agents/setup — one-time provisioning for a fresh CodingTrajectory orb.
+# Idempotent: safe to re-run on a warm snapshot.
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+step() { printf '\n\033[1m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
+
+# ---------------------------------------------------------------------------
+# 1. Install uv (standalone installer, idempotent)
+# ---------------------------------------------------------------------------
+step "Install uv"
+uv_bin="$HOME/.local/bin/uv"
+if [[ -x "$uv_bin" ]] && "$uv_bin" --version >/dev/null 2>&1; then
+  echo "uv already installed: $("$uv_bin" --version)"
+else
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+# Ensure uv is on PATH for the rest of this script and future shells.
+export PATH="$HOME/.local/bin:$PATH"
+
+# ---------------------------------------------------------------------------
+# 2. Sync the workspace — uv auto-installs Python 3.12 from .python-version
+# ---------------------------------------------------------------------------
+step "uv sync (installs Python 3.12 + all workspace dependencies)"
+uv sync
+
+# ---------------------------------------------------------------------------
+# 3. Verify the toolchain
+# ---------------------------------------------------------------------------
+step "Verify"
+echo "uv:     $(uv --version)"
+echo "python: $(uv run python --version)"
+echo "ruff:   $(uv run ruff --version)"
+
+step "Setup complete"
