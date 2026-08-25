@@ -119,6 +119,10 @@ def _handler_for(static_dir: Path) -> type[BaseHTTPRequestHandler]:
                     payload = _code_time_payload(query)
                 elif path == "/api/summary":
                     payload = _code_time_payload(query)
+                elif path == "/api/forecasts":
+                    payload = _forecast_list_payload(query)
+                elif path == "/api/calibration":
+                    payload = _calibration_payload(query)
                 else:
                     self._json_error(HTTPStatus.NOT_FOUND, "not found")
                     return
@@ -144,7 +148,9 @@ def _handler_for(static_dir: Path) -> type[BaseHTTPRequestHandler]:
             if not resolved.is_file():
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
-            content_type = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
+            content_type = (
+                mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
+            )
             data = resolved.read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
@@ -184,6 +190,58 @@ def _code_time_payload(query: dict[str, list[str]]) -> dict[str, Any]:
         project_filter=project,
         agent_vendor=agent_vendor,
     )
+
+
+def _first(query: dict[str, list[str]], key: str) -> str | None:
+    values = query.get(key)
+    return values[0] if values and values[0] else None
+
+
+def _forecast_list_payload(query: dict[str, list[str]]) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    for query_key, param_key in (
+        ("kind", "forecast_kind"),
+        ("project", "project_name"),
+        ("target_harness_name", "target_harness_name"),
+        ("status", "status"),
+    ):
+        value = _first(query, query_key)
+        if value:
+            params[param_key] = value
+    limit = _first(query, "limit")
+    if limit:
+        try:
+            params["limit"] = int(limit)
+        except ValueError as exc:
+            raise ValueError("limit must be an integer") from exc
+    return _estimate_call("estimate.list", params)
+
+
+def _calibration_payload(query: dict[str, list[str]]) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    for query_key, param_key in (
+        ("kind", "forecast_kind"),
+        ("project", "project_name"),
+        ("target_harness_name", "target_harness_name"),
+        ("target_model", "target_model"),
+        ("estimator_model", "estimator_model"),
+    ):
+        value = _first(query, query_key)
+        if value:
+            params[param_key] = value
+    return _estimate_call("estimate.calibration", params)
+
+
+def _estimate_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    from coding_trajectory.runtime import PluginApiError, default_plugin_client
+
+    try:
+        result = default_plugin_client().call(method, params)
+    except PluginApiError as exc:
+        raise ValueError(str(exc)) from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(f"ct api call {method} returned a non-object result")
+    return result
 
 
 if __name__ == "__main__":
