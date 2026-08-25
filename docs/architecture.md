@@ -144,13 +144,11 @@ coding-trajectory/
 │   │           ├── graph.py                # `ct session graph ...` orchestration-run views
 │   │           └── plugin.py               # `ct plugin list|<name>` (dispatch + index)
 │   └── plugins/                            # Built-in executable plugins
-│       ├── code_time/                      # `code-time` plugin
-│       │   ├── pyproject.toml
-│       │   ├── code_time.py
 │       ├── datahub/                        # `datahub` plugin
 │       │   ├── pyproject.toml
 │       │   ├── datahub.py                # Datahub CLI entry point
 │       │   ├── datahub_web.py            # Python HTTP server for web datahub
+│       │   ├── code_time.py              # `code-time` report and forecast surfaces
 │       │   ├── context_window.py           # Context composition projection
 │       │   ├── token_pricing.py             # models.dev pricing and model metadata
 │       │   ├── cleanup.py                  # Project/session cleanup logic
@@ -320,7 +318,7 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct session events SESSION_ID --type TYPE` | Filtered event search |
 | `uv run ct plugin list` | List available plugins |
 | `uv run ct plugin datahub web` | Start web datahub |
-| `uv run ct plugin code-time` | Today's coding time summary |
+| `uv run ct plugin datahub code-time` | Today's coding time summary |
 
 ### Testing
 

@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_project_command(rest)
     if action == "session":
         return _handle_session_command(rest)
+    if action == "code-time":
+        return _handle_code_time_command(rest)
     parser.parse_args(raw_args)
     return 2
 
@@ -41,6 +43,7 @@ def _build_root_parser() -> argparse.ArgumentParser:
     sub.add_parser("web", help="Rich datahub with analytics (browser).")
     sub.add_parser("project", help="Project cleanup actions.")
     sub.add_parser("session", help="Session analysis and cleanup actions.")
+    sub.add_parser("code-time", help="Coding time and agent temporality forecasts.")
     return parser
 
 
@@ -128,6 +131,14 @@ def _handle_session_command(args: list[str]) -> int:
     return 2
 
 
+def _handle_code_time_command(args: list[str]) -> int:
+    try:
+        from . import code_time as code_time_mod
+    except ImportError:
+        import code_time as code_time_mod
+    return code_time_mod.main(args)
+
+
 def _root_entry_text() -> str:
     return """Datahub executable plugin
 
@@ -136,8 +147,10 @@ Commands:
   ct plugin datahub project cleanup [--dry-run] [flags]
   ct plugin datahub session cleanup [flags]
   ct plugin datahub session context-window SESSION_ID [flags]
+  ct plugin datahub code-time [--window today|72h|7d|30d] [flags]
+  ct plugin datahub code-time forecast <predict|bind|get|list|calibration|backfill|job>
 
-Web:  Sessions-first UI with Today and Compare views."""
+Web:  Sessions-first UI with Today, Compare, and Code Time views."""
 
 
 def _project_cleanup(args: argparse.Namespace) -> int:

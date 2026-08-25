@@ -4,6 +4,7 @@ import {
   CalendarDays,
   GitCompareArrows,
   MessageSquare,
+  Timer,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -54,6 +55,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           url: "/compare",
           icon: GitCompareArrows,
           match: () => Boolean(matchRoute({ to: "/compare" })),
+        },
+        {
+          title: "Code Time",
+          url: "/code-time",
+          icon: Timer,
+          match: () => Boolean(matchRoute({ to: "/code-time" })),
         },
       ],
     },

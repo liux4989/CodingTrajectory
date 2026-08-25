@@ -16,6 +16,13 @@ entry = "datahub.py"
 "graph.overview" = 2
 "graph.stats" = 2
 "graph.usage" = 2
+"estimate.predict" = 1
+"estimate.bind" = 1
+"estimate.get" = 1
+"estimate.list" = 1
+"estimate.calibration" = 1
+"estimate.backfill.start" = 1
+"estimate.backfill.status" = 1
 
 [[tools]]
 name = "."
@@ -36,3 +43,11 @@ summary = "Clean orphaned or low-value session logs."
 [[tools]]
 name = "session/context-window"
 summary = "Inspect session context composition and trajectory events."
+
+[[tools]]
+name = "code-time"
+summary = "Show coding time summary."
+
+[[tools]]
+name = "code-time/forecast"
+summary = "Agent temporality: duration forecasts versus measured actuals."

@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_forecast(raw_args[1:])
 
     parser = argparse.ArgumentParser(
-        prog="ct plugin code-time",
+        prog="ct plugin datahub code-time",
         description="Today's coding work overview: time, sessions, and cost.",
     )
     parser.add_argument(
@@ -463,7 +463,7 @@ _KIND_LABELS = {
 
 def _run_forecast(args: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        prog="ct plugin code-time forecast",
+        prog="ct plugin datahub code-time forecast",
         description=(
             "Agent temporality: duration forecasts versus measured actuals. "
             "Evidence is always labeled by forecast kind; historical backcasts "

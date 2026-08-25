@@ -13,6 +13,7 @@ const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) =>
 const SessionsRoute = React.lazy(() => import("@/routes/sessions").then((mod) => ({ default: mod.SessionsRoute })));
 const SessionWorkspaceRoute = React.lazy(() => import("@/routes/session-workspace").then((mod) => ({ default: mod.SessionWorkspaceRoute })));
 const ModelUsageRoute = React.lazy(() => import("@/routes/model-usage").then((mod) => ({ default: mod.ModelUsageRoute })));
+const CodeTimeRoute = React.lazy(() => import("@/routes/code-time").then((mod) => ({ default: mod.CodeTimeRoute })));
 
 function RouteBoundary({ children }: { children: React.ReactNode }) {
   return (
@@ -201,6 +202,12 @@ function validateCompareSearch(search: Record<string, unknown>): CompareSearch {
   };
 }
 
+const codeTimeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/code-time",
+  component: () => <RouteBoundary><CodeTimeRoute /></RouteBoundary>,
+});
+
 const compareRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/compare",
@@ -233,6 +240,7 @@ const router = createRouter({
     legacyContextWindowRoute,
     compareRoute,
     legacyModelUsageRoute,
+    codeTimeRoute,
   ]),
 });
 

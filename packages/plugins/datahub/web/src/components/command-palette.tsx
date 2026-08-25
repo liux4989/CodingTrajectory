@@ -43,6 +43,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       { id: "nav-sessions", label: "Sessions", group: "Navigate", onSelect: () => navigate({ to: "/sessions", search: { projectName: undefined } }) },
       { id: "nav-today", label: "Today", group: "Navigate", onSelect: () => navigate({ to: "/today" }) },
       { id: "nav-compare", label: "Compare", group: "Navigate", onSelect: () => navigate({ to: "/compare", search: { projectName: undefined, modelKey: undefined, view: undefined, grain: undefined, unit: undefined } }) },
+      { id: "nav-code-time", label: "Code Time", group: "Navigate", onSelect: () => navigate({ to: "/code-time" }) },
     ];
 
     const sessionItems: CommandItem[] = (sessions.data?.items ?? [])

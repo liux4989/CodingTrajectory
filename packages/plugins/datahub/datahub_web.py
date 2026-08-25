@@ -32,6 +32,11 @@ try:
 except ImportError:
     from incremental_runtime import DatahubIncrementalRuntime
 
+try:
+    from . import code_time as code_time_mod
+except ImportError:
+    import code_time as code_time_mod
+
 
 _DEFAULT_PAGE_SIZE = 50
 _MAX_PAGE_SIZE = 200
@@ -285,6 +290,12 @@ def _handler_for(
                             grain=_first(query, "grain"),
                         )
                     )
+                elif path == "/api/code-time/report":
+                    payload = _code_time_report_payload(query)
+                elif path == "/api/code-time/forecasts":
+                    payload = _code_time_forecasts_payload(query)
+                elif path == "/api/code-time/calibration":
+                    payload = _code_time_calibration_payload(query)
                 else:
                     self._json_error(HTTPStatus.NOT_FOUND, "not found")
                     return
@@ -485,6 +496,65 @@ def _optional_revision(query: dict[str, list[str]]) -> int | None:
     if _first(query, "revision") is None:
         return None
     return _bounded_nonnegative_int(query, "revision", 0)
+
+
+# ---------------------------------------------------------------------------
+# code-time — computed on demand from the service API, not the revisioned store
+# ---------------------------------------------------------------------------
+
+
+def _code_time_report_payload(query: dict[str, list[str]]) -> dict[str, Any]:
+    window = _first(query, "window") or "today"
+    if window not in code_time_mod.WINDOW_SINCE_DAYS:
+        choices = ", ".join(sorted(code_time_mod.WINDOW_SINCE_DAYS))
+        raise ValueError(f"window must be one of: {choices}")
+    return code_time_mod.build_report(
+        window=window,
+        project_filter=_first(query, "project"),
+        agent_vendor=_first(query, "agent_vendor"),
+    )
+
+
+def _code_time_forecasts_payload(query: dict[str, list[str]]) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    for query_key, param_key in (
+        ("kind", "forecast_kind"),
+        ("project", "project_name"),
+        ("target_harness_name", "target_harness_name"),
+        ("status", "status"),
+    ):
+        value = _first(query, query_key)
+        if value:
+            params[param_key] = value
+    params["limit"] = _bounded_positive_int(query, "limit", 50, maximum=500)
+    return _estimate_call("estimate.list", params)
+
+
+def _code_time_calibration_payload(query: dict[str, list[str]]) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    for query_key, param_key in (
+        ("kind", "forecast_kind"),
+        ("project", "project_name"),
+        ("target_harness_name", "target_harness_name"),
+        ("target_model", "target_model"),
+        ("estimator_model", "estimator_model"),
+    ):
+        value = _first(query, query_key)
+        if value:
+            params[param_key] = value
+    return _estimate_call("estimate.calibration", params)
+
+
+def _estimate_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    from coding_trajectory.runtime import PluginApiError, default_plugin_client
+
+    try:
+        result = default_plugin_client().call(method, params)
+    except PluginApiError as exc:
+        raise ValueError(str(exc)) from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(f"ct api call {method} returned a non-object result")
+    return result
 
 
 def _unavailable_snapshot() -> dict[str, Any]:

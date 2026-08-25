@@ -5,9 +5,9 @@
 Proposed design, revision 2. No implementation exists yet.
 
 The mechanism extends the Pydantic service contracts in
-`packages/core/src/coding_trajectory/contracts.py` and the existing `code_time`
-surfaces. It does not introduce a new plugin and does not make model output
-canonical CT data.
+`packages/core/src/coding_trajectory/contracts.py` and the `code-time`
+surfaces of the `datahub` plugin. It does not introduce a new plugin and does
+not make model output canonical CT data.
 
 Phase 1 produces explicitly labeled historical backcasts. Genuine prospective
 forecasts require task-intake instrumentation and are introduced in phase 2.
@@ -159,14 +159,14 @@ packages/core/src/coding_trajectory/estimation/
   calibration.py  — deterministic cohort statistics
   jobs.py         — resumable backfill scheduling and budgets
 
-packages/plugins/code_time/
+packages/plugins/datahub/code_time.py
   — renders service results; it does not invoke the estimator directly
 ```
 
-The existing app-server transport currently lives in the dashboard plugin. The
+The existing app-server transport currently lives in the datahub plugin. The
 shared transport required here must move to an application-owned module before
 the estimator is implemented. Core service methods must not import another
-plugin, and `code_time` must not depend on dashboard internals.
+plugin, and the code-time surface must not depend on web dashboard internals.
 
 Boundary rules:
 
@@ -385,9 +385,9 @@ calibration policy.
 
 - `ct api call estimate.predict ...` supports a single backcast or intake
   forecast according to temporal eligibility.
-- `code_time` CLI can render forecast-versus-actual for eligible records while
-  visibly labeling backcast versus prospective evidence.
-- `code_time` web initially exposes aggregate calibration cohorts, sample sizes,
+- `ct plugin datahub code-time forecast` renders forecast-versus-actual for
+  eligible records while visibly labeling backcast versus prospective evidence.
+- The datahub Code Time tab exposes aggregate calibration cohorts, sample sizes,
   exclusions, and version filters. It does not elevate one noisy prediction into
   a performance conclusion.
 - Future harness integration may request and bind a forecast before starting the
@@ -416,7 +416,7 @@ calibration policy.
    prospective calibration. Do not claim improvement until this population has
    sufficient samples.
 3. **Operational integration:** durable service ownership, harness-side intake,
-   aggregate `code_time` dashboards, and bounded estimator-provider scaling.
+   aggregate code-time dashboards, and bounded estimator-provider scaling.
 4. **Advisory and control research:** MCP runtime advisories, elapsed/budget facts,
    and duration-control experiments. Keep these populations separate from
    prospective forecast calibration.
@@ -434,5 +434,5 @@ Before implementation is called complete:
   are explicitly undefined.
 - Deleting a disposable calibration projection does not delete the durable
   forecast artifacts needed to reconstruct it.
-- `code_time` consumes only versioned service results and has no dependency on
-  dashboard plugin internals.
+- The code-time surface consumes only versioned service results and has no
+  dependency on web dashboard internals.

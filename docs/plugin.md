@@ -21,7 +21,7 @@ application and imports the narrow `coding_trajectory.datahub` projection
 facade for incremental source planning, canonical materialization, project
 catalogs, provenance, and lazy retained detail. That module is not a general
 third-party plugin SDK. Transport clients remain the boundary for other
-plugins, including code-time.
+plugins.
 
 This keeps the core query surface stable while allowing package-specific command
 packs to ship independently.

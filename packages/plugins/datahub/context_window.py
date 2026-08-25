@@ -463,7 +463,7 @@ def _project_cache_breaks(
             "missing). Reinstall ct editable and retry:\n"
             "  uv tool install --force --editable packages/cli "
             "--with-editable packages/core --with-editable "
-            "packages/plugins/code_time --with-editable packages/plugins/datahub"
+            "packages/plugins/datahub"
         )
     turns = [t for t in (usage.get("turns") or []) if isinstance(t, dict)]
     if not turns:

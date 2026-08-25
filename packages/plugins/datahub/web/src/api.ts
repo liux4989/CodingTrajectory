@@ -76,6 +76,7 @@ export type SessionItem = {
   vendors: string[];
   session_ids: string[];
   title?: string | null;
+  preview?: string | null;
   project?: string | null;
 };
 
@@ -926,6 +927,190 @@ export async function fetchTokenEfficiencyProject(params: {
 
 export async function refreshDatahubData() {
   return fetchJson<{ status: "refreshed" }>("/api/refresh", { method: "POST" });
+}
+
+// ---------------------------------------------------------------------------
+// Code Time — coding-time report and agent temporality forecasts
+// ---------------------------------------------------------------------------
+
+export type CodeTimeWindow = "today" | "72h" | "7d" | "30d";
+
+export type CodeTimeTokens = {
+  prompt_tokens: number;
+  cached_prompt_tokens: number;
+  cache_write_tokens: number;
+  completion_tokens: number;
+  reasoning_tokens: number;
+  processed_tokens: number;
+};
+
+export type CodeTimeSession = {
+  root_session_id: string;
+  title: string | null;
+  vendor: string;
+  execution_seconds: number;
+  wait_seconds: number;
+  turns: number;
+  tool_calls: number;
+  tokens: CodeTimeTokens;
+  cost_usd: number | null;
+};
+
+export type CodeTimeProject = {
+  project_name: string;
+  session_count: number;
+  execution_seconds: number;
+  wait_seconds: number;
+  turns: number;
+  tool_calls: number;
+  tokens: CodeTimeTokens;
+  cost_usd: number | null;
+  sessions: CodeTimeSession[];
+};
+
+export type CodeTimeReport = {
+  window: CodeTimeWindow;
+  generated_at: string;
+  totals: {
+    session_count: number;
+    project_count: number;
+    execution_seconds: number;
+    wait_seconds: number;
+    turns: number;
+    tool_calls: number;
+    tokens: CodeTimeTokens;
+    cost_usd: number | null;
+  };
+  projects: CodeTimeProject[];
+};
+
+export type ForecastKind =
+  | "prospective"
+  | "prospective_unbound"
+  | "historical_backcast"
+  | "runtime_advisory";
+
+export type ForecastRecord = {
+  prediction_id: string;
+  forecast_kind: ForecastKind;
+  role: "primary" | "diagnostic";
+  status: "unbound" | "uncompared" | "compared";
+  turn_id?: string;
+  task_fingerprint: string;
+  issued_at: string;
+  bound_at?: string;
+  project_name?: string;
+  session_title?: string;
+  target: {
+    agent_vendor?: string;
+    harness_name?: string;
+    harness_version?: string;
+    model?: string;
+    effort?: string;
+    execution_policy_fingerprint?: string;
+  };
+  estimator: {
+    provider: string;
+    model?: string;
+    effort?: string;
+    prompt_version: string;
+    schema_version: string;
+  };
+  p50_minutes?: number;
+  p80_minutes?: number;
+  comparison?: {
+    compared_at: string;
+    actual_execution_seconds?: number;
+    duration_bucket?: string;
+    outcome: string;
+    exclusion?: string;
+  };
+};
+
+export type CalibrationCohort = {
+  cohort: {
+    forecast_kind: ForecastKind;
+    estimator_provider?: string;
+    estimator_model?: string;
+    estimator_effort?: string;
+    prompt_version?: string;
+    schema_version?: string;
+    retrieval_policy_version?: string;
+  };
+  eligible_count: number;
+  primary_count: number;
+  exclusions: Record<string, number>;
+  statistics: {
+    sample_count: number;
+    calibration_ratio?: { value: number | "undefined"; interval_95?: [number, number]; reason?: string };
+    median_absolute_log_error?: number | "undefined";
+    within_1_5x_share?: number | "undefined";
+    p80_coverage?: number | "undefined";
+    compression_exponent?: { value: number | "undefined"; reason?: string };
+  };
+  buckets: Array<{
+    bucket: string;
+    sample_count: number;
+    calibration_ratio?: number;
+    within_1_5x_share?: number;
+    outcome?: string;
+  }>;
+};
+
+export async function fetchCodeTimeReport(params?: {
+  window?: CodeTimeWindow;
+  project?: string;
+  signal?: AbortSignal;
+}) {
+  const search = new URLSearchParams();
+  if (params?.window) search.set("window", params.window);
+  if (params?.project) search.set("project", params.project);
+  const query = search.toString();
+  return fetchJson<CodeTimeReport>(`/api/code-time/report${query ? `?${query}` : ""}`, {
+    signal: params?.signal,
+  });
+}
+
+export async function fetchCodeTimeForecasts(params?: {
+  kind?: ForecastKind;
+  project?: string;
+  targetHarnessName?: string;
+  status?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}) {
+  const search = new URLSearchParams();
+  if (params?.kind) search.set("kind", params.kind);
+  if (params?.project) search.set("project", params.project);
+  if (params?.targetHarnessName) search.set("target_harness_name", params.targetHarnessName);
+  if (params?.status) search.set("status", params.status);
+  if (params?.limit != null) search.set("limit", String(params.limit));
+  const query = search.toString();
+  return fetchJson<{ items: ForecastRecord[] }>(
+    `/api/code-time/forecasts${query ? `?${query}` : ""}`,
+    { signal: params?.signal },
+  );
+}
+
+export async function fetchCodeTimeCalibration(params?: {
+  kind?: ForecastKind;
+  project?: string;
+  targetHarnessName?: string;
+  targetModel?: string;
+  estimatorModel?: string;
+  signal?: AbortSignal;
+}) {
+  const search = new URLSearchParams();
+  if (params?.kind) search.set("kind", params.kind);
+  if (params?.project) search.set("project", params.project);
+  if (params?.targetHarnessName) search.set("target_harness_name", params.targetHarnessName);
+  if (params?.targetModel) search.set("target_model", params.targetModel);
+  if (params?.estimatorModel) search.set("estimator_model", params.estimatorModel);
+  const query = search.toString();
+  return fetchJson<{
+    policy: { version?: string; min_samples?: number; within_factor?: number };
+    cohorts: CalibrationCohort[];
+  }>(`/api/code-time/calibration${query ? `?${query}` : ""}`, { signal: params?.signal });
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
