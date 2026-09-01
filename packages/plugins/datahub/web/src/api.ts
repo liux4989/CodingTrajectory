@@ -1,95 +1,14 @@
-export type OverviewPayload = {
-  schema_version: 1;
-  revision: number;
-  generated_at: string;
-  cohort: { since_days: number; session_graph_count: number };
-  coverage: Record<string, number>;
-  projects: { count: number; vendors: Record<string, number> };
-  sessions: {
-    count: number;
-    window_days: number;
-    runtime: {
-      execution_seconds: number;
-      wait_seconds: number;
-      turns: number;
-      tool_calls: number;
-      failed_tool_calls: number;
-    };
-    usage: {
-      processed_tokens: number;
-      cost_usd: number;
-      known_cost_count: number;
-      missing_cost_count: number;
-    };
-    top_projects: Array<{
-      project: string;
-      count: number;
-      vendors: Record<string, number>;
-      execution_seconds: number;
-      processed_tokens: number;
-      cost_usd: number;
-      known_cost_count: number;
-    }>;
-    top_sessions: Array<{
-      id?: string | null;
-      title?: string | null;
-      project?: string | null;
-      vendor: string;
-      vendors: string[];
-      started_at?: string | null;
-      execution_seconds: number;
-      wait_seconds: number;
-      turns: number;
-      tool_calls: number;
-      failed_tool_calls: number;
-      processed_tokens: number;
-    }>;
-    warnings: Array<{ session_id?: string | null; project: string; message: string }>;
-    errors: unknown[];
-  };
-};
+import type {
+  CostEvidence,
+  CursorPageMetadata,
+  OverviewPayload,
+  ProjectItem,
+  ProjectsPayload,
+  SessionPage,
+  TodayPayload,
+} from "./api/generated/datahub-api";
 
-export type ActivityBucket = {
-  bucket: string;
-  sessions: number;
-  execution_seconds: number;
-  processed_tokens: number;
-  cost_usd: number;
-};
-
-export type TodayPayload = OverviewPayload & {
-  hourly: ActivityBucket[];
-  daily: ActivityBucket[];
-  warnings: OverviewPayload["sessions"]["warnings"];
-};
-
-export type ProjectItem = {
-  name: string;
-  path: string | null;
-  vendors: string[];
-};
-
-export type SessionItem = {
-  root_session_id: string;
-  lineage_root_session_id?: string | null;
-  graph_id?: string | null;
-  vendors: string[];
-  session_ids: string[];
-  title?: string | null;
-  preview?: string | null;
-  project?: string | null;
-};
-
-export type CursorPageMetadata = {
-  revision: number;
-  next_cursor: string | null;
-  has_more: boolean;
-};
-
-export type SessionPage = {
-  items: SessionItem[];
-  page?: CursorPageMetadata;
-};
+export type * from "./api/generated/datahub-api";
 
 export type CursorRequest = {
   cursor?: string;
@@ -101,13 +20,6 @@ export type TokenEvidence = {
   value: number;
   confidence: "exact_usage" | "exact_text" | "estimated_tokens" | "structural" | "unknown";
   source: string;
-};
-
-export type CostEvidence = {
-  value_usd: number;
-  confidence: "reported" | "estimated";
-  source: string;
-  effective_date: string | null;
 };
 
 export type ContextCategory = {
@@ -135,9 +47,6 @@ export type ContextEvent = {
 
 export type CompactionEventRecord = {
   timestamp: string;
-  // Provider-native mechanism: "eviction_boundary" (Claude Code) carries
-  // pre/post/dropped/trigger; "context_compacted" (Codex) does not, so its
-  // delta fields stay null and render without those columns.
   mechanism: string;
   trigger: string | null;
   pre_tokens: number | null;
@@ -151,12 +60,6 @@ export type CompactionSummary = {
   events: CompactionEventRecord[];
 };
 
-// A measured reduction in cache-hit tokens across a turn boundary, classified
-// only when a supported cause is observed.
-// - ttl_confirmed: idle gap >= vendor TTL max (OpenAI >=600s, Anthropic >=300s)
-// - ttl_likely: idle in the ambiguous OpenAI 300-600s band
-// - effort_switch: an observed reasoning-effort change aligns with the loss.
-// - unattributed: loss measured but no supported cause observed.
 export type CacheBreakRecord = {
   turn_id: string;
   type: "ttl_confirmed" | "ttl_likely" | "effort_switch" | "unattributed";
@@ -164,8 +67,6 @@ export type CacheBreakRecord = {
   re_read_tokens: number;
   cached_after_tokens: number | null;
   est_cost_usd: number | null;
-  // Resolved effort levels for a confirmed effort_switch. effort_from is null
-  // on Claude Code's first /effort switch (baseline unknown).
   effort_from: string | null;
   effort_to: string | null;
 };
@@ -560,7 +461,7 @@ export async function fetchToday() {
 }
 
 export async function fetchProjects() {
-  return fetchJson<{ items: ProjectItem[] }>("/api/projects");
+  return fetchJson<ProjectsPayload>("/api/projects");
 }
 
 export async function fetchSessions(
