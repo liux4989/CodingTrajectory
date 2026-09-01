@@ -103,6 +103,7 @@ class OverviewPayload(StrictResponse):
     coverage: dict[str, int]
     projects: ProjectsOverview
     sessions: SessionOverview
+    warnings: list[WarningSummary]
 
 
 class ActivityBucket(StrictResponse):
@@ -127,6 +128,7 @@ class ProjectItem(StrictResponse):
 
 class ProjectsPayload(StrictResponse):
     items: list[ProjectItem]
+    page: CursorPageMetadata
 
 
 class SessionItem(StrictResponse):
@@ -148,7 +150,7 @@ class CursorPageMetadata(StrictResponse):
 
 class SessionPage(StrictResponse):
     items: list[SessionItem]
-    page: CursorPageMetadata | None = None
+    page: CursorPageMetadata
 
 
 class DatahubFreshness(StrictResponse):
@@ -169,6 +171,7 @@ class BootstrapStatus(StrictResponse):
     scan_finished_at: str | None
     error: str | None
     last_result: dict[str, Any] | None = None
+    coverage: dict[str, Any] | None = None
 
 
 class DatahubSnapshot(StrictResponse):
@@ -229,3 +232,23 @@ API_RESPONSE_MODELS = (
     DatahubSnapshot,
     DatahubChanges,
 )
+
+API_RESPONSE_BY_HANDLER: dict[str, type[BaseModel]] = {
+    "overview": OverviewPayload,
+    "today": TodayPayload,
+    "projects": ProjectsPayload,
+    "sessions": SessionPage,
+    "context_window": ContextWindowPayload,
+    "session_evidence_timeline": SessionEvidenceTimelinePayload,
+    "token_efficiency_project": TokenEfficiencyProjectPayload,
+    "snapshot": DatahubSnapshot,
+    "changes": DatahubChanges,
+}
+
+
+def validate_api_response(handler: str, payload: Any) -> None:
+    """Check generated route contracts without rewriting the wire payload."""
+
+    model = API_RESPONSE_BY_HANDLER.get(handler)
+    if model is not None:
+        model.model_validate(payload)

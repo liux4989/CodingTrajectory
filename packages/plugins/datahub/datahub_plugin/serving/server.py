@@ -33,6 +33,7 @@ _GZIP_CONTENT_TYPES = (
 )
 
 import datahub_plugin.cli.code_time as code_time_mod
+from datahub_plugin.api_models import validate_api_response
 from datahub_plugin.runtime.runtime import DatahubIncrementalRuntime
 
 _DEFAULT_PAGE_SIZE = 50
@@ -286,6 +287,7 @@ def _handler_for(
                 payload = endpoint(query)
                 if route.streaming:
                     return
+                validate_api_response(route.handler, payload)
                 self._json_response(payload)
             except DatahubBootstrapPending as exc:
                 self._json_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))

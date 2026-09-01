@@ -89,6 +89,9 @@ export type EntityId1 = string;
 export type EntityType1 = string;
 export type Revision1 = number;
 export type Upserts = DatahubUpsert[];
+export type Coverage = {
+  [k: string]: unknown;
+} | null;
 export type Error = string | null;
 export type LastResult = {
   [k: string]: unknown;
@@ -140,10 +143,14 @@ export type Project2 = string;
 export type SessionId2 = string | null;
 export type Warnings1 = WarningSummary[];
 export type WindowDays = number;
+export type Warnings2 = WarningSummary[];
 export type Name = string;
 export type Path = string | null;
 export type Vendors3 = string[];
 export type Items = ProjectItem[];
+export type HasMore = boolean;
+export type NextCursor = string | null;
+export type Revision4 = number;
 export type AgentName = string | null;
 export type ArtifactKind = ("file" | "command" | "check" | "commit" | "link") | null;
 export type EndedAt = string | null;
@@ -172,10 +179,10 @@ export type TurnSequence = number;
 export type Vendor2 = string | null;
 export type Entries = TimelineEntry[];
 export type EntrypointSessionId = string;
-export type Revision4 = number;
+export type Revision5 = number;
 export type RootSessionId = string;
 export type SchemaVersion2 = 1;
-export type Warnings2 = string[];
+export type Warnings3 = string[];
 export type GraphId = string | null;
 export type LineageRootSessionId = string | null;
 export type Preview = string | null;
@@ -185,9 +192,6 @@ export type SessionIds = string[];
 export type Title1 = string | null;
 export type Vendors4 = string[];
 export type Items1 = SessionItem[];
-export type HasMore = boolean;
-export type NextCursor = string | null;
-export type Revision5 = number;
 export type Bucket = string;
 export type CostUsd3 = number;
 export type ExecutionSeconds4 = number;
@@ -198,7 +202,7 @@ export type GeneratedAt2 = string;
 export type Hourly = ActivityBucket[];
 export type Revision6 = number;
 export type SchemaVersion3 = 1;
-export type Warnings3 = WarningSummary[];
+export type Warnings4 = WarningSummary[];
 export type Bucket1 = string;
 export type EndedAt1 = string;
 export type IsComplete = boolean;
@@ -280,7 +284,7 @@ export type Key1 = string;
 export type Kind1 = "exclusive" | "indicator";
 export type Label6 = string;
 export type SchemaVersion4 = 1;
-export type Warnings4 = string[];
+export type Warnings5 = string[];
 
 export interface DatahubApiContracts {
   ContextWindowPayload?: ContextWindowPayload;
@@ -527,6 +531,7 @@ export interface DatahubSnapshot {
  * via the `definition` "BootstrapStatus".
  */
 export interface BootstrapStatus {
+  coverage?: Coverage;
   error: Error;
   last_result?: LastResult;
   ready: Ready1;
@@ -539,17 +544,18 @@ export interface BootstrapStatus {
  */
 export interface OverviewPayload {
   cohort: Cohort;
-  coverage: Coverage;
+  coverage: Coverage1;
   generated_at: GeneratedAt1;
   projects: ProjectsOverview;
   revision: Revision3;
   schema_version: SchemaVersion1;
   sessions: SessionOverview;
+  warnings: Warnings2;
 }
 export interface Cohort {
   [k: string]: number;
 }
-export interface Coverage {
+export interface Coverage1 {
   [k: string]: number;
 }
 /**
@@ -647,6 +653,7 @@ export interface WarningSummary {
  */
 export interface ProjectsPayload {
   items: Items;
+  page: CursorPageMetadata;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -659,15 +666,24 @@ export interface ProjectItem {
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
+ * via the `definition` "CursorPageMetadata".
+ */
+export interface CursorPageMetadata {
+  has_more: HasMore;
+  next_cursor: NextCursor;
+  revision: Revision4;
+}
+/**
+ * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
  * via the `definition` "SessionEvidenceTimelinePayload".
  */
 export interface SessionEvidenceTimelinePayload {
   entries?: Entries;
   entrypoint_session_id: EntrypointSessionId;
-  revision: Revision4;
+  revision: Revision5;
   root_session_id: RootSessionId;
   schema_version?: SchemaVersion2;
-  warnings?: Warnings2;
+  warnings?: Warnings3;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -714,7 +730,7 @@ export interface TimelineTurnAccounting {
  */
 export interface SessionPage {
   items: Items1;
-  page?: CursorPageMetadata | null;
+  page: CursorPageMetadata;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -732,20 +748,11 @@ export interface SessionItem {
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
- * via the `definition` "CursorPageMetadata".
- */
-export interface CursorPageMetadata {
-  has_more: HasMore;
-  next_cursor: NextCursor;
-  revision: Revision5;
-}
-/**
- * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
  * via the `definition` "TodayPayload".
  */
 export interface TodayPayload {
   cohort: Cohort1;
-  coverage: Coverage1;
+  coverage: Coverage2;
   daily: Daily;
   generated_at: GeneratedAt2;
   hourly: Hourly;
@@ -753,12 +760,12 @@ export interface TodayPayload {
   revision: Revision6;
   schema_version: SchemaVersion3;
   sessions: SessionOverview;
-  warnings: Warnings3;
+  warnings: Warnings4;
 }
 export interface Cohort1 {
   [k: string]: number;
 }
-export interface Coverage1 {
+export interface Coverage2 {
   [k: string]: number;
 }
 /**
@@ -779,7 +786,7 @@ export interface ActivityBucket {
 export interface TokenEfficiencyProjectPayload {
   attribution: Attribution;
   comparisons: Comparisons;
-  coverage: Coverage2;
+  coverage: Coverage3;
   filters: Filters;
   generated_at: GeneratedAt3;
   hotspots?: Hotspots;
@@ -788,7 +795,7 @@ export interface TokenEfficiencyProjectPayload {
   project: Project4;
   schema_version?: SchemaVersion4;
   trends: Trends;
-  warnings?: Warnings4;
+  warnings?: Warnings5;
   [k: string]: unknown;
 }
 export interface Attribution {
@@ -856,7 +863,7 @@ export interface ComparisonDelta {
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
  * via the `definition` "Coverage".
  */
-export interface Coverage2 {
+export interface Coverage3 {
   attributed_tool_items?: AttributedToolItems;
   root_graphs?: RootGraphs;
   sessions?: Sessions1;

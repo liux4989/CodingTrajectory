@@ -953,13 +953,6 @@ class IncrementalStore(IngestionMixin, EntitiesMixin, ChangesMixin, DetailMixin)
         )
 
     @staticmethod
-    @staticmethod
-    @staticmethod
-    @staticmethod
-    @staticmethod
-    @staticmethod
-    @staticmethod
-    @staticmethod
     def _current_revision(connection: sqlite3.Connection) -> int:
         row = connection.execute(
             "SELECT value FROM store_metadata WHERE key = 'revision'"

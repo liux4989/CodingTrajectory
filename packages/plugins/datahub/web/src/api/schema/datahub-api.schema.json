@@ -37,6 +37,19 @@
     "BootstrapStatus": {
       "additionalProperties": false,
       "properties": {
+        "coverage": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coverage"
+        },
         "error": {
           "anyOf": [
             {
@@ -1572,6 +1585,13 @@
         },
         "sessions": {
           "$ref": "#/$defs/SessionOverview"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/WarningSummary"
+          },
+          "title": "Warnings",
+          "type": "array"
         }
       },
       "required": [
@@ -1581,7 +1601,8 @@
         "cohort",
         "coverage",
         "projects",
-        "sessions"
+        "sessions",
+        "warnings"
       ],
       "title": "OverviewPayload",
       "type": "object"
@@ -1995,10 +2016,14 @@
           },
           "title": "Items",
           "type": "array"
+        },
+        "page": {
+          "$ref": "#/$defs/CursorPageMetadata"
         }
       },
       "required": [
-        "items"
+        "items",
+        "page"
       ],
       "title": "ProjectsPayload",
       "type": "object"
@@ -2240,19 +2265,12 @@
           "type": "array"
         },
         "page": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CursorPageMetadata"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/CursorPageMetadata"
         }
       },
       "required": [
-        "items"
+        "items",
+        "page"
       ],
       "title": "SessionPage",
       "type": "object"
@@ -2718,9 +2736,9 @@
         "coverage",
         "projects",
         "sessions",
+        "warnings",
         "hourly",
-        "daily",
-        "warnings"
+        "daily"
       ],
       "title": "TodayPayload",
       "type": "object"

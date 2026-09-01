@@ -180,13 +180,18 @@ export function SessionsRoute() {
                 search: { view: "context" },
               });
             }} />}
-            cards={table.getRowModel().rows.map(({ original: item }) => (
+            cards={table.getRowModel().rows.length ? table.getRowModel().rows.map(({ original: item }) => (
               <button key={sessionId(item)} type="button" className="panel grid gap-2 bg-card text-left" onClick={() => router.navigate({ to: "/sessions/$sessionId", params: { sessionId: sessionId(item) }, search: { view: "context" } })}>
                 <span className="mono text-body-sm font-medium">{sessionId(item).slice(0, 12)}</span>
                 <span className="line-clamp-2 text-body-sm">{item.title ?? item.preview ?? "Untitled"}</span>
                 <span className="flex items-center justify-between gap-2 text-caption text-muted-foreground"><VendorBadges vendors={sessionVendors(item)} /><span>{Math.max(item.session_ids.length - 1, 0)} agents</span></span>
               </button>
-            ))}
+            )) : (
+              <div className="panel py-8 text-center text-body-sm text-muted-foreground">
+                <p className="m-0">No sessions match the current filter.</p>
+                <p className="m-0 mt-1 text-caption">Try adjusting the filter.</p>
+              </div>
+            )}
           />
           <DataTablePagination table={table} />
           <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2 text-body-sm text-muted-foreground">

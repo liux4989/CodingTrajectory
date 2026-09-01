@@ -372,6 +372,7 @@ class IngestionMixin:
             parsed_lines += 1
         return messages, start + cursor, len(chunk) - cursor, parsed_lines
 
+    @staticmethod
     def _assert_plans_current(
         connection: sqlite3.Connection, plans: Sequence[_IngestionPlan]
     ) -> None:
@@ -386,6 +387,7 @@ class IngestionMixin:
                     f"source checkpoint changed during refresh: {plan.path}"
                 )
 
+    @staticmethod
     def _assert_files_current(plans: Sequence[_IngestionPlan]) -> None:
         for plan in plans:
             if plan.kind == ChangeKind.DELETE:
@@ -406,6 +408,7 @@ class IngestionMixin:
                     f"source metadata changed during refresh: {plan.path}"
                 )
 
+    @staticmethod
     def _assert_source_snapshots_current(
         snapshots: Sequence[SourceSnapshot],
     ) -> None:
@@ -604,6 +607,7 @@ class IngestionMixin:
         )
         return self._source_id(connection, plan.path)
 
+    @staticmethod
     def _source_id(connection: sqlite3.Connection, path: str) -> int:
         row = connection.execute(
             "SELECT source_id FROM sources WHERE path = ?", (path,)
@@ -612,6 +616,7 @@ class IngestionMixin:
             raise KeyError(path)
         return int(row[0])
 
+    @staticmethod
     def _invalidate_messages(
         connection: sqlite3.Connection, source_id: int, revision: int
     ) -> None:
@@ -624,6 +629,7 @@ class IngestionMixin:
             (revision, revision, source_id),
         )
 
+    @staticmethod
     def _upsert_message(
         connection: sqlite3.Connection,
         source_id: int,

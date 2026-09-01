@@ -145,6 +145,7 @@ class ChangesMixin:
             },
         )
 
+    @staticmethod
     def _record_change(
         connection: sqlite3.Connection,
         revision: int,
