@@ -11,6 +11,8 @@ import {
 } from "@/api";
 
 const CHANGE_POLL_MS = 12_000;
+const MAX_STREAM_RECONNECTS = 3;
+const STREAM_RECONNECT_MS = 1_500;
 const MAX_INCREMENTAL_ENTITIES = 250;
 
 const QUERY_FAMILIES = {
@@ -30,6 +32,7 @@ const QUERY_FAMILIES = {
 const ALL_QUERY_FAMILIES = Object.values(QUERY_FAMILIES).flat();
 
 export type DatahubDeliveryState = {
+  mode: "live" | "reconnecting" | "polling";
   revision: number | null;
   generatedAt: string | null;
   freshness: DatahubFreshness | null;
@@ -80,6 +83,7 @@ function sessionIdsForSummary(payload: unknown, fallback: string): ReadonlySet<s
 
 function statusFromSnapshot(snapshot: DatahubSnapshot | undefined): DatahubDeliveryState {
   return {
+    mode: "reconnecting",
     revision: snapshot?.revision ?? null,
     generatedAt: snapshot?.generated_at ?? null,
     freshness: snapshot?.freshness ?? null,
@@ -167,9 +171,9 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
     staleTime: Infinity,
     refetchOnWindowFocus: false,
   });
-  const [revision, setRevision] = React.useState<number | null>(null);
   const [delivery, setDelivery] = React.useState<DatahubDeliveryState>(() => statusFromSnapshot(undefined));
   const appliedRevision = React.useRef<number | null>(null);
+  const targetRevision = React.useRef<number | null>(null);
   // The useQuery result object is not referentially stable; keep it in a ref
   // so effects can depend on the underlying data instead of the container.
   const snapshotRef = React.useRef(snapshot);
@@ -178,77 +182,98 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
   React.useEffect(() => {
     if (!snapshot.data) return;
     appliedRevision.current = snapshot.data.revision;
-    setRevision(snapshot.data.revision);
+    targetRevision.current = snapshot.data.revision;
     setDelivery(statusFromSnapshot(snapshot.data));
   }, [snapshot.data]);
 
-  const changes = useQuery({
-    queryKey: ["datahub", "changes", revision],
-    queryFn: ({ signal }) => fetchDatahubChanges({ afterRevision: revision ?? 0, signal }),
-    enabled: revision != null,
-    refetchInterval: () => (document.visibilityState === "visible" ? CHANGE_POLL_MS : false),
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: true,
-    retry: 1,
-  });
-
   React.useEffect(() => {
-    const payload = changes.data;
-    const currentRevision = appliedRevision.current;
-    if (!payload || currentRevision == null) return;
+    if (!snapshot.data) return;
+    let disposed = false;
+    let source: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+    let pollTimer: number | null = null;
+    let reconnects = 0;
+    let catchUpWorker: Promise<void> | null = null;
+    const controller = new AbortController();
 
-    if (payload.reset_required || payload.from_revision !== currentRevision) {
+    const recover = () => {
       resetAllRouteQueries(queryClient);
       appliedRevision.current = null;
-      setRevision(null);
+      targetRevision.current = null;
       void snapshotRef.current.refetch();
-      return;
-    }
-
-    if (payload.to_revision <= currentRevision) {
-      setDelivery((current) => {
-        const status = current.sourceStatus;
-        if (
-          current.catchingUp === payload.catching_up &&
-          status != null &&
-          status.ready === payload.source_status.ready &&
-          status.ingesting === payload.source_status.ingesting &&
-          status.failed === payload.source_status.failed &&
-          status.incomplete === payload.source_status.incomplete &&
-          !current.isLoading &&
-          !current.isRefreshing &&
-          current.error == null
-        ) {
-          return current;
+    };
+    const catchUp = () => {
+      if (catchUpWorker) return catchUpWorker;
+      catchUpWorker = (async () => {
+        while (!disposed && appliedRevision.current != null && targetRevision.current != null && appliedRevision.current < targetRevision.current) {
+          const currentRevision = appliedRevision.current;
+          const payload = await fetchDatahubChanges({ afterRevision: currentRevision, signal: controller.signal });
+          if (payload.reset_required || payload.from_revision !== currentRevision) {
+            recover();
+            return;
+          }
+          if (payload.to_revision <= currentRevision) return;
+          applyChanges(queryClient, payload);
+          appliedRevision.current = payload.to_revision;
+          setDelivery((current) => ({ ...current, revision: payload.to_revision, freshness: payload.freshness, catchingUp: payload.catching_up, sourceStatus: payload.source_status, isLoading: false, error: null }));
         }
-        return {
-          ...current,
-          catchingUp: payload.catching_up,
-          sourceStatus: payload.source_status,
-          isLoading: false,
-          isRefreshing: false,
-          error: null,
-        };
+      })().catch((error: unknown) => {
+        if (!disposed && !(error instanceof DOMException && error.name === "AbortError")) {
+          setDelivery((current) => ({ ...current, error: error instanceof Error ? error.message : String(error) }));
+        }
+      }).finally(() => { catchUpWorker = null; });
+      return catchUpWorker;
+    };
+    const wake = (revision: number) => {
+      if (!Number.isFinite(revision) || revision <= (appliedRevision.current ?? -1)) return;
+      targetRevision.current = Math.max(targetRevision.current ?? revision, revision);
+      void catchUp();
+    };
+    const poll = () => {
+      if (!disposed && document.visibilityState === "visible" && appliedRevision.current != null) {
+        targetRevision.current = Math.max(targetRevision.current ?? 0, appliedRevision.current + 1);
+        void catchUp();
+      }
+    };
+    const startPolling = () => {
+      source?.close();
+      setDelivery((current) => ({ ...current, mode: "polling" }));
+      poll();
+      pollTimer = window.setInterval(poll, CHANGE_POLL_MS);
+    };
+    const connect = () => {
+      if (disposed) return;
+      setDelivery((current) => ({ ...current, mode: reconnects ? "reconnecting" : current.mode }));
+      source = new EventSource("/api/datahub/events");
+      source.addEventListener("open", () => {
+        reconnects = 0;
+        setDelivery((current) => ({ ...current, mode: "live", error: null }));
       });
-      return;
-    }
+      source.addEventListener("revision", (event) => {
+        try { wake(Number((JSON.parse((event as MessageEvent<string>).data) as { revision: number }).revision)); } catch { /* malformed wakeups are ignored */ }
+      });
+      source.onerror = () => {
+        source?.close();
+        if (disposed) return;
+        reconnects += 1;
+        if (reconnects > MAX_STREAM_RECONNECTS) startPolling();
+        else {
+          setDelivery((current) => ({ ...current, mode: "reconnecting" }));
+          reconnectTimer = window.setTimeout(connect, STREAM_RECONNECT_MS * reconnects);
+        }
+      };
+    };
+    connect();
+    return () => {
+      disposed = true;
+      controller.abort();
+      source?.close();
+      if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
+      if (pollTimer != null) window.clearInterval(pollTimer);
+    };
+  }, [snapshot.data, queryClient]);
 
-    applyChanges(queryClient, payload);
-    appliedRevision.current = payload.to_revision;
-    setRevision(payload.to_revision);
-    setDelivery((current) => ({
-      ...current,
-      revision: payload.to_revision,
-      freshness: payload.freshness,
-      catchingUp: payload.catching_up,
-      sourceStatus: payload.source_status,
-      isLoading: false,
-      isRefreshing: false,
-      error: null,
-    }));
-  }, [changes.data, queryClient]);
-
-  const error = snapshot.error ?? changes.error;
+  const error = snapshot.error;
   const errorMessage = error instanceof Error ? error.message : error ? String(error) : null;
   const value = React.useMemo<DatahubDeliveryState>(
     () => ({

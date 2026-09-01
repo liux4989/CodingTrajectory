@@ -1,31 +1,20 @@
 import * as React from "react";
-import { cn } from "@/lib/utils";
-
-const headerSurface =
-  "border border-border-soft bg-card p-[clamp(1rem,2.5vw,1.75rem)] shadow-sm";
-
-type RouteHeaderProps = {
-  eyebrow: string;
+type PageHeaderProps = {
+  eyebrow?: string;
   title: string;
-  action?: React.ReactNode;
+  description?: string;
+  actions?: React.ReactNode;
 };
 
-export function RouteHeader({ eyebrow, title, action }: RouteHeaderProps) {
+export function PageHeader({ eyebrow, title, description, actions }: PageHeaderProps) {
   return (
-    <header
-      className={cn("flex items-start justify-between gap-4 rounded-2xl", headerSurface)}
-    >
-      <div>
-        <p className="eyebrow mb-1 text-muted-foreground">
-          {eyebrow}
-        </p>
-        <h2
-          className="m-0 max-w-[26ch] font-display text-[clamp(1.375rem,2.5vw,1.875rem)] font-semibold leading-tight tracking-tight text-wrap-balance"
-        >
-          {title}
-        </h2>
+    <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-border-subtle pb-3">
+      <div className="min-w-0">
+        {eyebrow ? <p className="eyebrow-soft mb-1 text-muted-foreground">{eyebrow}</p> : null}
+        <h1 className="m-0 font-display text-h1 font-semibold leading-tight tracking-tight">{title}</h1>
+        {description ? <p className="m-0 mt-1 text-body-sm text-muted-foreground">{description}</p> : null}
       </div>
-      {action}
+      {actions}
     </header>
   );
 }

@@ -8,7 +8,7 @@ import {
   type ForecastKind,
 } from "@/api";
 import { formatCompactNumber, formatCostUsd, formatDuration } from "@/lib/format";
-import { RouteHeader } from "@/components/route-header";
+import { PageHeader } from "@/components/route-header";
 import { MetricCard } from "@/components/metric-card";
 import { StaggerGroup } from "@/components/stagger-group";
 import { StateBlock } from "@/components/state-block";
@@ -84,10 +84,11 @@ export function CodeTimeRoute() {
 
   return (
     <div className="route-container w-full min-w-0 overflow-hidden">
-      <RouteHeader
-        eyebrow="Code time"
-        title="Coding work overview: time, sessions, and cost across projects."
-        action={
+      <PageHeader
+        eyebrow="Analyze"
+        title="Code Time"
+        description="Time, sessions, and cost across projects."
+        actions={
           <ToggleGroup
             type="single"
             value={window}

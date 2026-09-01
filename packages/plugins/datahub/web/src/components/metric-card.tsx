@@ -12,14 +12,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { MiniBarChart } from "@/components/charts";
 import { AnimatedNumber } from "@/components/animated-number";
-import { popIn, staggerItem, EASE } from "@/lib/motion";
+import { popIn, staggerItem } from "@/lib/motion";
 
 type MetricCardProps = {
   label: string;
   value: number | string;
   detail: string;
-  sparklineEntries?: Array<{ label: string; value: number }>;
-  ratio?: number;
+  footer?: React.ReactNode;
   trend?: { value: string; direction: "up" | "down" };
 };
 
@@ -29,11 +28,11 @@ type MetricCardProps = {
  * action slot, a mini bar chart in the content area, and a footer with the
  * detail line plus an optional ratio bar.
  */
-export function MetricCard({ label, value, detail, sparklineEntries, ratio, trend }: MetricCardProps) {
+export function MetricCard({ label, value, detail, footer, trend }: MetricCardProps) {
   return (
     <motion.div variants={staggerItem}>
-    <Card className="@container/card metric-card min-w-0 gap-0 overflow-hidden">
-      <CardHeader>
+    <Card className="@container/card metric-card min-w-0 gap-2 overflow-hidden p-3">
+      <CardHeader className="p-0">
         <CardDescription>{label}</CardDescription>
         <CardTitle className="font-display text-metric font-semibold tabular-nums leading-tight tracking-tight">
           {typeof value === "number" ? (
@@ -52,32 +51,15 @@ export function MetricCard({ label, value, detail, sparklineEntries, ratio, tren
           </CardAction>
         ) : null}
       </CardHeader>
-      {sparklineEntries?.length ? (
-        <CardContent className="pb-0">
-          <MiniBarChart
-            data={sparklineEntries}
-            ariaLabel={`${label} distribution`}
-          />
-        </CardContent>
-      ) : null}
-      <CardFooter className="mt-auto flex-col items-start gap-1.5 text-body-sm">
+      <CardFooter className="mt-auto flex-col items-start gap-1.5 p-0 text-body-sm">
         <p className="m-0 break-words text-muted-foreground">{detail}</p>
-        {ratio != null ? (
-          <div
-            className="h-1.5 w-full overflow-hidden rounded-full bg-surface-emphasis"
-            role="img"
-            aria-label={`${Math.round(ratio * 100)}%`}
-          >
-            <motion.div
-              className="h-full rounded-full bg-primary"
-              initial={{ width: 0 }}
-              animate={{ width: `${Math.min(100, Math.max(0, Math.round(ratio * 100)))}%` }}
-              transition={{ duration: 0.7, ease: EASE, delay: 0.1 }}
-            />
-          </div>
-        ) : null}
+        {footer}
       </CardFooter>
     </Card>
     </motion.div>
   );
 }
+
+MetricCard.Footer = function MetricCardFooter({ entries, label }: { entries: Array<{ label: string; value: number }>; label: string }) {
+  return entries.length ? <CardContent className="w-full p-0"><MiniBarChart data={entries} ariaLabel={label} /></CardContent> : null;
+};

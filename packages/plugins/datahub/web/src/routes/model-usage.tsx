@@ -16,7 +16,7 @@ import { DataTable } from "@/components/data-table";
 import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { MetricCard } from "@/components/metric-card";
-import { RouteHeader } from "@/components/route-header";
+import { PageHeader } from "@/components/route-header";
 import { SectionTabs } from "@/components/section-tabs";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
@@ -196,10 +196,7 @@ export function ModelUsageRoute() {
 
   return (
     <div className="route-container w-full min-w-0 overflow-hidden">
-      <RouteHeader
-        eyebrow="Usage"
-        title="Where did tokens, time, and money go?"
-      />
+      <PageHeader eyebrow="Analyze" title="Compare" description="Where tokens, time, and money went." />
 
       <Card className="min-w-0">
         <CardContent className="grid gap-6 pt-6">

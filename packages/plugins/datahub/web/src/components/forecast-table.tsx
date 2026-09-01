@@ -1,5 +1,6 @@
 import type { ForecastRecord } from "@/api";
 import { ForecastKindBadge } from "@/components/forecast-kind-badge";
+import { ResponsiveDataList } from "@/components/responsive-data-list";
 
 function formatMinutes(minutes: number | undefined): string {
   if (minutes === undefined || minutes === null) return "-";
@@ -39,7 +40,7 @@ export function ForecastTable({ forecasts }: { forecasts: ForecastRecord[] }) {
   }
 
   return (
-    <div className="overflow-x-auto">
+    <ResponsiveDataList table={<div className="overflow-x-auto">
       <table className="w-full text-body-sm">
         <thead>
           <tr className="border-b border-border bg-table-head text-left text-eyebrow font-display uppercase tracking-wider text-muted-foreground">
@@ -92,6 +93,12 @@ export function ForecastTable({ forecasts }: { forecasts: ForecastRecord[] }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </div>} cards={forecasts.map((record) => (
+      <article key={record.prediction_id} className="panel grid gap-2 bg-card">
+        <div className="flex items-center justify-between gap-2"><code className="text-xs">{record.prediction_id.slice(0, 8)}</code><ForecastKindBadge kind={record.forecast_kind} /></div>
+        <p className="m-0 text-body-sm">{record.project_name ?? "Unknown project"}</p>
+        <div className="flex justify-between text-caption text-muted-foreground"><span>p50 {formatMinutes(record.p50_minutes)}</span><span>{record.status}</span></div>
+      </article>
+    ))} />
   );
 }

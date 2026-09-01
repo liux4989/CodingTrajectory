@@ -13,7 +13,7 @@ import {
 } from "@tanstack/react-table";
 import { fetchSessions, type SessionItem } from "@/api";
 import { TableSkeleton } from "@/components/ui/skeleton";
-import { RouteHeader } from "@/components/route-header";
+import { PageHeader } from "@/components/route-header";
 import { Toolbar } from "@/components/toolbar";
 import { StateBlock } from "@/components/state-block";
 import { VendorBadges } from "@/components/badges";
@@ -23,6 +23,7 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SessionLink } from "@/components/session-link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ResponsiveDataList } from "@/components/responsive-data-list";
 
 const SESSION_WINDOW_DAYS = 7;
 const CURSOR_PAGE_SIZE = 50;
@@ -146,8 +147,8 @@ export function SessionsRoute() {
   });
 
   return (
-    <div className="route-container">
-      <RouteHeader eyebrow="Orchestration runs" title="Conversation branches and their owned agent runs." />
+    <div className="route-container-wide">
+      <PageHeader eyebrow="Observe" title="Sessions" description="Conversation branches and their agent runs." />
       {projectName ? (
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary" className="gap-1.5">
@@ -170,19 +171,22 @@ export function SessionsRoute() {
       {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} onRetry={() => sessions.refetch()} /> : null}
       {sessions.data ? (
         <>
-          <DataTable
-            table={table}
-            columnCount={columns.length}
-            emptyMessage="No sessions match the current filter."
-            emptyHint="Try adjusting the filter."
-            onRowClick={(item) => {
+          <ResponsiveDataList
+            table={<DataTable table={table} columnCount={columns.length} emptyMessage="No sessions match the current filter." emptyHint="Try adjusting the filter." onRowClick={(item) => {
               const id = sessionId(item);
               if (id) router.navigate({
                 to: "/sessions/$sessionId",
                 params: { sessionId: id },
                 search: { view: "context" },
               });
-            }}
+            }} />}
+            cards={table.getRowModel().rows.map(({ original: item }) => (
+              <button key={sessionId(item)} type="button" className="panel grid gap-2 bg-card text-left" onClick={() => router.navigate({ to: "/sessions/$sessionId", params: { sessionId: sessionId(item) }, search: { view: "context" } })}>
+                <span className="mono text-body-sm font-medium">{sessionId(item).slice(0, 12)}</span>
+                <span className="line-clamp-2 text-body-sm">{item.title ?? item.preview ?? "Untitled"}</span>
+                <span className="flex items-center justify-between gap-2 text-caption text-muted-foreground"><VendorBadges vendors={sessionVendors(item)} /><span>{Math.max(item.session_ids.length - 1, 0)} agents</span></span>
+              </button>
+            ))}
           />
           <DataTablePagination table={table} />
           <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2 text-body-sm text-muted-foreground">

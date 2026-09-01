@@ -81,11 +81,12 @@ function turnGroupKey(event: ContextEvent): string {
   return `turn:${event.turn_id ?? "none"}`;
 }
 
-function turnGroupLabel(event: ContextEvent): string {
+function turnGroupLabel(event: ContextEvent, vendor?: string): string {
   if (event.source === "subagent") return "SUBAGENT'S SEPARATE CONTEXT WINDOW";
   if (event.group === "before_first_prompt") return "BEFORE YOU TYPE ANYTHING";
   if (event.source === "you") return "You";
-  return "Claude works";
+  const label = vendor?.trim().replaceAll("_", " ");
+  return label ? `${label.replace(/\b\w/g, (letter) => letter.toUpperCase())} works` : "Agent activity";
 }
 
 type TurnGroup = {
@@ -96,7 +97,7 @@ type TurnGroup = {
   events: Array<{ event: ContextEvent; index: number }>;
 };
 
-function buildTurnGroups(events: ContextEvent[]): TurnGroup[] {
+function buildTurnGroups(events: ContextEvent[], vendor?: string): TurnGroup[] {
   const groups: TurnGroup[] = [];
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
@@ -104,7 +105,7 @@ function buildTurnGroups(events: ContextEvent[]): TurnGroup[] {
     if (groups.length === 0 || groupStartsHere(event, previous)) {
       groups.push({
         key: turnGroupKey(event),
-        label: turnGroupLabel(event),
+        label: turnGroupLabel(event, vendor),
         isSubagent: event.source === "subagent",
         totalTokens: 0,
         events: [],
@@ -168,7 +169,7 @@ export function ContextWindowRoute() {
     }
   }, [filteredEvents, selectedId]);
 
-  const turnGroups = React.useMemo(() => buildTurnGroups(filteredEvents), [filteredEvents]);
+  const turnGroups = React.useMemo(() => buildTurnGroups(filteredEvents, query.data?.vendor), [filteredEvents, query.data?.vendor]);
 
   // Default to every turn expanded; once the user folds one, the explicit
   // array takes over. Accordion `value` is always controlled so this works
@@ -270,7 +271,7 @@ export function ContextWindowRoute() {
   const hasFilters = activeCategories.size > 0 || searchQuery.trim().length > 0;
 
   return (
-    <div className="route-container w-full min-w-0 overflow-hidden pb-8">
+    <div className="route-container-wide w-full min-w-0 overflow-hidden pb-8">
       <div className="context-window-shell">
         <div className="context-window-topbar">
           <div className="context-window-title-row">

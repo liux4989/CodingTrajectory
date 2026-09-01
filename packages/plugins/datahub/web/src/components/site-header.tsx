@@ -15,6 +15,7 @@ function DeliveryStatus() {
   const failed = delivery.sourceStatus?.failed ?? 0;
   const incomplete = delivery.sourceStatus?.incomplete ?? 0;
   const lag = delivery.freshness?.lag_seconds;
+  const transportLabel = delivery.mode === "live" ? "Live" : delivery.mode === "reconnecting" ? "Reconnecting" : "Polling";
   const label = delivery.error
     ? "Delivery error"
     : delivery.catchingUp
@@ -23,7 +24,7 @@ function DeliveryStatus() {
       ? `${failed} source failure${failed === 1 ? "" : "s"}`
       : incomplete > 0
         ? `${incomplete} incomplete source${incomplete === 1 ? "" : "s"}`
-        : "Live";
+        : transportLabel;
   const detail = delivery.error
     ? `Delivery unavailable: ${delivery.error}`
     : `Revision ${delivery.revision ?? "—"} · ${lag == null ? "refresh lag unavailable" : `${Math.round(lag)}s refresh lag`}`;
@@ -32,7 +33,7 @@ function DeliveryStatus() {
     <Tooltip>
       <TooltipTrigger asChild>
         <Badge variant={delivery.error || failed > 0 ? "destructive" : "outline"} className="hidden gap-1 sm:inline-flex">
-          {delivery.catchingUp || delivery.isRefreshing ? <LoaderCircle className="animate-spin" /> : null}
+          {delivery.catchingUp || delivery.isRefreshing || delivery.mode === "reconnecting" ? <LoaderCircle className="animate-spin" /> : null}
           {delivery.error || failed > 0 ? <CircleAlert /> : null}
           {label}
         </Badge>

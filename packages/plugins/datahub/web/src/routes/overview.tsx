@@ -5,7 +5,7 @@ import type { ApexOptions } from "apexcharts";
 import { fetchToday, type OverviewPayload, type TodayPayload } from "@/api";
 import { formatCompactNumber, formatCostUsd, formatDuration } from "@/lib/format";
 import { LoadingShell } from "@/components/loading-shell";
-import { RouteHeader } from "@/components/route-header";
+import { PageHeader } from "@/components/route-header";
 import { MetricCard } from "@/components/metric-card";
 import { StaggerGroup } from "@/components/stagger-group";
 import { StateBlock } from "@/components/state-block";
@@ -38,17 +38,14 @@ export function OverviewRoute() {
 
   return (
     <div className="route-container w-full min-w-0 overflow-hidden">
-      <RouteHeader
-        eyebrow="Usage activity"
-        title={`Recent project and session activity from the last ${sinceDays} day${sinceDays === 1 ? "" : "s"}.`}
-      />
+      <PageHeader eyebrow="Observe" title="Today" description={`Project and session activity from the last ${sinceDays} day${sinceDays === 1 ? "" : "s"}.`} />
       <section className="stat-grid min-w-0">
         <StaggerGroup className="contents">
         <MetricCard
           label="Projects"
           value={data.projects.count}
           detail={`${vendorEntries.length} active vendor source(s)`}
-          sparklineEntries={vendorEntries.map(([label, value]) => ({ label: label.slice(0, 3), value }))}
+          footer={<MetricCard.Footer entries={vendorEntries.map(([label, value]) => ({ label: label.slice(0, 3), value }))} label="Sessions distribution" />}
         />
         <MetricCard
           label="Sessions"
@@ -59,7 +56,6 @@ export function OverviewRoute() {
           label="Runtime"
           value={Math.round(runtime.execution_seconds / 60)}
           detail={`${formatDuration(runtime.wait_seconds)} waiting, ${runtime.tool_calls.toLocaleString()} tool calls`}
-          ratio={runtime.tool_calls ? runtime.failed_tool_calls / runtime.tool_calls : 0}
         />
         <MetricCard
           label="Tokens"

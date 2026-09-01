@@ -85,10 +85,11 @@
   --text-caption: 0.8125rem;
   --text-body-sm: 0.875rem;
   --text-body: 1rem;
-  --text-heading: 1.25rem;
-  --text-h1: 1.5rem;
-  --text-display: clamp(1.875rem, 3vw, 2.5rem);
-  --text-metric: 1.875rem;
+  --text-micro: 0.6875rem;
+  --text-heading: 1.0625rem;
+  --text-h1: 1.25rem;
+  --text-display: 1.375rem;
+  --text-metric: 1.5rem;
 
   --tracking-tight: -0.03em;
   --tracking-wide: 0.08em;
@@ -139,10 +140,10 @@
   :root {
     --ink: #171717;
     --muted-color-text: #737373;
-    --paper: #fafafa;
+    --paper: #f7f7f6;
     --paper-strong: #ffffff;
-    --line: #e5e5e5;
-    --accent-teal: #0f766e;
+    --line: #e7e7e4;
+    --accent-teal: #0d7377;
     --accent-ink: #fafafa;
     --ember: #be123c;
     --moss: #0f766e;
@@ -168,9 +169,9 @@
   [data-theme="dark"] {
     --ink: #fafafa;
     --muted-color-text: #a3a3a3;
-    --paper: #0a0a0a;
-    --paper-strong: #171717;
-    --line: #262626;
+    --paper: #0b0b0c;
+    --paper-strong: #141416;
+    --line: #232326;
     --accent-teal: #2dd4bf;
     --accent-ink: #0a0a0a;
     --ember: #fb7185;
@@ -237,8 +238,8 @@
     --destructive-foreground: #fafafa;
     --border: #e5e5e5;
     --input: #e5e5e5;
-    --ring: #a3a3a3;
-    --radius: 0.75rem;
+    --ring: var(--accent-teal);
+    --radius: 0.5rem;
 
     --sidebar: #ffffff;
     --sidebar-border: rgb(23 23 23 / 8%);
@@ -270,7 +271,7 @@
     --destructive-foreground: #0a0a0a;
     --border: #262626;
     --input: #262626;
-    --ring: #525252;
+    --ring: var(--accent-teal);
 
     --sidebar: #111111;
     --sidebar-border: rgb(255 255 255 / 8%);
@@ -416,6 +417,13 @@
     display: grid;
     gap: var(--gap-route);
     max-width: var(--container-route);
+  }
+
+  .route-container-wide {
+    margin-inline: auto;
+    display: grid;
+    gap: var(--gap-route);
+    max-width: none;
   }
 
   /* Auto-fit stat grid that collapses 4→2→1 columns. */

@@ -119,57 +119,20 @@ const contextWindowRoute = createRoute({
   component: () => <RouteBoundary><SessionWorkspaceRoute /></RouteBoundary>,
 });
 
-const sessionGraphRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/sessions/$sessionId/graph",
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: "/sessions/$sessionId",
-      params: { sessionId: params.sessionId },
-      search: { view: "graph" },
-      replace: true,
-    });
-  },
-});
-
-const sessionTimelineRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/sessions/$sessionId/timeline",
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: "/sessions/$sessionId",
-      params: { sessionId: params.sessionId },
-      search: { view: "timeline" },
-      replace: true,
-    });
-  },
-});
-
-const sessionTreeRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/sessions/$sessionId/tree",
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: "/sessions/$sessionId",
-      params: { sessionId: params.sessionId },
-      search: { view: "tree" },
-      replace: true,
-    });
-  },
-});
-
-const legacyContextWindowRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/sessions/$sessionId/context-window",
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: "/sessions/$sessionId",
-      params: { sessionId: params.sessionId },
-      search: { view: "context" },
-      replace: true,
-    });
-  },
-});
+const legacySessionRoutes = (["graph", "timeline", "tree", "context-window"] as const).map((legacyView) =>
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: `/sessions/$sessionId/${legacyView}`,
+    beforeLoad: ({ params }) => {
+      throw redirect({
+        to: "/sessions/$sessionId",
+        params: { sessionId: params.sessionId },
+        search: { view: legacyView === "context-window" ? "context" : legacyView },
+        replace: true,
+      });
+    },
+  }),
+);
 
 type CompareSearch = {
   projectName: string | undefined;
@@ -234,10 +197,7 @@ const router = createRouter({
     sessionsRoute,
     todayRoute,
     contextWindowRoute,
-    sessionGraphRoute,
-    sessionTimelineRoute,
-    sessionTreeRoute,
-    legacyContextWindowRoute,
+    ...legacySessionRoutes,
     compareRoute,
     legacyModelUsageRoute,
     codeTimeRoute,

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useMatches } from "@tanstack/react-router";
-import { ChevronRight, Home } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type Crumb = { key: string; label: string; to: string };
@@ -23,6 +23,12 @@ type Props = {
 
 export function Breadcrumbs({ className }: Props) {
   const matches = useMatches();
+  const routeId = matches.at(-1)?.routeId ?? "";
+  const root = routeId === "/today"
+    ? { label: "Observe", to: "/today" }
+    : routeId === "/compare" || routeId === "/code-time"
+      ? { label: "Analyze", to: routeId }
+      : { label: "Observe", to: "/sessions" };
   const crumbs: Crumb[] = matches
     .filter((m) => m.routeId !== "__root__" && m.pathname !== "/" && m.routeId !== "/sessions")
     .map((m) => {
@@ -32,6 +38,9 @@ export function Breadcrumbs({ className }: Props) {
         : humanize(m.routeId);
       return { key: m.id, label, to: m.pathname };
     });
+  if (routeId.startsWith("/sessions/$sessionId")) {
+    crumbs.unshift({ key: "sessions", label: "Sessions", to: "/sessions" });
+  }
 
   if (crumbs.length === 0) return null;
 
@@ -41,13 +50,12 @@ export function Breadcrumbs({ className }: Props) {
       className={cn("flex flex-wrap items-center gap-1.5 text-body-sm text-muted-foreground", className)}
     >
       <Link
-        to="/sessions"
+        to={root.to}
         search={{ projectName: undefined }}
         preload="intent"
         className="inline-flex items-center gap-1 rounded transition-colors hover:text-foreground"
       >
-        <Home size={14} />
-        <span>Sessions</span>
+        <span>{root.label}</span>
       </Link>
       {crumbs.map((crumb, index) => {
         const isLeaf = index === crumbs.length - 1;

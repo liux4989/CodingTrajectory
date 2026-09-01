@@ -3,6 +3,7 @@ import type { CodeTimeProject } from "@/api";
 import { formatCompactNumber, formatCostUsd, formatDuration } from "@/lib/format";
 import { ProjectLink } from "@/components/project-link";
 import { SessionLink } from "@/components/session-link";
+import { ResponsiveDataList } from "@/components/responsive-data-list";
 
 type CodeTimeProjectTableProps = {
   projects: CodeTimeProject[];
@@ -22,7 +23,7 @@ export function CodeTimeProjectTable({ projects }: CodeTimeProjectTableProps) {
   }
 
   return (
-    <div className="overflow-x-auto">
+    <ResponsiveDataList table={<div className="overflow-x-auto">
       <table className="w-full text-body-sm">
         <thead>
           <tr className="border-b border-border bg-table-head text-left text-eyebrow font-display uppercase tracking-wider text-muted-foreground">
@@ -42,7 +43,12 @@ export function CodeTimeProjectTable({ projects }: CodeTimeProjectTableProps) {
           ))}
         </tbody>
       </table>
-    </div>
+    </div>} cards={projects.map((project) => (
+      <article key={project.project_name} className="panel grid gap-2 bg-card">
+        <div className="flex items-center justify-between gap-2"><ProjectLink name={project.project_name} /><span className="text-caption text-muted-foreground">{project.session_count} sessions</span></div>
+        <div className="grid grid-cols-2 gap-2 text-body-sm"><span><b>{durationOrDash(project.execution_seconds)}</b><small className="block text-muted-foreground">Coding time</small></span><span><b>{formatCostUsd(project.cost_usd)}</b><small className="block text-muted-foreground">Cost</small></span></div>
+      </article>
+    ))} />
   );
 }
 

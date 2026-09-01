@@ -1,6 +1,6 @@
 import * as React from "react";
 import { MetricSkeleton, TableSkeleton } from "@/components/ui/skeleton";
-import { RouteHeader } from "@/components/route-header";
+import { PageHeader } from "@/components/route-header";
 
 type LoadingShellProps = {
   eyebrow: string;
@@ -32,7 +32,7 @@ export function LoadingShell({
 }: LoadingShellProps) {
   return (
     <div className="route-container">
-      <RouteHeader eyebrow={eyebrow} title={title} />
+      <PageHeader eyebrow={eyebrow} title={title} />
       {detail ? <p className="m-0 text-body-sm text-muted-foreground">{detail}</p> : null}
       {variant === "metrics" || variant === "mixed" ? (
         <section className="stat-grid" aria-label="Loading metrics">

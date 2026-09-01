@@ -36,7 +36,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   const groups: NavGroup[] = [
     {
-      label: "Workspace",
+      label: "Observe",
       items: [
         {
           title: "Sessions",
@@ -50,6 +50,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           icon: CalendarDays,
           match: () => Boolean(matchRoute({ to: "/today" })),
         },
+      ],
+    },
+    {
+      label: "Analyze",
+      items: [
         {
           title: "Compare",
           url: "/compare",
@@ -73,6 +78,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <SidebarMenuButton
               asChild
+              tooltip="Session observability"
               className="data-[slot=sidebar-menu-button]:p-1.5!"
             >
               <Link to="/sessions" search={{ projectName: undefined }} preload="intent">
@@ -81,7 +87,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-display font-bold">CodingTrajectory</span>
-                  <span className="truncate text-xs text-muted-foreground">Session observability</span>
                 </div>
               </Link>
             </SidebarMenuButton>
