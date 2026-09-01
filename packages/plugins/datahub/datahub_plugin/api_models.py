@@ -21,8 +21,8 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from datahub_plugin.projections.context_window.models import ContextWindowProjection
 from datahub_plugin.projections.read_models_contracts import (
-    ProjectDetailPayload,
-    SessionTimelinePayload,
+    ProjectDetailPayload as ReadModelProjectDetailPayload,
+    SessionTimelinePayload as ReadModelSessionTimelinePayload,
 )
 from datahub_plugin.projections.session_timeline import SessionEvidenceTimeline
 from datahub_plugin.projections.token_efficiency_models import ProjectProjection
@@ -140,7 +140,7 @@ class TodayPayload(OverviewPayload):
 
 class ProjectItem(StrictResponse):
     name: str
-    path: str | None
+    path: str | None = None
     vendors: list[str]
 
 
@@ -164,6 +164,18 @@ class CursorPageMetadata(StrictResponse):
     revision: int
     next_cursor: str | None
     has_more: bool
+
+
+class SessionTimelinePayload(ReadModelSessionTimelinePayload):
+    """Timeline route payload, including its cursor metadata."""
+
+    page: CursorPageMetadata
+
+
+class ProjectDetailPayload(ReadModelProjectDetailPayload):
+    """Project-detail route payload, including its cursor metadata."""
+
+    page: CursorPageMetadata
 
 
 class SessionPage(StrictResponse):
@@ -423,6 +435,7 @@ class SessionItemDetailsPayload(RootModel[list[SessionItemDetail]]):
 
 class UsageBuckets(StrictResponse):
     prompt_tokens: int = 0
+    uncached_prompt_tokens: int = 0
     cached_prompt_tokens: int = 0
     cache_write_tokens: int = 0
     completion_tokens: int = 0
@@ -446,7 +459,7 @@ class ModelUsageContext(StrictResponse):
 
 
 class ModelUsagePricing(StrictResponse):
-    confidence: Literal["estimated", "missing_price"]
+    confidence: Literal["reported", "estimated", "missing_price"]
     source: str | None
     effective_date: str | None
     breakdown: dict[str, float] = Field(default_factory=dict)
@@ -532,6 +545,8 @@ class ModelUsageSession(StrictResponse):
     dominant_model: ModelUsageDominantModel | None
     estimated_cost_usd: float
     models: list[ModelUsageSessionModel]
+    turns: list[ModelUsageTurn] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ModelUsageTurn(StrictResponse):
@@ -604,9 +619,13 @@ class ModelUsageWarning(StrictResponse):
     message: str
 
 
+class ModelUsagePageMetadata(CursorPageMetadata):
+    limit: int
+
+
 class ModelUsagePages(StrictResponse):
-    sessions: CursorPageMetadata | None = None
-    turns: CursorPageMetadata | None = None
+    sessions: ModelUsagePageMetadata | None = None
+    turns: ModelUsagePageMetadata | None = None
 
 
 class ModelUsagePayload(StrictResponse):

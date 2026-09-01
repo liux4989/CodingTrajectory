@@ -247,6 +247,7 @@ export type PromptTokens1 = number;
 export type ReasoningTokens1 = number;
 export type ReportedTotalTokens = number | null;
 export type TotalConfidence = "reported_consistent" | "reported_missing" | "reported_inconsistent";
+export type UncachedPromptTokens = number;
 export type ModelOptions = ModelUsageOption[];
 export type AvgSessionCostUsd = number;
 export type AvgSessionElapsedSeconds = number;
@@ -262,7 +263,7 @@ export type ElapsedSeconds1 = number;
 export type EstimatedCostUsd1 = number;
 export type Model5 = string | null;
 export type ModelKey2 = string;
-export type Confidence3 = "estimated" | "missing_price";
+export type Confidence3 = "reported" | "estimated" | "missing_price";
 export type EffectiveDate1 = string | null;
 export type Source3 = string | null;
 export type Provider2 = string | null;
@@ -270,6 +271,7 @@ export type Sessions2 = number;
 export type Turns4 = number;
 export type Models = ModelUsageModel[];
 export type HasMore = boolean;
+export type Limit = number;
 export type NextCursor = string | null;
 export type Revision3 = number;
 export type Name = string;
@@ -304,13 +306,26 @@ export type Project = string | null;
 export type RuntimeAvailable = boolean;
 export type StartedAt = string | null;
 export type Title1 = string | null;
+export type EstimatedCostUsd4 = number;
+export type Model8 = string | null;
+export type ModelKey4 = string;
+export type Project1 = string | null;
+export type Provider5 = string | null;
+export type Sequence = number;
+export type SessionId3 = string;
+export type SessionTitle1 = string | null;
+export type StartedAt1 = string | null;
+export type TurnId5 = string;
 export type Vendor2 = string | null;
+export type Turns6 = ModelUsageTurn[];
+export type Vendor3 = string | null;
 export type WaitSeconds3 = number;
+export type Warnings1 = string[];
 export type Sessions3 = ModelUsageSession[];
 export type AvgElapsedSecondsPerSession = number;
 export type AvgTokensPerSession = number;
 export type AvgTokensPerTurn = number;
-export type EstimatedCostUsd4 = number;
+export type EstimatedCostUsd5 = number;
 export type MissingPriceCount = number;
 export type Models2 = number;
 export type ProcessedTokens2 = number;
@@ -321,28 +336,17 @@ export type TopModelBySessions = string | null;
 export type TotalElapsedSeconds = number;
 export type TotalExecutionSeconds = number;
 export type TotalWaitSeconds = number;
-export type Turns6 = number;
-export type Bucket1 = string;
-export type EstimatedCostUsd5 = number;
-export type Model8 = string | null;
-export type ModelKey4 = string;
-export type Provider5 = string | null;
 export type Turns7 = number;
+export type Bucket1 = string;
 export type EstimatedCostUsd6 = number;
 export type Model9 = string | null;
 export type ModelKey5 = string;
-export type Project1 = string | null;
 export type Provider6 = string | null;
-export type Sequence = number;
-export type SessionId3 = string;
-export type SessionTitle1 = string | null;
-export type StartedAt1 = string | null;
-export type TurnId5 = string;
-export type Vendor3 = string | null;
-export type Turns8 = ModelUsageTurn[];
+export type Turns8 = number;
+export type Turns9 = ModelUsageTurn[];
 export type Message = string;
 export type SessionId4 = string;
-export type Warnings1 = ModelUsageWarning[];
+export type Warnings2 = ModelUsageWarning[];
 export type GeneratedAt3 = string;
 export type Count3 = number;
 export type Revision5 = number;
@@ -352,7 +356,7 @@ export type Errors = unknown[];
 export type ExecutionSeconds4 = number;
 export type FailedToolCalls = number;
 export type ToolCalls3 = number;
-export type Turns9 = number;
+export type Turns10 = number;
 export type WaitSeconds4 = number;
 export type CostUsd3 = number;
 export type Count5 = number;
@@ -369,7 +373,7 @@ export type Project3 = string | null;
 export type StartedAt2 = string | null;
 export type Title2 = string | null;
 export type ToolCalls4 = number;
-export type Turns10 = number;
+export type Turns11 = number;
 export type Vendor4 = string;
 export type Vendors3 = string[];
 export type WaitSeconds5 = number;
@@ -381,10 +385,13 @@ export type ProcessedTokens5 = number;
 export type Message1 = string;
 export type Project4 = string;
 export type SessionId5 = string | null;
-export type Warnings2 = WarningSummary[];
-export type WindowDays = number;
 export type Warnings3 = WarningSummary[];
+export type WindowDays = number;
+export type Warnings4 = WarningSummary[];
 export type Name1 = string;
+export type HasMore1 = boolean;
+export type NextCursor1 = string | null;
+export type Revision6 = number;
 export type Path1 = string | null;
 export type SessionCount2 = number;
 export type Sessions5 = {
@@ -394,7 +401,7 @@ export type SinceDays2 = number | null;
 export type Vendors4 = string[];
 export type Items1 = ProjectItem[];
 export type Reused = boolean;
-export type Revision6 = number;
+export type Revision7 = number;
 export type Status1 = "catching_up";
 export type Status2 = "refreshed";
 export type EventId = string;
@@ -444,10 +451,10 @@ export type TurnSequence = number;
 export type Vendor5 = string | null;
 export type Entries = TimelineEntry[];
 export type EntrypointSessionId = string;
-export type Revision7 = number;
+export type Revision8 = number;
 export type RootSessionId4 = string;
 export type SchemaVersion5 = 1;
-export type Warnings4 = string[];
+export type Warnings5 = string[];
 export type Confidence5 = string | null;
 export type Provenance = string | null;
 export type SourceSessionId = string | null;
@@ -500,7 +507,7 @@ export type ProviderUsageBuckets1 = {
 export type RootSessionId7 = string | null;
 export type ExecutionSeconds8 = number | null;
 export type ToolCalls5 = number | null;
-export type Turns11 = number | null;
+export type Turns12 = number | null;
 export type Scope = string | null;
 export type Sessions7 = GraphStatsSession[] | null;
 export type Role2 = string | null;
@@ -512,7 +519,7 @@ export type PromptTokens2 = number | null;
 export type ReasoningTokens2 = number | null;
 export type Vendor7 = string | null;
 export type Vendor8 = string | null;
-export type Warnings5 = string[];
+export type Warnings6 = string[];
 export type Compaction = {
   [k: string]: unknown;
 } | null;
@@ -525,7 +532,7 @@ export type Source5 = string | null;
 export type ValueUsd1 = number;
 export type Model13 = string | null;
 export type Provider8 = string | null;
-export type Turns12 = number | null;
+export type Turns13 = number | null;
 export type Models3 = GraphModelUsage[];
 export type Scope1 = string | null;
 export type SelectedTurnId = string | null;
@@ -537,12 +544,12 @@ export type Relationship1 = string | null;
 export type Role3 = string | null;
 export type SessionId11 = string;
 export type Title4 = string | null;
-export type Turns13 =
+export type Turns14 =
   | {
       [k: string]: unknown;
     }[]
   | null;
-export type Warnings6 = string[];
+export type Warnings7 = string[];
 export type EventIds1 = string[] | null;
 export type ItemId1 = string;
 export type Kind2 = string;
@@ -598,9 +605,9 @@ export type Sessions10 = number;
 export type Daily = ActivityBucket[];
 export type GeneratedAt4 = string;
 export type Hourly = ActivityBucket[];
-export type Revision8 = number;
+export type Revision9 = number;
 export type SchemaVersion6 = 1;
-export type Warnings7 = WarningSummary[];
+export type Warnings8 = WarningSummary[];
 export type Bucket3 = string;
 export type EndedAt3 = string;
 export type IsComplete = boolean;
@@ -628,7 +635,7 @@ export type RootGraphs = number;
 export type Sessions11 = number;
 export type ToolItems = number;
 export type TruncatedInputSummaries = number;
-export type Turns14 = number;
+export type Turns15 = number;
 export type UndatedToolItems = number;
 export type DiscoveryDays = number;
 export type ProjectName4 = string;
@@ -655,7 +662,7 @@ export type Resource = string;
 export type Sessions12 = number;
 export type Status6 = "persistent" | "phase" | "outlier_dominated" | "emerging";
 export type TargetedCalls = number;
-export type Turns15 = number;
+export type Turns16 = number;
 export type CompletedAt1 = string | null;
 export type MaxContextTokens = number | null;
 export type PrimaryPattern = string | null;
@@ -688,7 +695,7 @@ export type DisplayName = string;
 export type Name2 = string;
 export type Path2 = string | null;
 export type SchemaVersion7 = 1;
-export type Warnings8 = string[];
+export type Warnings9 = string[];
 
 export interface DatahubApiContracts {
   CodeTimeCalibrationPayload?: CodeTimeCalibrationPayload;
@@ -1236,8 +1243,8 @@ export interface ModelUsagePayload {
   sessions: Sessions3;
   summary: ModelUsageSummary;
   time_buckets: TimeBuckets;
-  turns: Turns8;
-  warnings: Warnings1;
+  turns: Turns9;
+  warnings: Warnings2;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -1293,6 +1300,7 @@ export interface UsageBuckets {
   reasoning_tokens?: ReasoningTokens1;
   reported_total_tokens?: ReportedTotalTokens;
   total_confidence?: TotalConfidence;
+  uncached_prompt_tokens?: UncachedPromptTokens;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -1353,15 +1361,16 @@ export interface Breakdown {
  * via the `definition` "ModelUsagePages".
  */
 export interface ModelUsagePages {
-  sessions?: CursorPageMetadata | null;
-  turns?: CursorPageMetadata | null;
+  sessions?: ModelUsagePageMetadata | null;
+  turns?: ModelUsagePageMetadata | null;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
- * via the `definition` "CursorPageMetadata".
+ * via the `definition` "ModelUsagePageMetadata".
  */
-export interface CursorPageMetadata {
+export interface ModelUsagePageMetadata {
   has_more: HasMore;
+  limit: Limit;
   next_cursor: NextCursor;
   revision: Revision3;
 }
@@ -1371,7 +1380,7 @@ export interface CursorPageMetadata {
  */
 export interface ProjectItem {
   name: Name;
-  path: Path;
+  path?: Path;
   vendors: Vendors;
 }
 /**
@@ -1392,9 +1401,11 @@ export interface ModelUsageSession {
   runtime_available: RuntimeAvailable;
   started_at: StartedAt;
   title: Title1;
+  turns?: Turns6;
   usage: UsageBuckets;
-  vendor: Vendor2;
+  vendor: Vendor3;
   wait_seconds: WaitSeconds3;
+  warnings?: Warnings1;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -1433,6 +1444,26 @@ export interface ModelUsageSessionModel {
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
+ * via the `definition` "ModelUsageTurn".
+ */
+export interface ModelUsageTurn {
+  context: ModelUsageContext | null;
+  estimated_cost_usd: EstimatedCostUsd4;
+  model: Model8;
+  model_key: ModelKey4;
+  pricing: ModelUsagePricing;
+  project?: Project1;
+  provider: Provider5;
+  sequence: Sequence;
+  session_id: SessionId3;
+  session_title?: SessionTitle1;
+  started_at: StartedAt1;
+  turn_id: TurnId5;
+  usage: UsageBuckets;
+  vendor?: Vendor2;
+}
+/**
+ * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
  * via the `definition` "ModelUsageSummary".
  */
 export interface ModelUsageSummary {
@@ -1441,7 +1472,7 @@ export interface ModelUsageSummary {
   avg_tokens_per_turn: AvgTokensPerTurn;
   cost_stats: SessionTurnDistributionStats;
   elapsed_stats: ElapsedStats;
-  estimated_cost_usd: EstimatedCostUsd4;
+  estimated_cost_usd: EstimatedCostUsd5;
   missing_price_count: MissingPriceCount;
   models: Models2;
   processed_tokens: ProcessedTokens2;
@@ -1453,7 +1484,7 @@ export interface ModelUsageSummary {
   total_elapsed_seconds: TotalElapsedSeconds;
   total_execution_seconds: TotalExecutionSeconds;
   total_wait_seconds: TotalWaitSeconds;
-  turns: Turns6;
+  turns: Turns7;
 }
 export interface ElapsedStats {
   [k: string]: DistributionStats;
@@ -1479,32 +1510,12 @@ export interface TimeBuckets {
  */
 export interface ModelUsageTimeBucket {
   bucket: Bucket1;
-  estimated_cost_usd: EstimatedCostUsd5;
-  model: Model8;
-  model_key: ModelKey4;
-  provider: Provider5;
-  turns: Turns7;
-  usage: UsageBuckets;
-}
-/**
- * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
- * via the `definition` "ModelUsageTurn".
- */
-export interface ModelUsageTurn {
-  context: ModelUsageContext | null;
   estimated_cost_usd: EstimatedCostUsd6;
   model: Model9;
   model_key: ModelKey5;
-  pricing: ModelUsagePricing;
-  project?: Project1;
   provider: Provider6;
-  sequence: Sequence;
-  session_id: SessionId3;
-  session_title?: SessionTitle1;
-  started_at: StartedAt1;
-  turn_id: TurnId5;
+  turns: Turns8;
   usage: UsageBuckets;
-  vendor?: Vendor3;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -1526,7 +1537,7 @@ export interface OverviewPayload {
   revision: Revision5;
   schema_version: SchemaVersion4;
   sessions: SessionOverview;
-  warnings: Warnings3;
+  warnings: Warnings4;
 }
 export interface Cohort {
   [k: string]: number;
@@ -1556,7 +1567,7 @@ export interface SessionOverview {
   top_projects: TopProjects;
   top_sessions: TopSessions;
   usage: UsageTotals;
-  warnings: Warnings2;
+  warnings: Warnings3;
   window_days: WindowDays;
 }
 /**
@@ -1567,7 +1578,7 @@ export interface RuntimeTotals {
   execution_seconds: ExecutionSeconds4;
   failed_tool_calls: FailedToolCalls;
   tool_calls: ToolCalls3;
-  turns: Turns9;
+  turns: Turns10;
   wait_seconds: WaitSeconds4;
 }
 /**
@@ -1599,7 +1610,7 @@ export interface SessionSummary {
   started_at?: StartedAt2;
   title?: Title2;
   tool_calls: ToolCalls4;
-  turns: Turns10;
+  turns: Turns11;
   vendor: Vendor4;
   vendors: Vendors3;
   wait_seconds: WaitSeconds5;
@@ -1624,16 +1635,28 @@ export interface WarningSummary {
   session_id?: SessionId5;
 }
 /**
+ * Project-detail route payload, including its cursor metadata.
+ *
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
  * via the `definition` "ProjectDetailPayload".
  */
 export interface ProjectDetailPayload {
   name: Name1;
+  page: CursorPageMetadata;
   path?: Path1;
   session_count: SessionCount2;
   sessions?: Sessions5;
   since_days?: SinceDays2;
   vendors?: Vendors4;
+}
+/**
+ * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
+ * via the `definition` "CursorPageMetadata".
+ */
+export interface CursorPageMetadata {
+  has_more: HasMore1;
+  next_cursor: NextCursor1;
+  revision: Revision6;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -1657,7 +1680,7 @@ export interface RefreshPayload {
  */
 export interface IncrementalRefresh {
   reused: Reused;
-  revision: Revision6;
+  revision: Revision7;
   status: Status1;
 }
 /**
@@ -1692,10 +1715,10 @@ export interface SessionEventDetail {
 export interface SessionEvidenceTimelinePayload {
   entries: Entries;
   entrypoint_session_id: EntrypointSessionId;
-  revision: Revision7;
+  revision: Revision8;
   root_session_id: RootSessionId4;
   schema_version: SchemaVersion5;
-  warnings: Warnings4;
+  warnings: Warnings5;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -1845,7 +1868,7 @@ export interface GraphStatsPayload {
   sessions?: Sessions7;
   usage?: GraphUsageBuckets;
   vendor?: Vendor8;
-  warnings?: Warnings5;
+  warnings?: Warnings6;
   [k: string]: unknown;
 }
 /**
@@ -1870,7 +1893,7 @@ export interface Model12 {
 export interface GraphRuntime {
   execution_seconds?: ExecutionSeconds8;
   tool_calls?: ToolCalls5;
-  turns?: Turns11;
+  turns?: Turns12;
   [k: string]: unknown;
 }
 /**
@@ -1913,8 +1936,8 @@ export interface GraphUsagePayload {
   session_id: SessionId10;
   sessions?: Sessions8;
   total_usage?: GraphUsageBuckets;
-  turns?: Turns13;
-  warnings?: Warnings6;
+  turns?: Turns14;
+  warnings?: Warnings7;
   [k: string]: unknown;
 }
 /**
@@ -1935,7 +1958,7 @@ export interface GraphCostEvidence {
 export interface GraphModelUsage {
   model?: Model13;
   provider?: Provider8;
-  turns?: Turns12;
+  turns?: Turns13;
   usage?: GraphUsageBuckets | null;
   [k: string]: unknown;
 }
@@ -1993,10 +2016,13 @@ export interface SessionItem {
   vendors: Vendors7;
 }
 /**
+ * Timeline route payload, including its cursor metadata.
+ *
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
  * via the `definition` "SessionTimelinePayload".
  */
 export interface SessionTimelinePayload {
+  page: CursorPageMetadata;
   timeline?: Timeline;
   total: Total;
 }
@@ -2058,10 +2084,10 @@ export interface TodayPayload {
   generated_at: GeneratedAt4;
   hourly: Hourly;
   projects: ProjectsOverview;
-  revision: Revision8;
+  revision: Revision9;
   schema_version: SchemaVersion6;
   sessions: SessionOverview;
-  warnings: Warnings7;
+  warnings: Warnings8;
 }
 export interface Cohort1 {
   [k: string]: number;
@@ -2096,7 +2122,7 @@ export interface TokenEfficiencyProjectPayload {
   project: ProjectIdentity;
   schema_version: SchemaVersion7;
   trends: Trends;
-  warnings: Warnings8;
+  warnings: Warnings9;
   [k: string]: unknown;
 }
 export interface Attribution {
@@ -2170,7 +2196,7 @@ export interface Coverage3 {
   sessions: Sessions11;
   tool_items: ToolItems;
   truncated_input_summaries: TruncatedInputSummaries;
-  turns: Turns14;
+  turns: Turns15;
   undated_tool_items: UndatedToolItems;
   [k: string]: unknown;
 }
@@ -2208,7 +2234,7 @@ export interface HotspotRow {
   status: Status6;
   targeted_calls: TargetedCalls;
   turn: Distribution;
-  turns: Turns15;
+  turns: Turns16;
   [k: string]: unknown;
 }
 /**

@@ -4553,13 +4553,49 @@
       "title": "ModelUsageOption",
       "type": "object"
     },
+    "ModelUsagePageMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "limit": {
+          "title": "Limit",
+          "type": "integer"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next Cursor"
+        },
+        "revision": {
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision",
+        "next_cursor",
+        "has_more",
+        "limit"
+      ],
+      "title": "ModelUsagePageMetadata",
+      "type": "object"
+    },
     "ModelUsagePages": {
       "additionalProperties": false,
       "properties": {
         "sessions": {
           "anyOf": [
             {
-              "$ref": "#/$defs/CursorPageMetadata"
+              "$ref": "#/$defs/ModelUsagePageMetadata"
             },
             {
               "type": "null"
@@ -4570,7 +4606,7 @@
         "turns": {
           "anyOf": [
             {
-              "$ref": "#/$defs/CursorPageMetadata"
+              "$ref": "#/$defs/ModelUsagePageMetadata"
             },
             {
               "type": "null"
@@ -4705,6 +4741,7 @@
         },
         "confidence": {
           "enum": [
+            "reported",
             "estimated",
             "missing_price"
           ],
@@ -4840,6 +4877,13 @@
           ],
           "title": "Title"
         },
+        "turns": {
+          "items": {
+            "$ref": "#/$defs/ModelUsageTurn"
+          },
+          "title": "Turns",
+          "type": "array"
+        },
         "usage": {
           "$ref": "#/$defs/UsageBuckets"
         },
@@ -4857,6 +4901,13 @@
         "wait_seconds": {
           "title": "Wait Seconds",
           "type": "number"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
         }
       },
       "required": [
@@ -5760,10 +5811,14 @@
     },
     "ProjectDetailPayload": {
       "additionalProperties": false,
+      "description": "Project-detail route payload, including its cursor metadata.",
       "properties": {
         "name": {
           "title": "Name",
           "type": "string"
+        },
+        "page": {
+          "$ref": "#/$defs/CursorPageMetadata"
         },
         "path": {
           "anyOf": [
@@ -5812,7 +5867,8 @@
       },
       "required": [
         "name",
-        "session_count"
+        "session_count",
+        "page"
       ],
       "title": "ProjectDetailPayload",
       "type": "object"
@@ -5887,6 +5943,7 @@
               "type": "null"
             }
           ],
+          "default": null,
           "title": "Path"
         },
         "vendors": {
@@ -5899,7 +5956,6 @@
       },
       "required": [
         "name",
-        "path",
         "vendors"
       ],
       "title": "ProjectItem",
@@ -6607,7 +6663,11 @@
     },
     "SessionTimelinePayload": {
       "additionalProperties": false,
+      "description": "Timeline route payload, including its cursor metadata.",
       "properties": {
+        "page": {
+          "$ref": "#/$defs/CursorPageMetadata"
+        },
         "timeline": {
           "items": {
             "$ref": "#/$defs/TimelineBucketPayload"
@@ -6622,7 +6682,8 @@
         }
       },
       "required": [
-        "total"
+        "total",
+        "page"
       ],
       "title": "SessionTimelinePayload",
       "type": "object"
@@ -7338,6 +7399,11 @@
           ],
           "title": "Total Confidence",
           "type": "string"
+        },
+        "uncached_prompt_tokens": {
+          "default": 0,
+          "title": "Uncached Prompt Tokens",
+          "type": "integer"
         }
       },
       "title": "UsageBuckets",
