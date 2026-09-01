@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# ruff: noqa: E402
 """Evaluate session summary and search against private local judgments.
 
 The synthetic fixture remains the deterministic default. This companion is
@@ -113,7 +111,7 @@ class LocalEvaluationConfig(BaseModel):
         return values
 
     @model_validator(mode="after")
-    def scoped_judgments(self) -> "LocalEvaluationConfig":
+    def scoped_judgments(self) -> LocalEvaluationConfig:
         allowed = set(self.session_ids)
         for judgment in [*self.summary_judgments, *self.search_judgments]:
             if judgment.session_id not in allowed:
@@ -232,9 +230,13 @@ def _candidate_identities(session: Session, judgment: SearchJudgment) -> list[st
     query_folded = query.casefold()
     terms = tuple(dict.fromkeys(_tokens(query)))
     identities = []
-    for document in _search_documents(graph, session, turns):
-        if judgment.kinds is not None and document.kind not in judgment.kinds:
-            continue
+    for document in _search_documents(
+        graph,
+        session,
+        turns,
+        mode=judgment.mode,
+        kinds=judgment.kinds,
+    ):
         score, _fields = _lexical_score(
             document,
             query_folded=query_folded,
@@ -271,6 +273,8 @@ def _ranking_metrics(
 
     ideal = dcg(sorted(relevance.values(), reverse=True)[:10])
     return {
+        "recall_at_5": round(_recall_at(ranked, set(relevance), 5), 4),
+        "recall_at_10": round(_recall_at(ranked, set(relevance), 10), 4),
         "mrr": round(mrr, 4),
         "ndcg_at_10": round(
             dcg([relevance.get(identity, 0) for identity in top]) / ideal
@@ -1075,15 +1079,19 @@ def evaluate(
         candidates = _candidate_identities(session, judgment)
         candidate_rows[judgment.tier].append(
             {
-                "recall_at_5": _recall_at(candidates, relevant, 5),
-                "recall_at_10": _recall_at(candidates, relevant, 10),
+                "source_order_candidate_recall_at_5": _recall_at(
+                    candidates, relevant, 5
+                ),
+                "source_order_candidate_recall_at_10": _recall_at(
+                    candidates, relevant, 10
+                ),
                 "candidate_universe_recall": _recall_at(
                     candidates, relevant, len(candidates)
                 ),
             }
         )
-        for strategy in rank_rows:
-            rank_rows[strategy].append(
+        for strategy, rows in rank_rows.items():
+            rows.append(
                 _ranking_metrics(
                     _rank_ablation(response["matches"], judgment.query, strategy),
                     judgment.judgments,
@@ -1182,7 +1190,7 @@ def evaluate(
                 for strategy, rows in rank_rows.items()
             },
             "response_bytes": _distribution(response_bytes),
-            "ablation_candidate_set": "Each ablation reorders the same returned lexical candidates; it does not establish independent semantic or paraphrase recall.",
+            "ablation_candidate_set": "Each ablation reorders the same returned lexical candidates; source-order candidate recall is only a prefix diagnostic, while candidate-universe recall measures matching completeness.",
         },
         "performance": {"diagnostic_only": True, "measurements": performance},
         "gates": gates,

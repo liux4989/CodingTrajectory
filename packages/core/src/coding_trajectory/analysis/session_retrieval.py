@@ -5,6 +5,7 @@ from __future__ import annotations
 import heapq
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
@@ -150,7 +151,10 @@ def build_session_summary(
                             )
                         )
 
-            if isinstance(item, FileChangeItem) and signals.outcome(item) == "succeeded":
+            if (
+                isinstance(item, FileChangeItem)
+                and signals.outcome(item) == "succeeded"
+            ):
                 path = (item.path or _path_from_value(item.input) or "").strip()
                 if path:
                     existing = changes_by_path.get(path)
@@ -323,14 +327,18 @@ def search_session(
     query_folded = query_text.casefold()
     query_terms = tuple(dict.fromkeys(_tokens(query_text)))
 
-    documents = _search_documents(session_graph, session, turns)
+    documents = _search_documents(
+        session_graph,
+        session,
+        turns,
+        mode=mode,
+        kinds=selected_kinds,
+    )
     matches: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     retained_content_complete = _content_complete(session, turns)
     content_complete = retained_content_complete
     searched_resources = 0
     for document in documents:
-        if document.kind not in selected_kinds:
-            continue
         searched_resources += 1
         content_complete = content_complete and document.content_complete
         lexical_score, matched_fields = _lexical_score(
@@ -604,14 +612,23 @@ def _search_documents(
     session_graph: SessionGraph,
     session: Session,
     turns: list[Turn],
+    *,
+    mode: Literal["text", "path"] = "text",
+    kinds: Iterable[SearchKind] | None = None,
 ) -> list[_SearchDocument]:
-    index = build_session_graph_index(session_graph)
+    selected_kinds = frozenset(DEFAULT_SEARCH_KINDS if kinds is None else kinds)
+    include_user_messages = mode == "text" and "user_message" in selected_kinds
+    index = build_session_graph_index(session_graph) if include_user_messages else None
     signals = _ItemSignals()
     item_count = sum(len(turn.items) for turn in turns)
     item_position = 0
     documents: list[_SearchDocument] = []
     for turn in turns:
-        request = extract_user_request(index, turn, session=session)
+        request = (
+            extract_user_request(index, turn, session=session)
+            if index is not None
+            else None
+        )
         if request and request.get("content"):
             text, complete = _bounded_text(request["content"])
             documents.append(
@@ -637,14 +654,43 @@ def _search_documents(
         for item in turn.items:
             recency = _recency_score(item_position, item_count)
             item_position += 1
-            if isinstance(item, ReasoningItem) or _is_retrieval_item(item):
+            if (
+                isinstance(item, ReasoningItem)
+                or not _item_can_produce_search_kind(item, mode, selected_kinds)
+                or _is_retrieval_item(item)
+            ):
                 continue
-            documents.extend(_documents_for_item(item, recency=recency, signals=signals))
+            documents.extend(
+                _documents_for_item(
+                    item,
+                    recency=recency,
+                    signals=signals,
+                    mode=mode,
+                    kinds=selected_kinds,
+                )
+            )
     return documents
 
 
+def _item_can_produce_search_kind(
+    item: Item,
+    mode: Literal["text", "path"],
+    kinds: frozenset[SearchKind],
+) -> bool:
+    if isinstance(item, AgentMessageItem):
+        return mode == "text" and "assistant_message" in kinds
+    if isinstance(item, FileChangeItem):
+        return "file_change" in kinds
+    return mode == "text" and bool({"tool_call", "tool_result"} & kinds)
+
+
 def _documents_for_item(
-    item: Item, *, recency: float, signals: _ItemSignals
+    item: Item,
+    *,
+    recency: float,
+    signals: _ItemSignals,
+    mode: Literal["text", "path"],
+    kinds: frozenset[SearchKind],
 ) -> list[_SearchDocument]:
     references = _item_references(item)
     structural = signals.structural_score(item) + recency
@@ -672,33 +718,48 @@ def _documents_for_item(
         else getattr(item, "input", None)
     )
     output_value = getattr(item, "output", None)
-    input_text, input_complete = _bounded_text(input_value)
-    output_text, output_complete = _bounded_text(output_value)
     tool_name = str(getattr(item, "tool_name", None) or "")
     documents: list[_SearchDocument] = []
 
     if isinstance(item, FileChangeItem):
         path = item.path or _path_from_value(item.input) or ""
+        if mode == "path":
+            fields = {"path": path}
+            content_complete = True
+        else:
+            input_text, input_complete = _bounded_text(input_value)
+            output_text, output_complete = _bounded_text(output_value)
+            fields = {
+                "path": path,
+                "operation": item.operation or "",
+                "tool_name": tool_name,
+                "tool_input": input_text,
+                "tool_output": output_text,
+            }
+            content_complete = input_complete and output_complete
         documents.append(
             _SearchDocument(
                 kind="file_change",
                 timestamp=item.started_at,
                 label=signals.label(item),
-                fields={
-                    "path": path,
-                    "operation": item.operation or "",
-                    "tool_name": tool_name,
-                    "tool_input": input_text,
-                    "tool_output": output_text,
-                },
+                fields=fields,
                 references=references,
                 structural_score=structural,
-                content_complete=input_complete and output_complete,
+                content_complete=content_complete,
             )
         )
         return documents
 
-    if input_text or tool_name:
+    if "tool_call" in kinds:
+        input_text, input_complete = _bounded_text(input_value)
+    else:
+        input_text, input_complete = "", True
+    if "tool_result" in kinds:
+        output_text, output_complete = _bounded_text(output_value)
+    else:
+        output_text, output_complete = "", True
+
+    if "tool_call" in kinds and (input_text or tool_name):
         fields = {"tool_name": tool_name, "tool_input": input_text}
         if isinstance(item, CommandExecutionItem):
             fields["command"] = input_text
@@ -713,7 +774,7 @@ def _documents_for_item(
                 content_complete=input_complete,
             )
         )
-    if output_text:
+    if "tool_result" in kinds and output_text:
         documents.append(
             _SearchDocument(
                 kind="tool_result",

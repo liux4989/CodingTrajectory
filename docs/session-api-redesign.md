@@ -356,7 +356,11 @@ Contract rules:
 | `file_change` | Normalized path, operation, patch/write input, observed result |
 
 Large values use bounded field-aware extraction rather than one head-only
-character slice. Truncation is recorded in coverage metadata.
+character slice. Truncation is recorded in coverage metadata. Document
+construction honors `mode` and `kinds`: path mode materializes only file-path
+documents, and kind-filtered searches do not serialize unrelated tool inputs
+or results. `searched_resources` therefore counts the documents actually
+searched rather than every searchable document in the session.
 
 ### Ranking
 
@@ -491,14 +495,16 @@ and service dispatch, but writes its report only below the ignored
 `.artifacts/session-retrieval-local/` directory. The committed example uses
 synthetic UUIDs and placeholders only.
 
-For each configured query it reports candidate-generation Recall@5 and
-Recall@10 against every source-judged relevant resource, separately for exact
-and paraphrase tiers. Ranking then reports MRR, nDCG@10, and returned-result
-precision for structural-plus-lexical, lexical-only, and recent-first orders
-over the same returned candidate set. This keeps candidate coverage distinct
-from ordering quality. The current lexical candidate stage has no semantic
-retrieval claim; poor paraphrase recall is a diagnostic gap, not a reason to
-add embeddings in Phase 1/2.
+For each configured query it reports source-order candidate Recall@5 and
+Recall@10 as prefix diagnostics, plus candidate-universe recall as the measure
+of lexical matching completeness, separately for exact and paraphrase tiers.
+The source-order prefix is not API-ranked recall. Ranking reports actual
+Recall@5, Recall@10, MRR, nDCG@10, and returned-result precision for
+structural-plus-lexical, lexical-only, and recent-first orders over the same
+returned candidate set. This keeps candidate coverage distinct from ordering
+quality. The current lexical candidate stage has no semantic retrieval claim;
+poor paraphrase recall is a diagnostic gap, not a reason to add embeddings in
+Phase 1/2.
 
 Each local run also checks canonical reference resolution, selected-turn scope,
 private-reasoning and self-retrieval exclusion, kind filtering, bounds,
