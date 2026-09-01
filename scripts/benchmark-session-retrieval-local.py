@@ -16,11 +16,17 @@ measures at real scale:
 - exact recall/precision against derived ground truth: queries built from the
   canonical model itself (a changed path, a request token, a failed command
   phrase) whose expected matches are computable from first principles;
-- warm-store execution cost distribution across many real sessions.
+- warm-store execution cost at real scale.
+
+The corpus is a deterministic audited cohort of 12-20 sessions covering every
+vendor present, the largest and smallest sessions, sessions with failed
+commands, file changes, and multiple turns, and compact-retention sessions
+when present. The cohort is named in the report so every check outcome is
+traceable to an audited session. The local corpus is live: counts describe
+the discovery-time snapshot.
 
 Usage:
     uv run python scripts/benchmark-session-retrieval-local.py
-    uv run python scripts/benchmark-session-retrieval-local.py --max-sessions 400
     uv run python scripts/benchmark-session-retrieval-local.py --vendor codex
     uv run python scripts/benchmark-session-retrieval-local.py --since-days 30
     uv run python scripts/benchmark-session-retrieval-local.py --no-write
@@ -32,7 +38,6 @@ import argparse
 import json
 import math
 import platform
-import random
 import re
 import statistics
 import sys
@@ -69,7 +74,7 @@ SCHEMA_VERSION = 1
 DEFAULT_OUTPUT = (
     REPO_ROOT / "benchmarks" / "results" / "session-retrieval-local-v1.json"
 )
-SAMPLE_SEED = 20260901
+MAX_COHORT_SESSIONS = 20
 _MAX_FAILURE_EXAMPLES = 10
 _SINGLE_TOKEN_PATH_RE = re.compile(r"^[\w./:@+-]{4,200}$")
 _TOKEN_RE = re.compile(r"[\w./:@+-]+", re.UNICODE)
@@ -183,28 +188,82 @@ def _distribution(values: list[float]) -> dict[str, float]:
     }
 
 
-def _session_sort_key(session: Session) -> str:
-    return str(session.session_id)
+def _item_count(session: Session) -> int:
+    return sum(len(turn.items) for turn in session.turns)
 
 
-def select_sessions(store: DocumentStore, max_sessions: int) -> list[Session]:
-    """Deterministic seeded sample plus the largest sessions by item count."""
-    sessions = sorted(store.sessions.values(), key=_session_sort_key)
-    if max_sessions < 1:
-        return sessions
-    sample_size = min(max_sessions, len(sessions))
-    sampled = random.Random(SAMPLE_SEED).sample(sessions, sample_size)
-    by_items = sorted(
-        sessions,
-        key=lambda session: (
-            -sum(len(turn.items) for turn in session.turns),
-            str(session.session_id),
-        ),
+def _has_failed_command(session: Session) -> bool:
+    return any(
+        isinstance(item, CommandExecutionItem)
+        and (item.status == "failed" or bool(item.exit_code))
+        for turn in session.turns
+        for item in turn.items
     )
-    selected = {session.session_id: session for session in sampled}
-    for session in by_items[:10]:
-        selected.setdefault(session.session_id, session)
-    return sorted(selected.values(), key=_session_sort_key)
+
+
+def select_cohort(store: DocumentStore) -> list[tuple[Session, list[str]]]:
+    """Pick a deterministic audited cohort covering vendors, sizes, behaviors.
+
+    Every selected session carries the coverage slots it fills so report
+    readers can audit why each session belongs to the cohort. Ties break by
+    session id, keeping the cohort stable across runs on an unchanged corpus.
+    """
+    slots: dict[str, list[Any]] = {}
+
+    def add(slot: str, session: Session | None) -> None:
+        if session is not None:
+            key = str(session.session_id)
+            if key not in slots:
+                slots[key] = [session, []]
+            slots[key][1].append(slot)
+
+    sessions = sorted(store.sessions.values(), key=lambda s: str(s.session_id))
+    by_items = sorted(sessions, key=lambda s: (_item_count(s), str(s.session_id)))
+    vendors = sorted({session.vendor.value for session in sessions})
+    for vendor in vendors:
+        vendor_sessions = [s for s in sessions if s.vendor.value == vendor]
+        vendor_by_items = [s for s in by_items if s.vendor.value == vendor]
+        add(f"{vendor}:largest", vendor_by_items[-1])
+        add(f"{vendor}:typical", vendor_by_items[len(vendor_by_items) // 2])
+        add(
+            f"{vendor}:with_failures",
+            next((s for s in vendor_sessions if _has_failed_command(s)), None),
+        )
+        add(
+            f"{vendor}:with_file_changes",
+            next(
+                (
+                    s
+                    for s in vendor_sessions
+                    if any(
+                        isinstance(item, FileChangeItem)
+                        for turn in s.turns
+                        for item in turn.items
+                    )
+                ),
+                None,
+            ),
+        )
+        add(
+            f"{vendor}:multi_turn",
+            next((s for s in vendor_sessions if len(s.turns) >= 3), None),
+        )
+    add("smallest", by_items[0] if by_items else None)
+    add(
+        "measurements_retention",
+        next((s for s in sessions if s.measurements is not None), None),
+    )
+
+    cohort = sorted(slots.values(), key=lambda entry: str(entry[0].session_id))
+    if len(cohort) > MAX_COHORT_SESSIONS:
+        # Shed sessions that only fill the soft "typical" slot first.
+        essential = [
+            entry
+            for entry in cohort
+            if any(not name.endswith(":typical") for name in entry[1])
+        ]
+        cohort = essential[:MAX_COHORT_SESSIONS]
+    return [(entry[0], entry[1]) for entry in cohort]
 
 
 def _turn_request(index: Any, session: Session, turn: Any) -> dict[str, str] | None:
@@ -217,6 +276,7 @@ def _turn_request(index: Any, session: Session, turn: Any) -> dict[str, str] | N
 def evaluate_summary(
     store: DocumentStore,
     session: Session,
+    index: Any,
     checks: CheckLog,
 ) -> dict[str, Any]:
     sid = str(session.session_id)
@@ -291,7 +351,6 @@ def evaluate_summary(
     )
 
     # Objective is the truncated content of the last non-low-value request.
-    index = build_session_graph_index(_single_session_graph(session))
     requests = [
         (turn, request)
         for turn in session.turns
@@ -409,7 +468,7 @@ def _pick_token_case(
         if not content or len(content) > 16_000:
             continue
         tokens = sorted(
-            {token for token in _tokens(content) if len(token) >= 6},
+            {token for token in _tokens(content) if 6 <= len(token) <= 200},
             key=lambda token: (-len(token), token),
         )
         if not tokens:
@@ -428,7 +487,8 @@ def _pick_failed_command_case(session: Session) -> tuple[str, str] | None:
                 continue
             failed = item.status == "failed" or bool(item.exit_code)
             command = _normalize(str(item.command or ""))
-            if failed and 8 <= len(command) <= 2_000:
+            # The search contract caps query length at 1000 characters.
+            if failed and 8 <= len(command) <= 1_000:
                 return command, str(item.item_id)
     return None
 
@@ -516,10 +576,10 @@ def _check_search_response(
 def evaluate_search(
     store: DocumentStore,
     session: Session,
+    index: Any,
     checks: CheckLog,
 ) -> dict[str, Any]:
     sid = str(session.session_id)
-    index = build_session_graph_index(_single_session_graph(session))
     result: dict[str, Any] = {"cases": []}
 
     token_case = _pick_token_case(index, session)
@@ -707,6 +767,11 @@ def _single_session_graph(session: Session) -> Any:
     )
 
 
+# One cache shared across dispatches mirrors ServiceRuntime's store-lifetime
+# reuse and keeps entry-point indexing out of the per-call measurement noise.
+_SHARED_CACHE = IndexCache()
+
+
 def _dispatch(
     store: DocumentStore, method: str, params: dict[str, Any]
 ) -> dict[str, Any]:
@@ -717,7 +782,7 @@ def _dispatch(
         global_scope=True,
         current_dir=REPO_ROOT,
         discovery_note="local corpus benchmark",
-        cache=IndexCache(),
+        cache=_SHARED_CACHE,
     )
 
 
@@ -739,8 +804,9 @@ def evaluate(*, args: argparse.Namespace) -> dict[str, Any]:
     )
     build_s = time.perf_counter() - started
 
-    sessions = select_sessions(store, args.max_sessions)
+    cohort = select_cohort(store)
     checks = CheckLog()
+    audit: list[dict[str, Any]] = []
     summary_perf: list[float] = []
     summary_bytes: list[float] = []
     compression: list[float] = []
@@ -751,17 +817,21 @@ def evaluate(*, args: argparse.Namespace) -> dict[str, Any]:
     match_totals: list[float] = []
     derived = {"path_cases": 0, "token_cases": 0, "failed_command_cases": 0}
 
-    for session in sessions:
-        summary_result = evaluate_summary(store, session, checks)
+    for session, slots in cohort:
+        index = build_session_graph_index(_single_session_graph(session))
+        summary_result = evaluate_summary(store, session, index, checks)
         summary_perf.append(summary_result["first_ms"])
         summary_bytes.append(summary_result["summary_bytes"])
-        if summary_result["canonical_bytes"]:
-            compression.append(
-                summary_result["summary_bytes"] / summary_result["canonical_bytes"]
-            )
+        ratio = (
+            summary_result["summary_bytes"] / summary_result["canonical_bytes"]
+            if summary_result["canonical_bytes"]
+            else None
+        )
+        if ratio is not None:
+            compression.append(ratio)
         content_complete_count += int(summary_result["content_complete"])
 
-        search_result = evaluate_search(store, session, checks)
+        search_result = evaluate_search(store, session, index, checks)
         for case in search_result["cases"]:
             search_bytes.append(case["response_bytes"])
             if case["case"] == "request_token":
@@ -776,6 +846,23 @@ def evaluate(*, args: argparse.Namespace) -> dict[str, Any]:
                 derived["path_cases"] += 1
             elif case["case"] == "failed_command_phrase":
                 derived["failed_command_cases"] += 1
+
+        audit.append(
+            {
+                "session_id": str(session.session_id),
+                "vendor": session.vendor.value,
+                "turns": len(session.turns),
+                "items": _item_count(session),
+                "coverage_slots": slots,
+                "summary_ms": round(summary_result["first_ms"], 3),
+                "summary_bytes": summary_result["summary_bytes"],
+                "summary_compression_ratio": round(ratio, 4)
+                if ratio is not None
+                else None,
+                "content_complete": summary_result["content_complete"],
+                "derived_cases": [case["case"] for case in search_result["cases"]],
+            }
+        )
 
     vendors: dict[str, int] = {}
     for session in store.sessions.values():
@@ -833,13 +920,15 @@ def evaluate(*, args: argparse.Namespace) -> dict[str, Any]:
             if started_times
             else None,
         },
-        "sample": {
-            "sessions": len(sessions),
-            "seed": SAMPLE_SEED,
+        "cohort": {
+            "sessions": len(cohort),
             "selection": (
-                f"seeded sample of up to {args.max_sessions} sessions plus the "
-                "10 largest sessions by item count"
+                "audited coverage cohort: per-vendor largest/typical/"
+                "with-failures/with-file-changes/multi-turn sessions plus the "
+                "smallest and any measurements-retention session; ties break "
+                "by session id"
             ),
+            "members": audit,
         },
         "derived_ground_truth": derived,
         "checks": checks.report(),
@@ -847,9 +936,9 @@ def evaluate(*, args: argparse.Namespace) -> dict[str, Any]:
             "rank1_kind_distribution": rank1_kinds,
             "token_match_totals": _distribution(match_totals),
             "content_complete_share": round(
-                content_complete_count / len(sessions), 4
+                content_complete_count / len(cohort), 4
             )
-            if sessions
+            if cohort
             else None,
         },
         "performance": {
@@ -880,7 +969,14 @@ def _print_report(report: dict[str, Any]) -> None:
     )
     print(f"vendors: {corpus['vendors']}")
     print(f"store build: {report['store_build']['elapsed_s']:.1f}s")
-    print(f"sampled sessions: {report['sample']['sessions']}")
+    cohort = report["cohort"]
+    print(f"audited cohort: {cohort['sessions']} sessions")
+    for member in cohort["members"]:
+        print(
+            f"  {member['session_id'][:8]} {member['vendor']:12} "
+            f"turns={member['turns']:3} items={member['items']:5} "
+            f"slots={','.join(member['coverage_slots'])}"
+        )
     print(f"derived ground truth: {report['derived_ground_truth']}")
     print("\nChecks")
     for name, entry in report["checks"].items():
@@ -917,12 +1013,6 @@ def _print_report(report: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--max-sessions",
-        type=int,
-        default=250,
-        help="Seeded sample size (0 = every session; default: 250).",
-    )
-    parser.add_argument(
         "--vendor",
         choices=["codex", "claude_code", "pi"],
         default=None,
@@ -946,8 +1036,6 @@ def main() -> int:
         help="Evaluate without writing the JSON report.",
     )
     args = parser.parse_args()
-    if args.max_sessions < 0:
-        parser.error("--max-sessions must be >= 0")
 
     report = evaluate(args=args)
     _print_report(report)
