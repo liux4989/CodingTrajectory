@@ -55,6 +55,11 @@ def canonical_session_ids(mechanism: ClaudeSubagentInput) -> tuple[UUID, UUID | 
     return canonical_session_id, mechanism.parent_session_id
 
 
+def session_identity(mechanism: ClaudeSubagentInput) -> tuple[UUID | None, UUID | None]:
+    """VendorSessionMechanism entry point: ``(session_id, parent_session_id)``."""
+    return canonical_session_ids(mechanism)
+
+
 def extensions(mechanism: ClaudeSubagentInput) -> VendorExtensions:
     return VendorExtensions(
         claude_code=ClaudeCodeExtensions(

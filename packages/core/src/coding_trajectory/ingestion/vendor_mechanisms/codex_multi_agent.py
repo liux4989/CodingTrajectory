@@ -40,6 +40,17 @@ def parent_session_id(mechanism: CodexMultiAgentInput) -> UUID | None:
     )
 
 
+def session_identity(
+    mechanism: CodexMultiAgentInput,
+) -> tuple[UUID | None, UUID | None]:
+    """VendorSessionMechanism entry point: ``(sandbox_uuid, parent_session_id)``.
+
+    The sandbox id is the same record id the adapter parses into the session
+    UUID, so it may be ``None`` here when absent or unparseable.
+    """
+    return _parse_uuid(mechanism.sandbox_id), parent_session_id(mechanism)
+
+
 def extensions(mechanism: CodexMultiAgentInput) -> VendorExtensions:
     thread_spawn = mechanism.thread_spawn
     return VendorExtensions(
