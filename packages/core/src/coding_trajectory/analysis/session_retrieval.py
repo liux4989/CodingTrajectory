@@ -13,6 +13,7 @@ from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.request_lineage import extract_user_request
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
 from coding_trajectory.analysis.tool_summary_shell import classify_command_family
+from coding_trajectory.contracts.session import DEFAULT_SEARCH_KINDS, SearchKind
 from coding_trajectory.ingestion.common import format_datetime
 from coding_trajectory.ingestion.indexes import build_session_graph_index
 from coding_trajectory.ingestion.models import (
@@ -27,22 +28,6 @@ from coding_trajectory.ingestion.models import (
     ToolCallItem,
     ToolStatus,
     Turn,
-)
-
-SearchKind = Literal[
-    "user_message",
-    "assistant_message",
-    "tool_call",
-    "tool_result",
-    "file_change",
-]
-
-DEFAULT_SEARCH_KINDS: tuple[SearchKind, ...] = (
-    "user_message",
-    "assistant_message",
-    "tool_call",
-    "tool_result",
-    "file_change",
 )
 
 _SEARCH_FIELD_LIMIT = 16_000
