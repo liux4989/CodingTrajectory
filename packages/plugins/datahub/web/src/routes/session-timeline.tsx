@@ -13,6 +13,7 @@ import {
 } from "@/api";
 import { LoadingState } from "@/components/loading-state";
 import { MetricCard } from "@/components/metric-card";
+import { PageHeader } from "@/components/route-header";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { SessionViewTabs } from "@/components/session-view-tabs";
 import { StateBlock } from "@/components/state-block";
@@ -73,14 +74,14 @@ export function SessionTimelineRoute() {
 
   if (query.isPending) {
     return (
-      <div className="route-container w-full min-w-0 pb-8">
+      <div className="route-container-wide w-full min-w-0 pb-8">
         <LoadingState title="Loading evidence timeline" detail="Reading retained canonical session activity." />
       </div>
     );
   }
   if (query.isError) {
     return (
-      <div className="route-container w-full min-w-0 pb-8">
+      <div className="route-container-wide w-full min-w-0 pb-8">
         <StateBlock title="Evidence timeline failed" detail={query.error.message} onRetry={() => query.refetch()} />
       </div>
     );
@@ -118,14 +119,12 @@ export function SessionTimelineRoute() {
   const waterfall = buildWaterfall(payload.entries);
 
   return (
-    <div className="route-container w-full min-w-0 overflow-hidden pb-8">
+    <div className="route-container-wide w-full min-w-0 overflow-hidden pb-8">
       <div className="grid gap-4">
-        <div className="min-w-0">
-          <h1 className="m-0 font-display text-h1 leading-tight">Evidence timeline</h1>
-          <p className="m-0 mt-1 text-body-sm text-muted-foreground">
-            Source-linked requests, responses, tools, failures, and child-agent activity in recorded order.
-          </p>
-        </div>
+        <PageHeader
+          title="Evidence timeline"
+          description="Source-linked requests, responses, tools, failures, and child-agent activity in recorded order."
+        />
         <SessionViewTabs sessionId={sessionId} active="timeline" />
 
         <section className="stat-grid min-w-0">

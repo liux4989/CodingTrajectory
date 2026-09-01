@@ -4,6 +4,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { Bot, GitBranch } from "lucide-react";
 import { fetchSessionTree, type ConversationBranch } from "@/api";
 import { LoadingState } from "@/components/loading-state";
+import { PageHeader } from "@/components/route-header";
 import { SessionLink, shortSessionId } from "@/components/session-link";
 import { SessionViewTabs } from "@/components/session-view-tabs";
 import { StateBlock } from "@/components/state-block";
@@ -134,7 +135,7 @@ export function SessionTreeRoute() {
 
   if (query.isPending) {
     return (
-      <div className="route-container w-full min-w-0 pb-8">
+      <div className="route-container-wide w-full min-w-0 pb-8">
         <LoadingState
           title="Loading conversation tree"
           detail="Reading ordinary fork relationships for this session family."
@@ -144,7 +145,7 @@ export function SessionTreeRoute() {
   }
   if (query.isError) {
     return (
-      <div className="route-container w-full min-w-0 pb-8">
+      <div className="route-container-wide w-full min-w-0 pb-8">
         <StateBlock
           title="Conversation tree failed"
           detail={query.error.message}
@@ -156,16 +157,12 @@ export function SessionTreeRoute() {
 
   const payload = query.data;
   return (
-    <div className="route-container w-full min-w-0 pb-8">
+    <div className="route-container-wide w-full min-w-0 pb-8">
       <div className="grid gap-4">
-        <div className="min-w-0">
-          <h1 className="m-0 font-display text-h1 leading-tight">
-            Conversation tree
-          </h1>
-          <p className="m-0 mt-1 text-body-sm text-muted-foreground">
-            Ordinary human forks stay separate; each branch owns its agent graph.
-          </p>
-        </div>
+        <PageHeader
+          title="Conversation tree"
+          description="Ordinary human forks stay separate; each branch owns its agent graph."
+        />
         <SessionViewTabs sessionId={sessionId} active="tree" />
         <Card className="min-w-0">
           <CardHeader>

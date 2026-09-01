@@ -22,6 +22,7 @@ import type { ApexOptions } from "apexcharts";
 import { ApexChart, escapeHtml, resolveCssColor, tooltipRow, useApexTheme } from "@/components/ui/apex-chart";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/loading-state";
+import { PageHeader } from "@/components/route-header";
 import { SessionViewTabs } from "@/components/session-view-tabs";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
@@ -261,10 +262,18 @@ export function ContextWindowRoute() {
   }
 
   if (query.isPending) {
-    return <LoadingState title="Loading context window" detail="Reading normalized session projections." />;
+    return (
+      <div className="route-container-wide w-full min-w-0 pb-8">
+        <LoadingState title="Loading context window" detail="Reading normalized session projections." />
+      </div>
+    );
   }
   if (query.isError) {
-    return <StateBlock title="Context window failed" detail={query.error.message} onRetry={() => query.refetch()} />;
+    return (
+      <div className="route-container-wide w-full min-w-0 pb-8">
+        <StateBlock title="Context window failed" detail={query.error.message} onRetry={() => query.refetch()} />
+      </div>
+    );
   }
 
   const payload = query.data;
@@ -274,26 +283,22 @@ export function ContextWindowRoute() {
     <div className="route-container-wide w-full min-w-0 overflow-hidden pb-8">
       <div className="context-window-shell">
         <div className="context-window-topbar">
-          <div className="context-window-title-row">
-            <div className="min-w-0">
-              <h1 className="m-0 font-display text-h1 leading-tight">
-                Explore the context window
-              </h1>
-              <p className="m-0 mt-1 text-body-sm text-muted-foreground">
-                A session showing what enters context and what it costs
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-3">
-              <div className="text-right">
-                <p className="m-0 mono text-heading font-bold leading-none text-moss">
-                  ~{formatTokens(payload.used_tokens?.value)}
-                </p>
-                <p className="m-0 mt-1 mono text-caption text-muted-foreground">
-                  / {formatTokens(payload.context_window_tokens?.value)} tokens
-                </p>
+          <PageHeader
+            title="Explore the context window"
+            description="A session showing what enters context and what it costs"
+            actions={
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <div className="text-right">
+                  <p className="m-0 mono text-heading font-bold leading-none text-moss">
+                    ~{formatTokens(payload.used_tokens?.value)}
+                  </p>
+                  <p className="m-0 mt-1 mono text-caption text-muted-foreground">
+                    / {formatTokens(payload.context_window_tokens?.value)} tokens
+                  </p>
+                </div>
               </div>
-            </div>
-          </div>
+            }
+          />
         </div>
 
         <SessionViewTabs sessionId={sessionId} active="context" />

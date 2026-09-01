@@ -10,6 +10,7 @@ import {
 } from "@/api";
 import { GraphTree } from "@/components/graph-tree";
 import { MetricCard } from "@/components/metric-card";
+import { PageHeader } from "@/components/route-header";
 import { StaggerGroup } from "@/components/stagger-group";
 import { StateBlock } from "@/components/state-block";
 import { LoadingState } from "@/components/loading-state";
@@ -93,7 +94,7 @@ export function SessionGraphRoute() {
 
   if (query.isPending) {
     return (
-      <div className="route-container w-full min-w-0 pb-8">
+      <div className="route-container-wide w-full min-w-0 pb-8">
         <LoadingState
           title="Loading session graph"
           detail="Reading the retained graph projections for this session."
@@ -103,7 +104,7 @@ export function SessionGraphRoute() {
   }
   if (query.isError) {
     return (
-      <div className="route-container w-full min-w-0 pb-8">
+      <div className="route-container-wide w-full min-w-0 pb-8">
         <StateBlock
           title="Session graph failed"
           detail={query.error.message}
@@ -133,15 +134,12 @@ export function SessionGraphRoute() {
   const modes = orchestration.multi_agent_modes ?? [];
 
   return (
-    <div className="route-container w-full min-w-0 overflow-hidden pb-8">
+    <div className="route-container-wide w-full min-w-0 overflow-hidden pb-8">
       <div className="grid gap-4">
-        <div className="min-w-0">
-          <h1 className="m-0 font-display text-h1 leading-tight">Agent graph</h1>
-          <p className="m-0 mt-1 text-body-sm text-muted-foreground">
-            {overview.project ?? "Unknown project"} · branch-local orchestration across{" "}
-            {orchestration.session_count ?? overview.sessions.length} session(s)
-          </p>
-        </div>
+        <PageHeader
+          title="Agent graph"
+          description={`${overview.project ?? "Unknown project"} · branch-local orchestration across ${orchestration.session_count ?? overview.sessions.length} session(s)`}
+        />
         <SessionViewTabs sessionId={sessionId} active="graph" />
 
         <section className="stat-grid min-w-0">
