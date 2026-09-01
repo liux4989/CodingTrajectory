@@ -468,6 +468,44 @@ Results are explicitly labeled behavioral rather than real-world retrieval
 quality. Audited provider-log evaluation remains deferred until representative
 sources are available.
 
+### Private local evaluation workflow
+
+The synthetic benchmark remains the committed deterministic baseline. A second
+benchmark evaluates selected local canonical sessions without exporting their
+content:
+
+```bash
+cp benchmarks/session-retrieval-local.example.json \
+  .artifacts/session-retrieval-local/judgments.json
+# Replace placeholders with source-audited local session IDs, canonical
+# item/event references, and private query text.
+uv run python scripts/benchmark-session-retrieval-local.py \
+  --config .artifacts/session-retrieval-local/judgments.json
+```
+
+The configuration explicitly lists sessions and contains source-derived
+summary assertions and graded search relevance. It is intentionally local:
+never commit local IDs, source mappings, prompts, paths, snippets, raw logs,
+or detailed reports. The benchmark uses normal discovery, canonical ingestion,
+and service dispatch, but writes its report only below the ignored
+`.artifacts/session-retrieval-local/` directory. The committed example uses
+synthetic UUIDs and placeholders only.
+
+For each configured query it reports candidate-generation Recall@5 and
+Recall@10 against every source-judged relevant resource, separately for exact
+and paraphrase tiers. Ranking then reports MRR, nDCG@10, and returned-result
+precision for structural-plus-lexical, lexical-only, and recent-first orders
+over the same returned candidate set. This keeps candidate coverage distinct
+from ordering quality. The current lexical candidate stage has no semantic
+retrieval claim; poor paraphrase recall is a diagnostic gap, not a reason to
+add embeddings in Phase 1/2.
+
+Each local run also checks canonical reference resolution, selected-turn scope,
+private-reasoning and self-retrieval exclusion, kind filtering, bounds,
+coverage metadata, and repeat determinism. It records at least 30 warm calls
+for summary plus representative search cases. These timings are diagnostic
+until a stable representative baseline exists.
+
 ### Phase 3: Persistent index and wider scopes
 
 - Add a rebuildable SQLite FTS projection when measured session sizes justify it.

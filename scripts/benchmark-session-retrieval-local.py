@@ -1,35 +1,26 @@
 #!/usr/bin/env python3
-"""Evaluate session summary and search on the real local session corpus.
+# ruff: noqa: E402
+"""Evaluate session summary and search against private local judgments.
 
-This benchmark extends ``scripts/benchmark-session-retrieval.py`` from the
-synthetic fixture to the local provider logs on this machine (Codex, Claude
-Code, and Pi). The local corpus has no human relevance judgments, so ranking
-quality (nDCG/MRR) remains a synthetic-benchmark claim. What this benchmark
-measures at real scale:
+The synthetic fixture remains the deterministic default. This companion is
+opt-in: it reads a user-owned JSON configuration containing explicit local
+session IDs and source-derived judgments. Detailed reports stay under the
+ignored ``.artifacts/session-retrieval-local`` directory.
 
-- corpus size and cold store-build cost;
+- targeted source discovery and cold store-build cost;
 - summary invariants: bounded sections, truthful truncation, evidence
   references that resolve, private-reasoning and self-retrieval exclusion,
   objective selection, deterministic responses;
 - search invariants: truthful totals and limits, kind/turn scoping, rank
   ordering, bounded snippets, reference resolution, determinism;
-- exact recall/precision against derived ground truth: queries built from the
-  canonical model itself (a changed path, a request token, a failed command
-  phrase) whose expected matches are computable from first principles;
+- candidate-generation recall against configured canonical relevance, kept
+  separate from ranking and ranking ablations;
+- source-derived summary evidence assertions, never facts copied from output;
 - warm-store execution cost at real scale.
 
-The corpus is a deterministic audited cohort of 12-20 sessions covering every
-vendor present, the largest and smallest sessions, sessions with failed
-commands, file changes, and multiple turns, and compact-retention sessions
-when present. The cohort is named in the report so every check outcome is
-traceable to an audited session. The local corpus is live: counts describe
-the discovery-time snapshot.
-
 Usage:
-    uv run python scripts/benchmark-session-retrieval-local.py
-    uv run python scripts/benchmark-session-retrieval-local.py --vendor codex
-    uv run python scripts/benchmark-session-retrieval-local.py --since-days 30
-    uv run python scripts/benchmark-session-retrieval-local.py --no-write
+    uv run python scripts/benchmark-session-retrieval-local.py \
+      --config .artifacts/session-retrieval-local/judgments.json
 """
 
 from __future__ import annotations
@@ -44,8 +35,10 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "packages" / "core" / "src"))
@@ -57,8 +50,11 @@ from coding_trajectory.analysis.session_retrieval import (
     _SUMMARY_LIMITS,
     _SUMMARY_TEXT_LIMIT,
     _is_retrieval_item,
+    _lexical_score,
     _low_value_request,
+    _search_documents,
 )
+from coding_trajectory.discovery import discover_store_from_files, locate_session_files
 from coding_trajectory.ingestion.indexes import build_session_graph_index
 from coding_trajectory.ingestion.models import (
     CommandExecutionItem,
@@ -67,17 +63,62 @@ from coding_trajectory.ingestion.models import (
     Session,
 )
 from coding_trajectory.query import DocumentStore
-from coding_trajectory.service import IndexCache, dispatch, resolve_store
+from coding_trajectory.service import IndexCache, dispatch
 
 BENCHMARK_NAME = "session-retrieval-local"
 SCHEMA_VERSION = 1
-DEFAULT_OUTPUT = (
-    REPO_ROOT / "benchmarks" / "results" / "session-retrieval-local-v1.json"
-)
+DEFAULT_OUTPUT = REPO_ROOT / ".artifacts" / "session-retrieval-local" / "report.json"
 MAX_COHORT_SESSIONS = 20
 _MAX_FAILURE_EXAMPLES = 10
 _SINGLE_TOKEN_PATH_RE = re.compile(r"^[\w./:@+-]{4,200}$")
 _TOKEN_RE = re.compile(r"[\w./:@+-]+", re.UNICODE)
+
+
+class RelevantResource(BaseModel):
+    """One canonical source reference in a private local judgment file."""
+
+    identity: str = Field(pattern=r"^(?:[a-z_]+):(item|event):[0-9a-f-]{36}$")
+    relevance: int = Field(ge=1, le=3)
+
+
+class SearchJudgment(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    session_id: str
+    query: str = Field(min_length=1, max_length=1000)
+    mode: Literal["text", "path"] = "text"
+    tier: Literal["exact", "paraphrase"] = "exact"
+    turn_id: str | None = None
+    kinds: list[str] | None = None
+    judgments: list[RelevantResource] = Field(min_length=1)
+
+
+class SummaryJudgment(BaseModel):
+    session_id: str
+    objective: str | None = None
+    sections_include: dict[str, list[str]] = Field(default_factory=dict)
+    sections_exclude: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class LocalEvaluationConfig(BaseModel):
+    schema_version: Literal[1] = 1
+    session_ids: list[str] = Field(min_length=1)
+    summary_judgments: list[SummaryJudgment] = Field(default_factory=list)
+    search_judgments: list[SearchJudgment] = Field(default_factory=list)
+
+    @field_validator("session_ids")
+    @classmethod
+    def unique_session_ids(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("session_ids must be unique")
+        return values
+
+    @model_validator(mode="after")
+    def scoped_judgments(self) -> "LocalEvaluationConfig":
+        allowed = set(self.session_ids)
+        for judgment in [*self.summary_judgments, *self.search_judgments]:
+            if judgment.session_id not in allowed:
+                raise ValueError("every judgment session_id must appear in session_ids")
+        return self
 
 
 class CheckLog:
@@ -102,16 +143,13 @@ class CheckLog:
             name: {
                 "passed": self.passed.get(name, 0),
                 "failed": self.failed.get(name, 0),
-                "failure_examples": self.examples.get(name, []),
             }
             for name in names
         }
 
     def all_passed(self, prefix: str) -> bool:
         return all(
-            count == 0
-            for name, count in self.failed.items()
-            if name.startswith(prefix)
+            count == 0 for name, count in self.failed.items() if name.startswith(prefix)
         )
 
 
@@ -156,9 +194,126 @@ def _summary_references(summary: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _match_stable_id(match: dict[str, Any]) -> str:
     references = match.get("references") or {}
-    return str(
-        references.get("item_id") or (references.get("event_ids") or [""])[0]
+    return str(references.get("item_id") or (references.get("event_ids") or [""])[0])
+
+
+def _match_identity(match: dict[str, Any]) -> str:
+    references = match.get("references") or {}
+    item_id = references.get("item_id")
+    if item_id:
+        return f"{match['kind']}:item:{item_id}"
+    event_ids = references.get("event_ids") or []
+    return f"{match['kind']}:event:{event_ids[0]}" if event_ids else ""
+
+
+def _document_identity(document: Any) -> str:
+    references = document.references
+    item_id = references.get("item_id")
+    if item_id:
+        return f"{document.kind}:item:{item_id}"
+    event_ids = references.get("event_ids") or []
+    return f"{document.kind}:event:{event_ids[0]}" if event_ids else ""
+
+
+def _candidate_identities(session: Session, judgment: SearchJudgment) -> list[str]:
+    """Run the lexical candidate stage without the structural rank ordering.
+
+    The candidate sequence is canonical source order.  It deliberately does
+    not reuse API output, so configured source relevance remains the universe
+    for recall rather than becoming whatever the matcher returned.
+    """
+    graph = _single_session_graph(session)
+    turns = [
+        turn
+        for turn in session.turns
+        if judgment.turn_id is None or str(turn.turn_id) == judgment.turn_id
+    ]
+    query = " ".join(judgment.query.split())
+    query_folded = query.casefold()
+    terms = tuple(dict.fromkeys(_tokens(query)))
+    identities = []
+    for document in _search_documents(graph, session, turns):
+        if judgment.kinds is not None and document.kind not in judgment.kinds:
+            continue
+        score, _fields = _lexical_score(
+            document,
+            query_folded=query_folded,
+            query_terms=terms,
+            mode=judgment.mode,
+        )
+        if score > 0:
+            identities.append(_document_identity(document))
+    return identities
+
+
+def _recall_at(identities: list[str], relevant: set[str], k: int) -> float:
+    if not relevant:
+        return 1.0
+    return len(set(identities[:k]) & relevant) / len(relevant)
+
+
+def _ranking_metrics(
+    ranked: list[str], judgments: list[RelevantResource]
+) -> dict[str, float]:
+    relevance = {entry.identity: entry.relevance for entry in judgments}
+    top = ranked[:10]
+    found = {identity for identity in top if identity in relevance}
+    precision = len(found) / len(top) if top else 1.0
+    mrr = next(
+        (1 / rank for rank, identity in enumerate(ranked, 1) if identity in relevance),
+        0.0,
     )
+
+    def dcg(values: list[int]) -> float:
+        return sum(
+            (2**value - 1) / math.log2(index + 2) for index, value in enumerate(values)
+        )
+
+    ideal = dcg(sorted(relevance.values(), reverse=True)[:10])
+    return {
+        "mrr": round(mrr, 4),
+        "ndcg_at_10": round(
+            dcg([relevance.get(identity, 0) for identity in top]) / ideal
+            if ideal
+            else 1.0,
+            4,
+        ),
+        "precision_at_returned_10": round(precision, 4),
+    }
+
+
+def _mean_metrics(rows: list[dict[str, float]]) -> dict[str, float]:
+    return {
+        key: round(statistics.fmean(row[key] for row in rows), 4) for key in rows[0]
+    }
+
+
+def _lexical_baseline_score(match: dict[str, Any], query: str) -> int:
+    text = f"{match.get('label') or ''} {match.get('snippet') or ''}".casefold()
+    return sum(text.count(term) for term in dict.fromkeys(_tokens(query)))
+
+
+def _rank_ablation(
+    matches: list[dict[str, Any]], query: str, strategy: str
+) -> list[str]:
+    if strategy == "current_structural_lexical":
+        ordered = matches
+    elif strategy == "lexical_snippet_baseline":
+        ordered = sorted(
+            matches,
+            key=lambda match: (
+                -_lexical_baseline_score(match, query),
+                str(match["timestamp"]),
+                _match_identity(match),
+            ),
+        )
+    else:
+        ordered = sorted(
+            matches,
+            key=lambda match: (str(match["timestamp"]), _match_identity(match)),
+            reverse=True,
+        )
+    return [_match_identity(match) for match in ordered]
 
 
 def _rank_order_ok(matches: list[dict[str, Any]]) -> bool:
@@ -456,9 +611,7 @@ def _pick_path_case(session: Session) -> tuple[str, set[str]] | None:
     return query, expected
 
 
-def _pick_token_case(
-    index: Any, session: Session
-) -> tuple[str, str, str] | None:
+def _pick_token_case(index: Any, session: Session) -> tuple[str, str, str] | None:
     """Pick a distinctive request token; return (query, turn_id, request_text)."""
     for turn in session.turns:
         request = _turn_request(index, session, turn)
@@ -514,9 +667,7 @@ def _check_search_response(
     )
     checks.record(
         f"{case}.references_resolve",
-        all(
-            _refs_resolve(store, match["references"]) for match in matches
-        ),
+        all(_refs_resolve(store, match["references"]) for match in matches),
         f"{sid}: unresolved match references",
     )
     checks.record(
@@ -593,9 +744,7 @@ def evaluate_search(
         checks.record(
             "search.deterministic", response == repeated, f"{sid}: response drifted"
         )
-        _check_search_response(
-            store, checks, sid, "search.token", response, limit=50
-        )
+        _check_search_response(store, checks, sid, "search.token", response, limit=50)
         source_found = any(
             match["kind"] == "user_message"
             and match["references"].get("turn_id") == turn_id
@@ -786,223 +935,286 @@ def _dispatch(
     )
 
 
-def evaluate(*, args: argparse.Namespace) -> dict[str, Any]:
-    cache = IndexCache()
-    started = time.perf_counter()
-    store, note = resolve_store(
-        {
-            key: value
-            for key, value in {
-                "agent_vendor": args.vendor,
-                "since_days": args.since_days,
-            }.items()
-            if value is not None
-        },
-        global_scope=True,
-        current_dir=REPO_ROOT,
-        cache=cache,
-    )
-    build_s = time.perf_counter() - started
+def _assert_summary_judgments(
+    summary: dict[str, Any], judgment: SummaryJudgment, checks: CheckLog
+) -> None:
+    def identities(section: str) -> set[str]:
+        if section == "objective":
+            entry = summary.get("objective")
+            entries = [entry] if entry else []
+        else:
+            entries = summary.get(section, [])
+        return {
+            f"{kind}:{value}"
+            for entry in entries
+            for kind, value in [
+                ("item", (entry.get("references") or {}).get("item_id")),
+                (
+                    "event",
+                    next(
+                        iter((entry.get("references") or {}).get("event_ids") or []),
+                        None,
+                    ),
+                ),
+            ]
+            if value
+        }
 
-    cohort = select_cohort(store)
+    def source_keys(values: list[str]) -> set[str]:
+        return {":".join(value.split(":")[-2:]) for value in values}
+
+    if judgment.objective is not None:
+        checks.record(
+            "summary.judged_objective",
+            source_keys([judgment.objective]) <= identities("objective"),
+        )
+    for section, expected in judgment.sections_include.items():
+        checks.record(
+            f"summary.judged_include.{section}",
+            source_keys(expected) <= identities(section),
+        )
+    for section, excluded in judgment.sections_exclude.items():
+        checks.record(
+            f"summary.judged_exclude.{section}",
+            not (source_keys(excluded) & identities(section)),
+        )
+
+
+def _measure(
+    store: DocumentStore, method: str, params: dict[str, Any], repeat: int
+) -> dict[str, Any]:
+    runs = []
+    response: dict[str, Any] | None = None
+    for _ in range(repeat):
+        started = time.perf_counter_ns()
+        response = _dispatch(store, method, params)
+        runs.append((time.perf_counter_ns() - started) / 1_000_000)
+    assert response is not None
+    return {
+        "repeat": repeat,
+        "median_ms": round(statistics.median(runs), 4),
+        "p95_ms": round(_percentile(runs, 0.95), 4),
+        "response_bytes": len(_canonical_json(response).encode()),
+        "candidate_count": response.get("total"),
+    }
+
+
+def evaluate(
+    *, args: argparse.Namespace, config: LocalEvaluationConfig
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    source_paths = []
+    for session_id in config.session_ids:
+        source_paths.extend(
+            locate_session_files(
+                session_id=UUID(session_id),
+                current_dir=REPO_ROOT,
+                global_scope=True,
+                include_descendants=True,
+            )
+        )
+    store = discover_store_from_files(source_paths).store
+    build_s = time.perf_counter() - started
+    selected = [
+        store.sessions[UUID(session_id)]
+        for session_id in config.session_ids
+        if UUID(session_id) in store.sessions
+    ]
+    if len(selected) != len(config.session_ids):
+        raise ValueError("one or more configured session_ids were not discovered")
+
     checks = CheckLog()
-    audit: list[dict[str, Any]] = []
-    summary_perf: list[float] = []
     summary_bytes: list[float] = []
     compression: list[float] = []
-    search_perf: list[float] = []
-    search_bytes: list[float] = []
-    content_complete_count = 0
-    rank1_kinds: dict[str, int] = {}
-    match_totals: list[float] = []
-    derived = {"path_cases": 0, "token_cases": 0, "failed_command_cases": 0}
-
-    for session, slots in cohort:
+    for session in selected:
         index = build_session_graph_index(_single_session_graph(session))
-        summary_result = evaluate_summary(store, session, index, checks)
-        summary_perf.append(summary_result["first_ms"])
-        summary_bytes.append(summary_result["summary_bytes"])
-        ratio = (
-            summary_result["summary_bytes"] / summary_result["canonical_bytes"]
-            if summary_result["canonical_bytes"]
-            else None
+        result = evaluate_summary(store, session, index, checks)
+        summary_bytes.append(result["summary_bytes"])
+        if result["canonical_bytes"]:
+            compression.append(result["summary_bytes"] / result["canonical_bytes"])
+    for judgment in config.summary_judgments:
+        summary = _dispatch(
+            store, "session.summary", {"session_id": judgment.session_id}
         )
-        if ratio is not None:
-            compression.append(ratio)
-        content_complete_count += int(summary_result["content_complete"])
+        _assert_summary_judgments(summary, judgment, checks)
 
-        search_result = evaluate_search(store, session, index, checks)
-        for case in search_result["cases"]:
-            search_bytes.append(case["response_bytes"])
-            if case["case"] == "request_token":
-                derived["token_cases"] += 1
-                search_perf.append(case["first_ms"])
-                match_totals.append(case["total"])
-                if case["rank1_kind"]:
-                    rank1_kinds[case["rank1_kind"]] = (
-                        rank1_kinds.get(case["rank1_kind"], 0) + 1
-                    )
-            elif case["case"] == "changed_path":
-                derived["path_cases"] += 1
-            elif case["case"] == "failed_command_phrase":
-                derived["failed_command_cases"] += 1
-
-        audit.append(
+    candidate_rows: dict[str, list[dict[str, float]]] = {"exact": [], "paraphrase": []}
+    rank_rows: dict[str, list[dict[str, float]]] = {
+        "current_structural_lexical": [],
+        "lexical_snippet_baseline": [],
+        "recent_first_baseline": [],
+    }
+    response_bytes: list[float] = []
+    for judgment in config.search_judgments:
+        session = store.sessions[UUID(judgment.session_id)]
+        params: dict[str, Any] = {
+            "session_id": judgment.session_id,
+            "query": judgment.query,
+            "mode": judgment.mode,
+            "limit": 50,
+        }
+        if judgment.turn_id:
+            params["turn_id"] = judgment.turn_id
+        if judgment.kinds is not None:
+            params["kinds"] = judgment.kinds
+        response = _dispatch(store, "session.search", params)
+        repeated = _dispatch(store, "session.search", params)
+        checks.record("search.deterministic", response == repeated)
+        _check_search_response(
+            store,
+            checks,
+            judgment.session_id,
+            "search.judged",
+            response,
+            limit=50,
+            mode=judgment.mode,
+            kinds=judgment.kinds,
+            turn_id=judgment.turn_id,
+        )
+        relevant = {entry.identity for entry in judgment.judgments}
+        candidates = _candidate_identities(session, judgment)
+        candidate_rows[judgment.tier].append(
             {
-                "session_id": str(session.session_id),
-                "vendor": session.vendor.value,
-                "turns": len(session.turns),
-                "items": _item_count(session),
-                "coverage_slots": slots,
-                "summary_ms": round(summary_result["first_ms"], 3),
-                "summary_bytes": summary_result["summary_bytes"],
-                "summary_compression_ratio": round(ratio, 4)
-                if ratio is not None
-                else None,
-                "content_complete": summary_result["content_complete"],
-                "derived_cases": [case["case"] for case in search_result["cases"]],
+                "recall_at_5": _recall_at(candidates, relevant, 5),
+                "recall_at_10": _recall_at(candidates, relevant, 10),
+                "candidate_universe_recall": _recall_at(
+                    candidates, relevant, len(candidates)
+                ),
             }
         )
+        for strategy in rank_rows:
+            rank_rows[strategy].append(
+                _ranking_metrics(
+                    _rank_ablation(response["matches"], judgment.query, strategy),
+                    judgment.judgments,
+                )
+            )
+        response_bytes.append(len(_canonical_json(response).encode()))
 
-    vendors: dict[str, int] = {}
-    for session in store.sessions.values():
-        vendors[session.vendor.value] = vendors.get(session.vendor.value, 0) + 1
-    started_times = [
-        session.started_at for session in store.sessions.values() if session.started_at
-    ]
+    performance: dict[str, dict[str, Any]] = {}
+    primary = selected[0]
+    performance["session.summary"] = _measure(
+        store, "session.summary", {"session_id": str(primary.session_id)}, args.repeat
+    )
+    performance["session.summary"]["session_item_count"] = _item_count(primary)
+    text_judgment = next((j for j in config.search_judgments if j.mode == "text"), None)
+    path_judgment = next((j for j in config.search_judgments if j.mode == "path"), None)
+    for label, judgment in (
+        ("text_search", text_judgment),
+        ("high_hit_search", text_judgment),
+        ("path_search", path_judgment),
+        ("low_hit_search", path_judgment),
+    ):
+        if judgment is None:
+            continue
+        params = {
+            "session_id": judgment.session_id,
+            "query": judgment.query,
+            "mode": judgment.mode,
+            "limit": 50,
+        }
+        performance[label] = _measure(store, "session.search", params, args.repeat)
+        performance[label]["session_item_count"] = _item_count(
+            store.sessions[UUID(judgment.session_id)]
+        )
+    largest = max(selected, key=_item_count)
+    if config.search_judgments:
+        query = config.search_judgments[0].query
+        performance["large_session_search"] = _measure(
+            store,
+            "session.search",
+            {"session_id": str(largest.session_id), "query": query, "limit": 50},
+            args.repeat,
+        )
+        performance["large_session_search"]["session_item_count"] = _item_count(largest)
 
+    vendor_counts: dict[str, int] = {}
+    for session in selected:
+        vendor_counts[session.vendor.value] = (
+            vendor_counts.get(session.vendor.value, 0) + 1
+        )
     gates = {
         "summary_invariants": checks.all_passed("summary."),
         "search_invariants": checks.all_passed("search."),
-        "derived_ground_truth": (
-            derived["path_cases"] > 0
-            and derived["token_cases"] > 0
-            and checks.failed.get("search.path.exact_ground_truth", 0) == 0
-        ),
-        "deterministic_responses": (
-            checks.failed.get("summary.deterministic", 0) == 0
-            and checks.failed.get("search.deterministic", 0) == 0
-        ),
+        "judged_search_present": bool(config.search_judgments),
+        "deterministic_responses": checks.failed.get("summary.deterministic", 0) == 0
+        and checks.failed.get("search.deterministic", 0) == 0,
     }
     return {
         "schema_version": SCHEMA_VERSION,
         "benchmark": BENCHMARK_NAME,
         "generated_at": datetime.now(UTC).isoformat(),
         "scope": {
-            "data": "real local provider logs (Codex, Claude Code, Pi)",
-            "provider_logs": True,
-            "relevance_judgments": False,
-            "claim": (
-                "contract behavior, derived ground-truth recall, and execution "
-                "cost at real scale; ranking quality (nDCG/MRR) is only "
-                "claimed by the synthetic benchmark"
-            ),
+            "data": "private local provider logs",
+            "source_derived_judgments": True,
+            "private_configuration_written": False,
+            "semantic_ranking": False,
+            "claim": "local evidence and performance diagnostics; paraphrase results are diagnostic",
         },
         "environment": {
             "python": platform.python_version(),
             "platform": platform.platform(),
         },
-        "store_build": {
-            "elapsed_s": round(build_s, 3),
-            "sources": note,
-        },
-        "corpus": {
-            "graphs": len(store.session_graphs),
-            "sessions": len(store.sessions),
-            "turns": len(store.turns),
-            "items": len(store.items),
-            "events": len(store.events),
-            "vendors": vendors,
-            "first_session_at": min(started_times).isoformat()
-            if started_times
-            else None,
-            "last_session_at": max(started_times).isoformat()
-            if started_times
-            else None,
-        },
-        "cohort": {
-            "sessions": len(cohort),
-            "selection": (
-                "audited coverage cohort: per-vendor largest/typical/"
-                "with-failures/with-file-changes/multi-turn sessions plus the "
-                "smallest and any measurements-retention session; ties break "
-                "by session id"
+        "coverage": {
+            "selected_sessions": len(selected),
+            "vendors": vendor_counts,
+            "judged_summaries": len(config.summary_judgments),
+            "judged_queries": {
+                tier: len(rows) for tier, rows in candidate_rows.items()
+            },
+            "session_items": _distribution(
+                [float(_item_count(session)) for session in selected]
             ),
-            "members": audit,
         },
-        "derived_ground_truth": derived,
-        "checks": checks.report(),
-        "ranking_profile": {
-            "rank1_kind_distribution": rank1_kinds,
-            "token_match_totals": _distribution(match_totals),
-            "content_complete_share": round(
-                content_complete_count / len(cohort), 4
-            )
-            if cohort
-            else None,
+        "store_build": {"elapsed_s": round(build_s, 3)},
+        "summary": {
+            "checks": checks.report(),
+            "response_bytes": _distribution(summary_bytes),
+            "compression_ratio": _distribution(compression),
         },
-        "performance": {
-            "diagnostic_only": True,
-            "note": (
-                "Warm timings go through the full dispatch path, including "
-                "per-call entry-point indexing of the whole corpus store."
-            ),
-            "store_build_s": round(build_s, 3),
-            "session_summary_ms": _distribution(summary_perf),
-            "session_search_ms": _distribution(search_perf),
-            "summary_response_bytes": _distribution(summary_bytes),
-            "search_response_bytes": _distribution(search_bytes),
-            "summary_compression_ratio": _distribution(compression),
+        "search": {
+            "candidate_generation": {
+                tier: _mean_metrics(rows) if rows else {"count": 0}
+                for tier, rows in candidate_rows.items()
+            },
+            "ranking": {
+                strategy: _mean_metrics(rows) if rows else {"count": 0}
+                for strategy, rows in rank_rows.items()
+            },
+            "response_bytes": _distribution(response_bytes),
+            "ablation_candidate_set": "Each ablation reorders the same returned lexical candidates; it does not establish independent semantic or paraphrase recall.",
         },
+        "performance": {"diagnostic_only": True, "measurements": performance},
         "gates": gates,
         "passed": all(gates.values()),
     }
 
 
 def _print_report(report: dict[str, Any]) -> None:
-    corpus = report["corpus"]
     print("Local session retrieval benchmark")
     print("=" * 45)
-    print(
-        f"corpus: {corpus['sessions']} sessions / {corpus['graphs']} graphs / "
-        f"{corpus['turns']} turns / {corpus['items']} items"
-    )
-    print(f"vendors: {corpus['vendors']}")
+    coverage = report["coverage"]
+    print(f"selected sessions: {coverage['selected_sessions']}")
+    print(f"vendors: {coverage['vendors']}")
     print(f"store build: {report['store_build']['elapsed_s']:.1f}s")
-    cohort = report["cohort"]
-    print(f"audited cohort: {cohort['sessions']} sessions")
-    for member in cohort["members"]:
-        print(
-            f"  {member['session_id'][:8]} {member['vendor']:12} "
-            f"turns={member['turns']:3} items={member['items']:5} "
-            f"slots={','.join(member['coverage_slots'])}"
-        )
-    print(f"derived ground truth: {report['derived_ground_truth']}")
+    print(f"judged queries: {coverage['judged_queries']}")
     print("\nChecks")
-    for name, entry in report["checks"].items():
+    for name, entry in report["summary"]["checks"].items():
         marker = "PASS" if entry["failed"] == 0 else "FAIL"
-        print(f"  {marker} {name:52} {entry['passed']} passed / {entry['failed']} failed")
-        for example in entry["failure_examples"][:3]:
-            print(f"       example: {example}")
-    print("\nRanking profile (no judgments)")
-    print(f"  rank-1 kinds: {report['ranking_profile']['rank1_kind_distribution']}")
-    print(
-        f"  content-complete sessions: "
-        f"{report['ranking_profile']['content_complete_share']}"
-    )
-    print("\nWarm-store diagnostics")
-    for name in ("session_summary_ms", "session_search_ms"):
-        dist = report["performance"][name]
-        if dist.get("count"):
-            print(
-                f"  {name:22} median={dist['median']:.2f}ms "
-                f"p95={dist['p95']:.2f}ms max={dist['max']:.2f}ms"
-            )
-    compression = report["performance"]["summary_compression_ratio"]
-    if compression.get("count"):
         print(
-            f"  summary compression   median={compression['median']:.4f} "
-            f"p95={compression['p95']:.4f} max={compression['max']:.4f}"
+            f"  {marker} {name:52} {entry['passed']} passed / {entry['failed']} failed"
+        )
+    print("\nCandidate generation")
+    for tier, metrics in report["search"]["candidate_generation"].items():
+        print(f"  {tier:12} {metrics}")
+    print("\nRanking ablations")
+    for strategy, metrics in report["search"]["ranking"].items():
+        print(f"  {strategy:30} {metrics}")
+    print("\nWarm-store diagnostics")
+    for name, measurement in report["performance"]["measurements"].items():
+        print(
+            f"  {name:22} median={measurement['median_ms']:.2f}ms "
+            f"p95={measurement['p95_ms']:.2f}ms bytes={measurement['response_bytes']}"
         )
     print("\nGates")
     for name, passed in report["gates"].items():
@@ -1013,16 +1225,13 @@ def _print_report(report: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--vendor",
-        choices=["codex", "claude_code", "pi"],
-        default=None,
-        help="Restrict discovery to one vendor.",
+        "--config",
+        type=Path,
+        required=True,
+        help="Ignored private JSON with session IDs and source-derived judgments.",
     )
     parser.add_argument(
-        "--since-days",
-        type=int,
-        default=None,
-        help="Restrict discovery to logs modified in the last N days.",
+        "--repeat", type=int, default=30, help="Warm repetitions (default: 30)."
     )
     parser.add_argument(
         "--output",
@@ -1036,8 +1245,16 @@ def main() -> int:
         help="Evaluate without writing the JSON report.",
     )
     args = parser.parse_args()
+    if args.repeat < 30:
+        parser.error("--repeat must be at least 30 for local performance diagnostics")
+    try:
+        config = LocalEvaluationConfig.model_validate_json(
+            args.config.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        parser.error(f"invalid --config: {exc}")
 
-    report = evaluate(args=args)
+    report = evaluate(args=args, config=config)
     _print_report(report)
     if not args.no_write:
         output = args.output

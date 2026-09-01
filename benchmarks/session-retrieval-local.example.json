@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "session_ids": ["00000000-0000-4000-8000-000000000001"],
+  "summary_judgments": [
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "objective": "user_message:event:00000000-0000-4000-8000-000000000020",
+      "sections_include": {
+        "changes": ["file_change:item:00000000-0000-4000-8000-000000000103"]
+      },
+      "sections_exclude": {
+        "unresolved": ["tool_result:item:00000000-0000-4000-8000-000000000102"]
+      }
+    }
+  ],
+  "search_judgments": [
+    {
+      "name": "example-exact-path",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "query": "example/path.py",
+      "mode": "path",
+      "tier": "exact",
+      "judgments": [
+        {
+          "identity": "file_change:item:00000000-0000-4000-8000-000000000103",
+          "relevance": 3
+        }
+      ]
+    },
+    {
+      "name": "example-paraphrase",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "query": "synthetic paraphrase placeholder",
+      "tier": "paraphrase",
+      "judgments": [
+        {
+          "identity": "assistant_message:item:00000000-0000-4000-8000-000000000100",
+          "relevance": 2
+        }
+      ]
+    }
+  ]
+}
