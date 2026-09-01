@@ -4,22 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-try:
-    from .context_window_models import (
-        CacheBreakRecord,
-        CacheBreakSummary,
-        ContextEvent,
-        ContextWindowProjection,
-        _category_sort_key,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from context_window_models import (
-        CacheBreakRecord,
-        CacheBreakSummary,
-        ContextEvent,
-        ContextWindowProjection,
-        _category_sort_key,
-    )
+from datahub_plugin.projections.context_window_models import (
+    CacheBreakRecord,
+    CacheBreakSummary,
+    ContextEvent,
+    ContextWindowProjection,
+    _category_sort_key,
+)
 
 
 def render_markdown(projection: ContextWindowProjection) -> str:

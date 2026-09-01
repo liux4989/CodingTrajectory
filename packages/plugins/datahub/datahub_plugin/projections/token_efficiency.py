@@ -12,54 +12,27 @@ from typing import Any, Literal
 
 from coding_trajectory.runtime import ServiceApiClient
 
-try:
-    from .stat_utils import parse_datetime as _parse_datetime
-    from .stat_utils import percentile as _percentile
-    from .stat_utils import safe_div as _safe_div
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from stat_utils import parse_datetime as _parse_datetime
-    from stat_utils import percentile as _percentile
-    from stat_utils import safe_div as _safe_div
-
-try:
-    from .token_efficiency_models import (
-        ComparisonDelta,
-        Contributor,
-        Coverage,
-        Distribution,
-        Grain,
-        HotspotRow,
-        OutlierRow,
-        PatternDelta,
-        PatternIndicators,
-        PatternMetrics,
-        PatternRow,
-        PeriodComparison,
-        PeriodSummary,
-        ProjectOption,
-        ProjectProjection,
-        UnitDistributions,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from token_efficiency_models import (
-        ComparisonDelta,
-        Contributor,
-        Coverage,
-        Distribution,
-        Grain,
-        HotspotRow,
-        OutlierRow,
-        PatternDelta,
-        PatternIndicators,
-        PatternMetrics,
-        PatternRow,
-        PeriodComparison,
-        PeriodSummary,
-        ProjectOption,
-        ProjectProjection,
-        UnitDistributions,
-    )
-
+from datahub_plugin.projections.stat_utils import parse_datetime as _parse_datetime
+from datahub_plugin.projections.stat_utils import percentile as _percentile
+from datahub_plugin.projections.stat_utils import safe_div as _safe_div
+from datahub_plugin.projections.token_efficiency_models import (
+    ComparisonDelta,
+    Contributor,
+    Coverage,
+    Distribution,
+    Grain,
+    HotspotRow,
+    OutlierRow,
+    PatternDelta,
+    PatternIndicators,
+    PatternMetrics,
+    PatternRow,
+    PeriodComparison,
+    PeriodSummary,
+    ProjectOption,
+    ProjectProjection,
+    UnitDistributions,
+)
 
 # A batch shares one ServiceRuntime and its resolved store.  Keep this bounded
 # so one CLI response cannot grow without limit, while avoiding repeated index

@@ -7,14 +7,9 @@ from typing import Any
 from coding_trajectory.runtime import ServiceApiClient
 from pydantic import BaseModel, Field
 
-try:
-    from .stat_utils import parse_datetime as _parse_datetime
-    from .stat_utils import percentile as _percentile
-    from .stat_utils import safe_div as _safe_div
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from stat_utils import parse_datetime as _parse_datetime
-    from stat_utils import percentile as _percentile
-    from stat_utils import safe_div as _safe_div
+from datahub_plugin.projections.stat_utils import parse_datetime as _parse_datetime
+from datahub_plugin.projections.stat_utils import percentile as _percentile
+from datahub_plugin.projections.stat_utils import safe_div as _safe_div
 
 TOKEN_KEYS = (
     "prompt_tokens",

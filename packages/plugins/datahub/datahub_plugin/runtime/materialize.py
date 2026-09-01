@@ -15,56 +15,31 @@ from coding_trajectory.datahub import (
     rebuild_affected_session_graphs_from_files,
 )
 
-try:
-    from .analytical_read_models import (
-        CANONICAL_FACT_SCOPE,
-        FACT_PROJECT_SESSION,
-        MODEL_META,
-        MODEL_SESSION,
-        MODEL_TURN,
-        TOKEN_HOTSPOT,
-        TOKEN_OUTLIER,
-        TOKEN_PATTERN,
-        TOKEN_PROJECT_META,
-        CanonicalFactsApiClient,
-        build_canonical_root_fact_rows,
-        build_model_usage_rows,
-        canonical_fact_entity_kinds,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from analytical_read_models import (
-        CANONICAL_FACT_SCOPE,
-        FACT_PROJECT_SESSION,
-        MODEL_META,
-        MODEL_SESSION,
-        MODEL_TURN,
-        TOKEN_HOTSPOT,
-        TOKEN_OUTLIER,
-        TOKEN_PATTERN,
-        TOKEN_PROJECT_META,
-        CanonicalFactsApiClient,
-        build_canonical_root_fact_rows,
-        build_model_usage_rows,
-        canonical_fact_entity_kinds,
-    )
-try:
-    from .incremental_store import (
-        DetailEventRow,
-        DetailItemRow,
-        DetailSpan,
-        MaterializationContext,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from incremental_store import (
-        DetailEventRow,
-        DetailItemRow,
-        DetailSpan,
-        MaterializationContext,
-    )
-try:
-    from .read_models import aggregate_read_models, materialize_graph
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from read_models import aggregate_read_models, materialize_graph
+from datahub_plugin.projections.analytical_read_models import (
+    CANONICAL_FACT_SCOPE,
+    FACT_PROJECT_SESSION,
+    MODEL_META,
+    MODEL_SESSION,
+    MODEL_TURN,
+    TOKEN_HOTSPOT,
+    TOKEN_OUTLIER,
+    TOKEN_PATTERN,
+    TOKEN_PROJECT_META,
+    CanonicalFactsApiClient,
+    build_canonical_root_fact_rows,
+    build_model_usage_rows,
+    canonical_fact_entity_kinds,
+)
+from datahub_plugin.projections.read_models import (
+    aggregate_read_models,
+    materialize_graph,
+)
+from datahub_plugin.store.core import (
+    DetailEventRow,
+    DetailItemRow,
+    DetailSpan,
+    MaterializationContext,
+)
 
 
 def _materialize_changed_graphs(

@@ -8,6 +8,7 @@ serves indexed rows without rebuilding source transcripts on request threads.
 
 from __future__ import annotations
 
+import queue
 import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -28,101 +29,55 @@ from coding_trajectory.datahub import (
 from coding_trajectory.metrics.measurements import MeasurementMismatchError
 from pydantic import BaseModel, ConfigDict, Field
 
-try:
-    from . import context_window
-    from .analytical_read_models import (
-        CANONICAL_FACT_SCOPE,
-        FACT_GRAPH_OVERVIEW,
-        FACT_GRAPH_STATS,
-        FACT_GRAPH_USAGE,
-        FACT_PROJECT,
-        FACT_PROJECT_SESSION,
-        FACT_SESSION_OVERVIEW,
-        FACT_SESSION_STATS,
-        FACT_SESSION_TREE,
-        FACT_SESSION_USAGE,
-        FACT_TOOL_USAGE,
-        MODEL_META,
-        MODEL_SESSION,
-        MODEL_TURN,
-        TOKEN_HOTSPOT,
-        TOKEN_OUTLIER,
-        TOKEN_PATTERN,
-        TOKEN_PROJECT_META,
-        CanonicalFactsApiClient,
-        analytical_scope_key,
-        build_canonical_fact_rows,
-        build_canonical_root_fact_rows,
-        build_model_usage_rows,
-        build_token_efficiency_project_rows,
-        canonical_fact_entity_kinds,
-        page_metadata,
-        reconstruct_model_usage,
-        reconstruct_token_efficiency_project,
-    )
-    from .detail_hydration import DetailHydrator, DetailUnavailable
-    from .incremental_store import (
-        DetailEventRow,
-        DetailItemRow,
-        IncrementalStore,
-        MaterializationContext,
-        SourceFenceError,
-    )
-    from .read_models import (
-        DEFAULT_RECENT_HORIZON_DAYS,
-        aggregate_read_models,
-        materialize_graph,
-        reconstruct_recent_work,
-    )
-    from .session_timeline import build_session_evidence_timeline
-except ImportError:
-    import context_window
-    from analytical_read_models import (
-        CANONICAL_FACT_SCOPE,
-        FACT_GRAPH_OVERVIEW,
-        FACT_GRAPH_STATS,
-        FACT_GRAPH_USAGE,
-        FACT_PROJECT,
-        FACT_PROJECT_SESSION,
-        FACT_SESSION_OVERVIEW,
-        FACT_SESSION_STATS,
-        FACT_SESSION_TREE,
-        FACT_SESSION_USAGE,
-        FACT_TOOL_USAGE,
-        MODEL_META,
-        MODEL_SESSION,
-        MODEL_TURN,
-        TOKEN_HOTSPOT,
-        TOKEN_OUTLIER,
-        TOKEN_PATTERN,
-        TOKEN_PROJECT_META,
-        CanonicalFactsApiClient,
-        analytical_scope_key,
-        build_canonical_fact_rows,
-        build_canonical_root_fact_rows,
-        build_model_usage_rows,
-        build_token_efficiency_project_rows,
-        canonical_fact_entity_kinds,
-        page_metadata,
-        reconstruct_model_usage,
-        reconstruct_token_efficiency_project,
-    )
-    from detail_hydration import DetailHydrator, DetailUnavailable
-    from incremental_store import (
-        DetailEventRow,
-        DetailItemRow,
-        IncrementalStore,
-        MaterializationContext,
-        SourceFenceError,
-    )
-    from read_models import (
-        DEFAULT_RECENT_HORIZON_DAYS,
-        aggregate_read_models,
-        materialize_graph,
-        reconstruct_recent_work,
-    )
-    from session_timeline import build_session_evidence_timeline
-
+from datahub_plugin.projections import context_window
+from datahub_plugin.projections.analytical_read_models import (
+    CANONICAL_FACT_SCOPE,
+    FACT_GRAPH_OVERVIEW,
+    FACT_GRAPH_STATS,
+    FACT_GRAPH_USAGE,
+    FACT_PROJECT,
+    FACT_PROJECT_SESSION,
+    FACT_SESSION_OVERVIEW,
+    FACT_SESSION_STATS,
+    FACT_SESSION_TREE,
+    FACT_SESSION_USAGE,
+    FACT_TOOL_USAGE,
+    MODEL_META,
+    MODEL_SESSION,
+    MODEL_TURN,
+    TOKEN_HOTSPOT,
+    TOKEN_OUTLIER,
+    TOKEN_PATTERN,
+    TOKEN_PROJECT_META,
+    CanonicalFactsApiClient,
+    analytical_scope_key,
+    build_canonical_fact_rows,
+    build_canonical_root_fact_rows,
+    build_model_usage_rows,
+    build_token_efficiency_project_rows,
+    canonical_fact_entity_kinds,
+    page_metadata,
+    reconstruct_model_usage,
+    reconstruct_token_efficiency_project,
+)
+from datahub_plugin.projections.detail_hydration import (
+    DetailHydrator,
+    DetailUnavailable,
+)
+from datahub_plugin.projections.read_models import (
+    DEFAULT_RECENT_HORIZON_DAYS,
+    aggregate_read_models,
+    materialize_graph,
+    reconstruct_recent_work,
+)
+from datahub_plugin.projections.session_timeline import build_session_evidence_timeline
+from datahub_plugin.store.core import (
+    DetailEventRow,
+    DetailItemRow,
+    IncrementalStore,
+    MaterializationContext,
+    SourceFenceError,
+)
 
 PARSER_VERSION = "core-source-checkpoint-v3"
 READ_MODEL_SCHEMA_VERSION = "dashboard-read-model-v6"
@@ -179,6 +134,8 @@ class DatahubIncrementalRuntime:
         self.since_days = since_days
         self.refresh_seconds = max(1.0, refresh_seconds)
         self._uses_default_database = database_path is None
+        self._subscriber_lock = threading.Lock()
+        self._subscribers: set[queue.Queue[int]] = set()
         resolved_database_path = (database_path or _default_database_path()).resolve()
         self.store = IncrementalStore(
             resolved_database_path,
@@ -186,6 +143,7 @@ class DatahubIncrementalRuntime:
             schema_version=READ_MODEL_SCHEMA_VERSION,
             retained_change_revisions=RETAINED_CHANGE_REVISIONS,
             retain_source_messages=False,
+            post_commit=self._notify_revision,
         )
         self._executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="datahub-ingest"
@@ -210,10 +168,50 @@ class DatahubIncrementalRuntime:
 
     def shutdown(self) -> None:
         self._stop.set()
+        with self._subscriber_lock:
+            subscribers = tuple(self._subscribers)
+            self._subscribers.clear()
+            for subscriber in subscribers:
+                self._coalesce_revision(subscriber, -1)
         monitor = self._monitor
         if monitor is not None:
             monitor.join(timeout=1.0)
         self._executor.shutdown(wait=True, cancel_futures=True)
+
+    def subscribe_revisions(self) -> tuple[queue.Queue[int], int]:
+        """Atomically register a bounded revision wakeup subscription."""
+        subscriber: queue.Queue[int] = queue.Queue(maxsize=1)
+        with self._subscriber_lock:
+            self._subscribers.add(subscriber)
+            revision = self.store.current_revision()
+            self._coalesce_revision(subscriber, revision)
+        return subscriber, revision
+
+    def unsubscribe_revisions(self, subscriber: queue.Queue[int]) -> None:
+        with self._subscriber_lock:
+            self._subscribers.discard(subscriber)
+
+    def _notify_revision(self, revision: int) -> None:
+        """Wake live clients without ever allowing them to block publication."""
+        with self._subscriber_lock:
+            for subscriber in self._subscribers:
+                self._coalesce_revision(subscriber, revision)
+
+    @staticmethod
+    def _coalesce_revision(subscriber: queue.Queue[int], revision: int) -> None:
+        try:
+            subscriber.put_nowait(revision)
+            return
+        except queue.Full:
+            pass
+        try:
+            subscriber.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            subscriber.put_nowait(revision)
+        except queue.Full:
+            pass
 
     def request_refresh(self, *, force_bootstrap: bool = False) -> dict[str, Any]:
         """Schedule one refresh, coalescing concurrent browser requests."""
@@ -1539,58 +1537,31 @@ class DatahubIncrementalRuntime:
             self.request_refresh()
 
 
-try:
-    from .incremental_publish import (
-        _bootstrap_catalog_mutations,
-        _bootstrap_coverage_mutation,
-        _bootstrap_coverage_payload,
-        _candidate_paths,
-        _clear_all_entities,
-        _default_analytical_entity_kinds,
-        _default_database_path,
-        _delete_lineage_facts,
-        _delivery_families,
-        _delivery_family,
-        _detail_rows_for_graph,
-        _lag_seconds,
-        _materialize_changed_graphs,
-        _page_payload,
-        _publish_build_issues,
-        _publish_graph_issues,
-        _publish_relationships,
-        _remove_obsolete_dashboard_databases,
-        _replace_analytical_rows,
-        _replace_analytical_scope_rows,
-        _replace_read_model_subset,
-        _session_inventory_payload,
-        _token_project_entity_kinds,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from incremental_publish import (
-        _bootstrap_catalog_mutations,
-        _bootstrap_coverage_mutation,
-        _bootstrap_coverage_payload,
-        _candidate_paths,
-        _clear_all_entities,
-        _default_analytical_entity_kinds,
-        _default_database_path,
-        _delete_lineage_facts,
-        _delivery_families,
-        _delivery_family,
-        _detail_rows_for_graph,
-        _lag_seconds,
-        _materialize_changed_graphs,
-        _page_payload,
-        _publish_build_issues,
-        _publish_graph_issues,
-        _publish_relationships,
-        _remove_obsolete_dashboard_databases,
-        _replace_analytical_rows,
-        _replace_analytical_scope_rows,
-        _replace_read_model_subset,
-        _session_inventory_payload,
-        _token_project_entity_kinds,
-    )
+from datahub_plugin.runtime.materialize import (
+    _bootstrap_catalog_mutations,
+    _bootstrap_coverage_mutation,
+    _bootstrap_coverage_payload,
+    _candidate_paths,
+    _clear_all_entities,
+    _default_analytical_entity_kinds,
+    _default_database_path,
+    _delete_lineage_facts,
+    _delivery_families,
+    _delivery_family,
+    _detail_rows_for_graph,
+    _lag_seconds,
+    _materialize_changed_graphs,
+    _page_payload,
+    _publish_build_issues,
+    _publish_graph_issues,
+    _publish_relationships,
+    _remove_obsolete_dashboard_databases,
+    _replace_analytical_rows,
+    _replace_analytical_scope_rows,
+    _replace_read_model_subset,
+    _session_inventory_payload,
+    _token_project_entity_kinds,
+)
 
 
 def _model_usage_contract(payload: dict[str, Any], *, revision: int) -> dict[str, Any]:

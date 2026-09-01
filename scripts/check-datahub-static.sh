@@ -14,5 +14,5 @@ fi
 echo "+ uv run ruff check packages/plugins/datahub"
 uv run ruff check packages/plugins/datahub
 
-echo "+ uv run python -m py_compile packages/plugins/datahub/*.py"
-uv run python -m py_compile packages/plugins/datahub/*.py
+echo "+ compileall packages/plugins/datahub"
+uv run python -m compileall -q packages/plugins/datahub

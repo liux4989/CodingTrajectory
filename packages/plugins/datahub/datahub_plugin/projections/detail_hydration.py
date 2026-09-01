@@ -31,20 +31,12 @@ from coding_trajectory.datahub import (
     serialize_event_detail,
 )
 
-try:
-    from .incremental_store import (
-        DetailItemRow,
-        DetailSpan,
-        IncrementalStore,
-        SourceFenceError,
-    )
-except ImportError:
-    from incremental_store import (
-        DetailItemRow,
-        DetailSpan,
-        IncrementalStore,
-        SourceFenceError,
-    )
+from datahub_plugin.store.core import (
+    DetailItemRow,
+    DetailSpan,
+    IncrementalStore,
+    SourceFenceError,
+)
 
 
 class DetailUnavailable(RuntimeError):

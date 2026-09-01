@@ -7,22 +7,13 @@ import re
 import shlex
 from typing import Any
 
-try:
-    from .context_window_models import (
-        CategoryKey,
-        Confidence,
-        ContextEvent,
-        CostEvidence,
-        TokenEvidence,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from context_window_models import (
-        CategoryKey,
-        Confidence,
-        ContextEvent,
-        CostEvidence,
-        TokenEvidence,
-    )
+from datahub_plugin.projections.context_window_models import (
+    CategoryKey,
+    Confidence,
+    ContextEvent,
+    CostEvidence,
+    TokenEvidence,
+)
 
 
 def _tool_events_by_turn(

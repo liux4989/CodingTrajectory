@@ -34,55 +34,29 @@ from coding_trajectory.datahub import (
 )
 from pydantic import TypeAdapter
 
-try:
-    from .incremental_store_models import (
-        ChangeKind,
-        ChangesPage,
-        DetailEventRow,
-        DetailItemRow,
-        DetailSpan,
-        EntityMutation,
-        EntityRow,
-        IncompatibleStoreError,
-        IngestionStatus,
-        KeysetPage,
-        ProjectionInvalidation,
-        RefreshFailure,
-        RefreshResult,
-        RevisionChange,
-        SourceChange,
-        SourceFenceError,
-        SourceMessage,
-        SourceSnapshot,
-        _Cursor,
-        _DiskMetadata,
-        _IngestionPlan,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from incremental_store_models import (
-        ChangeKind,
-        ChangesPage,
-        DetailEventRow,
-        DetailItemRow,
-        DetailSpan,
-        EntityMutation,
-        EntityRow,
-        IncompatibleStoreError,
-        IngestionStatus,
-        KeysetPage,
-        ProjectionInvalidation,
-        RefreshFailure,
-        RefreshResult,
-        RevisionChange,
-        SourceChange,
-        SourceFenceError,
-        SourceMessage,
-        SourceSnapshot,
-        _Cursor,
-        _DiskMetadata,
-        _IngestionPlan,
-    )
-
+from datahub_plugin.store.models import (
+    ChangeKind,
+    ChangesPage,
+    DetailEventRow,
+    DetailItemRow,
+    DetailSpan,
+    EntityMutation,
+    EntityRow,
+    IncompatibleStoreError,
+    IngestionStatus,
+    KeysetPage,
+    ProjectionInvalidation,
+    RefreshFailure,
+    RefreshResult,
+    RevisionChange,
+    SourceChange,
+    SourceFenceError,
+    SourceMessage,
+    SourceSnapshot,
+    _Cursor,
+    _DiskMetadata,
+    _IngestionPlan,
+)
 
 _CHECKSUM_BYTES: Final = 64 * 1024
 _MAX_CHANGE_PAYLOAD_BYTES: Final = 64 * 1024
@@ -356,6 +330,7 @@ class IncrementalStore:
         retained_change_revisions: int = 512,
         event_identity: EventIdentityExtractor | None = None,
         retain_source_messages: bool = True,
+        post_commit: Callable[[int], None] | None = None,
     ) -> None:
         if retained_change_revisions < 1:
             raise ValueError("retained_change_revisions must be at least 1")
@@ -365,6 +340,7 @@ class IncrementalStore:
         self.retained_change_revisions = retained_change_revisions
         self._event_identity = event_identity or _default_event_identity
         self.retain_source_messages = retain_source_messages
+        self._post_commit = post_commit
         self._refresh_lock = threading.Lock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._assert_compatible_store()
@@ -813,6 +789,8 @@ class IncrementalStore:
                     self._metadata(connection, "last_ingested_at") or None
                 )
                 connection.commit()
+                if self._post_commit is not None:
+                    self._post_commit(revision)
             except Exception as exc:
                 if context is not None:
                     context._close()
@@ -1179,6 +1157,8 @@ class IncrementalStore:
             )
             self._prune_changes(connection, revision)
             connection.commit()
+            if self._post_commit is not None:
+                self._post_commit(revision)
         except Exception as exc:
             if context is not None:
                 context._close()

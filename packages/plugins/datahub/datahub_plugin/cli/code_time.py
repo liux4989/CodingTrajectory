@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from coding_trajectory.runtime import (
@@ -81,7 +81,7 @@ def build_report(
     project_names = (
         [project_filter]
         if project_filter
-        else sorted((_api_result(client, "project.list", {}).get("items") or {}))
+        else sorted(_api_result(client, "project.list", {}).get("items") or {})
     )
 
     project_sessions: dict[str, list[dict[str, Any]]] = {}
@@ -143,7 +143,7 @@ def build_report(
 
     report = {
         "window": window,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "totals": _aggregate_totals(project_slices),
         "projects": project_slices,
     }
@@ -775,11 +775,13 @@ def _render_job(job: dict[str, Any]) -> str:
         f"Backfill job {job.get('job_id')}",
         "=" * 72,
         f"  status: {job.get('status')}  stop: {job.get('stop_reason') or '-'}",
-        f"  eligible: {counts.get('eligible', 0)}  "
-        f"succeeded: {counts.get('succeeded', 0)}  "
-        f"skipped existing: {counts.get('skipped_existing', 0)}  "
-        f"retryable failed: {counts.get('retryable_failed', 0)}  "
-        f"permanent failed: {counts.get('permanent_failed', 0)}",
+        (
+            f"  eligible: {counts.get('eligible', 0)}  "
+            f"succeeded: {counts.get('succeeded', 0)}  "
+            f"skipped existing: {counts.get('skipped_existing', 0)}  "
+            f"retryable failed: {counts.get('retryable_failed', 0)}  "
+            f"permanent failed: {counts.get('permanent_failed', 0)}"
+        ),
     ]
     excluded = counts.get("excluded") or {}
     if excluded:

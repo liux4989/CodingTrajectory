@@ -12,28 +12,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from codex_app_server import CodexAppServerSession
 from coding_trajectory.runtime import PluginApiError, default_plugin_client
 from pydantic import BaseModel, Field
 
-try:
-    from .codex_app_server import CodexAppServerSession
-except ImportError:  # pragma: no cover - direct plugin execution fallback
-    from codex_app_server import CodexAppServerSession
-
-try:
-    from .cleanup_metadata import (
-        _claude_metadata_paths_by_project,
-        _codex_config_paths_by_project,
-        _pi_metadata_paths_by_project,
-        _remove_codex_project_config_entry,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from cleanup_metadata import (
-        _claude_metadata_paths_by_project,
-        _codex_config_paths_by_project,
-        _pi_metadata_paths_by_project,
-        _remove_codex_project_config_entry,
-    )
+from datahub_plugin.maintenance.cleanup_metadata import (
+    _claude_metadata_paths_by_project,
+    _codex_config_paths_by_project,
+    _pi_metadata_paths_by_project,
+    _remove_codex_project_config_entry,
+)
 
 Action = Literal["dry-run", "interactive", "trash", "delete", "cancelled"]
 

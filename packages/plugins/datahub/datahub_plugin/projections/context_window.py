@@ -9,80 +9,39 @@ from typing import Any
 
 from coding_trajectory.runtime import ServiceApiClient, default_plugin_client
 
-try:
-    from .context_window_compact import (
-        _compact_overview_api,
-        _compact_stats_api,
-        _compact_usage_api,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from context_window_compact import (
-        _compact_overview_api,
-        _compact_stats_api,
-        _compact_usage_api,
-    )
-try:
-    from .context_window_models import (
-        CacheBreakRecord,
-        CacheBreakSummary,
-        CategoryKey,
-        CompactionEventRecord,
-        CompactionSummary,
-        Confidence,
-        ContextCategory,
-        ContextEvent,
-        ContextSessionSection,
-        ContextWindowProjection,
-        CostEvidence,
-        ExpensiveItem,
-        TokenEvidence,
-        _category_sort_key,
-        _visible_text_size,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from context_window_models import (
-        CacheBreakRecord,
-        CacheBreakSummary,
-        CategoryKey,
-        CompactionEventRecord,
-        CompactionSummary,
-        Confidence,
-        ContextCategory,
-        ContextEvent,
-        ContextSessionSection,
-        ContextWindowProjection,
-        CostEvidence,
-        ExpensiveItem,
-        TokenEvidence,
-        _category_sort_key,
-        _visible_text_size,
-    )
-try:
-    from .context_window_render import _dedupe, render_markdown
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from context_window_render import _dedupe, render_markdown
-try:
-    from .context_window_tools import (
-        _confidence,
-        _cost_evidence_from_estimate,
-        _optional_float,
-        _optional_int,
-        _optional_text,
-        _tool_category,
-        _tool_events_by_turn,
-        _tool_item_events,
-    )
-except ImportError:  # pragma: no cover - direct plugin-directory imports
-    from context_window_tools import (
-        _confidence,
-        _cost_evidence_from_estimate,
-        _optional_float,
-        _optional_int,
-        _optional_text,
-        _tool_category,
-        _tool_events_by_turn,
-        _tool_item_events,
-    )
+from datahub_plugin.projections.context_window_compact import (
+    _compact_overview_api,
+    _compact_stats_api,
+    _compact_usage_api,
+)
+from datahub_plugin.projections.context_window_models import (
+    CacheBreakRecord,
+    CacheBreakSummary,
+    CategoryKey,
+    CompactionEventRecord,
+    CompactionSummary,
+    Confidence,
+    ContextCategory,
+    ContextEvent,
+    ContextSessionSection,
+    ContextWindowProjection,
+    CostEvidence,
+    ExpensiveItem,
+    TokenEvidence,
+    _category_sort_key,
+    _visible_text_size,
+)
+from datahub_plugin.projections.context_window_render import _dedupe, render_markdown
+from datahub_plugin.projections.context_window_tools import (
+    _confidence,
+    _cost_evidence_from_estimate,
+    _optional_float,
+    _optional_int,
+    _optional_text,
+    _tool_category,
+    _tool_events_by_turn,
+    _tool_item_events,
+)
 
 
 def main(
