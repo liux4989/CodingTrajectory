@@ -65,11 +65,20 @@ Automation that needs the complete service request surface should use
 Automation that needs service metadata should use `ct api schema METHOD`, for
 example `ct api schema session.usage`.
 
-## Service API v2
+## Versioned Service API
 
-The service registry exposes 13 methods. Requests are strict: unknown fields
-are rejected, and session/graph analysis requires a session, root-session, or
-turn entry point. `ct api call` returns the documented
+The accepted additive redesign for session interpretation and evidence
+discovery is specified in
+[`session-api-redesign.md`](session-api-redesign.md). It adds
+`session.summary.v1` and `session.search.v1` without changing the existing v2
+methods.
+
+The service registry currently exposes 25 method-scoped contracts: 16 project,
+session, and graph methods; two living protocols; and seven estimation methods.
+Requests are strict: unknown fields are rejected. The new summary/search
+methods require an exact canonical session ID; historical v2 session/graph
+analysis accepts a session, root-session, or turn entry point.
+`ct api call` returns the documented
 `{id, method, ok, result|error}` envelope; the `result` schema is also exposed
 separately for consumers that unwrap it.
 
@@ -118,16 +127,18 @@ signal.
    - omit `project_name` to use the current directory
    - known agent vendors are `claude_code`, `codex_cli`, and `pi`
 3. `session tree <SESSION_ID> [--output markdown|json]` — inspect ordinary human conversation forks and see the spawned-agent count owned by each branch
-4. `session overview <SESSION_ID> [--turns N] [--drop-turns K] [--output markdown|json]` — read one thread and identify relevant turns
+4. `session summary <SESSION_ID> [--turn TURN_ID] [--output markdown|json]` — get a bounded brief with canonical evidence references
+5. `session overview <SESSION_ID> [--turns N] [--drop-turns K] [--output markdown|json]` — read one thread and identify relevant turns
    - `--turns N` keeps only the last N visible turns per session
    - `--drop-turns K` drops the last K visible turns per session, matching `thread/rollback numTurns=K`
    - when combined, `--drop-turns` is applied before `--turns`
    - activity renders as grouped human labels with truncated assistant response previews
    - use `--output json` when you need full item ids for drill-down
-5. `session stats <SESSION_ID> [--output markdown|json]` — inspect session stats with compact context/token sections
-6. `session usage <SESSION_ID> [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and request-summed costs
-7. `session request-usage <SESSION_ID> [--turn TURN_ID] [--include-context] [--include-causality] [--output json]` — inspect every provider request and its exact usage buckets and estimated cost; opt into the larger context and causal diagnostics
-8. `session items <SESSION_ID> [<ITEM_ID> ...] [--turn TURN_ID] [--type ITEM_TYPE] [--include-content] [--output json]` — read scoped item evidence; repeat `--type` to filter item kinds and expand large content only when needed
+6. `session search <SESSION_ID> <QUERY> [--turn TURN_ID] [--mode text|path] [--kind KIND] [--limit N] [--output markdown|json]` — find canonical evidence using deterministic structural and lexical ranking
+7. `session items <SESSION_ID> [<ITEM_ID> ...] [--turn TURN_ID] [--type ITEM_TYPE] [--include-content] [--output json]` — expand scoped item evidence; repeat `--type` to filter item kinds and expand large content only when needed
+8. `session stats <SESSION_ID> [--output markdown|json]` — inspect session stats with compact context/token sections
+9. `session usage <SESSION_ID> [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and request-summed costs
+10. `session request-usage <SESSION_ID> [--turn TURN_ID] [--include-context] [--include-causality] [--output json]` — inspect every provider request and its exact usage buckets and estimated cost; opt into the larger context and causal diagnostics
 
 Graph-level inspection is nested under the branch session that owns the
 orchestration run. Ordinary human forks are boundaries and are never aggregated

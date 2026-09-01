@@ -12,6 +12,7 @@ from pydantic import (
     Field,
     RootModel,
     TypeAdapter,
+    field_validator,
     model_validator,
 )
 
@@ -58,6 +59,47 @@ class ProjectSessionsRequest(RequestModel):
 class SessionOverviewRequest(SessionEntryRequest):
     num_turns: int | None = Field(default=None, ge=1)
     drop_turns: int | None = Field(default=None, ge=1)
+
+
+class CanonicalSessionRequest(RequestModel):
+    session_id: str
+    turn_id: str | None = None
+
+
+class SessionSummaryRequest(CanonicalSessionRequest):
+    pass
+
+
+SearchKind = Literal[
+    "user_message",
+    "assistant_message",
+    "tool_call",
+    "tool_result",
+    "file_change",
+]
+
+
+class SessionSearchRequest(CanonicalSessionRequest):
+    query: str = Field(min_length=1, max_length=1000)
+    mode: Literal["text", "path"] = "text"
+    kinds: list[SearchKind] = Field(
+        default_factory=lambda: [
+            "user_message",
+            "assistant_message",
+            "tool_call",
+            "tool_result",
+            "file_change",
+        ]
+    )
+    limit: int = Field(default=20, ge=1, le=50)
+
+    @field_validator("query")
+    @classmethod
+    def normalize_query(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("query must contain non-whitespace text")
+        return normalized
 
 
 class SessionTreeRequest(SessionEntryRequest):
@@ -188,6 +230,100 @@ class ProjectSessionsResponse(ContractModel):
 class SessionOverviewResponse(ContractModel):
     root_session_id: str
     sessions: list[dict[str, Any]]
+
+
+class EvidenceReferences(ContractModel):
+    session_id: str
+    turn_id: str | None = None
+    item_id: str | None = None
+    event_ids: list[str] = Field(default_factory=list)
+
+
+class ProjectionIdentity(ContractModel):
+    name: str
+    version: int = Field(ge=1)
+    strategy: str
+
+
+class ProjectionCoverage(ContractModel):
+    retention: Literal["trajectory", "measurements"]
+    content_complete: bool
+    searched_resources: int | None = Field(default=None, ge=0)
+
+
+class SummaryClaim(ContractModel):
+    text: str
+    references: EvidenceReferences
+
+
+class SummaryChange(ContractModel):
+    path: str
+    operations: list[str] = Field(default_factory=list)
+    references: EvidenceReferences
+
+
+class SummaryEvidence(ContractModel):
+    label: str
+    status: str
+    references: EvidenceReferences
+
+
+class SummaryActivity(ContractModel):
+    kind: str
+    label: str
+    status: str
+    references: EvidenceReferences
+
+
+class TruncationStatus(ContractModel):
+    total: int = Field(ge=0)
+    truncated: bool
+
+
+class SessionSummaryResponse(ContractModel):
+    session_id: str
+    selected_turn_id: str | None = None
+    latest_turn_status: str | None = None
+    objective: SummaryClaim | None = None
+    decisions: list[SummaryClaim] = Field(default_factory=list)
+    changes: list[SummaryChange] = Field(default_factory=list)
+    verification: list[SummaryEvidence] = Field(default_factory=list)
+    unresolved: list[SummaryEvidence] = Field(default_factory=list)
+    next_actions: list[SummaryClaim] = Field(default_factory=list)
+    recent_activity: list[SummaryActivity] = Field(default_factory=list)
+    truncation: dict[str, TruncationStatus] = Field(default_factory=dict)
+    projection: ProjectionIdentity
+    coverage: ProjectionCoverage
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SearchQuery(ContractModel):
+    text: str
+    mode: Literal["text", "path"]
+    kinds: list[SearchKind] = Field(default_factory=list)
+
+
+class SearchMatch(ContractModel):
+    rank: int = Field(ge=1)
+    score: float
+    kind: SearchKind
+    timestamp: datetime
+    label: str
+    snippet: str
+    matched_fields: list[str] = Field(default_factory=list)
+    references: EvidenceReferences
+
+
+class SessionSearchResponse(ContractModel):
+    session_id: str
+    selected_turn_id: str | None = None
+    query: SearchQuery
+    matches: list[SearchMatch] = Field(default_factory=list)
+    total: int = Field(ge=0)
+    truncated: bool
+    projection: ProjectionIdentity
+    coverage: ProjectionCoverage
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SessionTreeResponse(ContractModel):
@@ -847,6 +983,18 @@ SERVICE_CONTRACTS = {
             SessionOverviewRequest,
             SessionOverviewResponse,
             CliSessionOverviewResponse,
+        ),
+        ServiceContract(
+            "session.summary",
+            1,
+            SessionSummaryRequest,
+            SessionSummaryResponse,
+        ),
+        ServiceContract(
+            "session.search",
+            1,
+            SessionSearchRequest,
+            SessionSearchResponse,
         ),
         ServiceContract("session.tree", 2, SessionTreeRequest, SessionTreeResponse),
         ServiceContract(

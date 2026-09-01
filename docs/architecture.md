@@ -197,6 +197,12 @@ The application layer implements versioned Pydantic method contracts consumed
 by the CLI. Automation and plugins use `ct api call` or `ct api batch`; dedicated
 commands provide a separate compact presentation shape for interactive use.
 
+The accepted additive redesign for a deterministic session summary and
+canonical evidence search is specified in
+[`session-api-redesign.md`](session-api-redesign.md). It preserves the existing
+method contracts while defining `summary`, `overview`, `search`, and exact
+evidence as separate progressive-disclosure layers.
+
 `ServiceRuntime` is the shared in-process executor behind ordinary CLI commands,
 `ct api call`, and `ct api batch`. It owns contract validation, index persistence,
 and compatible store reuse for the lifetime of one invocation. Batch remains an
@@ -211,6 +217,8 @@ explicit collection of independent calls; shell pipelines and tools such as
 | `project.sessions` | List orchestration runs, optionally including bulk runtime and usage summaries |
 | `session.tree` | Ordinary conversation-fork tree with branch-owned agent counts |
 | `session.overview` | Narrative overview: hierarchy, activity keys, turn summaries |
+| `session.summary` | Bounded evidence-backed objective, changes, verification, and unresolved work |
+| `session.search` | Deterministic structural and lexical search over one canonical thread |
 | `session.stats` | Provider usage plus common observed composition buckets and runtime statistics for one thread |
 | `session.usage` | Token usage and request-summed cost breakdown by turn for one thread |
 | `session.model_usage` | Detailed model and turn-level usage diagnostics for one thread |
@@ -221,6 +229,15 @@ explicit collection of independent calls; shell pipelines and tools such as
 | `session.tool_usage` | Per-tool allocation, with opt-in all-item ledger and causal diagnostics |
 | `session.items` | Turn-filterable item detail with optional full-content expansion |
 | `session.events` | Turn-filterable event query, request-usage selection, and full tool-result dereferencing |
+| `living.sessions` | Revisioned global session inventory snapshots and deltas |
+| `living.events` | Revisioned canonical resource snapshots and deltas for a hierarchy scope |
+| `estimate.predict` | Create a pre-task duration estimate |
+| `estimate.bind` | Bind an estimate to an observed session |
+| `estimate.get` | Read one estimate and its current comparison state |
+| `estimate.list` | List estimates with optional filters |
+| `estimate.calibration` | Report calibration over completed estimates |
+| `estimate.backfill.start` | Start historical estimate reconstruction |
+| `estimate.backfill.status` | Inspect backfill progress and results |
 
 ### Store Resolution
 
@@ -308,6 +325,8 @@ uv sync                    # Install all workspace dependencies
 | `uv run ct project sessions [PROJECT]` | List sessions for a project |
 | `uv run ct session tree SESSION_ID` | Ordinary conversation branches and their owned agent counts |
 | `uv run ct session overview SESSION_ID` | One-thread overview |
+| `uv run ct session summary SESSION_ID` | Bounded evidence-backed session brief |
+| `uv run ct session search SESSION_ID QUERY` | Search one thread's canonical evidence |
 | `uv run ct session stats SESSION_ID` | One-thread context window statistics |
 | `uv run ct session usage SESSION_ID` | One-thread token and log-reported cost breakdown |
 | `uv run ct session graph overview SESSION_ID` | One branch's internal agent tree and structural edges |

@@ -804,6 +804,24 @@ def _single_session_handler(
     return wrapper
 
 
+def _canonical_session_handler(
+    build: Callable[[dict[str, Any], SessionGraph], Any],
+) -> ServiceHandler:
+    """Resolve an exact canonical session ID for strict retrieval methods."""
+
+    @wraps(build)
+    def wrapper(params: dict[str, Any], context: ServiceContext) -> Any:
+        session_id = params["session_id"]
+        session = context.store.get_session(_parse_user_id(session_id))
+        session_graph = context.store.get_session_graph_for_session(session.session_id)
+        selected_graph = _single_session_graph(session_graph, session_id)
+        return _public_output_for_session_graph(
+            selected_graph, build(params, selected_graph)
+        )
+
+    return wrapper
+
+
 def _handle_project_sessions(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
@@ -890,6 +908,27 @@ def _handle_session_overview(
         session_graph,
         num_turns=_optional_positive_int(params, "num_turns"),
         drop_turns=_optional_positive_int(params, "drop_turns"),
+    )
+
+
+@_canonical_session_handler
+def _handle_session_summary(params: dict[str, Any], session_graph: SessionGraph) -> Any:
+    from coding_trajectory.analysis.session_retrieval import build_session_summary
+
+    return build_session_summary(session_graph, turn_id=params.get("turn_id"))
+
+
+@_canonical_session_handler
+def _handle_session_search(params: dict[str, Any], session_graph: SessionGraph) -> Any:
+    from coding_trajectory.analysis.session_retrieval import search_session
+
+    return search_session(
+        session_graph,
+        query=params["query"],
+        mode=params["mode"],
+        kinds=params["kinds"],
+        limit=params["limit"],
+        turn_id=params.get("turn_id"),
     )
 
 
@@ -1249,6 +1288,8 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "project.sessions": _handle_project_sessions,
     "living.events": _handle_living_events,
     "session.overview": _handle_session_overview,
+    "session.summary": _handle_session_summary,
+    "session.search": _handle_session_search,
     "session.tree": _handle_session_tree,
     "graph.overview": _handle_graph_overview,
     "session.stats": _handle_session_stats,

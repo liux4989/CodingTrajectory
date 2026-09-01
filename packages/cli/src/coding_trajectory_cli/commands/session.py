@@ -18,6 +18,7 @@ from coding_trajectory_cli._shared import (
     format_percent,
     format_tokens,
     one_line,
+    positive_int,
     render_usage_line,
 )
 
@@ -53,6 +54,24 @@ def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
 
 def _session_stats_params(args: argparse.Namespace) -> dict[str, Any]:
     return {"session_id": args.session_id}
+
+
+def _session_summary_params(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "session_id": args.session_id,
+        **({"turn_id": args.turn_id} if args.turn_id else {}),
+    }
+
+
+def _session_search_params(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "session_id": args.session_id,
+        "query": args.query,
+        "mode": args.mode,
+        "limit": args.limit,
+        **({"turn_id": args.turn_id} if args.turn_id else {}),
+        **({"kinds": args.kinds} if args.kinds else {}),
+    }
 
 
 def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
@@ -200,6 +219,97 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
         for session in sessions:
             _render_session_tree_node(session, {}, depth=0, lines=lines)
 
+    return "\n".join(lines).rstrip()
+
+
+def _evidence_suffix(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    item_id = value.get("item_id")
+    event_ids = value.get("event_ids") or []
+    if item_id:
+        return f" _(item `{item_id}`)_"
+    if event_ids:
+        return f" _(event `{event_ids[0]}`)_"
+    turn_id = value.get("turn_id")
+    return f" _(turn `{turn_id}`)_" if turn_id else ""
+
+
+def _render_session_summary_text(payload: dict[str, Any]) -> str:
+    lines = [f"# Session summary `{payload.get('session_id') or '-'}`", ""]
+    objective = payload.get("objective")
+    if isinstance(objective, dict):
+        lines.extend(
+            [
+                "## Objective",
+                f"{objective.get('text') or '-'}{_evidence_suffix(objective.get('references'))}",
+                "",
+            ]
+        )
+
+    sections = (
+        ("Decisions", "decisions", "text"),
+        ("Changes", "changes", "path"),
+        ("Verification", "verification", "label"),
+        ("Unresolved", "unresolved", "label"),
+        ("Next actions", "next_actions", "text"),
+        ("Recent activity", "recent_activity", "label"),
+    )
+    for heading, key, label_key in sections:
+        entries = payload.get(key) or []
+        if not entries:
+            continue
+        lines.extend([f"## {heading}", ""])
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            label = one_line(entry.get(label_key), limit=112)
+            if key == "changes":
+                operations = ", ".join(entry.get("operations") or [])
+                label += f" ({operations})" if operations else ""
+            status = entry.get("status")
+            status_suffix = f" [{status}]" if status else ""
+            lines.append(
+                f"- {label}{status_suffix}{_evidence_suffix(entry.get('references'))}"
+            )
+        lines.append("")
+
+    for warning in payload.get("warnings") or []:
+        lines.append(f"> Warning: {warning}")
+    return "\n".join(lines).rstrip()
+
+
+def _render_session_search_text(payload: dict[str, Any]) -> str:
+    query = payload.get("query") or {}
+    lines = [
+        f"# Session search `{payload.get('session_id') or '-'}`",
+        "",
+        f"Query: `{query.get('text') or ''}` ({query.get('mode') or 'text'})",
+        "",
+    ]
+    matches = payload.get("matches") or []
+    if not matches:
+        lines.append("No matching evidence.")
+    else:
+        lines.extend(
+            ["| # | Kind | Score | Match | Evidence |", "|---:|---|---:|---|---|"]
+        )
+        for match in matches:
+            references = match.get("references") or {}
+            evidence = (
+                references.get("item_id") or ((references.get("event_ids") or ["-"])[0])
+            )
+            snippet = one_line(match.get("snippet"), limit=96).replace("|", "\\|")
+            label = one_line(match.get("label"), limit=42).replace("|", "\\|")
+            lines.append(
+                f"| {match.get('rank') or '-'} | {match.get('kind') or '-'} | "
+                f"{match.get('score') or 0:g} | {label}: {snippet} | `{evidence}` |"
+            )
+        total = int(payload.get("total") or 0)
+        if payload.get("truncated"):
+            lines.extend(["", f"Showing {len(matches)} of {total} matches."])
+    for warning in payload.get("warnings") or []:
+        lines.extend(["", f"> Warning: {warning}"])
     return "\n".join(lines).rstrip()
 
 
@@ -941,6 +1051,86 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _params=_session_turn_window_params,
         _default_output="markdown",
         _renderer=_render_session_overview_text,
+    )
+
+    session_summary = session_sub.add_parser(
+        "summary",
+        prog="ct session summary",
+        help="Show a bounded, evidence-backed session brief.",
+        formatter_class=GhFormatter,
+    )
+    session_summary.add_argument(
+        "session_id",
+        metavar="SESSION_ID",
+        help="Exact canonical session ID.",
+    )
+    session_summary.add_argument(
+        "--turn",
+        dest="turn_id",
+        metavar="TURN_ID",
+        default=None,
+        help="Limit the summary to one turn.",
+    )
+    add_output_flags(session_summary)
+    session_summary.set_defaults(
+        _method="session.summary",
+        _params=_session_summary_params,
+        _default_output="markdown",
+        _renderer=_render_session_summary_text,
+    )
+
+    session_search = session_sub.add_parser(
+        "search",
+        prog="ct session search",
+        help="Search canonical session evidence with deterministic structural ranking.",
+        formatter_class=GhFormatter,
+    )
+    session_search.add_argument(
+        "session_id",
+        metavar="SESSION_ID",
+        help="Exact canonical session ID.",
+    )
+    session_search.add_argument("query", metavar="QUERY", help="Text or path to find.")
+    session_search.add_argument(
+        "--turn",
+        dest="turn_id",
+        metavar="TURN_ID",
+        default=None,
+        help="Limit the search to one turn.",
+    )
+    session_search.add_argument(
+        "--mode",
+        choices=("text", "path"),
+        default="text",
+        help="Search all indexed text or file paths only.",
+    )
+    session_search.add_argument(
+        "--kind",
+        dest="kinds",
+        choices=(
+            "user_message",
+            "assistant_message",
+            "tool_call",
+            "tool_result",
+            "file_change",
+        ),
+        action="append",
+        default=None,
+        help="Limit evidence kinds. Repeatable.",
+    )
+    session_search.add_argument(
+        "--limit",
+        type=positive_int,
+        default=20,
+        metavar="N",
+        help="Maximum matches to return (default: 20; API maximum: 50).",
+    )
+    add_output_flags(session_search)
+    session_search.set_defaults(
+        _method="session.search",
+        _params=_session_search_params,
+        _default_output="markdown",
+        _renderer=_render_session_search_text,
     )
 
     session_stats = session_sub.add_parser(

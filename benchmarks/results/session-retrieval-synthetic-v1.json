@@ -1,0 +1,334 @@
+{
+  "schema_version": 1,
+  "benchmark": "session-retrieval-synthetic",
+  "generated_at": "2026-09-01T07:07:33.458227+00:00",
+  "scope": {
+    "data": "synthetic canonical SessionGraph only",
+    "provider_logs": false,
+    "semantic_ranking": false,
+    "ablation_scope": "ranking only; candidate generation is held constant",
+    "claim": "behavioral evaluation, not real-world retrieval quality"
+  },
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.36"
+  },
+  "fixture": {
+    "sessions": 2,
+    "turns": 3,
+    "items": 29,
+    "search_cases": 5
+  },
+  "summary": {
+    "checks": {
+      "latest_material_objective": true,
+      "explicit_decision_preserved": true,
+      "later_decision_preserved": true,
+      "changes_merged_by_path": true,
+      "failed_and_passed_verification_preserved": true,
+      "corrected_failure_cleared": true,
+      "uncorrected_failure_retained": true,
+      "latest_plan_snapshot_wins": true,
+      "turn_scope_selects_objective": true,
+      "turn_scope_selects_plan_snapshot": true,
+      "recent_activity_is_bounded": true,
+      "private_reasoning_excluded": true,
+      "self_retrieval_excluded": true,
+      "all_evidence_resolves": true,
+      "deterministic_response": true
+    },
+    "passed": 15,
+    "total": 15,
+    "score": 1.0,
+    "response_bytes": 5800,
+    "canonical_fixture_bytes": 32637,
+    "compression_ratio": 0.1777,
+    "truncation": {
+      "decisions": {
+        "total": 2,
+        "truncated": false
+      },
+      "changes": {
+        "total": 1,
+        "truncated": false
+      },
+      "verification": {
+        "total": 3,
+        "truncated": false
+      },
+      "unresolved": {
+        "total": 1,
+        "truncated": false
+      },
+      "next_actions": {
+        "total": 0,
+        "truncated": false
+      },
+      "recent_activity": {
+        "total": 27,
+        "truncated": true
+      }
+    }
+  },
+  "search": {
+    "cases": [
+      {
+        "name": "structural-ranking",
+        "query": "ranking-signal",
+        "mode": "text",
+        "matching_documents": 4,
+        "coverage": {
+          "retention": "trajectory",
+          "content_complete": false,
+          "searched_resources": 35
+        },
+        "warnings": [
+          "Some searchable fields were truncated or not retained; results may be incomplete."
+        ],
+        "metrics": {
+          "current_structural_lexical": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          },
+          "lexical_snippet_baseline": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 0.6538
+          },
+          "recent_first_baseline": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 0.8497
+          }
+        },
+        "current_order": [
+          "tool_result:item:00000000-0000-4000-8000-000000000102",
+          "file_change:item:00000000-0000-4000-8000-000000000103",
+          "user_message:event:00000000-0000-4000-8000-000000000020",
+          "assistant_message:item:00000000-0000-4000-8000-000000000101"
+        ]
+      },
+      {
+        "name": "path-search",
+        "query": "src/auth/cache.py",
+        "mode": "path",
+        "matching_documents": 2,
+        "coverage": {
+          "retention": "trajectory",
+          "content_complete": false,
+          "searched_resources": 35
+        },
+        "warnings": [
+          "Some searchable fields were truncated or not retained; results may be incomplete."
+        ],
+        "metrics": {
+          "current_structural_lexical": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          },
+          "lexical_snippet_baseline": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          },
+          "recent_first_baseline": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          }
+        },
+        "current_order": [
+          "file_change:item:00000000-0000-4000-8000-000000000111",
+          "file_change:item:00000000-0000-4000-8000-000000000103"
+        ]
+      },
+      {
+        "name": "tail-preservation",
+        "query": "tail-sentinel",
+        "mode": "text",
+        "matching_documents": 1,
+        "coverage": {
+          "retention": "trajectory",
+          "content_complete": false,
+          "searched_resources": 35
+        },
+        "warnings": [
+          "Some searchable fields were truncated or not retained; results may be incomplete."
+        ],
+        "metrics": {
+          "current_structural_lexical": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          },
+          "lexical_snippet_baseline": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          },
+          "recent_first_baseline": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          }
+        },
+        "current_order": [
+          "tool_result:item:00000000-0000-4000-8000-000000000114"
+        ]
+      },
+      {
+        "name": "explicit-decision",
+        "query": "API compatibility",
+        "mode": "text",
+        "matching_documents": 2,
+        "coverage": {
+          "retention": "trajectory",
+          "content_complete": false,
+          "searched_resources": 35
+        },
+        "warnings": [
+          "Some searchable fields were truncated or not retained; results may be incomplete."
+        ],
+        "metrics": {
+          "current_structural_lexical": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          },
+          "lexical_snippet_baseline": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          },
+          "recent_first_baseline": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 0.834
+          }
+        },
+        "current_order": [
+          "user_message:event:00000000-0000-4000-8000-000000000020",
+          "assistant_message:item:00000000-0000-4000-8000-000000000100"
+        ]
+      },
+      {
+        "name": "unresolved-failure",
+        "query": "failed-validation",
+        "mode": "text",
+        "matching_documents": 1,
+        "coverage": {
+          "retention": "trajectory",
+          "content_complete": false,
+          "searched_resources": 35
+        },
+        "warnings": [
+          "Some searchable fields were truncated or not retained; results may be incomplete."
+        ],
+        "metrics": {
+          "current_structural_lexical": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          },
+          "lexical_snippet_baseline": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          },
+          "recent_first_baseline": {
+            "recall_at_10": 1.0,
+            "precision_at_returned_10": 1.0,
+            "mrr": 1.0,
+            "ndcg_at_10": 1.0
+          }
+        },
+        "current_order": [
+          "tool_result:item:00000000-0000-4000-8000-000000000113"
+        ]
+      }
+    ],
+    "aggregate": {
+      "current_structural_lexical": {
+        "recall_at_10": 1.0,
+        "precision_at_returned_10": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0
+      },
+      "lexical_snippet_baseline": {
+        "recall_at_10": 1.0,
+        "precision_at_returned_10": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.9308
+      },
+      "recent_first_baseline": {
+        "recall_at_10": 1.0,
+        "precision_at_returned_10": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.9367
+      }
+    },
+    "ablation_candidate_set": "All rankers reorder the same documents matched by the current lexical matcher.",
+    "invariants": {
+      "all_evidence_resolves": true,
+      "private_reasoning_excluded": true,
+      "self_retrieval_excluded": true,
+      "child_scope_isolated": true,
+      "turn_scope_isolated": true,
+      "limit_and_truncation_truthful": true,
+      "kind_filter_honored": true,
+      "long_tail_match_preserved": true,
+      "long_field_coverage_truthful": true,
+      "structural_failure_precedes_mutation": true,
+      "deterministic_response": true
+    },
+    "invariants_passed": 11,
+    "invariants_total": 11
+  },
+  "performance": {
+    "diagnostic_only": true,
+    "note": "Synthetic warm-store timings are not a real-data performance gate.",
+    "measurements": {
+      "session.summary": {
+        "repeat": 30,
+        "median_ms": 7.1113,
+        "p95_ms": 7.3314,
+        "min_ms": 6.9849,
+        "max_ms": 7.3608,
+        "response_bytes": 5800
+      },
+      "session.search": {
+        "repeat": 30,
+        "median_ms": 4.4187,
+        "p95_ms": 4.5246,
+        "min_ms": 4.3276,
+        "max_ms": 4.6775,
+        "response_bytes": 2179
+      }
+    }
+  },
+  "gates": {
+    "summary_behavior": true,
+    "search_invariants": true,
+    "search_recall_at_10": true,
+    "search_mrr": true,
+    "search_ndcg_at_10": true,
+    "structural_not_worse_than_lexical": true
+  },
+  "passed": true
+}
