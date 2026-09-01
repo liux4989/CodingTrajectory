@@ -23,7 +23,7 @@ export function formatIdleSeconds(seconds: number | null | undefined) {
   return `${Math.round(seconds)}s`;
 }
 
-export type CacheBreakType = "ttl_confirmed" | "ttl_likely" | "effort_switch" | "unattributed";
+export type CacheBreakType = "ttl_confirmed" | "ttl_likely" | "effort_switch" | "model_switch" | "unattributed";
 
 // Effort changes are actionable (amber); TTL breaks are age evictions
 // (neutral). ``ttl_likely`` remains explicitly tentative.
@@ -38,6 +38,13 @@ export function cacheBreakTone(type: CacheBreakType, effortFrom: string | null, 
     return {
       icon: <Zap size={12} />,
       label: `effort change${effortFrom ? ` ${effortFrom}->${effortTo}` : effortTo ? `->${effortTo}` : ""}`,
+      className: "border-warning/45 bg-warning/10 text-warning",
+    };
+  }
+  if (type === "model_switch") {
+    return {
+      icon: <Zap size={12} />,
+      label: "Model change",
       className: "border-warning/45 bg-warning/10 text-warning",
     };
   }
@@ -58,6 +65,7 @@ export function cacheBreakTone(type: CacheBreakType, effortFrom: string | null, 
 
 export const CACHE_BREAK_TYPE_ORDER: CacheBreakType[] = [
   "effort_switch",
+  "model_switch",
   "ttl_confirmed",
   "ttl_likely",
   "unattributed",

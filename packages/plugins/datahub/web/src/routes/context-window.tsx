@@ -842,6 +842,7 @@ function CacheBreaksPanel({ cacheBreaks }: { cacheBreaks: CacheBreakSummary }) {
       ttl_confirmed: theme.palette[2],
       ttl_likely: resolveCssColor("var(--warning)", theme.palette[1]),
       effort_switch: theme.palette[3],
+      model_switch: theme.palette[4],
       unattributed: resolveCssColor("var(--category-unattributed)", theme.palette[5]),
     }),
     [theme],

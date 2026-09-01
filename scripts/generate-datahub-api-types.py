@@ -26,7 +26,9 @@ from datahub_plugin.api_models import (
 def render_schema() -> str:
     definitions: dict[str, object] = {}
     for model in API_RESPONSE_MODELS:
-        model_schema = model.model_json_schema(ref_template="#/$defs/{model}")
+        model_schema = model.model_json_schema(
+            mode="serialization", ref_template="#/$defs/{model}"
+        )
         nested = model_schema.pop("$defs", {})
         for name, definition in nested.items():
             existing = definitions.get(name)

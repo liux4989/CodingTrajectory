@@ -13,7 +13,9 @@ ArtifactKind = Literal["file", "command", "check", "commit", "link"]
 
 
 class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
 
 class TimelineTurnAccounting(_StrictModel):

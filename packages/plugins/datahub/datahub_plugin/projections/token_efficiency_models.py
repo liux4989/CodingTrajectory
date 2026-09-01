@@ -5,12 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 Grain = Literal["daily", "weekly"]
 
 
-class Distribution(BaseModel):
+class _ProjectionModel(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
+
+class Distribution(_ProjectionModel):
     count: int = 0
     avg: float = 0
     median: float = 0
@@ -19,7 +23,7 @@ class Distribution(BaseModel):
     max: float = 0
 
 
-class PeriodSummary(BaseModel):
+class PeriodSummary(_ProjectionModel):
     bucket: str
     label: str
     is_complete: bool = True
@@ -34,7 +38,7 @@ class PeriodSummary(BaseModel):
     pattern_share: float = 0
 
 
-class ComparisonDelta(BaseModel):
+class ComparisonDelta(_ProjectionModel):
     total_prompt_tokens_pct: float | None = None
     session_median_pct: float | None = None
     session_p90_pct: float | None = None
@@ -42,25 +46,25 @@ class ComparisonDelta(BaseModel):
     turn_p90_pct: float | None = None
 
 
-class PeriodComparison(BaseModel):
+class PeriodComparison(_ProjectionModel):
     grain: Grain
     current: PeriodSummary
     previous: PeriodSummary | None = None
     deltas: ComparisonDelta = Field(default_factory=ComparisonDelta)
 
 
-class PatternIndicators(BaseModel):
+class PatternIndicators(_ProjectionModel):
     repeated_read: int = 0
     parallel_fanout: int = 0
     truncated_output: int = 0
 
 
-class UnitDistributions(BaseModel):
+class UnitDistributions(_ProjectionModel):
     session: Distribution = Field(default_factory=Distribution)
     turn: Distribution = Field(default_factory=Distribution)
 
 
-class Contributor(BaseModel):
+class Contributor(_ProjectionModel):
     session_id: str
     turn_id: str | None = None
     title: str | None = None
@@ -70,7 +74,7 @@ class Contributor(BaseModel):
     pattern: str | None = None
 
 
-class PatternMetrics(BaseModel):
+class PatternMetrics(_ProjectionModel):
     incidence_count: int = 0
     incidence_rate: float = 0
     calls: int = 0
@@ -81,7 +85,7 @@ class PatternMetrics(BaseModel):
     indicators: PatternIndicators = Field(default_factory=PatternIndicators)
 
 
-class PatternDelta(BaseModel):
+class PatternDelta(_ProjectionModel):
     prompt_tokens_pct: float | None = None
     incidence_rate_points: float = 0
     calls_pct: float | None = None
@@ -91,7 +95,7 @@ class PatternDelta(BaseModel):
     turn_p90_pct: float | None = None
 
 
-class PatternRow(BaseModel):
+class PatternRow(_ProjectionModel):
     key: str
     label: str
     kind: Literal["exclusive", "indicator"]
@@ -101,7 +105,7 @@ class PatternRow(BaseModel):
     contributors: list[Contributor] = Field(default_factory=list)
 
 
-class HotspotRow(BaseModel):
+class HotspotRow(_ProjectionModel):
     key: str
     resource: str
     status: Literal["persistent", "phase", "outlier_dominated", "emerging"]
@@ -121,7 +125,7 @@ class HotspotRow(BaseModel):
     contributors: list[Contributor] = Field(default_factory=list)
 
 
-class OutlierRow(BaseModel):
+class OutlierRow(_ProjectionModel):
     session_id: str
     turn_id: str
     title: str | None = None
@@ -133,7 +137,7 @@ class OutlierRow(BaseModel):
     reason_codes: list[str] = Field(default_factory=list)
 
 
-class Coverage(BaseModel):
+class Coverage(_ProjectionModel):
     root_graphs: int = 0
     sessions: int = 0
     turns: int = 0
@@ -143,20 +147,32 @@ class Coverage(BaseModel):
     truncated_input_summaries: int = 0
 
 
-class ProjectOption(BaseModel):
+class ProjectOption(_ProjectionModel):
     name: str
     path: str | None = None
     vendors: list[str] = Field(default_factory=list)
 
 
-class ProjectProjection(BaseModel):
+class ProjectFilters(_ProjectionModel):
+    since_days: int
+    discovery_days: int
+    project_name: str
+
+
+class ProjectIdentity(_ProjectionModel):
+    name: str
+    display_name: str
+    path: str | None = None
+
+
+class ProjectProjection(_ProjectionModel):
     schema_version: Literal[1] = 1
     generated_at: datetime
-    filters: dict[str, Any]
+    filters: ProjectFilters
     attribution: dict[str, Any]
     coverage: Coverage
     warnings: list[str] = Field(default_factory=list)
-    project: dict[str, Any]
+    project: ProjectIdentity
     comparisons: dict[str, PeriodComparison | None]
     trends: dict[str, list[PeriodSummary]]
     patterns: dict[str, list[PatternRow]] = Field(default_factory=dict)

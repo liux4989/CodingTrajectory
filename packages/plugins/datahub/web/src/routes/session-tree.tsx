@@ -176,7 +176,7 @@ export function SessionTreeRoute() {
             {payload.branches.length ? (
               <ConversationTree
                 branches={payload.branches}
-                selectedBranchId={payload.selected_branch_id}
+                selectedBranchId={payload.selected_branch_id ?? undefined}
               />
             ) : (
               <p className="m-0 text-body-sm text-muted-foreground">

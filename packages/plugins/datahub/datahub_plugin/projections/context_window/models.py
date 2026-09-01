@@ -43,7 +43,9 @@ Confidence = Literal[
 
 
 class TokenEvidence(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     value: int = Field(ge=0)
     confidence: Confidence
@@ -51,7 +53,9 @@ class TokenEvidence(BaseModel):
 
 
 class ContextCategory(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     id: str
     category: CategoryKey
@@ -63,7 +67,9 @@ class ContextCategory(BaseModel):
 
 
 class ContextEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     id: str
     group: Literal["before_first_prompt", "turn", "post_turn"]
@@ -84,7 +90,9 @@ class ContextEvent(BaseModel):
 
 
 class ExpensiveItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     item_id: str
     turn_id: str
@@ -96,7 +104,9 @@ class ExpensiveItem(BaseModel):
 
 
 class CompactionEventRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     timestamp: str
     # Provider-native mechanism (``eviction_boundary`` for Claude Code,
@@ -109,7 +119,9 @@ class CompactionEventRecord(BaseModel):
 
 
 class CompactionSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     count: int = 0
     cumulative_dropped_tokens: int | None = None
@@ -117,7 +129,9 @@ class CompactionSummary(BaseModel):
 
 
 class CacheBreakRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     turn_id: str
     # ttl_confirmed: idle gap exceeds the vendor's prompt-cache TTL max
@@ -157,7 +171,9 @@ class CacheBreakRecord(BaseModel):
 
 
 class CacheBreakSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     count: int = 0
     # Effort-independent static prefix that survives cache misses; the value
@@ -171,7 +187,9 @@ class CacheBreakSummary(BaseModel):
 
 
 class ContextSessionSection(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     session_id: str
     role: str
@@ -184,7 +202,9 @@ class ContextSessionSection(BaseModel):
 
 
 class CostEvidence(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     value_usd: float = Field(ge=0)
     confidence: Literal["reported", "estimated"]
@@ -193,7 +213,9 @@ class CostEvidence(BaseModel):
 
 
 class ContextWindowProjection(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     schema_version: Literal[1] = 1
     session_id: str

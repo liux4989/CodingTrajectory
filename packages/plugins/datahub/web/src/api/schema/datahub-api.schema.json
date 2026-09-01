@@ -213,7 +213,13 @@
         "turn_id",
         "type",
         "idle_seconds",
-        "re_read_tokens"
+        "re_read_tokens",
+        "cached_after_tokens",
+        "est_cost_usd",
+        "effort_from",
+        "effort_to",
+        "model_from",
+        "model_to"
       ],
       "title": "CacheBreakRecord",
       "type": "object"
@@ -270,7 +276,673 @@
           "type": "integer"
         }
       },
+      "required": [
+        "count",
+        "floor_tokens",
+        "total_re_read_tokens",
+        "estimated_waste_usd",
+        "by_type",
+        "events"
+      ],
       "title": "CacheBreakSummary",
+      "type": "object"
+    },
+    "CalibrationBucket": {
+      "additionalProperties": false,
+      "properties": {
+        "bucket": {
+          "title": "Bucket",
+          "type": "string"
+        },
+        "calibration_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Ratio"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outcome"
+        },
+        "sample_count": {
+          "title": "Sample Count",
+          "type": "integer"
+        },
+        "within_1_5x_share": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Within 1 5X Share"
+        }
+      },
+      "required": [
+        "bucket",
+        "sample_count"
+      ],
+      "title": "CalibrationBucket",
+      "type": "object"
+    },
+    "CalibrationCohort": {
+      "additionalProperties": false,
+      "properties": {
+        "buckets": {
+          "items": {
+            "$ref": "#/$defs/CalibrationBucket"
+          },
+          "title": "Buckets",
+          "type": "array"
+        },
+        "cohort": {
+          "$ref": "#/$defs/CalibrationCohortKey"
+        },
+        "eligible_count": {
+          "title": "Eligible Count",
+          "type": "integer"
+        },
+        "exclusions": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Exclusions",
+          "type": "object"
+        },
+        "primary_count": {
+          "title": "Primary Count",
+          "type": "integer"
+        },
+        "statistics": {
+          "$ref": "#/$defs/CalibrationStatistics"
+        }
+      },
+      "required": [
+        "cohort",
+        "eligible_count",
+        "primary_count",
+        "exclusions",
+        "statistics"
+      ],
+      "title": "CalibrationCohort",
+      "type": "object"
+    },
+    "CalibrationCohortKey": {
+      "additionalProperties": false,
+      "properties": {
+        "estimator_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Estimator Effort"
+        },
+        "estimator_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Estimator Model"
+        },
+        "estimator_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Estimator Provider"
+        },
+        "forecast_kind": {
+          "enum": [
+            "prospective",
+            "prospective_unbound",
+            "historical_backcast",
+            "runtime_advisory"
+          ],
+          "title": "Forecast Kind",
+          "type": "string"
+        },
+        "prompt_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Prompt Version"
+        },
+        "retrieval_policy_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Retrieval Policy Version"
+        },
+        "schema_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Schema Version"
+        }
+      },
+      "required": [
+        "forecast_kind",
+        "estimator_provider",
+        "estimator_model",
+        "estimator_effort",
+        "prompt_version",
+        "schema_version",
+        "retrieval_policy_version"
+      ],
+      "title": "CalibrationCohortKey",
+      "type": "object"
+    },
+    "CalibrationDefinedStatistic": {
+      "additionalProperties": false,
+      "properties": {
+        "interval_95": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interval 95"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "title": "CalibrationDefinedStatistic",
+      "type": "object"
+    },
+    "CalibrationPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "bootstrap_samples": {
+          "title": "Bootstrap Samples",
+          "type": "integer"
+        },
+        "bootstrap_seed": {
+          "title": "Bootstrap Seed",
+          "type": "integer"
+        },
+        "duration_buckets": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Duration Buckets",
+          "type": "array"
+        },
+        "min_compression_samples": {
+          "title": "Min Compression Samples",
+          "type": "integer"
+        },
+        "min_samples": {
+          "title": "Min Samples",
+          "type": "integer"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "within_factor": {
+          "title": "Within Factor",
+          "type": "number"
+        }
+      },
+      "required": [
+        "version",
+        "min_samples",
+        "min_compression_samples",
+        "within_factor",
+        "bootstrap_samples",
+        "bootstrap_seed",
+        "duration_buckets"
+      ],
+      "title": "CalibrationPolicy",
+      "type": "object"
+    },
+    "CalibrationStatistics": {
+      "additionalProperties": false,
+      "properties": {
+        "calibration_ratio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CalibrationDefinedStatistic"
+            },
+            {
+              "$ref": "#/$defs/CalibrationUndefinedStatistic"
+            }
+          ],
+          "title": "Calibration Ratio"
+        },
+        "compression_exponent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CalibrationDefinedStatistic"
+            },
+            {
+              "$ref": "#/$defs/CalibrationUndefinedStatistic"
+            }
+          ],
+          "title": "Compression Exponent"
+        },
+        "median_absolute_log_error": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "const": "undefined",
+              "type": "string"
+            }
+          ],
+          "title": "Median Absolute Log Error"
+        },
+        "p80_coverage": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "const": "undefined",
+              "type": "string"
+            }
+          ],
+          "title": "P80 Coverage"
+        },
+        "sample_count": {
+          "title": "Sample Count",
+          "type": "integer"
+        },
+        "within_1_5x_share": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "const": "undefined",
+              "type": "string"
+            }
+          ],
+          "title": "Within 1 5X Share"
+        }
+      },
+      "required": [
+        "sample_count",
+        "calibration_ratio",
+        "median_absolute_log_error",
+        "within_1_5x_share",
+        "p80_coverage",
+        "compression_exponent"
+      ],
+      "title": "CalibrationStatistics",
+      "type": "object"
+    },
+    "CalibrationUndefinedStatistic": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "value": {
+          "const": "undefined",
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "reason"
+      ],
+      "title": "CalibrationUndefinedStatistic",
+      "type": "object"
+    },
+    "CodeTimeCalibrationPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "cohorts": {
+          "items": {
+            "$ref": "#/$defs/CalibrationCohort"
+          },
+          "title": "Cohorts",
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/$defs/CalibrationPolicy"
+        }
+      },
+      "required": [
+        "policy",
+        "cohorts"
+      ],
+      "title": "CodeTimeCalibrationPayload",
+      "type": "object"
+    },
+    "CodeTimeForecastsPayload": {
+      "additionalProperties": true,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/EstimateForecastRecord"
+          },
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "title": "CodeTimeForecastsPayload",
+      "type": "object"
+    },
+    "CodeTimeProject": {
+      "additionalProperties": false,
+      "properties": {
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cost Usd"
+        },
+        "execution_seconds": {
+          "title": "Execution Seconds",
+          "type": "integer"
+        },
+        "project_name": {
+          "title": "Project Name",
+          "type": "string"
+        },
+        "session_count": {
+          "title": "Session Count",
+          "type": "integer"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/CodeTimeSession"
+          },
+          "title": "Sessions",
+          "type": "array"
+        },
+        "tokens": {
+          "$ref": "#/$defs/CodeTimeTokens"
+        },
+        "tool_calls": {
+          "title": "Tool Calls",
+          "type": "integer"
+        },
+        "turns": {
+          "title": "Turns",
+          "type": "integer"
+        },
+        "wait_seconds": {
+          "title": "Wait Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "project_name",
+        "session_count",
+        "execution_seconds",
+        "wait_seconds",
+        "turns",
+        "tool_calls",
+        "tokens",
+        "cost_usd",
+        "sessions"
+      ],
+      "title": "CodeTimeProject",
+      "type": "object"
+    },
+    "CodeTimeReport": {
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": {
+          "title": "Generated At",
+          "type": "string"
+        },
+        "projects": {
+          "items": {
+            "$ref": "#/$defs/CodeTimeProject"
+          },
+          "title": "Projects",
+          "type": "array"
+        },
+        "totals": {
+          "$ref": "#/$defs/CodeTimeTotals"
+        },
+        "window": {
+          "enum": [
+            "today",
+            "72h",
+            "7d",
+            "30d"
+          ],
+          "title": "Window",
+          "type": "string"
+        }
+      },
+      "required": [
+        "window",
+        "generated_at",
+        "totals",
+        "projects"
+      ],
+      "title": "CodeTimeReport",
+      "type": "object"
+    },
+    "CodeTimeSession": {
+      "additionalProperties": false,
+      "properties": {
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cost Usd"
+        },
+        "execution_seconds": {
+          "title": "Execution Seconds",
+          "type": "integer"
+        },
+        "root_session_id": {
+          "title": "Root Session Id",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Title"
+        },
+        "tokens": {
+          "$ref": "#/$defs/CodeTimeTokens"
+        },
+        "tool_calls": {
+          "title": "Tool Calls",
+          "type": "integer"
+        },
+        "turns": {
+          "title": "Turns",
+          "type": "integer"
+        },
+        "vendor": {
+          "title": "Vendor",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "title": "Wait Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "root_session_id",
+        "title",
+        "vendor",
+        "execution_seconds",
+        "wait_seconds",
+        "turns",
+        "tool_calls",
+        "tokens",
+        "cost_usd"
+      ],
+      "title": "CodeTimeSession",
+      "type": "object"
+    },
+    "CodeTimeTokens": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_write_tokens": {
+          "title": "Cache Write Tokens",
+          "type": "integer"
+        },
+        "cached_prompt_tokens": {
+          "title": "Cached Prompt Tokens",
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "title": "Completion Tokens",
+          "type": "integer"
+        },
+        "processed_tokens": {
+          "title": "Processed Tokens",
+          "type": "integer"
+        },
+        "prompt_tokens": {
+          "title": "Prompt Tokens",
+          "type": "integer"
+        },
+        "reasoning_tokens": {
+          "title": "Reasoning Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "prompt_tokens",
+        "cached_prompt_tokens",
+        "cache_write_tokens",
+        "completion_tokens",
+        "reasoning_tokens",
+        "processed_tokens"
+      ],
+      "title": "CodeTimeTokens",
+      "type": "object"
+    },
+    "CodeTimeTotals": {
+      "additionalProperties": false,
+      "properties": {
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cost Usd"
+        },
+        "execution_seconds": {
+          "title": "Execution Seconds",
+          "type": "integer"
+        },
+        "project_count": {
+          "title": "Project Count",
+          "type": "integer"
+        },
+        "session_count": {
+          "title": "Session Count",
+          "type": "integer"
+        },
+        "tokens": {
+          "$ref": "#/$defs/CodeTimeTokens"
+        },
+        "tool_calls": {
+          "title": "Tool Calls",
+          "type": "integer"
+        },
+        "turns": {
+          "title": "Turns",
+          "type": "integer"
+        },
+        "wait_seconds": {
+          "title": "Wait Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "session_count",
+        "project_count",
+        "execution_seconds",
+        "wait_seconds",
+        "turns",
+        "tool_calls",
+        "tokens",
+        "cost_usd"
+      ],
+      "title": "CodeTimeTotals",
       "type": "object"
     },
     "CompactionEventRecord": {
@@ -335,7 +1007,11 @@
       },
       "required": [
         "timestamp",
-        "mechanism"
+        "mechanism",
+        "trigger",
+        "pre_tokens",
+        "post_tokens",
+        "dropped_tokens"
       ],
       "title": "CompactionEventRecord",
       "type": "object"
@@ -368,6 +1044,11 @@
           "type": "array"
         }
       },
+      "required": [
+        "count",
+        "cumulative_dropped_tokens",
+        "events"
+      ],
       "title": "CompactionSummary",
       "type": "object"
     },
@@ -434,6 +1115,13 @@
           "title": "Turn P90 Pct"
         }
       },
+      "required": [
+        "total_prompt_tokens_pct",
+        "session_median_pct",
+        "session_p90_pct",
+        "turn_median_pct",
+        "turn_p90_pct"
+      ],
       "title": "ComparisonDelta",
       "type": "object"
     },
@@ -496,7 +1184,9 @@
         "category",
         "source_key",
         "label",
-        "tokens"
+        "tokens",
+        "percent",
+        "estimated_cost"
       ],
       "title": "ContextCategory",
       "type": "object"
@@ -634,10 +1324,18 @@
       "required": [
         "id",
         "group",
+        "turn_id",
         "category",
         "label",
+        "summary",
+        "tokens",
         "source",
-        "confidence"
+        "confidence",
+        "detail_ref",
+        "terminal_visible",
+        "estimated_cost",
+        "idle_seconds",
+        "re_read_tokens"
       ],
       "title": "ContextEvent",
       "type": "object"
@@ -719,7 +1417,12 @@
       "required": [
         "session_id",
         "role",
-        "label"
+        "label",
+        "relationship",
+        "parent_session_id",
+        "used_tokens",
+        "used_percent",
+        "token_cost"
       ],
       "title": "ContextSessionSection",
       "type": "object"
@@ -868,12 +1571,22 @@
         }
       },
       "required": [
+        "schema_version",
         "session_id",
         "active_session_id",
         "vendor",
+        "model",
+        "context_window_tokens",
+        "used_tokens",
+        "used_percent",
+        "token_cost",
         "categories",
         "provider_usage_buckets",
+        "session_sections",
+        "expensive_items",
         "events",
+        "compaction",
+        "cache_breaks",
         "warnings"
       ],
       "title": "ContextWindowPayload",
@@ -938,9 +1651,161 @@
         }
       },
       "required": [
-        "session_id"
+        "session_id",
+        "turn_id",
+        "title",
+        "prompt_tokens",
+        "calls",
+        "repeated_calls",
+        "pattern"
       ],
       "title": "Contributor",
+      "type": "object"
+    },
+    "ConversationBranch": {
+      "additionalProperties": true,
+      "properties": {
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Name"
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cwd"
+        },
+        "graph_session_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Graph Session Count"
+        },
+        "parent_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Session Id"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "source_turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Turn Id"
+        },
+        "spawned_agent_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spawned Agent Count"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "turn_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Count"
+        },
+        "vendor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vendor"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "ConversationBranch",
       "type": "object"
     },
     "CostEvidence": {
@@ -979,7 +1844,8 @@
       "required": [
         "value_usd",
         "confidence",
-        "source"
+        "source",
+        "effective_date"
       ],
       "title": "CostEvidence",
       "type": "object"
@@ -1022,6 +1888,15 @@
           "type": "integer"
         }
       },
+      "required": [
+        "root_graphs",
+        "sessions",
+        "turns",
+        "tool_items",
+        "attributed_tool_items",
+        "undated_tool_items",
+        "truncated_input_summaries"
+      ],
       "title": "Coverage",
       "type": "object"
     },
@@ -1305,7 +2180,654 @@
           "type": "number"
         }
       },
+      "required": [
+        "count",
+        "avg",
+        "median",
+        "p90",
+        "p95",
+        "max"
+      ],
       "title": "Distribution",
+      "type": "object"
+    },
+    "DistributionStats": {
+      "additionalProperties": false,
+      "properties": {
+        "avg": {
+          "title": "Avg",
+          "type": "number"
+        },
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "max": {
+          "title": "Max",
+          "type": "number"
+        },
+        "median": {
+          "title": "Median",
+          "type": "number"
+        },
+        "p90": {
+          "title": "P90",
+          "type": "number"
+        },
+        "p95": {
+          "title": "P95",
+          "type": "number"
+        }
+      },
+      "required": [
+        "count",
+        "avg",
+        "median",
+        "p90",
+        "p95",
+        "max"
+      ],
+      "title": "DistributionStats",
+      "type": "object"
+    },
+    "EstimateComparison": {
+      "additionalProperties": true,
+      "properties": {
+        "actual_execution_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual Execution Seconds"
+        },
+        "compared_at": {
+          "format": "date-time",
+          "title": "Compared At",
+          "type": "string"
+        },
+        "duration_bucket": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Bucket"
+        },
+        "exclusion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exclusion"
+        },
+        "outcome": {
+          "default": "unknown",
+          "title": "Outcome",
+          "type": "string"
+        },
+        "source_fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Fingerprint"
+        }
+      },
+      "required": [
+        "compared_at"
+      ],
+      "title": "EstimateComparison",
+      "type": "object"
+    },
+    "EstimateEstimatorConfig": {
+      "additionalProperties": true,
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "prompt_version": {
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "prompt_version",
+        "schema_version"
+      ],
+      "title": "EstimateEstimatorConfig",
+      "type": "object"
+    },
+    "EstimateForecastRecord": {
+      "additionalProperties": true,
+      "properties": {
+        "bound_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bound At"
+        },
+        "comparison": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EstimateComparison"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "data_cutoff_at": {
+          "format": "date-time",
+          "title": "Data Cutoff At",
+          "type": "string"
+        },
+        "estimator": {
+          "$ref": "#/$defs/EstimateEstimatorConfig"
+        },
+        "forecast_kind": {
+          "enum": [
+            "prospective",
+            "prospective_unbound",
+            "historical_backcast",
+            "runtime_advisory"
+          ],
+          "title": "Forecast Kind",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "title": "Issued At",
+          "type": "string"
+        },
+        "p50_minutes": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P50 Minutes"
+        },
+        "p80_minutes": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P80 Minutes"
+        },
+        "prediction_id": {
+          "title": "Prediction Id",
+          "type": "string"
+        },
+        "project_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Name"
+        },
+        "prompt_fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Fingerprint"
+        },
+        "retrieval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EstimateRetrievalSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "enum": [
+            "primary",
+            "diagnostic"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "root_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Session Id"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
+        },
+        "session_title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Title"
+        },
+        "status": {
+          "enum": [
+            "unbound",
+            "uncompared",
+            "compared"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/EstimateTargetConfig"
+        },
+        "target_execution_started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Execution Started At"
+        },
+        "task_available_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Available At"
+        },
+        "task_class": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Class"
+        },
+        "task_fingerprint": {
+          "title": "Task Fingerprint",
+          "type": "string"
+        },
+        "task_snapshot": {
+          "additionalProperties": true,
+          "title": "Task Snapshot",
+          "type": "object"
+        },
+        "turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Id"
+        }
+      },
+      "required": [
+        "prediction_id",
+        "idempotency_key",
+        "forecast_kind",
+        "role",
+        "status",
+        "task_fingerprint",
+        "issued_at",
+        "data_cutoff_at",
+        "estimator",
+        "created_at"
+      ],
+      "title": "EstimateForecastRecord",
+      "type": "object"
+    },
+    "EstimateRetrievalExample": {
+      "additionalProperties": true,
+      "properties": {
+        "actual_minutes": {
+          "title": "Actual Minutes",
+          "type": "number"
+        },
+        "harness_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harness Name"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "project_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Name"
+        },
+        "root_session_id": {
+          "title": "Root Session Id",
+          "type": "string"
+        },
+        "turn_id": {
+          "title": "Turn Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "root_session_id",
+        "actual_minutes"
+      ],
+      "title": "EstimateRetrievalExample",
+      "type": "object"
+    },
+    "EstimateRetrievalSnapshot": {
+      "additionalProperties": true,
+      "properties": {
+        "corpus_fingerprint": {
+          "title": "Corpus Fingerprint",
+          "type": "string"
+        },
+        "data_cutoff_at": {
+          "format": "date-time",
+          "title": "Data Cutoff At",
+          "type": "string"
+        },
+        "examples": {
+          "items": {
+            "$ref": "#/$defs/EstimateRetrievalExample"
+          },
+          "title": "Examples",
+          "type": "array"
+        },
+        "policy_version": {
+          "title": "Policy Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy_version",
+        "corpus_fingerprint",
+        "data_cutoff_at"
+      ],
+      "title": "EstimateRetrievalSnapshot",
+      "type": "object"
+    },
+    "EstimateTargetConfig": {
+      "additionalProperties": true,
+      "properties": {
+        "agent_vendor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Vendor"
+        },
+        "approval_policy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Policy"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "execution_policy_fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Policy Fingerprint"
+        },
+        "harness_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harness Name"
+        },
+        "harness_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harness Version"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "multi_agent_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Multi Agent Mode"
+        },
+        "permission_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Permission Mode"
+        },
+        "sandbox_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sandbox Mode"
+        },
+        "spawn_depth": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spawn Depth"
+        }
+      },
+      "title": "EstimateTargetConfig",
       "type": "object"
     },
     "ExpensiveItem": {
@@ -1360,6 +2882,1173 @@
         "estimated_cost"
       ],
       "title": "ExpensiveItem",
+      "type": "object"
+    },
+    "GraphContextWindow": {
+      "additionalProperties": true,
+      "properties": {
+        "used_percent": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Used Percent"
+        },
+        "used_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Used Tokens"
+        }
+      },
+      "title": "GraphContextWindow",
+      "type": "object"
+    },
+    "GraphCostEvidence": {
+      "additionalProperties": true,
+      "properties": {
+        "confidence": {
+          "enum": [
+            "reported",
+            "estimated"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "effective_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effective Date"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "value_usd": {
+          "title": "Value Usd",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value_usd",
+        "confidence"
+      ],
+      "title": "GraphCostEvidence",
+      "type": "object"
+    },
+    "GraphEdge": {
+      "additionalProperties": true,
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provenance"
+        },
+        "source_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Session Id"
+        },
+        "target_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Session Id"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        }
+      },
+      "title": "GraphEdge",
+      "type": "object"
+    },
+    "GraphModelUsage": {
+      "additionalProperties": true,
+      "properties": {
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "turns": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turns"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphUsageBuckets"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "GraphModelUsage",
+      "type": "object"
+    },
+    "GraphOrchestration": {
+      "additionalProperties": true,
+      "properties": {
+        "agent_paths": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Paths"
+        },
+        "edge_counts": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Edge Counts"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind"
+        },
+        "multi_agent_modes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Multi Agent Modes"
+        },
+        "multi_agent_versions": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Multi Agent Versions"
+        },
+        "session_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Count"
+        },
+        "spawned_agent_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spawned Agent Count"
+        },
+        "vendors": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vendors"
+        }
+      },
+      "title": "GraphOrchestration",
+      "type": "object"
+    },
+    "GraphOverviewGraph": {
+      "additionalProperties": true,
+      "properties": {
+        "orchestration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphOrchestration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "GraphOverviewGraph",
+      "type": "object"
+    },
+    "GraphOverviewPayload": {
+      "additionalProperties": true,
+      "properties": {
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/GraphEdge"
+          },
+          "title": "Edges",
+          "type": "array"
+        },
+        "graph": {
+          "$ref": "#/$defs/GraphOverviewGraph"
+        },
+        "graph_id": {
+          "title": "Graph Id",
+          "type": "string"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "root_session_id": {
+          "title": "Root Session Id",
+          "type": "string"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/GraphSessionNode"
+          },
+          "title": "Sessions",
+          "type": "array"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphOverviewSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "graph_id",
+        "root_session_id",
+        "sessions",
+        "edges"
+      ],
+      "title": "GraphOverviewPayload",
+      "type": "object"
+    },
+    "GraphOverviewSummary": {
+      "additionalProperties": true,
+      "properties": {
+        "ended_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended At"
+        },
+        "session_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Count"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "turn_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Count"
+        },
+        "vendors": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vendors"
+        }
+      },
+      "title": "GraphOverviewSummary",
+      "type": "object"
+    },
+    "GraphRuntime": {
+      "additionalProperties": true,
+      "properties": {
+        "execution_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Seconds"
+        },
+        "tool_calls": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Calls"
+        },
+        "turns": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turns"
+        }
+      },
+      "title": "GraphRuntime",
+      "type": "object"
+    },
+    "GraphSessionNode": {
+      "additionalProperties": true,
+      "properties": {
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Name"
+        },
+        "agent_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Path"
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cwd"
+        },
+        "edge_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Edge Type"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended At"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "multi_agent_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Multi Agent Mode"
+        },
+        "multi_agent_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Multi Agent Version"
+        },
+        "parent_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Session Id"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Effort"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "vendor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vendor"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "GraphSessionNode",
+      "type": "object"
+    },
+    "GraphStatsPayload": {
+      "additionalProperties": true,
+      "properties": {
+        "billed_token_usage": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Billed Token Usage"
+        },
+        "context_window": {
+          "$ref": "#/$defs/GraphContextWindow"
+        },
+        "messages": {
+          "additionalProperties": true,
+          "title": "Messages",
+          "type": "object"
+        },
+        "model": {
+          "additionalProperties": true,
+          "title": "Model",
+          "type": "object"
+        },
+        "provider_usage_buckets": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Provider Usage Buckets",
+          "type": "array"
+        },
+        "root_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Session Id"
+        },
+        "runtime": {
+          "$ref": "#/$defs/GraphRuntime"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope"
+        },
+        "sessions": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/GraphStatsSession"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sessions"
+        },
+        "usage": {
+          "$ref": "#/$defs/GraphUsageBuckets"
+        },
+        "vendor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vendor"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "title": "GraphStatsPayload",
+      "type": "object"
+    },
+    "GraphStatsSession": {
+      "additionalProperties": true,
+      "properties": {
+        "context_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphContextWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphUsageBuckets"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "vendor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vendor"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "GraphStatsSession",
+      "type": "object"
+    },
+    "GraphUsageBuckets": {
+      "additionalProperties": true,
+      "properties": {
+        "cached_prompt_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cached Prompt Tokens"
+        },
+        "completion_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion Tokens"
+        },
+        "processed_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Processed Tokens"
+        },
+        "prompt_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Tokens"
+        },
+        "reasoning_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Tokens"
+        }
+      },
+      "title": "GraphUsageBuckets",
+      "type": "object"
+    },
+    "GraphUsagePayload": {
+      "additionalProperties": true,
+      "properties": {
+        "compaction": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compaction"
+        },
+        "effort_changes": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort Changes"
+        },
+        "estimated_cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphCostEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/GraphModelUsage"
+          },
+          "title": "Models",
+          "type": "array"
+        },
+        "runtime": {
+          "$ref": "#/$defs/GraphRuntime"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope"
+        },
+        "selected_turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected Turn Id"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "sessions": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/GraphUsageSession"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sessions"
+        },
+        "total_usage": {
+          "$ref": "#/$defs/GraphUsageBuckets"
+        },
+        "turns": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turns"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "GraphUsagePayload",
+      "type": "object"
+    },
+    "GraphUsageSession": {
+      "additionalProperties": true,
+      "properties": {
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Name"
+        },
+        "estimated_cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphCostEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parent_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Session Id"
+        },
+        "relationship": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationship"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "total_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphUsageBuckets"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "GraphUsageSession",
       "type": "object"
     },
     "HotspotRow": {
@@ -1461,9 +4150,1130 @@
       "required": [
         "key",
         "resource",
-        "status"
+        "status",
+        "sessions",
+        "turns",
+        "calls",
+        "repeat_count",
+        "enclosing_prompt_tokens",
+        "largest_call_tokens",
+        "largest_call_share",
+        "broad_calls",
+        "targeted_calls",
+        "previous_enclosing_prompt_tokens",
+        "delta_pct",
+        "session",
+        "turn",
+        "contributors"
       ],
       "title": "HotspotRow",
+      "type": "object"
+    },
+    "IncrementalRefresh": {
+      "additionalProperties": false,
+      "properties": {
+        "reused": {
+          "title": "Reused",
+          "type": "boolean"
+        },
+        "revision": {
+          "title": "Revision",
+          "type": "integer"
+        },
+        "status": {
+          "const": "catching_up",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "revision",
+        "reused"
+      ],
+      "title": "IncrementalRefresh",
+      "type": "object"
+    },
+    "ModelUsageCohort": {
+      "additionalProperties": false,
+      "properties": {
+        "session_graph_count": {
+          "title": "Session Graph Count",
+          "type": "integer"
+        },
+        "since_days": {
+          "title": "Since Days",
+          "type": "integer"
+        },
+        "turn_count": {
+          "title": "Turn Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "since_days",
+        "session_graph_count",
+        "turn_count"
+      ],
+      "title": "ModelUsageCohort",
+      "type": "object"
+    },
+    "ModelUsageContext": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "default": "unknown",
+          "title": "Confidence",
+          "type": "string"
+        },
+        "context_window_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Window Tokens"
+        },
+        "final_used_percent": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Final Used Percent"
+        },
+        "final_used_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Final Used Tokens"
+        },
+        "max_used_percent": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Used Percent"
+        },
+        "max_used_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Used Tokens"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        }
+      },
+      "title": "ModelUsageContext",
+      "type": "object"
+    },
+    "ModelUsageCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "missing_pricing": {
+          "title": "Missing Pricing",
+          "type": "integer"
+        },
+        "total_models": {
+          "title": "Total Models",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total_models",
+        "missing_pricing"
+      ],
+      "title": "ModelUsageCoverage",
+      "type": "object"
+    },
+    "ModelUsageDominantModel": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "title": "Basis",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provider"
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "basis"
+      ],
+      "title": "ModelUsageDominantModel",
+      "type": "object"
+    },
+    "ModelUsageFilters": {
+      "additionalProperties": false,
+      "properties": {
+        "model_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model Key"
+        },
+        "project_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Project Name"
+        },
+        "since_days": {
+          "title": "Since Days",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "since_days",
+        "project_name",
+        "model_key"
+      ],
+      "title": "ModelUsageFilters",
+      "type": "object"
+    },
+    "ModelUsageModel": {
+      "additionalProperties": false,
+      "properties": {
+        "avg_session_cost_usd": {
+          "title": "Avg Session Cost Usd",
+          "type": "number"
+        },
+        "avg_session_elapsed_seconds": {
+          "title": "Avg Session Elapsed Seconds",
+          "type": "number"
+        },
+        "avg_turn_cost_usd": {
+          "title": "Avg Turn Cost Usd",
+          "type": "number"
+        },
+        "avg_turn_elapsed_seconds": {
+          "title": "Avg Turn Elapsed Seconds",
+          "type": "number"
+        },
+        "cost_stats": {
+          "$ref": "#/$defs/SessionTurnDistributionStats"
+        },
+        "elapsed_seconds": {
+          "title": "Elapsed Seconds",
+          "type": "number"
+        },
+        "estimated_cost_usd": {
+          "title": "Estimated Cost Usd",
+          "type": "number"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "model_key": {
+          "title": "Model Key",
+          "type": "string"
+        },
+        "pricing": {
+          "$ref": "#/$defs/ModelUsagePricing"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provider"
+        },
+        "sessions": {
+          "title": "Sessions",
+          "type": "integer"
+        },
+        "token_stats": {
+          "$ref": "#/$defs/SessionTurnDistributionStats"
+        },
+        "turns": {
+          "title": "Turns",
+          "type": "integer"
+        },
+        "usage": {
+          "$ref": "#/$defs/UsageBuckets"
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "model_key",
+        "sessions",
+        "turns",
+        "usage",
+        "estimated_cost_usd",
+        "elapsed_seconds",
+        "avg_session_cost_usd",
+        "avg_turn_cost_usd",
+        "avg_session_elapsed_seconds",
+        "avg_turn_elapsed_seconds",
+        "token_stats",
+        "cost_stats",
+        "pricing"
+      ],
+      "title": "ModelUsageModel",
+      "type": "object"
+    },
+    "ModelUsageOption": {
+      "additionalProperties": false,
+      "properties": {
+        "elapsed_seconds": {
+          "title": "Elapsed Seconds",
+          "type": "number"
+        },
+        "estimated_cost_usd": {
+          "title": "Estimated Cost Usd",
+          "type": "number"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "model_key": {
+          "title": "Model Key",
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provider"
+        },
+        "sessions": {
+          "title": "Sessions",
+          "type": "integer"
+        },
+        "turns": {
+          "title": "Turns",
+          "type": "integer"
+        },
+        "usage": {
+          "$ref": "#/$defs/UsageBuckets"
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "model_key",
+        "sessions",
+        "turns",
+        "usage",
+        "estimated_cost_usd",
+        "elapsed_seconds"
+      ],
+      "title": "ModelUsageOption",
+      "type": "object"
+    },
+    "ModelUsagePages": {
+      "additionalProperties": false,
+      "properties": {
+        "sessions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CursorPageMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "turns": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CursorPageMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "ModelUsagePages",
+      "type": "object"
+    },
+    "ModelUsagePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "cohort": {
+          "$ref": "#/$defs/ModelUsageCohort"
+        },
+        "coverage": {
+          "$ref": "#/$defs/ModelUsageCoverage"
+        },
+        "filters": {
+          "$ref": "#/$defs/ModelUsageFilters"
+        },
+        "generated_at": {
+          "title": "Generated At",
+          "type": "string"
+        },
+        "model_options": {
+          "items": {
+            "$ref": "#/$defs/ModelUsageOption"
+          },
+          "title": "Model Options",
+          "type": "array"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/ModelUsageModel"
+          },
+          "title": "Models",
+          "type": "array"
+        },
+        "pages": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelUsagePages"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "project_options": {
+          "items": {
+            "$ref": "#/$defs/ProjectItem"
+          },
+          "title": "Project Options",
+          "type": "array"
+        },
+        "revision": {
+          "title": "Revision",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/ModelUsageSession"
+          },
+          "title": "Sessions",
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/$defs/ModelUsageSummary"
+        },
+        "time_buckets": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/ModelUsageTimeBucket"
+            },
+            "type": "array"
+          },
+          "title": "Time Buckets",
+          "type": "object"
+        },
+        "turns": {
+          "items": {
+            "$ref": "#/$defs/ModelUsageTurn"
+          },
+          "title": "Turns",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ModelUsageWarning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "revision",
+        "generated_at",
+        "cohort",
+        "coverage",
+        "filters",
+        "project_options",
+        "model_options",
+        "summary",
+        "models",
+        "sessions",
+        "turns",
+        "time_buckets",
+        "warnings"
+      ],
+      "title": "ModelUsagePayload",
+      "type": "object"
+    },
+    "ModelUsagePricing": {
+      "additionalProperties": false,
+      "properties": {
+        "breakdown": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Breakdown",
+          "type": "object"
+        },
+        "confidence": {
+          "enum": [
+            "estimated",
+            "missing_price"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "effective_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Effective Date"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source"
+        }
+      },
+      "required": [
+        "confidence",
+        "source",
+        "effective_date"
+      ],
+      "title": "ModelUsagePricing",
+      "type": "object"
+    },
+    "ModelUsageSession": {
+      "additionalProperties": false,
+      "properties": {
+        "completed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Completed At"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelUsageContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dominant_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelUsageDominantModel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "elapsed_seconds": {
+          "title": "Elapsed Seconds",
+          "type": "number"
+        },
+        "estimated_cost_usd": {
+          "title": "Estimated Cost Usd",
+          "type": "number"
+        },
+        "execution_seconds": {
+          "title": "Execution Seconds",
+          "type": "number"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "mixed_models": {
+          "title": "Mixed Models",
+          "type": "boolean"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/ModelUsageSessionModel"
+          },
+          "title": "Models",
+          "type": "array"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Project"
+        },
+        "runtime_available": {
+          "title": "Runtime Available",
+          "type": "boolean"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Started At"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Title"
+        },
+        "usage": {
+          "$ref": "#/$defs/UsageBuckets"
+        },
+        "vendor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Vendor"
+        },
+        "wait_seconds": {
+          "title": "Wait Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "project",
+        "title",
+        "vendor",
+        "started_at",
+        "completed_at",
+        "elapsed_seconds",
+        "execution_seconds",
+        "wait_seconds",
+        "runtime_available",
+        "mixed_models",
+        "usage",
+        "context",
+        "dominant_model",
+        "estimated_cost_usd",
+        "models"
+      ],
+      "title": "ModelUsageSession",
+      "type": "object"
+    },
+    "ModelUsageSessionModel": {
+      "additionalProperties": false,
+      "properties": {
+        "estimated_cost_usd": {
+          "title": "Estimated Cost Usd",
+          "type": "number"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "model_key": {
+          "title": "Model Key",
+          "type": "string"
+        },
+        "pricing": {
+          "$ref": "#/$defs/ModelUsagePricing"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provider"
+        },
+        "turns": {
+          "title": "Turns",
+          "type": "integer"
+        },
+        "usage": {
+          "$ref": "#/$defs/UsageBuckets"
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "model_key",
+        "turns",
+        "usage",
+        "estimated_cost_usd",
+        "pricing"
+      ],
+      "title": "ModelUsageSessionModel",
+      "type": "object"
+    },
+    "ModelUsageSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "avg_elapsed_seconds_per_session": {
+          "title": "Avg Elapsed Seconds Per Session",
+          "type": "number"
+        },
+        "avg_tokens_per_session": {
+          "title": "Avg Tokens Per Session",
+          "type": "number"
+        },
+        "avg_tokens_per_turn": {
+          "title": "Avg Tokens Per Turn",
+          "type": "number"
+        },
+        "cost_stats": {
+          "$ref": "#/$defs/SessionTurnDistributionStats"
+        },
+        "elapsed_stats": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DistributionStats"
+          },
+          "title": "Elapsed Stats",
+          "type": "object"
+        },
+        "estimated_cost_usd": {
+          "title": "Estimated Cost Usd",
+          "type": "number"
+        },
+        "missing_price_count": {
+          "title": "Missing Price Count",
+          "type": "integer"
+        },
+        "models": {
+          "title": "Models",
+          "type": "integer"
+        },
+        "processed_tokens": {
+          "title": "Processed Tokens",
+          "type": "integer"
+        },
+        "runtime_eligible": {
+          "title": "Runtime Eligible",
+          "type": "integer"
+        },
+        "sessions": {
+          "title": "Sessions",
+          "type": "integer"
+        },
+        "token_stats": {
+          "$ref": "#/$defs/ModelUsageTokenStats"
+        },
+        "top_model_by_cost": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Top Model By Cost"
+        },
+        "top_model_by_sessions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Top Model By Sessions"
+        },
+        "total_elapsed_seconds": {
+          "title": "Total Elapsed Seconds",
+          "type": "number"
+        },
+        "total_execution_seconds": {
+          "title": "Total Execution Seconds",
+          "type": "number"
+        },
+        "total_wait_seconds": {
+          "title": "Total Wait Seconds",
+          "type": "number"
+        },
+        "turns": {
+          "title": "Turns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sessions",
+        "turns",
+        "models",
+        "processed_tokens",
+        "total_elapsed_seconds",
+        "total_execution_seconds",
+        "total_wait_seconds",
+        "runtime_eligible",
+        "avg_tokens_per_session",
+        "avg_tokens_per_turn",
+        "avg_elapsed_seconds_per_session",
+        "token_stats",
+        "cost_stats",
+        "elapsed_stats",
+        "estimated_cost_usd",
+        "missing_price_count",
+        "top_model_by_cost",
+        "top_model_by_sessions"
+      ],
+      "title": "ModelUsageSummary",
+      "type": "object"
+    },
+    "ModelUsageTimeBucket": {
+      "additionalProperties": false,
+      "properties": {
+        "bucket": {
+          "title": "Bucket",
+          "type": "string"
+        },
+        "estimated_cost_usd": {
+          "title": "Estimated Cost Usd",
+          "type": "number"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "model_key": {
+          "title": "Model Key",
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provider"
+        },
+        "turns": {
+          "title": "Turns",
+          "type": "integer"
+        },
+        "usage": {
+          "$ref": "#/$defs/UsageBuckets"
+        }
+      },
+      "required": [
+        "bucket",
+        "model_key",
+        "provider",
+        "model",
+        "turns",
+        "estimated_cost_usd",
+        "usage"
+      ],
+      "title": "ModelUsageTimeBucket",
+      "type": "object"
+    },
+    "ModelUsageTokenStats": {
+      "additionalProperties": false,
+      "properties": {
+        "buckets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SessionTurnDistributionStats"
+          },
+          "title": "Buckets",
+          "type": "object"
+        },
+        "session": {
+          "$ref": "#/$defs/DistributionStats"
+        },
+        "turn": {
+          "$ref": "#/$defs/DistributionStats"
+        }
+      },
+      "required": [
+        "session",
+        "turn",
+        "buckets"
+      ],
+      "title": "ModelUsageTokenStats",
+      "type": "object"
+    },
+    "ModelUsageTurn": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelUsageContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "estimated_cost_usd": {
+          "title": "Estimated Cost Usd",
+          "type": "number"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "model_key": {
+          "title": "Model Key",
+          "type": "string"
+        },
+        "pricing": {
+          "$ref": "#/$defs/ModelUsagePricing"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provider"
+        },
+        "sequence": {
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "session_title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Title"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Started At"
+        },
+        "turn_id": {
+          "title": "Turn Id",
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/UsageBuckets"
+        },
+        "vendor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vendor"
+        }
+      },
+      "required": [
+        "session_id",
+        "turn_id",
+        "sequence",
+        "started_at",
+        "provider",
+        "model",
+        "model_key",
+        "usage",
+        "context",
+        "estimated_cost_usd",
+        "pricing"
+      ],
+      "title": "ModelUsageTurn",
+      "type": "object"
+    },
+    "ModelUsageWarning": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "message"
+      ],
+      "title": "ModelUsageWarning",
       "type": "object"
     },
     "OutlierRow": {
@@ -1545,7 +5355,14 @@
       },
       "required": [
         "session_id",
-        "turn_id"
+        "turn_id",
+        "title",
+        "completed_at",
+        "prompt_tokens",
+        "session_share",
+        "max_context_tokens",
+        "primary_pattern",
+        "reason_codes"
       ],
       "title": "OutlierRow",
       "type": "object"
@@ -1687,6 +5504,15 @@
           "title": "Turn P90 Pct"
         }
       },
+      "required": [
+        "prompt_tokens_pct",
+        "incidence_rate_points",
+        "calls_pct",
+        "session_median_pct",
+        "session_p90_pct",
+        "turn_median_pct",
+        "turn_p90_pct"
+      ],
       "title": "PatternDelta",
       "type": "object"
     },
@@ -1708,6 +5534,11 @@
           "type": "integer"
         }
       },
+      "required": [
+        "repeated_read",
+        "parallel_fanout",
+        "truncated_output"
+      ],
       "title": "PatternIndicators",
       "type": "object"
     },
@@ -1748,6 +5579,16 @@
           "$ref": "#/$defs/UnitDistributions"
         }
       },
+      "required": [
+        "incidence_count",
+        "incidence_rate",
+        "calls",
+        "total_prompt_tokens",
+        "token_share",
+        "zero_inclusive",
+        "conditional",
+        "indicators"
+      ],
       "title": "PatternMetrics",
       "type": "object"
     },
@@ -1798,7 +5639,10 @@
         "key",
         "label",
         "kind",
-        "current"
+        "current",
+        "previous",
+        "deltas",
+        "contributors"
       ],
       "title": "PatternRow",
       "type": "object"
@@ -1833,7 +5677,9 @@
       },
       "required": [
         "grain",
-        "current"
+        "current",
+        "previous",
+        "deltas"
       ],
       "title": "PeriodComparison",
       "type": "object"
@@ -1898,10 +5744,131 @@
       "required": [
         "bucket",
         "label",
+        "is_complete",
         "started_at",
-        "ended_at"
+        "ended_at",
+        "session_count",
+        "turn_count",
+        "total_prompt_tokens",
+        "session_prompt",
+        "turn_prompt",
+        "pattern_prompt_tokens",
+        "pattern_share"
       ],
       "title": "PeriodSummary",
+      "type": "object"
+    },
+    "ProjectDetailPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "session_count": {
+          "minimum": 0,
+          "title": "Session Count",
+          "type": "integer"
+        },
+        "sessions": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Sessions",
+          "type": "array"
+        },
+        "since_days": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Since Days"
+        },
+        "vendors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Vendors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "session_count"
+      ],
+      "title": "ProjectDetailPayload",
+      "type": "object"
+    },
+    "ProjectFilters": {
+      "properties": {
+        "discovery_days": {
+          "title": "Discovery Days",
+          "type": "integer"
+        },
+        "project_name": {
+          "title": "Project Name",
+          "type": "string"
+        },
+        "since_days": {
+          "title": "Since Days",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "since_days",
+        "discovery_days",
+        "project_name"
+      ],
+      "title": "ProjectFilters",
+      "type": "object"
+    },
+    "ProjectIdentity": {
+      "properties": {
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "name",
+        "display_name",
+        "path"
+      ],
+      "title": "ProjectIdentity",
       "type": "object"
     },
     "ProjectItem": {
@@ -2028,6 +5995,32 @@
       "title": "ProjectsPayload",
       "type": "object"
     },
+    "RefreshPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "incremental": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IncrementalRefresh"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "const": "refreshed",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "RefreshPayload",
+      "type": "object"
+    },
     "RuntimeTotals": {
       "additionalProperties": false,
       "properties": {
@@ -2060,6 +6053,130 @@
         "failed_tool_calls"
       ],
       "title": "RuntimeTotals",
+      "type": "object"
+    },
+    "SessionEventDetail": {
+      "additionalProperties": true,
+      "properties": {
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Llm"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "timestamp": {
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "tool_call": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usage"
+        }
+      },
+      "required": [
+        "event_id",
+        "session_id",
+        "timestamp",
+        "type"
+      ],
+      "title": "SessionEventDetail",
+      "type": "object"
+    },
+    "SessionEventDetailsPayload": {
+      "additionalProperties": true,
+      "properties": {
+        "matches": {
+          "items": {
+            "$ref": "#/$defs/SessionEventDetail"
+          },
+          "title": "Matches",
+          "type": "array"
+        },
+        "root_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Session Id"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        }
+      },
+      "required": [
+        "matches"
+      ],
+      "title": "SessionEventDetailsPayload",
       "type": "object"
     },
     "SessionEvidenceTimelinePayload": {
@@ -2100,11 +6217,40 @@
         }
       },
       "required": [
+        "schema_version",
         "revision",
         "root_session_id",
-        "entrypoint_session_id"
+        "entrypoint_session_id",
+        "entries",
+        "warnings"
       ],
       "title": "SessionEvidenceTimelinePayload",
+      "type": "object"
+    },
+    "SessionGraphPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "overview": {
+          "$ref": "#/$defs/GraphOverviewPayload"
+        },
+        "root_session_id": {
+          "title": "Root Session Id",
+          "type": "string"
+        },
+        "stats": {
+          "$ref": "#/$defs/GraphStatsPayload"
+        },
+        "usage": {
+          "$ref": "#/$defs/GraphUsagePayload"
+        }
+      },
+      "required": [
+        "root_session_id",
+        "overview",
+        "stats",
+        "usage"
+      ],
+      "title": "SessionGraphPayload",
       "type": "object"
     },
     "SessionItem": {
@@ -2196,6 +6342,90 @@
       ],
       "title": "SessionItem",
       "type": "object"
+    },
+    "SessionItemDetail": {
+      "additionalProperties": true,
+      "properties": {
+        "event_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Ids"
+        },
+        "item_id": {
+          "title": "Item Id",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "operations": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operations"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "shape": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shape"
+        },
+        "turn_id": {
+          "title": "Turn Id",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "session_id",
+        "turn_id",
+        "kind",
+        "type"
+      ],
+      "title": "SessionItemDetail",
+      "type": "object"
+    },
+    "SessionItemDetailsPayload": {
+      "items": {
+        "$ref": "#/$defs/SessionItemDetail"
+      },
+      "title": "SessionItemDetailsPayload",
+      "type": "array"
     },
     "SessionOverview": {
       "additionalProperties": false,
@@ -2373,6 +6603,106 @@
         "processed_tokens"
       ],
       "title": "SessionSummary",
+      "type": "object"
+    },
+    "SessionTimelinePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "timeline": {
+          "items": {
+            "$ref": "#/$defs/TimelineBucketPayload"
+          },
+          "title": "Timeline",
+          "type": "array"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total"
+      ],
+      "title": "SessionTimelinePayload",
+      "type": "object"
+    },
+    "SessionTreePayload": {
+      "additionalProperties": true,
+      "properties": {
+        "branches": {
+          "items": {
+            "$ref": "#/$defs/ConversationBranch"
+          },
+          "title": "Branches",
+          "type": "array"
+        },
+        "root_session_id": {
+          "title": "Root Session Id",
+          "type": "string"
+        },
+        "selected_branch_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected Branch Id"
+        }
+      },
+      "required": [
+        "root_session_id",
+        "branches"
+      ],
+      "title": "SessionTreePayload",
+      "type": "object"
+    },
+    "SessionTurnDistributionStats": {
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/DistributionStats"
+        },
+        "turn": {
+          "$ref": "#/$defs/DistributionStats"
+        }
+      },
+      "required": [
+        "session",
+        "turn"
+      ],
+      "title": "SessionTurnDistributionStats",
+      "type": "object"
+    },
+    "TimelineBucketPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "date": {
+          "title": "Date",
+          "type": "string"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/TimelineSessionPayload"
+          },
+          "title": "Sessions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "date",
+        "count"
+      ],
+      "title": "TimelineBucketPayload",
       "type": "object"
     },
     "TimelineEntry": {
@@ -2553,14 +6883,59 @@
       },
       "required": [
         "id",
+        "timestamp",
+        "ended_at",
         "session_id",
         "turn_id",
         "turn_sequence",
         "position",
+        "vendor",
+        "agent_name",
         "kind",
-        "label"
+        "label",
+        "summary",
+        "status",
+        "failed",
+        "artifact_kind",
+        "turn_accounting",
+        "item_ids",
+        "event_ids",
+        "target_session_id"
       ],
       "title": "TimelineEntry",
+      "type": "object"
+    },
+    "TimelineSessionPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "v": {
+          "items": {
+            "type": "string"
+          },
+          "title": "V",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "TimelineSessionPayload",
       "type": "object"
     },
     "TimelineTurnAccounting": {
@@ -2665,7 +7040,14 @@
         }
       },
       "required": [
-        "processed_tokens"
+        "processed_tokens",
+        "cost_usd",
+        "cost_confidence",
+        "execution_seconds",
+        "model_active_seconds",
+        "wait_before_seconds",
+        "provider",
+        "model"
       ],
       "title": "TimelineTurnAccounting",
       "type": "object"
@@ -2768,9 +7150,7 @@
           "$ref": "#/$defs/Coverage"
         },
         "filters": {
-          "additionalProperties": true,
-          "title": "Filters",
-          "type": "object"
+          "$ref": "#/$defs/ProjectFilters"
         },
         "generated_at": {
           "format": "date-time",
@@ -2808,9 +7188,7 @@
           "type": "object"
         },
         "project": {
-          "additionalProperties": true,
-          "title": "Project",
-          "type": "object"
+          "$ref": "#/$defs/ProjectIdentity"
         },
         "schema_version": {
           "const": 1,
@@ -2837,13 +7215,18 @@
         }
       },
       "required": [
+        "schema_version",
         "generated_at",
         "filters",
         "attribution",
         "coverage",
+        "warnings",
         "project",
         "comparisons",
-        "trends"
+        "trends",
+        "patterns",
+        "hotspots",
+        "outliers"
       ],
       "title": "TokenEfficiencyProjectPayload",
       "type": "object"
@@ -2889,7 +7272,75 @@
           "$ref": "#/$defs/Distribution"
         }
       },
+      "required": [
+        "session",
+        "turn"
+      ],
       "title": "UnitDistributions",
+      "type": "object"
+    },
+    "UsageBuckets": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_write_tokens": {
+          "default": 0,
+          "title": "Cache Write Tokens",
+          "type": "integer"
+        },
+        "cached_prompt_tokens": {
+          "default": 0,
+          "title": "Cached Prompt Tokens",
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "default": 0,
+          "title": "Completion Tokens",
+          "type": "integer"
+        },
+        "processed_tokens": {
+          "default": 0,
+          "title": "Processed Tokens",
+          "type": "integer"
+        },
+        "prompt_completion_tokens": {
+          "default": 0,
+          "title": "Prompt Completion Tokens",
+          "type": "integer"
+        },
+        "prompt_tokens": {
+          "default": 0,
+          "title": "Prompt Tokens",
+          "type": "integer"
+        },
+        "reasoning_tokens": {
+          "default": 0,
+          "title": "Reasoning Tokens",
+          "type": "integer"
+        },
+        "reported_total_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reported Total Tokens"
+        },
+        "total_confidence": {
+          "default": "reported_missing",
+          "enum": [
+            "reported_consistent",
+            "reported_missing",
+            "reported_inconsistent"
+          ],
+          "title": "Total Confidence",
+          "type": "string"
+        }
+      },
+      "title": "UsageBuckets",
       "type": "object"
     },
     "UsageTotals": {
@@ -2955,6 +7406,15 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "CodeTimeCalibrationPayload": {
+      "$ref": "#/$defs/CodeTimeCalibrationPayload"
+    },
+    "CodeTimeForecastsPayload": {
+      "$ref": "#/$defs/CodeTimeForecastsPayload"
+    },
+    "CodeTimeReport": {
+      "$ref": "#/$defs/CodeTimeReport"
+    },
     "ContextWindowPayload": {
       "$ref": "#/$defs/ContextWindowPayload"
     },
@@ -2964,17 +7424,41 @@
     "DatahubSnapshot": {
       "$ref": "#/$defs/DatahubSnapshot"
     },
+    "ModelUsagePayload": {
+      "$ref": "#/$defs/ModelUsagePayload"
+    },
     "OverviewPayload": {
       "$ref": "#/$defs/OverviewPayload"
+    },
+    "ProjectDetailPayload": {
+      "$ref": "#/$defs/ProjectDetailPayload"
     },
     "ProjectsPayload": {
       "$ref": "#/$defs/ProjectsPayload"
     },
+    "RefreshPayload": {
+      "$ref": "#/$defs/RefreshPayload"
+    },
+    "SessionEventDetailsPayload": {
+      "$ref": "#/$defs/SessionEventDetailsPayload"
+    },
     "SessionEvidenceTimelinePayload": {
       "$ref": "#/$defs/SessionEvidenceTimelinePayload"
     },
+    "SessionGraphPayload": {
+      "$ref": "#/$defs/SessionGraphPayload"
+    },
+    "SessionItemDetailsPayload": {
+      "$ref": "#/$defs/SessionItemDetailsPayload"
+    },
     "SessionPage": {
       "$ref": "#/$defs/SessionPage"
+    },
+    "SessionTimelinePayload": {
+      "$ref": "#/$defs/SessionTimelinePayload"
+    },
+    "SessionTreePayload": {
+      "$ref": "#/$defs/SessionTreePayload"
     },
     "TodayPayload": {
       "$ref": "#/$defs/TodayPayload"

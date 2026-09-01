@@ -2,7 +2,7 @@ import type { ForecastRecord } from "@/api";
 import { ForecastKindBadge } from "@/components/forecast-kind-badge";
 import { ResponsiveDataList } from "@/components/responsive-data-list";
 
-function formatMinutes(minutes: number | undefined): string {
+function formatMinutes(minutes: number | null | undefined): string {
   if (minutes === undefined || minutes === null) return "-";
   if (minutes < 60) return `${Math.round(minutes)}m`;
   return `${(minutes / 60).toFixed(1)}h`;

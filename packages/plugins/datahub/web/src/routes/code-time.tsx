@@ -209,7 +209,7 @@ export function CodeTimeRoute() {
                         onRetry={() => forecasts.refetch()}
                       />
                     ) : (
-                      <ForecastTable forecasts={forecasts.data.items} />
+                      <ForecastTable forecasts={forecasts.data.items ?? []} />
                     )}
                   </CardContent>
                 </Card>

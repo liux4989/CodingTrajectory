@@ -63,8 +63,14 @@ function deltaForUnit(
   unit: TokenEfficiencyUnit,
   metric: "median" | "p90",
 ) {
-  const key = `${unit}_${metric}_pct` as const;
-  return comparison.deltas[key];
+  if (unit === "session") {
+    return metric === "median"
+      ? comparison.deltas.session_median_pct
+      : comparison.deltas.session_p90_pct;
+  }
+  return metric === "median"
+    ? comparison.deltas.turn_median_pct
+    : comparison.deltas.turn_p90_pct;
 }
 
 function trendBadge(value: number | null | undefined) {

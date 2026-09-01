@@ -391,7 +391,7 @@ function EvidenceDetail({ entry }: { entry: SessionTimelineEntry }) {
   return (
     <div className="grid gap-2 border-t border-border-soft pt-3">
       {[...query.data.items, ...query.data.events].map((detail, index) => (
-        <pre key={("item_id" in detail ? detail.item_id : detail.event_id) ?? index} className="m-0 max-h-80 overflow-auto rounded-lg bg-surface-emphasis p-3 text-caption whitespace-pre-wrap break-words">
+        <pre key={String(("item_id" in detail ? detail.item_id : detail.event_id) ?? index)} className="m-0 max-h-80 overflow-auto rounded-lg bg-surface-emphasis p-3 text-caption whitespace-pre-wrap break-words">
           {JSON.stringify(detail, null, 2)}
         </pre>
       ))}

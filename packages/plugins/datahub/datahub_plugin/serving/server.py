@@ -533,7 +533,9 @@ def _handler_for(
             started = time.perf_counter()
             try:
                 endpoint = getattr(self, f"_route_{route.handler}")
-                return endpoint(body)
+                payload, status = endpoint(body)
+                validate_api_response(route.handler, payload)
+                return payload, status
             finally:
                 _LOGGER.debug(
                     "datahub route=%s duration_ms=%.3f",
