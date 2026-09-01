@@ -13,6 +13,15 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from coding_trajectory.ingestion.adapters._shared import (
+    SHARED_FILE_TOOL_NAMES,
+    SHARED_PLAN_TOOL_NAMES,
+    ToolTaxonomy,
+    content_block_texts,
+    extract_uuid_text,
+    non_empty_str,
+    preview_text,
+)
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.common import (
     extract_exit_code,
@@ -61,28 +70,20 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
 _CODEX_PREVIEW_MAX_LEN = 96
 
-_CODEX_FILE_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "Read",
-        "Edit",
-        "MultiEdit",
-        "Write",
-        "View",
-        "read_file",
-        "read_many_files",
-        "replace",
-        "write_file",
-        "edit_file",
-        "create_file",
-        "apply_patch",
-    }
-)
-_CODEX_PLAN_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "TodoWrite",
-        "TodoRead",
-        "update_plan",
-    }
+_CODEX_TOOL_TAXONOMY = ToolTaxonomy(
+    plan_names=SHARED_PLAN_TOOL_NAMES,
+    file_change_names=SHARED_FILE_TOOL_NAMES
+    | frozenset(
+        {
+            "read_file",
+            "read_many_files",
+            "replace",
+            "write_file",
+            "edit_file",
+            "create_file",
+            "apply_patch",
+        }
+    ),
 )
 
 _CODEX_EXEC_STATIC_EXTRACTOR = "codex_exec_static_v2"
@@ -722,15 +723,12 @@ def _codex_command_activity_source(value: Any) -> str:
 
 
 def _codex_item_kind(*, tool_name: str | None, inner_type: str) -> str:
+    # Codex native inner types outrank the tool-name taxonomy.
     if inner_type == "local_shell_call":
         return "command_execution"
     if inner_type == "reasoning":
         return "reasoning"
-    if tool_name in _CODEX_PLAN_TOOL_NAMES:
-        return "plan"
-    if tool_name in _CODEX_FILE_TOOL_NAMES:
-        return "file_change"
-    return "tool_call"
+    return _CODEX_TOOL_TAXONOMY.classify(tool_name)
 
 
 def _parse_json_blob(raw: Any) -> Any:
@@ -845,21 +843,10 @@ def _extract_response_text(payload: dict[str, Any]) -> str | None:
     content = payload.get("content")
     if not isinstance(content, list):
         return None
-
-    texts = [
-        part.get("text", "")
-        for part in content
-        if isinstance(part, dict) and part.get("type") == "output_text"
-    ]
-    joined = " ".join(text for text in texts if text).strip()
-    return joined or None
+    return content_block_texts(content, text_type="output_text")
 
 
-def _as_non_empty_str(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    cleaned = value.strip()
-    return cleaned or None
+_as_non_empty_str = non_empty_str
 
 
 def _extract_nested_map(payload: dict[str, Any], *keys: str) -> dict[str, Any] | None:
@@ -871,21 +858,7 @@ def _extract_nested_map(payload: dict[str, Any], *keys: str) -> dict[str, Any] |
     return current if isinstance(current, dict) else None
 
 
-def _extract_uuid_text(value: Any) -> str | None:
-    raw = _as_non_empty_str(value)
-    if raw is None:
-        return None
-    for candidate in (raw, raw.removeprefix("T-")):
-        try:
-            UUID(candidate)
-            return candidate
-        except ValueError:
-            continue
-    match = re.search(
-        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-        raw,
-    )
-    return match.group(0) if match else raw
+_extract_uuid_text = extract_uuid_text
 
 
 def _codex_session_title(
@@ -921,24 +894,15 @@ def _codex_session_preview(transcript: Iterable[TranscriptRecord]) -> str | None
     for record in transcript:
         if record.kind != "user_message":
             continue
-        text = _as_non_empty_str(record.data.get("text"))
+        text = _codex_preview_text(record.data.get("text"))
         if text is None:
             continue
-        text = " ".join(text.split())
-        if len(text) <= _CODEX_PREVIEW_MAX_LEN:
-            return text
-        return f"{text[: _CODEX_PREVIEW_MAX_LEN - 3].rstrip()}..."
+        return text
     return None
 
 
 def _codex_preview_text(value: Any) -> str | None:
-    text = _as_non_empty_str(value)
-    if text is None:
-        return None
-    text = " ".join(text.split())
-    if len(text) <= _CODEX_PREVIEW_MAX_LEN:
-        return text
-    return f"{text[: _CODEX_PREVIEW_MAX_LEN - 3].rstrip()}..."
+    return preview_text(value, max_len=_CODEX_PREVIEW_MAX_LEN)
 
 
 def _extract_content_text(value: Any) -> str | None:

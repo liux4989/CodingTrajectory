@@ -11,6 +11,15 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from coding_trajectory.ingestion.adapters._shared import (
+    SHARED_FILE_TOOL_NAMES,
+    ToolTaxonomy,
+    content_block_field_texts,
+    content_block_texts,
+    content_blocks,
+    int_or_none,
+    non_empty_str,
+)
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.common import (
     compact_dict,
@@ -70,33 +79,15 @@ _TEAMMATE_ATTR_RE = re.compile(r'(\w+)="(.*?)"')
 # ``high`` ...) is the resolved effort in effect from that turn onward.
 _CLAUDE_EFFORT_STDOUT_RE = re.compile(r"Set effort level to (\w+)")
 
-_CLAUDE_FILE_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "Read",
-        "Edit",
-        "MultiEdit",
-        "Write",
-        "View",
-        "NotebookEdit",
-    }
+_CLAUDE_TOOL_TAXONOMY = ToolTaxonomy(
+    command_names=frozenset({"Bash", "bash"}),
+    plan_names=frozenset({"TaskCreate", "TaskUpdate"}),
+    file_change_names=SHARED_FILE_TOOL_NAMES | frozenset({"NotebookEdit"}),
 )
-_CLAUDE_PLAN_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "TaskCreate",
-        "TaskUpdate",
-    }
-)
-_CLAUDE_COMMAND_TOOL_NAMES: frozenset[str] = frozenset({"Bash", "bash"})
 
 
 def _claude_item_kind(tool_name: str | None) -> str:
-    if tool_name in _CLAUDE_COMMAND_TOOL_NAMES:
-        return "command_execution"
-    if tool_name in _CLAUDE_PLAN_TOOL_NAMES:
-        return "plan"
-    if tool_name in _CLAUDE_FILE_TOOL_NAMES:
-        return "file_change"
-    return "tool_call"
+    return _CLAUDE_TOOL_TAXONOMY.classify(tool_name)
 
 
 def _parse_team_messages(raw: str | None) -> list[ClaudeTeamMessage]:
@@ -129,17 +120,8 @@ def _parse_team_messages(raw: str | None) -> list[ClaudeTeamMessage]:
     return messages
 
 
-def _as_non_empty_str(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    cleaned = value.strip()
-    return cleaned or None
-
-
-def _as_int_or_none(value: object) -> int | None:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    return None
+_as_non_empty_str = non_empty_str
+_as_int_or_none = int_or_none
 
 
 def _compact_meta(record: TranscriptRecord, key: str) -> Any:
@@ -397,60 +379,23 @@ class _ClaudeRecordScan:
         self._effort_prev = level
 
 
-def _extract_text(content: str | list | None) -> str | None:
-    if content is None:
-        return None
-    if isinstance(content, str):
-        return content or None
-    texts = [
-        block.get("text", "")
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "text"
-    ]
-    joined = " ".join(text for text in texts if text).strip()
-    return joined or None
+_extract_text = content_block_texts
 
 
 def _extract_image_blocks(content: str | list | None) -> list[dict]:
-    if not isinstance(content, list):
-        return []
-    return [
-        block
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "image"
-    ]
+    return content_blocks(content, "image")
 
 
 def _extract_thinking(content: list | None) -> list[str]:
-    if not isinstance(content, list):
-        return []
-    return [
-        block.get("thinking", "")
-        for block in content
-        if isinstance(block, dict)
-        and block.get("type") == "thinking"
-        and block.get("thinking")
-    ]
+    return content_block_field_texts(content, "thinking", "thinking")
 
 
 def _tool_result_blocks(content: list | None) -> list[dict]:
-    if not isinstance(content, list):
-        return []
-    return [
-        block
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "tool_result"
-    ]
+    return content_blocks(content, "tool_result")
 
 
 def _tool_use_blocks(content: list | None) -> list[dict]:
-    if not isinstance(content, list):
-        return []
-    return [
-        block
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "tool_use"
-    ]
+    return content_blocks(content, "tool_use")
 
 
 def _is_real_user_prompt(obj: dict) -> bool:

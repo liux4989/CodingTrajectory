@@ -1,7 +1,7 @@
 """Single source of truth for model pricing and context-window resolution.
 
-Owns per-model USD pricing (``estimate_cost``), prompt-cache break waste
-(``cache_break_waste_usd``), and context-window resolution
+Owns per-model USD cost evidence (``cost_evidence_from_usage``), prompt-cache
+break waste (``cache_break_waste_usd``), and context-window resolution
 (``get_model_context_window``). The dashboard plugin and any other consumer
 read cost off the ``ct`` JSON this module populates; no pricing math lives in
 the plugin anymore.
@@ -123,52 +123,6 @@ _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
 }
 
 
-class TokenUsage(BaseModel):
-    input_tokens: int = 0
-    cached_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-    output_tokens: int = 0
-    reasoning_output_tokens: int = 0
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_compact_usage(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        return {
-            "input_tokens": value.get("prompt_tokens", value.get("input", 0)),
-            "cached_input_tokens": value.get(
-                "cached_prompt_tokens",
-                value.get("cached", 0),
-            ),
-            "cache_creation_input_tokens": value.get(
-                "cache_write_tokens",
-                value.get("cache_creation", 0),
-            ),
-            "output_tokens": value.get("completion_tokens", value.get("output", 0)),
-            "reasoning_output_tokens": value.get(
-                "reasoning_tokens",
-                value.get("reasoning", 0),
-            ),
-        }
-
-
-class CostBreakdown(BaseModel):
-    input_usd: float = 0.0
-    cached_input_usd: float = 0.0
-    cache_creation_input_usd: float = 0.0
-    output_usd: float = 0.0
-    reasoning_output_usd: float = 0.0
-
-
-class CostEstimate(BaseModel):
-    amount_usd: float = 0.0
-    pricing_source: str
-    pricing_effective_date: str
-    model: str
-    breakdown: CostBreakdown = Field(default_factory=CostBreakdown)
-
-
 class CostEvidenceFlat(BaseModel):
     """USD cost attribution attached next to a usage bucket.
 
@@ -206,9 +160,8 @@ def _estimate_cost_from_ints(
 ) -> tuple[float, str, str] | None:
     """Fast-path cost estimate returning (amount_usd, pricing_source, effective_date).
 
-    Mirrors estimate_cost math but takes token ints directly (avoiding
-    TokenUsage.model_validate + CostBreakdown/CostEstimate pydantic overhead)
-    for the 2M+ call hot path in tool-usage attribution.
+    Takes token ints directly (avoiding per-call pydantic overhead) for the
+    2M+ call hot path in tool-usage attribution.
     """
     if pricing_rule is _PRICING_RULE_UNSET:
         rule = _resolve_price_rule(model, provider=provider)
@@ -432,36 +385,6 @@ class ModelsDevCacheArtifact(BaseModel):
     catalog: ModelsDevCatalog
 
 
-def estimate_cost(
-    usage: dict[str, Any] | None,
-    *,
-    model: str | None,
-    provider: str | None = None,
-    now: datetime | None = None,
-    pricing_input_tokens: int | None = None,
-) -> CostEstimate | None:
-    normalized_model = _normalize_model_name(model)
-    if normalized_model is None:
-        return None
-    rule = _resolve_price_rule(normalized_model, provider=provider, now=now)
-    if rule is None:
-        return None
-    breakdown = _estimate_usage(
-        TokenUsage.model_validate(usage or {}),
-        rule,
-        provider=provider,
-        pricing_input_tokens=pricing_input_tokens,
-    )
-    amount = sum(breakdown.model_dump().values())
-    return CostEstimate(
-        amount_usd=_round_usd(amount),
-        pricing_source=rule.pricing_source,
-        pricing_effective_date=rule.pricing_effective_date,
-        model=normalized_model,
-        breakdown=breakdown,
-    )
-
-
 def cache_break_waste_usd(
     tokens: int,
     *,
@@ -527,67 +450,6 @@ def get_model_context_window(
             if candidate_model.limit and candidate_model.limit.context:
                 return candidate_model.limit.context
     return None
-
-
-def _estimate_usage(
-    usage: TokenUsage,
-    rule: PriceRule,
-    *,
-    provider: str | None,
-    pricing_input_tokens: int | None = None,
-) -> CostBreakdown:
-    tier_input_tokens = (
-        usage.input_tokens
-        if pricing_input_tokens is None
-        else max(pricing_input_tokens, 0)
-    )
-    above_threshold = (
-        rule.threshold_tokens is not None and tier_input_tokens > rule.threshold_tokens
-    )
-    input_rate = _threshold_rate(
-        above_threshold,
-        rule.input_per_mtok,
-        rule.input_per_mtok_above_threshold,
-    )
-    cached_rate = _threshold_rate(
-        above_threshold,
-        rule.cached_input_per_mtok,
-        rule.cached_input_per_mtok_above_threshold,
-    )
-    cache_creation_rate = _threshold_rate(
-        above_threshold,
-        rule.cache_creation_input_per_mtok,
-        rule.cache_creation_input_per_mtok_above_threshold,
-    )
-    output_rate = _threshold_rate(
-        above_threshold,
-        rule.output_per_mtok,
-        rule.output_per_mtok_above_threshold,
-    )
-    standard_input_tokens = usage.input_tokens
-    if not _uses_net_input_convention(provider, rule.model):
-        standard_input_tokens = max(
-            usage.input_tokens
-            - usage.cached_input_tokens
-            - usage.cache_creation_input_tokens,
-            0,
-        )
-    return CostBreakdown(
-        input_usd=_price(standard_input_tokens, input_rate),
-        cached_input_usd=_price(
-            usage.cached_input_tokens,
-            cached_rate,
-        ),
-        cache_creation_input_usd=_price(
-            usage.cache_creation_input_tokens,
-            cache_creation_rate,
-        ),
-        output_usd=_price(usage.output_tokens, output_rate),
-        reasoning_output_usd=_price(
-            usage.reasoning_output_tokens,
-            rule.reasoning_output_per_mtok,
-        ),
-    )
 
 
 def _threshold_rate(
@@ -920,12 +782,8 @@ def _normalize_model_name(model: str | None) -> str | None:
 
 __all__ = [
     "MODELS_DEV_SOURCE",
-    "TokenUsage",
-    "CostBreakdown",
-    "CostEstimate",
     "CostEvidenceFlat",
     "PriceRule",
-    "estimate_cost",
     "cache_break_waste_usd",
     "cost_evidence_from_usage",
     "get_model_context_window",

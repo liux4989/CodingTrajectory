@@ -12,15 +12,11 @@ from coding_trajectory.ingestion.indexes import index_events_by_id
 from coding_trajectory.ingestion.models import Event, Item, Session, SessionGraph, Turn
 
 
-class QueryError(Exception):
-    """Base class for CLI query failures."""
-
-
-class DocumentError(QueryError):
+class DocumentError(Exception):
     """Raised when the input document cannot be parsed."""
 
 
-class ResourceNotFoundError(QueryError):
+class ResourceNotFoundError(Exception):
     """Raised when a requested resource is not present."""
 
 

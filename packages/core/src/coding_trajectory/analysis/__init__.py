@@ -1,13 +1,5 @@
-from coding_trajectory.analysis.projections import (
-    build_event_scan,
-    build_item_details,
-    build_session_graph_narrative,
-    build_session_graph_overview,
-)
+"""Analysis projections over canonical session graphs.
 
-__all__ = [
-    "build_event_scan",
-    "build_item_details",
-    "build_session_graph_narrative",
-    "build_session_graph_overview",
-]
+Import concrete submodules directly (e.g. ``analysis.session_retrieval``);
+this package intentionally exposes no facade.
+"""
