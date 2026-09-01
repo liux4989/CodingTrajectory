@@ -9,7 +9,7 @@
 
 The datahub plugin has outgrown its current shape on both sides of the wire. The Python backend is 23 flat modules (~15.7k lines) with several god modules, three overlapping model layers, and a hand-rolled HTTP layer. The web UI is functionally rich but wastes space (marketing-style hero cards on every route, narrow content column), breaks on mobile (horizontally overflowing tables), and ships hand-maintained TypeScript mirrors of Python payloads that drift.
 
-This document proposes a staged redesign: (A) refresh the visual language at the token tier, (B) rebuild the layout and information architecture around data density, (C) restructure the Python package into layered subpackages with split god modules, and (D) align the API contract by generating TypeScript types from the Pydantic models. Each stage lands as an independently mergeable PR with the app working at every step.
+This document proposes a staged redesign: (A) refresh the visual language at the token tier, (B) rebuild the layout and information architecture around data density, (C) restructure the Python package into layered subpackages with split god modules, (D) align the API contract by generating TypeScript types from the Pydantic models, and (E) move live delivery from 12s polling to Server-Sent Events with the poll retained as an automatic fallback. Each stage lands as an independently mergeable PR with the app working at every step.
 
 ## Background & Motivation
 
@@ -65,13 +65,13 @@ flowchart LR
 2. **G2 — Layout & IA**: compact page-header pattern replaces hero cards; sidebar grouped by task (Observe / Analyze); route-appropriate container widths; responsive table → card-list strategy; fix the verified copy/artifact bugs.
 3. **G3 — Backend structure**: subpackage layout (`store/`, `projections/`, `http/`, `cli/`, `maintenance/`); split god modules along existing private-method seams; remove dual-import fallbacks; no behavior change.
 4. **G4 — Contract alignment**: TypeScript types generated from Pydantic models; hand-written API client shrinks to fetch functions only.
-5. **G5 — Verified rollout**: every PR passes the metrics quality gate where it touches metric-sensitive paths, and every UI PR is verified in a browser (chrome-devtools) across routes, themes, and viewports.
+5. **G5 — Live delivery**: replace the 12s changes poll with Server-Sent Events (revision wakeup + catch-up fetch), retaining the poll as an automatic fallback.
+6. **G6 — Verified rollout**: every PR passes the metrics quality gate where it touches metric-sensitive paths, and every UI PR is verified in a browser (chrome-devtools) across routes, themes, and viewports.
 
 ### Non-Goals
 
 - Changing `IncrementalStore` storage semantics, schema, or the JSONL-authoritative model.
 - Replacing the frontend stack (TanStack, shadcn/ui, Tailwind v4, ApexCharts all stay).
-- Real-time push (SSE/WebSocket) — the 12s poll stays; see Open Questions.
 - Authentication/multi-user — the server remains a localhost single-user tool.
 - New analytics features; this is a redesign of what exists.
 - Unit tests (project rule: do not write them).
@@ -239,7 +239,26 @@ A `bun run generate:api` script wires steps 1–3; CI/manual check is `git diff 
 
 **Delivery contract.** The `QUERY_FAMILIES` mapping in `use-datahub-delivery.tsx` stays frontend-owned (it knows query keys) but the family list is generated from the same schema pass (families enum exported from `_delivery_families()`), turning a string convention into a checked import.
 
-### Part F — Frontend component cleanup
+### Part F — Live delivery via Server-Sent Events
+
+The 12s changes poll (`CHANGE_POLL_MS` in `use-datahub-delivery.tsx`) is replaced by an SSE stream that acts as a wakeup signal; the changes payload itself stays on the existing endpoint.
+
+**Backend.**
+
+- New route `GET /api/datahub/events` → `text/event-stream; charset=utf-8` with `Cache-Control: no-cache`, registered in the declarative route table (Part D) as a streaming route. `ThreadingHTTPServer` already allocates one thread per connection — acceptable for a single-user local tool with a handful of open tabs.
+- `DatahubIncrementalRuntime` gains a minimal pub/sub: `self._subscribers: set[queue.Queue]` guarded by a lock. After any commit that advances the revision (end of `_refresh`, `_bootstrap`, or on-demand materialization), the new revision number is offered to each subscriber queue.
+- Subscriber queues are bounded (`maxsize=16`). On `queue.Full` the subscriber is dropped — the client reconnects and catches up from its last seen revision, so a slow or stuck consumer can never block ingestion.
+- Wire format: `id: <revision>` + `event: revision` + `data: {"revision": N}`. On connect the server immediately emits the current revision so a fresh client can catch up. After 25s of silence the handler emits a `: keepalive` comment, which also detects dead peers (laptop sleep, closed tab) on write and lets the handler exit.
+- SSE is a *signal*, not a data channel: change payloads are not duplicated into the stream. On a `revision` event the client fetches `/api/datahub/changes?after_revision=<lastSeen>` exactly once, reusing today's payload shape and `reset_required` semantics. `id:` doubles as EventSource's `Last-Event-ID`, so a reconnecting client knows where to resume.
+
+**Frontend.**
+
+- `DatahubDeliveryProvider` replaces the polling `useQuery` with an `EventSource("/api/datahub/events")`. On each `revision` event newer than `appliedRevision`, it fetches changes once and runs the same `applyChanges` path used today (`setQueryData` / `resetQueries` per family, context-window reset rules unchanged).
+- **Fallback**: if the stream fails to open or errors repeatedly (e.g. an older backend build without the route), the provider reverts to the existing 12s visible-only poll. The poll code is retained as the fallback path, not deleted.
+- The header "Live" badge now reflects stream state (`live` / `reconnecting` / `polling`) sourced from the delivery context.
+- The stream stays open in hidden tabs (localhost, negligible cost); the visibility-gated polling cadence applies only to the fallback path.
+
+### Part G — Frontend component cleanup
 
 - `main.tsx`: collapse the 5 legacy redirect routes (`/sessions/$id/graph|timeline|tree|context-window`, `/model-usage`) into a single data-driven legacy-redirect table; keeps URLs working, removes route-churn boilerplate.
 - `api.ts`: see Part E.
@@ -261,7 +280,9 @@ None. The SQLite store remains disposable derived state with a format marker (`s
 2. **Maximal-density ops console (Grafana-style).** Rejected by user direction; would hurt the session-explorer reading experience which benefits from comfortable line lengths.
 3. **FastAPI/aiohttp instead of stdlib HTTP.** Rejected: adds a dependency and async rewrite for a localhost tool whose current server is not a bottleneck; the declarative route table gets 90% of the maintainability win.
 4. **OpenAPI codegen instead of Pydantic → JSON Schema → TS.** Rejected: requires authoring/serving an OpenAPI document (a second contract description); the Pydantic models are already the authoritative shapes, so direct schema emission is less machinery.
-5. **Move the whole UI to server-rendered pages.** Rejected: the existing TanStack Query delivery (revision polling, incremental invalidation) is well-suited to a live-updating local dashboard; a rewrite discards working machinery.
+5. **Move the whole UI to server-rendered pages.** Rejected: the existing TanStack Query delivery (revision-driven incremental invalidation) is well-suited to a live-updating local dashboard; a rewrite discards working machinery.
+6. **Keep 12s polling instead of SSE.** Rejected as the primary mechanism: SSE on the stdlib `ThreadingHTTPServer` is one streaming route plus a bounded-queue fan-out in the runtime — small machinery — and live updates are the product's core feel. Polling is retained as the automatic fallback rather than deleted.
+7. **Push full change payloads over SSE.** Rejected: it duplicates the changes serialization onto a second channel and loses the `reset_required`/cursor semantics of `/api/datahub/changes`. Revision-number wakeups plus a catch-up fetch get the same latency with one payload path.
 
 ## Security & Privacy Considerations
 
@@ -291,12 +312,14 @@ None. The SQLite store remains disposable derived state with a format marker (`s
 | Token refresh causes unintended visual regressions on un-audited components | Minor | Browser verification across all routes in both themes; tier-1/2-only edits constrain blast radius |
 | Schema codegen produces unstable diffs (ordering) | Minor | Sort keys in emitted schema; pin `json-schema-to-typescript` version in `package.json` |
 | Dual-import fallback removal breaks the loose-script execution model | Major | Verified: `run_plugin` executes `sys.executable datahub.py` with `cwd` = plugin dir, so plugin-rooted absolute imports resolve; smoke every `ct plugin datahub …` command + web server before commit |
+| Stuck SSE consumer blocks or slows ingestion | Major | Bounded per-subscriber queues; `queue.Full` drops the subscriber and the client catches up by revision on reconnect |
+| SSE connections leak threads on dead peers | Minor | 25s keepalive write detects broken pipes; handler exits and unregisters; single-user localhost keeps total connections in single digits |
+| EventSource unsupported/failing (older backend, odd proxy) | Minor | Automatic fallback to the retained 12s visible-only poll; Live badge shows `polling` so the state is visible |
 
 ## Open Questions
 
-1. **Keep 12s polling or move to SSE?** The `/api/datahub/changes` poll is simple and works; SSE would cut latency for live sessions but adds connection lifecycle complexity to the stdlib server. Recommendation: keep polling in this redesign, revisit separately.
-2. **Display font.** Inter everywhere is the refined-evolution default. If a stronger identity is wanted later, a single `--font-display` swap (e.g. a grotesk) is a one-token change.
-3. **Retire legacy redirect routes?** They cost little; removal is a product call depending on whether old links are bookmarked anywhere.
+1. **Display font.** Inter everywhere is the refined-evolution default. If a stronger identity is wanted later, a single `--font-display` swap (e.g. a grotesk) is a one-token change.
+2. **Retire legacy redirect routes?** They cost little; removal is a product call depending on whether old links are bookmarked anywhere.
 
 ## Key Decisions
 
@@ -306,7 +329,7 @@ None. The SQLite store remains disposable derived state with a format marker (`s
 4. **`IncrementalStore` public facade preserved** — internal split into ingestion/entities/changes/detail modules; callers see no API change.
 5. **Pydantic → JSON Schema → TypeScript codegen** — the Python models stay the single source of truth; the 1,143-line hand-mirrored `api.ts` shrinks to fetch functions.
 6. **Stdlib HTTP stays, routing becomes a declarative table** — no new server dependency for a localhost tool.
-7. **Polling delivery retained** — SSE deferred; the delivery family list becomes generated to remove stringly-typed coupling.
+7. **SSE wakeup + catch-up fetch replaces polling** — SSE carries only revision numbers; `/api/datahub/changes` remains the single data channel, so no payload serialization is duplicated and `reset_required` semantics are preserved. The 12s poll is retained as the automatic fallback, and the delivery family list becomes generated to remove stringly-typed coupling.
 
 ## PR Plan
 
@@ -323,7 +346,7 @@ None. The SQLite store remains disposable derived state with a format marker (`s
 3. **PR 3 — PageHeader + layout & IA**
    - Files: `web/src/components/route-header.tsx` (becomes `PageHeader`), all route files (drop hero cards), `app-sidebar.tsx` (grouped nav), `styles.css` (`.route-container-wide`), `web/src/main.tsx` (legacy redirect table)
    - Dependencies: PR 2
-   - Implements B1–B3 + Part F route cleanup.
+   - Implements B1–B3 + Part G route cleanup.
 
 4. **PR 4 — Stat tiles + responsive table/card lists**
    - Files: `web/src/components/metric-card.tsx` (stat tile), new `responsive-data-list.tsx`, `data-table.tsx` column defs, sessions/code-time/forecast tables
@@ -345,7 +368,12 @@ None. The SQLite store remains disposable derived state with a format marker (`s
    - Dependencies: PR 6
    - Part D; wire format unchanged, verified by hitting every `/api/*` route.
 
-8. **PR 8 — API type codegen**
+8. **PR 8 — SSE live delivery**
+   - Files: `runtime/runtime.py` (pub/sub fan-out), `http/routes.py` + `http/server.py` (streaming `/api/datahub/events` route), `web/src/hooks/use-datahub-delivery.tsx` (EventSource + poll fallback), `web/src/api.ts` (reuse `fetchDatahubChanges`), `web/src/components/site-header.tsx` (Live badge states)
+   - Dependencies: PR 7
+   - Part F. Verified live in the browser: append to a JSONL source and watch the UI update without waiting 12s; kill/restart the stream to verify reconnect; run the UI against a build without the route to verify poll fallback.
+
+9. **PR 9 — API type codegen**
    - Files: `scripts/generate-datahub-api-types.py`, `web/package.json` (script + devDep), `web/src/api.ts` (slim to fetchers), `web/src/api/generated/`
    - Dependencies: PR 6 (stable model locations), PR 7
    - Part E; `git diff --exit-code` regeneration check documented in the script header.
