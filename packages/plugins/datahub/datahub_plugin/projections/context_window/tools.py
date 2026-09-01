@@ -7,7 +7,7 @@ import re
 import shlex
 from typing import Any
 
-from datahub_plugin.projections.context_window_models import (
+from datahub_plugin.projections.context_window.models import (
     CategoryKey,
     Confidence,
     ContextEvent,

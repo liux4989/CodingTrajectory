@@ -1,4 +1,4 @@
-"""Compact reshapers from raw service API payloads to projection inputs."""
+"""Compact reshapers from raw service payloads to projection inputs."""
 
 from __future__ import annotations
 

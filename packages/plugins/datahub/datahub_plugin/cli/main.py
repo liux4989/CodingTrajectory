@@ -115,7 +115,7 @@ def _handle_session_command(args: list[str]) -> int:
         parsed = _session_cleanup_parser().parse_args(args[1:])
         return _session_cleanup(parsed)
     if args and args[0] == "context-window":
-        import datahub_plugin.projections.context_window as context_window_mod
+        import datahub_plugin.cli.context_window_cmd as context_window_mod
 
         return context_window_mod.main(args[1:])
     parser = _session_parser()
@@ -127,7 +127,8 @@ def _handle_session_command(args: list[str]) -> int:
 
 
 def _handle_code_time_command(args: list[str]) -> int:
-    import datahub_plugin.cli.code_time as code_time_mod
+    import datahub_plugin.cli.code_time_cmd as code_time_mod
+
     return code_time_mod.main(args)
 
 
@@ -146,27 +147,15 @@ Web:  Sessions-first UI with Today, Compare, and Code Time views."""
 
 
 def _project_cleanup(args: argparse.Namespace) -> int:
-    import datahub_plugin.maintenance.cleanup as cleanup_mod
+    from datahub_plugin.cli.cleanup_cmd import project
 
-    try:
-        payload = cleanup_mod.handle_project(args)
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    print(cleanup_mod.render(args, payload))
-    return 1 if (payload.get("summary") or {}).get("error_count") else 0
+    return project(args)
 
 
 def _session_cleanup(args: argparse.Namespace) -> int:
-    import datahub_plugin.maintenance.cleanup as cleanup_mod
+    from datahub_plugin.cli.cleanup_cmd import session
 
-    try:
-        payload = cleanup_mod.handle_session(args)
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    print(cleanup_mod.render(args, payload))
-    return 1 if (payload.get("summary") or {}).get("error_count") else 0
+    return session(args)
 
 
 def _run_datahub_web(args: list[str]) -> int:

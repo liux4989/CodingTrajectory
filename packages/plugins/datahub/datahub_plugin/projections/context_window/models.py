@@ -1,4 +1,4 @@
-"""Context Window projection models and pure category ordering."""
+"""Context Window models and pure category ordering."""
 
 from __future__ import annotations
 

@@ -162,5 +162,3 @@ class ProjectProjection(BaseModel):
     patterns: dict[str, list[PatternRow]] = Field(default_factory=dict)
     hotspots: dict[str, list[HotspotRow]] = Field(default_factory=dict)
     outliers: dict[str, list[OutlierRow]] = Field(default_factory=dict)
-
-

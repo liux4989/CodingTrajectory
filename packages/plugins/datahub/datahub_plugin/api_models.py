@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from datahub_plugin.projections.context_window_models import ContextWindowProjection
+from datahub_plugin.projections.context_window.models import ContextWindowProjection
 from datahub_plugin.projections.session_timeline import SessionEvidenceTimeline
 from datahub_plugin.projections.token_efficiency_models import ProjectProjection
 

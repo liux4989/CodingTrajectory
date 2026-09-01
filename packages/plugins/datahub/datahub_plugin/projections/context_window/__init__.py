@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-import argparse
 from collections.abc import Iterable
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from coding_trajectory.runtime import ServiceApiClient, default_plugin_client
+if TYPE_CHECKING:
+    from coding_trajectory.runtime import ServiceApiClient
 
-from datahub_plugin.projections.context_window_compact import (
+from datahub_plugin.projections.context_window.compact import (
     _compact_overview_api,
     _compact_stats_api,
     _compact_usage_api,
 )
-from datahub_plugin.projections.context_window_models import (
+from datahub_plugin.projections.context_window.models import (
     CacheBreakRecord,
     CacheBreakSummary,
     CategoryKey,
@@ -31,8 +31,13 @@ from datahub_plugin.projections.context_window_models import (
     _category_sort_key,
     _visible_text_size,
 )
-from datahub_plugin.projections.context_window_render import _dedupe, render_markdown
-from datahub_plugin.projections.context_window_tools import (
+from datahub_plugin.projections.context_window.render import (
+    _dedupe,
+)
+from datahub_plugin.projections.context_window.render import (
+    render_markdown as render_markdown,
+)
+from datahub_plugin.projections.context_window.tools import (
     _confidence,
     _cost_evidence_from_estimate,
     _optional_float,
@@ -44,48 +49,16 @@ from datahub_plugin.projections.context_window_tools import (
 )
 
 
-def main(
-    argv: list[str] | None = None,
-    *,
-    prog: str = "ct plugin datahub session context-window",
-) -> int:
-    parser = argparse.ArgumentParser(
-        prog=prog,
-        description="Inspect context composition and trajectory events for one session.",
-    )
-    parser.add_argument("session_id")
-    parser.add_argument(
-        "--turn",
-        dest="turn_id",
-        default=None,
-        help="Limit the event timeline to one turn.",
-    )
-    parser.add_argument(
-        "--output",
-        choices=("markdown", "json"),
-        default="markdown",
-        help="Output format. Defaults to markdown.",
-    )
-    args = parser.parse_args(argv)
-
-    try:
-        projection = build_projection(args.session_id, turn_id=args.turn_id)
-    except RuntimeError as exc:
-        raise SystemExit(str(exc)) from exc
-    if args.output == "json":
-        print(projection.model_dump_json(indent=2))
-    else:
-        print(render_markdown(projection))
-    return 0
-
-
 def build_projection(
     session_id: str,
     *,
     turn_id: str | None = None,
     client: ServiceApiClient | None = None,
 ) -> ContextWindowProjection:
-    client = client or default_plugin_client()
+    if client is None:
+        from coding_trajectory.runtime import default_plugin_client
+
+        client = default_plugin_client()
     stats, overview, usage, tool_usage = _load_projection_inputs(session_id, client)
 
     selected_stats = _selected_session_stats(stats, session_id)
@@ -1131,7 +1104,3 @@ def _usage_token(usage: dict[str, Any] | None, short_key: str) -> int | None:
     if raw is None:
         raw = usage.get(f"{short_key}_tokens")
     return _optional_int(raw)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

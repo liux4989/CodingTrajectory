@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from datahub_plugin.projections.context_window_models import (
+from datahub_plugin.projections.context_window.models import (
     CacheBreakRecord,
     CacheBreakSummary,
     ContextEvent,
