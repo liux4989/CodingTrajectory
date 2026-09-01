@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.request_lineage import extract_user_request
@@ -86,6 +87,7 @@ def build_session_summary(
     session = _only_session(session_graph)
     turns = _selected_turns(session, turn_id)
     index = build_session_graph_index(session_graph)
+    signals = _ItemSignals()
     content_complete = _content_complete(session, turns)
 
     request_candidates: list[tuple[Turn, dict[str, str]]] = []
@@ -128,7 +130,7 @@ def build_session_summary(
         for item in turn.items:
             recency = _recency_score(item_position, item_count)
             item_position += 1
-            structural_score = _item_structural_score(item) + recency
+            structural_score = signals.structural_score(item) + recency
             references = _item_references(item)
 
             if isinstance(item, AgentMessageItem):
@@ -148,7 +150,7 @@ def build_session_summary(
                             )
                         )
 
-            if isinstance(item, FileChangeItem) and _item_outcome(item) == "succeeded":
+            if isinstance(item, FileChangeItem) and signals.outcome(item) == "succeeded":
                 path = (item.path or _path_from_value(item.input) or "").strip()
                 if path:
                     existing = changes_by_path.get(path)
@@ -172,7 +174,7 @@ def build_session_summary(
                         )
 
             if isinstance(item, CommandExecutionItem):
-                family, _head = classify_command_family(item.command)
+                family, _head = signals.command_family(item.command)
                 if family in {"tests", "build"}:
                     verification.append(
                         _RankedSummaryItem(
@@ -183,20 +185,20 @@ def build_session_summary(
                                     _stringify(item.command),
                                     max_len=_SUMMARY_TEXT_LIMIT,
                                 ),
-                                "status": _item_outcome(item),
+                                "status": signals.outcome(item),
                                 "references": references,
                             },
                         )
                     )
 
-            failure_key = _item_resolution_key(item)
-            outcome = _item_outcome(item)
+            failure_key = signals.resolution_key(item)
+            outcome = signals.outcome(item)
             if failure_key and outcome == "failed":
                 unresolved_by_key[failure_key] = _RankedSummaryItem(
                     timestamp=item.started_at,
                     structural_score=structural_score,
                     value={
-                        "label": _item_label(item),
+                        "label": signals.label(item),
                         "status": "failed",
                         "references": references,
                     },
@@ -229,8 +231,8 @@ def build_session_summary(
                         structural_score=structural_score,
                         value={
                             "kind": item.kind,
-                            "label": _item_label(item),
-                            "status": _item_outcome(item),
+                            "label": signals.label(item),
+                            "status": signals.outcome(item),
                             "references": references,
                         },
                     )
@@ -449,38 +451,84 @@ def _merge_references(left: dict[str, Any], right: dict[str, Any]) -> dict[str, 
     return {**left, "event_ids": event_ids}
 
 
-def _item_outcome(item: Item) -> str:
-    summary = summarize_tool_call(item)
-    if summary and summary.get("activity_outcome") in {
-        "succeeded",
-        "failed",
-        "unknown",
-    }:
-        return str(summary["activity_outcome"])
-    status = item.status
-    if status in {ToolStatus.COMPLETED, ToolStatus.COMPLETED.value, "completed"}:
-        return "succeeded"
-    if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
-        return "failed"
-    return "unknown"
+class _ItemSignals:
+    """Memoize deterministic per-item signals within one projection build.
 
+    ``summarize_tool_call`` and ``classify_command_family`` fully re-parse the
+    command line. Without memoization a projection pays that parse cost
+    several times per item, which dominates runtime on long real commands.
+    """
 
-def _item_structural_score(item: Item) -> float:
-    score = 0.0
-    if isinstance(item, FileChangeItem):
-        score += 34
-    elif isinstance(item, CommandExecutionItem):
-        family, _head = classify_command_family(item.command)
-        score += 26 if family == "tests" else 22 if family == "build" else 14
-    elif isinstance(item, PlanItem):
-        score += 18
-    elif isinstance(item, AgentMessageItem):
-        score += 10
-    elif isinstance(item, ToolCallItem):
-        score += 8
-    if _item_outcome(item) == "failed":
-        score += 24
-    return score
+    def __init__(self) -> None:
+        self._tool_summaries: dict[UUID, Any] = {}
+        self._command_families: dict[str, Any] = {}
+
+    def tool_summary(self, item: Item) -> Any:
+        if item.item_id not in self._tool_summaries:
+            self._tool_summaries[item.item_id] = summarize_tool_call(item)
+        return self._tool_summaries[item.item_id]
+
+    def command_family(self, command: Any) -> Any:
+        if not isinstance(command, str):
+            return classify_command_family(command)
+        if command not in self._command_families:
+            self._command_families[command] = classify_command_family(command)
+        return self._command_families[command]
+
+    def outcome(self, item: Item) -> str:
+        summary = self.tool_summary(item)
+        if summary and summary.get("activity_outcome") in {
+            "succeeded",
+            "failed",
+            "unknown",
+        }:
+            return str(summary["activity_outcome"])
+        status = item.status
+        if status in {ToolStatus.COMPLETED, ToolStatus.COMPLETED.value, "completed"}:
+            return "succeeded"
+        if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
+            return "failed"
+        return "unknown"
+
+    def structural_score(self, item: Item) -> float:
+        score = 0.0
+        if isinstance(item, FileChangeItem):
+            score += 34
+        elif isinstance(item, CommandExecutionItem):
+            family, _head = self.command_family(item.command)
+            score += 26 if family == "tests" else 22 if family == "build" else 14
+        elif isinstance(item, PlanItem):
+            score += 18
+        elif isinstance(item, AgentMessageItem):
+            score += 10
+        elif isinstance(item, ToolCallItem):
+            score += 8
+        if self.outcome(item) == "failed":
+            score += 24
+        return score
+
+    def label(self, item: Item) -> str:
+        if isinstance(item, AgentMessageItem):
+            return truncate_text_preview(_item_text(item), max_len=_SUMMARY_TEXT_LIMIT)
+        summary = self.tool_summary(item)
+        if summary:
+            name = str(summary.get("name") or item.kind)
+            description = summary.get("description") or summary.get("command")
+            if description:
+                return truncate_text_preview(
+                    f"{name}: {description}", max_len=_SUMMARY_TEXT_LIMIT
+                )
+            return name
+        return item.kind
+
+    def resolution_key(self, item: Item) -> str | None:
+        if isinstance(item, FileChangeItem):
+            return f"file:{item.path or _path_from_value(item.input) or item.item_id}"
+        if isinstance(item, CommandExecutionItem):
+            family, head = self.command_family(item.command)
+            return f"command:{family}:{head}"
+        tool_name = getattr(item, "tool_name", None)
+        return f"tool:{tool_name}" if tool_name else None
 
 
 def _recency_score(position: int, total: int) -> float:
@@ -512,31 +560,6 @@ def _dedupe_summary_items(
         if normalized and normalized not in selected:
             selected[normalized] = candidate
     return list(selected.values())
-
-
-def _item_label(item: Item) -> str:
-    if isinstance(item, AgentMessageItem):
-        return truncate_text_preview(_item_text(item), max_len=_SUMMARY_TEXT_LIMIT)
-    summary = summarize_tool_call(item)
-    if summary:
-        name = str(summary.get("name") or item.kind)
-        description = summary.get("description") or summary.get("command")
-        if description:
-            return truncate_text_preview(
-                f"{name}: {description}", max_len=_SUMMARY_TEXT_LIMIT
-            )
-        return name
-    return item.kind
-
-
-def _item_resolution_key(item: Item) -> str | None:
-    if isinstance(item, FileChangeItem):
-        return f"file:{item.path or _path_from_value(item.input) or item.item_id}"
-    if isinstance(item, CommandExecutionItem):
-        family, head = classify_command_family(item.command)
-        return f"command:{family}:{head}"
-    tool_name = getattr(item, "tool_name", None)
-    return f"tool:{tool_name}" if tool_name else None
 
 
 def _low_value_request(value: str | None) -> bool:
@@ -583,6 +606,7 @@ def _search_documents(
     turns: list[Turn],
 ) -> list[_SearchDocument]:
     index = build_session_graph_index(session_graph)
+    signals = _ItemSignals()
     item_count = sum(len(turn.items) for turn in turns)
     item_position = 0
     documents: list[_SearchDocument] = []
@@ -615,13 +639,15 @@ def _search_documents(
             item_position += 1
             if isinstance(item, ReasoningItem) or _is_retrieval_item(item):
                 continue
-            documents.extend(_documents_for_item(item, recency=recency))
+            documents.extend(_documents_for_item(item, recency=recency, signals=signals))
     return documents
 
 
-def _documents_for_item(item: Item, *, recency: float) -> list[_SearchDocument]:
+def _documents_for_item(
+    item: Item, *, recency: float, signals: _ItemSignals
+) -> list[_SearchDocument]:
     references = _item_references(item)
-    structural = _item_structural_score(item) + recency
+    structural = signals.structural_score(item) + recency
     if isinstance(item, AgentMessageItem):
         text, complete = _bounded_text(_item_text(item))
         return (
@@ -657,7 +683,7 @@ def _documents_for_item(item: Item, *, recency: float) -> list[_SearchDocument]:
             _SearchDocument(
                 kind="file_change",
                 timestamp=item.started_at,
-                label=_item_label(item),
+                label=signals.label(item),
                 fields={
                     "path": path,
                     "operation": item.operation or "",
@@ -680,7 +706,7 @@ def _documents_for_item(item: Item, *, recency: float) -> list[_SearchDocument]:
             _SearchDocument(
                 kind="tool_call",
                 timestamp=item.started_at,
-                label=_item_label(item),
+                label=signals.label(item),
                 fields=fields,
                 references=references,
                 structural_score=structural,
@@ -692,11 +718,11 @@ def _documents_for_item(item: Item, *, recency: float) -> list[_SearchDocument]:
             _SearchDocument(
                 kind="tool_result",
                 timestamp=item.completed_at or item.started_at,
-                label=f"{_item_label(item)} result",
+                label=f"{signals.label(item)} result",
                 fields={"tool_name": tool_name, "tool_output": output_text},
                 references=references,
                 structural_score=structural
-                + (8 if _item_outcome(item) == "failed" else 0),
+                + (8 if signals.outcome(item) == "failed" else 0),
                 content_complete=output_complete,
             )
         )
