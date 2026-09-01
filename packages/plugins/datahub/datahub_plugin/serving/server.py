@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import logging
 import mimetypes
 import queue
 import re
 import sys
+import time
 import traceback
 import webbrowser
 from collections.abc import Callable
@@ -36,6 +38,7 @@ from datahub_plugin.runtime.runtime import DatahubIncrementalRuntime
 _DEFAULT_PAGE_SIZE = 50
 _MAX_PAGE_SIZE = 200
 _MAX_CURSOR_LENGTH = 4096
+_LOGGER = logging.getLogger(__name__)
 
 
 class DatahubBootstrapPending(RuntimeError):
@@ -71,20 +74,88 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/overview", "overview", ("since_days",)),
     Route("GET", "/api/today", "today"),
     Route("GET", "/api/projects", "projects", ("agent_vendor", "limit", "cursor")),
-    Route("GET", "/api/projects/detail", "project_detail", ("project_name", "since_days", "limit", "cursor")),
-    Route("GET", "/api/sessions", "sessions", ("since_days", "project_name", "agent_vendor", "limit", "cursor")),
-    Route("GET", "/api/sessions/timeline", "session_timeline", ("since_days", "limit", "cursor")),
-    Route("GET", "/api/sessions/context-window", "context_window", ("session_id", "turn_id")),
+    Route(
+        "GET",
+        "/api/projects/detail",
+        "project_detail",
+        ("project_name", "since_days", "limit", "cursor"),
+    ),
+    Route(
+        "GET",
+        "/api/sessions",
+        "sessions",
+        ("since_days", "project_name", "agent_vendor", "limit", "cursor"),
+    ),
+    Route(
+        "GET",
+        "/api/sessions/timeline",
+        "session_timeline",
+        ("since_days", "limit", "cursor"),
+    ),
+    Route(
+        "GET",
+        "/api/sessions/context-window",
+        "context_window",
+        ("session_id", "turn_id"),
+    ),
     Route("GET", "/api/sessions/graph", "graph_detail", ("session_id",)),
     Route("GET", "/api/sessions/tree", "session_tree", ("session_id",)),
-    Route("GET", "/api/sessions/evidence-timeline", "session_evidence_timeline", ("session_id",)),
-    Route("GET", "/api/sessions/events", "session_event_details", ("event_ids", "turn_id", "type")),
-    Route("GET", "/api/sessions/items", "session_item_details", ("item_ids", "include_content", "turn_id")),
-    Route("GET", "/api/model-usage", "model_usage", ("since_days", "project_name", "model_key", "detail", "limit", "cursor", "revision")),
-    Route("GET", "/api/token-efficiency/project", "token_efficiency_project", ("project_name", "since_days", "limit", "cursor", "detail", "grain")),
-    Route("GET", "/api/code-time/report", "code_time_report", ("window", "project", "agent_vendor")),
-    Route("GET", "/api/code-time/forecasts", "code_time_forecasts", ("kind", "project", "target_harness_name", "status", "limit")),
-    Route("GET", "/api/code-time/calibration", "code_time_calibration", ("kind", "project", "target_harness_name", "target_model", "estimator_model")),
+    Route(
+        "GET",
+        "/api/sessions/evidence-timeline",
+        "session_evidence_timeline",
+        ("session_id",),
+    ),
+    Route(
+        "GET",
+        "/api/sessions/events",
+        "session_event_details",
+        ("event_ids", "turn_id", "type"),
+    ),
+    Route(
+        "GET",
+        "/api/sessions/items",
+        "session_item_details",
+        ("item_ids", "include_content", "turn_id"),
+    ),
+    Route(
+        "GET",
+        "/api/model-usage",
+        "model_usage",
+        (
+            "since_days",
+            "project_name",
+            "model_key",
+            "detail",
+            "limit",
+            "cursor",
+            "revision",
+        ),
+    ),
+    Route(
+        "GET",
+        "/api/token-efficiency/project",
+        "token_efficiency_project",
+        ("project_name", "since_days", "limit", "cursor", "detail", "grain"),
+    ),
+    Route(
+        "GET",
+        "/api/code-time/report",
+        "code_time_report",
+        ("window", "project", "agent_vendor"),
+    ),
+    Route(
+        "GET",
+        "/api/code-time/forecasts",
+        "code_time_forecasts",
+        ("kind", "project", "target_harness_name", "status", "limit"),
+    ),
+    Route(
+        "GET",
+        "/api/code-time/calibration",
+        "code_time_calibration",
+        ("kind", "project", "target_harness_name", "target_model", "estimator_model"),
+    ),
     Route("POST", "/api/refresh", "request_refresh"),
 )
 _ROUTES = {(route.method, route.pattern): route for route in ROUTES}
@@ -200,145 +271,20 @@ def _handler_for(
             print(f"{self.address_string()} - {format % args}", file=sys.stderr)
 
         def _handle_api_get(self, path: str, query: dict[str, list[str]]) -> None:
+            route = _ROUTES.get(("GET", path))
+            if route is None:
+                self._json_error(HTTPStatus.NOT_FOUND, "not found")
+                return
+            started = time.perf_counter()
             try:
-                route = _ROUTES.get(("GET", path))
-                if route is None:
-                    self._json_error(HTTPStatus.NOT_FOUND, "not found")
-                    return
+                endpoint = getattr(self, f"_route_{route.handler}")
+                if not route.streaming:
+                    # Preserve the historical GET-wide validation, including the
+                    # effective 200-item ceiling on forecast requests.
+                    _bounded_page_size(query)
+                    _cursor(query)
+                payload = endpoint(query)
                 if route.streaming:
-                    self._revision_events()
-                    return
-                limit = _bounded_page_size(query)
-                cursor = _cursor(query)
-                if path == "/api/datahub/snapshot":
-                    payload = (
-                        runtime.snapshot()
-                        if runtime is not None
-                        else _unavailable_snapshot()
-                    )
-                elif path == "/api/datahub/changes":
-                    after_revision = _bounded_nonnegative_int(
-                        query, "after_revision", 0
-                    )
-                    payload = (
-                        runtime.changes(after_revision)
-                        if runtime is not None
-                        else _unavailable_changes(after_revision)
-                    )
-                elif path == "/api/overview":
-                    payload = self._revisioned(
-                        lambda: runtime.overview(since_days=self._window_days(query))
-                    )
-                elif path == "/api/today":
-                    payload = self._revisioned(runtime.today)
-                elif path == "/api/projects":
-                    payload = self._revisioned(
-                        lambda: runtime.projects(
-                            agent_vendor=_first(query, "agent_vendor"),
-                            limit=limit,
-                            cursor=cursor,
-                        )
-                    )
-                elif path == "/api/projects/detail":
-                    payload = self._revisioned(
-                        lambda: runtime.project_detail(
-                            project_name=_required(query, "project_name"),
-                            since_days=self._window_days(query),
-                            limit=limit,
-                            cursor=cursor,
-                        )
-                    )
-                elif path == "/api/sessions":
-                    payload = self._revisioned(
-                        lambda: runtime.sessions(
-                            since_days=self._window_days(query),
-                            project_name=_first(query, "project_name"),
-                            agent_vendor=_first(query, "agent_vendor"),
-                            limit=limit,
-                            cursor=cursor,
-                        )
-                    )
-                elif path == "/api/sessions/timeline":
-                    payload = self._revisioned(
-                        lambda: runtime.session_timeline(
-                            since_days=self._window_days(query),
-                            limit=limit,
-                            cursor=cursor,
-                        )
-                    )
-                elif path == "/api/sessions/context-window":
-                    payload = self._revisioned(
-                        lambda: runtime.context_window(
-                            session_id=_required(query, "session_id"),
-                            turn_id=_first(query, "turn_id"),
-                        )
-                    )
-                elif path == "/api/sessions/graph":
-                    payload = self._revisioned(
-                        lambda: runtime.graph_detail(
-                            session_id=_required(query, "session_id"),
-                        )
-                    )
-                elif path == "/api/sessions/tree":
-                    payload = self._revisioned(
-                        lambda: runtime.session_tree(
-                            session_id=_required(query, "session_id"),
-                        )
-                    )
-                elif path == "/api/sessions/evidence-timeline":
-                    payload = self._revisioned(
-                        lambda: runtime.session_evidence_timeline(
-                            session_id=_required(query, "session_id"),
-                        )
-                    )
-                elif path == "/api/sessions/events":
-                    payload = self._revisioned(
-                        lambda: runtime.session_event_details(
-                            event_ids=_required(query, "event_ids").split(","),
-                            turn_id=_first(query, "turn_id"),
-                            event_type=_first(query, "type"),
-                        )
-                    )
-                elif path == "/api/sessions/items":
-                    payload = self._revisioned(
-                        lambda: runtime.session_item_details(
-                            item_ids=_required(query, "item_ids").split(","),
-                            include_content=_first(query, "include_content")
-                            in {"1", "true", "yes"},
-                            turn_id=_first(query, "turn_id"),
-                        )
-                    )
-                elif path == "/api/model-usage":
-                    payload = self._revisioned(
-                        lambda: runtime.model_usage(
-                            since_days=self._window_days(query),
-                            project_name=_first(query, "project_name"),
-                            model_key=_first(query, "model_key"),
-                            detail=_first(query, "detail") or "both",
-                            limit=limit,
-                            cursor=cursor,
-                            revision=_optional_revision(query),
-                        )
-                    )
-                elif path == "/api/token-efficiency/project":
-                    payload = self._revisioned(
-                        lambda: runtime.token_efficiency_project(
-                            project_name=_required(query, "project_name"),
-                            since_days=self._window_days(query),
-                            limit=limit,
-                            cursor=cursor,
-                            detail=_first(query, "detail"),
-                            grain=_first(query, "grain"),
-                        )
-                    )
-                elif path == "/api/code-time/report":
-                    payload = _code_time_report_payload(query)
-                elif path == "/api/code-time/forecasts":
-                    payload = _code_time_forecasts_payload(query)
-                elif path == "/api/code-time/calibration":
-                    payload = _code_time_calibration_payload(query)
-                else:
-                    self._json_error(HTTPStatus.NOT_FOUND, "not found")
                     return
                 self._json_response(payload)
             except DatahubBootstrapPending as exc:
@@ -357,10 +303,175 @@ def _handler_for(
                     "unexpected Datahub API error",
                 )
                 return
+            finally:
+                _LOGGER.debug(
+                    "datahub route=%s duration_ms=%.3f",
+                    route.handler,
+                    (time.perf_counter() - started) * 1000,
+                )
+
+        def _route_revision_events(self, query: dict[str, list[str]]) -> None:
+            self._revision_events()
+
+        def _route_snapshot(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            return (
+                runtime.snapshot() if runtime is not None else _unavailable_snapshot()
+            )
+
+        def _route_changes(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            after_revision = _bounded_nonnegative_int(query, "after_revision", 0)
+            return (
+                runtime.changes(after_revision)
+                if runtime is not None
+                else _unavailable_changes(after_revision)
+            )
+
+        def _route_overview(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.overview(since_days=self._window_days(query))
+            )
+
+        def _route_today(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            return self._revisioned(runtime.today)
+
+        def _route_projects(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.projects(
+                    agent_vendor=_first(query, "agent_vendor"),
+                    limit=_bounded_page_size(query),
+                    cursor=_cursor(query),
+                )
+            )
+
+        def _route_project_detail(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.project_detail(
+                    project_name=_required(query, "project_name"),
+                    since_days=self._window_days(query),
+                    limit=_bounded_page_size(query),
+                    cursor=_cursor(query),
+                )
+            )
+
+        def _route_sessions(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.sessions(
+                    since_days=self._window_days(query),
+                    project_name=_first(query, "project_name"),
+                    agent_vendor=_first(query, "agent_vendor"),
+                    limit=_bounded_page_size(query),
+                    cursor=_cursor(query),
+                )
+            )
+
+        def _route_session_timeline(
+            self, query: dict[str, list[str]]
+        ) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.session_timeline(
+                    since_days=self._window_days(query),
+                    limit=_bounded_page_size(query),
+                    cursor=_cursor(query),
+                )
+            )
+
+        def _route_context_window(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.context_window(
+                    session_id=_required(query, "session_id"),
+                    turn_id=_first(query, "turn_id"),
+                )
+            )
+
+        def _route_graph_detail(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.graph_detail(session_id=_required(query, "session_id"))
+            )
+
+        def _route_session_tree(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.session_tree(session_id=_required(query, "session_id"))
+            )
+
+        def _route_session_evidence_timeline(
+            self, query: dict[str, list[str]]
+        ) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.session_evidence_timeline(
+                    session_id=_required(query, "session_id")
+                )
+            )
+
+        def _route_session_event_details(
+            self, query: dict[str, list[str]]
+        ) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.session_event_details(
+                    event_ids=_required(query, "event_ids").split(","),
+                    turn_id=_first(query, "turn_id"),
+                    event_type=_first(query, "type"),
+                )
+            )
+
+        def _route_session_item_details(
+            self, query: dict[str, list[str]]
+        ) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.session_item_details(
+                    item_ids=_required(query, "item_ids").split(","),
+                    include_content=_first(query, "include_content")
+                    in {"1", "true", "yes"},
+                    turn_id=_first(query, "turn_id"),
+                )
+            )
+
+        def _route_model_usage(self, query: dict[str, list[str]]) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.model_usage(
+                    since_days=self._window_days(query),
+                    project_name=_first(query, "project_name"),
+                    model_key=_first(query, "model_key"),
+                    detail=_first(query, "detail") or "both",
+                    limit=_bounded_page_size(query),
+                    cursor=_cursor(query),
+                    revision=_optional_revision(query),
+                )
+            )
+
+        def _route_token_efficiency_project(
+            self, query: dict[str, list[str]]
+        ) -> dict[str, Any]:
+            return self._revisioned(
+                lambda: runtime.token_efficiency_project(
+                    project_name=_required(query, "project_name"),
+                    since_days=self._window_days(query),
+                    limit=_bounded_page_size(query),
+                    cursor=_cursor(query),
+                    detail=_first(query, "detail"),
+                    grain=_first(query, "grain"),
+                )
+            )
+
+        def _route_code_time_report(
+            self, query: dict[str, list[str]]
+        ) -> dict[str, Any]:
+            return _code_time_report_payload(query)
+
+        def _route_code_time_forecasts(
+            self, query: dict[str, list[str]]
+        ) -> dict[str, Any]:
+            return _code_time_forecasts_payload(query)
+
+        def _route_code_time_calibration(
+            self, query: dict[str, list[str]]
+        ) -> dict[str, Any]:
+            return _code_time_calibration_payload(query)
 
         def _revision_events(self) -> None:
             if runtime is None:
-                self._json_error(HTTPStatus.SERVICE_UNAVAILABLE, "incremental runtime unavailable")
+                self._json_error(
+                    HTTPStatus.SERVICE_UNAVAILABLE, "incremental runtime unavailable"
+                )
                 return
             subscriber, _revision = runtime.subscribe_revisions()
             self.send_response(HTTPStatus.OK)
@@ -415,12 +526,26 @@ def _handler_for(
             self, path: str, body: dict[str, Any]
         ) -> tuple[dict[str, Any], HTTPStatus]:
             route = _ROUTES.get(("POST", path))
-            if route is not None and route.handler == "request_refresh":
-                payload: dict[str, Any] = {"status": "refreshed"}
-                if runtime is not None:
-                    payload["incremental"] = runtime.request_refresh()
-                return payload, HTTPStatus.OK
-            raise ValueError("unknown api endpoint")
+            if route is None:
+                raise ValueError("unknown api endpoint")
+            started = time.perf_counter()
+            try:
+                endpoint = getattr(self, f"_route_{route.handler}")
+                return endpoint(body)
+            finally:
+                _LOGGER.debug(
+                    "datahub route=%s duration_ms=%.3f",
+                    route.handler,
+                    (time.perf_counter() - started) * 1000,
+                )
+
+        def _route_request_refresh(
+            self, body: dict[str, Any]
+        ) -> tuple[dict[str, Any], HTTPStatus]:
+            payload: dict[str, Any] = {"status": "refreshed"}
+            if runtime is not None:
+                payload["incremental"] = runtime.request_refresh()
+            return payload, HTTPStatus.OK
 
         def _serve_static(self, raw_path: str, *, include_body: bool) -> None:
             relative = raw_path.lstrip("/")
