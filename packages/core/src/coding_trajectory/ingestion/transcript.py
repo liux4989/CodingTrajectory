@@ -45,7 +45,11 @@ TranscriptKind = Literal[
 
 
 def _non_empty_str(value: Any) -> str | None:
-    """Return ``value`` when it is a non-empty string, else ``None``."""
+    """Return ``value`` when it is a non-empty string, else ``None``.
+
+    Deliberately non-stripping, unlike the shared adapters' ``non_empty_str``:
+    raw turn ids pass through verbatim.
+    """
     if isinstance(value, str) and value:
         return value
     return None

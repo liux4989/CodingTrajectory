@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from coding_trajectory.ingestion.adapters._shared import parse_uuid_text
 from coding_trajectory.ingestion.models import CodexExtensions, VendorExtensions
 
 
@@ -68,12 +69,4 @@ def extensions(mechanism: CodexMultiAgentInput) -> VendorExtensions:
     )
 
 
-def _parse_uuid(value: str | None) -> UUID | None:
-    if not value:
-        return None
-    for candidate in (value, value.removeprefix("T-")):
-        try:
-            return UUID(candidate)
-        except ValueError:
-            continue
-    return None
+_parse_uuid = parse_uuid_text

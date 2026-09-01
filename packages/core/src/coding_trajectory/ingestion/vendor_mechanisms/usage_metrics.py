@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from coding_trajectory.ingestion.adapters._shared import int_or_none
 from coding_trajectory.ingestion.common import compact_dict
 from coding_trajectory.ingestion.models import (
     ContextCategoryObservation,
@@ -256,11 +257,12 @@ def _dict_or_none(value: Any) -> dict[str, Any] | None:
 
 
 def _as_str(value: Any) -> str | None:
+    # Deliberately non-stripping, unlike the shared adapters' ``non_empty_str``:
+    # usage values pass through verbatim.
     return value if isinstance(value, str) and value else None
 
 
-def _as_int_or_none(value: Any) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+_as_int_or_none = int_or_none
 
 
 def _pi_cost_usd(value: Any) -> float | None:

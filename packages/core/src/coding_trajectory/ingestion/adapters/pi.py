@@ -9,6 +9,15 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from coding_trajectory.ingestion.adapters._shared import (
+    SHARED_FILE_TOOL_NAMES,
+    SHARED_PLAN_TOOL_NAMES,
+    ToolTaxonomy,
+    collapse_whitespace,
+    content_block_field_texts,
+    content_block_texts,
+    content_blocks,
+)
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.common import (
     extract_exit_code,
@@ -43,78 +52,43 @@ from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
 logger = logging.getLogger(__name__)
 
 
-_PI_FILE_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "readFile",
-        "read_file",
-        "read_many_files",
-        "writeFile",
-        "write_file",
-        "create_file",
-        "editFile",
-        "edit_file",
-        "replace",
-        "apply_patch",
-        "Read",
-        "Edit",
-        "MultiEdit",
-        "Write",
-        "View",
-    }
-)
-_PI_PLAN_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "TodoWrite",
-        "TodoRead",
-        "update_plan",
-    }
+_PI_TOOL_TAXONOMY = ToolTaxonomy(
+    command_names=frozenset({"bash"}),
+    plan_names=SHARED_PLAN_TOOL_NAMES,
+    file_change_names=SHARED_FILE_TOOL_NAMES
+    | frozenset(
+        {
+            "readFile",
+            "read_file",
+            "read_many_files",
+            "writeFile",
+            "write_file",
+            "create_file",
+            "editFile",
+            "edit_file",
+            "replace",
+            "apply_patch",
+        }
+    ),
 )
 
 
 def _pi_item_kind(tool_name: str | None) -> str:
-    if tool_name == "bash":
-        return "command_execution"
-    if tool_name in _PI_PLAN_TOOL_NAMES:
-        return "plan"
-    if tool_name in _PI_FILE_TOOL_NAMES:
-        return "file_change"
-    return "tool_call"
+    return _PI_TOOL_TAXONOMY.classify(tool_name)
 
 
 def _content_text(content: Any) -> str | None:
-    if isinstance(content, str):
-        return content or None
-    if isinstance(content, list):
-        texts = [
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        ]
-        joined = " ".join(text for text in texts if text).strip()
-        return joined or None
-    return None
+    if not isinstance(content, str | list):
+        return None
+    return content_block_texts(content)
 
 
 def _tool_calls_from_content(content: list[dict]) -> list[dict]:
-    if not isinstance(content, list):
-        return []
-    return [
-        block
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "toolCall"
-    ]
+    return content_blocks(content, "toolCall")
 
 
 def _thinking_blocks(content: list[dict]) -> list[str]:
-    if not isinstance(content, list):
-        return []
-    return [
-        block.get("thinking", "")
-        for block in content
-        if isinstance(block, dict)
-        and block.get("type") == "thinking"
-        and block.get("thinking")
-    ]
+    return content_block_field_texts(content, "thinking", "thinking")
 
 
 def _is_real_user_message(message: dict) -> bool:
@@ -190,7 +164,7 @@ class PiAdapter(BaseAdapter):
                 ):
                     text = _content_text(message.get("content", []))
                     if text:
-                        title = " ".join(text.split()) or None
+                        title = collapse_whitespace(text) or None
             if session_id is not None and title is not None:
                 break
             if session_id is not None:
@@ -376,7 +350,7 @@ class PiAdapter(BaseAdapter):
         if _is_real_user_message(message):
             text = _content_text(content)
             if text and not self._session_title:
-                self._session_title = " ".join(text.split()) or None
+                self._session_title = collapse_whitespace(text) or None
             transcript.append(
                 TranscriptRecord(
                     sequence=len(transcript),
