@@ -634,6 +634,7 @@ def _model_groups_for_turn(turn: TurnMetrics) -> list[ModelUsageModelFlat]:
         ModelUsageModelFlat(
             provider=provider,
             model=model,
+            requests=len(observations_by_model.get((provider, model), [])),
             turns=1,
             usage=usage,
             model_active_seconds=(turn.model_active_seconds if single_model else None),
@@ -667,6 +668,7 @@ def _model_usage_breakdown(
 ) -> list[ModelUsageModelFlat]:
     turn_list = list(turns)
     grouped: dict[tuple[str | None, str | None], TokenUsage] = {}
+    model_requests: dict[tuple[str | None, str | None], int] = {}
     model_turns: dict[tuple[str | None, str | None], set[UUID]] = {}
     active_seconds: dict[tuple[str | None, str | None], float] = {}
     active_seconds_complete: dict[tuple[str | None, str | None], bool] = {}
@@ -676,6 +678,7 @@ def _model_usage_breakdown(
         for group in groups:
             key = (group.provider, group.model)
             grouped[key] = grouped.get(key, TokenUsage()).plus(group.usage)
+            model_requests[key] = model_requests.get(key, 0) + group.requests
             model_turns.setdefault(key, set()).add(turn.turn_id)
             model_costs.setdefault(key, []).append(group.estimated_cost)
             if group.model_active_seconds is None:
@@ -688,6 +691,7 @@ def _model_usage_breakdown(
         ModelUsageModelFlat(
             provider=provider,
             model=model,
+            requests=model_requests.get((provider, model), 0),
             turns=len(model_turns.get((provider, model), set())),
             usage=usage,
             model_active_seconds=(

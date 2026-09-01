@@ -775,14 +775,20 @@ def _render_session_usage_text(
     if len(session_sections) > 1:
         return _render_session_usage_sections(payload, args, session_sections)
 
-    lines = ["# Session Usage", "", "```", "Total"]
-    lines.append(f"  {render_usage_line(payload.get('total_usage') or {})}")
     total_cost = payload.get("estimated_cost") or {}
-    if total_cost.get("value_usd") is not None:
-        lines.append(
-            f"  cost {format_cost(total_cost.get('value_usd'))} "
-            f"({total_cost.get('confidence', 'estimated')})"
+    models = payload.get("models") or []
+    lines = ["# Session Usage", "", "```", _usage_total_label("Total", models)]
+    request_count = sum(
+        int(row.get("requests") or 0) for row in models if isinstance(row, dict)
+    )
+    lines.append(
+        _render_token_cost_summary(
+            payload.get("total_usage") or {},
+            total_cost,
+            indent="  ",
+            requests=request_count,
         )
+    )
     _append_model_usage(lines, payload.get("models"), indent="  ")
     runtime = payload.get("runtime") or {}
     if runtime:
@@ -803,13 +809,12 @@ def _render_session_usage_text(
         lines.extend(["", "Turns"])
     for turn in rendered_turns:
         lines.append(f"  turn {turn.get('turn_id') or '-'}")
-        lines.append(f"    {render_usage_line(turn.get('usage') or {})}")
         turn_cost = turn.get("estimated_cost") or {}
-        if turn_cost.get("value_usd") is not None:
-            lines.append(
-                f"    cost {format_cost(turn_cost.get('value_usd'))} "
-                f"({turn_cost.get('confidence', 'estimated')})"
+        lines.append(
+            _render_token_cost_summary(
+                turn.get("usage") or {}, turn_cost, indent="    "
             )
+        )
         runtime = turn.get("runtime") or {}
         if runtime:
             timing_parts = []
@@ -838,14 +843,25 @@ def _render_session_usage_sections(
     args: argparse.Namespace | None,
     session_sections: list[dict[str, Any]],
 ) -> str:
-    lines = ["# Session Usage", "", "```", "Graph total"]
-    lines.append(f"  {render_usage_line(payload.get('total_usage') or {})}")
     total_cost = payload.get("estimated_cost") or {}
-    if total_cost.get("value_usd") is not None:
-        lines.append(
-            f"  cost {format_cost(total_cost.get('value_usd'))} "
-            f"({total_cost.get('confidence', 'estimated')})"
+    models = payload.get("models") or []
+    lines = [
+        "# Session Usage",
+        "",
+        "```",
+        _usage_total_label("Graph total", models),
+    ]
+    request_count = sum(
+        int(row.get("requests") or 0) for row in models if isinstance(row, dict)
+    )
+    lines.append(
+        _render_token_cost_summary(
+            payload.get("total_usage") or {},
+            total_cost,
+            indent="  ",
+            requests=request_count,
         )
+    )
     _append_model_usage(lines, payload.get("models"), indent="  ")
     runtime = payload.get("runtime") or {}
     if runtime:
@@ -866,14 +882,22 @@ def _render_session_usage_sections(
                 "```",
             ]
         )
-        lines.append("Total")
-        lines.append(f"  {render_usage_line(section.get('total_usage') or {})}")
         section_cost = section.get("estimated_cost") or {}
-        if section_cost.get("value_usd") is not None:
-            lines.append(
-                f"  cost {format_cost(section_cost.get('value_usd'))} "
-                f"({section_cost.get('confidence', 'estimated')})"
+        section_models = section.get("models") or []
+        lines.append(_usage_total_label("Total", section_models))
+        section_requests = sum(
+            int(row.get("requests") or 0)
+            for row in section_models
+            if isinstance(row, dict)
+        )
+        lines.append(
+            _render_token_cost_summary(
+                section.get("total_usage") or {},
+                section_cost,
+                indent="  ",
+                requests=section_requests,
             )
+        )
         _append_model_usage(lines, section.get("models"), indent="  ")
         section_runtime = section.get("runtime") or {}
         if section_runtime:
@@ -888,13 +912,12 @@ def _render_session_usage_sections(
             lines.extend(["", "Turns"])
         for turn in rendered_turns:
             lines.append(f"  turn {turn.get('turn_id') or '-'}")
-            lines.append(f"    {render_usage_line(turn.get('usage') or {})}")
             turn_cost = turn.get("estimated_cost") or {}
-            if turn_cost.get("value_usd") is not None:
-                lines.append(
-                    f"    cost {format_cost(turn_cost.get('value_usd'))} "
-                    f"({turn_cost.get('confidence', 'estimated')})"
+            lines.append(
+                _render_token_cost_summary(
+                    turn.get("usage") or {}, turn_cost, indent="    "
                 )
+            )
         if skipped:
             lines.append(
                 f"  (skipped {skipped} turn(s) with no recorded token usage; "
@@ -907,18 +930,68 @@ def _render_session_usage_sections(
 
 def _append_model_usage(lines: list[str], models: Any, *, indent: str) -> None:
     rows = [row for row in models or [] if isinstance(row, dict)]
-    if not rows:
+    if len(rows) <= 1:
         return
     lines.append(f"{indent}Usage by model")
     for row in rows:
         label = row.get("model") or "unknown model"
         if row.get("provider"):
             label = f"{row['provider']}/{label}"
-        detail = render_usage_line(row.get("usage") or {})
-        estimate = row.get("estimated_cost") or {}
-        if estimate.get("value_usd") is not None:
-            detail += f"  cost {format_cost(estimate['value_usd'])}"
-        lines.append(f"{indent}  {label}: {detail}")
+        requests = int(row.get("requests") or 0)
+        request_label = f" ({requests} request{'s' if requests != 1 else ''})"
+        lines.append(f"{indent}  {label}{request_label}")
+        lines.append(
+            _render_token_cost_summary(
+                row.get("usage") or {},
+                row.get("estimated_cost") or {},
+                indent=f"{indent}    ",
+            )
+        )
+
+
+def _usage_total_label(label: str, models: Any) -> str:
+    rows = [row for row in models or [] if isinstance(row, dict)]
+    if len(rows) != 1:
+        return label
+    row = rows[0]
+    model = row.get("model") or "unknown model"
+    if row.get("provider"):
+        model = f"{row['provider']}/{model}"
+    return f"{label} · {model}"
+
+
+def _render_token_cost_summary(
+    usage: dict[str, Any],
+    cost: dict[str, Any],
+    *,
+    indent: str,
+    requests: int | None = None,
+) -> str:
+    """Render the non-overlapping token buckets needed for cost review."""
+    parts: list[str] = []
+    if requests is not None:
+        parts.append(f"requests {requests}")
+
+    input_text = f"input {format_tokens(usage.get('uncached_prompt_tokens'))}"
+    cached = usage.get("cached_prompt_tokens")
+    cache_write = usage.get("cache_write_tokens")
+    if cached:
+        input_text += f" (+{format_tokens(cached)} cached)"
+    if cache_write:
+        input_text += f" (+{format_tokens(cache_write)} cache write)"
+    parts.append(input_text)
+
+    output_text = f"output {format_tokens(usage.get('completion_tokens'))}"
+    reasoning = usage.get("reasoning_tokens")
+    if reasoning:
+        output_text += f" (+{format_tokens(reasoning)} reasoning)"
+    parts.append(output_text)
+    parts.append(f"processed {format_tokens(usage.get('processed_tokens'))}")
+
+    if cost.get("value_usd") is not None:
+        confidence = cost.get("confidence", "estimated")
+        parts.append(f"cost {format_cost(cost['value_usd'])} ({confidence})")
+    return indent + "  ".join(parts)
 
 
 def _section_label_maps(

@@ -137,7 +137,7 @@ signal.
 6. `session search <SESSION_ID> <QUERY> [--turn TURN_ID] [--mode text|path] [--kind KIND] [--limit N] [--output markdown|json]` — find canonical evidence using deterministic structural and lexical ranking
 7. `session items <SESSION_ID> [<ITEM_ID> ...] [--turn TURN_ID] [--type ITEM_TYPE] [--include-content] [--output json]` — expand scoped item evidence; repeat `--type` to filter item kinds and expand large content only when needed
 8. `session stats <SESSION_ID> [--output markdown|json]` — inspect session stats with compact context/token sections
-9. `session usage <SESSION_ID> [--turn TURN_ID] [--output markdown|json]` — inspect turn-level token accounting and request-summed costs
+9. `session usage <SESSION_ID> [--turn TURN_ID] [--output markdown|json]` — inspect compact request, input/cache, output/reasoning, processed-token, and request-summed cost totals by model and turn
 10. `session request-usage <SESSION_ID> [--turn TURN_ID] [--include-context] [--include-causality] [--output json]` — inspect every provider request and its exact usage buckets and estimated cost; opt into the larger context and causal diagnostics
 
 Graph-level inspection is nested under the branch session that owns the

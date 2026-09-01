@@ -547,6 +547,7 @@ class ModelUsageContextFlat(BaseModel):
 class ModelUsageModelFlat(BaseModel):
     provider: str | None = None
     model: str | None = None
+    requests: int = 0
     turns: int = 0
     usage: TokenUsage = Field(default_factory=TokenUsage)
     model_active_seconds: float | None = None
