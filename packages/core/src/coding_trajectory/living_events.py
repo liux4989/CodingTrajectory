@@ -31,6 +31,7 @@ from coding_trajectory.ingestion.common import (
 )
 from coding_trajectory.ingestion.indexes import build_session_graph_index
 from coding_trajectory.ingestion.models import (
+    COMPACTION_MECHANISMS as _COMPACTION_MECHANISMS,
     AgentMessageItem,
     PlanItem,
     RuntimeObservation,
@@ -52,10 +53,6 @@ from coding_trajectory.living_events_store import (
 
 _VIEW_STRING_LIMIT = 500
 _VIEW_VALUE_LIMIT = 2000
-_COMPACTION_MECHANISMS = {
-    "claude_compact_boundary": "eviction_boundary",
-    "context_compacted": "context_compacted",
-}
 
 
 def default_database_path(*, current_dir: Path, global_scope: bool) -> Path:

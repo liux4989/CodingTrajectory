@@ -51,6 +51,9 @@ from coding_trajectory.metrics.pricing import (
     _resolve_price_rule,
     _uses_net_input_convention,
 )
+from coding_trajectory.metrics.usage_math import (
+    sum_usage_dicts as _sum_usage_dicts,
+)
 
 
 @dataclass(frozen=True)
@@ -539,14 +542,6 @@ def _allocated_cost_usage_dict_from_values(
         "prompt_completion_tokens": input_tokens + output_tokens,
     }
     return {key: value for key, value in usage_dict.items() if value > 0}
-
-
-def _sum_usage_dicts(items: Iterable[dict[str, int]]) -> dict[str, int]:
-    total: dict[str, int] = {}
-    for item in items:
-        for key, value in item.items():
-            total[key] = total.get(key, 0) + max(value, 0)
-    return {key: value for key, value in total.items() if value > 0}
 
 
 def _session_usage_observations(

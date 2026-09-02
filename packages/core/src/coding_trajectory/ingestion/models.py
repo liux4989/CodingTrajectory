@@ -172,6 +172,22 @@ class RuntimeObservation(BaseModel):
     effort_to: str | None = None
 
 
+# Evicting-compaction observation kinds. Codex emits ``context_compacted`` (a
+# full eviction with no pre/post delta in the event); Claude Code emits
+# ``claude_compact_boundary`` (a full eviction with pre/post/trigger metadata).
+# Both count as a compaction for stats and overview activities.
+COMPACTION_KINDS = frozenset({"context_compacted", "claude_compact_boundary"})
+
+# Map observation kinds to a compaction mechanism label. ``eviction_boundary``
+# (Claude Code) carries pre/post/dropped/trigger; ``context_compacted``
+# (Codex) does not. The label drives per-provider rendering so a bare Codex
+# compaction doesn't show as empty pre→post / dropped cells.
+COMPACTION_MECHANISMS = {
+    "claude_compact_boundary": "eviction_boundary",
+    "context_compacted": "context_compacted",
+}
+
+
 class Event(BaseModel):
     event_id: UUID = Field(default_factory=uuid4)
     session_id: UUID

@@ -25,26 +25,16 @@ from coding_trajectory.ingestion.indexes import (
     ordered_sessions,
 )
 from coding_trajectory.ingestion.models import (
+    COMPACTION_KINDS as _COMPACTION_KINDS,
+    COMPACTION_MECHANISMS as _COMPACTION_MECHANISMS,
     AgentMessageItem,
     Session,
     SessionGraph,
     Turn,
 )
 
-# Vendor-reported compaction observation kinds. Codex emits
-# ``context_compacted`` (full eviction, no pre/post delta in the event); Claude
-# Code emits ``claude_compact_boundary`` (full eviction with pre/post/trigger
-# metadata).
-_COMPACTION_KINDS = frozenset({"context_compacted", "claude_compact_boundary"})
-
-# Map provider observation kinds to a compaction mechanism label, mirrored from
-# ``metrics/context_stats/_common`` so overview activity entries carry the same
-# discriminator as the stats/usage payloads. ``eviction_boundary`` (Claude Code)
-# carries pre/post/dropped/trigger; ``context_compacted`` (Codex) does not.
-_COMPACTION_MECHANISMS = {
-    "claude_compact_boundary": "eviction_boundary",
-    "context_compacted": "context_compacted",
-}
+# Compaction observation kinds and mechanism labels are single-sourced in
+# ``ingestion.models`` (they describe RuntimeObservation kinds).
 
 
 def build_session_graph_overview(

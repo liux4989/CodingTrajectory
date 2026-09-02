@@ -39,6 +39,9 @@ from coding_trajectory.ingestion.models import (
 )
 from coding_trajectory.metrics.models import ContextCategoryFlat
 from coding_trajectory.metrics.pricing import cost_evidence_from_usage
+from coding_trajectory.metrics.usage_math import (
+    sum_usage_dicts as _sum_usage_values,
+)
 from coding_trajectory.token_counter import session_scoped
 
 
@@ -849,14 +852,6 @@ def _assert_context_composition_usage_reconciles(
     assert actual == expected, (
         "context composition allocated usage must reconcile to stats attribution"
     )
-
-
-def _sum_usage_values(items: Iterable[dict[str, int]]) -> dict[str, int]:
-    result: dict[str, int] = {}
-    for item in items:
-        for key, value in item.items():
-            result[key] = result.get(key, 0) + max(value, 0)
-    return {key: value for key, value in result.items() if value > 0}
 
 
 def _sum(measures: Iterable[_Measure]) -> _Measure:

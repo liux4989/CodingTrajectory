@@ -6,7 +6,13 @@ from collections.abc import Iterable
 from typing import Any
 
 from coding_trajectory.analysis.request_lineage import is_low_value_turn
-from coding_trajectory.ingestion.models import EventType, Session, SessionGraph
+from coding_trajectory.ingestion.models import (
+    COMPACTION_KINDS as _COMPACTION_KINDS,
+    COMPACTION_MECHANISMS as _COMPACTION_MECHANISMS,
+    EventType,
+    Session,
+    SessionGraph,
+)
 from coding_trajectory.metrics.models import (
     CompactionEventFlat,
     CompactionStatsFlat,
@@ -27,23 +33,8 @@ def root_session(session_graph: SessionGraph) -> Session:
     return session_graph.sessions[0]
 
 
-# Evicting-compaction observation kinds. Codex emits ``context_compacted`` (a
-# full eviction with no pre/post delta in the event); Claude Code emits
-# ``claude_compact_boundary`` (a full eviction). Both count as a compaction for
-# stats — previously only Codex's kind was counted, so Claude Code sessions
-# reported 0 compactions despite showing a ``Compacted history`` composition row.
-_COMPACTION_KINDS = frozenset({"context_compacted", "claude_compact_boundary"})
-
-# Map provider observation kinds to a compaction mechanism label. Same concept,
-# different mechanisms: Claude Code's ``claude_compact_boundary`` is a discrete
-# eviction (preserved messages + dropped totals); Codex's ``context_compacted``
-# carries no eviction metadata in the event. The label drives per-provider
-# rendering so a bare Codex compaction doesn't show as empty pre→post / dropped
-# cells. Mirrored in ``analysis/session_graph_views.py`` for overview activities.
-_COMPACTION_MECHANISMS = {
-    "claude_compact_boundary": "eviction_boundary",
-    "context_compacted": "context_compacted",
-}
+# Compaction observation kinds and mechanism labels are single-sourced in
+# ``ingestion.models`` (they describe RuntimeObservation kinds).
 
 
 def runtime_stats(

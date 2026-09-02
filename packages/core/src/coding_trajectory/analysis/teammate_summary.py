@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from coding_trajectory.analysis.activity_flow import build_flows
+from coding_trajectory.analysis.projection_utils import prune_empty_collections
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.models import Session, Turn
 
@@ -155,7 +156,7 @@ def build_teammate_summary(
             )
             if session_id is not None:
                 member_data["session_id"] = session_id
-        members.append(_prune_empty_collections(member_data))
+        members.append(prune_empty_collections(member_data))
     return {
         "lead_flow": _build_lead_flow(turn, user_request=user_request),
         "members": members,
@@ -343,7 +344,7 @@ def _build_lead_text_events(text: str) -> list[dict[str, Any]]:
 
 
 def _project_teammate_task(task: dict[str, Any]) -> dict[str, Any]:
-    return _prune_empty_collections(
+    return prune_empty_collections(
         prune_nones(
             {
                 "task_id": task.get("task_id"),
@@ -425,17 +426,3 @@ def _resolve_member_session_id(
             return earliest[0].session_id
 
     return None
-
-
-def _prune_empty_collections(value: Any) -> Any:
-    if isinstance(value, dict):
-        pruned: dict[str, Any] = {}
-        for key, child in value.items():
-            child_pruned = _prune_empty_collections(child)
-            if child_pruned in (None, [], {}, ""):
-                continue
-            pruned[key] = child_pruned
-        return pruned
-    if isinstance(value, list):
-        return [_prune_empty_collections(child) for child in value]
-    return value

@@ -270,7 +270,7 @@ def _status_for(record: dict[str, Any]) -> str:
 def _assign_roles(records: list[dict[str, Any]]) -> None:
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for record in records:
-        cohort = _cohort_key(record)
+        cohort = _role_group_key(record)
         groups.setdefault(cohort, []).append(record)
     for group in groups.values():
         group.sort(key=lambda item: (str(item.get("issued_at")), item["prediction_id"]))
@@ -278,7 +278,7 @@ def _assign_roles(records: list[dict[str, Any]]) -> None:
             record["role"] = "primary" if index == 0 else "diagnostic"
 
 
-def _cohort_key(record: dict[str, Any]) -> tuple[Any, ...]:
+def _role_group_key(record: dict[str, Any]) -> tuple[Any, ...]:
     estimator = record.get("estimator") or {}
     return (
         record.get("turn_id"),
