@@ -12,11 +12,13 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from coding_trajectory.ingestion.adapters._shared import (
     SHARED_FILE_TOOL_NAMES,
     SHARED_PLAN_TOOL_NAMES,
+    HeaderFacts,
     ToolTaxonomy,
     collapse_whitespace,
     content_block_field_texts,
     content_block_texts,
     content_blocks,
+    scan_header_records,
 )
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.assembly import AssemblyHooks, assemble_session
@@ -130,23 +132,27 @@ class PiAdapter(BaseAdapter):
     _TITLE_LOOKAHEAD = 50
 
     def scan_header(self, source: Path) -> SessionHeader | None:
-        session_id: UUID | None = None
-        cwd: str | None = None
-        title: str | None = None
-        since_session = 0
-        for record in self._iter_records(source):
+        id_resolved = False
+
+        def extract(record: dict) -> HeaderFacts:
+            nonlocal id_resolved
             entry_type = record.get("type")
-            if entry_type == "session" and session_id is None:
+            session_id: UUID | None = None
+            cwd: str | None = None
+            title: str | None = None
+            if entry_type == "session" and not id_resolved:
                 raw_id = record.get("id")
                 if isinstance(raw_id, str):
                     try:
                         session_id = UUID(raw_id)
                     except ValueError:
                         session_id = uuid5(NAMESPACE_URL, f"pi:{source}:{raw_id}")
-                cwd = record.get("cwd") or cwd
-            elif entry_type == "session_info" and title is None:
-                title = record.get("name") or title
-            elif entry_type == "message" and title is None:
+                    id_resolved = True
+                cwd = record.get("cwd") or None
+            elif entry_type == "session_info":
+                name = record.get("name")
+                title = name if name else None
+            elif entry_type == "message":
                 message = record.get("message")
                 if (
                     isinstance(message, dict)
@@ -156,20 +162,22 @@ class PiAdapter(BaseAdapter):
                     text = _content_text(message.get("content", []))
                     if text:
                         title = collapse_whitespace(text) or None
-            if session_id is not None and title is not None:
-                break
-            if session_id is not None:
-                since_session += 1
-                if since_session >= self._TITLE_LOOKAHEAD:
-                    break
+            return HeaderFacts(session_id=session_id, title=title, cwd=cwd)
+
+        facts = scan_header_records(
+            self._iter_records(source),
+            extract=extract,
+            lookahead=self._TITLE_LOOKAHEAD,
+        )
+        session_id = facts.session_id
         if session_id is None:
             session_id = uuid5(NAMESPACE_URL, f"pi:{source}")
         return SessionHeader(
             session_id=session_id,
             vendor=Vendor.PI,
             parent_session_id=None,
-            title=title,
-            cwd=cwd,
+            title=facts.title,
+            cwd=facts.cwd,
         )
 
     def _build_session(
