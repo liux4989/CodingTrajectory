@@ -12,7 +12,24 @@ from coding_trajectory.metrics.accounting import (
     glossary_usage_dict,
     usage_accounting_payload as _usage_accounting_payload,
 )
-from coding_trajectory.metrics.pricing import CostEvidenceFlat
+
+
+class CostEvidenceFlat(BaseModel):
+    """USD cost attribution attached next to a usage bucket.
+
+    Core (the pricing single source of truth) populates this; the dashboard
+    and other consumers read it off the ``ct`` JSON instead of repricing.
+    """
+
+    value_usd: float = Field(ge=0)
+    confidence: Literal["reported", "estimated"] = "estimated"
+    source: str | None = None
+    effective_date: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        return {key: value for key, value in data.items() if value is not None}
 
 
 class TokenUsage(BaseModel):

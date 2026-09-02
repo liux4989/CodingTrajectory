@@ -15,7 +15,7 @@ from coding_trajectory.datahub import (
     DocumentStore,
     rebuild_affected_session_graphs_with_measurements,
 )
-from coding_trajectory.metrics.measurements import MeasurementMismatchError
+from coding_trajectory.analysis.measurements import MeasurementMismatchError
 
 from datahub_plugin.projections.analytical_read_models import (
     CANONICAL_FACT_SCOPE,

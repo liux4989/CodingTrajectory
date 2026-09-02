@@ -24,17 +24,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, Final
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from pydantic import (
     BaseModel,
-    Field,
     ValidationError,
-    model_serializer,
     model_validator,
 )
+
+from coding_trajectory.metrics.models import CostEvidenceFlat
 
 TOKENS_PER_MILLION = 1_000_000
 MODELS_DEV_SOURCE = "https://models.dev/api.json"
@@ -121,24 +121,6 @@ _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     # --- MiniMax ---
     "minimax-m3": 512_000,
 }
-
-
-class CostEvidenceFlat(BaseModel):
-    """USD cost attribution attached next to a usage bucket.
-
-    Core (the pricing single source of truth) populates this; the dashboard
-    and other consumers read it off the ``ct`` JSON instead of repricing.
-    """
-
-    value_usd: float = Field(ge=0)
-    confidence: Literal["reported", "estimated"] = "estimated"
-    source: str | None = None
-    effective_date: str | None = None
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, handler):
-        data = handler(self)
-        return {key: value for key, value in data.items() if value is not None}
 
 
 def _usage_int(usage: dict[str, Any], primary: str, fallback: str) -> int:
