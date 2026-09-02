@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import re
 from collections.abc import Iterable
 from datetime import datetime
@@ -21,6 +21,7 @@ from coding_trajectory.ingestion.adapters._shared import (
     non_empty_str,
 )
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
+from coding_trajectory.ingestion.assembly import AssemblyHooks, assemble_session
 from coding_trajectory.ingestion.common import (
     compact_dict,
     infer_tool_success,
@@ -30,31 +31,20 @@ from coding_trajectory.ingestion.models import (
     ContextSourceObservation,
     ContextUsageObservation,
     Event,
-    Item,
     RuntimeObservation,
     Session,
-    TeamTurnState,
-    ToolCallItem,
     ToolStatus,
     Turn,
     Vendor,
 )
 from coding_trajectory.ingestion.provenance import RecordSpan
-from coding_trajectory.ingestion.retention import (
-    CanonicalRetention,
-    compact_context_usage_observation,
-)
-from coding_trajectory.ingestion.transcript import (
-    TranscriptRecord,
-    TranscriptStabilizer,
-    build_session_provenance,
-    compact_session_cwd,
-    events_from_transcript,
-    project_transcript,
-)
+from coding_trajectory.ingestion.retention import CanonicalRetention
+from coding_trajectory.ingestion.transcript import TranscriptRecord
 from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
     ClaudeSubagentInput,
     canonical_session_ids,
+)
+from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
     extensions as claude_extensions,
 )
 from coding_trajectory.ingestion.vendor_mechanisms.claude_team import (
@@ -231,6 +221,86 @@ def _starting_context_sources(
 
 
 _TEAM_TOOL_NAMES: frozenset[str] = frozenset({"Agent", "TaskCreate", "TaskUpdate"})
+
+
+def _team_tool_calls_from_transcript(
+    transcript: list[TranscriptRecord],
+) -> dict[str, dict[str, Any]]:
+    """Capture the merged input/output bodies of team-management tool calls.
+
+    Derived from the pre-retention transcript (tool_call input + tool_result
+    output, keyed by tool_call_id), replacing per-item body reads so compact
+    sessions - whose item bodies were dropped at translation - rebuild the
+    identical team state.
+    """
+    calls: dict[str, dict[str, Any]] = {}
+    for record in transcript:
+        tool_call_id = record.data.get("tool_call_id")
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            continue
+        if record.kind == "tool_call":
+            tool_name = record.data.get("tool_name")
+            if tool_name in _TEAM_TOOL_NAMES:
+                calls[tool_call_id] = {
+                    "tool_name": tool_name,
+                    "input": record.data.get("input"),
+                    "output": None,
+                }
+        elif record.kind == "tool_result":
+            entry = calls.get(tool_call_id)
+            output = record.data.get("output")
+            if entry is not None and output is not None:
+                entry["output"] = output
+    return calls
+
+
+def _claude_context_usage(
+    transcript: list[TranscriptRecord],
+) -> list[ContextUsageObservation]:
+    """Build usage observations, deduplicated by provider response id.
+
+    A Claude Code ``uuid`` identifies one local stream event, whereas
+    ``message.id`` identifies the provider response.  One response is recorded
+    as several stream events (thinking, text, tool-use, final state), each
+    repeating the same final usage block.  Preserve every event in the
+    transcript, but retain usage once per provider response so billed
+    accounting does not charge the same request repeatedly.
+    """
+    usage_records_by_response_id: dict[str, TranscriptRecord] = {}
+    usage_records_without_response_id: list[TranscriptRecord] = []
+    for record in transcript:
+        vendor_data = record.data.get("vendor_data", {})
+        if not isinstance(vendor_data, dict):
+            continue
+        response_id = vendor_data.get("provider_response_id")
+        if isinstance(response_id, str) and response_id:
+            # The final stream event is the most complete observation and
+            # remains associated with the turn that owns the response.
+            usage_records_by_response_id[response_id] = record
+        else:
+            usage_records_without_response_id.append(record)
+
+    return [
+        observation
+        for record in [
+            *usage_records_by_response_id.values(),
+            *usage_records_without_response_id,
+        ]
+        if (
+            observation := context_usage_observation(
+                timestamp=record.timestamp,
+                source="claude_usage_block",
+                normalized=record.data.get("vendor_data", {}),
+                source_event_id=record.record_id,
+                # Claude Code emits Anthropic-schema usage (input_tokens is
+                # uncached) regardless of the underlying routed model, so the
+                # net-input convention applies to every observation.
+                provider="anthropic",
+                category_source="claude_usage_block",
+            )
+        )
+        is not None
+    ]
 
 
 def _record_title(record: dict[str, object]) -> str | None:
@@ -495,124 +565,52 @@ class ClaudeCodeAdapter(BaseAdapter):
             raise ValueError(
                 f"ClaudeCodeAdapter: no transcript records parsed from {source}"
             )
-        compact = (
-            TranscriptStabilizer(vendor=Vendor.CLAUDE_CODE, source=source)
-            if retention == "measurements"
-            else None
-        )
-        events = events_from_transcript(
-            session_id=session_id, records=transcript, stabilizer=compact
-        )
-        turns = project_transcript(
-            session_id=session_id,
-            vendor=Vendor.CLAUDE_CODE,
-            records=transcript,
-            compact=compact,
-        )
-        if compact is not None:
-            self.last_provenance = build_session_provenance(
-                session_id=session_id,
-                vendor=Vendor.CLAUDE_CODE,
-                source=source,
-                stabilizer=compact,
-                turns=turns,
-            )
-        if compact is not None:
-            for turn, team_state in zip(
-                turns, self._compact_team_states(turns, team_inputs), strict=False
-            ):
-                turn.team_state = team_state
-        else:
+        # Pre-retention team-tool bodies: compact items drop input/output at
+        # translation, so team state is rebuilt from these captured dicts
+        # through the same ``build_turn_team_state`` code path in both modes.
+        team_tool_calls = _team_tool_calls_from_transcript(transcript)
+
+        def _attach_team_states(turns: list[Turn]) -> None:
             for turn, team_input in zip(turns, team_inputs, strict=False):
-                turn.team_state = build_turn_team_state(turn, team_input=team_input)
-        started_at = min(record.timestamp for record in transcript)
-        ended_at = max(record.timestamp for record in transcript)
-        runtime_observations = self._build_runtime_observations(
-            transcript, scan.effort_observations
-        )
-        # A Claude Code ``uuid`` identifies one local stream event, whereas
-        # ``message.id`` identifies the provider response.  One response is
-        # recorded as several stream events (thinking, text, tool-use, final
-        # state), each repeating the same final usage block.  Preserve every
-        # event in the transcript, but retain usage once per provider response
-        # so billed accounting does not charge the same request repeatedly.
-        usage_records_by_response_id: dict[str, TranscriptRecord] = {}
-        usage_records_without_response_id: list[TranscriptRecord] = []
-        for record in transcript:
-            vendor_data = record.data.get("vendor_data", {})
-            if not isinstance(vendor_data, dict):
-                continue
-            response_id = vendor_data.get("provider_response_id")
-            if isinstance(response_id, str) and response_id:
-                # The final stream event is the most complete observation and
-                # remains associated with the turn that owns the response.
-                usage_records_by_response_id[response_id] = record
-            else:
-                usage_records_without_response_id.append(record)
-
-        context_usage = [
-            observation
-            for record in [
-                *usage_records_by_response_id.values(),
-                *usage_records_without_response_id,
-            ]
-            if (
-                observation := context_usage_observation(
-                    timestamp=record.timestamp,
-                    source="claude_usage_block",
-                    normalized=record.data.get("vendor_data", {}),
-                    source_event_id=record.record_id,
-                    # Claude Code emits Anthropic-schema usage (input_tokens is
-                    # uncached) regardless of the underlying routed model, so the
-                    # net-input convention applies to every observation.
-                    provider="anthropic",
-                    category_source="claude_usage_block",
+                turn.team_state = build_turn_team_state(
+                    turn,
+                    team_input=team_input,
+                    team_tool_calls=team_tool_calls,
                 )
-            )
-            is not None
-        ]
-        context_sources = (
-            []
-            if compact is not None
-            else _starting_context_sources(
-                started_at=started_at,
-                context_usage=context_usage,
-                first_prompt_text=_first_api_prompt_text(
-                    turns=turns, events=events, context_usage=context_usage
-                ),
-            )
-        )
-        if compact is not None:
-            context_usage = [
-                compact_context_usage_observation(observation, compact.event_ids)
-                for observation in context_usage
-            ]
 
-        return Session(
-            session_id=session_id,
-            vendor=self.vendor,
-            agent_name=extensions.claude_code.agent_name
-            if extensions and extensions.claude_code
-            else None,
-            started_at=started_at,
-            ended_at=ended_at,
-            parent_session_id=parent_session_id,
-            events=events,
-            turns=turns,
-            context_usage=context_usage,
-            context_sources=context_sources,
-            runtime_observations=runtime_observations,
+        hooks = AssemblyHooks(
             extensions=extensions,
-            cwd=(
-                compact_session_cwd(
-                    vendor=Vendor.CLAUDE_CODE,
-                    source=source,
-                    extensions=extensions,
-                    payload_cwd=compact.cwd,
-                )
-                if compact is not None
-                else None
+            parent_session_id=parent_session_id,
+            runtime_observations=self._build_runtime_observations(
+                transcript, scan.effort_observations
             ),
+            session_fields={
+                "agent_name": extensions.claude_code.agent_name
+                if extensions and extensions.claude_code
+                else None,
+            },
+            build_context_usage=_claude_context_usage,
+            build_context_sources=lambda context: _starting_context_sources(
+                started_at=context.started_at,
+                context_usage=context.context_usage,
+                first_prompt_text=_first_api_prompt_text(
+                    turns=context.turns,
+                    events=context.events,
+                    context_usage=context.context_usage,
+                ),
+            ),
+            decorate_turns=_attach_team_states,
+            provenance_sink=lambda provenance: setattr(
+                self, "last_provenance", provenance
+            ),
+        )
+        return assemble_session(
+            vendor=Vendor.CLAUDE_CODE,
+            source=source,
+            session_id=session_id,
+            transcript=transcript,
+            retention=retention,
+            hooks=hooks,
         )
 
     def _build_runtime_observations(
@@ -658,11 +656,6 @@ class ClaudeCodeAdapter(BaseAdapter):
         """Extract only CT-useful transcript facts from Claude Code JSONL records."""
         transcript: list[TranscriptRecord] = []
         team_inputs: list[ClaudeTeamStateInput] = []
-        # Small merged input/output dicts for team-management tools
-        # (Agent/TaskCreate/TaskUpdate), keyed by tool_call_id.  Compact
-        # sessions drop item bodies at translation; team-state reconstruction
-        # re-reads only these bounded dicts instead of resident bodies.
-        self._team_tool_calls: dict[str, dict[str, Any]] = {}
 
         for record, span in records:
             if scan is not None:
@@ -743,13 +736,6 @@ class ClaudeCodeAdapter(BaseAdapter):
                 for block in _tool_result_blocks(content):
                     tool_use_result = record.get("toolUseResult")
                     success = infer_tool_success(tool_use_result)
-                    result_call_id = block.get("tool_use_id") or block.get("toolUseID")
-                    result_output = (
-                        tool_use_result
-                        if tool_use_result is not None
-                        else block.get("content")
-                    )
-                    self._merge_team_tool_result(result_call_id, result_output)
                     transcript.append(
                         TranscriptRecord(
                             sequence=len(transcript),
@@ -898,63 +884,6 @@ class ClaudeCodeAdapter(BaseAdapter):
             )
             return
 
-    def _merge_team_tool_result(self, tool_call_id: Any, output: Any) -> None:
-        if not isinstance(tool_call_id, str) or not tool_call_id:
-            return
-        entry = self._team_tool_calls.get(tool_call_id)
-        if entry is not None and output is not None:
-            entry["output"] = output
-
-    def _compact_team_states(
-        self,
-        turns: list[Turn],
-        team_inputs: list[ClaudeTeamStateInput],
-    ) -> list[TeamTurnState | None]:
-        """Rebuild team state for compact turns from captured team-tool dicts.
-
-        ``build_turn_team_state`` reads merged item input/output bodies, which
-        compact items no longer carry.  The captured per-call dicts are exactly
-        the merged bodies for the three team-management tools, so transient
-        full-fidelity proxy items reproduce the same state.
-        """
-        results: list[TeamTurnState | None] = []
-        for turn, team_input in zip(turns, team_inputs, strict=False):
-            pseudo_items: list[Item] = []
-            for item in turn.items:
-                if item.kind not in {
-                    "tool_call",
-                    "command_execution",
-                    "file_change",
-                    "plan",
-                }:
-                    continue
-                call_id = getattr(item, "tool_call_id", None)
-                entry = self._team_tool_calls.get(call_id) if call_id else None
-                if entry is None:
-                    continue
-                pseudo_items.append(
-                    ToolCallItem(
-                        session_id=turn.session_id,
-                        turn_id=turn.turn_id,
-                        sequence=item.sequence,
-                        started_at=item.started_at,
-                        tool_name=entry.get("tool_name")
-                        if isinstance(entry.get("tool_name"), str)
-                        else None,
-                        tool_call_id=call_id,
-                        input=entry.get("input"),
-                        output=entry.get("output"),
-                    )
-                )
-            proxy = Turn(
-                session_id=turn.session_id,
-                sequence=turn.sequence,
-                started_at=turn.started_at,
-                items=pseudo_items,
-            )
-            results.append(build_turn_team_state(proxy, team_input=team_input))
-        return results
-
     def _handle_assistant_record(
         self,
         record: dict,
@@ -1031,12 +960,6 @@ class ClaudeCodeAdapter(BaseAdapter):
         for block in tool_uses:
             tool_id = block.get("id")
             tool_name = block.get("name")
-            if tool_name in _TEAM_TOOL_NAMES and isinstance(tool_id, str) and tool_id:
-                self._team_tool_calls[tool_id] = {
-                    "tool_name": tool_name,
-                    "input": block.get("input"),
-                    "output": None,
-                }
             transcript.append(
                 TranscriptRecord(
                     sequence=len(transcript),

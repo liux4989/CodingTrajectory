@@ -19,6 +19,7 @@ from coding_trajectory.ingestion.adapters._shared import (
     content_blocks,
 )
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
+from coding_trajectory.ingestion.assembly import AssemblyHooks, assemble_session
 from coding_trajectory.ingestion.common import (
     extract_exit_code,
     infer_tool_success,
@@ -32,18 +33,8 @@ from coding_trajectory.ingestion.models import (
     VendorExtensions,
 )
 from coding_trajectory.ingestion.provenance import RecordSpan
-from coding_trajectory.ingestion.retention import (
-    CanonicalRetention,
-    compact_context_usage_observation,
-)
-from coding_trajectory.ingestion.transcript import (
-    TranscriptRecord,
-    TranscriptStabilizer,
-    build_session_provenance,
-    compact_session_cwd,
-    events_from_transcript,
-    project_transcript,
-)
+from coding_trajectory.ingestion.retention import CanonicalRetention
+from coding_trajectory.ingestion.transcript import TranscriptRecord
 from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
     context_usage_observation,
     normalize_pi_usage,
@@ -193,52 +184,6 @@ class PiAdapter(BaseAdapter):
         if not transcript:
             raise ValueError(f"PiAdapter: no transcript records parsed from {source}")
 
-        compact = (
-            TranscriptStabilizer(vendor=Vendor.PI, source=source)
-            if retention == "measurements"
-            else None
-        )
-        events = events_from_transcript(
-            session_id=session_id, records=transcript, stabilizer=compact
-        )
-        turns = project_transcript(
-            session_id=session_id,
-            vendor=Vendor.PI,
-            records=transcript,
-            compact=compact,
-        )
-        if compact is not None:
-            self.last_provenance = build_session_provenance(
-                session_id=session_id,
-                vendor=Vendor.PI,
-                source=source,
-                stabilizer=compact,
-                turns=turns,
-            )
-
-        started_at = min(record.timestamp for record in transcript)
-        ended_at = max(record.timestamp for record in transcript)
-        context_usage = [
-            observation
-            for record in transcript
-            if (
-                observation := context_usage_observation(
-                    timestamp=record.timestamp,
-                    source="pi_usage_block",
-                    normalized=record.data.get("vendor_data", {}),
-                    source_event_id=record.record_id,
-                    provider=self._current_provider,
-                    category_source="pi_usage_block",
-                )
-            )
-            is not None
-        ]
-        if compact is not None:
-            context_usage = [
-                compact_context_usage_observation(observation, compact.event_ids)
-                for observation in context_usage
-            ]
-
         extensions = VendorExtensions(
             pi=PiExtensions(
                 session_file=str(source),
@@ -249,26 +194,34 @@ class PiAdapter(BaseAdapter):
                 thinking_level=self._current_thinking_level,
             )
         )
-
-        return Session(
-            session_id=session_id,
-            vendor=self.vendor,
-            started_at=started_at,
-            ended_at=ended_at,
-            events=events,
-            turns=turns,
-            context_usage=context_usage,
+        hooks = AssemblyHooks(
             extensions=extensions,
-            cwd=(
-                compact_session_cwd(
-                    vendor=Vendor.PI,
-                    source=source,
-                    extensions=extensions,
-                    payload_cwd=compact.cwd,
+            build_context_usage=lambda records_: [
+                observation
+                for record in records_
+                if (
+                    observation := context_usage_observation(
+                        timestamp=record.timestamp,
+                        source="pi_usage_block",
+                        normalized=record.data.get("vendor_data", {}),
+                        source_event_id=record.record_id,
+                        provider=self._current_provider,
+                        category_source="pi_usage_block",
+                    )
                 )
-                if compact is not None
-                else None
+                is not None
+            ],
+            provenance_sink=lambda provenance: setattr(
+                self, "last_provenance", provenance
             ),
+        )
+        return assemble_session(
+            vendor=Vendor.PI,
+            source=source,
+            session_id=session_id,
+            transcript=transcript,
+            retention=retention,
+            hooks=hooks,
         )
 
     def _build_transcript(
