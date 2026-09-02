@@ -2,16 +2,18 @@
 
 - **Status:** Accepted target architecture; foundation implemented
 - **Date:** 2026-09-02
-- **Scope:** All 25 public CT methods, remote custody, local callers, workers,
-  caches, and collector handoff
+- **Scope:** All 25 public CT method authorities, compact remote custody,
+  full-detail local callers, workers, caches, and collector handoff
 - **Supersedes:** [`remote-session-ledger-design.md`](remote-session-ledger-design.md)
 
 ## Decision
 
 CodingTrajectory will build a remote CT control plane, not only a synchronized
-session store. Local and remote agents call one Python API implementing the
-existing Pydantic semantics. Supabase provides Auth, RLS, PostgreSQL, and durable
-state. Python workers own graph projection and estimation execution.
+session store. The embedded transport retains the existing full-detail Pydantic
+semantics against host-local evidence. The initial remote transport serves a
+compact, explicitly scoped representation. Supabase provides Auth, RLS,
+PostgreSQL, and durable state. Python workers own graph projection and
+estimation execution.
 
 The control plane has four explicit authorities:
 
@@ -67,9 +69,12 @@ Transport
     +-- HttpTransport           authenticated local/remote clients
 ```
 
-Both transports validate through the same Pydantic request and result models.
-The CLI, Python SDK, plugins, and remote agents differ only in endpoint and
-credential acquisition. Agents never query canonical Supabase tables directly.
+Both transports validate shared request models and compatible result models for
+the operations their content scope permits. The embedded transport can serve
+full detail; the initial HTTP transport must declare `content_scope: compact`
+and reject local-only detail methods. The CLI, Python SDK, plugins, and remote
+agents differ by endpoint, credential acquisition, and declared content scope.
+Agents never query canonical Supabase tables directly.
 
 ## Accepted observation ledger
 
@@ -79,7 +84,10 @@ A coding session can resume after appearing terminal, and one graph can include
 sources observed by different hosts. Therefore collectors do not claim that a
 graph is permanently complete and do not race to upload replacement graphs.
 
-Collectors submit normalized source observations:
+Collectors submit normalized source observations. The current deployed wire
+format is full-fidelity `canonical_session_snapshot.v1`. Its successor will
+first apply the existing measurements retention and then scrub remote-only
+private fields before publication:
 
 ```text
 workspace_id                 resolved from the authenticated principal
@@ -111,15 +119,20 @@ than mutating history.
 - Every accepted request has a durable receipt keyed by agent and idempotency key.
 - Graph projection records the complete source vector used for each revision.
 
-Raw vendor logs remain evidence on their originating host. Raw-log upload is not
-required by this architecture and must be a separate, explicit security choice.
+Raw vendor logs and full-detail canonical trajectories remain evidence on their
+originating host. The remote compact payload excludes tool bodies, command
+bodies, host paths, file/media bodies, and unbounded event payloads. Raw-log
+upload is not required by this architecture and must be a separate, explicit
+security choice.
 
 ## Canonical graph revisions
 
-`ct_artifact_revisions.payload` is the canonical serialized `SessionGraph` for
-the initial implementation. It round-trips through the existing Pydantic model.
-Search indexes, metric facts, cards, and Datahub state are rebuildable
-projections, never alternate writable representations.
+`ct_artifact_revisions.payload` will contain the canonical compact
+`SessionGraph` for the remote service. It round-trips through the compatible
+Pydantic model with full-detail body fields absent. Search indexes, metric
+facts, cards, and Datahub state are rebuildable projections, never alternate
+writable representations. Full-detail local graphs remain host-local evidence,
+not a second remote representation.
 
 Each revision records:
 
@@ -172,8 +185,9 @@ and (superseded_sequence is null or superseded_sequence > S)
 Every item in `batch` shares one `S`. This prevents a response from mixing
 graphs from before and after concurrent ingestion.
 
-Method `result` schemas remain unchanged during the first remote migration. A
-new versioned outer envelope adds transport metadata:
+Remote-compatible method result schemas remain unchanged during the first
+compact remote migration; local-only detail methods are not exposed through
+HTTP. A versioned outer envelope adds transport metadata:
 
 ```json
 {
@@ -186,6 +200,7 @@ new versioned outer envelope adds transport metadata:
     "snapshot_sequence": 481,
     "source": "remote",
     "freshness": "authoritative",
+    "content_scope": "compact",
     "artifact_revision": 7,
     "projection_version": "optional"
   },
@@ -199,9 +214,10 @@ commands require idempotency keys. A client may request `min_sequence` with a
 bounded wait for read-after-write behavior.
 
 Source selection belongs to client transport configuration, not method
-parameters. Normal operation uses the remote API. Explicit offline mode reads a
-snapshot-bound cache and reports its last known sequence; it never silently
-falls back to vendor logs.
+parameters. Normal compact operation uses the remote API. A full-detail local
+operation selects the embedded transport explicitly. A request for local-only
+detail never silently falls back from remote to vendor logs. Explicit offline
+mode reads a snapshot-bound cache and reports its last known sequence.
 
 ## Living state
 
@@ -265,8 +281,8 @@ are never uploaded as ingestion input.
 
 ## Access control
 
-The initial product position is one private workspace with `full_canonical`
-membership:
+The initial product position is one private workspace with compact remote
+membership and full-detail local custody:
 
 - Supabase Auth identifies users and agent principals.
 - Every durable key begins with `workspace_id`.
@@ -274,13 +290,14 @@ membership:
 - Agent credentials are workspace- and capability-scoped.
 - Canonical writes occur only through the API/projector role.
 - The service role remains server-side and is never distributed to agents.
-- Host locations, source payloads, worker queues, and provider credentials are
-  server-only or principal-private.
+- Host locations, source payloads, worker queues, provider credentials, and
+  full-detail local evidence are server-only or principal-private.
+- Remote payloads contain compact historical facts only.
 
-A metadata-only grant cannot honestly serve `session.items`, `session.events`,
-search, or evidence-bearing usage methods. Restricted sharing therefore requires
-a separately versioned reduced API rather than partial responses under current
-contracts.
+`session.events` full detail is embedded/local-only in the initial remote
+release. Remote `session.items` may return only compact metadata and
+measurements. A restricted grant still requires a separately versioned API
+rather than an undocumented partial response.
 
 ## Foundation and delivery plan
 
@@ -298,15 +315,18 @@ contracts.
 2. Implement authenticated HTTP `call`, `batch`, and `schema` transports.
 3. Implement workspace snapshot selection and remote authority repositories.
 4. Add projector and estimation workers with leases and bounded retries.
-5. Prove all 25 methods against a method-authority parity matrix.
+5. Prove compact compatibility for remote-exposed methods, and prove explicit
+   scope errors for local-only full-detail methods.
 
 ### Local collector
 
 The host-local collector and authenticated Supabase ingress contract are now
 implemented. `ct collector` discovers Codex, Claude Code, and Pi sources,
-normalizes complete JSONL prefixes with the existing adapters, persists a
-canonical snapshot in its local outbox, then publishes with a stable
-idempotency key and heartbeat. Deployment and real-host validation remain
+normalizes complete JSONL prefixes with the existing adapters, and currently
+persists a full `canonical_session_snapshot.v1` in its local outbox. The next
+wire version will apply compact measurements retention plus the remote-boundary
+scrubber before publishing with a stable idempotency key and heartbeat.
+Deployment and real-host validation remain
 operational work because they require a specific Supabase project, registered
 agent credentials, and local source access. Its fixed boundary and commands
 are documented in [`local-collector-handoff.md`](local-collector-handoff.md).
@@ -316,10 +336,13 @@ are documented in [`local-collector-handoff.md`](local-collector-handoff.md).
 The control plane is ready when:
 
 1. Every registered method has exactly one declared authority.
-2. Embedded and HTTP transports pass identical validated method results.
+2. Embedded and HTTP transports pass compatible validated results for the
+   remote compact scope; local-only detail methods return an explicit scope
+   error over HTTP.
 3. A batch observes one workspace sequence across all authorities.
 4. Repeated observation delivery is idempotent and conflicting reuse is rejected.
-5. Graph revisions round-trip through `SessionGraph` and retain their source vector.
+5. Compact graph revisions round-trip through `SessionGraph` and retain their
+   source vector.
 6. `project.list` needs no shared host path.
 7. Lease expiry produces `unknown`, never fabricated terminal state.
 8. Estimation jobs survive worker restart without duplicate successful forecasts.

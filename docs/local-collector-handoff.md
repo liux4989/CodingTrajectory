@@ -1,6 +1,7 @@
 # Local Collector Handoff
 
-- **Status:** Implemented collector and Supabase ingress contract; deployment pending
+- **Status:** Implemented collector and Supabase ingress contract; compact remote
+  retention is the next approved design change
 - **Owner:** Local agents with access to representative vendor logs and runtimes
 - **Depends on:** Applying the committed Supabase migrations and provisioning a scoped agent credential
 
@@ -37,6 +38,7 @@ discover source
   -> identify source and epoch
   -> read only committed complete records
   -> normalize with existing Python vendor adapter
+  -> [next compact wire version] apply measurements retention and remote-boundary scrubber
   -> assign deterministic event identity and source sequence
   -> write durable outbox record
   -> publish with stable idempotency key
@@ -46,9 +48,15 @@ discover source
 The collector must reuse existing Codex, Claude Code, and Pi adapters rather
 than create remote-only parsers. It may retain source paths and byte offsets in
 its private state. Shared payloads use canonical IDs and portable project IDs.
-It sends a `canonical_session_snapshot.v1` payload assembled by those adapters,
-not raw JSONL records. The host `cwd`, Codex `cwd`, and Pi session-file fields
-are stripped before publication; the source path never leaves the SQLite state.
+The deployed collector currently sends a full
+`canonical_session_snapshot.v1` payload assembled by those adapters, not raw
+JSONL records. The next wire version will apply the existing measurements
+retention mode followed by a remote-boundary scrubber before it enters the
+outbox. That compact payload excludes tool inputs/outputs, commands, full
+assistant/reasoning text, unbounded event payloads, item vendor data,
+context-source text, host paths, and file/media-like bodies. The host `cwd`,
+Codex `cwd`, and Pi session-file fields are already stripped before
+publication; the source path never leaves the SQLite state.
 
 ## Durable local state
 
@@ -100,6 +108,10 @@ prompts, credentials, and proprietary content remain local.
 6. Collector restart resumes every pending outbox record.
 7. Lease expiry is reported remotely as `unknown`.
 8. The same accepted observations produce the same graph hash when replayed.
+9. The compact wire payload contains no tool body, command body, host path,
+   file/media body, data URI, or base64 body.
+10. Full-detail `session.events` remains local-only; any remote item response
+    is compact and declares its scope.
 
 ## Operation
 

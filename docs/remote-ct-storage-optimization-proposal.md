@@ -1,40 +1,47 @@
-# Remote CT Storage Optimization Proposal
+# Remote CT Compact Storage Proposal
 
-- **Status:** Proposed; no storage or schema change approved yet
+- **Status:** Proposed implementation; compact remote boundary agreed
 - **Date:** 2026-09-02
-- **Scope:** Remote collector observations, future graph revisions, retention,
-  and the distinction between the active ingest plane and deferred worker
-  extensions
-- **Related:** [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md)
+- **Scope:** Remote collector observations, remote content scope, and future
+  storage work
+- **Related:** [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md),
+  [`local-collector-handoff.md`](local-collector-handoff.md)
 
-## Decision requested
+## Decision
 
-Adopt a content-addressed canonical-payload layer and a staged retention model
-before activating graph projection workers. Keep the existing authority model,
-ordering, idempotency, and Pydantic contracts unchanged.
+Remote collection will reuse the existing `measurements` retention mode and
+apply a small remote-boundary scrubber. It will not introduce a parallel
+`remote_compact` canonical model.
 
-This proposal does **not** authorize a migration, a deletion, an archive, or a
-change to the currently accepted remote-control-plane design. It supplies the
-decision record and validation gates for that work.
+The resulting compact observation is the remote historical representation. The
+full vendor log and full-detail canonical trajectory remain on the host that
+owns them. The remote service must declare `content_scope: compact`; it must
+not imply that omitted content is unavailable on the originating host.
+
+This decision changes future collection only. Existing accepted full snapshots
+remain immutable while compact collection, replay, and query compatibility are
+validated. It does not authorize a destructive backfill or deletion.
 
 ## Why now
 
-A read-only storage measurement on 2026-09-02 found that the active control
-plane is not broadly expensive. Sixteen accepted source observations account
-for approximately 25.9 MiB of canonical `payload` data; the largest one is
-approximately 10.3 MiB. The complete observation table occupies approximately
-27.0 MiB including indexes and TOAST allocation. All other currently created
-control-plane tables together occupy well under 1 MiB.
+A read-only storage measurement on 2026-09-02 found 16 accepted source
+observations with 25.9 MiB of JSONB payload. The largest snapshot is
+approximately 10.3 MiB; the median is approximately 527 KiB. The observation
+table occupies approximately 27.0 MiB including indexes and TOAST allocation.
+Every other currently created control-plane table together occupies well under
+1 MiB.
 
-The cost is therefore not the count of relational tables. It is the fact that
-each changed source is stored as a complete normalized session snapshot. A
-growing session repeats most of its earlier content in every accepted snapshot.
-The future projector would make this worse if it also stored full, inline
-`SessionGraph` JSONB revisions for the same material.
+The cost is therefore not the count of relational tables. It is duplicated tool
+content inside each full normalized session snapshot. All 16 current
+observations belong to different sources, so checkpoints, deltas, and
+whole-snapshot content addressing would not reduce this baseline. They are
+future-growth tools, not the first fix.
 
-The current implementation has no graph revisions yet. This is the right
-point to choose the storage representation before a worker creates a second
-large history.
+Exact, content-free comparison of linked event and item fields found 16.75 MiB
+of duplicated successful tool output and 0.88 MiB of duplicated tool input:
+17.64 MiB, or 68.1% of the current measured payload bytes. This is a
+representation measurement, not a promise of equal disk savings after
+compression.
 
 ## Current custody and its constraint
 
@@ -66,6 +73,49 @@ Any optimization must preserve all of these invariants:
 6. No retention task may delete canonical bytes until a durable replay proof
    establishes what can be reconstructed without them.
 
+## Remote compact boundary
+
+The existing `CanonicalRetention="measurements"` mode is the base. It retains
+canonical IDs, event and turn ordering, timing, status, tool identity,
+item/event links, compact usage, and content-derived measurements. It drops
+item `input`, `output`, `command`, `text`, and `vendor_data`; it also drops
+LLM-response and `vendor.raw` events and context-source text.
+
+`session.summary` is a read-time projection, not a storage profile. It cannot
+replace compact canonical events, items, timing, or measurement facts.
+
+Measurements retention needs only three remote-boundary additions:
+
+| Existing behavior | Required remote rule |
+|---|---|
+| User-prompt payload text may remain | Retain measurements and an explicitly bounded summary only; omit full prompt bodies |
+| `FileChangeItem.path` may remain | Omit host paths and private location hints |
+| Team-state text may remain | Retain only an explicitly approved bounded summary or counts |
+
+The scrubber runs after measurements retention. It is a small composition rule,
+not a second retention model that can drift from the local compact path.
+
+```text
+host-local vendor log
+  -> existing adapter builds full transient session
+  -> CanonicalRetention = measurements
+  -> remote-boundary scrubber
+  -> compact canonical source observation
+  -> durable receipt, ordered change log, lease update
+```
+
+| Keep remotely | Omit remotely |
+|---|---|
+| Stable IDs, source epoch/sequence, hashes, timing, status | Full tool inputs and outputs |
+| Tool name, tool-call ID, exit code, item/event links | Commands and command output |
+| Token/character measurements, compact usage, bounded approved summaries | Full assistant/reasoning text and unbounded event payloads |
+| Compact file-change operation/counts, if useful | File paths, file contents, binary/media data, data URIs, and base64 bodies |
+| Workspace/project IDs and liveness watermarks | `vendor_data`, context-source text, and host-local provenance |
+
+The collection schema version must advance when this policy is implemented. The
+digest continues to cover the complete compact canonical payload, so retry,
+ordering, and conflict semantics remain unchanged.
+
 ## Options considered
 
 ### A. Keep full JSONB forever
@@ -90,8 +140,9 @@ Observation and graph-revision records keep their typed metadata plus a digest
 reference. The worker reads, decompresses, verifies the digest, and validates
 the Pydantic model before projecting.
 
-This preserves exact replay without asking Postgres to store repeated,
-query-inaccessible JSONB documents. It is the recommended first step.
+This remains a possible second step after compact collection. It does not
+remove duplicate bodies within one snapshot, and whole-snapshot deduplication
+does not help the current one-snapshot-per-source baseline.
 
 ### D. Deltas plus periodic checkpoints
 
@@ -99,30 +150,30 @@ Store a complete checkpoint followed by validated append/delta frames, then
 write another checkpoint at a defined boundary. This is the largest potential
 space reduction for growing sessions, but it adds a canonical patch protocol,
 base-version rules, and reconstruction failure modes. It should follow a
-measured compressed-blob baseline, not precede it.
+measured compact-payload baseline, not precede it.
 
 ### E. Retain only the latest snapshot
 
 This is cheap but loses exact historical reconstruction. It is incompatible
 with the current sequence-snapshot and evidence model, so it is rejected.
 
-## Recommended target
+## Deferred payload backend
 
-Introduce a content-addressed payload layer whose public semantic value is the
-canonical JSON document, not its physical storage format.
+Content-addressed payloads are deferred until compact collection is measured.
+If later justified, their public semantic value remains the canonical JSON
+document, not its physical storage format.
 
 ```text
-collector
-  -> canonical JSON + SHA-256
-  -> validate and compress
-  -> immutable canonical payload blob
+compact collector
+  -> compact canonical JSON + SHA-256
+  -> optional validate and compress
+  -> optional immutable canonical payload blob
                   |
                   +--> source observation header, sequence, receipt, change log
-                  |
-                  +--> future graph revision header and source vector
+                  +--> future compact graph revision header and source vector
 ```
 
-The logical schema is:
+If later justified, the logical schema is:
 
 ```text
 ct_canonical_payloads
@@ -153,12 +204,13 @@ allows an implementation to change compression or move bytes between Postgres
 and object storage without changing event identity, replay evidence, or public
 method behavior.
 
-### First implementation backend
+### Later implementation backend
 
-Use a private, Postgres-backed `bytea` payload blob with explicit compression
-for the first migration. It preserves the current RPC transaction boundary:
-the ingress can validate bytes, record the immutable blob, accept the
-observation, write the receipt, and advance the change log atomically.
+Prefer a private, Postgres-backed `bytea` payload blob with explicit
+compression before any object-store backend. It preserves the current RPC
+transaction boundary: the ingress can validate bytes, record the immutable
+blob, accept the observation, write the receipt, and advance the change log
+atomically.
 
 Supabase Storage is a later backend option, not the first move. Direct object
 upload and a database commit are not one transaction; adopting it first would
@@ -169,15 +221,15 @@ that upgrade once measured database payload growth justifies it.
 ### Graph projection rule
 
 Do not enable a worker that writes a complete graph JSONB revision for every
-source observation. The worker must instead use the same canonical-payload
-layer, and must establish a durable source vector for every graph revision.
+source observation. The worker must first use compact source observations and
+establish a durable source vector for every compact graph revision.
 
 Before choosing graph checkpoints or deltas, measure these two quantities on a
 representative private corpus:
 
 ```text
-compressed full graph bytes per accepted source update
-delta bytes / compressed checkpoint bytes
+compact graph bytes per accepted source update
+delta bytes / compact checkpoint bytes
 ```
 
 Only introduce deltas when their measured benefit exceeds the added replay and
@@ -200,7 +252,7 @@ the evidence chain explicit.
 
 Initially, no source payload is eligible for deletion: no graph projector has
 yet produced durable revision/source-vector evidence. The first storage change
-is representation compression, not history removal.
+is compact collection, not compression or history removal.
 
 ## Active core versus deferred extensions
 
@@ -228,75 +280,56 @@ physically, while a destructive rollback would create migration churn. Instead,
 document their inactive state, avoid writing them, and activate each module
 only with its owner and validation plan.
 
-## Migration and validation plan
+## Validation and rollout
 
-### Phase 0 — baseline and acceptance criteria
+### Phase 1 — compact collection
 
-1. Record aggregate payload sizes, row counts, compressed-size ratios, and
-   largest-payload sizes without exporting session content.
-2. Build a private local benchmark corpus of configured session identifiers;
-   reports contain aggregate byte/count data only.
-3. Define a storage reduction target from measured compression, rather than
-   assuming a ratio.
-4. Confirm that every affected public method has an unchanged result schema and
-   that remote reads can rehydrate the same canonical model.
+1. Add a collector option that selects existing measurements retention before
+   remote serialization.
+2. Apply the remote-boundary scrubber and publish a new compact schema version.
+3. Keep the existing full local trajectory and vendor log untouched.
+4. Add aggregate-only size telemetry: source count, payload bytes, body fields
+   removed, and compact measurement counts. It must not record content, paths,
+   identifiers, or prompts.
 
-### Phase 1 — additive payload layer
+### Phase 2 — compatibility evidence
 
-1. Add `ct_canonical_payloads`; reuse the existing `content_sha256` fields as
-   the payload references.
-2. Dual-write new accepted snapshots to the existing JSONB column and the
-   compressed blob layer.
-3. For every dual write, decompress, recompute the SHA-256, validate Pydantic,
-   and compare it with the accepted observation digest.
-4. Do not change query routing or retention in this phase.
+1. For a private representative corpus, compare local full and remote compact
+   results for summaries, graphs, statistics, and usage methods.
+2. Record the expected local-only behavior for `session.events` and full item
+   detail rather than treating it as a parity failure.
+3. Confirm exact retry, source epoch rollover, and change-log ordering with the
+   compact payload digest.
+4. Confirm no host paths, file contents, data URIs, base64 bodies, or tool
+   bodies are present in the outbound compact payload.
 
-### Phase 2 — verified cutover
+### Phase 3 — reassess storage backend
 
-1. Backfill existing rows through a restricted server-side process that emits
-   only aggregate progress and failure counts.
-2. Treat a row as blob-backed only after its referenced payload passes exact
-   digest and model validation.
-3. Make all remote readers use the digest reference.
-4. Run the full public-method compatibility workflow against the same revision
-   snapshots.
-
-### Phase 3 — representation cleanup
-
-1. Make inline JSONB optional for blob-backed observations.
-2. Retain it during a defined rollback window.
-3. Remove inline payload bytes only after the backfill is complete, remote
-   readers are proven, and a restore rehearsal succeeds.
-
-### Phase 4 — optional checkpoint/delta and object-store backends
-
-Advance only if the measured compressed-blob baseline remains too large. A
-delta protocol or object-store backend must retain the same digest,
-rehydration, authorization, and cleanup guarantees.
+Only after Phase 2, measure compact-payload size distribution and repeat-source
+versions. Propose compression, content-addressed blobs, checkpoints, or object
+storage only if their measured benefit outweighs their transaction and replay
+complexity.
 
 ## Acceptance gates
 
-The proposal becomes an implementation decision only when all of the following
-are explicit:
+Implementation is ready only when:
 
-- chosen hot-retention period, checkpoint policy, and long-term evidence rule;
-- measured compression ratio on a private representative corpus;
-- replay proof for every compacted source sequence;
-- public-method compatibility evidence for all 25 methods;
-- RLS and service-boundary design for payload reads/writes;
-- failure handling for an interrupted upload, duplicate digest, invalid
-  compression, and failed decompression;
-- a rollback plan that never destroys the only canonical copy.
+1. The compact payload validates against a versioned Pydantic contract.
+2. Full tool bodies, command bodies, paths, media-like bodies, and unbounded
+   event payloads are absent from outbound remote observations.
+3. Summary and metric results have documented compact compatibility evidence.
+4. Local-only detail methods return an explicit remote scope error.
+5. Existing source ordering, idempotency, receipts, and lease semantics pass
+   unchanged.
+6. No existing remote payload is deleted or rewritten as part of rollout.
 
-## Open decisions
+## Open decisions after compact validation
 
-1. Is exact reconstruction required for every source observation sequence, or
-   only every externally visible graph revision and retained checkpoint?
-2. What hot window is required for source-level replay and retry diagnosis?
-3. Do we accept a Postgres `bytea` blob backend first for atomicity, or is the
-   additional object-store protocol justified immediately?
-4. Which future projection is allowed to create a graph revision, and what
-   source-vector/checkpoint rule bounds revision growth?
-
-Until those decisions are made, the safe action is to continue collecting with
-the existing immutable snapshots and avoid enabling the graph projector.
+1. Which bounded summaries, if any, are useful remotely and what are their
+   maximum character/token limits?
+2. Should compact remote `session.items` be exposed immediately, or should it
+   also remain local-only until its compact result contract is reviewed?
+3. What compact-size distribution and repeat-version rate justify a compressed
+   blob backend?
+4. What retention period is required for compact source observations and
+   operational receipts?
