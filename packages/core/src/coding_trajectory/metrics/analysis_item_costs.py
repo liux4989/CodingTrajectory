@@ -54,6 +54,7 @@ from coding_trajectory.metrics.pricing import (
 from coding_trajectory.metrics.usage_math import (
     sum_usage_dicts as _sum_usage_dicts,
 )
+from coding_trajectory.metrics.accounting import glossary_usage_dict
 
 
 @dataclass(frozen=True)
@@ -531,17 +532,16 @@ def _allocated_cost_usage_dict_from_values(
     reasoning_output_tokens: int,
     total_tokens: int,
 ) -> dict[str, int]:
-    usage_dict = {
-        "prompt_tokens": input_tokens,
-        "uncached_prompt_tokens": uncached_input_tokens,
-        "cached_prompt_tokens": cached_input_tokens,
-        "cache_write_tokens": cache_creation_input_tokens,
-        "completion_tokens": output_tokens,
-        "reasoning_tokens": reasoning_output_tokens,
-        "processed_tokens": total_tokens,
-        "prompt_completion_tokens": input_tokens + output_tokens,
-    }
-    return {key: value for key, value in usage_dict.items() if value > 0}
+    return glossary_usage_dict(
+        input_tokens=input_tokens,
+        uncached_input_tokens=uncached_input_tokens,
+        cached_input_tokens=cached_input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        output_tokens=output_tokens,
+        reasoning_output_tokens=reasoning_output_tokens,
+        processed_tokens=total_tokens,
+        drop_nonpositive=True,
+    )
 
 
 def _session_usage_observations(

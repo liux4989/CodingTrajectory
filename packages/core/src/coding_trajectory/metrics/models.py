@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_serializer
 
 from coding_trajectory.metrics.accounting import (
+    glossary_usage_dict,
     usage_accounting_payload as _usage_accounting_payload,
 )
 from coding_trajectory.metrics.pricing import CostEvidenceFlat
@@ -61,18 +62,16 @@ class TokenUsage(BaseModel):
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         _ = handler
-        data: dict[str, int | str | float | None] = {
-            "prompt_tokens": self.input_tokens,
-            "cached_prompt_tokens": self.cached_input_tokens,
-            "cache_write_tokens": self.cache_creation_input_tokens,
-            "completion_tokens": self.output_tokens,
-            "reasoning_tokens": self.reasoning_output_tokens,
-            "processed_tokens": self.processed_token_total(),
-            "prompt_completion_tokens": self.prompt_completion_tokens(),
-            "total_confidence": self.total_confidence,
-        }
-        if self.uncached_input_tokens is not None:
-            data["uncached_prompt_tokens"] = self.uncached_input_tokens
+        data: dict[str, int | str | float | None] = glossary_usage_dict(
+            input_tokens=self.input_tokens,
+            uncached_input_tokens=self.uncached_input_tokens,
+            cached_input_tokens=self.cached_input_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens,
+            output_tokens=self.output_tokens,
+            reasoning_output_tokens=self.reasoning_output_tokens,
+            processed_tokens=self.processed_token_total(),
+        )
+        data["total_confidence"] = self.total_confidence
         if self.reported_total_tokens is not None:
             data["reported_total_tokens"] = self.reported_total_tokens
         if self.cost_usd is not None:
@@ -699,14 +698,15 @@ class AllocatedRealTokenCost(BaseModel):
     def _serialize(self, handler):
         _ = handler
         return {
-            "prompt_tokens": self.input_tokens,
-            "uncached_prompt_tokens": self.uncached_input_tokens,
-            "cached_prompt_tokens": self.cached_input_tokens,
-            "cache_write_tokens": self.cache_creation_input_tokens,
-            "completion_tokens": self.output_tokens,
-            "reasoning_tokens": self.reasoning_output_tokens,
-            "processed_tokens": self.total_tokens,
-            "prompt_completion_tokens": self.input_tokens + self.output_tokens,
+            **glossary_usage_dict(
+                input_tokens=self.input_tokens,
+                uncached_input_tokens=self.uncached_input_tokens,
+                cached_input_tokens=self.cached_input_tokens,
+                cache_creation_input_tokens=self.cache_creation_input_tokens,
+                output_tokens=self.output_tokens,
+                reasoning_output_tokens=self.reasoning_output_tokens,
+                processed_tokens=self.total_tokens,
+            ),
             "allocation_method": self.allocation_method,
         }
 
