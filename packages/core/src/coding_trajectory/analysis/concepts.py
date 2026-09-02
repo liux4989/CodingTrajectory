@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from enum import Enum
 
+from coding_trajectory.analysis.tool_summary_shared import (
+    SUBAGENT_TASK,
+    TODO_LIST,
+    VENDOR_TOOL_CONCEPT,
+)
+
 
 class ItemKind(str, Enum):
     ASSISTANT_RESPONSE = "assistant_response"
@@ -16,15 +22,19 @@ class ItemKind(str, Enum):
     REASONING = "reasoning"
 
 
+# ItemKind follows the display concept for spawn/plan tools. AGENT_COLLAB is
+# deliberately absent: ``collab_agent`` names Codex collaboration operations
+# (send_input, wait_agent, ...), not spawns, so those items stay TOOL_CALL.
+_ITEM_KIND_FROM_TOOL_CONCEPT: dict[str, ItemKind] = {
+    SUBAGENT_TASK: ItemKind.PLAN_SUBAGENT,
+    TODO_LIST: ItemKind.TODO_LIST,
+}
+
 # Maps tool_name -> ItemKind for tool names that carry semantic meaning beyond
-# TOOL_CALL. The remaining tools fall back to TOOL_CALL.
+# TOOL_CALL. Derived from VENDOR_TOOL_CONCEPT so the two registries cannot
+# drift. The remaining tools fall back to TOOL_CALL.
 TOOL_CONCEPT_MAP: dict[str, ItemKind] = {
-    # --- subagent spawning ---
-    "spawn_agent": ItemKind.PLAN_SUBAGENT,  # Codex
-    "Agent": ItemKind.PLAN_SUBAGENT,  # Claude Code
-    "Task": ItemKind.PLAN_SUBAGENT,  # Factory
-    # --- todo list / planning ---
-    "update_plan": ItemKind.TODO_LIST,  # Codex
-    "TodoWrite": ItemKind.TODO_LIST,  # Claude Code
-    "TodoRead": ItemKind.TODO_LIST,  # Claude Code
+    tool_name: _ITEM_KIND_FROM_TOOL_CONCEPT[concept]
+    for tool_name, concept in VENDOR_TOOL_CONCEPT.items()
+    if concept in _ITEM_KIND_FROM_TOOL_CONCEPT
 }

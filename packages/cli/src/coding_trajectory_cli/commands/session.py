@@ -159,6 +159,10 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
             return (
                 f"Subagent activity: {one_line(activity['task'], limit=72)}{annotation}"
             )
+        if tool == "AgentCollab" and activity.get("task"):
+            return (
+                f"Agent collaboration: {one_line(activity['task'], limit=72)}{annotation}"
+            )
         for key in ("cmd", "path", "query", "url", "items", "task", "session"):
             if activity.get(key):
                 return (

@@ -10,6 +10,7 @@ from coding_trajectory.analysis.tool_summary_shell import (
     classify_shell,
 )
 from coding_trajectory.analysis.tool_summary_shared import (
+    AGENT_COLLAB,
     EDIT_FILE,
     LIST_FILES,
     READ_FILE,
@@ -281,7 +282,7 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
             return f"{len(todos)} item(s)"
         return first_str(tool_input, ("explanation", "text"))
 
-    if concept == SUBAGENT_TASK:
+    if concept in {SUBAGENT_TASK, AGENT_COLLAB}:
         detail = first_str(
             tool_input, ("subagent_type", "agent_type", "description", "prompt")
         )

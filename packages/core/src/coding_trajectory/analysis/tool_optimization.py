@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from coding_trajectory.analysis.tool_summary_shared import (
+    AGENT_COLLAB,
     EDIT_FILE,
     LIST_FILES,
     READ_FILE,
@@ -98,6 +99,7 @@ TOOL_OPTIMIZATION_PROFILES: tuple[ToolOptimizationProfile, ...] = (
     ),
     ToolOptimizationProfile(concept=TODO_LIST, detail_key="items"),
     ToolOptimizationProfile(concept=SUBAGENT_TASK, detail_key="task"),
+    ToolOptimizationProfile(concept=AGENT_COLLAB, detail_key="task"),
     ToolOptimizationProfile(concept=SESSION_HANDOFF, detail_key="session"),
 )
 

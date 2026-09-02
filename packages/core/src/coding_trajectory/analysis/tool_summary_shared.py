@@ -15,6 +15,9 @@ WEB_FETCH = "WebFetch"
 WEB_SEARCH = "WebSearch"
 TODO_LIST = "TodoList"
 SUBAGENT_TASK = "SubagentTask"
+# Collaboration operations on an already-spawned agent (send_input, wait,
+# resume, close) — distinct from spawning one.
+AGENT_COLLAB = "AgentCollab"
 SESSION_HANDOFF = "SessionHandoff"
 
 VENDOR_TOOL_CONCEPT: dict[str, str] = {
@@ -48,7 +51,7 @@ VENDOR_TOOL_CONCEPT: dict[str, str] = {
     "apply_patch": EDIT_FILE,
     "update_plan": TODO_LIST,
     "spawn_agent": SUBAGENT_TASK,
-    "collab_agent": SUBAGENT_TASK,
+    "collab_agent": AGENT_COLLAB,
     "web_search": WEB_SEARCH,
     "edit_file": EDIT_FILE,
     "create_file": WRITE_FILE,
