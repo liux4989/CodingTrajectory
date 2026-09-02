@@ -1,8 +1,8 @@
 # Local Collector Handoff
 
-- **Status:** Deferred implementation contract
+- **Status:** Implemented collector and Supabase ingress contract; deployment pending
 - **Owner:** Local agents with access to representative vendor logs and runtimes
-- **Depends on:** Remote control-plane ingestion contracts and authenticated API
+- **Depends on:** Applying the committed Supabase migrations and provisioning a scoped agent credential
 
 ## Purpose
 
@@ -13,7 +13,7 @@ does not answer shared historical queries and does not publish SQLite caches.
 
 ## Required inputs from the control plane
 
-Before collector implementation begins, the remote service must provide:
+The committed ingress migration provides:
 
 1. Agent registration and scoped credentials.
 2. Project registration and private location registration.
@@ -21,7 +21,14 @@ Before collector implementation begins, the remote service must provide:
 4. Observation ingestion with durable idempotency receipts.
 5. Source-epoch rollover for truncation or replacement.
 6. Lease heartbeat and living-observation endpoints.
-7. Request and observation JSON Schemas discoverable without reading logs.
+7. Strict versioned request and receipt models in
+   `coding_trajectory.control_plane.collector_protocol`.
+
+The collector uses the RPC names `ct_collector_register_source`,
+`ct_collector_publish_observation`, and `ct_collector_heartbeat` through the
+Supabase REST RPC endpoint. The caller needs an authenticated principal that
+matches the registered agent and has `ingest` plus `living` capability; the
+service role is never placed in the collector environment.
 
 ## Collector responsibilities
 
@@ -39,6 +46,9 @@ discover source
 The collector must reuse existing Codex, Claude Code, and Pi adapters rather
 than create remote-only parsers. It may retain source paths and byte offsets in
 its private state. Shared payloads use canonical IDs and portable project IDs.
+It sends a `canonical_session_snapshot.v1` payload assembled by those adapters,
+not raw JSONL records. The host `cwd`, Codex `cwd`, and Pi session-file fields
+are stripped before publication; the source path never leaves the SQLite state.
 
 ## Durable local state
 
@@ -90,3 +100,28 @@ prompts, credentials, and proprietary content remain local.
 6. Collector restart resumes every pending outbox record.
 7. Lease expiry is reported remotely as `unknown`.
 8. The same accepted observations produce the same graph hash when replayed.
+
+## Operation
+
+Inspect eligible sources without emitting paths or reading transcript bodies:
+
+```sh
+uv run ct collector scan --global-scope
+```
+
+After applying the migrations and registering a project and agent, provide only
+local credentials and identifiers, then run one collection pass:
+
+```sh
+export CT_SUPABASE_URL=https://your-project.supabase.co
+export CT_SUPABASE_ANON_KEY=...
+export CT_COLLECTOR_ACCESS_TOKEN=...
+uv run ct collector run --global-scope --since-days 7 \
+  --workspace-id <workspace-uuid> --agent-id <agent-uuid> --project-id <project-uuid>
+```
+
+The default outbox is private local state at
+`~/.coding-trajectory/control-plane/collector.sqlite3`. `ct collector status`
+reports only its pending count. Re-running `run` preserves the exact queued
+payload and idempotency key; a rejected record stays inspectable locally and
+does not prevent another source from publishing.

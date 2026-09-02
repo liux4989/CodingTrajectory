@@ -300,11 +300,16 @@ contracts.
 4. Add projector and estimation workers with leases and bounded retries.
 5. Prove all 25 methods against a method-authority parity matrix.
 
-### Local collector handoff
+### Local collector
 
-Real vendor-log observation and publishing is intentionally a final workstream
-for local agents that can inspect actual host data. Its fixed boundary is
-documented in [`local-collector-handoff.md`](local-collector-handoff.md).
+The host-local collector and authenticated Supabase ingress contract are now
+implemented. `ct collector` discovers Codex, Claude Code, and Pi sources,
+normalizes complete JSONL prefixes with the existing adapters, persists a
+canonical snapshot in its local outbox, then publishes with a stable
+idempotency key and heartbeat. Deployment and real-host validation remain
+operational work because they require a specific Supabase project, registered
+agent credentials, and local source access. Its fixed boundary and commands
+are documented in [`local-collector-handoff.md`](local-collector-handoff.md).
 
 ## Acceptance criteria
 
