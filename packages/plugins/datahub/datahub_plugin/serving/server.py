@@ -52,6 +52,7 @@ class DatahubWebConfig:
     port: int
     open_browser: bool
     static_dir: Path
+    since_days: int | None = None
 
 
 class DatahubHTTPServer(ThreadingHTTPServer):
@@ -170,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         port=args.port,
         open_browser=args.open,
         static_dir=_static_dir(args.static_dir),
+        since_days=args.since_days,
     )
     if not config.static_dir.is_dir():
         print(
@@ -182,7 +184,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def serve(config: DatahubWebConfig) -> int:
-    runtime = DatahubIncrementalRuntime(current_dir=_repo_root())
+    runtime_kwargs: dict[str, Any] = {"current_dir": _repo_root()}
+    if config.since_days is not None:
+        runtime_kwargs["since_days"] = config.since_days
+    runtime = DatahubIncrementalRuntime(**runtime_kwargs)
     handler = _handler_for(config.static_dir, runtime)
     try:
         server = DatahubHTTPServer((config.host, config.port), handler)
@@ -221,6 +226,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--open", action="store_true", help="Open the datahub in a browser."
     )
     parser.add_argument("--static-dir", default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--since-days",
+        type=int,
+        default=None,
+        help="Materialize the last N days of sessions (default: 7).",
+    )
     return parser
 
 

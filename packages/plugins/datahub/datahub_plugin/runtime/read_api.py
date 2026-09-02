@@ -99,6 +99,7 @@ class RuntimeSnapshot(BaseModel):
     source_status: dict[str, int]
     minimum_available_revision: int = Field(ge=0)
     bootstrap: dict[str, Any]
+    horizon_days: int = Field(ge=1)
 
 
 class RuntimeReadApiMixin:
@@ -156,6 +157,7 @@ class RuntimeReadApiMixin:
                 "last_result": last_result,
                 "coverage": coverage_row.payload if coverage_row is not None else None,
             },
+            horizon_days=self.since_days,
         ).model_dump(mode="json")
 
     def changes(self, after_revision: int) -> dict[str, Any]:
@@ -288,12 +290,7 @@ class RuntimeReadApiMixin:
         )
         items = []
         for row in page.items:
-            payload = dict(row.payload)
-            payload.pop("cost_usd", None)
-            payload.pop("pricing_confidence", None)
-            payload.pop("runtime", None)
-            payload.pop("usage", None)
-            payload.pop("warnings", None)
+            payload = _session_inventory_payload(row.payload)
             if agent_vendor and agent_vendor not in (payload.get("vendors") or []):
                 continue
             items.append(payload)

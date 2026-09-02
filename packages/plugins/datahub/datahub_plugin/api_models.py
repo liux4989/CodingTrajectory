@@ -158,6 +158,15 @@ class SessionItem(StrictResponse):
     title: str | None = None
     preview: str | None = None
     project: str | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    status: str | None = None
+    turns: int | None = None
+    execution_seconds: float | None = None
+    failed_tool_calls: int | None = None
+    processed_tokens: int | None = None
+    cost_usd: float | None = None
+    pricing_confidence: str | None = None
 
 
 class CursorPageMetadata(StrictResponse):
@@ -212,6 +221,7 @@ class DatahubSnapshot(StrictResponse):
     source_status: DatahubSourceStatus
     minimum_available_revision: int
     bootstrap: BootstrapStatus
+    horizon_days: int
 
 
 class DatahubUpsert(StrictResponse):

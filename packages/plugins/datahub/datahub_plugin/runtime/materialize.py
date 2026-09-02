@@ -721,10 +721,28 @@ def _page_payload(
     }
 
 
+_SESSION_INVENTORY_RUNTIME_KEYS = (
+    "started_at",
+    "ended_at",
+    "status",
+    "turns",
+    "execution_seconds",
+    "failed_tool_calls",
+)
+
+
 def _session_inventory_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    result = dict(payload)
-    for key in ("cost_usd", "pricing_confidence", "runtime", "usage", "warnings"):
-        result.pop(key, None)
+    """Compact list row: identity fields plus summary stats, no heavy dicts."""
+    result = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"runtime", "usage", "warnings"}
+    }
+    runtime = payload.get("runtime") or {}
+    usage = payload.get("usage") or {}
+    for key in _SESSION_INVENTORY_RUNTIME_KEYS:
+        result[key] = runtime.get(key)
+    result["processed_tokens"] = usage.get("processed_tokens")
     return result
 
 

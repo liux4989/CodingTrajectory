@@ -2066,6 +2066,10 @@
           "title": "Generated At",
           "type": "string"
         },
+        "horizon_days": {
+          "title": "Horizon Days",
+          "type": "integer"
+        },
         "minimum_available_revision": {
           "title": "Minimum Available Revision",
           "type": "integer"
@@ -2085,7 +2089,8 @@
         "catching_up",
         "source_status",
         "minimum_available_revision",
-        "bootstrap"
+        "bootstrap",
+        "horizon_days"
       ],
       "title": "DatahubSnapshot",
       "type": "object"
@@ -6312,6 +6317,54 @@
     "SessionItem": {
       "additionalProperties": false,
       "properties": {
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended At"
+        },
+        "execution_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Seconds"
+        },
+        "failed_tool_calls": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failed Tool Calls"
+        },
         "graph_id": {
           "anyOf": [
             {
@@ -6348,6 +6401,30 @@
           "default": null,
           "title": "Preview"
         },
+        "pricing_confidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pricing Confidence"
+        },
+        "processed_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Processed Tokens"
+        },
         "project": {
           "anyOf": [
             {
@@ -6371,6 +6448,30 @@
           "title": "Session Ids",
           "type": "array"
         },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
+        },
         "title": {
           "anyOf": [
             {
@@ -6382,6 +6483,18 @@
           ],
           "default": null,
           "title": "Title"
+        },
+        "turns": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turns"
         },
         "vendors": {
           "items": {

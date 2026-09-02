@@ -220,6 +220,7 @@ export type ScanFinishedAt = string | null;
 export type ScanStartedAt = string | null;
 export type CatchingUp1 = boolean;
 export type GeneratedAt1 = string;
+export type HorizonDays = number;
 export type MinimumAvailableRevision = number;
 export type Revision2 = number;
 export type SessionGraphCount = number;
@@ -565,13 +566,22 @@ export type Type4 = string;
  * via the `definition` "SessionItemDetailsPayload".
  */
 export type SessionItemDetailsPayload = SessionItemDetail[];
+export type CostUsd6 = number | null;
+export type EndedAt3 = string | null;
+export type ExecutionSeconds9 = number | null;
+export type FailedToolCalls2 = number | null;
 export type GraphId1 = string | null;
 export type LineageRootSessionId = string | null;
 export type Preview = string | null;
+export type PricingConfidence = string | null;
+export type ProcessedTokens8 = number | null;
 export type Project6 = string | null;
 export type RootSessionId8 = string;
 export type SessionIds = string[];
+export type StartedAt5 = string | null;
+export type Status5 = string | null;
 export type Title5 = string | null;
+export type Turns15 = number | null;
 export type Vendors7 = string[];
 export type Items2 = SessionItem[];
 export type Count6 = number;
@@ -589,8 +599,8 @@ export type ParentSessionId3 = string | null;
 export type SessionId13 = string;
 export type SourceTurnId = string | null;
 export type SpawnedAgentCount1 = number | null;
-export type StartedAt5 = string | null;
-export type Status5 = string | null;
+export type StartedAt6 = string | null;
+export type Status6 = string | null;
 export type Title7 = string | null;
 export type TurnCount2 = number | null;
 export type Vendor9 = string | null;
@@ -598,9 +608,9 @@ export type Branches = ConversationBranch[];
 export type RootSessionId9 = string;
 export type SelectedBranchId = string | null;
 export type Bucket2 = string;
-export type CostUsd6 = number;
-export type ExecutionSeconds9 = number;
-export type ProcessedTokens8 = number;
+export type CostUsd7 = number;
+export type ExecutionSeconds10 = number;
+export type ProcessedTokens9 = number;
 export type Sessions10 = number;
 export type Daily = ActivityBucket[];
 export type GeneratedAt4 = string;
@@ -609,7 +619,7 @@ export type Revision9 = number;
 export type SchemaVersion6 = 1;
 export type Warnings8 = WarningSummary[];
 export type Bucket3 = string;
-export type EndedAt3 = string;
+export type EndedAt4 = string;
 export type IsComplete = boolean;
 export type Label5 = string;
 export type PatternPromptTokens = number;
@@ -621,7 +631,7 @@ export type Max1 = number;
 export type Median1 = number;
 export type P901 = number;
 export type P951 = number;
-export type StartedAt6 = string;
+export type StartedAt7 = string;
 export type TotalPromptTokens = number;
 export type TurnCount3 = number;
 export type SessionMedianPct = number | null;
@@ -635,7 +645,7 @@ export type RootGraphs = number;
 export type Sessions11 = number;
 export type ToolItems = number;
 export type TruncatedInputSummaries = number;
-export type Turns15 = number;
+export type Turns16 = number;
 export type UndatedToolItems = number;
 export type DiscoveryDays = number;
 export type ProjectName4 = string;
@@ -660,9 +670,9 @@ export type PreviousEnclosingPromptTokens = number;
 export type RepeatCount = number;
 export type Resource = string;
 export type Sessions12 = number;
-export type Status6 = "persistent" | "phase" | "outlier_dominated" | "emerging";
+export type Status7 = "persistent" | "phase" | "outlier_dominated" | "emerging";
 export type TargetedCalls = number;
-export type Turns16 = number;
+export type Turns17 = number;
 export type CompletedAt1 = string | null;
 export type MaxContextTokens = number | null;
 export type PrimaryPattern = string | null;
@@ -1209,6 +1219,7 @@ export interface DatahubSnapshot {
   catching_up: CatchingUp1;
   freshness: DatahubFreshness;
   generated_at: GeneratedAt1;
+  horizon_days: HorizonDays;
   minimum_available_revision: MinimumAvailableRevision;
   revision: Revision2;
   source_status: DatahubSourceStatus;
@@ -2006,13 +2017,22 @@ export interface SessionPage {
  * via the `definition` "SessionItem".
  */
 export interface SessionItem {
+  cost_usd?: CostUsd6;
+  ended_at?: EndedAt3;
+  execution_seconds?: ExecutionSeconds9;
+  failed_tool_calls?: FailedToolCalls2;
   graph_id?: GraphId1;
   lineage_root_session_id?: LineageRootSessionId;
   preview?: Preview;
+  pricing_confidence?: PricingConfidence;
+  processed_tokens?: ProcessedTokens8;
   project?: Project6;
   root_session_id: RootSessionId8;
   session_ids: SessionIds;
+  started_at?: StartedAt5;
+  status?: Status5;
   title?: Title5;
+  turns?: Turns15;
   vendors: Vendors7;
 }
 /**
@@ -2066,8 +2086,8 @@ export interface ConversationBranch {
   session_id: SessionId13;
   source_turn_id?: SourceTurnId;
   spawned_agent_count?: SpawnedAgentCount1;
-  started_at?: StartedAt5;
-  status?: Status5;
+  started_at?: StartedAt6;
+  status?: Status6;
   title?: Title7;
   turn_count?: TurnCount2;
   vendor?: Vendor9;
@@ -2101,9 +2121,9 @@ export interface Coverage2 {
  */
 export interface ActivityBucket {
   bucket: Bucket2;
-  cost_usd: CostUsd6;
-  execution_seconds: ExecutionSeconds9;
-  processed_tokens: ProcessedTokens8;
+  cost_usd: CostUsd7;
+  execution_seconds: ExecutionSeconds10;
+  processed_tokens: ProcessedTokens9;
   sessions: Sessions10;
 }
 /**
@@ -2148,14 +2168,14 @@ export interface PeriodComparison {
  */
 export interface PeriodSummary {
   bucket: Bucket3;
-  ended_at: EndedAt3;
+  ended_at: EndedAt4;
   is_complete: IsComplete;
   label: Label5;
   pattern_prompt_tokens: PatternPromptTokens;
   pattern_share: PatternShare;
   session_count: SessionCount5;
   session_prompt: Distribution;
-  started_at: StartedAt6;
+  started_at: StartedAt7;
   total_prompt_tokens: TotalPromptTokens;
   turn_count: TurnCount3;
   turn_prompt: Distribution;
@@ -2196,7 +2216,7 @@ export interface Coverage3 {
   sessions: Sessions11;
   tool_items: ToolItems;
   truncated_input_summaries: TruncatedInputSummaries;
-  turns: Turns15;
+  turns: Turns16;
   undated_tool_items: UndatedToolItems;
   [k: string]: unknown;
 }
@@ -2231,10 +2251,10 @@ export interface HotspotRow {
   resource: Resource;
   session: Distribution;
   sessions: Sessions12;
-  status: Status6;
+  status: Status7;
   targeted_calls: TargetedCalls;
   turn: Distribution;
-  turns: Turns16;
+  turns: Turns17;
   [k: string]: unknown;
 }
 /**
