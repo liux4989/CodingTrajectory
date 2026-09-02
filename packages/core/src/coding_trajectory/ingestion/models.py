@@ -7,7 +7,19 @@ from enum import Enum
 from typing import Annotated, Any, Literal, TypeAlias
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class StrictModel(BaseModel):
+    """Base for internal record models that reject unknown fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class FrozenStrictModel(StrictModel):
+    """StrictModel variant that is also immutable."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class EventType(str, Enum):

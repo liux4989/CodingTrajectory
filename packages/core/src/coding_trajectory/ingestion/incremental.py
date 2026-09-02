@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Literal, TypeAlias
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.adapters.claude_code import (
@@ -30,7 +30,12 @@ from coding_trajectory.ingestion.adapters.claude_code import (
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
 from coding_trajectory.ingestion.adapters.pi import PiAdapter
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
-from coding_trajectory.ingestion.models import Session, SessionGraph, Vendor
+from coding_trajectory.ingestion.models import (
+    FrozenStrictModel,
+    Session,
+    SessionGraph,
+    Vendor,
+)
 from coding_trajectory.ingestion.provenance import SessionProvenance
 from coding_trajectory.ingestion.retention import CanonicalRetention
 from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
@@ -38,8 +43,6 @@ from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
 )
 
 
-class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class SourceStatus(StrEnum):
@@ -51,7 +54,7 @@ class SourceStatus(StrEnum):
     DELETED = "deleted"
 
 
-class SourceSnapshot(_StrictModel):
+class SourceSnapshot(FrozenStrictModel):
     """Core input contract for a persisted source checkpoint."""
 
     path: str
@@ -74,7 +77,7 @@ class SourceSnapshot(_StrictModel):
     metadata: dict[str, Any]
 
 
-class SourceMessage(_StrictModel):
+class SourceMessage(FrozenStrictModel):
     """Core input contract for one complete canonical JSONL record."""
 
     source_message_id: str
@@ -91,7 +94,7 @@ class SourceMessage(_StrictModel):
     payload_complete: bool = True
 
 
-class GraphBuildIssue(_StrictModel):
+class GraphBuildIssue(FrozenStrictModel):
     """Observable failure or uncertainty encountered during graph repair."""
 
     severity: Literal["warning", "error"]
@@ -103,7 +106,7 @@ class GraphBuildIssue(_StrictModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
-class SourceGraphRelationship(_StrictModel):
+class SourceGraphRelationship(FrozenStrictModel):
     """Canonical source-to-session/root relationship for checkpoint metadata."""
 
     source_path: str
@@ -114,7 +117,7 @@ class SourceGraphRelationship(_StrictModel):
     project_identifier: str
 
 
-class IncrementalGraphBuild(_StrictModel):
+class IncrementalGraphBuild(FrozenStrictModel):
     """Affected canonical graphs plus relationship and failure evidence."""
 
     status: Literal["complete", "inconclusive", "failed"]
@@ -130,7 +133,7 @@ class IncrementalGraphBuild(_StrictModel):
     provenance: tuple[SessionProvenance, ...] = ()
 
 
-class SourceGraphComponent(_StrictModel):
+class SourceGraphComponent(FrozenStrictModel):
     """One independently rebuildable parent/child source component."""
 
     component_id: UUID
@@ -140,7 +143,7 @@ class SourceGraphComponent(_StrictModel):
     latest_mtime_ns: int = Field(ge=0)
 
 
-class SourceGraphComponentPlan(_StrictModel):
+class SourceGraphComponentPlan(FrozenStrictModel):
     """Bounded topology plan used for component-streamed cold ingestion."""
 
     status: Literal["complete", "inconclusive", "failed"]
@@ -154,14 +157,14 @@ MessageInput: TypeAlias = SourceMessage | Mapping[str, Any]
 MessagesForPath: TypeAlias = Callable[[str], Iterable[MessageInput]]
 
 
-class _SourceHeader(_StrictModel):
+class _SourceHeader(FrozenStrictModel):
     path: str
     vendor: Vendor
     session_id: UUID
     parent_session_id: UUID | None = None
 
 
-class _BuiltSource(_StrictModel):
+class _BuiltSource(FrozenStrictModel):
     path: str
     vendor: Vendor
     project_identifier: str

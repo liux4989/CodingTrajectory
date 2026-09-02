@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
 from coding_trajectory.analysis.content_size import scoped_content_size_cache
 from coding_trajectory.analysis.projections import build_session_graph_overview
@@ -24,7 +24,7 @@ from coding_trajectory.ingestion.indexes import (
     SessionGraphIndex,
     build_session_graph_index,
 )
-from coding_trajectory.ingestion.models import Session, SessionGraph
+from coding_trajectory.ingestion.models import Session, SessionGraph, StrictModel
 from coding_trajectory.metrics.analysis import (
     _StatsTokenUsageBreakdown,
     _build_session_graph_stats_usage_breakdown,
@@ -48,11 +48,9 @@ from coding_trajectory.token_counter import (
 EconomicsDetail = Literal["core", "evidence"]
 
 
-class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
 
 
-class EconomicsReconciliation(_StrictModel):
+class EconomicsReconciliation(StrictModel):
     """Proof that attributed usage retains the billed accounting total."""
 
     basis: Literal["canonical_billed_total", "item_context_allocation"]
@@ -69,7 +67,7 @@ class EconomicsReconciliation(_StrictModel):
         return self
 
 
-class EconomicsContribution(_StrictModel):
+class EconomicsContribution(StrictModel):
     """Stable core economics plus optional expensive supporting evidence."""
 
     schema_version: Literal[1] = 1
@@ -84,7 +82,7 @@ class EconomicsContribution(_StrictModel):
     overview: dict[str, Any] | None = None
 
 
-class GraphEconomicsBundle(_StrictModel):
+class GraphEconomicsBundle(StrictModel):
     """One graph computation shared by every public session entrypoint."""
 
     schema_version: Literal[1] = 1
