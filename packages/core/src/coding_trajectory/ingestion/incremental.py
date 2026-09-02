@@ -22,20 +22,12 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from coding_trajectory.discovery import (
-    discover_store_from_files,
-    infer_project_identifier,
-    stabilize_session,
-)
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.adapters.claude_code import (
     ClaudeCodeAdapter,
     _subagent_input,
 )
-from coding_trajectory.ingestion.adapters.codex import (
-    CodexAdapter,
-    _cut_inherited_records,
-)
+from coding_trajectory.ingestion.adapters.codex import CodexAdapter
 from coding_trajectory.ingestion.adapters.pi import PiAdapter
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.ingestion.models import Session, SessionGraph, Vendor
@@ -430,6 +422,10 @@ def rebuild_affected_session_graphs(
                 records=records,
                 parent_started_turn_ids=parent_turns,
             )
+            # Lazy: discovery imports the ingestion package, so a top-level
+            # import here would close a circular-import cycle.
+            from coding_trajectory.discovery import infer_project_identifier
+
             project = infer_project_identifier(
                 session, Path(path), fallback=Path(path).stem
             )
@@ -681,6 +677,10 @@ def rebuild_affected_session_graphs_from_files(
             old_roots=old_roots,
             new_roots=new_roots,
         )
+
+    # Lazy: discovery imports the ingestion package, so a top-level import
+    # here would close a circular-import cycle.
+    from coding_trajectory.discovery import discover_store_from_files
 
     try:
         discovery = discover_store_from_files(
@@ -1203,24 +1203,23 @@ def _build_session_from_records(
     records: list[dict[str, Any]],
     parent_started_turn_ids: set[str] | None,
 ) -> Session:
+    # Lazy: discovery imports the ingestion package, so a top-level import
+    # here would close a circular-import cycle.
+    from coding_trajectory.discovery import stabilize_session
+
     source = Path(snapshot.path)
-    adapter: BaseAdapter
+    adapter_cls: type[BaseAdapter]
     if vendor == Vendor.CODEX_CLI:
-        adapter = CodexAdapter()
-        codex_records = _cut_inherited_records(records, parent_started_turn_ids)
-        state = CodexAdapter._ParseState()
-        transcript = adapter._build_transcript(codex_records, state)
-        session = adapter._build_session(source, transcript, state)
+        adapter_cls = CodexAdapter
     elif vendor == Vendor.CLAUDE_CODE:
-        adapter = ClaudeCodeAdapter()
-        adapter._reset_ingest_state()
-        session = adapter._build_session(source, records)
+        adapter_cls = ClaudeCodeAdapter
     elif vendor == Vendor.PI:
-        adapter = PiAdapter()
-        adapter._reset_ingest_state()
-        session = adapter._build_session(source, records)
+        adapter_cls = PiAdapter
     else:  # pragma: no cover - Vendor is closed, defensive for future members
         raise ValueError(f"unsupported vendor: {vendor}")
+    session = adapter_cls().build_canonical_session(
+        source, records, parent_started_turn_ids=parent_started_turn_ids
+    )
     return stabilize_session(session, vendor=vendor, source=source)
 
 

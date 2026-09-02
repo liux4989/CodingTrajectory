@@ -98,6 +98,30 @@ class BaseAdapter(ABC):
         )
         return self._build_session(path, records, retention=retention)
 
+    def build_canonical_session(
+        self,
+        source: Path,
+        records: Iterable[dict],
+        *,
+        parent_started_turn_ids: set[str] | None = None,
+    ) -> Session:
+        """Build an unstabilized trajectory-retention session from in-memory records.
+
+        Supported seam for consumers that hold canonical JSONL records rather
+        than a file (incremental graph repair).  Equivalent to
+        ``ingest_file(..., retention="trajectory")`` minus byte spans, so no
+        provenance is produced; the caller applies ``stabilize_session``.
+        ``parent_started_turn_ids`` is honored only by vendors whose fork
+        cutting needs it (Codex overrides this method).
+        """
+        self._reset_ingest_state()
+        self.last_provenance: SessionProvenance | None = None
+        return self._build_session(
+            source,
+            ((record, None) for record in records),
+            retention="trajectory",
+        )
+
     def scan_started_turn_ids(self, source: Path) -> set[str] | None:
         """Return the set of vendor turn_ids that begin a turn in this file, or
         ``None`` when the vendor has no such concept. Used by multi-file

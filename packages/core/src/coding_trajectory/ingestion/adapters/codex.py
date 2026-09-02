@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from pydantic import BaseModel
+
 from coding_trajectory.ingestion.adapters._shared import (
     SHARED_FILE_TOOL_NAMES,
     SHARED_PLAN_TOOL_NAMES,
@@ -23,6 +25,7 @@ from coding_trajectory.ingestion.adapters._shared import (
     preview_text,
 )
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
+from coding_trajectory.ingestion.assembly import AssemblyHooks, assemble_session
 from coding_trajectory.ingestion.common import (
     extract_exit_code,
     infer_tool_success,
@@ -36,34 +39,27 @@ from coding_trajectory.ingestion.models import (
     RuntimeObservation,
     Session,
     SessionStatus,
-    TurnStatus,
     ToolStatus,
+    TurnStatus,
     Vendor,
 )
 from coding_trajectory.ingestion.provenance import RecordSpan, SessionProvenance
-from coding_trajectory.ingestion.retention import (
-    CanonicalRetention,
-    compact_context_usage_observation,
-)
-from coding_trajectory.ingestion.transcript import (
-    TranscriptRecord,
-    TranscriptStabilizer,
-    build_session_provenance,
-    compact_session_cwd,
-    events_from_transcript,
-    project_transcript,
-)
+from coding_trajectory.ingestion.retention import CanonicalRetention
+from coding_trajectory.ingestion.transcript import TranscriptRecord
 from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
     CodexMultiAgentInput,
     CodexThreadSpawn,
+)
+from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
     extensions as codex_extensions,
+)
+from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
     parent_session_id as codex_parent_session_id,
 )
 from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
     context_usage_observation,
     normalize_codex_token_count,
 )
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -1291,6 +1287,23 @@ class CodexAdapter(BaseAdapter):
         transcript = self._build_transcript(records, state)
         return self._build_session(path, transcript, state, retention=retention)
 
+    def build_canonical_session(
+        self,
+        source: Path,
+        records: Iterable[dict],
+        *,
+        parent_started_turn_ids: set[str] | None = None,
+    ) -> Session:
+        """In-memory-record seam: cut inherited fork history, then assemble."""
+        self._reset_ingest_state()
+        self.last_provenance: SessionProvenance | None = None
+        cut = _cut_inherited_records(list(records), parent_started_turn_ids)
+        state = self._ParseState()
+        transcript = self._build_transcript(
+            ((record, None) for record in cut), state
+        )
+        return self._build_session(source, transcript, state, retention="trajectory")
+
     def scan_started_turn_ids(self, source: Path) -> set[str] | None:
         started: set[str] = set()
         for record in self._iter_records(source):
@@ -1341,9 +1354,6 @@ class CodexAdapter(BaseAdapter):
             raise ValueError(
                 f"CodexAdapter: no transcript records parsed from {source}"
             )
-        else:
-            started_at = min(record.timestamp for record in transcript)
-            ended_at = max(record.timestamp for record in transcript)
 
         meta = state.session_meta
         ctx = state.turn_context
@@ -1353,14 +1363,6 @@ class CodexAdapter(BaseAdapter):
         if state.multi_agent_mode is not None:
             mechanism.multi_agent_mode = state.multi_agent_mode
         parent_session_id = codex_parent_session_id(mechanism)
-        compact = (
-            TranscriptStabilizer(vendor=Vendor.CODEX_CLI, source=source)
-            if retention == "measurements"
-            else None
-        )
-        events = events_from_transcript(
-            session_id=state.session_id, records=transcript, stabilizer=compact
-        )
         extensions = codex_extensions(mechanism)
         if extensions.codex is not None:
             extensions.codex.preview = state.session_preview or _codex_session_preview(
@@ -1369,10 +1371,7 @@ class CodexAdapter(BaseAdapter):
             if state.spawn_links:
                 extensions.codex.spawn_links = dict(state.spawn_links)
 
-        turns = project_transcript(
-            session_id=state.session_id,
-            vendor=Vendor.CODEX_CLI,
-            records=transcript,
+        hooks = AssemblyHooks(
             active_status=(
                 TurnStatus.RUNNING
                 if source_is_living(source)
@@ -1384,55 +1383,34 @@ class CodexAdapter(BaseAdapter):
             # mode so turns (incl. compaction-only turns) project correctly and
             # spawn calls are turn-attributed.
             prefer_lifecycle=True,
-            compact=compact,
-        )
-        if compact is not None:
-            self.last_provenance = build_session_provenance(
-                session_id=state.session_id,
-                vendor=Vendor.CODEX_CLI,
-                source=source,
-                stabilizer=compact,
-                turns=turns,
-            )
-        session_status = _derive_session_status(turns)
-
-        context_usage = state.context_usage
-        if compact is not None:
-            context_usage = [
-                compact_context_usage_observation(observation, compact.event_ids)
-                for observation in context_usage
-            ]
-
-        return Session(
-            session_id=state.session_id,
-            vendor=Vendor.CODEX_CLI,
-            model=_as_non_empty_str(ctx.get("model")),
-            reasoning_effort=_as_non_empty_str(ctx.get("effort")),
-            agent_name=extensions.codex.agent_nickname if extensions.codex else None,
-            started_at=started_at,
-            ended_at=ended_at,
-            parent_session_id=parent_session_id,
-            events=events,
-            turns=turns,
-            context_usage=context_usage,
-            context_sources=(
-                []
-                if compact is not None
-                else list(state.context_source_by_block.values())
-            ),
-            runtime_observations=state.runtime_observations,
             extensions=extensions,
-            status=session_status,
-            cwd=(
-                compact_session_cwd(
-                    vendor=Vendor.CODEX_CLI,
-                    source=source,
-                    extensions=extensions,
-                    payload_cwd=compact.cwd,
-                )
-                if compact is not None
-                else None
+            parent_session_id=parent_session_id,
+            runtime_observations=state.runtime_observations,
+            session_fields={
+                "model": _as_non_empty_str(ctx.get("model")),
+                "reasoning_effort": _as_non_empty_str(ctx.get("effort")),
+                "agent_name": extensions.codex.agent_nickname
+                if extensions.codex
+                else None,
+            },
+            build_context_usage=lambda _records: state.context_usage,
+            build_context_sources=lambda _context: list(
+                state.context_source_by_block.values()
             ),
+            build_session_fields=lambda context: {
+                "status": _derive_session_status(context.turns)
+            },
+            provenance_sink=lambda provenance: setattr(
+                self, "last_provenance", provenance
+            ),
+        )
+        return assemble_session(
+            vendor=Vendor.CODEX_CLI,
+            source=source,
+            session_id=state.session_id,
+            transcript=transcript,
+            retention=retention,
+            hooks=hooks,
         )
 
     def _build_transcript(

@@ -82,15 +82,86 @@ class TranscriptRecord(BaseModel):
     origin: RecordSpan | None = None
 
 
+def stable_event_id(
+    vendor: Vendor,
+    source: Any,
+    *,
+    index: int,
+    timestamp: datetime,
+    type: str,
+    actor: str | None,
+    payload: dict[str, Any],
+) -> UUID:
+    """Canonical event id recipe.
+
+    Single source of truth for the event hash inputs, used by both the inline
+    ``TranscriptStabilizer`` (measurements path) and the post-assembly
+    ``discovery.stabilize_session`` pass (trajectory path).
+    """
+    return stable_uuid(
+        vendor,
+        source,
+        index=index,
+        timestamp=timestamp.isoformat(),
+        type=type,
+        actor=actor,
+        payload=payload,
+    )
+
+
+def stable_turn_id(
+    vendor: Vendor,
+    source: Any,
+    *,
+    turn_index: int,
+    session_id: UUID,
+    sequence: int,
+    started_at: datetime,
+) -> UUID:
+    """Canonical turn id recipe shared by inline and post-assembly stabilization."""
+    return stable_uuid(
+        vendor,
+        source,
+        turn_index=turn_index,
+        session_id=str(session_id),
+        sequence=sequence,
+        started_at=started_at.isoformat(),
+    )
+
+
+def stable_item_id(
+    vendor: Vendor,
+    source: Any,
+    *,
+    turn_index: int,
+    item_index: int,
+    kind: str,
+    sequence: int,
+    started_at: datetime,
+    tool_call_id: str | None,
+) -> UUID:
+    """Canonical item id recipe shared by inline and post-assembly stabilization."""
+    return stable_uuid(
+        vendor,
+        source,
+        turn_index=turn_index,
+        item_index=item_index,
+        kind=kind,
+        sequence=sequence,
+        started_at=started_at.isoformat(),
+        tool_call_id=tool_call_id,
+    )
+
+
 class TranscriptStabilizer:
     """Inline canonical ID assignment for the compact (measurements) path.
 
-    Reproduces ``discovery.stabilize_session``'s ID recipe record-by-record so
-    event payloads are hashed and discarded at translation time instead of
-    staying resident until post-assembly stabilization.  The event index,
-    timestamp, type, actor, and full event payload enter each hash exactly as
-    the post-assembly path computes them, so compact and full ingestion
-    produce identical identifiers, topology, and metric outputs.
+    Applies the shared ``stable_*_id`` recipe record-by-record so event
+    payloads are hashed and discarded at translation time instead of staying
+    resident until post-assembly stabilization.  The event index, timestamp,
+    type, actor, and full event payload enter each hash exactly as the
+    post-assembly path computes them, so compact and full ingestion produce
+    identical identifiers, topology, and metric outputs.
     """
 
     def __init__(self, *, vendor: Vendor, source: Any) -> None:
@@ -106,11 +177,11 @@ class TranscriptStabilizer:
     def stabilize_event(self, record: TranscriptRecord) -> UUID:
         """Assign the canonical event id for one record and capture cwd."""
         payload = _event_payload(record)
-        stable = stable_uuid(
+        stable = stable_event_id(
             self._vendor,
             self._source,
             index=self._event_index,
-            timestamp=record.timestamp.isoformat(),
+            timestamp=record.timestamp,
             type=_event_type(record).value,
             actor=_actor(record),
             payload=payload,
@@ -147,13 +218,13 @@ class TranscriptStabilizer:
         self, *, turn_index: int, session_id: UUID, sequence: int, started_at: datetime
     ) -> UUID:
         """Assign the canonical turn id exactly as post-assembly stabilization."""
-        return stable_uuid(
+        return stable_turn_id(
             self._vendor,
             self._source,
             turn_index=turn_index,
-            session_id=str(session_id),
+            session_id=session_id,
             sequence=sequence,
-            started_at=started_at.isoformat(),
+            started_at=started_at,
         )
 
     def stabilize_item(
@@ -167,14 +238,14 @@ class TranscriptStabilizer:
         tool_call_id: str | None,
     ) -> UUID:
         """Assign the canonical item id exactly as post-assembly stabilization."""
-        return stable_uuid(
+        return stable_item_id(
             self._vendor,
             self._source,
             turn_index=turn_index,
             item_index=item_index,
             kind=kind,
             sequence=sequence,
-            started_at=started_at.isoformat(),
+            started_at=started_at,
             tool_call_id=tool_call_id,
         )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -48,8 +49,20 @@ def high_value_teammate_request(messages: list[ClaudeTeamMessage]) -> str | None
 
 
 def build_turn_team_state(
-    turn: Turn, *, team_input: ClaudeTeamStateInput
+    turn: Turn,
+    *,
+    team_input: ClaudeTeamStateInput,
+    team_tool_calls: Mapping[str, dict[str, Any]] | None = None,
 ) -> TeamTurnState | None:
+    """Merge teammate messages and team-management tool calls into turn state.
+
+    ``team_tool_calls`` carries the pre-retention input/output bodies of the
+    team-management tools (Agent/TaskCreate/TaskUpdate), keyed by
+    ``tool_call_id``.  When provided, those captured bodies are used instead of
+    the projected item bodies, so compact (measurements-retention) items -
+    whose bodies were dropped at translation - reconstruct the identical state
+    through the same code path.
+    """
     members: dict[str, dict[str, object]] = {}
     tasks: dict[str, dict[str, object]] = {}
 
@@ -84,7 +97,13 @@ def build_turn_team_state(
             )
 
     for item in _turn_tool_items(turn):
-        _merge_tool_item(members=members, tasks=tasks, item=item)
+        call_id = getattr(item, "tool_call_id", None)
+        captured = (
+            team_tool_calls.get(call_id)
+            if team_tool_calls is not None and isinstance(call_id, str)
+            else None
+        )
+        _merge_tool_item(members=members, tasks=tasks, item=item, captured=captured)
 
     if not members and not tasks:
         return None
@@ -163,12 +182,19 @@ def _merge_tool_item(
     members: dict[str, dict[str, object]],
     tasks: dict[str, dict[str, object]],
     item: Item,
+    captured: dict[str, Any] | None = None,
 ) -> None:
-    item_input = getattr(item, "input", None)
+    if captured is not None:
+        raw_name = captured.get("tool_name")
+        tool_name = raw_name if isinstance(raw_name, str) else None
+        item_input = captured.get("input")
+        item_output = captured.get("output")
+    else:
+        tool_name = getattr(item, "tool_name", None)
+        item_input = getattr(item, "input", None)
+        item_output = getattr(item, "output", None)
     tool_input = item_input if isinstance(item_input, dict) else {}
-    item_output = getattr(item, "output", None)
     tool_output = item_output if isinstance(item_output, dict) else {}
-    tool_name = getattr(item, "tool_name", None)
 
     if tool_name == "Agent":
         member_id = _first_str(tool_output, ("teammate_id", "agent_id", "name"))

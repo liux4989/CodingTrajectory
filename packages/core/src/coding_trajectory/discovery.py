@@ -13,13 +13,30 @@ from typing import cast
 from uuid import UUID
 
 from coding_trajectory import debug
+from coding_trajectory.discovery_metadata import (
+    ProjectDiscoveryItem,
+    _claude_project_dir_metadata,
+    _codex_config_project_metadata,
+    _codex_home,
+    _pi_project_path_from_session_header,
+    _pi_session_project_metadata,
+    _pi_session_root,
+)
+from coding_trajectory.discovery_paths import (
+    _ancestor_dirs_up_to_project_marker,
+    _decode_claude_encoded_path,
+    _encode_claude_project_path,
+    _encode_pi_project_path,
+    _is_recent_enough,
+    _project_scope_matches_path,
+)
 from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.common import (
     canonical_json,
     normalize_project_key,
-    stable_uuid,
 )
+from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.ingestion.models import (
     Event,
     Item,
@@ -36,25 +53,16 @@ from coding_trajectory.ingestion.retention import (
     retain_event_for_measurements,
     retain_item_for_measurements,
 )
+from coding_trajectory.ingestion.transcript import (
+    stable_event_id as _stable_event_id,
+)
+from coding_trajectory.ingestion.transcript import (
+    stable_item_id as _stable_item_id,
+)
+from coding_trajectory.ingestion.transcript import (
+    stable_turn_id as _stable_turn_id,
+)
 from coding_trajectory.query import DocumentError, DocumentStore
-from coding_trajectory.ingestion.graph import assemble_project_session_graphs
-from coding_trajectory.discovery_paths import (
-    _ancestor_dirs_up_to_project_marker,
-    _decode_claude_encoded_path,
-    _encode_claude_project_path,
-    _encode_pi_project_path,
-    _is_recent_enough,
-    _project_scope_matches_path,
-)
-from coding_trajectory.discovery_metadata import (
-    ProjectDiscoveryItem,
-    _claude_project_dir_metadata,
-    _codex_config_project_metadata,
-    _codex_home,
-    _pi_project_path_from_session_header,
-    _pi_session_project_metadata,
-    _pi_session_root,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1211,11 +1219,6 @@ def format_discovery_sources(sources: list[DiscoverySource]) -> str:
     return "\n".join(lines)
 
 
-def _stable_uuid(vendor: Vendor, source: Path, **fields: object) -> UUID:
-    """Derive a deterministic UUID5 for a canonical resource."""
-    return stable_uuid(vendor, source, **fields)
-
-
 def stabilize_session(
     session: Session,
     *,
@@ -1227,11 +1230,11 @@ def stabilize_session(
     event_id_map: dict[object, object] = {}
     events: list[Event] = []
     for index, event in enumerate(session.events):
-        stable_event_id = _stable_uuid(
+        stable_event_id = _stable_event_id(
             vendor,
             source,
             index=index,
-            timestamp=event.timestamp.isoformat(),
+            timestamp=event.timestamp,
             type=event.type.value,
             actor=event.actor,
             payload=event.payload,
@@ -1247,26 +1250,26 @@ def stabilize_session(
     turn_id_map: dict[object, object] = {}
     turns: list[Turn] = []
     for t_index, turn in enumerate(session.turns):
-        stable_turn_id = _stable_uuid(
+        stable_turn_id = _stable_turn_id(
             vendor,
             source,
             turn_index=t_index,
-            session_id=str(session.session_id),
+            session_id=session.session_id,
             sequence=turn.sequence,
-            started_at=turn.started_at.isoformat(),
+            started_at=turn.started_at,
         )
         turn_id_map[turn.turn_id] = stable_turn_id
 
         stable_items: list[Item] = []
         for i_index, item in enumerate(turn.items):
-            stable_item_id = _stable_uuid(
+            stable_item_id = _stable_item_id(
                 vendor,
                 source,
                 turn_index=t_index,
                 item_index=i_index,
                 kind=item.kind,
                 sequence=item.sequence,
-                started_at=item.started_at.isoformat(),
+                started_at=item.started_at,
                 tool_call_id=getattr(item, "tool_call_id", None),
             )
             stable_item = item.model_copy(
