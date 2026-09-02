@@ -9,6 +9,7 @@ unchanged by construction.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -123,6 +124,48 @@ def preview_text(value: Any, *, max_len: int = 96) -> str | None:
     if len(text) <= max_len:
         return text
     return f"{text[: max_len - 3].rstrip()}..."
+
+
+@dataclass
+class HeaderFacts:
+    """Header facts accumulated by ``scan_header_records``."""
+
+    session_id: UUID | None = None
+    title: str | None = None
+    cwd: str | None = None
+
+
+def scan_header_records(
+    records: Iterable[dict],
+    *,
+    extract: Callable[[dict], HeaderFacts | None],
+    lookahead: int,
+) -> HeaderFacts:
+    """Bounded header scan shared by the vendor adapters.
+
+    Merges each record's extracted facts into the running header (first
+    non-None session id and title win; a reported cwd replaces the previous
+    one). Stops once both id and title are found, or ``lookahead`` records
+    after the record that yielded the id.
+    """
+    facts = HeaderFacts()
+    since_id = 0
+    for record in records:
+        update = extract(record)
+        if update is not None:
+            if facts.session_id is None and update.session_id is not None:
+                facts.session_id = update.session_id
+            if facts.title is None and update.title is not None:
+                facts.title = update.title
+            if update.cwd is not None:
+                facts.cwd = update.cwd
+        if facts.session_id is not None and facts.title is not None:
+            break
+        if facts.session_id is not None:
+            since_id += 1
+            if since_id >= lookahead:
+                break
+    return facts
 
 
 # Tool names shared by more than one vendor taxonomy. Per-vendor taxonomies

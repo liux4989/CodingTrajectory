@@ -289,6 +289,40 @@ def _extract_nested_map(payload: dict[str, Any], *keys: str) -> dict[str, Any] |
 _extract_uuid_text = extract_uuid_text
 
 
+_SESSION_INDEX_CACHE: dict[Path, tuple[int, dict[str, str]]] = {}
+
+
+def _codex_session_index_titles(index_path: Path) -> dict[str, str]:
+    """Parse the name index at most once per (path, mtime); later duplicates win."""
+    try:
+        mtime = index_path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    cached = _SESSION_INDEX_CACHE.get(index_path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    titles: dict[str, str] = {}
+    try:
+        with index_path.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                record_id = record.get("id")
+                if not isinstance(record_id, str):
+                    continue
+                candidate = _as_non_empty_str(
+                    record.get("thread_name")
+                ) or _as_non_empty_str(record.get("title"))
+                if candidate is not None:
+                    titles[record_id] = candidate
+    except OSError:
+        return {}
+    _SESSION_INDEX_CACHE[index_path] = (mtime, titles)
+    return titles
+
+
 def _codex_session_title(
     session_id: UUID,
     index_path: Path = _DEFAULT_CODEX_SESSION_INDEX,
@@ -297,24 +331,7 @@ def _codex_session_title(
     if not index_path.is_file():
         return None
 
-    title: str | None = None
-    try:
-        with index_path.open(encoding="utf-8") as f:
-            for line in f:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("id") != str(session_id):
-                    continue
-                candidate = _as_non_empty_str(
-                    record.get("thread_name")
-                ) or _as_non_empty_str(record.get("title"))
-                if candidate is not None:
-                    title = candidate
-    except OSError:
-        return None
-    return title
+    return _codex_session_index_titles(index_path).get(str(session_id))
 
 
 def _codex_session_preview(transcript: Iterable[TranscriptRecord]) -> str | None:
