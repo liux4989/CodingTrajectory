@@ -353,3 +353,23 @@ def _as_float_or_none(value: Any) -> float | None:
     if isinstance(value, int | float) and not isinstance(value, bool):
         return float(value)
     return None
+
+
+def turn_usage_observations(
+    session: Session,
+    turn: Turn,
+) -> list[TokenUsageObservation]:
+    event_ids = set(turn.event_ids)
+    token_observations: list[TokenUsageObservation] = []
+    for observation in session.context_usage:
+        if observation.source_event_id not in event_ids:
+            continue
+        token_observation = _usage_from_context_observation(
+            observation,
+            scope_id=turn.turn_id,
+            session=session,
+        )
+        if token_observation is not None:
+            token_observations.append(token_observation)
+    token_observations.sort(key=lambda item: item.timestamp)
+    return token_observations

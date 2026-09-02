@@ -25,19 +25,21 @@ from coding_trajectory.ingestion.indexes import (
     build_session_graph_index,
 )
 from coding_trajectory.ingestion.models import Session, SessionGraph, StrictModel
-from coding_trajectory.metrics.analysis import (
-    _StatsTokenUsageBreakdown,
-    _build_session_graph_stats_usage_breakdown,
-    _build_session_graph_tool_usage,
-    _sum_usage_dicts,
-    build_session_graph_context_stats,
+from coding_trajectory.metrics.attribution import (
+    StatsTokenUsageBreakdown,
     build_session_graph_billed_token_usage,
+    build_session_graph_stats_token_usage,
+    build_session_graph_stats_usage_breakdown,
+    build_session_graph_tool_usage_uncached,
+)
+from coding_trajectory.metrics.analysis import (
+    build_session_graph_context_stats,
     build_session_graph_full_metrics,
     build_session_graph_model_usage,
-    build_session_graph_stats_token_usage,
     build_session_graph_usage,
 )
 from coding_trajectory.metrics.models import SessionGraphMetrics
+from coding_trajectory.metrics.usage_math import sum_usage_dicts
 from coding_trajectory.token_counter import (
     counter_for_session_graph,
     scoped_counter,
@@ -231,12 +233,12 @@ def _build_session_contribution(
             ),
         )
 
-    stats_breakdown = _build_session_graph_stats_usage_breakdown(session_graph)
+    stats_breakdown = build_session_graph_stats_usage_breakdown(session_graph)
     reconciliation = _reconciliation(
         stats_breakdown,
         expected_billed_usage=billed_usage,
     )
-    tool_usage = _build_session_graph_tool_usage(
+    tool_usage = build_session_graph_tool_usage_uncached(
         session_graph,
         include_item_real_token_costs=include_item_real_token_costs,
         include_advanced_causality=include_advanced_causality,
@@ -294,12 +296,12 @@ def build_session_graph_stats(
     include_session_composition: bool = True,
     precomputed_metrics: SessionGraphMetrics | None = None,
     precomputed_index: SessionGraphIndex | None = None,
-    precomputed_breakdown: _StatsTokenUsageBreakdown | None = None,
+    precomputed_breakdown: StatsTokenUsageBreakdown | None = None,
 ) -> dict[str, Any]:
     """Build the canonical stats response while accepting shared intermediates."""
 
     stats_breakdown = precomputed_breakdown or (
-        _build_session_graph_stats_usage_breakdown(session_graph)
+        build_session_graph_stats_usage_breakdown(session_graph)
     )
     stats_usage = stats_breakdown.graph_usage
     full_metrics = precomputed_metrics or build_session_graph_full_metrics(
@@ -338,15 +340,15 @@ def _parse_entrypoint_id(entrypoint_id: str | UUID) -> UUID:
 
 
 def _reconciliation(
-    stats_breakdown: _StatsTokenUsageBreakdown,
+    stats_breakdown: StatsTokenUsageBreakdown,
     *,
     expected_billed_usage: dict[str, int] | None = None,
 ) -> EconomicsReconciliation:
     usage = stats_breakdown.graph_usage
-    attributed = _sum_usage_dicts(
+    attributed = sum_usage_dicts(
         (
-            _sum_usage_dicts(usage["allocated_usage_by_item"].values()),
-            _sum_usage_dicts(usage["allocated_usage_by_context_source"].values()),
+            sum_usage_dicts(usage["allocated_usage_by_item"].values()),
+            sum_usage_dicts(usage["allocated_usage_by_context_source"].values()),
         )
     )
     billed = dict(usage.get("billed_token_usage") or {})
