@@ -32,7 +32,7 @@ from coding_trajectory.ingestion.models import (
 from coding_trajectory.metrics._build import (
     _build_full_metrics,
     _is_zero_usage,
-    _token_usage_from_mapping,
+    _usage_from_context_observation,
 )
 from coding_trajectory.metrics.accounting import usage_accounting_payload
 from coding_trajectory.metrics.context_stats._common import (
@@ -45,7 +45,6 @@ from coding_trajectory.metrics.models import (
     AttributionPolicy,
     DominantModelFlat,
     ItemRealTokenCostFlat,
-    MetricSource,
     ModelUsageContextFlat,
     ModelUsageModelFlat,
     ModelUsageTurnFlat,
@@ -1183,31 +1182,16 @@ def _turn_usage_observations(
     turn: Turn,
 ) -> list[TokenUsageObservation]:
     event_ids = set(turn.event_ids)
-    observations = [
-        obs for obs in session.context_usage if obs.source_event_id in event_ids
-    ]
     token_observations: list[TokenUsageObservation] = []
-    for observation in observations:
-        usage = _token_usage_from_mapping(
-            observation.usage,
-            provider=observation.provider or session.vendor.value,
-        )
-        if _is_zero_usage(usage):
+    for observation in session.context_usage:
+        if observation.source_event_id not in event_ids:
             continue
-        token_observations.append(
-            TokenUsageObservation(
-                scope_type="turn",
-                scope_id=turn.turn_id,
-                timestamp=observation.timestamp,
-                usage=usage,
-                provider=observation.provider or session.vendor.value,
-                model=observation.model,
-                source=MetricSource(
-                    vendor=session.vendor.value,
-                    source_type="session.context_usage",
-                    event_id=observation.source_event_id,
-                ),
-            )
+        token_observation = _usage_from_context_observation(
+            observation,
+            scope_id=turn.turn_id,
+            session=session,
         )
+        if token_observation is not None:
+            token_observations.append(token_observation)
     token_observations.sort(key=lambda item: item.timestamp)
     return token_observations

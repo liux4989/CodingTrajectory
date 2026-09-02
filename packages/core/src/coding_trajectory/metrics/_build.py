@@ -11,6 +11,7 @@ Internal helpers re-imported by :mod:`coding_trajectory.metrics.analysis`.
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from coding_trajectory import debug
 from coding_trajectory.ingestion.models import (
@@ -112,7 +113,7 @@ def _build_turn_metrics(
     for context_observation in context_observations:
         usage_observation = _usage_from_context_observation(
             context_observation,
-            turn=turn,
+            scope_id=turn.turn_id,
             session=session,
         )
         if usage_observation is not None:
@@ -150,9 +151,14 @@ def _usage_model_active_seconds(turns: list[TurnMetrics]) -> float | None:
 def _usage_from_context_observation(
     observation: ContextUsageObservation,
     *,
-    turn: Turn,
+    scope_id: UUID,
     session: Session,
 ) -> TokenUsageObservation | None:
+    """Normalize one context-usage observation, dropping zero usage.
+
+    Single normalization pipeline for ``session.context_usage`` entries;
+    callers pick the scope id (turn or session) and any pre-filtering.
+    """
     provider = observation.provider or session.vendor.value
     token_usage = _token_usage_from_mapping(observation.usage, provider=provider)
     if token_usage is None or _is_zero_usage(token_usage):
@@ -160,7 +166,7 @@ def _usage_from_context_observation(
 
     return TokenUsageObservation(
         scope_type="turn",
-        scope_id=turn.turn_id,
+        scope_id=scope_id,
         timestamp=observation.timestamp,
         usage=token_usage,
         provider=provider,

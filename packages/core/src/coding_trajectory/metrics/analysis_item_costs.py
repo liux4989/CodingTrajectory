@@ -31,13 +31,12 @@ from coding_trajectory.ingestion.models import (
 )
 from coding_trajectory.metrics._build import (
     _is_zero_usage,
-    _token_usage_from_mapping,
+    _usage_from_context_observation,
 )
 from coding_trajectory.metrics.models import (
     AllocatedRealTokenCost,
     InvokeResponseTokens,
     ItemRealTokenCostFlat,
-    MetricSource,
     ReadAfterResult,
     ToolItemFlat,
     ToolTokenAttribution,
@@ -555,25 +554,16 @@ def _session_usage_observations(
 
     observations: list[tuple[TokenUsageObservation, UUID | None]] = []
     for observation in session.context_usage:
-        provider = observation.provider or session.vendor.value
-        usage = _token_usage_from_mapping(observation.usage, provider=provider)
-        if _is_zero_usage(usage):
+        token_observation = _usage_from_context_observation(
+            observation,
+            scope_id=session.session_id,
+            session=session,
+        )
+        if token_observation is None:
             continue
         observations.append(
             (
-                TokenUsageObservation(
-                    scope_type="turn",
-                    scope_id=session.session_id,
-                    timestamp=observation.timestamp,
-                    usage=usage,
-                    provider=provider,
-                    model=observation.model,
-                    source=MetricSource(
-                        vendor=session.vendor.value,
-                        source_type="session.context_usage",
-                        event_id=observation.source_event_id,
-                    ),
-                ),
+                token_observation,
                 event_turn.get(observation.source_event_id),
             )
         )
