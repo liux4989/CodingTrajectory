@@ -22,8 +22,12 @@ from uuid import UUID
 from coding_trajectory.control_plane.collector_protocol import (
     LeaseHeartbeatRequest,
     LeaseHeartbeatResponse,
+    LivingObservationReceipt,
+    LivingObservationRequest,
     ObservationReceipt,
     ObservationRequest,
+    ProjectRegistrationRequest,
+    ProjectRegistrationResponse,
     SourceRegistrationRequest,
     SourceRegistrationResponse,
 )
@@ -41,6 +45,10 @@ _SNAPSHOT_SCHEMA_VERSION = "canonical_session_snapshot.v2"
 class CollectorRemote(Protocol):
     """The narrow remote authority used by a collector."""
 
+    def register_project(
+        self, request: ProjectRegistrationRequest
+    ) -> ProjectRegistrationResponse: ...
+
     def register_source(
         self, request: SourceRegistrationRequest, *, idempotency_key: str
     ) -> SourceRegistrationResponse: ...
@@ -51,6 +59,10 @@ class CollectorRemote(Protocol):
 
     def heartbeat(self, request: LeaseHeartbeatRequest) -> LeaseHeartbeatResponse: ...
 
+    def publish_living_observation(
+        self, request: LivingObservationRequest
+    ) -> LivingObservationReceipt: ...
+
 
 class CollectorRemoteError(RuntimeError):
     """A remote response was unavailable or did not match its contract."""
@@ -59,7 +71,9 @@ class CollectorRemoteError(RuntimeError):
 class SupabaseCollectorRemote:
     """Call the committed Supabase RPC ingress contract over HTTPS."""
 
-    def __init__(self, *, url: str, api_key: str, access_token: str, timeout: float = 20) -> None:
+    def __init__(
+        self, *, url: str, api_key: str, access_token: str, timeout: float = 20
+    ) -> None:
         self._url = url.rstrip("/") + "/rest/v1/rpc/"
         self._api_key = api_key
         self._access_token = access_token
@@ -76,6 +90,13 @@ class SupabaseCollectorRemote:
             )
         )
 
+    def register_project(
+        self, request: ProjectRegistrationRequest
+    ) -> ProjectRegistrationResponse:
+        return ProjectRegistrationResponse.model_validate(
+            self._rpc("ct_project_register", request.model_dump(mode="json"))
+        )
+
     def publish_observation(
         self, request: ObservationRequest, *, idempotency_key: str
     ) -> ObservationReceipt:
@@ -90,6 +111,16 @@ class SupabaseCollectorRemote:
     def heartbeat(self, request: LeaseHeartbeatRequest) -> LeaseHeartbeatResponse:
         return LeaseHeartbeatResponse.model_validate(
             self._rpc("ct_collector_heartbeat", request.model_dump(mode="json"))
+        )
+
+    def publish_living_observation(
+        self, request: LivingObservationRequest
+    ) -> LivingObservationReceipt:
+        return LivingObservationReceipt.model_validate(
+            self._rpc(
+                "ct_collector_publish_living_observation",
+                request.model_dump(mode="json"),
+            )
         )
 
     def _rpc(
@@ -111,12 +142,22 @@ class SupabaseCollectorRemote:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(http_request, timeout=self._timeout) as response:
+            with urllib.request.urlopen(
+                http_request, timeout=self._timeout
+            ) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
-            raise CollectorRemoteError(f"collector remote {name} failed: {exc}") from exc
+        except (
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise CollectorRemoteError(
+                f"collector remote {name} failed: {exc}"
+            ) from exc
         if not isinstance(payload, dict):
-            raise CollectorRemoteError(f"collector remote {name} returned a non-object response")
+            raise CollectorRemoteError(
+                f"collector remote {name} returned a non-object response"
+            )
         return payload
 
 
@@ -307,7 +348,10 @@ class LocalCollector:
                     rollover=rollover,
                 ),
                 idempotency_key=_source_key(
-                    self.identity, candidate.vendor.value, str(header.session_id), local_epoch
+                    self.identity,
+                    candidate.vendor.value,
+                    str(header.session_id),
+                    local_epoch,
                 ),
             )
             source_id = registration.source_id
@@ -347,7 +391,9 @@ class LocalCollector:
             schema_version=_SNAPSHOT_SCHEMA_VERSION,
             parser_version=_PARSER_VERSION,
             content_sha256=content_sha256,
-            observed_at=datetime.fromtimestamp(stat.st_mtime_ns / 1_000_000_000, tz=UTC),
+            observed_at=datetime.fromtimestamp(
+                stat.st_mtime_ns / 1_000_000_000, tz=UTC
+            ),
             payload=payload,
         )
         idempotency_key = _sha256(
@@ -407,7 +453,11 @@ class LocalCollector:
     def _upsert_source(self, **values: Any) -> None:
         self._connection.execute(
             "insert into registered_sources (path, vendor, native_session_id, source_id, source_epoch, file_identity, committed_offset, next_source_sequence, snapshot_schema_version) values (:path, :vendor, :native_session_id, :source_id, :source_epoch, :file_identity, :committed_offset, 0, :snapshot_schema_version) on conflict(path) do update set vendor = excluded.vendor, native_session_id = excluded.native_session_id, source_id = excluded.source_id, source_epoch = excluded.source_epoch, file_identity = excluded.file_identity, committed_offset = excluded.committed_offset, next_source_sequence = case when registered_sources.source_epoch <> excluded.source_epoch then 0 else registered_sources.next_source_sequence end, last_digest = case when registered_sources.source_epoch <> excluded.source_epoch then null else registered_sources.last_digest end, snapshot_schema_version = excluded.snapshot_schema_version",
-            {**values, "path": str(values["source"]), "source_id": str(values["source_id"]) if values["source_id"] else None},
+            {
+                **values,
+                "path": str(values["source"]),
+                "source_id": str(values["source_id"]) if values["source_id"] else None,
+            },
         )
 
     def _get_meta(self, key: str, default: str) -> str:
@@ -476,7 +526,9 @@ def _complete_prefix(source: Path, size: int) -> tuple[int, bytes]:
         return offset, handle.read(offset)
 
 
-def _normalized_session(candidate: DiscoveryCandidate, source_id: UUID, raw: bytes) -> dict[str, Any]:
+def _normalized_session(
+    candidate: DiscoveryCandidate, source_id: UUID, raw: bytes
+) -> dict[str, Any]:
     records = [json.loads(line) for line in raw.splitlines() if line.strip()]
     # The opaque URI creates host-independent stable event/item IDs.  It is not
     # opened and it deliberately cannot reveal the source path to the server.
@@ -487,7 +539,9 @@ def _normalized_session(candidate: DiscoveryCandidate, source_id: UUID, raw: byt
     return session.model_dump(mode="json")
 
 
-def _source_key(identity: CollectorIdentity, vendor: str, native_session_id: str, epoch: int) -> str:
+def _source_key(
+    identity: CollectorIdentity, vendor: str, native_session_id: str, epoch: int
+) -> str:
     return _sha256(f"{identity.agent_id}:{vendor}:{native_session_id}:{epoch}".encode())
 
 

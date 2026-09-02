@@ -274,16 +274,16 @@ Active now
   source registration, observations, receipts, change sequence
   leases and heartbeats
 
-Deferred activation
-  project inventory and host-location registration
-  graph artifacts/revisions and projection outbox
+Activated remote foundation
+  portable project inventory
+  compact graph artifacts/revisions and projection outbox
+  living canonical observations and lease-aware reads
   estimation jobs, attempts, and forecast events
 ```
 
-Do not drop the deferred tables merely to save space. They are nearly free
-physically, while a destructive rollback would create migration churn. Instead,
-document their inactive state, avoid writing them, and activate each module
-only with its owner and validation plan.
+These tables remain small control-plane records. Do not normalize compact graph
+payloads further or add a blob backend merely to reduce table count; measure the
+activated representation before introducing another storage layer.
 
 ## Validation and rollout
 

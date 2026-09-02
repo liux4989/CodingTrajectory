@@ -1,6 +1,6 @@
 # Remote CT Control Plane Design
 
-- **Status:** Accepted target architecture; foundation implemented
+- **Status:** Remote foundation implemented; deployment and private validation pending
 - **Date:** 2026-09-02
 - **Scope:** All 25 public CT method authorities, compact remote custody,
   full-detail local callers, workers, caches, and collector handoff
@@ -84,10 +84,9 @@ A coding session can resume after appearing terminal, and one graph can include
 sources observed by different hosts. Therefore collectors do not claim that a
 graph is permanently complete and do not race to upload replacement graphs.
 
-Collectors submit normalized source observations. The current deployed wire
-format is full-fidelity `canonical_session_snapshot.v1`. Its successor will
-first apply the existing measurements retention and then scrub remote-only
-private fields before publication:
+Collectors submit normalized source observations. The implemented wire format
+is compact `canonical_session_snapshot.v2`: it applies existing measurements
+retention and then scrubs remote-only private fields before publication:
 
 ```text
 workspace_id                 resolved from the authenticated principal
@@ -309,23 +308,30 @@ remote result contract.
 
 ### Remote service
 
-The compact historical foundation is implemented: service-role projection RPCs lease
-accepted observations and atomically publish complete graph-revision sets; the
-Python projector preserves existing graph semantics; and `ct api call/batch`
-can explicitly select one authenticated, snapshot-pinned remote workspace for
-the compact v2 snapshot schema. Remote mode rejects the other
-authorities until their repositories exist rather than silently returning
-host-local data. Production activation still waits for private-corpus
-compatibility and privacy validation.
+The remote foundation now implements all four authorities. Service-role
+projector RPCs lease accepted observations and atomically publish graph-revision
+sets. Portable project registration and inventory never expose host paths.
+Living reads preserve the existing snapshot/delta contract while omitting
+expired leases as unknown. Estimation uses durable jobs and append-only forecast
+events with provider execution in a service-role Python worker.
 
-Remaining remote-owned work:
+`ct api call/batch --remote-workspace-id ...` and the authenticated Python HTTP
+service both construct the same `ServiceRuntime`, contracts, dispatcher, and
+handlers. Every request pins one workspace sequence before authority access.
+The HTTP surface is `POST /v1/call`, `/v1/batch`, and `/v1/schema`; bearer JWTs
+are forwarded to Supabase membership checks and service-role credentials never
+enter clients.
 
-1. Host the stateless authenticated HTTP `call`, `batch`, and `schema` service.
-2. Implement the portable project-inventory repository and `project.list`.
-3. Implement freshness-aware living observation queries.
-4. Implement the estimation event repository, queue, and central worker.
-5. Add optional revision-bound client caching and prove compact compatibility
-   for all shared methods.
+The only remaining remote work is operational rather than architectural:
+
+1. Apply migrations through `20260902070000_ct_remote_api.sql`.
+2. Deploy `ct api serve`, `ct projector run`, and `ct estimator run` as supervised
+   services with server-only worker credentials.
+3. Complete private-corpus compact compatibility/privacy validation and publish
+   canonical living changes from collectors.
+
+Revision-bound disk caching remains optional. It is not required for API parity
+and will not be implemented before measurements demonstrate a latency need.
 
 Local-agent handoff remains deliberately narrow: apply migrations to the chosen
 Supabase project, provision capability-scoped credentials, run the collector on
@@ -338,10 +344,10 @@ assembly, conflict resolution, snapshots, or shared API reads.
 
 The host-local collector and authenticated Supabase ingress contract are now
 implemented. `ct collector` discovers Codex, Claude Code, and Pi sources,
-normalizes complete JSONL prefixes with the existing adapters, and currently
-persists a full `canonical_session_snapshot.v1` in its local outbox. The next
-wire version will apply compact measurements retention plus the remote-boundary
-scrubber before publishing with a stable idempotency key and heartbeat.
+normalizes complete JSONL prefixes with the existing adapters, and persists
+compact `canonical_session_snapshot.v2` records in its local outbox. It applies
+measurements retention plus the remote-boundary scrubber before publishing with
+a stable idempotency key and heartbeat.
 Deployment and real-host validation remain
 operational work because they require a specific Supabase project, registered
 agent credentials, and local source access. Its fixed boundary and commands
@@ -362,7 +368,7 @@ The control plane is ready when:
 7. Lease expiry produces `unknown`, never fabricated terminal state.
 8. Estimation jobs survive worker restart without duplicate successful forecasts.
 9. RLS denies non-members and authenticated clients cannot write canonical tables.
-10. Offline cache responses identify their snapshot and never merge vendor logs.
+10. Any future offline cache identifies its snapshot and never merges vendor logs.
 
 ## Explicit non-goals
 

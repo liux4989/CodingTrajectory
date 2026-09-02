@@ -30,6 +30,16 @@ Supabase REST RPC endpoint. The caller needs an authenticated principal that
 matches the registered agent and has `ingest` plus `living` capability; the
 service role is never placed in the collector environment.
 
+Portable projects and canonical living changes use `ct_project_register` and
+`ct_collector_publish_living_observation`. The Python client exposes these as
+`SupabaseCollectorRemote.register_project(...)` and
+`publish_living_observation(...)`. A living payload is one existing
+`LivingChange`/`LivingSessionsChange` object with `cursor` and `revision`
+omitted; PostgreSQL assigns its authoritative workspace revision and cursor.
+Heartbeat and canonical living records share the agent-instance observation
+sequence, so the local publisher must allocate one monotonically increasing
+sequence across both operations.
+
 ## Collector responsibilities
 
 ```text
@@ -112,6 +122,8 @@ prompts, credentials, and proprietary content remain local.
    file/media body, data URI, or base64 body.
 10. Remote `session.events` and `session.items` return retained compact evidence
     through the shared API and declare their scope.
+11. The host publishes `living.events` and `living.sessions` canonical changes;
+    heartbeat-only coverage remains explicit until this publisher is enabled.
 
 ## Operation
 

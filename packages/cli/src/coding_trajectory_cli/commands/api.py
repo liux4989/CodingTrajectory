@@ -11,9 +11,9 @@ from typing import Any
 from uuid import UUID
 
 from coding_trajectory.contracts import command_schema
-from coding_trajectory.control_plane.remote import (
-    SupabaseHistoricalRepository,
-    SupabaseRpcClient,
+from coding_trajectory.control_plane.http_service import (
+    RemoteRuntimeFactory,
+    serve_http,
 )
 from coding_trajectory.runtime import ServiceRuntime
 
@@ -52,34 +52,36 @@ def _runtime(args: argparse.Namespace) -> ServiceRuntime:
     workspace_id = getattr(args, "remote_workspace_id", None)
     if args.snapshot_sequence is not None and workspace_id is None:
         raise ValueError("--snapshot-sequence requires --remote-workspace-id")
-    repository = None
     if workspace_id is not None:
-        url = args.supabase_url or os.environ.get("CT_SUPABASE_URL")
-        api_key = args.supabase_api_key or os.environ.get("CT_SUPABASE_ANON_KEY")
+        url, api_key = _remote_service_config(args)
         access_token = args.access_token or os.environ.get("CT_ACCESS_TOKEN")
-        missing = [
-            name
-            for name, value in (
-                ("CT_SUPABASE_URL", url),
-                ("CT_SUPABASE_ANON_KEY", api_key),
-                ("CT_ACCESS_TOKEN", access_token),
-            )
-            if not value
-        ]
-        if missing:
-            raise ValueError("remote API requires " + ", ".join(missing))
-        repository = SupabaseHistoricalRepository(
-            client=SupabaseRpcClient(
-                url=url, api_key=api_key, access_token=access_token
-            ),
+        if not access_token:
+            raise ValueError("remote API requires CT_ACCESS_TOKEN")
+        return RemoteRuntimeFactory(
+            url=url,
+            api_key=api_key,
             workspace_id=workspace_id,
-            snapshot_sequence=args.snapshot_sequence,
-        )
+        ).build(access_token, snapshot_sequence=args.snapshot_sequence)
     return ServiceRuntime(
         global_scope=args.global_scope,
         current_dir=Path.cwd(),
-        historical_repository=repository,
     )
+
+
+def _remote_service_config(args: argparse.Namespace) -> tuple[str, str]:
+    url = args.supabase_url or os.environ.get("CT_SUPABASE_URL")
+    api_key = args.supabase_api_key or os.environ.get("CT_SUPABASE_ANON_KEY")
+    missing = [
+        name
+        for name, value in (
+            ("CT_SUPABASE_URL", url),
+            ("CT_SUPABASE_ANON_KEY", api_key),
+        )
+        if not value
+    ]
+    if missing:
+        raise ValueError("remote API requires " + ", ".join(missing))
+    return str(url), str(api_key)
 
 
 def _handle_api_call(args: argparse.Namespace) -> dict[str, Any]:
@@ -97,6 +99,17 @@ def _handle_api_schema(args: argparse.Namespace) -> dict[str, Any]:
     return command_schema(args.method, command=f"ct api call {args.method}")
 
 
+def _handle_api_serve(args: argparse.Namespace) -> None:
+    url, api_key = _remote_service_config(args)
+    serve_http(
+        factory=RemoteRuntimeFactory(
+            url=url, api_key=api_key, workspace_id=args.remote_workspace_id
+        ),
+        host=args.host,
+        port=args.port,
+    )
+
+
 def _add_remote_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--remote-workspace-id",
@@ -109,9 +122,7 @@ def _add_remote_flags(parser: argparse.ArgumentParser) -> None:
         help="Pin remote reads to this workspace sequence (defaults to latest).",
     )
     parser.add_argument("--supabase-url", help="Defaults to CT_SUPABASE_URL.")
-    parser.add_argument(
-        "--supabase-api-key", help="Defaults to CT_SUPABASE_ANON_KEY."
-    )
+    parser.add_argument("--supabase-api-key", help="Defaults to CT_SUPABASE_ANON_KEY.")
     parser.add_argument("--access-token", help="Defaults to CT_ACCESS_TOKEN.")
 
 
@@ -197,3 +208,16 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _plugin_handler=_handle_api_schema,
         _default_output="json",
     )
+
+    serve = api_sub.add_parser(
+        "serve",
+        prog="ct api serve",
+        help="Serve authenticated remote CT call, batch, and schema endpoints.",
+        formatter_class=GhFormatter,
+    )
+    serve.add_argument("--remote-workspace-id", type=UUID, required=True)
+    serve.add_argument("--supabase-url", help="Defaults to CT_SUPABASE_URL.")
+    serve.add_argument("--supabase-api-key", help="Defaults to CT_SUPABASE_ANON_KEY.")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.set_defaults(_plugin_handler=_handle_api_serve, _default_output="json")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import atexit
 import json
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol, Self
 
@@ -217,6 +217,8 @@ class ServiceRuntime:
         global_scope: bool,
         current_dir: Path,
         historical_repository: HistoricalRepository | None = None,
+        authority_handlers: Mapping[MethodAuthority, Callable[..., Any]] | None = None,
+        transport_metadata: Callable[[], dict[str, Any] | None] | None = None,
     ) -> None:
         self.global_scope = global_scope
         self.current_dir = current_dir
@@ -224,12 +226,20 @@ class ServiceRuntime:
         self.cache = IndexCache.load()
         self._stores: dict[tuple[Any, ...], tuple[Any, str]] = {}
         self._batch_store: tuple[Any, str] | None = None
+        overrides = dict(authority_handlers or {})
+        self._transport_metadata = transport_metadata
         self._dispatcher = ApplicationDispatcher(
             {
                 MethodAuthority.HISTORICAL: self._call_historical,
-                MethodAuthority.PROJECT_INVENTORY: self._call_project_inventory,
-                MethodAuthority.LIVING: self._call_living,
-                MethodAuthority.ESTIMATION: self._call_estimation,
+                MethodAuthority.PROJECT_INVENTORY: overrides.get(
+                    MethodAuthority.PROJECT_INVENTORY, self._call_project_inventory
+                ),
+                MethodAuthority.LIVING: overrides.get(
+                    MethodAuthority.LIVING, self._call_living
+                ),
+                MethodAuthority.ESTIMATION: overrides.get(
+                    MethodAuthority.ESTIMATION, self._call_estimation
+                ),
             }
         )
 
@@ -265,12 +275,10 @@ class ServiceRuntime:
         return self._dispatcher.call(method, params)
 
     def _call_project_inventory(self, method: str, params: dict[str, Any]) -> Any:
-        if self.historical_repository is not None:
-            raise ValueError(
-                "remote project inventory is not implemented; remote mode currently supports historical methods only"
-            )
         if method != "project.list":
-            raise KeyError(f"no local project inventory handler registered for {method}")
+            raise KeyError(
+                f"no local project inventory handler registered for {method}"
+            )
         return project_list_metadata(
             params,
             global_scope=True,
@@ -278,10 +286,6 @@ class ServiceRuntime:
         )
 
     def _call_living(self, method: str, params: dict[str, Any]) -> Any:
-        if self.historical_repository is not None:
-            raise ValueError(
-                "remote living authority is not implemented; remote mode currently supports historical methods only"
-            )
         if method == "living.events":
             from coding_trajectory.living_events import serve_living_events
 
@@ -302,10 +306,6 @@ class ServiceRuntime:
         raise KeyError(f"no local living handler registered for {method}")
 
     def _call_estimation(self, method: str, params: dict[str, Any]) -> Any:
-        if self.historical_repository is not None:
-            raise ValueError(
-                "remote estimation authority is not implemented; remote mode currently supports historical methods only"
-            )
         from coding_trajectory.estimation import serve_estimate
 
         return serve_estimate(
@@ -366,6 +366,8 @@ class ServiceRuntime:
         return response
 
     def transport_metadata(self) -> dict[str, Any] | None:
+        if self._transport_metadata is not None:
+            return self._transport_metadata()
         if self.historical_repository is None:
             return None
         return self.historical_repository.metadata()

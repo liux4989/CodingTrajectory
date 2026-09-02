@@ -35,6 +35,21 @@ class SourceRegistrationResponse(CollectorModel):
     source_epoch: int = Field(ge=1)
 
 
+class ProjectRegistrationRequest(CollectorModel):
+    version: Literal[1] = 1
+    workspace_id: UUID
+    agent_id: UUID
+    display_name: str = Field(min_length=1)
+    repository_identity: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+
+
+class ProjectRegistrationResponse(CollectorModel):
+    project_id: UUID
+    revision: int = Field(gt=0)
+    committed_sequence: int = Field(gt=0)
+
+
 class ObservationRequest(CollectorModel):
     """One idempotent, host-normalized source snapshot."""
 
@@ -74,3 +89,20 @@ class LeaseHeartbeatRequest(CollectorModel):
 class LeaseHeartbeatResponse(CollectorModel):
     committed_sequence: int = Field(ge=1)
     lease_expires_at: datetime
+
+
+class LivingObservationRequest(CollectorModel):
+    """One contract-valid living change projected on its owning host."""
+
+    version: Literal[1] = 1
+    workspace_id: UUID
+    agent_id: UUID
+    agent_instance_id: UUID
+    observation_sequence: int = Field(ge=1)
+    observed_at: datetime
+    kind: Literal["living.events", "living.sessions"]
+    payload: dict[str, Any]
+
+
+class LivingObservationReceipt(CollectorModel):
+    committed_sequence: int = Field(ge=1)
