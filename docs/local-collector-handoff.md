@@ -120,6 +120,28 @@ uv run ct collector run --global-scope --since-days 7 \
   --workspace-id <workspace-uuid> --agent-id <agent-uuid> --project-id <project-uuid>
 ```
 
+### Refreshable macOS credential profile
+
+For a recurring local collector, store the Auth user's password only in macOS
+Keychain. The profile file is mode `0600`, contains no JWT or password, and
+holds the workspace/agent identity plus the project URL and publishable key.
+Each collection pass signs in just-in-time for a fresh user JWT.
+
+```sh
+uv run ct collector credentials configure \
+  --profile default \
+  --workspace-id <workspace-uuid> --agent-id <agent-uuid> \
+  --supabase-url https://your-project.supabase.co \
+  --supabase-api-key <publishable-key> \
+  --email <collector-auth-email>
+
+uv run ct collector run --credential-profile default --global-scope --since-days 7
+```
+
+Use `ct collector credentials status --profile default` to confirm only that
+the profile and its Keychain password exist. It never prints a password, JWT,
+API key, email address, or identifiers.
+
 The default outbox is private local state at
 `~/.coding-trajectory/control-plane/collector.sqlite3`. `ct collector status`
 reports only its pending count. Re-running `run` preserves the exact queued
