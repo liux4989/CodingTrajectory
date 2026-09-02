@@ -69,12 +69,12 @@ Transport
     +-- HttpTransport           authenticated local/remote clients
 ```
 
-Both transports validate shared request models and compatible result models for
-the operations their content scope permits. The embedded transport can serve
-full detail; the initial HTTP transport must declare `content_scope: compact`
-and reject local-only detail methods. The CLI, Python SDK, plugins, and remote
-agents differ by endpoint, credential acquisition, and declared content scope.
-Agents never query canonical Supabase tables directly.
+Both transports validate the same request and result models through the same
+Python handlers. The embedded transport can serve full bodies; the HTTP
+transport declares `content_scope: compact` and serves retained evidence for
+all methods. The CLI, Python SDK, plugins, and remote agents differ by endpoint,
+credential acquisition, and declared content scope. Agents never query
+canonical Supabase tables directly.
 
 ## Accepted observation ledger
 
@@ -185,24 +185,22 @@ and (superseded_sequence is null or superseded_sequence > S)
 Every item in `batch` shares one `S`. This prevents a response from mixing
 graphs from before and after concurrent ingestion.
 
-Remote-compatible method result schemas remain unchanged during the first
-compact remote migration; local-only detail methods are not exposed through
-HTTP. A versioned outer envelope adds transport metadata:
+Method result schemas and handlers remain shared during the compact remote
+migration. Detail methods return retained compact events and items rather than
+inventing a second remote API. The outer envelope adds optional transport
+metadata without changing local replies:
 
 ```json
 {
   "id": "request-id",
   "method": "session.summary",
-  "version": 1,
   "ok": true,
   "meta": {
     "workspace_id": "uuid",
     "snapshot_sequence": 481,
     "source": "remote",
     "freshness": "authoritative",
-    "content_scope": "compact",
-    "artifact_revision": 7,
-    "projection_version": "optional"
+    "content_scope": "compact"
   },
   "result": {}
 }
@@ -215,9 +213,9 @@ bounded wait for read-after-write behavior.
 
 Source selection belongs to client transport configuration, not method
 parameters. Normal compact operation uses the remote API. A full-detail local
-operation selects the embedded transport explicitly. A request for local-only
-detail never silently falls back from remote to vendor logs. Explicit offline
-mode reads a snapshot-bound cache and reports its last known sequence.
+operation selects the embedded transport explicitly. Remote reads never
+silently hydrate omitted bodies from vendor logs. Explicit offline mode reads a
+snapshot-bound cache and reports its last known sequence.
 
 ## Living state
 
@@ -294,10 +292,10 @@ membership and full-detail local custody:
   full-detail local evidence are server-only or principal-private.
 - Remote payloads contain compact historical facts only.
 
-`session.events` full detail is embedded/local-only in the initial remote
-release. Remote `session.items` may return only compact metadata and
-measurements. A restricted grant still requires a separately versioned API
-rather than an undocumented partial response.
+`session.events` and `session.items` use the same handlers remotely, returning
+the event and item evidence retained by measurements mode. The envelope and
+existing coverage fields make omitted bodies explicit; there is no parallel
+remote result contract.
 
 ## Foundation and delivery plan
 
@@ -311,12 +309,30 @@ rather than an undocumented partial response.
 
 ### Remote service
 
-1. Add versioned control-plane request and response envelopes.
-2. Implement authenticated HTTP `call`, `batch`, and `schema` transports.
-3. Implement workspace snapshot selection and remote authority repositories.
-4. Add projector and estimation workers with leases and bounded retries.
-5. Prove compact compatibility for remote-exposed methods, and prove explicit
-   scope errors for local-only full-detail methods.
+The compact historical foundation is implemented: service-role projection RPCs lease
+accepted observations and atomically publish complete graph-revision sets; the
+Python projector preserves existing graph semantics; and `ct api call/batch`
+can explicitly select one authenticated, snapshot-pinned remote workspace for
+the compact v2 snapshot schema. Remote mode rejects the other
+authorities until their repositories exist rather than silently returning
+host-local data. Production activation still waits for private-corpus
+compatibility and privacy validation.
+
+Remaining remote-owned work:
+
+1. Host the stateless authenticated HTTP `call`, `batch`, and `schema` service.
+2. Implement the portable project-inventory repository and `project.list`.
+3. Implement freshness-aware living observation queries.
+4. Implement the estimation event repository, queue, and central worker.
+5. Add optional revision-bound client caching and prove compact compatibility
+   for all shared methods.
+
+Local-agent handoff remains deliberately narrow: apply migrations to the chosen
+Supabase project, provision capability-scoped credentials, run the collector on
+machines that own vendor logs, and validate compact observations on private
+representative data. Operate the projector with a server-only service role only
+after compact compatibility gates pass. Local agents do not own canonical graph
+assembly, conflict resolution, snapshots, or shared API reads.
 
 ### Local collector
 
@@ -336,9 +352,8 @@ are documented in [`local-collector-handoff.md`](local-collector-handoff.md).
 The control plane is ready when:
 
 1. Every registered method has exactly one declared authority.
-2. Embedded and HTTP transports pass compatible validated results for the
-   remote compact scope; local-only detail methods return an explicit scope
-   error over HTTP.
+2. Embedded and HTTP transports use the same validated method contracts and
+   handlers; remote results identify compact coverage.
 3. A batch observes one workspace sequence across all authorities.
 4. Repeated observation delivery is idempotent and conflicting reuse is rejected.
 5. Compact graph revisions round-trip through `SessionGraph` and retain their

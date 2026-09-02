@@ -730,6 +730,7 @@ class CodexAdapter(BaseAdapter):
         records: Iterable[dict],
         *,
         parent_started_turn_ids: set[str] | None = None,
+        retention: CanonicalRetention = "trajectory",
     ) -> Session:
         """In-memory-record seam: cut inherited fork history, then assemble."""
         self._reset_ingest_state()
@@ -739,7 +740,7 @@ class CodexAdapter(BaseAdapter):
         transcript = self._build_transcript(
             ((record, None) for record in cut), state
         )
-        return self._build_session(source, transcript, state, retention="trajectory")
+        return self._build_session(source, transcript, state, retention=retention)
 
     def scan_started_turn_ids(self, source: Path) -> set[str] | None:
         started: set[str] = set()

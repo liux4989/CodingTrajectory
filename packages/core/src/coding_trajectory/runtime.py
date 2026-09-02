@@ -11,7 +11,11 @@ from typing import Any, Protocol, Self
 
 from pydantic import ValidationError
 
-from coding_trajectory.control_plane import ApplicationDispatcher, MethodAuthority
+from coding_trajectory.control_plane import (
+    METHOD_AUTHORITIES,
+    ApplicationDispatcher,
+    MethodAuthority,
+)
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import (
     IndexCache,
@@ -118,6 +122,14 @@ class ServiceApiClient(Protocol):
         """Execute one request, returning the ``ct api`` envelope shape."""
 
 
+class HistoricalRepository(Protocol):
+    """Supply graph stores from one local or remote historical authority."""
+
+    def store_for(self, method: str, params: dict[str, Any]) -> tuple[Any, str]: ...
+
+    def metadata(self) -> dict[str, Any] | None: ...
+
+
 class PluginApiError(RuntimeError):
     """Raised when an in-process service call fails."""
 
@@ -199,9 +211,16 @@ def default_plugin_client() -> PluginApiClient:
 class ServiceRuntime:
     """Execute calls and batches while reusing compatible stores."""
 
-    def __init__(self, *, global_scope: bool, current_dir: Path) -> None:
+    def __init__(
+        self,
+        *,
+        global_scope: bool,
+        current_dir: Path,
+        historical_repository: HistoricalRepository | None = None,
+    ) -> None:
         self.global_scope = global_scope
         self.current_dir = current_dir
+        self.historical_repository = historical_repository
         self.cache = IndexCache.load()
         self._stores: dict[tuple[Any, ...], tuple[Any, str]] = {}
         self._batch_store: tuple[Any, str] | None = None
@@ -224,6 +243,14 @@ class ServiceRuntime:
         self.cache.save()
 
     def prepare_batch(self, requests: list[dict[str, Any]]) -> None:
+        if self.historical_repository is not None:
+            if any(
+                request.get("method") in METHOD_AUTHORITIES
+                and METHOD_AUTHORITIES[request["method"]] == MethodAuthority.HISTORICAL
+                for request in requests
+            ):
+                self.historical_repository.store_for("project.sessions", {})
+            return
         ids = _entrypoint_ids(requests)
         if not ids:
             return
@@ -238,6 +265,10 @@ class ServiceRuntime:
         return self._dispatcher.call(method, params)
 
     def _call_project_inventory(self, method: str, params: dict[str, Any]) -> Any:
+        if self.historical_repository is not None:
+            raise ValueError(
+                "remote project inventory is not implemented; remote mode currently supports historical methods only"
+            )
         if method != "project.list":
             raise KeyError(f"no local project inventory handler registered for {method}")
         return project_list_metadata(
@@ -247,6 +278,10 @@ class ServiceRuntime:
         )
 
     def _call_living(self, method: str, params: dict[str, Any]) -> Any:
+        if self.historical_repository is not None:
+            raise ValueError(
+                "remote living authority is not implemented; remote mode currently supports historical methods only"
+            )
         if method == "living.events":
             from coding_trajectory.living_events import serve_living_events
 
@@ -267,6 +302,10 @@ class ServiceRuntime:
         raise KeyError(f"no local living handler registered for {method}")
 
     def _call_estimation(self, method: str, params: dict[str, Any]) -> Any:
+        if self.historical_repository is not None:
+            raise ValueError(
+                "remote estimation authority is not implemented; remote mode currently supports historical methods only"
+            )
         from coding_trajectory.estimation import serve_estimate
 
         return serve_estimate(
@@ -307,18 +346,33 @@ class ServiceRuntime:
             DocumentError,
         ) as exc:
             return _error_item(request_id, method, str(exc))
-        return {
+        response = {
             "id": request_id,
             "method": method,
             "ok": True,
             "result": result,
         }
+        metadata = self.transport_metadata()
+        if metadata is not None:
+            response["meta"] = metadata
+        return response
 
     def batch(self, requests: list[dict[str, Any]]) -> dict[str, Any]:
         self.prepare_batch(requests)
-        return {"items": [self.execute(request) for request in requests]}
+        response = {"items": [self.execute(request) for request in requests]}
+        metadata = self.transport_metadata()
+        if metadata is not None:
+            response["meta"] = metadata
+        return response
+
+    def transport_metadata(self) -> dict[str, Any] | None:
+        if self.historical_repository is None:
+            return None
+        return self.historical_repository.metadata()
 
     def _store_for(self, method: str, params: dict[str, Any]) -> tuple[Any, str]:
+        if self.historical_repository is not None:
+            return self.historical_repository.store_for(method, params)
         if self._batch_store is not None and _entrypoint_ids_from_params(params):
             return self._batch_store
         include_descendants = _requires_session_component(method)

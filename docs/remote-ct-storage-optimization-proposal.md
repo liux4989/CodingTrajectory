@@ -1,6 +1,6 @@
 # Remote CT Compact Storage Proposal
 
-- **Status:** Proposed implementation; compact remote boundary agreed
+- **Status:** Compact v2 boundary implemented; private-corpus validation pending
 - **Date:** 2026-09-02
 - **Scope:** Remote collector observations, remote content scope, and future
   storage work
@@ -21,6 +21,11 @@ not imply that omitted content is unavailable on the originating host.
 This decision changes future collection only. Existing accepted full snapshots
 remain immutable while compact collection, replay, and query compatibility are
 validated. It does not authorize a destructive backfill or deletion.
+
+The implementation uses `canonical_session_snapshot.v2`, advances existing
+collector sources into a new epoch, retires unaccepted local and remote v1
+projection work, and validates the compact invariant again in the Python
+projector. Existing v1 observations remain evidence but are never projected.
 
 ## Why now
 
@@ -282,22 +287,20 @@ only with its owner and validation plan.
 
 ## Validation and rollout
 
-### Phase 1 — compact collection
+### Phase 1 — compact collection (implemented)
 
-1. Add a collector option that selects existing measurements retention before
-   remote serialization.
+1. Select existing measurements retention before remote serialization.
 2. Apply the remote-boundary scrubber and publish a new compact schema version.
 3. Keep the existing full local trajectory and vendor log untouched.
-4. Add aggregate-only size telemetry: source count, payload bytes, body fields
-   removed, and compact measurement counts. It must not record content, paths,
-   identifiers, or prompts.
+4. Measure aggregate payload size during private-corpus validation without
+   recording content, paths, identifiers, or prompts.
 
 ### Phase 2 — compatibility evidence
 
 1. For a private representative corpus, compare local full and remote compact
    results for summaries, graphs, statistics, and usage methods.
-2. Record the expected local-only behavior for `session.events` and full item
-   detail rather than treating it as a parity failure.
+2. Confirm `session.events` and `session.items` return retained compact evidence
+   through the same handlers and contracts as local reads.
 3. Confirm exact retry, source epoch rollover, and change-log ordering with the
    compact payload digest.
 4. Confirm no host paths, file contents, data URIs, base64 bodies, or tool
@@ -318,7 +321,8 @@ Implementation is ready only when:
 2. Full tool bodies, command bodies, paths, media-like bodies, and unbounded
    event payloads are absent from outbound remote observations.
 3. Summary and metric results have documented compact compatibility evidence.
-4. Local-only detail methods return an explicit remote scope error.
+4. All historical methods remain callable and identify compact coverage without
+   silently hydrating omitted bodies.
 5. Existing source ordering, idempotency, receipts, and lease semantics pass
    unchanged.
 6. No existing remote payload is deleted or rewritten as part of rollout.
@@ -327,9 +331,7 @@ Implementation is ready only when:
 
 1. Which bounded summaries, if any, are useful remotely and what are their
    maximum character/token limits?
-2. Should compact remote `session.items` be exposed immediately, or should it
-   also remain local-only until its compact result contract is reviewed?
-3. What compact-size distribution and repeat-version rate justify a compressed
+2. What compact-size distribution and repeat-version rate justify a compressed
    blob backend?
-4. What retention period is required for compact source observations and
+3. What retention period is required for compact source observations and
    operational receipts?

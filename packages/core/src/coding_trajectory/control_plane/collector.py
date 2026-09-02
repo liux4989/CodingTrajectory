@@ -27,15 +27,15 @@ from coding_trajectory.control_plane.collector_protocol import (
     SourceRegistrationRequest,
     SourceRegistrationResponse,
 )
+from coding_trajectory.control_plane.compact import build_remote_compact_session
 from coding_trajectory.discovery import (
     DiscoveryCandidate,
     discover_source_candidates,
-    stabilize_session,
 )
 from coding_trajectory.ingestion.common import canonical_json, last_complete_line_offset
 
-_PARSER_VERSION = "ct-local-collector-v1"
-_SNAPSHOT_SCHEMA_VERSION = "canonical_session_snapshot.v1"
+_PARSER_VERSION = "ct-local-collector-v2"
+_SNAPSHOT_SCHEMA_VERSION = "canonical_session_snapshot.v2"
 
 
 class CollectorRemote(Protocol):
@@ -152,6 +152,7 @@ class LocalCollector:
         self._connection.execute(
             "update observation_outbox set state = 'pending' where state = 'in_flight'"
         )
+        self._retire_legacy_outbox()
         self._connection.commit()
 
     def close(self) -> None:
@@ -278,8 +279,13 @@ class LocalCollector:
             return 0
         file_identity = f"{stat.st_dev}:{stat.st_ino}"
         state = self._source_state(source)
+        schema_changed = state is not None and (
+            state["snapshot_schema_version"] != _SNAPSHOT_SCHEMA_VERSION
+        )
         rollover = state is not None and (
-            state["file_identity"] != file_identity or complete_offset < state["committed_offset"]
+            state["file_identity"] != file_identity
+            or complete_offset < state["committed_offset"]
+            or schema_changed
         )
         local_epoch = (
             int(state["source_epoch"]) + 1
@@ -314,6 +320,7 @@ class LocalCollector:
             source_epoch=local_epoch,
             file_identity=file_identity,
             committed_offset=complete_offset,
+            snapshot_schema_version=_SNAPSHOT_SCHEMA_VERSION,
         )
         digest = _sha256(complete_bytes)
         if source_id is None or (
@@ -363,8 +370,8 @@ class LocalCollector:
             ),
         )
         self._connection.execute(
-            "update registered_sources set last_digest = ?, next_source_sequence = ? where path = ?",
-            (digest, sequence + 1, str(source)),
+            "update registered_sources set last_digest = ?, next_source_sequence = ?, snapshot_schema_version = ? where path = ?",
+            (digest, sequence + 1, _SNAPSHOT_SCHEMA_VERSION, str(source)),
         )
         self._connection.commit()
         return 1
@@ -399,7 +406,7 @@ class LocalCollector:
 
     def _upsert_source(self, **values: Any) -> None:
         self._connection.execute(
-            "insert into registered_sources (path, vendor, native_session_id, source_id, source_epoch, file_identity, committed_offset, next_source_sequence) values (:path, :vendor, :native_session_id, :source_id, :source_epoch, :file_identity, :committed_offset, 0) on conflict(path) do update set vendor = excluded.vendor, native_session_id = excluded.native_session_id, source_id = excluded.source_id, source_epoch = excluded.source_epoch, file_identity = excluded.file_identity, committed_offset = excluded.committed_offset",
+            "insert into registered_sources (path, vendor, native_session_id, source_id, source_epoch, file_identity, committed_offset, next_source_sequence, snapshot_schema_version) values (:path, :vendor, :native_session_id, :source_id, :source_epoch, :file_identity, :committed_offset, 0, :snapshot_schema_version) on conflict(path) do update set vendor = excluded.vendor, native_session_id = excluded.native_session_id, source_id = excluded.source_id, source_epoch = excluded.source_epoch, file_identity = excluded.file_identity, committed_offset = excluded.committed_offset, next_source_sequence = case when registered_sources.source_epoch <> excluded.source_epoch then 0 else registered_sources.next_source_sequence end, last_digest = case when registered_sources.source_epoch <> excluded.source_epoch then null else registered_sources.last_digest end, snapshot_schema_version = excluded.snapshot_schema_version",
             {**values, "path": str(values["source"]), "source_id": str(values["source_id"]) if values["source_id"] else None},
         )
 
@@ -423,7 +430,7 @@ class LocalCollector:
               path text primary key, vendor text not null, native_session_id text not null,
               source_id text, source_epoch integer not null, file_identity text not null,
               committed_offset integer not null, next_source_sequence integer not null,
-              last_digest text
+              last_digest text, snapshot_schema_version text
             );
             create table if not exists observation_outbox (
               idempotency_key text primary key, source_id text not null, source_epoch integer not null,
@@ -437,6 +444,29 @@ class LocalCollector:
             );
             """
         )
+        columns = {
+            row["name"]
+            for row in self._connection.execute("pragma table_info(registered_sources)")
+        }
+        if "snapshot_schema_version" not in columns:
+            self._connection.execute(
+                "alter table registered_sources add column snapshot_schema_version text"
+            )
+
+    def _retire_legacy_outbox(self) -> None:
+        rows = self._connection.execute(
+            "select idempotency_key, request_json from observation_outbox where state in ('pending', 'in_flight')"
+        ).fetchall()
+        for row in rows:
+            try:
+                request = ObservationRequest.model_validate_json(row["request_json"])
+            except ValueError:
+                continue
+            if request.schema_version == "canonical_session_snapshot.v1":
+                self._connection.execute(
+                    "update observation_outbox set state = 'rejected', last_error = 'legacy_v1_not_published' where idempotency_key = ?",
+                    (row["idempotency_key"],),
+                )
 
 
 def _complete_prefix(source: Path, size: int) -> tuple[int, bytes]:
@@ -451,18 +481,10 @@ def _normalized_session(candidate: DiscoveryCandidate, source_id: UUID, raw: byt
     # The opaque URI creates host-independent stable event/item IDs.  It is not
     # opened and it deliberately cannot reveal the source path to the server.
     portable_source = Path(f"ct-source-{source_id}")
-    session = candidate.adapter_cls().build_canonical_session(portable_source, records)
-    session = stabilize_session(session, vendor=candidate.vendor, source=portable_source)
-    payload = session.model_dump(mode="json")
-    payload["cwd"] = None
-    extensions = payload.get("extensions")
-    if isinstance(extensions, dict):
-        for name in ("codex", "pi"):
-            extension = extensions.get(name)
-            if isinstance(extension, dict):
-                extension.pop("cwd", None)
-                extension.pop("session_file", None)
-    return payload
+    session = build_remote_compact_session(
+        candidate, source=portable_source, records=records
+    )
+    return session.model_dump(mode="json")
 
 
 def _source_key(identity: CollectorIdentity, vendor: str, native_session_id: str, epoch: int) -> str:

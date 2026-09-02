@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from coding_trajectory.contracts import command_schema
+from coding_trajectory.control_plane.remote import (
+    SupabaseHistoricalRepository,
+    SupabaseRpcClient,
+)
 from coding_trajectory.runtime import ServiceRuntime
+
 from coding_trajectory_cli._shared import GhFormatter, add_params_flag
 
 
@@ -41,19 +48,78 @@ def _read_batch_requests(args: argparse.Namespace) -> list[dict[str, Any]]:
     return parsed
 
 
+def _runtime(args: argparse.Namespace) -> ServiceRuntime:
+    workspace_id = getattr(args, "remote_workspace_id", None)
+    if args.snapshot_sequence is not None and workspace_id is None:
+        raise ValueError("--snapshot-sequence requires --remote-workspace-id")
+    repository = None
+    if workspace_id is not None:
+        url = args.supabase_url or os.environ.get("CT_SUPABASE_URL")
+        api_key = args.supabase_api_key or os.environ.get("CT_SUPABASE_ANON_KEY")
+        access_token = args.access_token or os.environ.get("CT_ACCESS_TOKEN")
+        missing = [
+            name
+            for name, value in (
+                ("CT_SUPABASE_URL", url),
+                ("CT_SUPABASE_ANON_KEY", api_key),
+                ("CT_ACCESS_TOKEN", access_token),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError("remote API requires " + ", ".join(missing))
+        repository = SupabaseHistoricalRepository(
+            client=SupabaseRpcClient(
+                url=url, api_key=api_key, access_token=access_token
+            ),
+            workspace_id=workspace_id,
+            snapshot_sequence=args.snapshot_sequence,
+        )
+    return ServiceRuntime(
+        global_scope=args.global_scope,
+        current_dir=Path.cwd(),
+        historical_repository=repository,
+    )
+
+
 def _handle_api_call(args: argparse.Namespace) -> dict[str, Any]:
-    with ServiceRuntime(global_scope=args.global_scope, current_dir=Path.cwd()) as runtime:
+    with _runtime(args) as runtime:
         return runtime.execute(_request_from_args(args))
 
 
 def _handle_api_batch(args: argparse.Namespace) -> dict[str, Any]:
     requests = _read_batch_requests(args)
-    with ServiceRuntime(global_scope=args.global_scope, current_dir=Path.cwd()) as runtime:
+    with _runtime(args) as runtime:
         return runtime.batch(requests)
 
 
 def _handle_api_schema(args: argparse.Namespace) -> dict[str, Any]:
     return command_schema(args.method, command=f"ct api call {args.method}")
+
+
+def _add_remote_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--remote-workspace-id",
+        type=UUID,
+        help="Use the authoritative remote historical snapshot for this workspace.",
+    )
+    parser.add_argument(
+        "--snapshot-sequence",
+        type=_nonnegative_int,
+        help="Pin remote reads to this workspace sequence (defaults to latest).",
+    )
+    parser.add_argument("--supabase-url", help="Defaults to CT_SUPABASE_URL.")
+    parser.add_argument(
+        "--supabase-api-key", help="Defaults to CT_SUPABASE_ANON_KEY."
+    )
+    parser.add_argument("--access-token", help="Defaults to CT_ACCESS_TOKEN.")
+
+
+def _nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
+    return parsed
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -85,6 +151,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Use global discovery for requests without a session entry point.",
     )
     add_params_flag(call)
+    _add_remote_flags(call)
     call.set_defaults(
         _plugin_handler=_handle_api_call,
         _default_output="json",
@@ -102,6 +169,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         default="-",
         help="Read request array from a file, or '-' for stdin.",
     )
+    _add_remote_flags(batch)
     batch.add_argument(
         "--requests",
         dest="requests_json",

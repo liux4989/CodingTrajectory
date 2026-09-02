@@ -13,11 +13,22 @@ class ApiEnvelopeModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ApiTransportMetadata(ApiEnvelopeModel):
+    """Authority and snapshot facts carried outside versioned method results."""
+
+    workspace_id: str
+    snapshot_sequence: int
+    source: Literal["remote"]
+    freshness: Literal["authoritative"]
+    content_scope: Literal["compact"]
+
+
 class ApiSuccessResponse(ApiEnvelopeModel, Generic[ResultT]):
     id: Any
     method: str
     ok: Literal[True]
     result: ResultT
+    meta: ApiTransportMetadata | None = None
 
 
 class ApiErrorDetail(ApiEnvelopeModel):
@@ -29,3 +40,4 @@ class ApiErrorResponse(ApiEnvelopeModel):
     method: Any
     ok: Literal[False]
     error: ApiErrorDetail
+    meta: ApiTransportMetadata | None = None
