@@ -16,7 +16,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 from uuid import UUID
 
 from coding_trajectory.control_plane.collector_protocol import (
@@ -27,7 +27,11 @@ from coding_trajectory.control_plane.collector_protocol import (
     SourceRegistrationRequest,
     SourceRegistrationResponse,
 )
-from coding_trajectory.discovery import DiscoveryCandidate, discover_source_candidates, stabilize_session
+from coding_trajectory.discovery import (
+    DiscoveryCandidate,
+    discover_source_candidates,
+    stabilize_session,
+)
 from coding_trajectory.ingestion.common import canonical_json, last_complete_line_offset
 
 _PARSER_VERSION = "ct-local-collector-v1"
@@ -153,7 +157,7 @@ class LocalCollector:
     def close(self) -> None:
         self._connection.close()
 
-    def __enter__(self) -> LocalCollector:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_exc: object) -> None:
@@ -261,7 +265,9 @@ class LocalCollector:
         ).fetchone()
         return int(row["count"])
 
-    def _collect_candidate(self, candidate: DiscoveryCandidate, *, remote: CollectorRemote | None) -> int:
+    def _collect_candidate(
+        self, candidate: DiscoveryCandidate, *, remote: CollectorRemote | None
+    ) -> int:
         source = candidate.path
         header = candidate.adapter_cls().scan_identity(source)
         if header is None:
@@ -275,7 +281,13 @@ class LocalCollector:
         rollover = state is not None and (
             state["file_identity"] != file_identity or complete_offset < state["committed_offset"]
         )
-        local_epoch = (int(state["source_epoch"]) + 1) if rollover else int(state["source_epoch"]) if state else 1
+        local_epoch = (
+            int(state["source_epoch"]) + 1
+            if rollover
+            else int(state["source_epoch"])
+            if state
+            else 1
+        )
         source_id = UUID(state["source_id"]) if state and state["source_id"] else None
         if remote is not None and (source_id is None or rollover):
             registration = remote.register_source(
@@ -304,7 +316,9 @@ class LocalCollector:
             committed_offset=complete_offset,
         )
         digest = _sha256(complete_bytes)
-        if source_id is None or (state is not None and not rollover and state["last_digest"] == digest):
+        if source_id is None or (
+            state is not None and not rollover and state["last_digest"] == digest
+        ):
             self._connection.commit()
             return 0
         sequence = 0 if rollover else int(state["next_source_sequence"]) if state else 0
@@ -330,7 +344,10 @@ class LocalCollector:
             payload=payload,
         )
         idempotency_key = _sha256(
-            f"{self.identity.agent_id}:{source_id}:{local_epoch}:{sequence}:{content_sha256}".encode()
+            (
+                f"{self.identity.agent_id}:{source_id}:{local_epoch}:"
+                f"{sequence}:{content_sha256}"
+            ).encode()
         )
         self._connection.execute(
             "insert or ignore into observation_outbox (idempotency_key, source_id, source_epoch, source_sequence, event_id, content_sha256, request_json, state, attempts, created_at) values (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)",
@@ -387,7 +404,9 @@ class LocalCollector:
         )
 
     def _get_meta(self, key: str, default: str) -> str:
-        row = self._connection.execute("select value from collector_meta where key = ?", (key,)).fetchone()
+        row = self._connection.execute(
+            "select value from collector_meta where key = ?", (key,)
+        ).fetchone()
         return str(row["value"]) if row is not None else default
 
     def _set_meta(self, key: str, value: str) -> None:

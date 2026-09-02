@@ -16,17 +16,18 @@ from coding_trajectory.control_plane.collector import (
     LocalCollector,
     SupabaseCollectorRemote,
 )
+from coding_trajectory.discovery import discover_source_candidates
+
+from coding_trajectory_cli._shared import (
+    GhFormatter,
+    add_agent_vendor_flag,
+    add_global_scope_flag,
+)
 from coding_trajectory_cli.collector_credentials import (
     CollectorCredentialError,
     configure_profile,
     profile_summary,
     refresh_profile,
-)
-from coding_trajectory.discovery import discover_source_candidates
-from coding_trajectory_cli._shared import (
-    GhFormatter,
-    add_agent_vendor_flag,
-    add_global_scope_flag,
 )
 
 
@@ -119,6 +120,7 @@ def _handle_scan(args: argparse.Namespace) -> dict[str, Any]:
         current_dir=Path.cwd(),
         global_scope=args.global_scope,
         agent_vendor=args.agent_vendor,
+        since_days=args.since_days,
     )
     return {
         "discovered": len(candidates),
@@ -242,7 +244,9 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     run.set_defaults(_plugin_handler=_handle_run, _default_output="json")
 
     status = commands.add_parser(
-        "status", help="Show local outbox count only.", formatter_class=GhFormatter
+        "status",
+        help="Show local outbox count only.",
+        formatter_class=GhFormatter,
     )
     status.add_argument("--state-path", help="Private SQLite delivery state path.")
     status.set_defaults(_plugin_handler=_handle_status, _default_output="json")
