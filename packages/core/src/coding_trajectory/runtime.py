@@ -5,12 +5,13 @@ from __future__ import annotations
 import atexit
 import json
 import threading
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol, Self
 
 from pydantic import ValidationError
 
-from coding_trajectory.contracts import service_contract
+from coding_trajectory.control_plane import ApplicationDispatcher, MethodAuthority
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import (
     IndexCache,
@@ -173,7 +174,7 @@ class PluginApiClient:
                 self._runtime.close()
                 self._runtime = None
 
-    def __enter__(self) -> PluginApiClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_exc: object) -> None:
@@ -204,8 +205,16 @@ class ServiceRuntime:
         self.cache = IndexCache.load()
         self._stores: dict[tuple[Any, ...], tuple[Any, str]] = {}
         self._batch_store: tuple[Any, str] | None = None
+        self._dispatcher = ApplicationDispatcher(
+            {
+                MethodAuthority.HISTORICAL: self._call_historical,
+                MethodAuthority.PROJECT_INVENTORY: self._call_project_inventory,
+                MethodAuthority.LIVING: self._call_living,
+                MethodAuthority.ESTIMATION: self._call_estimation,
+            }
+        )
 
-    def __enter__(self) -> ServiceRuntime:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_exc: object) -> None:
@@ -226,54 +235,53 @@ class ServiceRuntime:
         )
 
     def call(self, method: str, params: dict[str, Any]) -> Any:
-        contract = service_contract(method)
-        validated_params = contract.validate_request(params)
-        if method == "project.list":
-            return contract.validate_response(
-                project_list_metadata(
-                    validated_params,
-                    global_scope=True,
-                    current_dir=self.current_dir,
-                )
-            )
+        return self._dispatcher.call(method, params)
+
+    def _call_project_inventory(self, method: str, params: dict[str, Any]) -> Any:
+        if method != "project.list":
+            raise KeyError(f"no local project inventory handler registered for {method}")
+        return project_list_metadata(
+            params,
+            global_scope=True,
+            current_dir=self.current_dir,
+        )
+
+    def _call_living(self, method: str, params: dict[str, Any]) -> Any:
         if method == "living.events":
             from coding_trajectory.living_events import serve_living_events
 
-            return contract.validate_response(
-                serve_living_events(
-                    validated_params,
-                    cache=self.cache,
-                    current_dir=self.current_dir,
-                    global_scope=self.global_scope,
-                )
+            return serve_living_events(
+                params,
+                cache=self.cache,
+                current_dir=self.current_dir,
+                global_scope=self.global_scope,
             )
         if method == "living.sessions":
             from coding_trajectory.living_sessions import serve_living_sessions
 
-            return contract.validate_response(
-                serve_living_sessions(
-                    validated_params,
-                    current_dir=self.current_dir,
-                    global_scope=self.global_scope,
-                )
+            return serve_living_sessions(
+                params,
+                current_dir=self.current_dir,
+                global_scope=self.global_scope,
             )
-        if method.startswith("estimate."):
-            from coding_trajectory.estimation import serve_estimate
+        raise KeyError(f"no local living handler registered for {method}")
 
-            return contract.validate_response(
-                serve_estimate(
-                    method,
-                    validated_params,
-                    global_scope=self.global_scope,
-                    current_dir=self.current_dir,
-                    cache=self.cache,
-                )
-            )
+    def _call_estimation(self, method: str, params: dict[str, Any]) -> Any:
+        from coding_trajectory.estimation import serve_estimate
 
-        store, discovery_note = self._store_for(method, validated_params)
+        return serve_estimate(
+            method,
+            params,
+            global_scope=self.global_scope,
+            current_dir=self.current_dir,
+            cache=self.cache,
+        )
+
+    def _call_historical(self, method: str, params: dict[str, Any]) -> Any:
+        store, discovery_note = self._store_for(method, params)
         return dispatch(
             method,
-            validated_params,
+            params,
             store=store,
             global_scope=self.global_scope,
             current_dir=self.current_dir,

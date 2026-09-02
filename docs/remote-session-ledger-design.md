@@ -1,8 +1,15 @@
-# Remote Session Ledger Design
+# Remote Session Ledger Design (Superseded)
 
-- **Status:** Proposed
+- **Status:** Superseded by [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md)
 - **Date:** 2026-09-02
 - **Scope:** CodingTrajectory session storage, API custody, and agent caches
+
+This proposal established the correct single-authority boundary for historical
+session graphs, but it does not cover all 25 public CT methods. The replacement
+design retains the immutable graph-revision ledger inside a broader remote CT
+control plane with separate project-inventory, living-state, and estimation
+authorities. This document remains as the decision history for why local SQLite
+caches and vendor logs must not become shared query authorities.
 
 ## Decision summary
 

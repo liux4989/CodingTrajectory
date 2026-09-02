@@ -6,15 +6,21 @@ currently visible Supabase project's database major version.
 
 ## Source-of-truth boundary
 
-CodingTrajectory does not currently define a remotely deployed relational
-schema. Its SQLite files are disposable, revisioned read models rebuilt from
-canonical JSONL agent-session logs. Do not convert or upload those SQLite files
-as a Supabase migration: that would turn a local cache into a production
-authority and would change the product's data-ownership model.
+CodingTrajectory now defines the remote control-plane foundation in
+`migrations/20260902000000_ct_control_plane_foundation.sql`. It owns workspace
+identity, accepted observations, immutable graph revisions, portable projects,
+living leases, estimation records, and transactional worker delivery.
 
-Create a migration only when a new, explicitly owned Supabase data model has
-been designed. Keep each migration under `supabase/migrations/` and review its
-SQL before deployment.
+Local SQLite files remain delivery state or disposable revision-bound read
+models. Do not convert or upload them as Supabase migrations. Vendor logs remain
+host-local upstream evidence and are published only through the future
+authenticated collector protocol described in
+[`docs/local-collector-handoff.md`](../docs/local-collector-handoff.md).
+
+The target architecture and authority boundaries are documented in
+[`docs/remote-ct-control-plane-design.md`](../docs/remote-ct-control-plane-design.md).
+Keep each migration under `supabase/migrations/` and review its SQL before
+deployment.
 
 ## Local development
 
