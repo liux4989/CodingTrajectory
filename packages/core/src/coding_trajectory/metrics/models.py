@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_serializer
@@ -12,6 +12,10 @@ from coding_trajectory.metrics.accounting import (
     glossary_usage_dict,
     usage_accounting_payload as _usage_accounting_payload,
 )
+
+
+def _drop_none(data: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in data.items() if value is not None}
 
 
 class CostEvidenceFlat(BaseModel):
@@ -28,8 +32,7 @@ class CostEvidenceFlat(BaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
-        data = handler(self)
-        return {key: value for key, value in data.items() if value is not None}
+        return _drop_none(handler(self))
 
 
 class TokenUsage(BaseModel):
@@ -282,8 +285,7 @@ class TurnRuntimeFlat(BaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
-        data = handler(self)
-        return {key: value for key, value in data.items() if value is not None}
+        return _drop_none(handler(self))
 
 
 class MessageStatsFlat(BaseModel):
@@ -325,8 +327,7 @@ class CompactionEventFlat(BaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
-        data = handler(self)
-        return {key: value for key, value in data.items() if value is not None}
+        return _drop_none(handler(self))
 
 
 class CompactionStatsFlat(BaseModel):
@@ -364,8 +365,7 @@ class EffortChangeEventFlat(BaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
-        data = handler(self)
-        return {key: value for key, value in data.items() if value is not None}
+        return _drop_none(handler(self))
 
 
 class EffortChangeStatsFlat(BaseModel):
@@ -556,8 +556,7 @@ class ModelUsageContextFlat(BaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
-        data = handler(self)
-        return {key: value for key, value in data.items() if value is not None}
+        return _drop_none(handler(self))
 
 
 class ModelUsageModelFlat(BaseModel):

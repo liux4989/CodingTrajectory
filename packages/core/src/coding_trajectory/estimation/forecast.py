@@ -144,32 +144,29 @@ def run_forecast_for_turn(
         )
 
     issued_iso = format_datetime(issued_at)
-    record = {
-        "prediction_id": uuid4().hex,
-        "idempotency_key": key,
-        "forecast_kind": kind,
-        "turn_id": str(turn_id),
-        "root_session_id": str(candidate.root_session_id),
-        "session_id": str(candidate.session.session_id),
-        "task_fingerprint": fingerprint,
-        "task_available_at": format_datetime(candidate.task_available_at),
-        "target_execution_started_at": format_datetime(
+    record = _forecast_record(
+        idempotency_key=key,
+        forecast_kind=kind,
+        turn_id=str(turn_id),
+        root_session_id=str(candidate.root_session_id),
+        session_id=str(candidate.session.session_id),
+        task_fingerprint=fingerprint,
+        task_available_at=format_datetime(candidate.task_available_at),
+        target_execution_started_at=format_datetime(
             candidate.target_execution_started_at
         ),
-        "issued_at": issued_iso,
-        "data_cutoff_at": format_datetime(data_cutoff_at),
-        "project_name": candidate.project_name,
-        "task_class": None,
-        "session_title": snapshot.get("session_title"),
-        "task_snapshot": snapshot,
-        "target": target.as_dict(),
-        "estimator": estimator,
-        "prompt_fingerprint": prompt_fingerprint(prompt),
-        "retrieval": retrieval,
-        "p50_minutes": result.p50_minutes,
-        "p80_minutes": result.p80_minutes,
-        "created_at": issued_iso,
-    }
+        issued_iso=issued_iso,
+        data_cutoff_at=format_datetime(data_cutoff_at),
+        project_name=candidate.project_name,
+        session_title=snapshot.get("session_title"),
+        task_snapshot=snapshot,
+        target=target.as_dict(),
+        estimator=estimator,
+        prompt_fingerprint=prompt_fingerprint(prompt),
+        retrieval=retrieval,
+        p50_minutes=result.p50_minutes,
+        p80_minutes=result.p80_minutes,
+    )
     # A second worker can form the same deterministic plan while this worker is
     # waiting on the estimator.  Re-check and write under the ledger lock so we
     # never retain two forecast artifacts for one idempotency key.
@@ -272,36 +269,82 @@ def predict_unbound(
             return {"forecast": None, "failure": failure, "reused_existing": False}
 
         issued_iso = format_datetime(issued_at)
-        record = {
-            "prediction_id": uuid4().hex,
-            "idempotency_key": key,
-            "forecast_kind": "prospective_unbound",
-            "turn_id": None,
-            "root_session_id": None,
-            "session_id": None,
-            "task_fingerprint": fingerprint,
-            "task_available_at": None,
-            "target_execution_started_at": None,
-            "issued_at": issued_iso,
-            "data_cutoff_at": issued_iso,
-            "project_name": params.get("project_name"),
-            "task_class": None,
-            "session_title": None,
-            "task_snapshot": snapshot,
-            "target": target.as_dict(),
-            "estimator": estimator,
-            "prompt_fingerprint": prompt_fingerprint(prompt),
-            "retrieval": retrieval,
-            "p50_minutes": result.p50_minutes,
-            "p80_minutes": result.p80_minutes,
-            "created_at": issued_iso,
-        }
+        record = _forecast_record(
+            idempotency_key=key,
+            forecast_kind="prospective_unbound",
+            turn_id=None,
+            root_session_id=None,
+            session_id=None,
+            task_fingerprint=fingerprint,
+            task_available_at=None,
+            target_execution_started_at=None,
+            issued_iso=issued_iso,
+            data_cutoff_at=issued_iso,
+            project_name=params.get("project_name"),
+            session_title=None,
+            task_snapshot=snapshot,
+            target=target.as_dict(),
+            estimator=estimator,
+            prompt_fingerprint=prompt_fingerprint(prompt),
+            retrieval=retrieval,
+            p50_minutes=result.p50_minutes,
+            p80_minutes=result.p80_minutes,
+        )
         ledger.append_forecast(record)
         return {
             "forecast": ledger.find_forecast(record["prediction_id"]),
             "failure": None,
             "reused_existing": False,
         }
+
+
+def _forecast_record(
+    *,
+    idempotency_key: str,
+    forecast_kind: str,
+    turn_id: str | None,
+    root_session_id: str | None,
+    session_id: str | None,
+    task_fingerprint: str,
+    task_available_at: str | None,
+    target_execution_started_at: str | None,
+    issued_iso: str,
+    data_cutoff_at: str,
+    project_name: str | None,
+    session_title: str | None,
+    task_snapshot: dict[str, Any],
+    target: dict[str, Any],
+    estimator: dict[str, Any],
+    prompt_fingerprint: str,
+    retrieval: dict[str, Any],
+    p50_minutes: float,
+    p80_minutes: float,
+) -> dict[str, Any]:
+    """Build the durable forecast record literal (single construction site)."""
+    return {
+        "prediction_id": uuid4().hex,
+        "idempotency_key": idempotency_key,
+        "forecast_kind": forecast_kind,
+        "turn_id": turn_id,
+        "root_session_id": root_session_id,
+        "session_id": session_id,
+        "task_fingerprint": task_fingerprint,
+        "task_available_at": task_available_at,
+        "target_execution_started_at": target_execution_started_at,
+        "issued_at": issued_iso,
+        "data_cutoff_at": data_cutoff_at,
+        "project_name": project_name,
+        "task_class": None,
+        "session_title": session_title,
+        "task_snapshot": task_snapshot,
+        "target": target,
+        "estimator": estimator,
+        "prompt_fingerprint": prompt_fingerprint,
+        "retrieval": retrieval,
+        "p50_minutes": p50_minutes,
+        "p80_minutes": p80_minutes,
+        "created_at": issued_iso,
+    }
 
 
 def estimator_config(
