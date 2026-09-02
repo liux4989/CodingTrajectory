@@ -16,7 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from coding_trajectory.analysis.content_size import scoped_content_size_cache
 from coding_trajectory.analysis.projections import build_session_graph_overview
-from coding_trajectory.analysis.session_stats import build_session_stats_projection
+from coding_trajectory.analysis.session_stats import (
+    build_session_stats_projection,
+    single_session_graph,
+)
 from coding_trajectory.ingestion.indexes import (
     SessionGraphIndex,
     build_session_graph_index,
@@ -112,7 +115,7 @@ def build_economics_contribution(
     selected = _selected_session(
         session_graph, index=index, entrypoint_id=entrypoint_id
     )
-    single = _single_session_graph(session_graph, selected)
+    single = single_session_graph(session_graph, selected)
     with scoped_content_size_cache(), scoped_counter(counter_for_session_graph(single)):
         return _build_session_contribution(
             single,
@@ -175,7 +178,7 @@ def iter_graph_economics_contributions(
     if detail not in {"core", "evidence"}:
         raise ValueError("economics detail must be core or evidence")
     for session in session_graph.sessions:
-        single = _single_session_graph(session_graph, session)
+        single = single_session_graph(session_graph, session)
         with (
             scoped_content_size_cache(),
             scoped_counter(counter_for_session_graph(single)),
@@ -258,14 +261,6 @@ def _build_session_contribution(
         tool_usage=tool_usage,
         stats=stats,
         overview=overview,
-    )
-
-
-def _single_session_graph(source_graph: SessionGraph, session: Session) -> SessionGraph:
-    return SessionGraph(
-        root_session_id=session.session_id,
-        project_identifier=source_graph.project_identifier,
-        sessions=[session],
     )
 
 

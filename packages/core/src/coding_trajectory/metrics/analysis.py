@@ -16,6 +16,7 @@ from coding_trajectory.analysis.session_stats import (
     session_graph_title,
     session_role,
     session_title,
+    single_session_graph,
 )
 from coding_trajectory.ingestion.indexes import (
     SessionGraphIndex,
@@ -167,7 +168,7 @@ def build_session_graph_usage(
             if turn_id is None or str(turn.turn_id) == turn_id
         ]
         session_usage = _sum_turn_usage(selected_session_turns)
-        single = _single_session_graph(session_graph, source_session)
+        single = single_session_graph(session_graph, source_session)
         model_breakdown = _model_usage_breakdown(selected_session_turns)
         estimated_cost = _aggregate_model_cost(model_breakdown)
         section = {
@@ -563,17 +564,6 @@ def _turn_pricing_context(turn: TurnMetrics) -> tuple[str | None, str | None]:
     if dominant is None:
         return None, None
     return dominant.provider, dominant.model
-
-
-def _single_session_graph(
-    source_graph: SessionGraph,
-    session: Session,
-) -> SessionGraph:
-    return SessionGraph(
-        root_session_id=session.session_id,
-        project_identifier=source_graph.project_identifier,
-        sessions=[session],
-    )
 
 
 def _token_usage_payload(usage: TokenUsage) -> dict[str, Any]:

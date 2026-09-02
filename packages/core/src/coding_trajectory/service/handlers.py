@@ -101,7 +101,7 @@ def _graph_handler(
     return wrapper
 
 
-def _single_session_graph(
+def _select_session_graph(
     session_graph: SessionGraph, entrypoint_id: str | None
 ) -> SessionGraph:
     """Select one canonical session from a graph for ``session.*`` methods."""
@@ -144,7 +144,7 @@ def _single_session_handler(
         session_graph = _resolve_session_graph(
             context.store, _session_graph_entrypoint_id(params)
         )
-        selected_graph = _single_session_graph(
+        selected_graph = _select_session_graph(
             session_graph, _session_graph_entrypoint_id(params)
         )
         return _public_output_for_session_graph(
@@ -164,7 +164,7 @@ def _canonical_session_handler(
         session_id = params["session_id"]
         session = context.store.get_session(_parse_user_id(session_id))
         session_graph = context.store.get_session_graph_for_session(session.session_id)
-        selected_graph = _single_session_graph(session_graph, session_id)
+        selected_graph = _select_session_graph(session_graph, session_id)
         return _public_output_for_session_graph(
             selected_graph, build(params, selected_graph)
         )
@@ -422,7 +422,7 @@ def _handle_session_events(
                 session_graph = context.store.get_session_graph_for_session(
                     event.session_id
                 )
-                selected_graph = _single_session_graph(
+                selected_graph = _select_session_graph(
                     session_graph,
                     params.get("session_id")
                     or params.get("root_session_id")
@@ -465,7 +465,7 @@ def _handle_session_events(
 
     entrypoint_id = _session_graph_entrypoint_id(params)
     session_graph = _resolve_session_graph(context.store, entrypoint_id)
-    session_graph = _single_session_graph(session_graph, entrypoint_id)
+    session_graph = _select_session_graph(session_graph, entrypoint_id)
     allowed_event_ids = _event_ids_for_turn(session_graph, selected_turn_id)
 
     event_type = params.get("type")
@@ -557,7 +557,7 @@ def _handle_session_items(
 
     entrypoint_id = params.get("session_id") or params.get("root_session_id")
     session_graph = _resolve_session_graph(context.store, entrypoint_id)
-    session_graph = _single_session_graph(session_graph, entrypoint_id)
+    session_graph = _select_session_graph(session_graph, entrypoint_id)
 
     types_filter = set(params["types"]) if params.get("types") else None
     projection_index: SessionGraphIndex | None = None
