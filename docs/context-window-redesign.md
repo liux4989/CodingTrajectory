@@ -1,332 +1,232 @@
 # Context Window UI Redesign
 
-## Reference Design Analysis
+**Status:** Proposed
 
-Key elements learned from the reference (dogfooding) design:
+**Reviewed:** 2026-09-03
 
-1. **Header**: Title/subtitle left-aligned, token counter right-aligned in same row
-2. **Capacity progress bar**: Full-width bar showing used vs total tokens, with color-coded category segments filling the used portion, empty remainder dark
-3. **Legend**: Standalone horizontal row of colored dots + labels, separate from timeline
-4. **Compact timeline strip**: Thin bar with per-segment category colors (already exists)
-5. **Event list**: Grouped by phase ("BEFORE YOU TYPE ANYTHING", "YOU TYPE IN YOUR TERMINAL"), each item = colored dot + confidence badge + label + token count + per-item progress bar
-6. **Detail panel**: Sticky right sidebar with category label, event name, summary text, metadata dl, pin button, and "Key Takeaway" callout
+**Primary surface:** `packages/plugins/datahub/web/src/routes/context-window.tsx`
 
-## ASCII Mockup
+## Purpose
 
-```
-+-------------------------------------------------------------------------+
-|  <- Sessions                                                            |
-|  Explore the context window         ~19.7K tokens / 200K - illustrative |
-|  A simulated session showing what enters context and what it costs      |
-|                                                                         |
-|  +-------------------------------------------------------------------+  |
-|  | ████████|=|=|=|=|=|=|=|=|                                         |  |
-|  | ^ green ^ ^ ^ ^ ^ ^ ^ ^                                          |  |
-|  |  (used)  | | | | | | | |                                          |  |
-|  |     orange | | | | | | |                                          |  |
-|  |       blue | | | | | |                                            |  |
-|  |        gray| | | | |                                              |  |
-|  |       teal | | | |                                                |  |
-|  |     orange | | |                                                  |  |
-|  |   red-org. | |                                                    |  |
-|  |            <-- remaining empty (dark bg) -->                      |  |
-|  +-------------------------------------------------------------------+  |
-|                                                                         |
-|  [square] System  [sq] CLAUDE.md  [sq] Memory  [sq] Skills  [sq] MCP  |
-|  [sq] Rules  [sq] You  [sq] Files  [sq] Output  [sq] Claude  [sq] Hks |
-|  [eye] = appears in your terminal                                       |
-+-------------------------------------------------------------------------+
+The context-window page should be a diagnosis surface, not a second raw session timeline. The session timeline already owns chronological inspection. This page should help a user answer four questions, in this order:
 
-+-------------------------------------------+  +--------------------------+
-|  | BEFORE YOU TYPE ANYTHING               |  |                          |
-|  +---------------------------------------+|  |  Hover or click any event|
-|  | [dot] auto  System prompt      +4.2K  ||  |                          |
-|  |   [████████████████............]      ||  |  Hover to preview. Click |
-|  +---------------------------------------+|  |  to pin so you can scroll|
-|  | [dot] auto  Auto memory        +680   ||  |                          |
-|  |   [████.............]                 ||  | +------------------------+|
-|  +---------------------------------------+|  | | KEY TAKEAWAY          ||
-|  | [dot] auto  Environment info   +280   ||  | |-----------------------||
-|  |   [██...........]                     ||  | | A lot loads before you||
-|  +---------------------------------------+|  | | type anything.        ||
-|  | [dot] auto  MCP tools (def.)   +120   ||  | | CLAUDE.md, memory,    ||
-|  |   [█......]                           ||  | | skills, and MCP tools ||
-|  +---------------------------------------+|  | | are all in context    ||
-|  | [dot] auto  Skill descriptions +450   ||  | | before your 1st prompt||
-|  |   [███............]                   ||  | +------------------------+|
-|  +---------------------------------------+|  |                          |
-|  | [dot] auto  ~/.claude/CLAUDE.md +320  ||  |  Token impact  1.8K tkns |
-|  |   [██.........]                       ||  |  Evidence src  proj file |
-|  +---------------------------------------+|  |  Confidence  exact_text  |
-|  | [dot] auto  Project CLAUDE.md  +1.8K  ||  |  Terminal    Visible     |
-|  |   [██████..........]                  ||  |                          |
-|  +---------------------------------------+|  |                          |
-|                                           |  |                          |
-|  | YOU TYPE IN YOUR TERMINAL              |  |                          |
-|  +---------------------------------------+|  |                          |
-|  | [dot] auto  Your first prompt    +12  ||  |                          |
-|  +---------------------------------------+|  |                          |
-+-------------------------------------------+  +--------------------------+
+1. How full is the context window?
+2. What consumes the most context?
+3. Where is context pressure or churn occurring?
+4. What evidence explains those numbers?
+
+The redesign keeps the existing backend projection authoritative. The frontend presents available facts and degraded states; it must not infer new semantic categories from command text.
+
+## Current Findings
+
+The current implementation is functional, but its visual hierarchy gives nearly every element equal weight:
+
+- The capacity composition chart dominates the first viewport, even when only one observation exists.
+- Context history and the useful event evidence begin below the fold.
+- Every event group starts expanded, creating a long, noisy list.
+- The page has nested scrolling in the event list and inspector.
+- The first event is selected automatically, so the inspector initially shows a broad starting-context item instead of a useful summary.
+- Hover, selection, and pinning create three competing interaction states.
+- The route receives useful projection fields such as `model`, `token_cost`, `expensive_items`, `provider_usage_buckets`, and `warnings`, but does not present them.
+
+The fixed inspector and dense charts make the page feel like an analytics dashboard before it has established the basic answer: whether the session is near its context limit and why.
+
+### Degraded capacity state
+
+When total capacity is unavailable, the current page can render combinations such as observed tokens against `0`, an empty capacity bar, and “unknown used.” This visually implies a measured denominator that does not exist.
+
+The degraded state must instead say that observed tokens are available while model capacity is unavailable. Category composition remains useful, but it is normalized against observed tokens rather than drawn as a fraction of an unknown capacity.
+
+### Label quality boundary
+
+Some event labels contain only a generic target, while others include malformed serialized fragments. The route should display the projected behavior and supporting identity supplied by the backend. It should not add a growing set of TypeScript regular expressions or command taxonomies to repair labels locally.
+
+Malformed or incomplete identities must be corrected at the shared projection boundary so overview, summary, metrics, and this UI remain aligned.
+
+## Target Experience
+
+```text
+Context window                                      Model and evidence status
+23.5K used of 258.4K · 9.1% · 234.9K remaining
+[ composition bar, including unused capacity when known ]
+
+Largest contributors                    Context pressure
+Files             8.4K                  2 cache breaks
+Tool output       6.1K                  1 compaction
+Starting context  4.7K                  +18.2K since first prompt
+
+Context history                         [Search history] [Filters]
+> Before first prompt · 7 events · 5.2K
+v Turn 1 · 18 events · 14.1K
+    Read file                                      +1.2K
+    discovery.py · Files · terminal-visible
 ```
 
-## Component Layout Structure
+The target hierarchy is:
 
-```
-<div max-w-[96rem] mx-auto grid gap-5>
+1. **Capacity** — a compact, truthful status header.
+2. **Drivers** — the largest contributors and expensive items.
+3. **Pressure** — cache breaks, compactions, warnings, and growth.
+4. **Evidence** — a searchable, grouped history with on-demand detail.
 
-  <Card>                             // Header
-    <CardHeader>
-      <CardTitle>Explore the context window</CardTitle>
-      <CardDescription>A session showing what enters context...</CardDescription>
-      <CardAction>                   // token counter, right-aligned
-        ~19.7K tokens / 200K - illustrative
-      </CardAction>
-    </CardHeader>
-  </Card>
+## Presentation Behavior
 
-  <CapacityBar />                    // NEW: full-width capacity progress bar
+### Capacity known
 
-  <LegendRow />                      // Standalone legend (colored dots + labels)
+Show:
 
-  <div grid-cols-[1.15fr 0.85fr]>   // Two-column layout
+- used tokens, capacity, percentage, and remaining tokens;
+- category segments as a fraction of capacity;
+- unused capacity as an explicit neutral segment;
+- an approximation marker only when the backend says the value is estimated.
 
-    <section>                        // Event stream (left)
-      <GroupHeader "BEFORE YOU TYPE ANYTHING" />
-      <EventItem /> ...
-      <GroupHeader "YOU TYPE IN YOUR TERMINAL" />
-      <EventItem /> ...
-    </section>
+Do not repeat the same figures in multiple oversized cards.
 
-    <aside sticky>                   // Detail panel (right)
-      <CategoryLabel />
-      <EventTitle />
-      <SummaryText />
-      <MetadataDL />
-      <KeyTakeaway /> (when no event selected)
-    </aside>
+### Capacity unavailable
 
-  </div>
+Show:
 
-</div>
-```
+- observed tokens;
+- “capacity unavailable” with the model name when known;
+- category composition normalized against observed tokens;
+- the evidence or warning explaining the unavailable capacity, when supplied.
 
-## New Components Needed
+Do not render unused capacity, a zero denominator, a percentage, or the word “unknown” as if it were a measurement.
 
-### `<CapacityBar>`
+### Multi-session scope
 
-Full-width bar showing context window utilization:
-- Outer: `rounded-full border border-foreground/14 bg-foreground/7` (h-2 or h-2.5)
-- Filled segments: flex children, each with `flexGrow={category.tokens.value}`, colored bg
-- Total filled width = `used_percent`% of outer bar
-- Remainder = empty/dark background
-- Hoverable segments with Radix Tooltip: `"{label}: {tokens} tokens ({pct}%)"`
+When the projection includes child sessions, show a compact scope strip identifying root and child contributions. Never merge a child context window into the root as though they share one physical model context.
 
-### `<LegendRow>`
+## Summary and Contributor Area
 
-Simple flex-wrap list:
-```
-<ul flex flex-wrap gap-x-4 gap-y-1.5>
-  <li> <span dot /> <span label /> </li>
-  ...
-  <li> <Eye /> = appears in your terminal </li>
-</ul>
-```
+The first content row below capacity contains two compact cards.
 
-### `<EventItem>` (refactored from inline)
+### Largest contributors
 
-Each row in the event stream:
-```
-<button w-full rounded-xl border bg-foreground/5 px-4 py-3>
-  <div flex items-center gap-2>
-    <span dot />
-    <Badge variant="secondary">auto</Badge>
-    <span text-muted-foreground>System prompt</span>
-  </div>
-  <div font-mono text-emerald-400>+4.2K</div>
-  <div h-[3px] rounded-full bg-foreground/8>     // per-item progress bar
-    <span style={{ width: tokenPercent% }} />
-  </div>
-</button>
-```
+Use existing projection fields directly:
 
-## Design Token Audit & Proposal
+- category totals;
+- `expensive_items`;
+- `token_cost`;
+- `provider_usage_buckets`, where present.
 
-### Current State: Audit Findings
+With no event selected, this area is the page-level explanation. Selecting an event replaces it with event detail. Remove the separate pin state; click selects, clicking again or using Escape returns to the summary.
 
-**Well-structured areas:**
-- Font families (`--font-display`, `--font-body`, `--font-mono`) cleanly defined via CSS variables
-- Semantic color palette (`--ink`, `--paper`, `--ember`, `--moss`) with proper light/dark pairs
-- Category colors now theme-aware via CSS variables
-- Radius system (`--radius` + computed sm/md/lg/xl) defined in styles.css
+### Context pressure
 
-**Inconsistencies found across ALL dashboard web components:**
+Show a compact summary of:
 
-| Problem | Count | Example |
-|---------|-------|---------|
-| Arbitrary font-size values | 18 distinct | `text-[0.74rem]`, `text-[0.82rem]`, `text-[0.88rem]`... |
-| Hardcoded `rgb(255 255 255 / 8%)` dark border | 8+ in 7 files | `dark:border-[rgb(255_255_255/8%)]` |
-| Hardcoded `#eee0bd` / `#2a2620` table head bg | 3 route files | `bg-[#eee0bd] dark:bg-[#2a2620]` |
-| `orange-500` Tailwind color used directly | 2 places | `border-orange-500/30`, `bg-orange-500/90` |
-| Distinct `border-foreground/N` opacity levels | 7 distinct | `/6`, `/9`, `/11`, `/12`, `/13`, `/14`, `/18` |
-| Arbitrary border-radius values | 6 distinct | `[2px]`, `[1.1rem]`, `[1.2rem]`, `[1.4rem]`, `[2rem]` |
-| `text-white` hardcoded | 4 places | Destructive button, badge, dialog |
-| `font-[850]` one-off weight | 1 place | metric-card.tsx |
-| Identical large shadow copy-pasted | 3 places | `0 24px 70px rgb(49 42 25 / 18%)` |
+- cache-break count and affected tokens;
+- compaction count and known before/after sizes;
+- warnings;
+- context growth between meaningful observations.
 
-### Proposed: 4-Tier Token System
+Detailed cache-break and compaction records belong in an accordion below the summary. Only render trend charts when multiple comparable observations exist. A single observation should be a row, not a chart. If compaction sizes are absent, say “size not exposed” instead of implying an outcome.
 
-Following the [modern-web-guidance CSS architecture guide](https://developer.mozilla.org/en-US/docs/Web/CSS), tokens are organized in tiers with each tier building on the previous one.
+## Context History Explorer
 
-#### Tier 1: Literal Tokens (raw palette, already defined)
+### Group defaults
 
-These are the raw color values. Already exist in `:root` and `[data-theme="dark"]`. No changes needed.
+- “Before first prompt” starts collapsed and displays its event count and token total.
+- The latest meaningful turn starts expanded.
+- Other turns start collapsed.
+- Group names use natural product language rather than raw enum values.
 
-```
---ink, --paper, --paper-strong, --line, --accent-teal, --ember, --moss, etc.
---category-system, --category-memory, --category-skills, etc.
+### Event rows
+
+Each row separates behavior from identity:
+
+```text
+Read file                                          +1.2K
+discovery.py · Files · terminal-visible
 ```
 
-#### Tier 2: Semantic Tokens (meaning-based, mostly exist)
+The first line answers what happened. The supporting line answers which target, category, and evidence visibility apply. Color is supplementary; text carries the meaning.
 
-Already defined:
-```css
---foreground: var(--ink);
---background: var(--paper);
---card: var(--paper-strong);
---primary: var(--accent-teal);
---destructive: var(--ember);
---muted-foreground: var(--muted-color-text);
-```
+The route consumes the structural labels produced by the shared projection. It must not maintain a parallel frontend classifier for shell commands or tool families.
 
-**NEW tokens to add:**
+### Filtering
 
-```css
-/* Surface tiers for layered backgrounds */
---surface-0: var(--paper);           /* page background */
---surface-1: var(--paper-strong);    /* cards, panels */
---surface-2: var(--ink) / 5%;       /* subtle raised areas (light) */
+- Place search in the context-history header.
+- Give search an explicit accessible label; placeholder text is only a hint.
+- Use an installed multi-select `ToggleGroup` for category filters.
+- Display result count and a clear reset action.
+- Preserve group boundaries while filtering.
 
-/* Border tiers */
---border-default: var(--border);     /* primary borders */
---border-subtle: var(--ink) / 8%;   /* dividers, separators */
---border-strong: var(--ink) / 18%;  /* emphasis borders */
+## Responsive and Scrolling Model
 
-/* Status colors */
---success: var(--moss);
---warning: #b45309;                  /* light */ / #d97706 (dark) */
---info: var(--accent-teal);
+Use one page-level scroll container.
 
-/* Overlay */
---overlay: var(--ink) / 30%;
-```
+- Desktop: history and detail form a two-column layout; detail may be sticky within the page.
+- Mobile: event detail opens in the installed `Sheet` component.
+- Avoid independently scrolling the history list and detail panel.
+- Initially limit very large groups with “Show more.” Add virtualization only if measured session sizes require it.
+- `content-visibility: auto` may be used as a progressive rendering optimization after browser validation.
 
-#### Tier 3: UI Tokens (purpose-specific)
+## Accessibility Corrections
 
-**Typography scale** -- consolidate 18 arbitrary sizes into 6 semantic roles:
+- Do not place interactive category controls inside an element with `role="img"`.
+- Give search and filters programmatic labels.
+- Do not use `role="tab"` for navigation links unless the complete tablist, tab, and tabpanel keyboard model is implemented.
+- Keep visible focus states for rows, filters, accordions, and mobile detail controls.
+- Expose chart values as adjacent text, not color or hover content alone.
+- Verify reading order and reflow at 200% zoom.
 
-```css
-/* Type scale (rem-based, honors user font-size preference) */
---text-eyebrow: 0.75rem;    /* 12px - uppercase kickers, "BEFORE YOU TYPE..." */
---text-caption: 0.8125rem;  /* 13px - labels, tooltips, metadata */
---text-body-sm: 0.875rem;   /* 14px - body secondary, timestamps */
---text-body: 1rem;          /* 16px - primary body, event labels */
---text-heading: 1.5rem;     /* 24px - section headings, detail panel */
---text-display: clamp(2rem, 4vw, 3.5rem);  /* page titles */
---text-metric: clamp(2rem, 4vw, 3.8rem);   /* metric card numbers */
+## Component Plan
 
-/* Tracking (letter-spacing) scale */
---tracking-tight: -0.03em;  /* display headings */
---tracking-normal: 0;       /* body text */
---tracking-wide: 0.08em;    /* uppercase labels */
---tracking-wider: 0.14em;   /* eyebrow kickers */
+Keep the route responsible for data loading, URL/query state, filters, and selection. Extract only three product-level sections:
 
-/* Leading (line-height) scale */
---leading-tight: 0.95;      /* display headings */
---leading-snug: 1.25;       /* sub-headings */
---leading-normal: 1.5;      /* body text */
---leading-relaxed: 1.625;   /* long-form summaries */
-```
+1. `ContextWindowSummary` — capacity, composition, contributor summary, and degraded state.
+2. `ContextEventExplorer` — search, filters, groups, rows, selection, and responsive detail.
+3. `ContextMaintenanceDetails` — cache breaks, compactions, provider observations, and warnings.
 
-**Shadow scale:**
+Reuse the installed `Card`, `Accordion`, `ToggleGroup`, `Input`, `Badge`, and `Sheet` primitives. Add an `Alert` primitive only if warnings need a distinct semantic surface.
 
-```css
---shadow-sm: 0 1px 2px var(--ink / 5%);
---shadow-md: 0 4px 12px var(--ink / 8%);
---shadow-lg: 0 14px 32px var(--ink / 12%);
---shadow-popover: 0 24px 70px var(--ink / 18%);  /* tooltips, dialogs */
-```
+This split should materially reduce the current route size while avoiding a component per visual fragment.
 
-**Surface opacity scale (for bg-foreground/N patterns):**
+## Implementation Sequence
 
-```css
---surface-hover: var(--ink) / 8%;
---surface-active: var(--ink) / 12%;
---surface-track: var(--ink) / 7%;   /* progress bar tracks */
---surface-fill: var(--ink) / 5%;    /* event item backgrounds */
---surface-divider: var(--ink) / 9%; /* DL row separators */
-```
+### Phase 1 — Correctness and hierarchy
 
-**Border radius consolidation** -- use existing `--radius` system:
+- Implement explicit known-capacity and unavailable-capacity states.
+- Replace the oversized first-viewport chart layout with capacity, contributors, and pressure summaries.
+- Present the existing model, cost, expensive-item, provider-bucket, and warning fields.
+- Stop auto-selecting the first event and remove pinning.
+- Keep label semantics sourced from the shared projection.
 
-```css
-/* Already defined, just enforce usage: */
---radius-sm: calc(var(--radius) - 4px);  /* 8px - badges */
---radius-md: calc(var(--radius) - 2px);  /* 10px - inputs, inner */
---radius-lg: var(--radius);               /* 12px - cards */
---radius-xl: calc(var(--radius) + 4px);  /* 16px - event items */
---radius-2xl: calc(var(--radius) + 8px); /* 20px - tables */
---radius-3xl: calc(var(--radius) + 20px);/* 32px - route headers */
---radius-full: 9999px;                   /* pills, circles */
-```
+### Phase 2 — Interaction and structure
 
-#### Tier 4: Component Tokens (future, not needed now)
+- Extract the three product-level sections.
+- Add collapsed group defaults, search, category filters, and result counts.
+- Move maintenance details into an accordion.
+- Replace nested scrolling with page scrolling.
+- Add the mobile detail sheet.
 
-Only add when a component needs to override Tier 3 tokens. Examples:
-```css
---button-bg-primary: var(--primary);
---table-head-bg: var(--surface-2);
-```
+### Phase 3 — Validation
 
-### Migration Plan
+- Run `bun run check:api`.
+- Run `bun run build`.
+- Validate known-capacity and unavailable-capacity sessions.
+- Validate sessions with and without cache breaks, compactions, child sessions, provider observations, and warnings.
+- Exercise keyboard navigation, light and dark themes, narrow layouts, and 200% zoom.
+- Confirm malformed labels are fixed upstream rather than hidden by route-specific cleanup.
 
-**Phase 1: Add Tier 2+3 tokens to styles.css**
-- Add semantic border tokens (`--border-subtle`, `--border-default`, `--border-strong`)
-- Add type scale tokens (`--text-eyebrow` through `--text-display`)
-- Add shadow scale tokens (`--shadow-sm` through `--shadow-popover`)
-- Add surface opacity tokens (`--surface-hover`, `--surface-fill`, etc.)
-- Add `--warning` color with light/dark variants
-- Add `--radius-2xl` and `--radius-3xl`
+## Acceptance Criteria
 
-**Phase 2: Migrate components to use tokens**
-- Replace all `dark:border-[rgb(255_255_255/8%)]` with `dark:border-border-subtle`
-- Replace all `bg-[#eee0bd] dark:bg-[#2a2620]` with `bg-table-head` (new semantic)
-- Replace arbitrary font sizes: `text-[0.74rem]` → `text-eyebrow`, `text-[0.82rem]` → `text-caption`, etc.
-- Replace `orange-500` with `text-warning` / `border-warning`
-- Replace copy-pasted shadows with `shadow-popover`
-- Replace `font-[850]` with `font-extrabold` (nearest standard weight)
+- A user can identify capacity status and the largest contributor without scrolling.
+- Unavailable capacity never renders as zero capacity, a percentage, or unused space.
+- Cache breaks and compactions are visible without dominating the page.
+- The initial state explains the whole session rather than an arbitrary first event.
+- Event rows state both behavior and target identity when that evidence exists.
+- The route contains no command-text taxonomy or label-repair rules.
+- The page has one scrolling model and remains usable on mobile.
+- Search, filters, disclosure controls, and details are keyboard accessible.
+- The context page complements rather than duplicates the session timeline.
 
-**Phase 3: Add to Tailwind theme**
-Map all new CSS variables in `@theme inline` so they work as Tailwind utilities:
-```css
-@theme inline {
-  --text-eyebrow: var(--text-eyebrow);
-  --text-caption: var(--text-caption);
-  /* ... enables text-eyebrow, text-caption utilities */
-}
-```
+## Non-goals
 
-### Tailwind v4 Integration
-
-In Tailwind CSS v4, the `@theme inline` block maps CSS custom properties to Tailwind utilities. The approach:
-
-1. **Define raw values in `:root` / `[data-theme="dark"]`** (Tier 1 + 2)
-2. **Reference them in `@theme inline`** via `var()` so Tailwind generates utilities
-3. **Components use Tailwind utilities classes** (e.g., `text-eyebrow`, `border-border-subtle`)
-4. **Never use arbitrary values** (`text-[0.74rem]`) in components -- always go through tokens
-
-This ensures:
-- Single source of truth for all design values
-- Light/dark mode works automatically
-- Consistent usage across all components
-- Easy to tune globally by changing one variable
-
+- Reclassifying commands in the browser.
+- Reconstructing missing capacity, compaction outcomes, or token counts.
+- Replacing the raw chronological session timeline.
+- Adding speculative charts for a single observation.
+- Preserving the current pin interaction solely for compatibility.
