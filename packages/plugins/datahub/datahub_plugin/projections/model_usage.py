@@ -596,14 +596,27 @@ def _empty_usage() -> dict[str, Any]:
             key: 0
             for key in (*TOKEN_KEYS, "processed_tokens", "prompt_completion_tokens")
         },
+        "uncached_prompt_tokens": 0,
         "reported_total_tokens": 0,
         "total_confidence": "reported_missing",
     }
 
 
+def _uncached_prompt_tokens(usage: dict[str, Any]) -> int:
+    """Uncached input, falling back to ``prompt_tokens`` when the source does
+    not split it out (same rule as the CLI display helper)."""
+    uncached = usage.get("uncached_prompt_tokens")
+    if uncached is None:
+        uncached = usage.get("prompt_tokens")
+    return int(_number(uncached))
+
+
 def _add_usage(target: dict[str, Any], usage: dict[str, Any]) -> None:
     for key in TOKEN_KEYS:
         target[key] = int(target.get(key) or 0) + int(_number(usage.get(key)))
+    target["uncached_prompt_tokens"] = int(
+        target.get("uncached_prompt_tokens") or 0
+    ) + _uncached_prompt_tokens(usage)
     target["processed_tokens"] = int(
         target.get("processed_tokens") or 0
     ) + _usage_total(usage)

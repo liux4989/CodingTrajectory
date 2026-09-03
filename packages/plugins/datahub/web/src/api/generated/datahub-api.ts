@@ -513,11 +513,13 @@ export type Scope = string | null;
 export type Sessions7 = GraphStatsSession[] | null;
 export type Role2 = string | null;
 export type SessionId9 = string;
+export type CacheWriteTokens2 = number | null;
 export type CachedPromptTokens2 = number | null;
 export type CompletionTokens2 = number | null;
 export type ProcessedTokens7 = number | null;
 export type PromptTokens2 = number | null;
 export type ReasoningTokens2 = number | null;
+export type UncachedPromptTokens1 = number | null;
 export type Vendor7 = string | null;
 export type Vendor8 = string | null;
 export type Warnings6 = string[];
@@ -1925,11 +1927,13 @@ export interface GraphStatsSession {
  * via the `definition` "GraphUsageBuckets".
  */
 export interface GraphUsageBuckets {
+  cache_write_tokens?: CacheWriteTokens2;
   cached_prompt_tokens?: CachedPromptTokens2;
   completion_tokens?: CompletionTokens2;
   processed_tokens?: ProcessedTokens7;
   prompt_tokens?: PromptTokens2;
   reasoning_tokens?: ReasoningTokens2;
+  uncached_prompt_tokens?: UncachedPromptTokens1;
   [k: string]: unknown;
 }
 /**

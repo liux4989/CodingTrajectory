@@ -196,7 +196,7 @@ export function SessionGraphRoute() {
           <CardHeader>
             <CardTitle className="title-card">Session Composition</CardTitle>
             <CardDescription>
-              Per-session processed tokens, split into cached and fresh portions. Select a bar to open the session.
+              Per-session processed tokens, split into cached and uncached portions. Select a bar to open the session.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -249,10 +249,14 @@ type GraphModel = NonNullable<SessionGraphPayload["usage"]["models"]>[number];
 
 function bucketMix(totalUsage: SessionGraphPayload["usage"]["total_usage"]) {
   const buckets = totalUsage ?? {};
+  // Uncached input falls back to gross prompt when the source does not split
+  // it out, matching the glossary display rule.
+  const input = buckets.uncached_prompt_tokens ?? buckets.prompt_tokens ?? 0;
   return [
-    { label: "Prompt", value: Math.max((buckets.prompt_tokens ?? 0) - (buckets.cached_prompt_tokens ?? 0), 0) },
+    { label: "Input", value: input },
     { label: "Cached", value: buckets.cached_prompt_tokens ?? 0 },
-    { label: "Completion", value: buckets.completion_tokens ?? 0 },
+    { label: "Cache write", value: buckets.cache_write_tokens ?? 0 },
+    { label: "Output", value: buckets.completion_tokens ?? 0 },
     { label: "Reasoning", value: buckets.reasoning_tokens ?? 0 },
   ];
 }
@@ -337,7 +341,7 @@ function SessionCompositionChart({ rows, rootId }: { rows: CompositionRow[]; roo
         series={[
           { name: "Cached", data: rows.map((row) => row.stats?.usage?.cached_prompt_tokens ?? 0) },
           {
-            name: "Fresh prompt + output",
+            name: "Uncached",
             data: rows.map((row) =>
               Math.max(
                 (row.usage?.total_usage?.processed_tokens ?? row.stats?.usage?.processed_tokens ?? 0) -

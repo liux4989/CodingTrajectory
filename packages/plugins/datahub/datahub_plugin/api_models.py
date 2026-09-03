@@ -331,7 +331,9 @@ class GraphRuntime(ExtensibleResponse):
 class GraphUsageBuckets(ExtensibleResponse):
     processed_tokens: int | None = None
     prompt_tokens: int | None = None
+    uncached_prompt_tokens: int | None = None
     cached_prompt_tokens: int | None = None
+    cache_write_tokens: int | None = None
     completion_tokens: int | None = None
     reasoning_tokens: int | None = None
 

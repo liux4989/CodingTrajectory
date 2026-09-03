@@ -3759,6 +3759,18 @@
     "GraphUsageBuckets": {
       "additionalProperties": true,
       "properties": {
+        "cache_write_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Write Tokens"
+        },
         "cached_prompt_tokens": {
           "anyOf": [
             {
@@ -3818,6 +3830,18 @@
           ],
           "default": null,
           "title": "Reasoning Tokens"
+        },
+        "uncached_prompt_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uncached Prompt Tokens"
         }
       },
       "title": "GraphUsageBuckets",

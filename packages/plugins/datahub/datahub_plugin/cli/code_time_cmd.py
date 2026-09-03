@@ -333,7 +333,7 @@ def render_report(report: dict[str, Any]) -> str:
 
     header = (
         f"  {'Project':<{col_project}}  {'Sessions':>8}  {'Coding':>10}  "
-        f"{'Tokens':>10}  {'Cost':>8}"
+        f"{'Processed':>10}  {'Cost':>8}"
     )
     lines.append(header)
     lines.append("  " + "-" * (len(header) - 2))
@@ -382,7 +382,7 @@ def _totals_line(totals: dict[str, Any]) -> str:
         f"Wait time: {_format_duration(totals['wait_seconds'])}",
         f"Turns: {totals['turns']}",
         f"Tool calls: {totals['tool_calls']}",
-        f"Tokens: {_format_tokens(totals['tokens']['processed_tokens'])}",
+        f"Processed: {_format_tokens(totals['tokens']['processed_tokens'])}",
     ]
     if totals.get("cost_usd") is not None:
         parts.append(f"Cost: {_format_cost(totals['cost_usd'])}")

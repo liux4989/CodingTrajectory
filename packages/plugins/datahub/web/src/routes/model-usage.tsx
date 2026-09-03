@@ -60,15 +60,19 @@ const ALL_PROJECTS = "__all_projects__";
 const ALL_MODELS = "__all_models__";
 type TokenBucketKey =
   | "processed_tokens"
-  | "prompt_tokens"
+  | "uncached_prompt_tokens"
   | "cached_prompt_tokens"
+  | "cache_write_tokens"
   | "completion_tokens"
   | "reasoning_tokens";
+// Display labels follow docs/token-usage-glossary.md (input/cached/cache
+// write/output/reasoning/processed).
 const TOKEN_BUCKET_DEFS = [
   { key: "processed_tokens", label: "Processed" },
-  { key: "prompt_tokens", label: "Prompt" },
+  { key: "uncached_prompt_tokens", label: "Input" },
   { key: "cached_prompt_tokens", label: "Cached" },
-  { key: "completion_tokens", label: "Completion" },
+  { key: "cache_write_tokens", label: "Cache write" },
+  { key: "completion_tokens", label: "Output" },
   { key: "reasoning_tokens", label: "Reasoning" },
 ] as const satisfies ReadonlyArray<{ key: TokenBucketKey; label: string }>;
 const VIEW_OPTIONS = [
@@ -1210,9 +1214,10 @@ function sessionColumns(view: UsageView): ColumnDef<ModelUsageSession>[] {
         ]
       : view === "tokens"
         ? [
-            sessionTokenColumn("prompt_tokens", "Prompt"),
+            sessionTokenColumn("uncached_prompt_tokens", "Input"),
             sessionTokenColumn("cached_prompt_tokens", "Cached"),
-            sessionTokenColumn("completion_tokens", "Completion"),
+            sessionTokenColumn("cache_write_tokens", "Cache write"),
+            sessionTokenColumn("completion_tokens", "Output"),
             sessionTokenColumn("reasoning_tokens", "Reasoning"),
           ]
       : [
@@ -1348,9 +1353,10 @@ function turnColumns(view: "cost" | "tokens"): ColumnDef<ModelUsageTurn>[] {
     },
     ...(view === "tokens"
       ? [
-          turnTokenColumn("prompt_tokens", "Prompt"),
+          turnTokenColumn("uncached_prompt_tokens", "Input"),
           turnTokenColumn("cached_prompt_tokens", "Cached"),
-          turnTokenColumn("completion_tokens", "Completion"),
+          turnTokenColumn("cache_write_tokens", "Cache write"),
+          turnTokenColumn("completion_tokens", "Output"),
           turnTokenColumn("reasoning_tokens", "Reasoning"),
         ]
       : [

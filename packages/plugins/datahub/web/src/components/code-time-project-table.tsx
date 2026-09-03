@@ -33,7 +33,7 @@ export function CodeTimeProjectTable({ projects }: CodeTimeProjectTableProps) {
             <th className="px-4 py-2 text-right">Wait Time</th>
             <th className="px-4 py-2 text-right">Turns</th>
             <th className="px-4 py-2 text-right">Tool Calls</th>
-            <th className="px-4 py-2 text-right">Tokens</th>
+            <th className="px-4 py-2 text-right">Processed</th>
             <th className="px-4 py-2 text-right">Cost</th>
           </tr>
         </thead>

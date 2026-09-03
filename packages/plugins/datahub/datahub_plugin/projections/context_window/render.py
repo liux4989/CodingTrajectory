@@ -73,13 +73,20 @@ def render_markdown(projection: ContextWindowProjection) -> str:
             )
 
     if projection.expensive_items:
-        lines.extend(["", "Most Expensive Items"])
+        lines.extend(
+            [
+                "",
+                "Most Expensive Items "
+                "(cost · input/cached/cache write/output/reasoning)",
+            ]
+        )
         for item in projection.expensive_items[:12]:
             usage = item.allocated_usage
             lines.append(
                 f"  {_format_cost(item.estimated_cost.value_usd):>9}  "
                 f"{_format_tokens(usage.get('uncached_prompt_tokens'))}/"
                 f"{_format_tokens(usage.get('cached_prompt_tokens'))}/"
+                f"{_format_tokens(usage.get('cache_write_tokens'))}/"
                 f"{_format_tokens(usage.get('completion_tokens'))}/"
                 f"{_format_tokens(usage.get('reasoning_tokens'))}  "
                 f"{item.category:<10} {_one_line(item.label + ': ' + item.summary, 72)}"
