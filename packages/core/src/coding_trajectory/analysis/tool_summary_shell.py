@@ -21,21 +21,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
 from coding_trajectory.analysis.shell_parser import split_shell_stages
 
 
-CommandFamily = Literal[
-    "cli_report",
-    "search",
-    "list_files",
-    "read_file",
-    "tests",
-    "build",
-    "code_fix",
-    "repository",
-    "dependency",
-    "diagnostic",
-    "external",
-    "runtime",
-    "other",
-]
+VerificationKind = Literal["tests", "checks"]
 
 _TEST_RUNNER_HEADS = frozenset(
     {
@@ -53,7 +39,7 @@ _TEST_RUNNER_HEADS = frozenset(
 _TEST_SUBCOMMAND_RUNNERS = frozenset(
     {"npm", "pnpm", "yarn", "bun", "deno", "cargo", "go", "dotnet", "mix"}
 )
-_BUILD_TOKENS = frozenset(
+_CHECK_RUNNER_HEADS = frozenset(
     {
         "tsc",
         "mypy",
@@ -64,53 +50,14 @@ _BUILD_TOKENS = frozenset(
         "black",
         "isort",
         "prettier",
-        "make",
-        "cmake",
-        "webpack",
-        "rollup",
-        "vite",
-        "esbuild",
         "clippy",
-        "build",
-        "compile",
-        "lint",
-        "typecheck",
-        "check",
-        "vet",
     }
 )
-_PACKAGE_MANAGERS = frozenset(
-    {
-        "npm",
-        "pnpm",
-        "yarn",
-        "bun",
-        "pip",
-        "pip3",
-        "uv",
-        "poetry",
-        "pipenv",
-        "cargo",
-        "gem",
-        "bundle",
-        "brew",
-        "conda",
-        "apt",
-        "apt-get",
-    }
+_CHECK_SUBCOMMANDS = frozenset(
+    {"build", "compile", "lint", "typecheck", "check", "vet"}
 )
-_DEPENDENCY_TOKENS = frozenset(
-    {
-        "install",
-        "add",
-        "ci",
-        "sync",
-        "get",
-        "lock",
-        "update",
-        "upgrade",
-        "remove",
-    }
+_CHECK_SUBCOMMAND_RUNNERS = frozenset(
+    {"npm", "pnpm", "yarn", "bun", "deno", "cargo", "go", "dotnet", "mix"}
 )
 _COMMAND_RUNNERS = frozenset(
     {
@@ -129,32 +76,6 @@ _COMMAND_RUNNERS = frozenset(
     }
 )
 _RUNNER_SUBWORDS = frozenset({"run", "exec", "dlx", "tool", "task"})
-_CODE_FIX_TOKENS = frozenset({"fmt", "format", "fix", "fixer"})
-_DIAGNOSTIC_HEADS = frozenset(
-    {"pwd", "date", "which", "where", "whoami", "uname", "env", "printenv"}
-)
-_EXTERNAL_HEADS = frozenset(
-    {
-        "curl",
-        "wget",
-        "http",
-        "https",
-        "wrangler",
-        "aws",
-        "gcloud",
-        "az",
-        "fly",
-        "flyctl",
-        "vercel",
-        "netlify",
-        "ssh",
-        "scp",
-        "rsync",
-    }
-)
-_RUNTIME_TOKENS = frozenset(
-    {"dev", "serve", "server", "start", "up", "runserver", "preview"}
-)
 _SHELL_SETUP_HEADS = frozenset({"cd", "pushd", "popd", "export", "set", "unset"})
 
 
@@ -193,53 +114,37 @@ def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, st
     return RUN_COMMAND, description, "shell:command"
 
 
-def classify_command_family(tool_input: Any) -> tuple[CommandFamily, str]:
-    """Return a best-effort internal hint, not a user-facing command label.
-
-    Overview labels use ``classify_shell``'s small structural vocabulary and
-    preserve unrecognized commands as ``RunCommand``.  Families support summary
-    ranking and metrics only, so ambiguous shell words must remain ``other``.
-    """
+def classify_verification_command(tool_input: Any) -> VerificationKind | None:
+    """Recognize only commands suitable for the summary verification section."""
     cmd = shell_cmd(tool_input)
     if not cmd and isinstance(tool_input, str):
         cmd = tool_input
     if not cmd:
-        return "other", "command"
+        return None
     tokens = [
         os.path.basename(token.lower()) for token in safe_split(primary_stage(cmd))
     ]
     if not tokens:
-        return "other", "command"
+        return None
 
     head = command_head(tokens)
-    token_set = set(tokens)
-    if head in {"rg", "grep", "ag", "ack", "rga"}:
-        return "search", head
-    if head in {"ls", "eza", "exa", "tree", "find", "fd"}:
-        return "list_files", head
-    if head in {"cat", "bat", "head", "tail", "less", "more", "nl", "sed"}:
-        return "read_file", head
-    if head == "ct":
-        return "cli_report", head
-    if head in {"git", "gh", "hg", "svn"} or tokens[0] in {"git", "gh", "hg", "svn"}:
-        return "repository", head
     if head in _TEST_RUNNER_HEADS or (
         tokens[0] in _TEST_SUBCOMMAND_RUNNERS and "test" in tokens[1:]
     ):
-        return "tests", head
-    if token_set & _CODE_FIX_TOKENS:
-        return "code_fix", head
-    if token_set & _BUILD_TOKENS:
-        return "build", head
-    if token_set & _PACKAGE_MANAGERS and token_set & _DEPENDENCY_TOKENS:
-        return "dependency", head
-    if head in _DIAGNOSTIC_HEADS or "--version" in token_set or "-v" in token_set:
-        return "diagnostic", head
-    if head in _EXTERNAL_HEADS:
-        return "external", head
-    if token_set & _RUNTIME_TOKENS:
-        return "runtime", head
-    return "other", head
+        return "tests"
+    if head in _CHECK_RUNNER_HEADS:
+        if head in {"black", "isort", "prettier"} and "--check" not in tokens:
+            return None
+        if head == "ruff" and not any(
+            token in {"check", "rule", "analyze"} for token in tokens[1:]
+        ):
+            return None
+        return "checks"
+    if tokens[0] in _CHECK_SUBCOMMAND_RUNNERS and any(
+        token in _CHECK_SUBCOMMANDS for token in tokens[1:]
+    ):
+        return "checks"
+    return None
 
 
 def command_head(tokens: list[str]) -> str:

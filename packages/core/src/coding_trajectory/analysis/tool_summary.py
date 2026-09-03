@@ -5,10 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from coding_trajectory.analysis.tool_summary_shell import (
-    classify_command_family,
-    classify_shell,
-)
+from coding_trajectory.analysis.tool_summary_shell import classify_shell
 from coding_trajectory.analysis.tool_summary_shared import (
     AGENT_COLLAB,
     EDIT_FILE,
@@ -151,11 +148,7 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         result["optimization_profile"] = optimization_profile
     if description:
         result["description"] = description
-    if item.kind == "command_execution" or concept == RUN_COMMAND:
-        family, command = classify_command_family(tool_input)
-        result["command_family"] = family
-        result["command"] = command
-    else:
+    if item.kind != "command_execution" and concept != RUN_COMMAND:
         result["breakdown"] = _other_output_breakdown(tool_name, tool_input)
     status = getattr(item, "status", None)
     if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
@@ -183,8 +176,6 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         result["name"] = "Interacted with background terminal"
         result["optimization_profile"] = "activity:background_terminal_interaction"
         result.pop("description", None)
-        result.pop("command_family", None)
-        result.pop("command", None)
     return result
 
 
@@ -212,15 +203,16 @@ def _other_output_breakdown(tool_name: str, tool_input: Any) -> str:
         return f"exec ({len(unique_labels)} {count_label}): {shown}{suffix}"
     commands = _embedded_exec_commands(tool_input)
     if commands:
-        command_heads = [
-            classify_command_family({"cmd": command})[1] for command in commands
+        command_descriptions = [
+            classify_shell("exec_command", {"cmd": command})[1] or "command"
+            for command in commands
         ]
-        unique_heads = list(dict.fromkeys(command_heads))
-        shown = ", ".join(unique_heads[:4])
-        remaining = len(unique_heads) - 4
+        unique_descriptions = list(dict.fromkeys(command_descriptions))
+        shown = ", ".join(unique_descriptions[:4])
+        remaining = len(unique_descriptions) - 4
         suffix = f", +{remaining} more" if remaining > 0 else ""
-        count_label = "command" if len(unique_heads) == 1 else "commands"
-        return f"exec ({len(unique_heads)} {count_label}): {shown}{suffix}"
+        count_label = "command" if len(unique_descriptions) == 1 else "commands"
+        return f"exec ({len(unique_descriptions)} {count_label}): {shown}{suffix}"
     return "exec orchestration"
 
 

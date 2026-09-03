@@ -148,13 +148,13 @@ into the same multi-agent graph:
 2. `session graph stats <SESSION_ID> [--session-composition] [--output markdown|json]` — inspect aggregate context and token statistics; opt into per-session composition
 3. `session graph usage <SESSION_ID> [--turn TURN_ID] [--flat-turns] [--output markdown|json]` — inspect aggregate token usage; opt into the graph-wide flat turn list
 
-The `Other command output` row in `session stats` is scoped to the selected
-thread. Use `session graph stats` when child-agent totals are needed; ordinary
-forked threads remain separate conversation branches.
-Unclassified shell commands are grouped by normalized command name; an
-orchestrating `exec` tool is grouped as one wrapper with its contained command
-labels. Wrapper output is kept together because the source log does not expose
-an exact token split across its inner commands.
+The `Command output` and `Other tool output` rows in `session stats` are scoped
+to the selected thread. Use `session graph stats` when child-agent totals are
+needed; ordinary forked threads remain separate conversation branches. Command
+output remains one observed structural bucket instead of being divided by an
+inferred command-intent taxonomy. An orchestrating `exec` tool remains one
+wrapper because the source log does not expose an exact token split across its
+inner commands.
 
 `session usage` is intentionally turn-focused. It reports provider token
 buckets and prices every recorded provider request independently before

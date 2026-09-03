@@ -25,9 +25,10 @@ and target (`ReadFile: docs/example.md`) instead of being renamed to the generic
 `RunCommand`. Commands without a recognized behavior remain `RunCommand` with
 their bounded primary-command description. That fallback is authoritative for
 display: CT does not replace an explicit command with a broader family label
-such as `Ran tests`. Internal command-family hints may inform summary ranking or
-metrics, but they are not presentation semantics and ambiguous shell words such
-as the POSIX `test` predicate remain uncategorized.
+such as `Ran tests`. Summary verification uses a separate, narrow recognizer for
+known test and check invocations. Context composition keeps generic command
+output in one observed bucket rather than inferring command intent. Ambiguous
+shell words such as the POSIX `test` predicate remain uncategorized.
 
 This is the update boundary for future Codex changes. Native Codex item types
 and lifecycle evidence take precedence. The adapter reconstructs only stable,

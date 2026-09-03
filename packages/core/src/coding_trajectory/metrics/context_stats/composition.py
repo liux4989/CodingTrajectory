@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -104,24 +103,11 @@ _COORDINATION_CONCEPTS = frozenset({TODO_LIST, SUBAGENT_TASK, SESSION_HANDOFF})
 _OUTPUT_CONCEPT_LABELS = {
     SEARCH_TEXT: "Search output",
     LIST_FILES: "File listing output",
+    RUN_COMMAND: "Command output",
     WEB_FETCH: "Web fetch output",
     WEB_SEARCH: "Web search output",
 }
-_OUTPUT_FAMILY_LABELS = {
-    "cli_report": "CLI reports",
-    "search": "Search output",
-    "list_files": "File listing output",
-    "read_file": "File read command output",
-    "tests": "Test output",
-    "build": "Build / lint output",
-    "code_fix": "Formatter / fixer output",
-    "repository": "Repository output",
-    "dependency": "Dependency output",
-    "diagnostic": "Diagnostic output",
-    "external": "External service output",
-    "runtime": "Runtime output",
-    "other": "Other command output",
-}
+_OTHER_TOOL_OUTPUT = "other_tool"
 
 
 @session_scoped
@@ -522,7 +508,6 @@ def _agent_work(
     files: dict[str, _Measure] = defaultdict(_Measure)
     agent: dict[str, _Measure] = defaultdict(_Measure)
     output: dict[str, _Measure] = defaultdict(_Measure)
-    other_output: dict[str, _Measure] = defaultdict(_Measure)
     evicted = _Measure()
     has_agent_message_items = any(
         item.kind == "agent_message"
@@ -588,11 +573,10 @@ def _agent_work(
                     files=files,
                     agent=agent,
                     output=output,
-                    other_output=other_output,
                     allocated_usage_by_item=allocated_usage_by_item,
                 )
 
-    children = _assemble_agent_categories(files, agent, output, other_output)
+    children = _assemble_agent_categories(files, agent, output)
     return _measure_from_categories(children), children, evicted
 
 
@@ -600,7 +584,6 @@ def _assemble_agent_categories(
     files: dict[str, _Measure],
     agent: dict[str, _Measure],
     output: dict[str, _Measure],
-    other_output: dict[str, _Measure],
 ) -> list[ContextCategoryFlat]:
     """Shape accumulated file/agent/output measures into the composition children tree."""
     file_children = [
@@ -648,29 +631,21 @@ def _assemble_agent_categories(
         if category is not None
     ]
     output_children = [
-        _category(f"output_{concept.lower()}", label, output[concept])
+        _category(
+            f"output_{'command' if concept == RUN_COMMAND else concept.lower()}",
+            label,
+            output[concept],
+        )
         for concept, label in _OUTPUT_CONCEPT_LABELS.items()
         if output[concept].items
     ]
-    for key, label in _OUTPUT_FAMILY_LABELS.items():
-        if not output[key].items:
-            continue
-        if key != "other":
-            output_children.append(_category(f"output_{key}", label, output[key]))
-            continue
-        breakdown_children = [
-            _category(
-                f"output_other_{_category_key_part(breakdown)}",
-                breakdown,
-                measure,
-            )
-            for breakdown, measure in sorted(
-                other_output.items(), key=lambda item: (-item[1].tokens, item[0])
-            )
-            if measure.items
-        ]
+    if output[_OTHER_TOOL_OUTPUT].items:
         output_children.append(
-            _category("output_other", label, output[key], breakdown_children)
+            _category(
+                "output_other_tool",
+                "Other tool output",
+                output[_OTHER_TOOL_OUTPUT],
+            )
         )
 
     children = [
@@ -691,7 +666,6 @@ def _add_tool_item(
     files: dict[str, _Measure],
     agent: dict[str, _Measure],
     output: dict[str, _Measure],
-    other_output: dict[str, _Measure],
     allocated_usage_by_item: dict[UUID, dict[str, int]],
 ) -> None:
     if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
@@ -737,51 +711,17 @@ def _add_tool_item(
             allocated_usage=allocated_usage,
         )
         return
-    output_family = _output_family_key(summary, concept)
-    output[output_family].add(
+    output[_OTHER_TOOL_OUTPUT].add(
         tokens=tokens,
         chars=chars,
         allocated_usage=allocated_usage,
     )
-    if output_family == "other":
-        other_output[_output_breakdown_key(summary, concept)].add(
-            tokens=tokens,
-            chars=chars,
-            allocated_usage=allocated_usage,
-        )
 
 
 def _file_category_key(concept: str) -> str:
     if concept in _CODE_CHANGE_CONCEPTS:
         return concept.lower()
     return f"context_{concept.lower()}"
-
-
-def _output_family_key(summary: dict[str, object], concept: str) -> str:
-    if concept != RUN_COMMAND:
-        return "other"
-    family = summary.get("command_family")
-    return (
-        family
-        if isinstance(family, str) and family in _OUTPUT_FAMILY_LABELS
-        else "other"
-    )
-
-
-def _output_breakdown_key(summary: dict[str, object], concept: str) -> str:
-    if concept == RUN_COMMAND:
-        command = summary.get("command")
-        if isinstance(command, str) and command:
-            return command
-    breakdown = summary.get("breakdown")
-    if isinstance(breakdown, str) and breakdown:
-        return breakdown
-    return concept
-
-
-def _category_key_part(label: str) -> str:
-    value = re.sub(r"[^a-zA-Z0-9]+", "_", label).strip("_").lower()
-    return value[:96] or "unknown"
 
 
 def _parent(

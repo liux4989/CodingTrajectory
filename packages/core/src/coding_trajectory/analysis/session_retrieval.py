@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import heapq
 import json
 import re
@@ -19,7 +20,7 @@ from coding_trajectory.analysis.activity_flow import (
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.request_lineage import extract_user_request
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
-from coding_trajectory.analysis.tool_summary_shell import classify_command_family
+from coding_trajectory.analysis.tool_summary_shell import classify_verification_command
 from coding_trajectory.contracts.session import DEFAULT_SEARCH_KINDS, SearchKind
 from coding_trajectory.ingestion.common import format_datetime
 from coding_trajectory.ingestion.indexes import build_session_graph_index
@@ -183,9 +184,9 @@ def build_session_summary(
                         )
 
             if isinstance(item, CommandExecutionItem):
-                family, _head = signals.command_family(item.command)
+                verification_kind = signals.verification_kind(item)
                 outcome = public_activity_outcome(signals.outcome(item))
-                if family in {"tests", "build"} and outcome is not None:
+                if verification_kind is not None and outcome is not None:
                     verification.append(
                         _RankedSummaryItem(
                             timestamp=item.started_at,
@@ -462,26 +463,26 @@ def _merge_references(left: dict[str, Any], right: dict[str, Any]) -> dict[str, 
 class _ItemSignals:
     """Memoize deterministic per-item signals within one projection build.
 
-    ``summarize_tool_call`` and ``classify_command_family`` fully re-parse the
-    command line. Without memoization a projection pays that parse cost
-    several times per item, which dominates runtime on long real commands.
+    Tool summaries and verification recognition may be consulted by several
+    summary sections. Keep those narrow signals item-scoped without introducing
+    a general command-intent taxonomy.
     """
 
     def __init__(self) -> None:
         self._tool_summaries: dict[UUID, Any] = {}
-        self._command_families: dict[str, Any] = {}
+        self._verification_kinds: dict[UUID, str | None] = {}
 
     def tool_summary(self, item: Item) -> Any:
         if item.item_id not in self._tool_summaries:
             self._tool_summaries[item.item_id] = summarize_tool_call(item)
         return self._tool_summaries[item.item_id]
 
-    def command_family(self, command: Any) -> Any:
-        if not isinstance(command, str):
-            return classify_command_family(command)
-        if command not in self._command_families:
-            self._command_families[command] = classify_command_family(command)
-        return self._command_families[command]
+    def verification_kind(self, item: CommandExecutionItem) -> str | None:
+        if item.item_id not in self._verification_kinds:
+            self._verification_kinds[item.item_id] = classify_verification_command(
+                item.command
+            )
+        return self._verification_kinds[item.item_id]
 
     def outcome(self, item: Item) -> str:
         summary = self.tool_summary(item)
@@ -514,8 +515,7 @@ class _ItemSignals:
         if isinstance(item, FileChangeItem):
             score += 34
         elif isinstance(item, CommandExecutionItem):
-            family, _head = self.command_family(item.command)
-            score += 26 if family == "tests" else 22 if family == "build" else 14
+            score += 14
         elif isinstance(item, PlanItem):
             score += 18
         elif isinstance(item, AgentMessageItem):
@@ -551,8 +551,8 @@ class _ItemSignals:
         if isinstance(item, FileChangeItem):
             return f"file:{item.path or _path_from_value(item.input) or item.item_id}"
         if isinstance(item, CommandExecutionItem):
-            family, head = self.command_family(item.command)
-            return f"command:{family}:{head}"
+            identity = _command_identity(item.command)
+            return f"command:{identity}" if identity else f"command:{item.item_id}"
         tool_name = getattr(item, "tool_name", None)
         return f"tool:{tool_name}" if tool_name else None
 
@@ -576,9 +576,7 @@ def _recent_activity_cells(
     for turn in turns:
         items_by_id = {str(item.item_id): item for item in turn.items}
         for item_run in _summary_activity_item_runs(turn.items, signals):
-            for cell in build_flows(
-                item_run, flatten_commands=flatten_commands
-            ):
+            for cell in build_flows(item_run, flatten_commands=flatten_commands):
                 if is_control_only_activity_cell(cell):
                     continue
                 item_ids = _activity_cell_item_ids(cell)
@@ -980,6 +978,21 @@ def _item_text(item: AgentMessageItem) -> str:
 
 def _stringify(value: Any) -> str:
     return _bounded_text(value)[0]
+
+
+def _command_identity(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        command = value.strip()
+    else:
+        try:
+            command = json.dumps(value, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError):
+            command = str(value).strip()
+    if not command:
+        return None
+    return hashlib.sha256(command.encode()).hexdigest()
 
 
 def _tokens(value: str) -> list[str]:
