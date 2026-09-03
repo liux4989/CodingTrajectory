@@ -38,10 +38,20 @@ class ProjectionObservation(BaseModel):
         if self.payload.get("kind") != "canonical_session_snapshot.v2":
             raise ValueError("projection observation is not a compact v2 snapshot")
         checkpoint = self.payload.get("source_checkpoint")
-        if not isinstance(checkpoint, dict) or not isinstance(
-            checkpoint.get("committed_offset"), int
+        if not isinstance(checkpoint, dict) or set(checkpoint) != {"segments"}:
+            raise TypeError("compact snapshot has no valid segmented checkpoint")
+        segments = checkpoint.get("segments")
+        if not (
+            isinstance(segments, list)
+            and bool(segments)
+            and all(
+                isinstance(offset, int)
+                and not isinstance(offset, bool)
+                and offset >= 0
+                for offset in segments
+            )
         ):
-            raise TypeError("compact snapshot has no source checkpoint")
+            raise TypeError("compact snapshot has no valid segmented checkpoint")
         session = Session.model_validate(self.payload.get("session"))
         validate_remote_compact_session(session)
         return session
