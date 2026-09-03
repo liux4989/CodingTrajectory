@@ -261,6 +261,11 @@ structural signals such as mutations, failed validation, commits, user scope
 changes, and recency, but final entries retain chronological order within each
 section.
 
+`recent_activity.status` is present only for outcome-bearing activity. Agent
+messages and terminal wait/interaction observations have no execution outcome,
+matching Codex's typed event model; they omit the property rather than report
+`unknown`.
+
 ### Non-goals
 
 - Scoring whether the session succeeded.

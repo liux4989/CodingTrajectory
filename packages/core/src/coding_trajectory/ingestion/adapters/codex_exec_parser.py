@@ -39,6 +39,7 @@ _CODEX_STATIC_EXEC_TOOL_NAMES: frozenset[str] = frozenset(
         "update_plan",
         "wait_agent",
         "web__run",
+        "write_stdin",
     }
 )
 _CODEX_STATIC_COLLAB_TOOL_NAMES: frozenset[str] = frozenset(
@@ -347,6 +348,38 @@ def _build_static_exec_invocation(
             source_offset=source_offset,
         )
 
+    if method == "write_stdin":
+        # ``write_stdin`` has a stable transport shape.  In particular, an
+        # empty ``chars`` payload is Codex's background-terminal poll. Codex
+        # rollouts have used both ``process_id`` and ``session_id`` as the
+        # terminal identity; preserve which identity field was supplied so
+        # activity projection never conflates their numeric values.
+        if not isinstance(argument, dict):
+            return None
+        identities = [
+            (key, argument.get(key))
+            for key in ("process_id", "session_id")
+            if key in argument
+        ]
+        chars = argument.get("chars")
+        identity = identities[0][1] if len(identities) == 1 else None
+        if (
+            len(identities) != 1
+            or not isinstance(identity, (str, int))
+            or isinstance(identity, bool)
+            or (isinstance(identity, str) and not identity.strip())
+            or (isinstance(identity, int) and identity <= 0)
+            or not isinstance(chars, str)
+        ):
+            return None
+        return StaticExecInvocation(
+            method=method,
+            tool_name="write_stdin",
+            item_kind="command_execution",
+            input=argument,
+            source_offset=source_offset,
+        )
+
     if method == "web__run":
         if not isinstance(argument, dict):
             return None
@@ -502,6 +535,20 @@ def _has_possible_tool_reference(source: str, offset: int) -> bool:
     return re.search(r"\btools\b", source[offset:]) is not None
 
 
+def _is_safe_text_await(source: str, tokens: list[tuple[str, int, int]]) -> bool:
+    """Recognize only ``text(await tools.apply_patch(...))`` containment.
+
+    Codex commonly displays a patch result through ``text``.  This is not a
+    general expression parser: accepting arbitrary parenthesized awaits would
+    allow a wrapper's control flow to be mistaken for a direct nested call.
+    """
+
+    if len(tokens) < 3 or tokens[-3][0] != "text" or tokens[-2][0] != "await":
+        return False
+    between = _skip_js_trivia(source, tokens[-3][2])
+    return between is not None and between < len(source) and source[between] == "("
+
+
 def extract_static_exec_invocations(value: Any) -> list[StaticExecInvocation] | None:
     """Extract statically proven nested calls from a historical ``exec`` cell.
 
@@ -579,13 +626,19 @@ def extract_static_exec_invocations(value: Any) -> list[StaticExecInvocation] | 
             continue
         if len(tokens) < 2 or tokens[-2][0] != "await":
             return None
-        if _previous_non_trivia_character(value, tokens[-2][1]) not in {None, "=", ";"}:
+        previous = _previous_non_trivia_character(value, tokens[-2][1])
+        direct_await = previous in {None, "=", ";"}
+        text_await = previous == "(" and _is_safe_text_await(value, tokens)
+        if not direct_await and not text_await:
             return None
         parsed = _parse_static_exec_tool_call(value, tokens[-1][1])
         if parsed is None:
             return None
         invocation, offset = parsed
+        # A parenthesized await is safe only in the narrow patch-result form
+        # above.  Keep all other nested expression forms fail closed.
+        if text_await and invocation.method != "apply_patch":
+            return None
         invocations.append(invocation)
 
     return invocations or None
-

@@ -666,6 +666,17 @@ class CodexAdapter(BaseAdapter):
         pending_exec_wrappers: dict[str, _PendingExecWrapper] = field(
             default_factory=dict
         )
+        # Raw terminal identities are needed only while reconstructing legacy
+        # exec wrappers. Map each one to a token derived from an already-public
+        # tool call id so measurements retention can group polls without
+        # retaining a reversible digest of the process/session identifier.
+        background_terminal_group_tokens: dict[tuple[str, str, int], str] = field(
+            default_factory=dict
+        )
+        # Visible assistant output flushes Codex's active terminal-wait streak.
+        # Compact items discard that text, so include a content-free epoch in
+        # wait grouping markers to preserve the same boundary.
+        activity_cell_epoch: int = 0
         # Every custom ``exec`` call, including cells whose JavaScript cannot
         # be statically parsed. Its wrapper result can still be failed even
         # though it gives no nested-tool outcome.
@@ -864,6 +875,13 @@ class CodexAdapter(BaseAdapter):
             if span is not None:
                 for entry in transcript[before:]:
                     entry.origin = span
+            if any(
+                entry.kind == "assistant_message"
+                and isinstance(entry.data.get("text"), str)
+                and bool(entry.data["text"].strip())
+                for entry in transcript[before:]
+            ):
+                state.activity_cell_epoch += 1
         return transcript
 
     def _translate_record(

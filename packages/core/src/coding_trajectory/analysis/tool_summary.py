@@ -29,7 +29,15 @@ from coding_trajectory.analysis.tool_summary_shared import (
 from coding_trajectory.ingestion.models import Item, ToolStatus
 
 
-def _activity_metadata(item: Item) -> dict[str, str | bool]:
+_EXPANDED_EXEC_TOOL_NAME = "codex_exec_expanded"
+_BACKGROUND_WAIT_TOOL_PREFIX = "codex_background_terminal_wait:"
+_BACKGROUND_INTERACTION_TOOL_NAME = "codex_background_terminal_interaction"
+_OUTCOMELESS_ACTIVITY_KINDS = frozenset(
+    {"background_terminal_wait", "background_terminal_interaction"}
+)
+
+
+def _activity_metadata(item: Item) -> dict[str, str | bool | int]:
     """Return outcome-bearing activity facts retained into compact sessions.
 
     Adapters may supply a stricter provenance record.  In its absence a
@@ -49,21 +57,29 @@ def _activity_metadata(item: Item) -> dict[str, str | bool]:
     metadata: dict[str, str | bool] = {}
     if raw_activity.get("hidden_from_overview") is True:
         metadata["hidden"] = True
-    if item.kind == "command_execution":
+    activity_kind = raw_activity.get("kind")
+    if isinstance(activity_kind, str):
+        metadata["kind"] = activity_kind
+    elif item.kind == "command_execution":
         metadata["kind"] = "command"
     source = raw_activity.get("source")
     metadata["source"] = source if isinstance(source, str) else "agent"
 
-    outcome = raw_activity.get("outcome")
-    if outcome not in {"succeeded", "failed", "unknown"}:
-        status = getattr(item, "status", None)
-        if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
-            outcome = "failed"
-        elif status in {ToolStatus.COMPLETED, ToolStatus.COMPLETED.value, "completed"}:
-            outcome = "succeeded"
-        else:
-            outcome = "unknown"
-    metadata["outcome"] = outcome
+    if activity_kind not in _OUTCOMELESS_ACTIVITY_KINDS:
+        outcome = raw_activity.get("outcome")
+        if outcome not in {"succeeded", "failed", "unknown"}:
+            status = getattr(item, "status", None)
+            if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
+                outcome = "failed"
+            elif status in {
+                ToolStatus.COMPLETED,
+                ToolStatus.COMPLETED.value,
+                "completed",
+            }:
+                outcome = "succeeded"
+            else:
+                outcome = "unknown"
+        metadata["outcome"] = outcome
 
     fidelity = raw_activity.get("fidelity")
     if isinstance(fidelity, str):
@@ -71,13 +87,19 @@ def _activity_metadata(item: Item) -> dict[str, str | bool]:
     wrapper_status = raw_activity.get("wrapper_status")
     if isinstance(wrapper_status, str):
         metadata["wrapper_status"] = wrapper_status
+    terminal_identity = raw_activity.get("background_terminal_identity")
+    if isinstance(terminal_identity, str) and terminal_identity:
+        metadata["background_terminal_identity"] = terminal_identity
     return metadata
 
 
 def summarize_tool_call(item: Item) -> dict[str, Any] | None:
     measurements = getattr(item, "measurements", None)
-    if measurements is not None:
-        return dict(measurements.tool_summary) if measurements.tool_summary else None
+    if measurements is not None and measurements.tool_summary:
+        return dict(measurements.tool_summary)
+    # The remote-boundary scrubber deliberately removes content-derived tool
+    # summaries while retaining the body-free canonical item. Fall through to
+    # its bounded compact marker/tool identity instead of erasing the activity.
     tool_name_raw = getattr(item, "tool_name", None)
     tool_name = (tool_name_raw or "").strip() if isinstance(tool_name_raw, str) else ""
     if not tool_name:
@@ -88,6 +110,34 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         }.get(item.kind, "")
     if not tool_name:
         return None
+
+    # These are adapter-owned semantic markers used only after static Codex
+    # exec reconstruction. They survive measurements retention without raw
+    # wrapper code, stdin characters, or terminal identities.
+    if tool_name == _EXPANDED_EXEC_TOOL_NAME:
+        return None
+    if tool_name.startswith(_BACKGROUND_WAIT_TOOL_PREFIX):
+        identity_key = tool_name.removeprefix(_BACKGROUND_WAIT_TOOL_PREFIX)
+        if not identity_key:
+            return None
+        return {
+            "name": RUN_COMMAND,
+            "optimization_profile": "activity:background_terminal_wait",
+            "activity_kind": "background_terminal_wait",
+            "activity_source": "agent",
+            "activity_fidelity": "derived_static",
+            "activity_wrapper_status": "completed",
+            "background_terminal_identity": identity_key,
+        }
+    if tool_name == _BACKGROUND_INTERACTION_TOOL_NAME:
+        return {
+            "name": "Interacted with background terminal",
+            "optimization_profile": "activity:background_terminal_interaction",
+            "activity_kind": "background_terminal_interaction",
+            "activity_source": "agent",
+            "activity_fidelity": "derived_static",
+            "activity_wrapper_status": "completed",
+        }
 
     tool_input = (
         item.command
@@ -123,6 +173,18 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         result["activity_fidelity"] = activity["fidelity"]
     if isinstance(activity.get("wrapper_status"), str):
         result["activity_wrapper_status"] = activity["wrapper_status"]
+    terminal_identity = activity.get("background_terminal_identity")
+    if isinstance(terminal_identity, str) and terminal_identity:
+        result["background_terminal_identity"] = terminal_identity
+    if activity.get("kind") == "background_terminal_interaction":
+        # The canonical input retains the exact keystrokes for detail views,
+        # but overview must not disclose them. This is a terminal interaction,
+        # not a shell command or an empty polling wait.
+        result["name"] = "Interacted with background terminal"
+        result["optimization_profile"] = "activity:background_terminal_interaction"
+        result.pop("description", None)
+        result.pop("command_family", None)
+        result.pop("command", None)
     return result
 
 

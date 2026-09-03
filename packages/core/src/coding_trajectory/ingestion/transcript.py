@@ -700,7 +700,12 @@ class TranscriptProjector:
             "turn_id": current_turn.turn_id,
             "sequence": self._next_item_sequence(),
             "started_at": record.timestamp,
-            "tool_name": record.data.get("tool_name"),
+            "tool_name": (
+                record.data.get("compact_tool_name")
+                if self._compact is not None
+                and isinstance(record.data.get("compact_tool_name"), str)
+                else record.data.get("tool_name")
+            ),
             "tool_call_id": record.data.get("tool_call_id"),
             "input": None if self._compact is not None else record.data.get("input"),
             "output": None if self._compact is not None else record.data.get("output"),

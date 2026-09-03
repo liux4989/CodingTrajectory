@@ -57,10 +57,28 @@ cell.
    nested-outcome evidence; only the wrapper itself can be marked failed from
    it. A JavaScript syntax error remains a visible failed `exec`, because no
    nested action could have started.
-5. The raw `exec` wrapper remains canonical evidence. It is hidden only from
-   the compact activity view when every nested activity was safely
+5. The raw `exec` wrapper remains canonical evidence. It is hidden from
+   semantic activity projections when every nested activity was safely
    reconstructed or bound to native or explicit wrapper-result evidence;
-   unresolved or unsupported wrappers remain visible as `exec`.
+   unresolved or unsupported wrappers remain visible as `exec`. Overview and
+   summary recent activity consume the same cell projector, so a superseded
+   transport wrapper cannot disappear from one view and reappear in another.
+   Summary excludes its own `session.summary` / `session.search` commands at
+   the projector boundary to avoid recursively reporting retrieval activity.
+
+Empty `write_stdin` calls are background-terminal polls, not shell commands.
+Contiguous polls for the same namespaced terminal identity become one wait
+cell while retaining every canonical item reference. Non-empty stdin is a
+separate terminal interaction and its raw input remains available only through
+the item evidence layer. Like Codex's `TerminalInteraction` notification,
+neither form has an execution outcome; absence is not rendered as `unknown`.
+The enclosing JavaScript wrapper's completion remains separate and never
+claims that the underlying process completed.
+
+Measurements retention keeps only bounded compact markers for wrapper
+suppression and terminal grouping. Those markers contain no command body,
+stdin content, or process/session identifier; a content-free assistant-output
+epoch preserves wait-streak boundaries after compact retention drops text.
 
 Consequently a legacy session can show `Searched the web for …` or `Updated
 plan: 4 item(s)` with its nested outcome marked unavailable, rather than a raw

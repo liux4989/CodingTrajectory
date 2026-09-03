@@ -22,6 +22,9 @@ _OVERVIEW_TEXT_PREVIEW_LEN = 220
 _TOOL_SHAPED_KINDS: frozenset[str] = frozenset(
     {"tool_call", "command_execution", "file_change", "plan"}
 )
+_OUTCOMELESS_ACTIVITY_KINDS = frozenset(
+    {"background_terminal_wait", "background_terminal_interaction"}
+)
 _EXPLORATION_CONCEPTS: frozenset[str] = frozenset({READ_FILE, SEARCH_TEXT, LIST_FILES})
 _EXPLORATION_CELL_KEY = ("exploration", None, None)
 _COMMAND_CELL_KEY = ("command", None, None)
@@ -126,7 +129,19 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    if item.get("type") == "background_terminal_wait":
+        return prune_nones(
+            {
+                "tool": "Waited for background terminal",
+                "count": item.get("count"),
+                "item_ids": item.get("item_ids"),
+            }
+        )
+
     if item.get("type") == "tool_call":
+        outcome_bearing = (
+            item.get("activity_kind") not in _OUTCOMELESS_ACTIVITY_KINDS
+        )
         profile = tool_optimization_profile(
             str(item.get("name") or ""),
             _profile_name(item),
@@ -139,8 +154,12 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
                 "item_ids": [item.get("item_id")]
                 if isinstance(item.get("item_id"), str)
                 else None,
-                "outcome": item.get("activity_outcome"),
-                "wrapper_status": item.get("activity_wrapper_status"),
+                "outcome": (
+                    item.get("activity_outcome") if outcome_bearing else None
+                ),
+                "wrapper_status": (
+                    item.get("activity_wrapper_status") if outcome_bearing else None
+                ),
             }
         )
 
@@ -203,6 +222,19 @@ def _tool_activity_group_key(
         return None
     if item.get("activity_source") != "agent":
         return None
+
+    # Empty write_stdin calls are not commands. Codex presents a contiguous
+    # same-terminal polling run as one terminal wait, even though persisted
+    # history cannot prove when the underlying process completed.
+    if item.get("activity_kind") == "background_terminal_wait":
+        identity = item.get("background_terminal_identity")
+        if (
+            isinstance(identity, str)
+            and identity
+            and item.get("activity_wrapper_status") == "completed"
+        ):
+            return ("background_terminal_wait", identity, None)
+        return None
     if item.get("activity_outcome") != "succeeded":
         return None
 
@@ -220,6 +252,8 @@ def _tool_activity_group_key(
 
 
 def _project_tool_activity_cell(cell: _ToolActivityCell) -> list[dict[str, Any]]:
+    if cell.group_key[0] == "background_terminal_wait":
+        return [_project_background_terminal_wait_cell(cell.items)]
     if len(cell.items) == 1:
         return [cell.items[0]]
     if cell.group_key == _COMMAND_CELL_KEY:
@@ -227,6 +261,25 @@ def _project_tool_activity_cell(cell: _ToolActivityCell) -> list[dict[str, Any]]
     if cell.group_key == _EXPLORATION_CELL_KEY:
         return [_project_exploration_cell(cell.items)]
     return [_project_repeated_tool_cell(cell.items)]
+
+
+def _project_background_terminal_wait_cell(
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Collapse one contiguous empty-stdin polling streak by terminal identity."""
+
+    item_ids = [
+        item["item_id"]
+        for item in items
+        if isinstance(item.get("item_id"), str) and item.get("item_id")
+    ]
+    return prune_nones(
+        {
+            "type": "background_terminal_wait",
+            "count": len(items),
+            "item_ids": item_ids or None,
+        }
+    )
 
 
 def _project_exploration_cell(items: list[dict[str, Any]]) -> dict[str, Any]:

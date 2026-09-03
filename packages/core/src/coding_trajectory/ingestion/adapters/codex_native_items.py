@@ -1,14 +1,14 @@
-"""Native Codex terminal-item handlers, split out of ``codex.py``.
+"""Native Codex terminal items and legacy exec-wrapper reconstruction.
 
-Pure code motion: these were ``CodexAdapter`` methods/statics. Each takes the
-adapter's ``_ParseState`` explicitly and mutates it in place. Shared helpers
-and ``_PendingExecWrapper`` remain in ``codex.py``.
+Each handler takes the adapter's ``_ParseState`` explicitly and mutates it in
+place. Shared helpers and ``_PendingExecWrapper`` remain in ``codex.py``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from hashlib import sha256
 from typing import Any
 
 from coding_trajectory.ingestion.adapters.codex import (
@@ -32,13 +32,16 @@ from coding_trajectory.ingestion.transcript import TranscriptRecord
 
 _CODEX_EXEC_STATIC_EXTRACTOR = "codex_exec_static_v2"
 _NATIVE_EXEC_MATCH_GRACE_SECONDS = 2
+_EXPANDED_EXEC_TOOL_NAME = "codex_exec_expanded"
+_BACKGROUND_WAIT_TOOL_PREFIX = "codex_background_terminal_wait:"
+_BACKGROUND_INTERACTION_TOOL_NAME = "codex_background_terminal_interaction"
 
 # Moved signatures keep their original ``_ParseState`` spelling.
 _ParseState = CodexAdapter._ParseState
 
 def activity_data(
     *,
-    outcome: str,
+    outcome: str | None,
     fidelity: str,
     provenance: dict[str, Any],
     source: str = "agent",
@@ -47,10 +50,11 @@ def activity_data(
 ) -> dict[str, Any]:
     activity: dict[str, Any] = {
         "source": source,
-        "outcome": outcome,
         "fidelity": fidelity,
         "provenance": provenance,
     }
+    if outcome is not None:
+        activity["outcome"] = outcome
     if activity_kind is not None:
         activity["kind"] = activity_kind
     if wrapper_status is not None:
@@ -167,6 +171,13 @@ def match_pending_exec_wrapper(
         return None
     wrapper, index = candidates[0]
     wrapper.matched_native_indices.add(index)
+    if wrapper.closed and len(wrapper.matched_native_indices) == len(
+        wrapper.invocations
+    ):
+        # A native terminal item may be persisted just after the wrapper
+        # result. Once every child has authoritative evidence, suppress the
+        # failed envelope exactly as we do when matching finished earlier.
+        hide_expanded_exec_wrapper(wrapper)
     return wrapper, index
 
 def match_pending_exec_wrapper_invocation(
@@ -186,6 +197,10 @@ def match_pending_exec_wrapper_invocation(
         return None
     wrapper, index = candidates[0]
     wrapper.matched_native_indices.add(index)
+    if wrapper.closed and len(wrapper.matched_native_indices) == len(
+        wrapper.invocations
+    ):
+        hide_expanded_exec_wrapper(wrapper)
     return wrapper, index
 
 def hide_expanded_exec_wrapper(wrapper: _PendingExecWrapper) -> None:
@@ -199,6 +214,35 @@ def hide_expanded_exec_wrapper(wrapper: _PendingExecWrapper) -> None:
         "child_count": len(wrapper.invocations),
         "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
     }
+    # Compact retention strips vendor_data and wrapper input. Keep only an
+    # opaque semantic marker on the canonical row so compact projections do
+    # not resurrect this transport envelope as generic ``exec`` activity.
+    wrapper.call_record.data["compact_tool_name"] = _EXPANDED_EXEC_TOOL_NAME
+
+
+def _background_wait_tool_name(
+    identity: tuple[str, str | int],
+    *,
+    wrapper_call_id: str,
+    state: _ParseState,
+) -> str:
+    """Return an opaque grouping marker that does not encode the identity.
+
+    Compact overview needs a stable equality key to coalesce same-terminal
+    polling. The canonical input keeps the raw identifier only in trajectory
+    retention. The compact token is derived from the first already-retained
+    wrapper call id observed for that identity, never from the process/session
+    value itself.
+    """
+
+    kind, value = identity
+    key = (kind, str(value), state.activity_cell_epoch)
+    token = state.background_terminal_group_tokens.get(key)
+    if token is None:
+        token = sha256(wrapper_call_id.encode()).hexdigest()
+        state.background_terminal_group_tokens[key] = token
+    return f"{_BACKGROUND_WAIT_TOOL_PREFIX}{token}"
+
 
 def static_activity_input(invocation: StaticExecInvocation) -> Any:
     """Keep fallback activity useful without copying a full patch payload."""
@@ -211,9 +255,37 @@ def static_activity_input(invocation: StaticExecInvocation) -> Any:
             return {"patch_reference": reference}
     return {"patch_reference": "literal"}
 
+def _background_terminal_identity(
+    invocation: StaticExecInvocation,
+) -> tuple[str, str | int] | None:
+    """Return the namespaced identity for a static ``write_stdin`` call."""
+
+    if invocation.method != "write_stdin" or not isinstance(invocation.input, dict):
+        return None
+    if not isinstance(invocation.input.get("chars"), str):
+        return None
+    identities = [
+        (key, invocation.input.get(key))
+        for key in ("process_id", "session_id")
+        if key in invocation.input
+    ]
+    if len(identities) != 1:
+        return None
+    key, value = identities[0]
+    if (
+        not isinstance(value, (str, int))
+        or isinstance(value, bool)
+        or (isinstance(value, str) and not value.strip())
+        or (isinstance(value, int) and value <= 0)
+    ):
+        return None
+    return key, value
+
+
 def append_derived_exec_activities(
     wrapper: _PendingExecWrapper,
     *,
+    state: _ParseState,
     timestamp: datetime,
     wrapper_status: ToolStatus,
     wrapper_output: Any,
@@ -235,47 +307,95 @@ def append_derived_exec_activities(
             continue
         tool_call_id = f"{wrapper.call_id}:nested:{index}"
         input_data = static_activity_input(invocation)
+        # ``Script completed`` can prove only that the outer JavaScript cell
+        # returned. For stdin polling or interaction it is never proof of the
+        # terminal-side outcome, even when other one-call wrapper forms carry
+        # attributable result content.
+        invocation_observed_result = (
+            observed_wrapper_result and invocation.method != "write_stdin"
+        )
+        terminal_identity = _background_terminal_identity(invocation)
+        background_poll = (
+            terminal_identity is not None
+            and isinstance(invocation.input, dict)
+            and invocation.input.get("chars") == ""
+        )
+        background_interaction = (
+            invocation.method == "write_stdin"
+            and terminal_identity is not None
+            and isinstance(invocation.input, dict)
+            and isinstance(invocation.input.get("chars"), str)
+            and bool(invocation.input["chars"])
+        )
+        semantic_tool_name = invocation.tool_name
+        if background_poll and terminal_identity is not None:
+            semantic_tool_name = _background_wait_tool_name(
+                terminal_identity,
+                wrapper_call_id=wrapper.call_id,
+                state=state,
+            )
+        elif background_interaction:
+            semantic_tool_name = _BACKGROUND_INTERACTION_TOOL_NAME
+        activity_kind: str | None = None
+        if background_poll:
+            activity_kind = "background_terminal_wait"
+        elif background_interaction:
+            activity_kind = "background_terminal_interaction"
+        elif invocation.item_kind == "command_execution":
+            activity_kind = "command"
+        activity_provenance: dict[str, Any] = {
+            "parent_tool_call_id": wrapper.call_id,
+            "parent_tool_name": "exec",
+            "nested_method": invocation.method,
+            "nested_index": index,
+            "source_offset": invocation.source_offset,
+            "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+            **({"wrapper_result_observed": True} if invocation_observed_result else {}),
+        }
+        if terminal_identity is not None:
+            identity_key, identity_value = terminal_identity
+            activity_provenance["terminal_identity"] = {
+                "kind": identity_key,
+                "value": identity_value,
+            }
+        activity_outcome: str | None = None
+        if not (background_poll or background_interaction):
+            activity_outcome = (
+                "succeeded" if invocation_observed_result else "unknown"
+            )
+        activity = activity_data(
+            outcome=activity_outcome,
+            fidelity=(
+                "observed_wrapper" if invocation_observed_result else "derived_static"
+            ),
+            activity_kind=activity_kind,
+            wrapper_status=wrapper_status.value,
+            provenance=activity_provenance,
+        )
+        if background_poll or background_interaction:
+            # Completion of the JavaScript wrapper does not establish that
+            # the terminal completed.  This merely exposes a wait observation
+            # keyed by the terminal process for the overview projection.
+            identity_key, identity_value = terminal_identity
+            activity["activity"]["background_terminal_identity"] = (
+                f"{identity_key}:{identity_value}"
+            )
         record_data: dict[str, Any] = {
             "tool_name": invocation.tool_name,
+            "compact_tool_name": (
+                semantic_tool_name
+                if semantic_tool_name != invocation.tool_name
+                else None
+            ),
             "tool_call_id": tool_call_id,
             "input": input_data,
             "status": (
                 ToolStatus.COMPLETED.value
-                if observed_wrapper_result
+                if invocation_observed_result
                 else ToolStatus.REQUESTED.value
             ),
             "item_kind": invocation.item_kind,
-            "vendor_data": activity_data(
-                outcome=("succeeded" if observed_wrapper_result else "unknown"),
-                fidelity=(
-                    "observed_wrapper"
-                    if observed_wrapper_result
-                    else "derived_static"
-                ),
-                activity_kind=(
-                    "command"
-                    if invocation.item_kind == "command_execution"
-                    else None
-                ),
-                wrapper_status=(
-                    ToolStatus.FAILED.value
-                    if wrapper_status == ToolStatus.FAILED
-                    else None
-                ),
-                provenance={
-                    "parent_tool_call_id": wrapper.call_id,
-                    "parent_tool_name": "exec",
-                    "nested_method": invocation.method,
-                    "nested_index": index,
-                    "source_offset": invocation.source_offset,
-                    "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
-                    **(
-                        {"wrapper_result_observed": True}
-                        if observed_wrapper_result
-                        else {}
-                    ),
-                },
-            ),
+            "vendor_data": activity,
         }
         if invocation.command is not None:
             record_data["command"] = input_data
@@ -290,7 +410,7 @@ def append_derived_exec_activities(
         )
         transcript.append(activity_record)
         wrapper.derived_records[index] = activity_record
-        if observed_wrapper_result:
+        if invocation_observed_result:
             transcript.append(
                 TranscriptRecord(
                     sequence=len(transcript),
@@ -347,11 +467,40 @@ def handle_static_exec_wrapper_output(
                     },
                 )
             )
+        # A syntax error occurs before nested execution, so later unrelated
+        # native items must not bind through the normal short grace window.
+        state.pending_exec_wrappers.pop(call_id, None)
+        return
+    if wrapper_status == ToolStatus.FAILED:
+        # The wrapper failed after parsing, but persisted evidence cannot say
+        # whether any lexical child started. Keep the failed wrapper visible
+        # instead of projecting a past-tense terminal wait or interaction.
+        if len(wrapper.matched_native_indices) == len(wrapper.invocations):
+            # Every lexical child is independently represented by a native
+            # event, so the wrapper failure is only envelope evidence and
+            # would duplicate the authoritative activities.
+            hide_expanded_exec_wrapper(wrapper)
+            return
+        vendor_data = wrapper.call_record.data.setdefault("vendor_data", {})
+        if isinstance(vendor_data, dict):
+            vendor_data.update(
+                activity_data(
+                    outcome="failed",
+                    fidelity="observed_wrapper",
+                    activity_kind=None,
+                    provenance={
+                        "tool_call_id": wrapper.call_id,
+                        "reason": "exec_wrapper_failed_nested_execution_unknown",
+                        "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+                    },
+                )
+            )
         return
     # The public wrapper is evidence, not a parallel visible action, once
     # every statically proven nested activity has its own canonical row.
     append_derived_exec_activities(
         wrapper,
+        state=state,
         timestamp=timestamp,
         wrapper_status=wrapper_status,
         wrapper_output=payload.get("output"),

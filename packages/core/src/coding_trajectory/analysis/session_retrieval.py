@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
+from coding_trajectory.analysis.activity_flow import build_flows
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.request_lineage import extract_user_request
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
@@ -97,7 +98,6 @@ def build_session_summary(
     verification: list[_RankedSummaryItem] = []
     unresolved_by_key: dict[str, _RankedSummaryItem] = {}
     next_actions: list[_RankedSummaryItem] = []
-    recent: list[_RankedSummaryItem] = []
 
     item_count = sum(len(turn.items) for turn in turns)
     item_position = 0
@@ -195,20 +195,24 @@ def build_session_summary(
                         )
                     )
 
-            failure_key = signals.resolution_key(item)
-            outcome = signals.outcome(item)
-            if failure_key and outcome == "failed":
-                unresolved_by_key[failure_key] = _RankedSummaryItem(
-                    timestamp=item.started_at,
-                    structural_score=structural_score,
-                    value={
-                        "label": signals.label(item),
-                        "status": "failed",
-                        "references": references,
-                    },
-                )
-            elif failure_key and outcome == "succeeded":
-                unresolved_by_key.pop(failure_key, None)
+            # A hidden static-exec wrapper is transport evidence superseded by
+            # its derived child activities.  Its wrapper lifecycle must not
+            # create or clear unresolved state; the child owns that outcome.
+            if signals.activity_visible(item):
+                failure_key = signals.resolution_key(item)
+                outcome = signals.outcome(item)
+                if failure_key and outcome == "failed":
+                    unresolved_by_key[failure_key] = _RankedSummaryItem(
+                        timestamp=item.started_at,
+                        structural_score=structural_score,
+                        value={
+                            "label": signals.label(item),
+                            "status": "failed",
+                            "references": references,
+                        },
+                    )
+                elif failure_key and outcome == "succeeded":
+                    unresolved_by_key.pop(failure_key, None)
 
             if isinstance(item, PlanItem):
                 # Plan tools publish snapshots. Only the latest snapshot can
@@ -227,20 +231,6 @@ def build_session_summary(
                             },
                         )
                     )
-
-            if not isinstance(item, ReasoningItem) and not _is_retrieval_item(item):
-                recent.append(
-                    _RankedSummaryItem(
-                        timestamp=item.started_at,
-                        structural_score=structural_score,
-                        value={
-                            "kind": item.kind,
-                            "label": signals.label(item),
-                            "status": signals.outcome(item),
-                            "references": references,
-                        },
-                    )
-                )
 
     objective = None
     if request_candidates:
@@ -267,7 +257,7 @@ def build_session_summary(
         "verification": verification,
         "unresolved": list(unresolved_by_key.values()),
         "next_actions": next_actions,
-        "recent_activity": recent,
+        "recent_activity": _recent_activity_cells(turns, signals),
     }
     sections: dict[str, list[dict[str, Any]]] = {}
     truncation: dict[str, dict[str, int | bool]] = {}
@@ -498,6 +488,17 @@ class _ItemSignals:
             return "failed"
         return "unknown"
 
+    def activity_visible(self, item: Item) -> bool:
+        """Whether an item remains a user-visible semantic activity.
+
+        This shares the tool-summary visibility contract used by
+        ``activity_flow.build_flows`` while keeping self-retrieval outside the
+        summary input before those items can be coalesced into a cell.
+        """
+
+        summary = self.tool_summary(item)
+        return not (summary and summary.get("activity_hidden") is True)
+
     def structural_score(self, item: Item) -> float:
         score = 0.0
         if isinstance(item, FileChangeItem):
@@ -521,7 +522,14 @@ class _ItemSignals:
         summary = self.tool_summary(item)
         if summary:
             name = str(summary.get("name") or item.kind)
-            description = summary.get("description") or summary.get("command")
+            # A visible desktop ``exec`` wrapper is not a shell command of its
+            # own. Its safe, bounded breakdown describes the orchestration
+            # from the tool input without exposing raw command output.
+            description = (
+                summary.get("description")
+                or summary.get("command")
+                or summary.get("breakdown")
+            )
             if description:
                 return truncate_text_preview(
                     f"{name}: {description}", max_len=_SUMMARY_TEXT_LIMIT
@@ -537,6 +545,143 @@ class _ItemSignals:
             return f"command:{family}:{head}"
         tool_name = getattr(item, "tool_name", None)
         return f"tool:{tool_name}" if tool_name else None
+
+
+def _recent_activity_cells(
+    turns: list[Turn], signals: _ItemSignals
+) -> list[_RankedSummaryItem]:
+    """Use the overview's canonical activity cells for the rolling tail.
+
+    Higher-value summary sections intentionally inspect raw canonical items.
+    Recent activity instead mirrors the shared flow projection, including its
+    wrapper suppression, command grouping, and background-terminal waits.
+    A cell retains one deterministic representative item plus every source
+    event id, keeping the existing evidence-reference contract resolvable.
+    """
+
+    cells: list[_RankedSummaryItem] = []
+    for turn in turns:
+        items_by_id = {str(item.item_id): item for item in turn.items}
+        for item_run in _summary_activity_item_runs(turn.items, signals):
+            for cell in build_flows(item_run):
+                item_ids = _activity_cell_item_ids(cell)
+                source_items = [
+                    items_by_id[item_id]
+                    for item_id in item_ids
+                    if item_id in items_by_id
+                ]
+                summary_source_items = [
+                    item for item in source_items if not _is_retrieval_item(item)
+                ]
+                if not summary_source_items:
+                    continue
+                representative = summary_source_items[-1]
+                references = _item_references(representative)
+                for item in summary_source_items[:-1]:
+                    references = _merge_references(references, _item_references(item))
+                value: dict[str, Any] = {
+                    "kind": _activity_cell_kind(cell, representative),
+                    "label": _activity_cell_label(cell, signals, representative),
+                    "references": references,
+                }
+                status = _activity_cell_status(cell, signals, representative)
+                if status is not None:
+                    value["status"] = status
+                cells.append(
+                    _RankedSummaryItem(
+                        timestamp=representative.started_at,
+                        structural_score=signals.structural_score(representative),
+                        value=value,
+                    )
+                )
+    return cells
+
+
+def _summary_activity_item_runs(
+    items: list[Item], signals: _ItemSignals
+) -> list[list[Item]]:
+    """Return visible runs for the canonical activity-cell projection.
+
+    Self-retrieval is not summary activity.  It is also a temporal boundary:
+    filtering it from one input list would incorrectly merge the commands on
+    either side into one shared cell and inflate its count.
+    """
+
+    runs: list[list[Item]] = []
+    active: list[Item] = []
+    for item in items:
+        if _is_retrieval_item(item):
+            if active:
+                runs.append(active)
+                active = []
+            continue
+        # The canonical projector ignores reasoning and superseded transport
+        # wrappers without flushing its active cell. Mirror that behavior;
+        # only summary's self-retrieval exclusion introduces an extra boundary.
+        if isinstance(item, ReasoningItem) or not signals.activity_visible(item):
+            continue
+        active.append(item)
+    if active:
+        runs.append(active)
+    return runs
+
+
+def _activity_cell_item_ids(cell: dict[str, Any]) -> list[str]:
+    item_ids = cell.get("item_ids")
+    if isinstance(item_ids, list):
+        return [item_id for item_id in item_ids if isinstance(item_id, str) and item_id]
+    item_id = cell.get("item_id")
+    return [item_id] if isinstance(item_id, str) and item_id else []
+
+
+def _activity_cell_kind(cell: dict[str, Any], representative: Item) -> str:
+    if cell.get("type") == "background_terminal_wait":
+        return "background_terminal_wait"
+    if cell.get("activity_kind") == "background_terminal_interaction":
+        return "background_terminal_interaction"
+    if cell.get("type") == "tool_call_group":
+        return "activity_group"
+    return representative.kind
+
+
+def _activity_cell_label(
+    cell: dict[str, Any], signals: _ItemSignals, representative: Item
+) -> str:
+    cell_type = cell.get("type")
+    count = cell.get("count")
+    if cell_type == "background_terminal_wait":
+        suffix = f" ({count} polls)" if isinstance(count, int) and count > 1 else ""
+        return f"Waited for background terminal{suffix}"
+    if cell_type == "tool_call_group":
+        name = str(cell.get("name") or "Tool")
+        if name == "RunCommand" and isinstance(count, int):
+            return f"Ran {count} commands"
+        descriptions = cell.get("descriptions")
+        detail = ", ".join(
+            description
+            for description in (descriptions if isinstance(descriptions, list) else [])[
+                :3
+            ]
+            if isinstance(description, str) and description
+        )
+        label = f"{name}: {detail}" if detail else f"{name} ({count} calls)"
+        return truncate_text_preview(label, max_len=_SUMMARY_TEXT_LIMIT)
+    return signals.label(representative)
+
+
+def _activity_cell_status(
+    cell: dict[str, Any], signals: _ItemSignals, representative: Item
+) -> str | None:
+    if (
+        isinstance(representative, AgentMessageItem)
+        or cell.get("type") == "background_terminal_wait"
+        or cell.get("activity_kind") == "background_terminal_interaction"
+    ):
+        return None
+    status = cell.get("status")
+    if status in {"succeeded", "failed", "unknown"}:
+        return str(status)
+    return signals.outcome(representative)
 
 
 def _recency_score(position: int, total: int) -> float:

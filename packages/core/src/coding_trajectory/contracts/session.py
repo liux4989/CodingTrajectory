@@ -223,7 +223,7 @@ class SummaryEvidence(ContractModel):
 class SummaryActivity(ContractModel):
     kind: str
     label: str
-    status: str
+    status: str | None = None
     references: EvidenceReferences
 
 

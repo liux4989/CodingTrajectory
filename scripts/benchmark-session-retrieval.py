@@ -634,6 +634,16 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
             len(summary["recent_activity"]) == 12
             and summary["truncation"]["recent_activity"]["truncated"] is True
         ),
+        "non_outcome_activity_omits_status": all(
+            "status" not in entry
+            for entry in summary["recent_activity"]
+            if entry.get("kind")
+            in {
+                "agent_message",
+                "background_terminal_wait",
+                "background_terminal_interaction",
+            }
+        ),
         "private_reasoning_excluded": "private-sentinel" not in serialized,
         "self_retrieval_excluded": "self-sentinel" not in serialized,
         "all_evidence_resolves": all(
