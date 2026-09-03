@@ -625,6 +625,36 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
     distinguished_command_activities = build_overview_flows(
         [derived_static_item, second_derived_static_item]
     )
+    first_successful_command = derived_static_item.model_copy(
+        update={
+            "status": ToolStatus.COMPLETED.value,
+            "vendor_data": {
+                "activity": {
+                    "kind": "command",
+                    "source": "agent",
+                    "outcome": "succeeded",
+                    "fidelity": "native",
+                }
+            },
+        }
+    )
+    second_successful_command = second_derived_static_item.model_copy(
+        update={
+            "status": ToolStatus.COMPLETED.value,
+            "vendor_data": {
+                "activity": {
+                    "kind": "command",
+                    "source": "agent",
+                    "outcome": "succeeded",
+                    "fidelity": "native",
+                }
+            },
+        }
+    )
+    flattened_successful_commands = build_overview_flows(
+        [first_successful_command, second_successful_command],
+        flatten_commands=True,
+    )
     background_wait_item = CommandExecutionItem(
         session_id=fixture.root_session_id,
         turn_id=fixture.second_turn_id,
@@ -711,6 +741,19 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
                 "uv run ruff check packages/core/src",
                 "uv run ruff check packages/cli/src",
             ]
+        ),
+        "successful_commands_remain_flat": (
+            [entry.get("cmd") for entry in flattened_successful_commands]
+            == [
+                "uv run ruff check packages/core/src",
+                "uv run ruff check packages/cli/src",
+            ]
+            and all(
+                entry.get("tool") == "RunCommand"
+                and "commands" not in entry
+                and "count" not in entry
+                for entry in flattened_successful_commands
+            )
         ),
         "control_only_waits_stay_detail_only": (
             len(internal_wait_activity) == 1

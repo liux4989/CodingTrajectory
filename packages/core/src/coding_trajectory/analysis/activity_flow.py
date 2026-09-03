@@ -62,7 +62,9 @@ def is_control_only_activity_cell(item: dict[str, Any]) -> bool:
     return item.get("type") == "background_terminal_wait"
 
 
-def build_flows(items: list[Item]) -> list[dict[str, Any]]:
+def build_flows(
+    items: list[Item], *, flatten_commands: bool = False
+) -> list[dict[str, Any]]:
     from coding_trajectory.analysis.tool_summary import summarize_tool_call
 
     result: list[dict[str, Any]] = []
@@ -106,12 +108,14 @@ def build_flows(items: list[Item]) -> list[dict[str, Any]]:
                         "item_id": str(item.item_id),
                     }
                 )
-    return _project_activity_cells(result)
+    return _project_activity_cells(result, flatten_commands=flatten_commands)
 
 
-def build_overview_flows(items: list[Item]) -> list[dict[str, Any]]:
+def build_overview_flows(
+    items: list[Item], *, flatten_commands: bool = False
+) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
-    for item in build_flows(items):
+    for item in build_flows(items, flatten_commands=flatten_commands):
         if is_control_only_activity_cell(item):
             continue
         if item.get("type") == "assistant_response":
@@ -201,7 +205,9 @@ def _truncate_text(
     return text
 
 
-def _project_activity_cells(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _project_activity_cells(
+    items: list[dict[str, Any]], *, flatten_commands: bool
+) -> list[dict[str, Any]]:
     """Project ordered tool facts into Codex-style activity cells.
 
     The active cell only accepts compatible, agent-originated successful tool
@@ -220,7 +226,9 @@ def _project_activity_cells(items: list[dict[str, Any]]) -> list[dict[str, Any]]
         active = None
 
     for item in items:
-        group_key = _tool_activity_group_key(item)
+        group_key = _tool_activity_group_key(
+            item, flatten_commands=flatten_commands
+        )
         if group_key is None:
             flush_active()
             projected.append(item)
@@ -243,6 +251,8 @@ def _project_activity_cells(items: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def _tool_activity_group_key(
     item: dict[str, Any],
+    *,
+    flatten_commands: bool,
 ) -> tuple[str, str | None, str | None] | None:
     if item.get("type") != "tool_call":
         return None
@@ -261,11 +271,17 @@ def _tool_activity_group_key(
         ):
             return ("background_terminal_wait", identity, None)
         return None
+    if item.get("activity_kind") == "command":
+        # Evidence-rich Codex views are static and lack the TUI's expandable
+        # transcript, so their commands remain inspectable rows. Compact and
+        # other-vendor projections retain their established grouping contract.
+        if flatten_commands and item.get("activity_fidelity"):
+            return None
+        if item.get("activity_outcome") == "succeeded":
+            return _COMMAND_CELL_KEY
+        return None
     if item.get("activity_outcome") != "succeeded":
         return None
-
-    if item.get("activity_kind") == "command":
-        return _COMMAND_CELL_KEY
 
     name = str(item.get("name") or "")
     profile_name = _profile_name(item)

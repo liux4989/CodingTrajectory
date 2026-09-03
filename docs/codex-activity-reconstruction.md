@@ -2,21 +2,21 @@
 
 ## Reference behavior
 
-CT's activity-cell state machine follows the Codex TUI implementation in
+CT's typed activity reconstruction references the Codex TUI implementation in
 `codex-rs/tui/src/exec_cell/model.rs` and its execution-flow coverage in
 `codex-rs/tui/src/chatwidget/tests/exec_flow.rs`. Its ThreadItem replay follows
 `chatwidget/replay.rs`, `chatwidget/command_lifecycle.rs`,
 `chatwidget/tool_lifecycle.rs`, and `history_cell/plans.rs`: commands,
 web-searches, file changes, plan updates, and collaboration calls are distinct
-history cells rather than variants of a generic shell command.
-
-- A cell groups only contiguous compatible commands.
-- It has a hard cap of 32 commands.
-- Only agent-originated and unified-exec-startup commands are groupable.
-- A command must have a successful completion (`exit_code == 0`) before it can
-  join the compact `Ran N commands` presentation.
-- Messages, failures, user-shell commands, web activity, mutations, and other
-  incompatible tool forms flush the active cell.
+history cells rather than variants of a generic shell command. CT reuses those
+typed categories and lifecycle rules, but deliberately does not copy Codex's
+command-cell compaction for evidence-rich Codex history. Codex can pair `Ran N
+commands` with an interactive, expandable transcript; CT's static overview
+cannot. Each retained Codex command therefore remains a separate bounded,
+evidence-linked row. Compact-retention and other-vendor projections preserve
+their established grouping contracts. Compatible repeated non-command
+activities may still use the 32-item cell state machine when their details
+remain visible in the compact projection.
 
 Codex TUI receives those native command lifecycles while the session is live.
 CT instead reconstructs a completed historical JSONL file, so it preserves a
@@ -33,8 +33,9 @@ cell.
    historical `Extension(kind="web.search")` spelling, whose action/query and
    result cards are an observed web result—not an unknown `exec` child.
    `CommandExecution`, `FileChange`, `WebSearch`, `Plan`, and
-   `CollabAgentToolCall` retain their specialized mappings. Eligible adjacent
-   command successes use the same 32-item cell state machine as the TUI.
+   `CollabAgentToolCall` retain their specialized mappings. Adjacent commands
+   remain flat so their bounded descriptions and individual references survive
+   in the static overview.
 2. Older JSONL may retain only a `custom_tool_call(name="exec")` JavaScript
    wrapper. CT recognizes direct literal calls to `tools.exec_command`,
    `tools.web__run` search/image-query and browse operations,
@@ -88,8 +89,8 @@ Consequently a legacy session can show `Searched the web for …`, `Updated plan
 check …` rather than a raw `exec` code cell. Command rows prefer this bounded
 primary-command description over a lossy family head such as `src`, so distinct
 commands do not become identical labels. The row carries no displayed outcome
-when only static evidence exists. A newer session with native exit-zero facts
-can show `Ran N commands`.
+when only static evidence exists. Native successful commands use the same flat
+presentation rather than collapsing into `Ran N commands`.
 
 ## Physical session segments
 

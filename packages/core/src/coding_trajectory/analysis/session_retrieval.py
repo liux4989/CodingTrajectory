@@ -35,6 +35,7 @@ from coding_trajectory.ingestion.models import (
     ToolCallItem,
     ToolStatus,
     Turn,
+    Vendor,
 )
 
 _SEARCH_FIELD_LIMIT = 16_000
@@ -262,7 +263,11 @@ def build_session_summary(
         "verification": verification,
         "unresolved": list(unresolved_by_key.values()),
         "next_actions": next_actions,
-        "recent_activity": _recent_activity_cells(turns, signals),
+        "recent_activity": _recent_activity_cells(
+            turns,
+            signals,
+            flatten_commands=session.vendor == Vendor.CODEX_CLI,
+        ),
     }
     sections: dict[str, list[dict[str, Any]]] = {}
     truncation: dict[str, dict[str, int | bool]] = {}
@@ -553,7 +558,10 @@ class _ItemSignals:
 
 
 def _recent_activity_cells(
-    turns: list[Turn], signals: _ItemSignals
+    turns: list[Turn],
+    signals: _ItemSignals,
+    *,
+    flatten_commands: bool,
 ) -> list[_RankedSummaryItem]:
     """Use the overview's canonical activity cells for the rolling tail.
 
@@ -568,7 +576,9 @@ def _recent_activity_cells(
     for turn in turns:
         items_by_id = {str(item.item_id): item for item in turn.items}
         for item_run in _summary_activity_item_runs(turn.items, signals):
-            for cell in build_flows(item_run):
+            for cell in build_flows(
+                item_run, flatten_commands=flatten_commands
+            ):
                 if is_control_only_activity_cell(cell):
                     continue
                 item_ids = _activity_cell_item_ids(cell)

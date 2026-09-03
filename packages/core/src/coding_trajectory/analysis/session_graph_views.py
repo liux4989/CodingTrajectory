@@ -31,6 +31,7 @@ from coding_trajectory.ingestion.models import (
     Session,
     SessionGraph,
     Turn,
+    Vendor,
 )
 
 # Compaction observation kinds and mechanism labels are single-sourced in
@@ -477,7 +478,10 @@ def _turn_nav_node(
             "ended_at": turn.ended_at,
             "status": turn.status,
             "user_request": user_request,
-            "activity": build_overview_flows(turn.items),
+            "activity": build_overview_flows(
+                turn.items,
+                flatten_commands=session.vendor == Vendor.CODEX_CLI,
+            ),
             "refs": {
                 "item_ids": [str(item.item_id) for item in turn.items],
                 "user_request_event_id": str(turn.user_request_event_id)

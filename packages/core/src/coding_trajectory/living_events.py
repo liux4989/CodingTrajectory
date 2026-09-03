@@ -39,6 +39,7 @@ from coding_trajectory.ingestion.models import (
     SessionEdge,
     SessionGraph,
     Turn,
+    Vendor,
 )
 from coding_trajectory.living_sources import (
     LivingSourceSnapshot,
@@ -511,7 +512,10 @@ def _project_graph(
                 ],
                 "activity": [
                     activity
-                    for activity in build_overview_flows(turn.items)
+                    for activity in build_overview_flows(
+                        turn.items,
+                        flatten_commands=session.vendor == Vendor.CODEX_CLI,
+                    )
                     if "text" not in activity
                 ],
                 "item_count": len(turn.items),
