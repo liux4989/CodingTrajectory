@@ -422,6 +422,13 @@ def get_model_context_window(
     if artifact is None:
         return None
     normalized_provider = _normalize_provider(provider)
+    if normalized_provider and not any(
+        _normalize_provider(candidate.id or provider_key) == normalized_provider
+        for provider_key, candidate in artifact.catalog.providers.items()
+    ):
+        # Agent-vendor labels (``pi``) are not models.dev provider ids; scoping
+        # by one would filter out every candidate, so search all providers.
+        normalized_provider = None
     for provider_key, candidate_provider in artifact.catalog.providers.items():
         provider_id = _normalize_provider(candidate_provider.id or provider_key)
         if normalized_provider and provider_id != normalized_provider:
