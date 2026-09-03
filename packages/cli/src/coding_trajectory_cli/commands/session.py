@@ -135,8 +135,6 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
             annotations.append("failed")
         if activity.get("wrapper_status") == "failed":
             annotations.append("wrapper failed")
-        if activity.get("outcome") == "unknown":
-            annotations.append("outcome unavailable")
         annotation = f" [{'; '.join(annotations)}]" if annotations else ""
         if tool == "RunCommand" and count and count != 1:
             command_word = "command" if count == 1 else "commands"
@@ -272,7 +270,7 @@ def _render_session_summary_text(payload: dict[str, Any]) -> str:
                 operations = ", ".join(entry.get("operations") or [])
                 label += f" ({operations})" if operations else ""
             status = entry.get("status")
-            status_suffix = f" [{status}]" if status else ""
+            status_suffix = f" [{status}]" if status and status != "unknown" else ""
             lines.append(
                 f"- {label}{status_suffix}{_evidence_suffix(entry.get('references'))}"
             )

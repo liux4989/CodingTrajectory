@@ -261,10 +261,19 @@ structural signals such as mutations, failed validation, commits, user scope
 changes, and recency, but final entries retain chronological order within each
 section.
 
-`recent_activity.status` is present only for outcome-bearing activity. Agent
-messages and terminal wait/interaction observations have no execution outcome,
-matching Codex's typed event model; they omit the property rather than report
-`unknown`.
+`recent_activity.status` is present only when a provider-backed terminal
+outcome is known. Agent messages, terminal wait/interaction observations, and
+statically reconstructed commands without attributable completion evidence
+omit the property rather than report `unknown`. The `verification` section
+likewise includes only commands with observed `succeeded` or `failed` outcomes.
+Evidence uncertainty remains available through canonical fidelity and
+provenance instead of becoming a display status.
+
+Pure background-terminal polling is control-only evidence, so its coalesced
+wait cells are excluded from `recent_activity` and the default overview.
+Canonical items retain poll ordering, terminal identity, and evidence
+references for detail retrieval. Non-empty terminal interaction stays visible
+because it changes terminal state.
 
 ### Non-goals
 

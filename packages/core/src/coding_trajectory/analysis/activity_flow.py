@@ -38,6 +38,30 @@ class _ToolActivityCell(BaseModel):
     items: list[dict[str, Any]]
 
 
+def public_activity_outcome(value: Any) -> str | None:
+    """Return only provider-backed terminal outcomes for public projections.
+
+    ``unknown`` is CT evidence bookkeeping for a statically reconstructed
+    activity. Codex has no matching terminal command status, so exposing it as
+    an execution outcome would invent UI semantics that the provider does not
+    have.
+    """
+
+    return str(value) if value in {"succeeded", "failed"} else None
+
+
+def is_control_only_activity_cell(item: dict[str, Any]) -> bool:
+    """Whether a cell is retained evidence but not useful default activity.
+
+    Empty-stdin terminal polling records orchestration progress, not work or a
+    user-visible result. Keep the canonical items and their grouped cell for
+    detail consumers while excluding the cell from overview and summary.
+    Non-empty interaction remains visible because it changes terminal state.
+    """
+
+    return item.get("type") == "background_terminal_wait"
+
+
 def build_flows(items: list[Item]) -> list[dict[str, Any]]:
     from coding_trajectory.analysis.tool_summary import summarize_tool_call
 
@@ -88,6 +112,8 @@ def build_flows(items: list[Item]) -> list[dict[str, Any]]:
 def build_overview_flows(items: list[Item]) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
     for item in build_flows(items):
+        if is_control_only_activity_cell(item):
+            continue
         if item.get("type") == "assistant_response":
             text = _truncate_text(item.get("text"))
             if text:
@@ -124,7 +150,7 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
                 profile.detail_list_key: item.get("descriptions"),
                 profile.detail_counts_key or "": item.get("description_counts"),
                 "item_ids": item.get("item_ids"),
-                "outcome": item.get("activity_outcome"),
+                "outcome": public_activity_outcome(item.get("activity_outcome")),
                 "wrapper_status": item.get("activity_wrapper_status"),
             }
         )
@@ -154,9 +180,9 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
                 "item_ids": [item.get("item_id")]
                 if isinstance(item.get("item_id"), str)
                 else None,
-                "outcome": (
-                    item.get("activity_outcome") if outcome_bearing else None
-                ),
+                "outcome": public_activity_outcome(item.get("activity_outcome"))
+                if outcome_bearing
+                else None,
                 "wrapper_status": (
                     item.get("activity_wrapper_status") if outcome_bearing else None
                 ),

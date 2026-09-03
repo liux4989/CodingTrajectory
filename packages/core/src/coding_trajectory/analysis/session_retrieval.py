@@ -11,7 +11,11 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from coding_trajectory.analysis.activity_flow import build_flows
+from coding_trajectory.analysis.activity_flow import (
+    build_flows,
+    is_control_only_activity_cell,
+    public_activity_outcome,
+)
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.request_lineage import extract_user_request
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
@@ -179,7 +183,8 @@ def build_session_summary(
 
             if isinstance(item, CommandExecutionItem):
                 family, _head = signals.command_family(item.command)
-                if family in {"tests", "build"}:
+                outcome = public_activity_outcome(signals.outcome(item))
+                if family in {"tests", "build"} and outcome is not None:
                     verification.append(
                         _RankedSummaryItem(
                             timestamp=item.started_at,
@@ -189,7 +194,7 @@ def build_session_summary(
                                     _stringify(item.command),
                                     max_len=_SUMMARY_TEXT_LIMIT,
                                 ),
-                                "status": signals.outcome(item),
+                                "status": outcome,
                                 "references": references,
                             },
                         )
@@ -564,6 +569,8 @@ def _recent_activity_cells(
         items_by_id = {str(item.item_id): item for item in turn.items}
         for item_run in _summary_activity_item_runs(turn.items, signals):
             for cell in build_flows(item_run):
+                if is_control_only_activity_cell(cell):
+                    continue
                 item_ids = _activity_cell_item_ids(cell)
                 source_items = [
                     items_by_id[item_id]
@@ -679,9 +686,10 @@ def _activity_cell_status(
     ):
         return None
     status = cell.get("status")
-    if status in {"succeeded", "failed", "unknown"}:
-        return str(status)
-    return signals.outcome(representative)
+    projected_status = public_activity_outcome(status)
+    if projected_status is not None:
+        return projected_status
+    return public_activity_outcome(signals.outcome(representative))
 
 
 def _recency_score(position: int, total: int) -> float:

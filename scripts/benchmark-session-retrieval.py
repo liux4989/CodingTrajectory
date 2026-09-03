@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "packages" / "core" / "src"))
 
+from coding_trajectory.analysis.activity_flow import build_flows, build_overview_flows
 from coding_trajectory.ingestion.models import (
     AgentMessageItem,
     CommandExecutionItem,
@@ -597,6 +598,44 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
     )
     serialized = _canonical_json(summary)
     source_bytes = len(fixture.graph.model_dump_json().encode())
+    derived_static_item = CommandExecutionItem(
+        session_id=fixture.root_session_id,
+        turn_id=fixture.second_turn_id,
+        sequence=0,
+        started_at=datetime(2026, 1, 1, tzinfo=UTC),
+        status=ToolStatus.REQUESTED.value,
+        command="synthetic-derived-command",
+        vendor_data={
+            "activity": {
+                "kind": "command",
+                "source": "agent",
+                "outcome": "unknown",
+                "fidelity": "derived_static",
+            }
+        },
+    )
+    internal_derived_activity = build_flows([derived_static_item])[0]
+    public_derived_activity = build_overview_flows([derived_static_item])[0]
+    background_wait_item = CommandExecutionItem(
+        session_id=fixture.root_session_id,
+        turn_id=fixture.second_turn_id,
+        sequence=1,
+        started_at=datetime(2026, 1, 1, tzinfo=UTC),
+        status=ToolStatus.REQUESTED.value,
+        tool_name="write_stdin",
+        command={"session_id": 7, "chars": ""},
+        vendor_data={
+            "activity": {
+                "kind": "background_terminal_wait",
+                "source": "agent",
+                "fidelity": "derived_static",
+                "wrapper_status": "completed",
+                "background_terminal_identity": "session_id:synthetic",
+            }
+        },
+    )
+    internal_wait_activity = build_flows([background_wait_item])
+    public_wait_activity = build_overview_flows([background_wait_item])
     checks = {
         "latest_material_objective": summary.get("objective", {}).get("text")
         == "Continue and verify the authentication cache. second-scope",
@@ -643,6 +682,29 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
                 "background_terminal_wait",
                 "background_terminal_interaction",
             }
+        ),
+        "public_projections_omit_unknown_outcomes": (
+            internal_derived_activity.get("activity_fidelity") == "derived_static"
+            and internal_derived_activity.get("activity_outcome") == "unknown"
+            and "outcome" not in public_derived_activity
+            and all(
+                entry.get("status") != "unknown"
+                for entry in summary["recent_activity"]
+            )
+            and all(
+                entry.get("status") in {"succeeded", "failed"}
+                for entry in summary["verification"]
+            )
+        ),
+        "control_only_waits_stay_detail_only": (
+            len(internal_wait_activity) == 1
+            and internal_wait_activity[0].get("type")
+            == "background_terminal_wait"
+            and public_wait_activity == []
+            and all(
+                entry.get("kind") != "background_terminal_wait"
+                for entry in summary["recent_activity"]
+            )
         ),
         "private_reasoning_excluded": "private-sentinel" not in serialized,
         "self_retrieval_excluded": "self-sentinel" not in serialized,
