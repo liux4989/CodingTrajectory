@@ -9,6 +9,7 @@ from typing import Any, Iterable
 from uuid import UUID, uuid5
 import numpy as np
 from coding_trajectory.analysis.content_size import (
+    event_text_size,
     item_input_size,
     item_output_size,
     item_output_text,
@@ -610,7 +611,7 @@ def _item_cost_entries_for_turn(
                     sequence=-1,
                     started_at=user_event.timestamp,
                     kind="user_prompt",
-                    visible_tokens=visible_text_size(text).tokens,
+                    visible_tokens=event_text_size(user_event).tokens,
                 )
             )
 

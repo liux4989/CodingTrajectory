@@ -20,6 +20,7 @@ ContentSizeConfidence = Literal[
 ]
 
 _ORIGINAL_TOKEN_COUNT = re.compile(r"Original token count: (\d+)")
+CONTENT_SIZE_MEASUREMENT_KEY = "_ct_content_size"
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,29 @@ def visible_text_size(text: str, *, reported_tokens: int | None = None) -> Conte
     if cache is not None:
         cache[key] = result
     return result
+
+
+def event_text_size(event: Any, *, field: str = "text") -> ContentSize:
+    """Size event text, honoring a body-free shareable measurement when present."""
+
+    payload = getattr(event, "payload", None)
+    if not isinstance(payload, dict):
+        return visible_text_size("")
+    measured = payload.get(CONTENT_SIZE_MEASUREMENT_KEY)
+    if isinstance(measured, dict):
+        chars = measured.get("chars")
+        tokens = measured.get("tokens")
+        if (
+            isinstance(chars, int)
+            and not isinstance(chars, bool)
+            and chars >= 0
+            and isinstance(tokens, int)
+            and not isinstance(tokens, bool)
+            and tokens >= 0
+        ):
+            return _measured_size(chars, tokens)
+    text = payload.get(field)
+    return visible_text_size(text if isinstance(text, str) else "")
 
 
 def item_input_text(item: Item) -> str:

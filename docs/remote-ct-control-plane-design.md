@@ -1,391 +1,206 @@
 # Remote CT Control Plane Design
 
-- **Status:** Remote foundation implemented; deployment and private validation pending
-- **Date:** 2026-09-02
-- **Scope:** All 25 public CT method authorities, compact remote custody,
-  full-detail local callers, workers, caches, and collector handoff
+- **Status:** Shareable historical path implemented locally; deployment pending
+- **Date:** 2026-09-04
+- **Scope:** Public method authorities, historical artifacts, project inventory,
+  living state, estimation, and collector handoff
 - **Supersedes:** [`remote-session-ledger-design.md`](remote-session-ledger-design.md)
 
 ## Decision
 
-CodingTrajectory will build a remote CT control plane, not only a synchronized
-session store. The embedded transport retains the existing full-detail Pydantic
-semantics against host-local evidence. The initial remote transport serves a
-compact, explicitly scoped representation. Supabase provides Auth, RLS,
-PostgreSQL, and durable state. Python workers own graph projection and
-estimation execution.
+CodingTrajectory has one public API contract and one shared historical handler
+implementation. Local and remote shareable calls consume the same
+`ct.shareable_graph.v1` artifact. Artifact schema changes do not create a new
+public API version while response contracts remain compatible.
 
-The control plane has four explicit authorities:
+Detailed evidence APIs stay local. They continue to hydrate the existing raw
+log and full canonical trajectory and do not depend on an uploaded artifact.
+
+## Authorities
 
 | Authority | Public methods | Durable state |
 |---|---:|---|
-| Historical graphs | `project.sessions`, all `session.*`, all `graph.*` — 15 | Accepted observations and immutable `SessionGraph` revisions |
-| Project inventory | `project.list` — 1 | Portable projects, aliases, and private agent locations |
-| Living state | `living.sessions`, `living.events` — 2 | Agent leases, heartbeats, source checkpoints, ordered observations |
+| Historical | 15 project/session/graph methods | Source checkpoints, shareable artifact revisions, normalized source vectors |
+| Project inventory | `project.list` | Portable projects, revisions, aliases, private agent locations |
+| Living | `living.sessions`, `living.events` | Agent leases and ordered living observations |
 | Estimation | Seven `estimate.*` methods | Forecast events, jobs, attempts, leases, and results |
 
-No local database is a fifth authority. A local outbox holds unacknowledged
-delivery work; a local cache holds a labeled remote snapshot. Neither may answer
-as shared current truth.
+Collector SQLite is not an authority. It stores only delivery state. Raw vendor
+logs remain authoritative evidence on their originating host.
+
+## API boundary
+
+Shareable local and remote methods use the same artifact and handler:
+
+- `project.sessions`
+- `session.overview`
+- `session.summary`
+- `session.tree`
+- `graph.overview`
+- `session.stats`
+- `graph.stats`
+- `session.usage`
+- `graph.usage`
+- `session.model_usage`
+- `session.request_usage`
+- `session.tool_usage`
+- `session.items` with `include_content=false`
+
+Local-only evidence methods are:
+
+- `session.search`
+- `session.events`
+- `session.items` with `include_content=true`
+
+Remote routing rejects those methods explicitly before dispatch. It does not
+return a partial evidence response or maintain a legacy compatibility handler.
 
 ## Runtime topology
 
 ```text
-Local CT agent ----\
-                    >-- CT Python API --+-- historical graph authority
-Remote CT agent ---/                    +-- portable project registry
-                                        +-- living observation authority
-                                        +-- estimation ledger
-                                                  |
-                   Supabase Auth/RLS/Postgres <---+-- projector/estimate workers
-                              ^
-                              |
-                    authenticated ingestion
-                              |
-                    host-local CT collector
-                    vendor logs + durable outbox
+host-local logs
+  -> fenced adapters
+  -> ShareableGraphArtifact
+       |-> local shareable API -> shared handlers
+       |-> durable collector outbox
+             -> authenticated direct publication
+             -> bounded artifact revision + normalized source vector
+                    -> targeted remote snapshot
+                    -> shared handlers
+
+host-local logs -> full canonical hydration -> local-only evidence APIs
 ```
 
-The API service is stateless with respect to canonical data. Supabase Edge
-Functions may provide small webhook or ingress adapters, but they do not
-reimplement graph, evidence, metric, or forecast semantics in TypeScript.
+The remote side authenticates, authorizes, validates, sequences, stores, and
+serves artifacts. It does not download all source observations, rebuild a graph,
+recompute measurements, compare complete historical JSON documents, or build a
+whole-workspace store for a targeted resource request.
 
-## Application architecture
+## Historical publication
 
-The public method registry remains the semantic contract. Runtime routing is
-transport-neutral:
+Each physical log segment is fenced at the last complete line. Resumed segments
+with one vendor session identity coalesce into one logical source and one
+canonical session. The collector publishes a small immutable source checkpoint
+after source registration. Only accepted current checkpoints may appear in an
+artifact source vector.
+
+One project publication contains:
 
 ```text
-ContractRegistry
-    |
-ApplicationDispatcher
-    +-- HistoricalAuthority
-    +-- ProjectInventoryAuthority
-    +-- LivingAuthority
-    +-- EstimationAuthority
-
-Transport
-    +-- EmbeddedTransport       current local CLI/plugin use
-    +-- HttpTransport           authenticated local/remote clients
+workspace_id / agent_id / project_id
+project-local publication_sequence
+complete normalized source_vector
+one or more bounded ct.shareable_graph.v1 artifacts
 ```
 
-Both transports validate the same request and result models through the same
-Python handlers. The embedded transport can serve full bodies; the HTTP
-transport declares `content_scope: compact` and serves retained evidence for
-all methods. The CLI, Python SDK, plugins, and remote agents differ by endpoint,
-credential acquisition, and declared content scope. Agents never query
-canonical Supabase tables directly.
+The transaction verifies collector capability, project ownership, source
+membership, accepted checkpoints, current watermarks, schema shape, content
+bounds, canonical sizes, request digest, artifact digests, and idempotency. It
+then publishes all revisions at one workspace sequence, supersedes prior
+revisions, updates inventory, records resource lookup rows, and commits one
+receipt.
 
-## Accepted observation ledger
+The same request and idempotency key return the same receipt. Conflicting reuse
+is rejected. A publication sequence gap is rejected. A valid but stale source
+vector is consumed as superseded and never becomes visible.
 
-### Why observations, not completed graphs
+Legacy source observations and artifact revisions remain immutable. They are
+not deleted or mixed with shareable history. Unfinished legacy projector jobs
+are retired, and the projector RPCs and worker are removed.
 
-A coding session can resume after appearing terminal, and one graph can include
-sources observed by different hosts. Therefore collectors do not claim that a
-graph is permanently complete and do not race to upload replacement graphs.
+## Historical reads
 
-Collectors submit normalized source observations. The implemented wire format
-is compact `canonical_session_snapshot.v2`: it applies existing measurements
-retention and then scrubs remote-only private fields before publication:
-
-```text
-workspace_id                 resolved from the authenticated principal
-agent_id
-source_id
-source_epoch                 advances on truncation or replacement
-source_sequence              monotonic within one epoch
-event_id                     stable deduplication identity
-schema_version
-parser_version
-content_sha256
-observed_at
-payload
-```
-
-The server validates and accepts observations. A Python projector deterministically
-assembles accepted observations into a complete immutable `SessionGraph`
-revision for each currently known source vector. A publisher may report a
-terminal observation, but a later valid observation appends a revision rather
-than mutating history.
-
-### Idempotency and ordering
-
-- The same event identity and digest is an idempotent success.
-- The same identity with a different digest is a conflict and cannot overwrite.
-- Sequence gaps may be retained as pending but do not advance the contiguous
-  committed source watermark.
-- Source truncation, replacement, or incompatible compaction starts a new epoch.
-- Every accepted request has a durable receipt keyed by agent and idempotency key.
-- Graph projection records the complete source vector used for each revision.
-
-Raw vendor logs and full-detail canonical trajectories remain evidence on their
-originating host. The remote compact payload excludes tool bodies, command
-bodies, host paths, file/media bodies, and unbounded event payloads. Raw-log
-upload is not required by this architecture and must be a separate, explicit
-security choice.
-
-## Canonical graph revisions
-
-`ct_artifact_revisions.payload` will contain the canonical compact
-`SessionGraph` for the remote service. It round-trips through the compatible
-Pydantic model with full-detail body fields absent. Search indexes, metric
-facts, cards, and Datahub state are rebuildable projections, never alternate
-writable representations. Full-detail local graphs remain host-local evidence,
-not a second remote representation.
-
-Each revision records:
-
-```text
-(workspace_id, artifact_id, revision)
-schema_version
-payload
-content_sha256
-source_vector
-published_sequence
-superseded_sequence
-observed_at
-committed_at
-```
-
-The composite workspace key applies at every boundary. Heavy projections are
-not built in the ingestion transaction. That transaction commits accepted
-records, one workspace sequence, a change-log record, and a transactional
-projection-outbox item. Workers may rebuild projections later; historical API
-handlers can compute from canonical graphs until a compatible projection exists.
-
-## Portable project identity
-
-`project.list` cannot be reconstructed from shared host paths. The control plane
-owns stable `project_id` values and revisioned project metadata:
-
-```text
-project_id
-display_name
-repository_identity optional
-aliases
-published_sequence / superseded_sequence
-```
-
-An agent may register a private project location such as a local path or URI.
-Locations are scoped to that agent and excluded from shared results by default.
-Path basename, current working directory, and vendor-specific encoded paths are
-never authorization boundaries or canonical project identity.
-
-## Request snapshots and envelopes
-
-Every call binds to workspace sequence `S` at request start. Every resource read
-by that request is the version satisfying:
+A request pins workspace sequence `S`. Visible revisions satisfy:
 
 ```text
 published_sequence <= S
 and (superseded_sequence is null or superseded_sequence > S)
+and schema_version = ct.shareable_graph.v1
 ```
 
-Every item in `batch` shares one `S`. This prevents a response from mixing
-graphs from before and after concurrent ingestion.
+Session, turn, and item requests use normalized resource rows to load only the
+owning artifact. Project and vendor filters are applied in the snapshot query.
+The returned artifact identity, digest, and schema are validated by the same
+Pydantic model before it is converted to an ephemeral `DocumentStore` for the
+existing handler.
 
-Method result schemas and handlers remain shared during the compact remote
-migration. Detail methods return retained compact events and items rather than
-inventing a second remote API. The outer envelope adds optional transport
-metadata without changing local replies:
+`project.sessions` is the intentional collection read; a targeted session call
+does not build a complete workspace store. A batch retains one pinned snapshot
+sequence across its historical calls.
 
-```json
-{
-  "id": "request-id",
-  "method": "session.summary",
-  "ok": true,
-  "meta": {
-    "workspace_id": "uuid",
-    "snapshot_sequence": 481,
-    "source": "remote",
-    "freshness": "authoritative",
-    "content_scope": "compact"
-  },
-  "result": {}
-}
-```
+## Artifact and JSONB rationale
 
-The authenticated API exposes `call`, `batch`, and `schema`. Potentially
-unbounded results use signed, scope-bound cursors. Ingestion and estimation
-commands require idempotency keys. A client may request `min_sequence` with a
-bounded wait for read-after-write behavior.
+The artifact is a bounded, nested API document rather than a queryable event
+lake. JSONB preserves its ordered hierarchy and optional typed capsules without
+creating a second relational canonical model. The fields needed for integrity
+or lookup are normalized separately.
 
-Source selection belongs to client transport configuration, not method
-parameters. Normal compact operation uses the remote API. A full-detail local
-operation selects the embedded transport explicitly. Remote reads never
-silently hydrate omitted bodies from vendor logs. Explicit offline mode reads a
-snapshot-bound cache and reports its last known sequence.
+The 8 MiB per-artifact and 16 MiB per-publication limits are hard gates. Exact
+replay compares deterministic SHA-256 digests. Storage or delta infrastructure
+is not introduced while representative artifacts remain safely within those
+bounds.
+
+The complete artifact contract and retention decision are documented in
+[`remote-ct-storage-optimization-proposal.md`](remote-ct-storage-optimization-proposal.md).
+
+## Project inventory
+
+Portable `project_id`, display name, optional repository identity, and aliases
+are revisioned independently from historical artifacts. Agent project locations
+may contain private local paths, but are principal-private and never used as
+portable identity or returned by shared historical APIs.
 
 ## Living state
 
-Living state is a stream of signed host observations, not database inference.
-Each connected collector maintains an agent-instance lease:
+Living state remains a stream of explicit host observations. Heartbeats and
+canonical living changes share one monotonic agent-instance sequence. Freshness
+transitions to `unknown` after lease expiry; missing or expired data never
+fabricates `not_living` or terminal state.
 
-```text
-agent_instance_id
-heartbeat_at
-lease_expires_at
-observed_at
-received_at
-source_watermarks
-runtime_state
-```
+Snapshot and delta pagination keep their existing raw, scope-bound cursors.
+SSE is an optional transport over the same durable sequence.
 
-Freshness transitions are `living -> delayed -> unknown` unless an explicit
-terminal observation exists. Lease expiry never means `not_living`. The
-connected app server remains the only authority for direct runtime control.
+## Estimation
 
-The existing snapshot/delta and cursor model remains the durable protocol. SSE
-may stream the same ordered changes but is only a transport convenience; clients
-resume from their last durable cursor and receive `reset` when retention has
-invalidated it.
-
-## Estimation authority
-
-Forecast evidence uses a remote append-only event ledger. A central Python
-worker is the initial executor and owns provider credential access, budget
-limits, retries, and concurrency. Queue payloads contain IDs, not canonical
-payloads or secrets.
-
-- `estimate.predict` creates an idempotent job and immutable forecast receipt.
-- `estimate.bind` appends a binding event.
-- `estimate.get`, `estimate.list`, and `estimate.calibration` fold events at a
-  declared workspace snapshot.
-- `estimate.backfill.start` creates a durable resumable job.
-- `estimate.backfill.status` reads job, lease, progress, attempts, and failures.
-
-Every forecast records the historical snapshot and retrieval corpus sequence it
-used. A delegated host executor can be added later, but it is not part of the
-initial shared architecture.
-
-## Local outbox and cache
-
-The collector writes proposed observations to a durable local outbox before
-network delivery:
-
-```text
-vendor log -> normalize -> outbox -> remote receipt -> acknowledge locally
-```
-
-Outbox state is `pending`, `in_flight`, `accepted`, or `rejected`. Retries reuse
-the same idempotency key. Unaccepted observations are visible only to their
-originating host.
-
-A separate optional cache is keyed by server, workspace, snapshot sequence,
-artifact revision, and projection version. Revocation triggers eviction, but CT
-does not claim it can retract data already delivered to a client. Cache records
-are never uploaded as ingestion input.
+Estimation remains a separate append-only job and forecast authority. A
+server-side worker owns provider credentials, claims, retry policy, and result
+publication. Historical inputs are pinned to one workspace snapshot. The
+shareable-artifact change does not place estimator credentials on collectors or
+clients.
 
 ## Access control
 
-The initial product position is one private workspace with compact remote
-membership and full-detail local custody:
-
 - Supabase Auth identifies users and agent principals.
 - Every durable key begins with `workspace_id`.
-- RLS protects every table exposed to authenticated clients.
-- Agent credentials are workspace- and capability-scoped.
-- Canonical writes occur only through the API/projector role.
-- The service role remains server-side and is never distributed to agents.
-- Host locations, source payloads, worker queues, provider credentials, and
-  full-detail local evidence are server-only or principal-private.
-- Remote payloads contain compact historical facts only.
+- RLS protects exposed tables.
+- Collector writes occur only through capability-checked RPCs.
+- Estimator service-role credentials remain server-only.
+- Host paths and source files remain local or principal-private.
+- Remote artifacts contain only the bounded shareable contract.
 
-Remote historical calls retain the same handlers and result contracts. A
-content-capability gate rejects `session.search`, `session.events`, and
-`session.items(include_content=true)` before dispatch because compact custody
-cannot satisfy them. Metadata-only `session.items` remains available; there is
-no parallel remote result contract.
+## Rollout gates
 
-## Foundation and delivery plan
+1. Fetch and record the exact source revision without overwriting local work.
+2. Validate representative Codex, Claude Code, and Pi fenced sources.
+3. Require zero identity/topology and numeric metric deltas.
+4. Require zero prohibited body/path/media fields.
+5. Require byte- and digest-identical replay and lost-response retry.
+6. Confirm every artifact is below 8 MiB and the atomic publication below
+   16 MiB.
+7. Confirm the configured Supabase target is authorized and non-production.
+8. Apply the migration, publish a canary, and verify snapshot/idempotency/stale
+   behavior before enabling supervised collection.
 
-### Foundation — this repository
+A failed gate stops rollout. Privacy, topology, checkpoint, snapshot, and
+idempotency rules are never weakened to continue deployment.
 
-1. Declare all 25 method-to-authority assignments in code.
-2. Route the embedded runtime through a transport-neutral application dispatcher.
-3. Add the Supabase identity, sequence, project, observation, graph revision,
-   change log, living lease, estimation ledger, and worker-outbox schema.
-4. Preserve current local API behavior while remote adapters are introduced.
+## Non-goals
 
-### Remote service
-
-The remote foundation now implements all four authorities. Service-role
-projector RPCs lease accepted observations and atomically publish graph-revision
-sets. Portable project registration and inventory never expose host paths.
-Living reads preserve the existing snapshot/delta contract while omitting
-expired leases as unknown. Estimation uses durable jobs and append-only forecast
-events with provider execution in a service-role Python worker.
-
-`ct api call/batch --remote-workspace-id ...` and the authenticated Python HTTP
-service both construct the same `ServiceRuntime`, contracts, dispatcher, and
-handlers. Every request pins one workspace sequence before authority access.
-The HTTP surface is `POST /v1/call`, `/v1/batch`, and `/v1/schema`; bearer JWTs
-are forwarded to Supabase membership checks and service-role credentials never
-enter clients.
-
-The only remaining remote work is operational rather than architectural:
-
-1. Apply migrations through `20260902080000_ct_collector_living_sequence.sql`.
-2. Deploy `ct api serve`, `ct projector run`, and `ct estimator run` as supervised
-   services with server-only worker credentials.
-3. Complete private-corpus compact compatibility/privacy validation and publish
-   canonical living changes from collectors.
-
-Compact historical access is intentionally narrower than local access.
-`session.search` and `session.events` are unavailable remotely, and
-`session.items` rejects `include_content=true`. These calls fail explicitly
-rather than returning undocumented partial results. Other historical methods
-retain topology and numeric metrics while omitting private names, previews,
-paths, team state, runtime identifiers, and narrative evidence.
-
-Revision-bound disk caching remains optional. It is not required for API parity
-and will not be implemented before measurements demonstrate a latency need.
-
-Local-agent handoff remains deliberately narrow: apply migrations to the chosen
-Supabase project, provision capability-scoped credentials, run the collector on
-machines that own vendor logs, and validate compact observations on private
-representative data. Operate the projector with a server-only service role only
-after compact compatibility gates pass. Local agents do not own canonical graph
-assembly, conflict resolution, snapshots, or shared API reads.
-
-### Local collector
-
-The host-local collector and authenticated Supabase ingress contract are now
-implemented. `ct collector` discovers Codex, Claude Code, and Pi sources,
-normalizes complete JSONL prefixes with the existing adapters, and persists
-compact `canonical_session_snapshot.v2` records in its local outbox. It applies
-measurements retention plus the remote-boundary scrubber before publishing with
-a stable idempotency key and heartbeat.
-The collector can register a portable project before source publication and
-uses one durable outbox sequence for canonical living changes and heartbeats.
-Producing those canonical living changes and real-host validation remain local
-operational work because they require a specific Supabase project, registered
-agent credentials, and local source access. Its fixed boundary and commands are
-documented in [`local-collector-handoff.md`](local-collector-handoff.md).
-
-## Acceptance criteria
-
-The control plane is ready when:
-
-1. Every registered method has exactly one declared authority.
-2. Embedded and HTTP transports use the same validated method contracts and
-   handlers; remote results identify compact coverage.
-3. A batch observes one workspace sequence across all authorities.
-4. Repeated observation delivery is idempotent and conflicting reuse is rejected.
-5. Compact graph revisions round-trip through `SessionGraph` and retain their
-   source vector.
-6. `project.list` needs no shared host path.
-7. Lease expiry produces `unknown`, never fabricated terminal state.
-8. Estimation jobs survive worker restart without duplicate successful forecasts.
-9. RLS denies non-members and authenticated clients cannot write canonical tables.
-10. Any future offline cache identifies its snapshot and never merges vendor logs.
-
-## Explicit non-goals
-
-- Synchronizing SQLite files or allowing cache write-back.
+- Uploading raw logs, full sessions, or general events.
+- Synchronizing SQLite or allowing cache write-back.
+- Maintaining compact-v2 or historical remote compatibility handlers.
 - Treating filesystem paths as shared project identity.
-- Recreating Python semantics in SQL, Edge Functions, or TypeScript.
-- Building heavy projections inside the ingest transaction.
-- Inferring liveness from missing database updates.
-- Claiming a session graph can never resume after a terminal observation.
-- Collecting or uploading real vendor data as part of the control-plane foundation.
+- Reimplementing Python API semantics in SQL or TypeScript.
+- Reconstructing graphs in a remote projector.
+- Adding blob storage, compression transport, or graph deltas without measured
+  necessity.

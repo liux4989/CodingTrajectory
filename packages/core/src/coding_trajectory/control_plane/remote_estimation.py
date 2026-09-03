@@ -186,7 +186,7 @@ class RemoteEstimationAuthority:
             workspace_id=self.workspace_id,
             snapshot_sequence=self.snapshot_sequence,
         )
-        store, _ = repository.store_for("estimate", {})
+        store, _ = repository.store_for("project.sessions", {})
         sequence = repository.snapshot_sequence
         if sequence is None:
             raise RemoteControlPlaneError("historical snapshot has no sequence")

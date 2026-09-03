@@ -88,6 +88,7 @@ def _identity_from_args(
         agent_id=args.agent_id,
         agent_instance_id=agent_instance_id,
         project_id=project_id if project_id is not None else args.project_id,
+        project_name=args.project_name,
     )
 
 
@@ -157,6 +158,8 @@ def _handle_run(args: argparse.Namespace) -> dict[str, Any]:
         project_id = registration.project_id
     if project_id is None:
         raise ValueError("collector run requires --project-id or --project-name")
+    if not args.project_name:
+        raise ValueError("collector run requires --project-name for artifact identity")
     identity = _identity_from_args(args, state_path, project_id=project_id)
     with LocalCollector(database_path=state_path, identity=identity) as collector:
         result = collector.collect(
@@ -175,6 +178,10 @@ def _handle_run(args: argparse.Namespace) -> dict[str, Any]:
         "rejected": result.rejected,
         "pending": result.pending,
         "heartbeat_sequence": result.heartbeat_sequence,
+        "failed": result.failed,
+        "artifacts_queued": result.artifacts_queued,
+        "artifacts_accepted": result.artifacts_accepted,
+        "artifacts_rejected": result.artifacts_rejected,
     }
 
 
@@ -241,15 +248,15 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     run = commands.add_parser(
         "run",
-        help="Queue and publish normalized canonical snapshots.",
+        help="Queue checkpoints and publish bounded shareable graph artifacts.",
         formatter_class=GhFormatter,
     )
-    add_global_scope_flag(run)
     add_agent_vendor_flag(run)
     run.add_argument(
         "--since-days",
         type=_positive_int,
-        help="Publish only sources modified in the last N days.",
+        default=7,
+        help="Publish only sources modified in the last N days (default: 7).",
     )
     run.add_argument("--workspace-id", type=_uuid_arg)
     run.add_argument("--agent-id", type=_uuid_arg)
@@ -278,7 +285,11 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Refresh a private macOS Keychain-backed collector profile before publishing.",
     )
     run.add_argument("--no-heartbeat", action="store_true")
-    run.set_defaults(_plugin_handler=_handle_run, _default_output="json")
+    run.set_defaults(
+        _plugin_handler=_handle_run,
+        _default_output="json",
+        global_scope=False,
+    )
 
     status = commands.add_parser(
         "status",

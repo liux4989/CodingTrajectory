@@ -1,181 +1,131 @@
 # Local Collector Handoff
 
-- **Status:** Compact v2 collector implemented; deployment and private validation pending
-- **Owner:** Local agents with access to representative vendor logs and runtimes
-- **Depends on:** Applying the committed Supabase migrations and provisioning a scoped agent credential
+- **Status:** Direct shareable-artifact collector implemented; deployment pending
+- **Owner:** A host with authorized access to local vendor logs
+- **Depends on:** The shareable-graph migration and a capability-scoped collector
+  principal
 
 ## Purpose
 
-The local collector is the only component that reads host vendor logs. It turns
-local source changes into deterministic normalized observations, persists them
-before delivery, publishes them idempotently, and maintains liveness leases. It
-does not answer shared historical queries and does not publish SQLite caches.
+The collector is the only component that reads Codex, Claude Code, and Pi logs.
+It fences complete source bytes, builds one body-free shareable artifact, stores
+delivery work durably, publishes project artifacts idempotently, and maintains
+the existing living sequence. Local SQLite is delivery state, never remote
+historical authority.
 
-## Required inputs from the control plane
-
-The committed ingress migration provides:
-
-1. Agent registration and scoped credentials.
-2. Project registration and private location registration.
-3. Source registration returning stable `source_id` and current epoch.
-4. Observation ingestion with durable idempotency receipts.
-5. Source-epoch rollover for truncation or replacement.
-6. Lease heartbeat and living-observation endpoints.
-7. Strict versioned request and receipt models in
-   `coding_trajectory.control_plane.collector_protocol`.
-
-The collector uses the RPC names `ct_collector_register_source`,
-`ct_collector_publish_observation`, and `ct_collector_heartbeat` through the
-Supabase REST RPC endpoint. The caller needs an authenticated principal that
-matches the registered agent and has `ingest` plus `living` capability; the
-service role is never placed in the collector environment.
-
-Portable projects and canonical living changes use `ct_project_register` and
-`ct_collector_publish_living_observation`. The Python client exposes these as
-`SupabaseCollectorRemote.register_project(...)` and
-`publish_living_observation(...)`. A living payload is one existing
-`LivingChange`/`LivingSessionsChange` object with `cursor` and `revision`
-omitted; PostgreSQL assigns its authoritative workspace revision and cursor.
-Heartbeat and canonical living records share the agent-instance observation
-sequence, so the local publisher must allocate one monotonically increasing
-sequence across both operations.
-
-`ct collector run --project-name NAME` registers the portable project before
-source publication. `--repository-identity` and repeatable `--project-alias`
-values are optional; they must be portable identifiers, never host paths. An
-existing `--project-id` remains supported and is checked against registration
-when both forms are supplied.
-
-## Collector responsibilities
+## Collection sequence
 
 ```text
-discover source
-  -> identify source and epoch
-  -> read only committed complete records
-  -> normalize with existing Python vendor adapter
-  -> apply measurements retention and remote-boundary scrubber
-  -> assign deterministic event identity and source sequence
-  -> write durable outbox record
-  -> publish with stable idempotency key
-  -> retain receipt and advance local acknowledged watermark
+discover project-scoped sources
+  -> record one complete-line byte fence per physical segment
+  -> derive fork trimming from those same fenced parent bytes
+  -> coalesce resumed segments into one logical source/session
+  -> build and validate ct.shareable_graph.v1 locally
+  -> queue metadata-only source checkpoints
+  -> obtain accepted checkpoint receipts
+  -> assemble the complete project graph locally
+  -> queue one atomic artifact publication with a complete source vector
+  -> publish with the original bytes and idempotency key
+  -> heartbeat on the shared living sequence
 ```
 
-The collector must reuse existing Codex, Claude Code, and Pi adapters rather
-than create remote-only parsers. It may retain source paths and byte offsets in
-its private state. Shared payloads use canonical IDs and portable project IDs.
-The collector sends a compact `canonical_session_snapshot.v2` payload assembled
-by those adapters, not raw JSONL records. It applies the existing measurements
-retention mode followed by a remote-boundary scrubber before the payload enters
-the outbox. That compact payload excludes tool inputs/outputs, commands, full
-assistant/reasoning text, unbounded event payloads, item vendor data,
-context-source text, host paths, and file/media-like bodies. The host `cwd`,
-Codex `cwd`, and Pi session-file fields are stripped before publication; the
-source path never leaves the SQLite state. Upgrading a v1 collector advances
-each registered source to a fresh epoch; pending local v1 payloads are retired
-rather than published under the compact authority.
+Measurement extraction and artifact normalization consume the same in-memory
+records read from the fence. Bytes appended after the fence are deferred to the
+next pass. Parent fork-cut inputs are derived only from fenced records; the
+collector never rescans an unfenced parent during normalization.
+
+## Required remote contract
+
+The collector uses:
+
+- `ct_project_register` for portable project identity;
+- `ct_collector_register_source` for stable logical sources and epochs;
+- `ct_collector_publish_observation` for metadata-only checkpoints;
+- `ct_collector_publish_artifacts` for direct atomic graph publication;
+- `ct_collector_heartbeat` for leases; and
+- `ct_collector_publish_living_observation` for canonical living changes.
+
+The collector principal needs only its scoped authenticated capabilities. A
+service-role credential must never be installed on the collector host.
+
+Remote collection requires a portable project name and project ID. The
+repository identity and aliases are optional portable identifiers. A host path
+is never project identity. Remote collection is project-scoped; `--global-scope`
+is rejected. The default collection window is seven days.
 
 ## Durable local state
 
-Collector state may use SQLite, but its schema is delivery state only:
-
 ```text
 registered_sources
-  source_id, vendor, native_session_id, source_epoch
-  committed_offset, next_source_sequence, last_digest
+  physical segment path, file identity, fence, logical source, epoch
+
+logical_sources
+  vendor/native session identity, source ID, epoch, next sequence, last digest
 
 observation_outbox
-  idempotency_key, source_id, source_epoch, source_sequence
-  event_id, content_sha256, payload, state, attempts, last_error
+  exact checkpoint request, idempotency key, attempts, outcome
+
+artifact_outbox
+  exact project publication, project sequence, digest, attempts, outcome
+
+living_outbox
+  heartbeat and living changes on one monotonic observation sequence
 
 remote_receipts
-  idempotency_key, receipt_id, outcome, committed_sequence, received_at
+  durable accepted/duplicate/rejected/conflict evidence
 ```
 
-Crashes between local write and network acknowledgement must cause an identical
-retry, not a new event identity. A rejected record remains inspectable and does
-not block unrelated sources.
+Paths exist only in private collector state. They are not serialized into a
+checkpoint or artifact.
 
-## Data-collection validation
+On restart, in-flight records return to pending. A lost response retries the
+byte-identical stored request with the same idempotency key. A pending or
+rejected artifact publication blocks assignment of a newer project publication
+sequence. Source failures prevent a partial project artifact from being queued.
 
-Local agents must validate with representative real sources without committing
-private logs or secrets:
+## Artifact content
 
-- one Codex, Claude Code, and Pi source;
-- append during an active turn;
-- process restart and exact retry;
-- source truncation/replacement and epoch rollover;
-- parent plus subagent sources arriving out of order;
-- a session that resumes after a terminal observation;
-- temporary/unmapped project followed by explicit project registration;
-- network loss through outbox recovery;
-- heartbeat delay and lease expiry.
+The collector publishes the bounded structural/numeric core and semantic
+capsules documented in
+[`remote-ct-storage-optimization-proposal.md`](remote-ct-storage-optimization-proposal.md).
+It never uploads raw logs, complete sessions, event arrays, commands, tool
+inputs, or tool outputs. A value visible only inside a tool output therefore
+does not enter remote history.
 
-Validation artifacts committed to the repository must be sanitized fixtures or
-hashes and arithmetic reconstructed from source evidence. Real source paths,
-prompts, credentials, and proprietary content remain local.
+The per-source checkpoint payload contains only:
+
+```text
+kind = ct.source_checkpoint.v1
+complete offsets for the logical source segments
+digest of the locally built source artifact
+```
+
+The remote graph payload exists only in the atomic artifact publication, not in
+every source observation.
+
+## Operational use
+
+Before a run, confirm that the target is authorized and non-production. Keep
+the API URL, publishable key, and collector access token in the local secret
+environment or the existing Keychain-backed credential profile. Never put
+secret values in command history, reports, or repository files.
+
+Run with a portable project name. The collector registers that name when
+needed, checks an explicitly supplied project ID for consistency, and then
+uses the seven-day project-scoped default. `ct collector status` exposes only
+the aggregate pending count.
 
 ## Definition of done
 
-1. No shared API reads directly from collector SQLite or vendor logs.
-2. Duplicate delivery creates one accepted observation.
-3. Conflicting identity reuse returns a durable conflict receipt.
-4. A sequence gap does not advance the server's contiguous source watermark.
-5. Truncation starts a new source epoch without deleting prior evidence.
-6. Collector restart resumes every pending outbox record.
-7. Lease expiry is reported remotely as `unknown`.
-8. The same accepted observations produce the same graph hash when replayed.
-9. The compact wire payload contains no tool body, command body, host path,
-   file/media body, data URI, or base64 body.
-10. Remote `session.items` returns metadata only. `session.search`,
-    `session.events`, and `session.items(include_content=true)` fail explicitly
-    because compact snapshots do not retain the content their contracts need.
-11. The host publishes `living.events` and `living.sessions` canonical changes;
-    heartbeat-only coverage remains explicit until this publisher is enabled.
-
-## Operation
-
-Inspect eligible sources without emitting paths or reading transcript bodies:
-
-```sh
-uv run ct collector scan --global-scope
-```
-
-After applying the migrations and registering a project and agent, provide only
-local credentials and identifiers, then run one collection pass:
-
-```sh
-export CT_SUPABASE_URL=https://your-project.supabase.co
-export CT_SUPABASE_ANON_KEY=...
-export CT_COLLECTOR_ACCESS_TOKEN=...
-uv run ct collector run --since-days 7 \
-  --workspace-id <workspace-uuid> --agent-id <agent-uuid> \
-  --project-name <portable-name> --repository-identity <portable-repository-id>
-```
-
-### Refreshable macOS credential profile
-
-For a recurring local collector, store the Auth user's password only in macOS
-Keychain. The profile file is mode `0600`, contains no JWT or password, and
-holds the workspace/agent identity plus the project URL and publishable key.
-Each collection pass signs in just-in-time for a fresh user JWT.
-
-```sh
-uv run ct collector credentials configure \
-  --profile default \
-  --workspace-id <workspace-uuid> --agent-id <agent-uuid> \
-  --supabase-url https://your-project.supabase.co \
-  --supabase-api-key <publishable-key> \
-  --email <collector-auth-email>
-
-uv run ct collector run --credential-profile default --global-scope --since-days 7
-```
-
-Use `ct collector credentials status --profile default` to confirm only that
-the profile and its Keychain password exist. It never prints a password, JWT,
-API key, email address, or identifiers.
-
-The default outbox is private local state at
-`~/.coding-trajectory/control-plane/collector.sqlite3`. `ct collector status`
-reports only its pending count. Re-running `run` preserves the exact queued
-payload and idempotency key; a rejected record stays inspectable locally and
-does not prevent another source from publishing.
+1. One resumed-session group creates one logical source registration.
+2. Source epoch and sequence advance without collision or loss.
+3. Fork trimming, local discovery, and the artifact retain identical turn and
+   item identities.
+4. Source checkpoints contain no graph or transcript body.
+5. Every artifact source is present exactly once in the normalized source
+   vector, and every vector source belongs to an artifact.
+6. A partial or failed collection publishes no project artifact.
+7. Exact replay produces the same artifact bytes and digest.
+8. Lost-response retry reuses the exact request and idempotency key.
+9. Artifact and publication size bounds fail closed.
+10. Heartbeats and living changes retain one monotonic agent-instance sequence.

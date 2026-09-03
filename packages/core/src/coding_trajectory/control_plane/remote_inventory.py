@@ -108,5 +108,5 @@ class SupabaseProjectInventoryRepository:
             "snapshot_sequence": self.snapshot_sequence,
             "source": "remote",
             "freshness": "authoritative",
-            "content_scope": "compact",
+            "content_scope": "shareable",
         }

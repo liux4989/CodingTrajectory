@@ -1,353 +1,157 @@
-# Remote CT Compact Storage Proposal
+# Shareable Historical Artifact Decision
 
-- **Status:** Compact v2 boundary implemented; private-corpus validation pending
-- **Date:** 2026-09-02
-- **Scope:** Remote collector observations, remote content scope, and future
-  storage work
+- **Status:** Implemented locally; non-production deployment pending
+- **Date:** 2026-09-04
+- **Scope:** Historical collection, storage, replay, and API coverage
 - **Related:** [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md),
   [`local-collector-handoff.md`](local-collector-handoff.md)
 
 ## Decision
 
-Remote collection will reuse the existing `measurements` retention mode and
-apply a small remote-boundary scrubber. It will not introduce a parallel
-`remote_compact` canonical model.
+CodingTrajectory has one body-free historical representation for shareable
+reads: `ct.shareable_graph.v1`. The originating host constructs it once from a
+fenced, complete source prefix. The same artifact and the same handlers serve
+local shareable calls and remote calls.
 
-The resulting compact observation is the remote historical representation. The
-full vendor log and full-detail canonical trajectory remain on the host that
-owns them. The remote service must declare `content_scope: compact`; it must
-not imply that omitted content is unavailable on the originating host.
+The remote service does not receive raw logs, full canonical sessions, compact
+compatibility sessions, or general event arrays. It does not reconstruct
+graphs or recompute measurements. Detailed evidence reads remain local and use
+the existing raw-log/canonical path.
 
-This decision changes future collection only. Existing accepted full snapshots
-remain immutable while compact collection, replay, and query compatibility are
-validated. It does not authorize a destructive backfill or deletion.
+Source observations now carry checkpoint, ordering, parser, and digest metadata
+only. An authenticated project collector publishes the locally assembled graph
+artifacts atomically with a complete normalized source vector.
 
-The implementation uses `canonical_session_snapshot.v2`, advances existing
-collector sources into a new epoch, retires unaccepted local and remote v1
-projection work, and validates the compact invariant again in the Python
-projector. Existing v1 observations remain evidence but are never projected.
+## Artifact boundary
 
-## Why now
+The strict Pydantic artifact contains:
 
-A read-only storage measurement on 2026-09-02 found 16 accepted source
-observations with 25.9 MiB of JSONB payload. The largest snapshot is
-approximately 10.3 MiB; the median is approximately 527 KiB. The observation
-table occupies approximately 27.0 MiB including indexes and TOAST allocation.
-Every other currently created control-plane table together occupies well under
-1 MiB.
+- graph, session, turn, item, and edge identities;
+- parent/child, fork, sidechain, spawn, and edge-origin topology;
+- ordering, timestamps, lifecycle status, vendor, model, and reasoning effort;
+- normalized request usage, model usage inputs, runtime observations, and
+  content-derived numeric measurements;
+- tool name, category, outcome, exit code, and bounded safe description;
+- bounded user-request and assistant-response previews;
+- portable file-change path and operation;
+- compact team membership/task state; and
+- bounded semantic capsules for verification, resolution, and pending-plan
+  projections.
 
-The cost is therefore not the count of relational tables. It is duplicated tool
-content inside each full normalized session snapshot. All 16 current
-observations belong to different sources, so checkpoints, deltas, and
-whole-snapshot content addressing would not reduce this baseline. They are
-future-growth tools, not the first fix.
+It structurally excludes:
 
-Exact, content-free comparison of linked event and item fields found 16.75 MiB
-of duplicated successful tool output and 0.88 MiB of duplicated tool input:
-17.64 MiB, or 68.1% of the current measured payload bytes. This is a
-representation measurement, not a promise of equal disk savings after
-compression.
+- full prompts, responses, reasoning, commands, and event payloads;
+- tool inputs, tool outputs, tool-call transport IDs, and vendor payloads;
+- raw context-source text, traces, reasons, triggers, and runtime IDs;
+- source files, host locations, working directories, and absolute file paths;
+- data URIs, media/blob bodies, and unbounded strings; and
+- a general events collection.
 
-## Current custody and its constraint
+The previews and semantic capsules are deliberate product data. They preserve
+the useful shape of overview and summary APIs without retaining the high-volume
+evidence bodies from which they were derived.
 
-The accepted design intentionally separates four authorities:
+## Size and persistence bounds
 
-| Authority | Active durable records | Storage consequence |
-|---|---|---|
-| Historical graphs | Source observations; future graph revisions | Canonical content is potentially large |
-| Project inventory | Projects, revisions, aliases, private locations | Small metadata |
-| Living state | Current leases and heartbeat observations | Small, append-only operational history |
-| Estimation | Jobs, attempts, forecast events | Deferred; currently empty |
+One serialized graph artifact is limited to 8 MiB. One atomic project
+publication is limited to 16 MiB. Both bounds are enforced by Pydantic before
+queueing and by PostgreSQL before committing. A bound failure stops publication;
+it is not bypassed with a weaker schema.
 
-The remote collector sends an already normalized canonical session snapshot.
-Raw vendor logs stay on the originating host. The server relies on the
-snapshot's canonical JSON digest for deduplication, ordering, and evidence.
-
-Any optimization must preserve all of these invariants:
-
-1. One declared canonical representation must round-trip through the existing
-   Pydantic model exactly.
-2. A source observation remains immutable and ordered by source epoch and
-   sequence.
-3. The same event and digest remains an idempotent success; conflicting content
-   remains a conflict.
-4. A workspace snapshot at sequence `S` must not combine pre- and post-`S`
-   resources.
-5. No optimization uploads a raw vendor log, a host path, or private collector
-   state.
-6. No retention task may delete canonical bytes until a durable replay proof
-   establishes what can be reconstructed without them.
-
-## Remote compact boundary
-
-The existing `CanonicalRetention="measurements"` mode is the base. It retains
-canonical IDs, event and turn ordering, timing, status, tool identity,
-item/event links, compact usage, and content-derived measurements. It drops
-item `input`, `output`, `command`, `text`, and `vendor_data`; it also drops
-LLM-response and `vendor.raw` events and context-source text.
-
-`session.summary` is a read-time projection, not a storage profile. It cannot
-replace compact canonical events, items, timing, or measurement facts.
-
-Measurements retention needs only three remote-boundary additions:
-
-| Existing behavior | Required remote rule |
-|---|---|
-| User-prompt payload text may remain | Retain measurements and an explicitly bounded summary only; omit full prompt bodies |
-| `FileChangeItem.path` may remain | Omit host paths and private location hints |
-| Team-state text may remain | Retain only an explicitly approved bounded summary or counts |
-
-The scrubber runs after measurements retention. It is a small composition rule,
-not a second retention model that can drift from the local compact path.
+The persistence model stays intentionally small:
 
 ```text
-host-local vendor log
-  -> existing adapter builds full transient session
-  -> CanonicalRetention = measurements
-  -> remote-boundary scrubber
-  -> compact canonical source observation
-  -> durable receipt, ordered change log, lease update
-```
-
-| Keep remotely | Omit remotely |
-|---|---|
-| Stable IDs, source epoch/sequence, hashes, timing, status | Full tool inputs and outputs |
-| Tool name, tool-call ID, exit code, item/event links | Commands and command output |
-| Token/character measurements, compact usage, bounded approved summaries | Full assistant/reasoning text and unbounded event payloads |
-| Compact file-change operation/counts, if useful | File paths, file contents, binary/media data, data URIs, and base64 bodies |
-| Workspace/project IDs and liveness watermarks | `vendor_data`, context-source text, and host-local provenance |
-
-The collection schema version must advance when this policy is implemented. The
-digest continues to cover the complete compact canonical payload, so retry,
-ordering, and conflict semantics remain unchanged.
-
-## Options considered
-
-### A. Keep full JSONB forever
-
-This is the current representation. It is simple: one row is enough to
-rehydrate one source snapshot, and PostgreSQL manages compression internally.
-It is also linear in the complete size of every changed snapshot. It remains a
-reasonable small-pilot baseline, but it does not bound growth for active,
-long-running sessions.
-
-### B. Normalize every session field into relational tables
-
-This would move turns, items, events, text, metrics, and links into many
-tables. It may help a few query paths, but it creates a second writable session
-model, significantly expands migration work, and does not remove the bulk of
-transcript text. It is rejected for the first optimization.
-
-### C. Compressed, content-addressed canonical payloads
-
-Store the canonical JSON bytes once per digest in an immutable payload store.
-Observation and graph-revision records keep their typed metadata plus a digest
-reference. The worker reads, decompresses, verifies the digest, and validates
-the Pydantic model before projecting.
-
-This remains a possible second step after compact collection. It does not
-remove duplicate bodies within one snapshot, and whole-snapshot deduplication
-does not help the current one-snapshot-per-source baseline.
-
-### D. Deltas plus periodic checkpoints
-
-Store a complete checkpoint followed by validated append/delta frames, then
-write another checkpoint at a defined boundary. This is the largest potential
-space reduction for growing sessions, but it adds a canonical patch protocol,
-base-version rules, and reconstruction failure modes. It should follow a
-measured compact-payload baseline, not precede it.
-
-### E. Retain only the latest snapshot
-
-This is cheap but loses exact historical reconstruction. It is incompatible
-with the current sequence-snapshot and evidence model, so it is rejected.
-
-## Deferred payload backend
-
-Content-addressed payloads are deferred until compact collection is measured.
-If later justified, their public semantic value remains the canonical JSON
-document, not its physical storage format.
-
-```text
-compact collector
-  -> compact canonical JSON + SHA-256
-  -> optional validate and compress
-  -> optional immutable canonical payload blob
-                  |
-                  +--> source observation header, sequence, receipt, change log
-                  +--> future compact graph revision header and source vector
-```
-
-If later justified, the logical schema is:
-
-```text
-ct_canonical_payloads
-  workspace_id
-  content_sha256                 -- SHA-256 of uncompressed canonical JSON
-  schema_version
-  representation                 -- e.g. ct.source-snapshot.v1
-  encoding                       -- e.g. zstd
-  uncompressed_bytes
-  stored_bytes
-  storage_locator                -- implementation-private
-  state                          -- staging | ready | failed
-  created_at
-  primary key (workspace_id, content_sha256)
-
 ct_source_observations
-  existing identity, ordering, timing, and receipt-related fields
-  existing content_sha256        -- references ct_canonical_payloads
-  payload is retired after verified backfill
+  immutable source epoch/sequence/checkpoint/digest metadata
 
 ct_artifact_revisions
-  existing artifact/version/source-vector fields
-  existing content_sha256        -- references ct_canonical_payloads
+  one bounded ct.shareable_graph.v1 JSONB artifact per revision
+
+ct_artifact_revision_sources
+  normalized complete source vector for each artifact revision
+
+ct_artifact_revision_resources
+  session/turn/item lookup index for targeted reads
+
+ct_artifacts
+  current revision plus small indexed inventory fields
 ```
 
-The payload digest remains the digest of the uncompressed canonical JSON. This
-allows an implementation to change compression or move bytes between Postgres
-and object storage without changing event identity, replay evidence, or public
-method behavior.
+JSONB remains appropriate because the artifact is one bounded, strictly
+validated API document with nested order and optional fields. Relational rows
+are used where the server needs joins, integrity, or lookup: source vectors,
+resource ownership, project inventory, sequences, and receipts. The database
+does not query arbitrary transcript JSON.
 
-### Later implementation backend
+Supabase Storage, gzip object transport, generic blobs, staging tables, graph
+deltas, and a replacement projector architecture are not part of this design.
+They are reconsidered only if representative artifacts cannot satisfy the
+explicit bound.
 
-Prefer a private, Postgres-backed `bytea` payload blob with explicit
-compression before any object-store backend. It preserves the current RPC
-transaction boundary: the ingress can validate bytes, record the immutable
-blob, accept the observation, write the receipt, and advance the change log
-atomically.
+## Digest and replay
 
-Supabase Storage is a later backend option, not the first move. Direct object
-upload and a database commit are not one transaction; adopting it first would
-require a staging/finalization protocol, orphan collection, server-side digest
-verification, and recovery semantics. The proposed `storage_locator` permits
-that upgrade once measured database payload growth justifies it.
+Canonical JSON serialization is deterministic. The content SHA-256
+covers the complete artifact. Python validates the artifact, byte count, and
+digest before durable queueing. PostgreSQL independently validates the exact
+object shape, bounded content, canonical byte count, request digest, artifact
+digest, and normalized source vector.
 
-### Graph projection rule
+The artifact serializes the exact finite `cost_usd` float spelling as a bounded
+decimal string, then restores it to a number before invoking shared handlers.
+This avoids Python exponent formatting and PostgreSQL JSONB numeric
+normalization producing different digests without changing public results.
 
-Do not enable a worker that writes a complete graph JSONB revision for every
-source observation. The worker must first use compact source observations and
-establish a durable source vector for every compact graph revision.
+An exact retry reuses the original serialized request and idempotency key.
+Conflicting reuse is rejected. A new publication advances one project-local
+monotonic sequence. A source vector older than the accepted source watermarks is
+recorded as superseded and never becomes current.
 
-Before choosing graph checkpoints or deltas, measure these two quantities on a
-representative private corpus:
+## API coverage
 
-```text
-compact graph bytes per accepted source update
-delta bytes / compact checkpoint bytes
-```
+The following methods use the same shareable artifact and existing handler in
+both local and remote execution:
 
-Only introduce deltas when their measured benefit exceeds the added replay and
-operational complexity.
+- `project.sessions`
+- `session.overview`
+- `session.summary`
+- `session.tree`
+- `graph.overview`
+- `session.stats`
+- `graph.stats`
+- `session.usage`
+- `graph.usage`
+- `session.model_usage`
+- `session.request_usage`
+- `session.tool_usage`
+- `session.items` with `include_content=false`
 
-## Retention model
+Numeric usage and stats results are retained exactly. Overview, tree, summary,
+tool descriptions, and metadata-only item views document bounded semantic
+coverage and do not imply complete evidence.
 
-Retention is a custody decision, not a vacuum job. The following tiers keep
-the evidence chain explicit.
+These evidence-body methods remain local and are rejected before remote
+dispatch:
 
-| Record | Hot retention | Long-term rule | Preconditions for compaction |
-|---|---|---|---|
-| Source payload bytes | All recent accepted snapshots | Terminal and periodic checkpoints; compacted history only with replay proof | Exact rehydration from retained checkpoint/frame chain |
-| Observation headers, hashes, ordering | Forever | Forever | None |
-| Receipts | Operational window to be decided | Digest/outcome evidence retained or summarized | Retry and conflict window is closed |
-| Completed projection outbox | Short operational window | Delete after idempotent projection proof | Projection output and source vector are durable |
-| Lease current state | One active row per instance | Replace in place | None |
-| Historical liveness observations | Short diagnostics window | Expire or summarize | No public historical-liveness contract depends on each row |
-| Estimation attempts/errors | Per job policy | Summarize after completion | Forecast receipt and audit requirements are met |
+- `session.search`
+- `session.events`
+- `session.items` with `include_content=true`
 
-Initially, no source payload is eligible for deletion: no graph projector has
-yet produced durable revision/source-vector evidence. The first storage change
-is compact collection, not compression or history removal.
+There is no legacy remote handler or parallel remote result contract.
 
-## Active core versus deferred extensions
+## Transition
 
-The live database contains future tables for project inventory, graph
-projection, outbox delivery, and estimation. Their physical cost is negligible
-today, but they make the foundation harder to read as a live product.
+Existing v1 and compact-v2 observations and revisions remain immutable. They
+are not deleted, rewritten, projected, or mixed into shareable history. The
+migration retires unfinished legacy projector jobs, constrains all new source
+observations to metadata-only checkpoints, and constrains all new artifact
+revisions to `ct.shareable_graph.v1`.
 
-Treat the deployment as staged modules:
+The projector worker and its RPCs are removed. Remote publication stores the
+locally produced artifact directly after authorization and validation.
 
-```text
-Active now
-  workspace identity and membership
-  collector agents/capabilities
-  source registration, observations, receipts, change sequence
-  leases and heartbeats
+## Deployment gate
 
-Activated remote foundation
-  portable project inventory
-  compact graph artifacts/revisions and projection outbox
-  living canonical observations and lease-aware reads
-  estimation jobs, attempts, and forecast events
-```
-
-These tables remain small control-plane records. Do not normalize compact graph
-payloads further or add a blob backend merely to reduce table count; measure the
-activated representation before introducing another storage layer.
-
-### Compact historical compatibility
-
-The private-corpus survey establishes the supported boundary after privacy
-scrubbing:
-
-| Remote method | Compact support |
-|---|---|
-| `session.usage`, `graph.usage`, `session.model_usage`, default `session.request_usage` | Equivalent numeric result |
-| `project.sessions`, overview, summary, tree, stats, `session.tool_usage` | Supported with documented narrative/composition coverage loss |
-| `session.items` | Metadata only; `include_content=true` is rejected |
-| `session.search`, `session.events` | Rejected because required content is omitted |
-
-Local methods retain their existing full behavior. This is one shared method
-implementation with a remote content-capability gate, not a second API ruleset.
-
-## Validation and rollout
-
-### Phase 1 — compact collection (implemented)
-
-1. Select existing measurements retention before remote serialization.
-2. Apply the remote-boundary scrubber and publish a new compact schema version.
-3. Keep the existing full local trajectory and vendor log untouched.
-4. Measure aggregate payload size during private-corpus validation without
-   recording content, paths, identifiers, or prompts.
-
-### Phase 2 — compatibility evidence
-
-1. For a private representative corpus, compare local full and remote compact
-   results for summaries, graphs, statistics, and usage methods.
-2. Confirm `session.search`, `session.events`, and content-bearing
-   `session.items` fail explicitly while metadata-only `session.items` remains
-   available through the shared handler and contract.
-3. Confirm exact retry, source epoch rollover, and change-log ordering with the
-   compact payload digest.
-4. Confirm no host paths, file contents, data URIs, base64 bodies, or tool
-   bodies are present in the outbound compact payload.
-
-### Phase 3 — reassess storage backend
-
-Only after Phase 2, measure compact-payload size distribution and repeat-source
-versions. Propose compression, content-addressed blobs, checkpoints, or object
-storage only if their measured benefit outweighs their transaction and replay
-complexity.
-
-## Acceptance gates
-
-Implementation is ready only when:
-
-1. The compact payload validates against a versioned Pydantic contract.
-2. Full tool bodies, command bodies, paths, media-like bodies, and unbounded
-   event payloads are absent from outbound remote observations.
-3. Summary and metric results have documented compact compatibility evidence.
-4. All historical methods remain callable and identify compact coverage without
-   silently hydrating omitted bodies.
-5. Existing source ordering, idempotency, receipts, and lease semantics pass
-   unchanged.
-6. No existing remote payload is deleted or rewritten as part of rollout.
-
-## Open decisions after compact validation
-
-1. Which bounded summaries, if any, are useful remotely and what are their
-   maximum character/token limits?
-2. What compact-size distribution and repeat-version rate justify a compressed
-   blob backend?
-3. What retention period is required for compact source observations and
-   operational receipts?
+The local privacy, topology, numeric, size, retry, and replay gates must pass
+before database access. Migration deployment additionally requires explicit
+confirmation that the configured Supabase target is authorized and
+non-production. A failed gate stops rollout; old evidence is preserved.

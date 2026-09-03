@@ -1,9 +1,9 @@
 """Host-local vendor-log collector for the remote CT control plane.
 
 The collector is deliberately a delivery client: its SQLite database holds
-paths, offsets and unacknowledged canonical observations, but is never a query
-authority.  Vendor JSONL is parsed locally through the existing adapters and
-only the normalized canonical session snapshot is queued for publishing.
+paths, offsets, and unacknowledged checkpoint/artifact requests, but is never a
+query authority. Vendor JSONL is parsed locally through the existing adapters;
+only metadata checkpoints and bounded shareable graphs are queued remotely.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 
 from coding_trajectory.contracts import LivingChange, LivingSessionsChange
 from coding_trajectory.control_plane.collector_protocol import (
+    ArtifactPublicationRequest,
     LeaseHeartbeatRequest,
     LeaseHeartbeatResponse,
     LivingObservationReceipt,
@@ -29,19 +30,27 @@ from coding_trajectory.control_plane.collector_protocol import (
     ObservationRequest,
     ProjectRegistrationRequest,
     ProjectRegistrationResponse,
+    ShareableArtifactPublication,
+    SourceVectorEntry,
     SourceRegistrationRequest,
     SourceRegistrationResponse,
 )
-from coding_trajectory.control_plane.compact import build_remote_compact_segments
+from coding_trajectory.control_plane.shareable import (
+    ShareableGraphArtifact,
+    build_shareable_graph_artifact,
+    build_shareable_segments,
+)
 from coding_trajectory.discovery import (
     DiscoveryCandidate,
     discover_source_candidates,
 )
 from coding_trajectory.ingestion.adapters.base import SessionHeader
 from coding_trajectory.ingestion.common import canonical_json, last_complete_line_offset
+from coding_trajectory.ingestion.graph import assemble_project_session_graphs
+from coding_trajectory.ingestion.models import Session
 
-_PARSER_VERSION = "ct-local-collector-v2"
-_SNAPSHOT_SCHEMA_VERSION = "canonical_session_snapshot.v2"
+_PARSER_VERSION = "ct-local-collector-v4"
+_SOURCE_SCHEMA_VERSION = "ct.source_checkpoint.v1"
 
 
 class CollectorRemote(Protocol):
@@ -57,6 +66,10 @@ class CollectorRemote(Protocol):
 
     def publish_observation(
         self, request: ObservationRequest, *, idempotency_key: str
+    ) -> ObservationReceipt: ...
+
+    def publish_artifacts(
+        self, request: ArtifactPublicationRequest, *, idempotency_key: str
     ) -> ObservationReceipt: ...
 
     def heartbeat(self, request: LeaseHeartbeatRequest) -> LeaseHeartbeatResponse: ...
@@ -106,6 +119,17 @@ class SupabaseCollectorRemote:
             self._rpc(
                 "ct_collector_publish_observation",
                 request.model_dump(mode="json"),
+                idempotency_key=idempotency_key,
+            )
+        )
+
+    def publish_artifacts(
+        self, request: ArtifactPublicationRequest, *, idempotency_key: str
+    ) -> ObservationReceipt:
+        return ObservationReceipt.model_validate(
+            self._rpc(
+                "ct_collector_publish_artifacts",
+                request.model_dump(mode="json", exclude_none=True),
                 idempotency_key=idempotency_key,
             )
         )
@@ -169,6 +193,7 @@ class CollectorIdentity:
     agent_id: UUID
     agent_instance_id: UUID
     project_id: UUID | None = None
+    project_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +204,10 @@ class CollectorRunResult:
     rejected: int
     pending: int
     heartbeat_sequence: int | None
+    failed: int = 0
+    artifacts_queued: int = 0
+    artifacts_accepted: int = 0
+    artifacts_rejected: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +220,17 @@ class _FencedCandidate:
     modified_at: datetime
     segment_id: UUID
     rollover: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _CollectedSource:
+    artifact: ShareableGraphArtifact
+    source_id: UUID | None
+    source_epoch: int
+    source_sequence: int | None
+    content_sha256: str | None
+    observed_at: datetime
+    queued: int
 
 
 class LocalCollector:
@@ -206,6 +246,9 @@ class LocalCollector:
         self._create_schema()
         self._connection.execute(
             "update observation_outbox set state = 'pending' where state = 'in_flight'"
+        )
+        self._connection.execute(
+            "update artifact_outbox set state = 'pending' where state = 'in_flight'"
         )
         self._retire_legacy_outbox()
         self._connection.commit()
@@ -229,7 +272,16 @@ class LocalCollector:
         remote: CollectorRemote | None = None,
         heartbeat: bool = True,
     ) -> CollectorRunResult:
-        """Discover, normalize, queue, publish and optionally heartbeat once."""
+        """Discover, fence, publish checkpoints, and publish local graph artifacts."""
+
+        if remote is not None and global_scope:
+            raise ValueError(
+                "remote shareable publication requires project-scoped collection"
+            )
+        if remote is not None and self.identity.project_id is None:
+            raise ValueError("remote shareable publication requires a project_id")
+        if remote is not None and not (self.identity.project_name or "").strip():
+            raise ValueError("remote shareable publication requires a project_name")
 
         candidates = discover_source_candidates(
             current_dir=current_dir,
@@ -238,6 +290,7 @@ class LocalCollector:
             since_days=since_days,
         )
         fenced: list[_FencedCandidate] = []
+        failed = 0
         for candidate in candidates:
             try:
                 source = candidate.path
@@ -279,6 +332,7 @@ class LocalCollector:
                 )
             except (CollectorRemoteError, OSError, ValueError, json.JSONDecodeError):
                 # A changing or malformed local source is retried on the next pass.
+                failed += 1
                 continue
         parent_turn_ids = _parent_started_turn_ids(fenced)
         grouped: dict[tuple[str, UUID], list[_FencedCandidate]] = {}
@@ -287,14 +341,38 @@ class LocalCollector:
                 (source.candidate.vendor.value, source.header.session_id), []
             ).append(source)
         queued = 0
+        collected: list[_CollectedSource] = []
         for group in grouped.values():
             try:
-                queued += self._collect_segments(
+                source = self._collect_segments(
                     group, parent_turn_ids=parent_turn_ids, remote=remote
                 )
+                queued += source.queued
+                collected.append(source)
             except (CollectorRemoteError, OSError, ValueError, json.JSONDecodeError):
+                failed += 1
                 continue
         accepted, rejected = self.flush(remote) if remote is not None else (0, 0)
+        artifacts_accepted = 0
+        artifacts_rejected = 0
+        artifacts_queued = 0
+        if remote is not None:
+            # Drain an older exact request before assigning the next monotonic
+            # project publication sequence.
+            prior_accepted, prior_rejected = self._flush_artifacts(remote)
+            artifacts_accepted += prior_accepted
+            artifacts_rejected += prior_rejected
+            if (
+                prior_rejected == 0
+                and not self._artifact_publication_blocked()
+                and failed == 0
+                and collected
+                and all(self._source_delivery_accepted(source) for source in collected)
+            ):
+                artifacts_queued = self._queue_artifact_publication(collected)
+                current_accepted, current_rejected = self._flush_artifacts(remote)
+                artifacts_accepted += current_accepted
+                artifacts_rejected += current_rejected
         heartbeat_sequence: int | None = None
         if remote is not None and heartbeat:
             try:
@@ -310,6 +388,10 @@ class LocalCollector:
             rejected=rejected,
             pending=self.pending_count(),
             heartbeat_sequence=heartbeat_sequence,
+            failed=failed,
+            artifacts_queued=artifacts_queued,
+            artifacts_accepted=artifacts_accepted,
+            artifacts_rejected=artifacts_rejected,
         )
 
     def flush(self, remote: CollectorRemote) -> tuple[int, int]:
@@ -365,9 +447,203 @@ class LocalCollector:
             self._connection.commit()
         return accepted, rejected
 
+    def _artifact_publication_blocked(self) -> bool:
+        return (
+            self._connection.execute(
+                "select 1 from artifact_outbox where state in ('pending', 'rejected') limit 1"
+            ).fetchone()
+            is not None
+        )
+
+    def _source_delivery_accepted(self, source: _CollectedSource) -> bool:
+        if (
+            source.source_id is None
+            or source.source_sequence is None
+            or source.content_sha256 is None
+        ):
+            return False
+        row = self._connection.execute(
+            "select state from observation_outbox where source_id = ? and source_epoch = ? and source_sequence = ? and content_sha256 = ?",
+            (
+                str(source.source_id),
+                source.source_epoch,
+                source.source_sequence,
+                source.content_sha256,
+            ),
+        ).fetchone()
+        return row is not None and row["state"] == "accepted"
+
+    def _queue_artifact_publication(self, sources: list[_CollectedSource]) -> int:
+        if self.identity.project_id is None:
+            raise ValueError("shareable publication requires a project_id")
+        session_sources: dict[UUID, tuple[Session, list[_CollectedSource]]] = {}
+        for source in sources:
+            graph = source.artifact.to_session_graph()
+            if len(graph.sessions) != 1:
+                raise ValueError(
+                    "one collected source must contain exactly one session"
+                )
+            session = graph.sessions[0]
+            existing = session_sources.get(session.session_id)
+            if existing is not None:
+                if existing[0] != session:
+                    raise ValueError("collected sources disagree on canonical session")
+                existing[1].append(source)
+            else:
+                session_sources[session.session_id] = (session, [source])
+
+        graphs = assemble_project_session_graphs(
+            self.identity.project_name or "project",
+            [entry[0] for entry in session_sources.values()],
+        )
+        source_vector = [
+            SourceVectorEntry(
+                source_id=source.source_id,
+                source_epoch=source.source_epoch,
+                source_sequence=source.source_sequence,
+                content_sha256=source.content_sha256,
+            )
+            for source in sorted(sources, key=lambda entry: str(entry.source_id))
+            if source.source_id is not None
+            and source.source_sequence is not None
+            and source.content_sha256 is not None
+        ]
+        if len(source_vector) != len(sources):
+            raise ValueError("shareable publication has an incomplete source vector")
+
+        artifacts: list[ShareableArtifactPublication] = []
+        for graph in sorted(graphs, key=lambda entry: str(entry.root_session_id)):
+            graph_sources = [
+                source
+                for session in graph.sessions
+                for source in session_sources[session.session_id][1]
+            ]
+            artifact = build_shareable_graph_artifact(graph)
+            artifacts.append(
+                ShareableArtifactPublication(
+                    artifact_id=artifact.graph.root_session_id,
+                    payload=artifact,
+                    content_sha256=artifact.digest(),
+                    serialized_bytes=len(artifact.canonical_bytes()),
+                    source_ids=sorted(
+                        (
+                            source.source_id
+                            for source in graph_sources
+                            if source.source_id is not None
+                        ),
+                        key=str,
+                    ),
+                    observed_at=max(source.observed_at for source in graph_sources),
+                )
+            )
+
+        basis = {
+            "source_vector": [
+                entry.model_dump(mode="json", exclude_none=True)
+                for entry in source_vector
+            ],
+            "artifacts": [
+                {
+                    "artifact_id": str(artifact.artifact_id),
+                    "content_sha256": artifact.content_sha256,
+                    "serialized_bytes": artifact.serialized_bytes,
+                    "source_ids": [str(value) for value in artifact.source_ids],
+                    "observed_at": artifact.observed_at.isoformat(),
+                }
+                for artifact in artifacts
+            ],
+        }
+        publication_digest = _sha256(canonical_json(basis).encode())
+        meta_prefix = f"artifact_publication:{self.identity.project_id}"
+        if self._get_meta(f"{meta_prefix}:last_digest", "") == publication_digest:
+            return 0
+        sequence = int(self._get_meta(f"{meta_prefix}:next_sequence", "0"))
+        request = ArtifactPublicationRequest(
+            workspace_id=self.identity.workspace_id,
+            agent_id=self.identity.agent_id,
+            project_id=self.identity.project_id,
+            publication_sequence=sequence,
+            source_vector=source_vector,
+            artifacts=artifacts,
+        )
+        idempotency_key = _sha256(
+            (
+                f"{self.identity.agent_id}:{self.identity.project_id}:"
+                f"{sequence}:{publication_digest}"
+            ).encode()
+        )
+        self._connection.execute(
+            "insert or ignore into artifact_outbox (idempotency_key, project_id, publication_sequence, content_sha256, request_json, state, attempts, created_at) values (?, ?, ?, ?, ?, 'pending', 0, ?)",
+            (
+                idempotency_key,
+                str(self.identity.project_id),
+                sequence,
+                publication_digest,
+                request.model_dump_json(exclude_none=True),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        self._set_meta(f"{meta_prefix}:last_digest", publication_digest)
+        self._set_meta(f"{meta_prefix}:next_sequence", str(sequence + 1))
+        self._connection.commit()
+        return 1
+
+    def _flush_artifacts(self, remote: CollectorRemote) -> tuple[int, int]:
+        accepted = 0
+        rejected = 0
+        rows = self._connection.execute(
+            "select * from artifact_outbox where state = 'pending' order by publication_sequence, created_at"
+        ).fetchall()
+        for row in rows:
+            self._connection.execute(
+                "update artifact_outbox set state = 'in_flight', attempts = attempts + 1 where idempotency_key = ?",
+                (row["idempotency_key"],),
+            )
+            self._connection.commit()
+            try:
+                receipt = remote.publish_artifacts(
+                    ArtifactPublicationRequest.model_validate_json(row["request_json"]),
+                    idempotency_key=row["idempotency_key"],
+                )
+            except (CollectorRemoteError, OSError, ValueError):
+                self._connection.execute(
+                    "update artifact_outbox set state = 'pending', last_error = ? where idempotency_key = ?",
+                    ("remote delivery failed", row["idempotency_key"]),
+                )
+                self._connection.commit()
+                break
+            if receipt.outcome in {"accepted", "duplicate"}:
+                state = "accepted"
+                accepted += 1
+            else:
+                state = "rejected"
+                rejected += 1
+            self._connection.execute(
+                "update artifact_outbox set state = ?, last_error = ? where idempotency_key = ?",
+                (
+                    state,
+                    None if state == "accepted" else receipt.outcome,
+                    row["idempotency_key"],
+                ),
+            )
+            self._connection.execute(
+                "insert or replace into remote_receipts (idempotency_key, receipt_id, outcome, committed_sequence, received_at) values (?, ?, ?, ?, ?)",
+                (
+                    row["idempotency_key"],
+                    str(receipt.receipt_id),
+                    receipt.outcome,
+                    receipt.committed_sequence,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            self._connection.commit()
+            if state == "rejected":
+                break
+        return accepted, rejected
+
     def pending_count(self) -> int:
         row = self._connection.execute(
-            "select (select count(*) from observation_outbox where state = 'pending') + (select count(*) from living_outbox where state = 'pending') as count"
+            "select (select count(*) from observation_outbox where state = 'pending') + (select count(*) from artifact_outbox where state = 'pending') + (select count(*) from living_outbox where state = 'pending') as count"
         ).fetchone()
         return int(row["count"])
 
@@ -424,15 +700,17 @@ class LocalCollector:
         *,
         parent_turn_ids: dict[UUID, set[str]],
         remote: CollectorRemote | None,
-    ) -> int:
+    ) -> _CollectedSource:
         segments = sorted(segments, key=lambda segment: str(segment.segment_id))
         first = segments[0]
         vendor = first.candidate.vendor.value
         native_session_id = str(first.header.session_id)
+        artifact = _normalized_segments(segments, parent_turn_ids)
+        observed_at = max(segment.modified_at for segment in segments)
         state = self._logical_source_state(vendor, native_session_id)
         rollover = any(segment.rollover for segment in segments) or (
             state is not None
-            and state["snapshot_schema_version"] != _SNAPSHOT_SCHEMA_VERSION
+            and state["snapshot_schema_version"] != _SOURCE_SCHEMA_VERSION
         )
         local_epoch = (
             int(state["source_epoch"]) + 1
@@ -472,26 +750,33 @@ class LocalCollector:
                 file_identity=segment.file_identity,
                 committed_offset=segment.complete_offset,
                 segment_id=segment.segment_id,
-                snapshot_schema_version=_SNAPSHOT_SCHEMA_VERSION,
+                snapshot_schema_version=_SOURCE_SCHEMA_VERSION,
             )
         self._upsert_logical_source(
             vendor=vendor,
             native_session_id=native_session_id,
             source_id=source_id,
             source_epoch=local_epoch,
-            snapshot_schema_version=_SNAPSHOT_SCHEMA_VERSION,
+            snapshot_schema_version=_SOURCE_SCHEMA_VERSION,
         )
         if source_id is None:
             self._connection.commit()
-            return 0
+            return _CollectedSource(
+                artifact=artifact,
+                source_id=None,
+                source_epoch=local_epoch,
+                source_sequence=None,
+                content_sha256=None,
+                observed_at=observed_at,
+                queued=0,
+            )
         sequence = 0 if rollover else int(state["next_source_sequence"]) if state else 0
-        normalized = _normalized_segments(segments, source_id, parent_turn_ids)
         payload = {
-            "kind": _SNAPSHOT_SCHEMA_VERSION,
+            "kind": _SOURCE_SCHEMA_VERSION,
             "source_checkpoint": {
                 "segments": [segment.complete_offset for segment in segments]
             },
-            "session": normalized,
+            "shareable_digest": artifact.digest(),
         }
         content_sha256 = _sha256(canonical_json(payload).encode())
         if (
@@ -500,8 +785,16 @@ class LocalCollector:
             and state["last_digest"] == content_sha256
         ):
             self._connection.commit()
-            return 0
-        event_id = f"snapshot:{content_sha256}"
+            return _CollectedSource(
+                artifact=artifact,
+                source_id=source_id,
+                source_epoch=local_epoch,
+                source_sequence=max(int(state["next_source_sequence"]) - 1, 0),
+                content_sha256=content_sha256,
+                observed_at=observed_at,
+                queued=0,
+            )
+        event_id = f"checkpoint:{content_sha256}"
         request = ObservationRequest(
             workspace_id=self.identity.workspace_id,
             agent_id=self.identity.agent_id,
@@ -509,10 +802,10 @@ class LocalCollector:
             source_epoch=local_epoch,
             source_sequence=sequence,
             event_id=event_id,
-            schema_version=_SNAPSHOT_SCHEMA_VERSION,
+            schema_version=_SOURCE_SCHEMA_VERSION,
             parser_version=_PARSER_VERSION,
             content_sha256=content_sha256,
-            observed_at=max(segment.modified_at for segment in segments),
+            observed_at=observed_at,
             payload=payload,
         )
         idempotency_key = _sha256(
@@ -539,7 +832,7 @@ class LocalCollector:
             (
                 content_sha256,
                 sequence + 1,
-                _SNAPSHOT_SCHEMA_VERSION,
+                _SOURCE_SCHEMA_VERSION,
                 vendor,
                 native_session_id,
             ),
@@ -549,7 +842,15 @@ class LocalCollector:
             (content_sha256, sequence + 1, vendor, native_session_id),
         )
         self._connection.commit()
-        return 1
+        return _CollectedSource(
+            artifact=artifact,
+            source_id=source_id,
+            source_epoch=local_epoch,
+            source_sequence=sequence,
+            content_sha256=content_sha256,
+            observed_at=observed_at,
+            queued=1,
+        )
 
     def _heartbeat(self, remote: CollectorRemote) -> int | None:
         source_watermarks = {
@@ -726,6 +1027,13 @@ class LocalCollector:
               request_json text not null, state text not null, attempts integer not null,
               last_error text, created_at text not null
             );
+            create table if not exists artifact_outbox (
+              idempotency_key text primary key, project_id text not null,
+              publication_sequence integer not null, content_sha256 text not null,
+              request_json text not null, state text not null, attempts integer not null,
+              last_error text, created_at text not null,
+              unique(project_id, publication_sequence)
+            );
             create table if not exists remote_receipts (
               idempotency_key text primary key, receipt_id text not null, outcome text not null,
               committed_sequence integer, received_at text not null
@@ -766,9 +1074,9 @@ class LocalCollector:
                 request = ObservationRequest.model_validate_json(row["request_json"])
             except ValueError:
                 continue
-            if request.schema_version == "canonical_session_snapshot.v1":
+            if request.schema_version != _SOURCE_SCHEMA_VERSION:
                 self._connection.execute(
-                    "update observation_outbox set state = 'rejected', last_error = 'legacy_v1_not_published' where idempotency_key = ?",
+                    "update observation_outbox set state = 'rejected', last_error = 'superseded_schema_not_published' where idempotency_key = ?",
                     (row["idempotency_key"],),
                 )
 
@@ -804,17 +1112,17 @@ def _parent_started_turn_ids(
 
 def _normalized_segments(
     segments: list[_FencedCandidate],
-    source_id: UUID,
     parent_turn_ids: dict[UUID, set[str]],
-) -> dict[str, Any]:
+) -> ShareableGraphArtifact:
     ordered = sorted(segments, key=lambda segment: str(segment.segment_id))
-    # Opaque, durable segment URIs create collision-free canonical IDs without
-    # disclosing host paths. Resumed files are then coalesced as one session.
-    session = build_remote_compact_segments(
+    # The source path participates only in deterministic canonical IDs and is
+    # never serialized into the shareable artifact. Using the same identity
+    # input as local discovery keeps local and remote turn/item IDs identical.
+    artifact = build_shareable_segments(
         [
             (
                 segment.candidate,
-                Path(f"ct-source-{source_id}-segment-{segment.segment_id}"),
+                segment.candidate.path,
                 segment.records,
                 (
                     parent_turn_ids.get(segment.header.parent_session_id)
@@ -825,7 +1133,7 @@ def _normalized_segments(
             for segment in ordered
         ]
     )
-    return session.model_dump(mode="json")
+    return artifact
 
 
 def _source_key(

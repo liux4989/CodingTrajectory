@@ -187,13 +187,18 @@ def build_session_summary(
                 verification_kind = signals.verification_kind(item)
                 outcome = public_activity_outcome(signals.outcome(item))
                 if verification_kind is not None and outcome is not None:
+                    verification_label = (
+                        _stringify(item.command)
+                        if item.command
+                        else signals.label(item)
+                    )
                     verification.append(
                         _RankedSummaryItem(
                             timestamp=item.started_at,
                             structural_score=structural_score,
                             value={
                                 "label": truncate_text_preview(
-                                    _stringify(item.command),
+                                    verification_label,
                                     max_len=_SUMMARY_TEXT_LIMIT,
                                 ),
                                 "status": outcome,
@@ -225,7 +230,7 @@ def build_session_summary(
                 # Plan tools publish snapshots. Only the latest snapshot can
                 # describe the session's current explicit next actions.
                 next_actions.clear()
-                for action in _pending_plan_actions(item.input):
+                for action in _pending_plan_actions_for_item(item):
                     next_actions.append(
                         _RankedSummaryItem(
                             timestamp=item.started_at,
@@ -288,7 +293,7 @@ def build_session_summary(
     warnings = []
     if not content_complete:
         warnings.append(
-            "Some transcript bodies were not retained; the summary uses compact measurements and may omit text-derived facts."
+            "Some transcript bodies were not retained; the summary uses shareable measurements and bounded semantic previews and may omit text-derived facts."
         )
     return {
         "session_id": str(session.session_id),
@@ -481,7 +486,7 @@ class _ItemSignals:
         if item.item_id not in self._verification_kinds:
             self._verification_kinds[item.item_id] = classify_verification_command(
                 item.command
-            )
+            ) or _shareable_semantics(item).get("verification_kind")
         return self._verification_kinds[item.item_id]
 
     def outcome(self, item: Item) -> str:
@@ -548,6 +553,9 @@ class _ItemSignals:
         return item.kind
 
     def resolution_key(self, item: Item) -> str | None:
+        retained = _shareable_semantics(item).get("resolution_key")
+        if isinstance(retained, str) and retained:
+            return retained
         if isinstance(item, FileChangeItem):
             return f"file:{item.path or _path_from_value(item.input) or item.item_id}"
         if isinstance(item, CommandExecutionItem):
@@ -555,6 +563,26 @@ class _ItemSignals:
             return f"command:{identity}" if identity else f"command:{item.item_id}"
         tool_name = getattr(item, "tool_name", None)
         return f"tool:{tool_name}" if tool_name else None
+
+
+def _shareable_semantics(item: Item) -> dict[str, Any]:
+    vendor_data = item.vendor_data
+    value = (
+        vendor_data.get("shareable_semantics")
+        if isinstance(vendor_data, dict)
+        else None
+    )
+    return value if isinstance(value, dict) else {}
+
+
+def _pending_plan_actions_for_item(item: PlanItem) -> list[str]:
+    actions = _pending_plan_actions(item.input)
+    if actions:
+        return actions
+    retained = _shareable_semantics(item).get("plan_actions")
+    if not isinstance(retained, list):
+        return []
+    return [value for value in retained if isinstance(value, str) and value]
 
 
 def _recent_activity_cells(

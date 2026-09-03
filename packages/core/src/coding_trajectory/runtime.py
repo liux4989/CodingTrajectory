@@ -16,7 +16,7 @@ from coding_trajectory.control_plane import (
     ApplicationDispatcher,
     MethodAuthority,
 )
-from coding_trajectory.query import DocumentError, ResourceNotFoundError
+from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
 from coding_trajectory.service import (
     IndexCache,
     dispatch,
@@ -103,6 +103,32 @@ def _requires_session_component(method: str) -> bool:
     return method.startswith("graph.") or method == "session.tree"
 
 
+def _requires_local_evidence(method: str, params: dict[str, Any]) -> bool:
+    """Return whether a historical call must retain host-local bodies/events."""
+
+    return (
+        method in {"session.events", "session.search"}
+        or method == "session.items"
+        and bool(params.get("include_content"))
+    )
+
+
+def _shareable_store(store: DocumentStore) -> DocumentStore:
+    """Round-trip all graphs through the exact local/remote shared artifact."""
+
+    from coding_trajectory.control_plane.shareable import shareable_session_graph
+
+    return DocumentStore.from_session_graphs(
+        [
+            shareable_session_graph(graph)
+            for graph in sorted(
+                store.session_graphs.values(),
+                key=lambda graph: str(graph.root_session_id),
+            )
+        ]
+    )
+
+
 def _error_item(request_id: Any, method: Any, message: str) -> dict[str, Any]:
     return {
         "id": request_id,
@@ -124,6 +150,8 @@ class ServiceApiClient(Protocol):
 
 class HistoricalRepository(Protocol):
     """Supply graph stores from one local or remote historical authority."""
+
+    def pin_snapshot(self) -> int: ...
 
     def store_for(self, method: str, params: dict[str, Any]) -> tuple[Any, str]: ...
 
@@ -226,6 +254,7 @@ class ServiceRuntime:
         self.cache = IndexCache.load()
         self._stores: dict[tuple[Any, ...], tuple[Any, str]] = {}
         self._batch_store: tuple[Any, str] | None = None
+        self._batch_shareable_store: tuple[Any, str] | None = None
         overrides = dict(authority_handlers or {})
         self._transport_metadata = transport_metadata
         self._dispatcher = ApplicationDispatcher(
@@ -259,11 +288,12 @@ class ServiceRuntime:
                 and METHOD_AUTHORITIES[request["method"]] == MethodAuthority.HISTORICAL
                 for request in requests
             ):
-                self.historical_repository.store_for("project.sessions", {})
+                self.historical_repository.pin_snapshot()
             return
         ids = _entrypoint_ids(requests)
         if not ids:
             return
+        self._batch_shareable_store = None
         self._batch_store = resolve_store(
             {"session_ids": ids},
             global_scope=self.global_scope,
@@ -376,19 +406,35 @@ class ServiceRuntime:
         if self.historical_repository is not None:
             return self.historical_repository.store_for(method, params)
         if self._batch_store is not None and _entrypoint_ids_from_params(params):
-            return self._batch_store
+            if _requires_local_evidence(method, params):
+                return self._batch_store
+            if self._batch_shareable_store is None:
+                store, note = self._batch_store
+                self._batch_shareable_store = (_shareable_store(store), note)
+            return self._batch_shareable_store
         include_descendants = _requires_session_component(method)
-        key = _store_key(
-            params,
-            global_scope=self.global_scope,
-            include_descendants=include_descendants,
+        key = (
+            "local_evidence"
+            if _requires_local_evidence(method, params)
+            else "shareable",
+            *_store_key(
+                params,
+                global_scope=self.global_scope,
+                include_descendants=include_descendants,
+            ),
         )
         if key not in self._stores:
-            self._stores[key] = resolve_store(
+            store, note = resolve_store(
                 _discovery_params(params),
                 global_scope=self.global_scope,
                 current_dir=self.current_dir,
                 cache=self.cache,
                 include_descendants=include_descendants,
+            )
+            self._stores[key] = (
+                store
+                if _requires_local_evidence(method, params)
+                else _shareable_store(store),
+                note,
             )
         return self._stores[key]

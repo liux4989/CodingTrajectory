@@ -51,7 +51,7 @@ class RemoteRuntimeFactory:
             request["snapshot_sequence"] = snapshot_sequence
         pinned = client.call("ct_workspace_snapshot", request)
         sequence = pinned.get("snapshot_sequence")
-        if not isinstance(sequence, int) or sequence < 0:
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
             raise ValueError("remote workspace returned an invalid snapshot sequence")
         historical = SupabaseHistoricalRepository(
             client=client,
@@ -82,7 +82,7 @@ class RemoteRuntimeFactory:
             "snapshot_sequence": sequence,
             "source": "remote",
             "freshness": "authoritative",
-            "content_scope": "compact",
+            "content_scope": "shareable",
         }
         return ServiceRuntime(
             global_scope=True,

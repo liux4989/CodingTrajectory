@@ -1,94 +1,24 @@
-"""Supabase-backed projection worker and historical snapshot repository."""
+"""Supabase-backed historical snapshot repository and RPC transport."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import urllib.error
 import urllib.request
-from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ValidationError
 
-from coding_trajectory.control_plane.compact import validate_remote_compact_session
-from coding_trajectory.ingestion.common import canonical_json
-from coding_trajectory.ingestion.graph import assemble_project_session_graphs
-from coding_trajectory.ingestion.models import Session, SessionGraph
+from coding_trajectory.contracts import service_contract
+from coding_trajectory.control_plane.shareable import ShareableGraphArtifact
+from coding_trajectory.ingestion.common import canonical_json, format_datetime
+from coding_trajectory.ingestion.models import SessionGraph
 from coding_trajectory.query import DocumentError, DocumentStore
 
 
 class RemoteControlPlaneError(DocumentError):
     """A remote control-plane operation failed or violated its contract."""
-
-
-class ProjectionObservation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source_id: UUID
-    source_epoch: int = Field(gt=0)
-    source_sequence: int = Field(ge=0)
-    observed_at: datetime
-    payload: dict[str, Any]
-
-    def compact_session(self) -> Session:
-        """Validate the small v2 wrapper and return its canonical session."""
-
-        if self.payload.get("kind") != "canonical_session_snapshot.v2":
-            raise ValueError("projection observation is not a compact v2 snapshot")
-        checkpoint = self.payload.get("source_checkpoint")
-        if not isinstance(checkpoint, dict) or set(checkpoint) != {"segments"}:
-            raise TypeError("compact snapshot has no valid segmented checkpoint")
-        segments = checkpoint.get("segments")
-        if not (
-            isinstance(segments, list)
-            and bool(segments)
-            and all(
-                isinstance(offset, int)
-                and not isinstance(offset, bool)
-                and offset >= 0
-                for offset in segments
-            )
-        ):
-            raise TypeError("compact snapshot has no valid segmented checkpoint")
-        session = Session.model_validate(self.payload.get("session"))
-        validate_remote_compact_session(session)
-        return session
-
-
-class ProjectionClaim(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    workspace_id: UUID
-    outbox_id: int
-    project_id: UUID
-    workspace_sequence: int = Field(gt=0)
-    attempts: int = Field(gt=0)
-    observations: list[ProjectionObservation]
-
-
-class ProjectedArtifact(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    artifact_id: UUID
-    schema_version: Literal["canonical_session_graph.measurements.v1"] = (
-        "canonical_session_graph.measurements.v1"
-    )
-    payload: dict[str, Any]
-    content_sha256: str
-    source_vector: dict[str, dict[str, int]]
-    observed_at: datetime
-
-
-class ProjectionPublication(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    workspace_id: UUID
-    outbox_id: int
-    worker_id: str
-    project_id: UUID
-    artifacts: list[ProjectedArtifact]
 
 
 class SupabaseRpcClient:
@@ -134,111 +64,6 @@ class SupabaseRpcClient:
         return payload
 
 
-def project_claim(claim: ProjectionClaim, *, worker_id: str) -> ProjectionPublication:
-    """Deterministically assemble all source snapshots in a claimed project."""
-
-    sessions: dict[UUID, tuple[Session, list[ProjectionObservation]]] = {}
-    for observation in claim.observations:
-        session = observation.compact_session()
-        existing = sessions.get(session.session_id)
-        if existing is not None:
-            if existing[0] != session:
-                raise RemoteControlPlaneError(
-                    f"conflicting source snapshots for session {session.session_id}"
-                )
-            existing[1].append(observation)
-            continue
-        sessions[session.session_id] = (session, [observation])
-
-    graphs = assemble_project_session_graphs(
-        str(claim.project_id), [entry[0] for entry in sessions.values()]
-    )
-    artifacts = [
-        _projected_artifact(graph, sessions=sessions)
-        for graph in sorted(graphs, key=lambda item: str(item.root_session_id))
-    ]
-    return ProjectionPublication(
-        workspace_id=claim.workspace_id,
-        outbox_id=claim.outbox_id,
-        worker_id=worker_id,
-        project_id=claim.project_id,
-        artifacts=artifacts,
-    )
-
-
-def _projected_artifact(
-    graph: SessionGraph,
-    *,
-    sessions: dict[UUID, tuple[Session, list[ProjectionObservation]]],
-) -> ProjectedArtifact:
-    for edge in graph.edges:
-        if edge.metadata is not None and (
-            set(edge.metadata) != {"tool_name"}
-            or not isinstance(edge.metadata["tool_name"], str)
-            or not edge.metadata["tool_name"]
-        ):
-            raise RemoteControlPlaneError(
-                "remote graph edge retained metadata other than canonical tool_name"
-            )
-    payload = graph.model_dump(mode="json")
-    encoded = canonical_json(payload).encode()
-    observations = [
-        observation
-        for session in graph.sessions
-        for observation in sessions[session.session_id][1]
-    ]
-    return ProjectedArtifact(
-        artifact_id=graph.root_session_id,
-        payload=payload,
-        content_sha256=hashlib.sha256(encoded).hexdigest(),
-        source_vector={
-            str(item.source_id): {
-                "source_epoch": item.source_epoch,
-                "source_sequence": item.source_sequence,
-            }
-            for item in sorted(observations, key=lambda value: str(value.source_id))
-        },
-        observed_at=max(item.observed_at for item in observations),
-    )
-
-
-class ProjectionWorker:
-    """Lease and project one remote outbox job at a time."""
-
-    def __init__(self, *, client: SupabaseRpcClient, worker_id: str) -> None:
-        if not worker_id.strip():
-            raise ValueError("worker_id must not be empty")
-        self._client = client
-        self.worker_id = worker_id
-
-    def run_once(self, *, lease_seconds: int = 120) -> bool:
-        raw = self._client.call(
-            "ct_projector_claim",
-            {"worker_id": self.worker_id, "lease_seconds": lease_seconds},
-        )
-        if not raw:
-            return False
-        claim = ProjectionClaim.model_validate(raw)
-        try:
-            publication = project_claim(claim, worker_id=self.worker_id)
-            self._client.call(
-                "ct_projector_publish", publication.model_dump(mode="json")
-            )
-        except Exception as exc:
-            self._client.call(
-                "ct_projector_fail",
-                {
-                    "workspace_id": str(claim.workspace_id),
-                    "outbox_id": claim.outbox_id,
-                    "worker_id": self.worker_id,
-                    "error": str(exc)[:1000],
-                    "retry_seconds": min(3600, 2 ** min(10, claim.attempts)),
-                },
-            )
-            raise
-        return True
-
-
 class SupabaseHistoricalRepository:
     """Load one immutable workspace snapshot for existing historical handlers."""
 
@@ -252,14 +77,45 @@ class SupabaseHistoricalRepository:
         self._client = client
         self.workspace_id = workspace_id
         self.snapshot_sequence = snapshot_sequence
-        self._store: DocumentStore | None = None
+        self._stores: dict[str, DocumentStore] = {}
+
+    def pin_snapshot(self) -> int:
+        """Pin the workspace sequence without loading historical artifacts."""
+
+        if self.snapshot_sequence is None:
+            raw = self._client.call(
+                "ct_historical_snapshot",
+                {
+                    "workspace_id": str(self.workspace_id),
+                    "metadata_only": True,
+                },
+            )
+            sequence = raw.get("snapshot_sequence")
+            artifacts = raw.get("artifacts")
+            if (
+                isinstance(sequence, bool)
+                or not isinstance(sequence, int)
+                or sequence < 0
+                or artifacts != []
+            ):
+                raise RemoteControlPlaneError(
+                    "historical snapshot metadata response is invalid"
+                )
+            self.snapshot_sequence = sequence
+        return self.snapshot_sequence
 
     def store_for(
         self, method: str, params: dict[str, Any]
     ) -> tuple[DocumentStore, str]:
-        _require_compact_historical_scope(method, params)
-        if self._store is None:
-            request: dict[str, Any] = {"workspace_id": str(self.workspace_id)}
+        _require_shareable_historical_scope(method, params)
+        validated = service_contract(method).validate_request(params)
+        request = _historical_snapshot_request(
+            workspace_id=self.workspace_id,
+            method=method,
+            params=validated,
+        )
+        key = canonical_json(request)
+        if key not in self._stores:
             if self.snapshot_sequence is not None:
                 request["snapshot_sequence"] = self.snapshot_sequence
             raw = self._client.call("ct_historical_snapshot", request)
@@ -267,7 +123,11 @@ class SupabaseHistoricalRepository:
                 raise RemoteControlPlaneError("historical snapshot workspace mismatch")
             sequence = raw.get("snapshot_sequence")
             artifacts = raw.get("artifacts")
-            if not isinstance(sequence, int) or sequence < 0:
+            if (
+                isinstance(sequence, bool)
+                or not isinstance(sequence, int)
+                or sequence < 0
+            ):
                 raise RemoteControlPlaneError(
                     "historical snapshot has invalid sequence"
                 )
@@ -275,18 +135,15 @@ class SupabaseHistoricalRepository:
                 raise RemoteControlPlaneError(
                     "historical snapshot has no artifact list"
                 )
-            graphs = [
-                SessionGraph.model_validate(item["payload"])
-                for item in artifacts
-                if isinstance(item, dict) and "payload" in item
-            ]
-            if len(graphs) != len(artifacts):
-                raise RemoteControlPlaneError(
-                    "historical snapshot contains invalid artifacts"
-                )
+            graphs = [_snapshot_artifact_graph(item) for item in artifacts]
+            if (
+                self.snapshot_sequence is not None
+                and sequence != self.snapshot_sequence
+            ):
+                raise RemoteControlPlaneError("historical snapshot sequence mismatch")
             self.snapshot_sequence = sequence
-            self._store = DocumentStore.from_session_graphs(graphs)
-        return self._store, f"remote workspace snapshot {self.snapshot_sequence}"
+            self._stores[key] = DocumentStore.from_session_graphs(graphs)
+        return self._stores[key], f"remote workspace snapshot {self.snapshot_sequence}"
 
     def metadata(self) -> dict[str, Any] | None:
         if self.snapshot_sequence is None:
@@ -296,22 +153,63 @@ class SupabaseHistoricalRepository:
             "snapshot_sequence": self.snapshot_sequence,
             "source": "remote",
             "freshness": "authoritative",
-            "content_scope": "compact",
+            "content_scope": "shareable",
         }
 
 
-def _require_compact_historical_scope(method: str, params: dict[str, Any]) -> None:
-    """Reject historical requests whose contract requires omitted private content."""
+def _historical_snapshot_request(
+    *, workspace_id: UUID, method: str, params: dict[str, Any]
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "workspace_id": str(workspace_id),
+        "method": method,
+    }
+    resource_ids = [
+        value
+        for key in ("session_id", "root_session_id", "turn_id")
+        if isinstance((value := params.get(key)), str) and value
+    ]
+    item_ids = params.get("item_ids")
+    if isinstance(item_ids, list):
+        resource_ids.extend(value for value in item_ids if isinstance(value, str))
+    if resource_ids:
+        request["resource_ids"] = list(dict.fromkeys(resource_ids))
+    for key in ("project_name", "agent_vendor", "since_days"):
+        if key in params:
+            request[key] = params[key]
+    if "modified_since" in params:
+        request["modified_since"] = format_datetime(params["modified_since"])
+    return request
+
+
+def _snapshot_artifact_graph(value: Any) -> SessionGraph:
+    if not isinstance(value, dict) or "payload" not in value:
+        raise RemoteControlPlaneError("historical snapshot contains invalid artifacts")
+    try:
+        artifact = ShareableGraphArtifact.model_validate(value["payload"])
+    except ValidationError as exc:
+        raise RemoteControlPlaneError(
+            "historical snapshot artifact schema is invalid"
+        ) from exc
+    if str(value.get("artifact_id")) != str(artifact.graph.root_session_id):
+        raise RemoteControlPlaneError("historical snapshot artifact identity mismatch")
+    if value.get("content_sha256") != artifact.digest():
+        raise RemoteControlPlaneError("historical snapshot artifact digest mismatch")
+    return artifact.to_session_graph()
+
+
+def _require_shareable_historical_scope(method: str, params: dict[str, Any]) -> None:
+    """Reject requests whose contract requires host-local evidence bodies."""
 
     if method == "session.search":
         raise RemoteControlPlaneError(
-            "session.search is unavailable for compact remote snapshots because searchable content is not retained"
+            "session.search is local-only because searchable evidence is not retained remotely"
         )
     if method == "session.events":
         raise RemoteControlPlaneError(
-            "session.events is unavailable for compact remote snapshots because full event content is not retained"
+            "session.events is local-only because event evidence is not retained remotely"
         )
     if method == "session.items" and params.get("include_content"):
         raise RemoteControlPlaneError(
-            "session.items include_content=true is unavailable for compact remote snapshots"
+            "session.items include_content=true is local-only"
         )

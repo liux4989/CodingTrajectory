@@ -10,6 +10,7 @@ from enum import Enum
 from uuid import UUID
 
 from coding_trajectory.analysis.content_size import (
+    event_text_size,
     item_input_size,
     item_output_size,
     item_text_size,
@@ -481,7 +482,7 @@ def _user_input(
                 if prompt_index == 0
                 else "user_follow_up_requests"
             )
-            size = visible_text_size(text)
+            size = event_text_size(event)
             buckets[key].add(
                 tokens=size.tokens,
                 chars=size.chars,
