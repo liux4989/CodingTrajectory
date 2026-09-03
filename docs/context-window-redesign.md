@@ -1,6 +1,6 @@
 # Context Window UI Redesign
 
-**Status:** Proposed
+**Status:** Implemented
 
 **Reviewed:** 2026-09-03
 

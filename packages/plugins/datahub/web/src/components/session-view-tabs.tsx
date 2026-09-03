@@ -27,8 +27,7 @@ export function SessionViewTabs({ sessionId, active }: SessionViewTabsProps) {
               to="/sessions/$sessionId"
               params={{ sessionId }}
               search={{ view: tab.id }}
-              role="tab"
-              aria-selected={isActive}
+              aria-current={isActive ? "page" : undefined}
               className={cn(
                 "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-body-sm font-medium transition-colors",
                 isActive
