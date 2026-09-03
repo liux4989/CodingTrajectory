@@ -74,16 +74,6 @@ def build_flows(
             if summary is not None:
                 if summary.get("activity_hidden") is True:
                     continue
-                if summary.get("activity_kind") == "command":
-                    # TUI cells represent an executed command as a command even
-                    # when CT's deeper semantic classifier recognizes its shell
-                    # intent as read/search/list.  Keep that semantic evidence
-                    # in the item summary while the overview mirrors the cell.
-                    summary["name"] = RUN_COMMAND
-                    summary["optimization_profile"] = "activity:command"
-                    summary["description"] = summary.get("description") or summary.get(
-                        "command"
-                    )
                 summary.setdefault("item_id", str(item.item_id))
                 result.append({"type": "tool_call", **summary})
             continue

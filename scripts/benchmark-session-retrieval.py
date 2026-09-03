@@ -655,6 +655,16 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
         [first_successful_command, second_successful_command],
         flatten_commands=True,
     )
+    semantic_read_activity = build_overview_flows(
+        [
+            derived_static_item.model_copy(
+                update={
+                    "command": "sed -n '1,20p' docs/example.md",
+                }
+            )
+        ],
+        flatten_commands=True,
+    )[0]
     background_wait_item = CommandExecutionItem(
         session_id=fixture.root_session_id,
         turn_id=fixture.second_turn_id,
@@ -754,6 +764,11 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
                 and "count" not in entry
                 for entry in flattened_successful_commands
             )
+        ),
+        "shell_behavior_survives_command_transport": (
+            semantic_read_activity.get("tool") == "ReadFile"
+            and semantic_read_activity.get("path") == "docs/example.md"
+            and "cmd" not in semantic_read_activity
         ),
         "control_only_waits_stay_detail_only": (
             len(internal_wait_activity) == 1

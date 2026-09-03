@@ -18,6 +18,13 @@ their established grouping contracts. Compatible repeated non-command
 activities may still use the 32-item cell state machine when their details
 remain visible in the compact projection.
 
+The shell invocation remains transport evidence, not the display behavior.
+When the existing classifier can prove that a command reads a file, searches
+text, lists paths, or edits a file, the flat row retains that semantic action
+and target (`ReadFile: docs/example.md`) instead of being renamed to the generic
+`RunCommand`. Commands without a recognized behavior remain `RunCommand` with
+their bounded primary-command description.
+
 Codex TUI receives those native command lifecycles while the session is live.
 CT instead reconstructs a completed historical JSONL file, so it preserves a
 separate evidence and canonical-lifecycle layer before projecting the compact
