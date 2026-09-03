@@ -55,8 +55,9 @@ class TokenUsage(BaseModel):
     # re-reads by the full prompt instead of the uncached subset.
     uncached_input_tokens: int | None = None
     # Vendor-reported USD cost for this usage bucket (e.g. Pi's ``cost.total``
-    # from its jsonl logs). ``None`` when the vendor doesn't report cost, in
-    # which case downstream consumers fall back to the pricing SoT's estimate.
+    # from its jsonl logs). Downstream consumers prefer it over the pricing
+    # SoT's estimate, falling back to the estimate when it is ``None`` or 0
+    # with billable tokens (subscription plans report unmetered calls as 0).
     cost_usd: float | None = None
     total_confidence: Literal[
         "reported_consistent",

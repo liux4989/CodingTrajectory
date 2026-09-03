@@ -197,13 +197,16 @@ def pinned_pricing(artifact: PricingArtifact) -> Iterator[None]:
 
     original_rules = pricing._load_live_price_rules
     original_catalog = pricing._load_models_dev_cache
+    original_preindexed = pricing._preindexed_price_rules
     pricing._load_live_price_rules = lambda *, now: rules
     pricing._load_models_dev_cache = lambda *, now, refresh: None
+    pricing._preindexed_price_rules = lambda: {}
     try:
         yield
     finally:
         pricing._load_live_price_rules = original_rules
         pricing._load_models_dev_cache = original_catalog
+        pricing._preindexed_price_rules = original_preindexed
 
 
 def build_store(case: BaselineCase) -> DocumentStore:

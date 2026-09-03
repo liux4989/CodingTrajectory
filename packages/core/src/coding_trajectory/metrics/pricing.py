@@ -10,8 +10,12 @@ Context-window resolution tiers: the Claude Code alias suffix
 (e.g. ``glm-5.2[1m]`` -> 1_000_000), then a curated static map (offline-safe,
 used by ingestion), then the live https://models.dev catalog (24h disk cache,
 gated by ``CT_DISABLE_LIVE_PRICING`` so the ingestion hot path can stay
-offline). Pricing is always the live catalog (with the OpenAI standard rules
-as a static fallback) since static per-model rates are too coarse.
+offline). Pricing tiers: a curated static pre-index (offline-safe; canonical
+models.dev provider rates plus stable Anthropic list prices for models the
+catalog no longer lists), then the live models.dev catalog for the long tail,
+then the OpenAI standard rules. The pre-index also shields unscoped lookups
+from zero-priced catalog entries (coding-plan / free providers) that would
+otherwise floor a model's cost at 0.
 """
 
 from __future__ import annotations
@@ -42,6 +46,8 @@ OPENAI_STANDARD_PRICING_SOURCE = (
     "https://developers.openai.com/api/docs/pricing?latest-pricing=standard"
 )
 OPENAI_STANDARD_PRICING_EFFECTIVE_DATE = "2026-06-30"
+ANTHROPIC_PRICING_SOURCE = "https://www.anthropic.com/pricing"
+_PREINDEXED_PRICING_EFFECTIVE_DATE = "2026-09-03"
 _MODELS_DEV_TTL = timedelta(hours=24)
 _MODELS_DEV_TIMEOUT_SECONDS = 5
 _MODELS_DEV_CACHE_VERSION = 1
@@ -118,6 +124,9 @@ _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "glm-5.2": 1_000_000,
     # --- Kimi (Moonshot) ---
     "kimi-k2.7-code": 262_144,
+    "kimi-k3": 1_048_576,
+    "k3": 1_048_576,
+    "k3-256k": 262_144,
     # --- MiniMax ---
     "minimax-m3": 512_000,
 }
@@ -250,16 +259,25 @@ def cost_evidence_from_usage(
     Prefers a vendor-reported cost (``usage["cost_usd"]`` — e.g. Pi's
     ``cost.total`` from its jsonl logs) over the pricing catalog's estimate,
     so sessions whose logs carry real cost are billed at that cost rather
-    than an estimate. Returns ``None`` when neither is available (unknown
-    model + no reported cost), so callers omit cost rather than report a
-    misleading 0. Shared by ``analysis`` and ``composition``.
+    than an estimate. A reported cost of 0 with billable tokens is an
+    unmetered subscription call (e.g. a coding-plan provider logging
+    ``cost.total = 0``), not cost evidence: it falls through to the catalog
+    estimate when the model is priced, and stays reported 0 otherwise.
+    Returns ``None`` when neither is available (unknown model + no reported
+    cost), so callers omit cost rather than report a misleading 0. Shared by
+    ``analysis`` and ``composition``.
     """
     if not usage:
         return None
-    reported = usage.get("cost_usd")
-    if isinstance(reported, int | float) and not isinstance(reported, bool):
+    reported_raw = usage.get("cost_usd")
+    reported = (
+        round(float(reported_raw), 8)
+        if isinstance(reported_raw, int | float) and not isinstance(reported_raw, bool)
+        else None
+    )
+    if reported:
         return CostEvidenceFlat(
-            value_usd=round(float(reported), 8),
+            value_usd=reported,
             confidence="reported",
             source="session log",
         )
@@ -271,6 +289,12 @@ def cost_evidence_from_usage(
         or usage.get("completion_tokens", 0)
         or usage.get("reasoning_tokens", 0)
     ):
+        if reported is not None:
+            return CostEvidenceFlat(
+                value_usd=reported,
+                confidence="reported",
+                source="session log",
+            )
         return None
     estimate = _estimate_cost_from_ints(
         _usage_int(usage, "prompt_tokens", "input"),
@@ -283,6 +307,12 @@ def cost_evidence_from_usage(
         pricing_input_tokens=pricing_input_tokens,
     )
     if estimate is None:
+        if reported is not None:
+            return CostEvidenceFlat(
+                value_usd=reported,
+                confidence="reported",
+                source="session log",
+            )
         return None
     amount_usd, pricing_source, pricing_effective_date = estimate
     return CostEvidenceFlat(
@@ -308,6 +338,103 @@ class PriceRule:
     cache_creation_input_per_mtok_above_threshold: float | None = None
     pricing_source: str = MODELS_DEV_SOURCE
     pricing_effective_date: str = ""
+
+
+_PREINDEXED_PRICE_RULES: dict[str, PriceRule] = {}
+
+
+def _preindexed_price_rules() -> dict[str, PriceRule]:
+    """Curated static pricing, resolved before the live models.dev catalog.
+
+    Rates are the canonical-provider entries from https://models.dev
+    (``anthropic``, ``zai``, ``moonshotai``, ``minimax``; bedrock/vertex for
+    ``claude-opus-4-1``), plus stable Anthropic list prices for discontinued
+    models the catalog no longer carries. Keyed by normalized model id; the
+    live catalog covers everything else.
+    """
+    global _PREINDEXED_PRICE_RULES
+    if _PREINDEXED_PRICE_RULES:
+        return _PREINDEXED_PRICE_RULES
+    rules = {
+        rule.model: rule
+        for rule in [
+            # --- Claude (Anthropic) ---
+            _preindexed_rule("claude-opus-4-8", input_rate=5.0, cached_rate=0.5, cache_creation_rate=6.25, output_rate=25.0),
+            _preindexed_rule("claude-opus-4-7", input_rate=5.0, cached_rate=0.5, cache_creation_rate=6.25, output_rate=25.0),
+            _preindexed_rule("claude-opus-4-6", input_rate=5.0, cached_rate=0.5, cache_creation_rate=6.25, output_rate=25.0),
+            _preindexed_rule("claude-opus-4-5", input_rate=5.0, cached_rate=0.5, cache_creation_rate=6.25, output_rate=25.0),
+            _preindexed_rule("claude-opus-4-1", input_rate=15.0, cached_rate=1.5, cache_creation_rate=18.75, output_rate=75.0),
+            _preindexed_rule("claude-sonnet-5", input_rate=2.0, cached_rate=0.2, cache_creation_rate=2.5, output_rate=10.0),
+            _preindexed_rule("claude-sonnet-4-6", input_rate=3.0, cached_rate=0.3, cache_creation_rate=3.75, output_rate=15.0),
+            _preindexed_rule("claude-sonnet-4-5", input_rate=3.0, cached_rate=0.3, cache_creation_rate=3.75, output_rate=15.0),
+            _preindexed_rule("claude-fable-5", input_rate=10.0, cached_rate=1.0, cache_creation_rate=12.5, output_rate=50.0),
+            _preindexed_rule("claude-haiku-4-5", input_rate=1.0, cached_rate=0.1, cache_creation_rate=1.25, output_rate=5.0),
+            # Anthropic list prices; models.dev no longer lists these.
+            _preindexed_rule("claude-opus-4-0", input_rate=15.0, cached_rate=1.5, cache_creation_rate=18.75, output_rate=75.0, pricing_source=ANTHROPIC_PRICING_SOURCE),
+            _preindexed_rule("claude-sonnet-4-0", input_rate=3.0, cached_rate=0.3, cache_creation_rate=3.75, output_rate=15.0, pricing_source=ANTHROPIC_PRICING_SOURCE),
+            _preindexed_rule("claude-3-7-sonnet", input_rate=3.0, cached_rate=0.3, cache_creation_rate=3.75, output_rate=15.0, pricing_source=ANTHROPIC_PRICING_SOURCE),
+            _preindexed_rule("claude-3-5-sonnet", input_rate=3.0, cached_rate=0.3, cache_creation_rate=3.75, output_rate=15.0, pricing_source=ANTHROPIC_PRICING_SOURCE),
+            _preindexed_rule("claude-3-5-haiku", input_rate=0.8, cached_rate=0.08, cache_creation_rate=1.0, output_rate=4.0, pricing_source=ANTHROPIC_PRICING_SOURCE),
+            _preindexed_rule("claude-3-opus", input_rate=15.0, cached_rate=1.5, cache_creation_rate=18.75, output_rate=75.0, pricing_source=ANTHROPIC_PRICING_SOURCE),
+            _preindexed_rule("claude-3-haiku", input_rate=0.25, cached_rate=0.03, cache_creation_rate=0.3, output_rate=1.25, pricing_source=ANTHROPIC_PRICING_SOURCE),
+            # --- GLM (Zhipu) ---
+            _preindexed_rule("glm-5.2", input_rate=1.4, cached_rate=0.26, cache_creation_rate=0.0, output_rate=4.4),
+            _preindexed_rule("glm-5.1", input_rate=1.4, cached_rate=0.26, cache_creation_rate=0.0, output_rate=4.4),
+            _preindexed_rule("glm-5", input_rate=1.0, cached_rate=0.2, cache_creation_rate=0.0, output_rate=3.2),
+            _preindexed_rule("glm-4.7", input_rate=0.6, cached_rate=0.11, cache_creation_rate=0.0, output_rate=2.2),
+            _preindexed_rule("glm-4.6", input_rate=0.6, cached_rate=0.11, cache_creation_rate=0.0, output_rate=2.2),
+            _preindexed_rule("glm-4.5", input_rate=0.6, cached_rate=0.11, cache_creation_rate=0.0, output_rate=2.2),
+            # --- Kimi (Moonshot) ---
+            _preindexed_rule("kimi-k2.7-code", input_rate=0.95, cached_rate=0.19, output_rate=4.0),
+            # Kimi coding plan (api.kimi.com/coding): per the official plan
+            # docs, k3 (1M context) bills at the kimi-k3 API rate while
+            # k3-256k bills at half that rate.
+            _preindexed_rule("kimi-k3", input_rate=3.0, cached_rate=0.3, output_rate=15.0),
+            _preindexed_rule("k3", input_rate=3.0, cached_rate=0.3, cache_creation_rate=0.0, output_rate=15.0),
+            _preindexed_rule("k3-256k", input_rate=1.5, cached_rate=0.15, cache_creation_rate=0.0, output_rate=7.5),
+            # --- MiniMax (512k context tier from the ``minimax`` provider) ---
+            _preindexed_rule(
+                "minimax-m3",
+                input_rate=0.3,
+                cached_rate=0.06,
+                output_rate=1.2,
+                threshold_tokens=512_000,
+                input_rate_above_threshold=0.6,
+                cached_rate_above_threshold=0.12,
+                output_rate_above_threshold=2.4,
+            ),
+        ]
+    }
+    _PREINDEXED_PRICE_RULES = rules
+    return _PREINDEXED_PRICE_RULES
+
+
+def _preindexed_rule(
+    model: str,
+    *,
+    input_rate: float,
+    output_rate: float,
+    cached_rate: float | None = None,
+    cache_creation_rate: float | None = None,
+    threshold_tokens: int | None = None,
+    input_rate_above_threshold: float | None = None,
+    cached_rate_above_threshold: float | None = None,
+    output_rate_above_threshold: float | None = None,
+    pricing_source: str = MODELS_DEV_SOURCE,
+) -> PriceRule:
+    return PriceRule(
+        model=model,
+        input_per_mtok=input_rate,
+        output_per_mtok=output_rate,
+        cached_input_per_mtok=cached_rate,
+        cache_creation_input_per_mtok=cache_creation_rate,
+        threshold_tokens=threshold_tokens,
+        input_per_mtok_above_threshold=input_rate_above_threshold,
+        output_per_mtok_above_threshold=output_rate_above_threshold,
+        cached_input_per_mtok_above_threshold=cached_rate_above_threshold,
+        pricing_source=pricing_source,
+        pricing_effective_date=_PREINDEXED_PRICING_EFFECTIVE_DATE,
+    )
 
 
 class ModelsDevContextOver200KCost(BaseModel):
@@ -450,12 +577,19 @@ def _threshold_rate(
 
 
 def _uses_net_input_convention(provider: str | None, model: str | None) -> bool:
-    """Anthropic reports cached/cache-creation tokens *on top of* the input
-    total; OpenAI/Codex report input net of cache. Drives whether the input
-    bucket is split before pricing. Single copy — ``analysis.py`` reuses it.
+    """Anthropic-style APIs report ``input`` net of cache (cached/creation are
+    separate buckets); OpenAI-style report input gross of cache. Drives whether
+    the input bucket is split before pricing. Single copy — ``analysis.py``
+    reuses it. ``kimi-coding`` serves the anthropic-messages API, and Pi
+    normalizes its usage as ANTHROPIC_UNCACHED.
     """
     if provider:
-        return provider.strip().lower() in {"anthropic", "claude", "claude-code"}
+        return provider.strip().lower() in {
+            "anthropic",
+            "claude",
+            "claude-code",
+            "kimi-coding",
+        }
     return "claude" in (model or "").lower()
 
 
@@ -629,8 +763,16 @@ def _catalog_to_price_rules(
             if rule is None:
                 continue
             rules[_provider_model_key(provider_id, rule.model)] = rule
-            rules.setdefault(rule.model, rule)
+            existing = rules.get(rule.model)
+            if existing is None or (not _is_priced(existing) and _is_priced(rule)):
+                # Unscoped fallback: prefer a priced entry over zero-priced
+                # coding-plan / free providers so cost never floors at 0.
+                rules[rule.model] = rule
     return rules
+
+
+def _is_priced(rule: PriceRule) -> bool:
+    return rule.input_per_mtok > 0 or rule.output_per_mtok > 0
 
 
 def _model_to_price_rule(
@@ -708,8 +850,12 @@ def _resolve_price_rule(
         if cached is not _PRICING_RULE_UNSET:
             return cached
 
-    rules = _load_live_price_rules(now=now or datetime.now(UTC))
-    rule = _lookup_price_rule(rules, provider=provider, model=normalized_model)
+    rule = _lookup_price_rule(
+        _preindexed_price_rules(), provider=provider, model=normalized_model
+    )
+    if rule is None:
+        rules = _load_live_price_rules(now=now or datetime.now(UTC))
+        rule = _lookup_price_rule(rules, provider=provider, model=normalized_model)
     if rule is None:
         rule = _lookup_price_rule(
             _openai_standard_price_rules(),
