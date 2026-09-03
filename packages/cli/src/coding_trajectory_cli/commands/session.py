@@ -19,6 +19,7 @@ from coding_trajectory_cli._shared import (
     format_tokens,
     one_line,
     positive_int,
+    render_usage_buckets,
     render_usage_line,
 )
 
@@ -615,7 +616,7 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         "",
         "```",
         f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
-        f"{'Billed Unc/Cache/Create/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
+        f"{'Billed In/Cache/Write/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
         f"{'Share':>8}",
     ]
 
@@ -719,7 +720,7 @@ def _render_session_stats_sections(
                 "",
                 "```",
                 f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
-                f"{'Billed Unc/Cache/Create/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
+                f"{'Billed In/Cache/Write/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
                 f"{'Share':>8}",
             ]
         )
@@ -973,22 +974,7 @@ def _render_token_cost_summary(
     parts: list[str] = []
     if requests is not None:
         parts.append(f"requests {requests}")
-
-    input_text = f"input {format_tokens(usage.get('uncached_prompt_tokens'))}"
-    cached = usage.get("cached_prompt_tokens")
-    cache_write = usage.get("cache_write_tokens")
-    if cached:
-        input_text += f" (+{format_tokens(cached)} cached)"
-    if cache_write:
-        input_text += f" (+{format_tokens(cache_write)} cache write)"
-    parts.append(input_text)
-
-    output_text = f"output {format_tokens(usage.get('completion_tokens'))}"
-    reasoning = usage.get("reasoning_tokens")
-    if reasoning:
-        output_text += f" (+{format_tokens(reasoning)} reasoning)"
-    parts.append(output_text)
-    parts.append(f"processed {format_tokens(usage.get('processed_tokens'))}")
+    parts.append(render_usage_buckets(usage))
 
     if cost.get("value_usd") is not None:
         confidence = cost.get("confidence", "estimated")

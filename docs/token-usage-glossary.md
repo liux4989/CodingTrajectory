@@ -27,6 +27,36 @@ reasoning tokens separately from the provider total.
 Cost should be computed from component buckets or provider-reported cost, not
 from one total multiplied by one rate.
 
+## Display labels
+
+CLI markdown output renders the glossary fields under one concise label set
+(see `ct session usage`). Payload field names stay unchanged; only the human
+labels are fixed:
+
+| Glossary field | Display label |
+| --- | --- |
+| `prompt_tokens` | `prompt` |
+| `uncached_prompt_tokens` | `input` |
+| `cached_prompt_tokens` | `cached` |
+| `cache_write_tokens` | `cache write` |
+| `completion_tokens` | `output` |
+| `reasoning_tokens` | `reasoning` |
+| `reported_total_tokens` | `reported` |
+| `processed_tokens` | `processed` |
+| `prompt_completion_tokens` | `prompt+completion` |
+
+The compact bucket line shows the priced buckets with zero-valued cache and
+reasoning buckets omitted, then the processed total:
+
+```text
+input 235.1k (+13.2m cached)  output 39.9k (+15.0k reasoning)  processed 13.5m
+```
+
+Audit lines (for example the billed-token line in `ct session stats`) append
+the derived totals `reported` and `prompt+completion` when present. The
+per-category allocation column in `ct session stats` renders the same buckets
+as a slash tuple in label order: `input/cached/cache write/output/reasoning`.
+
 ## Request pricing
 
 `session.request_usage` is the pricing authority. Each provider request is

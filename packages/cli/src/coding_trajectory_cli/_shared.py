@@ -993,18 +993,42 @@ def evidence_to_pricing(evidence: Any) -> dict[str, Any] | None:
     )
 
 
+def render_usage_buckets(usage: dict[str, Any]) -> str:
+    """Compact bucket summary using the glossary display labels.
+
+    Single source for the ``input (+cached) (+cache write)  output
+    (+reasoning)  processed`` line shared by ``session usage`` summaries and
+    the billed-token audit lines. See docs/token-usage-glossary.md for the
+    field-to-label mapping.
+    """
+    uncached = usage.get("uncached_prompt_tokens")
+    if uncached is None:
+        uncached = usage.get("prompt_tokens")
+    input_text = f"input {format_tokens(uncached)}"
+    cached = usage.get("cached_prompt_tokens")
+    cache_write = usage.get("cache_write_tokens")
+    if cached:
+        input_text += f" (+{format_tokens(cached)} cached)"
+    if cache_write:
+        input_text += f" (+{format_tokens(cache_write)} cache write)"
+
+    output_text = f"output {format_tokens(usage.get('completion_tokens'))}"
+    reasoning = usage.get("reasoning_tokens")
+    if reasoning:
+        output_text += f" (+{format_tokens(reasoning)} reasoning)"
+
+    return f"{input_text}  {output_text}  processed {format_tokens(usage.get('processed_tokens'))}"
+
+
 def render_usage_line(usage: dict[str, Any]) -> str:
-    parts = [
-        f"prompt {format_tokens(usage.get('prompt_tokens'))}",
-        f"uncached {format_tokens(usage.get('uncached_prompt_tokens'))}",
-        f"cached {format_tokens(usage.get('cached_prompt_tokens'))}",
-        f"cache write {format_tokens(usage.get('cache_write_tokens'))}",
-        f"completion {format_tokens(usage.get('completion_tokens'))}",
-        f"reasoning {format_tokens(usage.get('reasoning_tokens'))}",
-        f"reported {format_tokens(usage.get('reported_total_tokens'))}",
-        f"processed {format_tokens(usage.get('processed_tokens'))}",
-        f"prompt+completion {format_tokens(usage.get('prompt_completion_tokens'))}",
-    ]
+    """Bucket summary plus derived totals (``reported``, ``prompt+completion``)."""
+    parts = [render_usage_buckets(usage)]
+    reported = usage.get("reported_total_tokens")
+    if reported:
+        parts.append(f"reported {format_tokens(reported)}")
+    prompt_completion = usage.get("prompt_completion_tokens")
+    if prompt_completion:
+        parts.append(f"prompt+completion {format_tokens(prompt_completion)}")
     if "cost_usd" in usage:
         parts.append(f"cost {format_cost(usage.get('cost_usd'))}")
     return "  ".join(parts)
