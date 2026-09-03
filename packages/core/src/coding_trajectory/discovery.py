@@ -200,14 +200,14 @@ def _coalesce_session_segments(
                 session=(
                     ordered[0][1]
                     if len(ordered) == 1
-                    else _merge_session_segments(ordered)
+                    else merge_session_segments(ordered)
                 ),
             )
         )
     return coalesced
 
 
-def _merge_session_segments(segments: list[tuple[Path, Session]]) -> Session:
+def merge_session_segments(segments: list[tuple[Path, Session]]) -> Session:
     """Combine consecutive source segments without inventing a new identity."""
 
     ordered_sessions = [session for _path, session in segments]

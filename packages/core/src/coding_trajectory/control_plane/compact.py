@@ -7,8 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from coding_trajectory.analysis.measurements import attach_measurements
-from coding_trajectory.discovery import DiscoveryCandidate, stabilize_session
-from coding_trajectory.ingestion.graph import build_session_graph
+from coding_trajectory.discovery import (
+    DiscoveryCandidate,
+    merge_session_segments,
+    stabilize_session,
+)
+from coding_trajectory.ingestion.graph import (
+    build_session_graph,
+    canonical_spawn_origins,
+)
 from coding_trajectory.ingestion.models import (
     ClaudeCodeExtensions,
     CodexExtensions,
@@ -27,15 +34,52 @@ def build_remote_compact_session(
     *,
     source: Path,
     records: Iterable[dict[str, Any]],
+    parent_started_turn_ids: set[str] | None = None,
 ) -> Session:
     """Build measurements retention and attach body-derived facts once."""
 
-    materialized = list(records)
-    full = candidate.adapter_cls().build_canonical_session(source, materialized)
-    full = stabilize_session(full, vendor=candidate.vendor, source=source)
-    compact = candidate.adapter_cls().build_canonical_session(
-        source, materialized, retention="measurements"
+    return build_remote_compact_segments(
+        [(candidate, source, records, parent_started_turn_ids)]
     )
+
+
+def build_remote_compact_segments(
+    segments: list[
+        tuple[DiscoveryCandidate, Path, Iterable[dict[str, Any]], set[str] | None]
+    ],
+) -> Session:
+    """Build and coalesce fenced physical segments into one logical snapshot."""
+
+    full_segments: list[tuple[Path, Session]] = []
+    compact_segments: list[tuple[Path, Session]] = []
+    for candidate, source, records, parent_started_turn_ids in segments:
+        materialized = list(records)
+        full = candidate.adapter_cls().build_canonical_session(
+            source,
+            materialized,
+            parent_started_turn_ids=parent_started_turn_ids,
+        )
+        full = stabilize_session(full, vendor=candidate.vendor, source=source)
+        compact = candidate.adapter_cls().build_canonical_session(
+            source,
+            materialized,
+            parent_started_turn_ids=parent_started_turn_ids,
+            retention="measurements",
+        )
+        full_segments.append((source, full))
+        compact_segments.append((source, compact))
+
+    full = (
+        full_segments[0][1]
+        if len(full_segments) == 1
+        else merge_session_segments(full_segments)
+    )
+    compact = (
+        compact_segments[0][1]
+        if len(compact_segments) == 1
+        else merge_session_segments(compact_segments)
+    )
+    compact = _attach_canonical_spawn_origins(compact, full)
     graph = build_session_graph(
         root_session_id=compact.session_id,
         project_identifier="remote-compact-source",
@@ -46,6 +90,17 @@ def build_remote_compact_session(
     compact = scrub_remote_session(compact)
     validate_remote_compact_session(compact)
     return compact
+
+
+def _attach_canonical_spawn_origins(compact: Session, full: Session) -> Session:
+    origins = canonical_spawn_origins(full)
+    extensions = compact.extensions
+    if not origins or extensions is None or extensions.codex is None:
+        return compact
+    codex = extensions.codex.model_copy(update={"canonical_spawn_origins": origins})
+    return compact.model_copy(
+        update={"extensions": extensions.model_copy(update={"codex": codex})}
+    )
 
 
 def scrub_remote_session(session: Session) -> Session:
@@ -230,9 +285,7 @@ def _scrub_extensions(session: Session) -> VendorExtensions | None:
             forked_from_id=codex.forked_from_id,
             spawn_parent_thread_id=codex.spawn_parent_thread_id,
             spawn_depth=codex.spawn_depth,
-            spawn_links={
-                child_session_id: "" for child_session_id in codex.spawn_links
-            },
+            canonical_spawn_origins=codex.canonical_spawn_origins,
         )
     if claude is None and codex is None:
         return None

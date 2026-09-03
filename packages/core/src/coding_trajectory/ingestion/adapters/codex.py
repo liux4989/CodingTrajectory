@@ -754,8 +754,11 @@ class CodexAdapter(BaseAdapter):
         return self._build_session(source, transcript, state, retention=retention)
 
     def scan_started_turn_ids(self, source: Path) -> set[str] | None:
+        return self.scan_started_turn_ids_records(self._iter_records(source))
+
+    def scan_started_turn_ids_records(self, records: Iterable[dict]) -> set[str] | None:
         started: set[str] = set()
-        for record in self._iter_records(source):
+        for record in records:
             payload = record.get("payload") or {}
             if payload.get("type") == "task_started" and isinstance(
                 payload.get("turn_id"), str
@@ -763,10 +766,18 @@ class CodexAdapter(BaseAdapter):
                 started.add(payload["turn_id"])
         return started
 
+    def scan_identity_records(
+        self, source: Path, records: Iterable[dict]
+    ) -> SessionHeader | None:
+        return self._identity_from_records(records)
+
     def scan_identity(self, source: Path) -> SessionHeader | None:
         """Read the leading ``session_meta`` without searching for a title."""
 
-        for record in self._iter_records(source):
+        return self._identity_from_records(self._iter_records(source))
+
+    def _identity_from_records(self, records: Iterable[dict]) -> SessionHeader | None:
+        for record in records:
             if record.get("type") != "session_meta":
                 continue
             meta = record.get("payload") or {}

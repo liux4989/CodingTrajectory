@@ -12,6 +12,7 @@ from coding_trajectory.ingestion.common import (
 )
 from coding_trajectory.ingestion.indexes import index_event_owners
 from coding_trajectory.ingestion.models import (
+    CanonicalSpawnOrigin,
     Event,
     EventType,
     Item,
@@ -173,6 +174,7 @@ class _EdgeOrigin:
 
 @dataclass(frozen=True, slots=True)
 class _EdgeOriginIndex:
+    canonical_origins_by_child_id: dict[str, _EdgeOrigin]
     spawn_call_id_by_child_id: dict[str, str]
     origins_by_call_id: dict[str, _EdgeOrigin]
     latest_tool_origin: _EdgeOrigin | None
@@ -183,6 +185,19 @@ class _EdgeOriginIndex:
         extensions = session.extensions
         spawn_links = (
             dict(extensions.codex.spawn_links)
+            if extensions and extensions.codex
+            else {}
+        )
+        canonical_origins = (
+            {
+                child_id: _EdgeOrigin(
+                    event_id=origin.event_id,
+                    turn_id=origin.turn_id,
+                    item_id=origin.item_id,
+                    tool_name=origin.tool_name,
+                )
+                for child_id, origin in extensions.codex.canonical_spawn_origins.items()
+            }
             if extensions and extensions.codex
             else {}
         )
@@ -203,6 +218,7 @@ class _EdgeOriginIndex:
 
         if latest_tool_event is None:
             return cls(
+                canonical_origins_by_child_id=canonical_origins,
                 spawn_call_id_by_child_id=spawn_links,
                 origins_by_call_id={},
                 latest_tool_origin=None,
@@ -210,6 +226,7 @@ class _EdgeOriginIndex:
 
         item_index = index_event_owners(session.turns)
         return cls(
+            canonical_origins_by_child_id=canonical_origins,
             spawn_call_id_by_child_id=spawn_links,
             origins_by_call_id={
                 call_id: _edge_origin(event, item_index)
@@ -220,6 +237,9 @@ class _EdgeOriginIndex:
 
     def origin_for(self, child_session_id: UUID) -> _EdgeOrigin | None:
         """Resolve a child's spawn origin, falling back to the latest tool call."""
+        canonical = self.canonical_origins_by_child_id.get(str(child_session_id))
+        if canonical is not None:
+            return canonical
         spawn_call_id = self.spawn_call_id_by_child_id.get(str(child_session_id))
         if spawn_call_id is not None:
             origin = self.origins_by_call_id.get(spawn_call_id)
@@ -227,6 +247,23 @@ class _EdgeOriginIndex:
                 return origin
 
         return self.latest_tool_origin
+
+
+def canonical_spawn_origins(session: Session) -> dict[str, CanonicalSpawnOrigin]:
+    """Resolve private provider call IDs into portable canonical edge origins."""
+
+    index = _EdgeOriginIndex.from_session(session)
+    origins: dict[str, CanonicalSpawnOrigin] = {}
+    for child_id in index.spawn_call_id_by_child_id:
+        origin = index.origin_for(UUID(child_id))
+        if origin is not None:
+            origins[child_id] = CanonicalSpawnOrigin(
+                event_id=origin.event_id,
+                turn_id=origin.turn_id,
+                item_id=origin.item_id,
+                tool_name=origin.tool_name,
+            )
+    return origins
 
 
 def _build_edge(

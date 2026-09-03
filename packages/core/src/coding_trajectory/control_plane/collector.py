@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, Self
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from coding_trajectory.contracts import LivingChange, LivingSessionsChange
 from coding_trajectory.control_plane.collector_protocol import (
@@ -32,11 +32,12 @@ from coding_trajectory.control_plane.collector_protocol import (
     SourceRegistrationRequest,
     SourceRegistrationResponse,
 )
-from coding_trajectory.control_plane.compact import build_remote_compact_session
+from coding_trajectory.control_plane.compact import build_remote_compact_segments
 from coding_trajectory.discovery import (
     DiscoveryCandidate,
     discover_source_candidates,
 )
+from coding_trajectory.ingestion.adapters.base import SessionHeader
 from coding_trajectory.ingestion.common import canonical_json, last_complete_line_offset
 
 _PARSER_VERSION = "ct-local-collector-v2"
@@ -180,6 +181,18 @@ class CollectorRunResult:
     heartbeat_sequence: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class _FencedCandidate:
+    candidate: DiscoveryCandidate
+    header: SessionHeader
+    records: list[dict[str, Any]]
+    complete_offset: int
+    file_identity: str
+    modified_at: datetime
+    segment_id: UUID
+    rollover: bool
+
+
 class LocalCollector:
     """Collect complete JSONL prefixes into a durable, retry-safe local outbox."""
 
@@ -224,12 +237,62 @@ class LocalCollector:
             agent_vendor=agent_vendor,
             since_days=since_days,
         )
-        queued = 0
+        fenced: list[_FencedCandidate] = []
         for candidate in candidates:
             try:
-                queued += self._collect_candidate(candidate, remote=remote)
+                source = candidate.path
+                stat = source.stat()
+                complete_offset, complete_bytes = _complete_prefix(source, stat.st_size)
+                if complete_offset == 0:
+                    continue
+                records = [
+                    json.loads(line)
+                    for line in complete_bytes.splitlines()
+                    if line.strip()
+                ]
+                header = candidate.adapter_cls().scan_identity_records(source, records)
+                if header is None:
+                    continue
+                state = self._source_state(source)
+                file_identity = f"{stat.st_dev}:{stat.st_ino}"
+                rollover = state is not None and (
+                    state["file_identity"] != file_identity
+                    or complete_offset < state["committed_offset"]
+                )
+                fenced.append(
+                    _FencedCandidate(
+                        candidate=candidate,
+                        header=header,
+                        records=records,
+                        complete_offset=complete_offset,
+                        file_identity=file_identity,
+                        modified_at=datetime.fromtimestamp(
+                            stat.st_mtime_ns / 1_000_000_000, tz=UTC
+                        ),
+                        segment_id=(
+                            UUID(state["segment_id"])
+                            if state is not None and state["segment_id"]
+                            else uuid4()
+                        ),
+                        rollover=rollover,
+                    )
+                )
             except (CollectorRemoteError, OSError, ValueError, json.JSONDecodeError):
                 # A changing or malformed local source is retried on the next pass.
+                continue
+        parent_turn_ids = _parent_started_turn_ids(fenced)
+        grouped: dict[tuple[str, UUID], list[_FencedCandidate]] = {}
+        for source in fenced:
+            grouped.setdefault(
+                (source.candidate.vendor.value, source.header.session_id), []
+            ).append(source)
+        queued = 0
+        for group in grouped.values():
+            try:
+                queued += self._collect_segments(
+                    group, parent_turn_ids=parent_turn_ids, remote=remote
+                )
+            except (CollectorRemoteError, OSError, ValueError, json.JSONDecodeError):
                 continue
         accepted, rejected = self.flush(remote) if remote is not None else (0, 0)
         heartbeat_sequence: int | None = None
@@ -355,26 +418,21 @@ class LocalCollector:
         committed = self._flush_living(remote)
         return len(queued_sequences & committed.keys())
 
-    def _collect_candidate(
-        self, candidate: DiscoveryCandidate, *, remote: CollectorRemote | None
+    def _collect_segments(
+        self,
+        segments: list[_FencedCandidate],
+        *,
+        parent_turn_ids: dict[UUID, set[str]],
+        remote: CollectorRemote | None,
     ) -> int:
-        source = candidate.path
-        header = candidate.adapter_cls().scan_identity(source)
-        if header is None:
-            return 0
-        stat = source.stat()
-        complete_offset, complete_bytes = _complete_prefix(source, stat.st_size)
-        if complete_offset == 0:
-            return 0
-        file_identity = f"{stat.st_dev}:{stat.st_ino}"
-        state = self._source_state(source)
-        schema_changed = state is not None and (
-            state["snapshot_schema_version"] != _SNAPSHOT_SCHEMA_VERSION
-        )
-        rollover = state is not None and (
-            state["file_identity"] != file_identity
-            or complete_offset < state["committed_offset"]
-            or schema_changed
+        segments = sorted(segments, key=lambda segment: str(segment.segment_id))
+        first = segments[0]
+        vendor = first.candidate.vendor.value
+        native_session_id = str(first.header.session_id)
+        state = self._logical_source_state(vendor, native_session_id)
+        rollover = any(segment.rollover for segment in segments) or (
+            state is not None
+            and state["snapshot_schema_version"] != _SNAPSHOT_SCHEMA_VERSION
         )
         local_epoch = (
             int(state["source_epoch"]) + 1
@@ -389,45 +447,60 @@ class LocalCollector:
                 SourceRegistrationRequest(
                     workspace_id=self.identity.workspace_id,
                     agent_id=self.identity.agent_id,
-                    vendor=candidate.vendor.value,
-                    native_session_id=str(header.session_id),
+                    vendor=vendor,
+                    native_session_id=native_session_id,
                     project_id=self.identity.project_id,
                     source_epoch=local_epoch,
                     rollover=rollover,
                 ),
                 idempotency_key=_source_key(
                     self.identity,
-                    candidate.vendor.value,
-                    str(header.session_id),
+                    vendor,
+                    native_session_id,
                     local_epoch,
                 ),
             )
             source_id = registration.source_id
             local_epoch = registration.source_epoch
-        self._upsert_source(
-            source=source,
-            vendor=candidate.vendor.value,
-            native_session_id=str(header.session_id),
+        for segment in segments:
+            self._upsert_source(
+                source=segment.candidate.path,
+                vendor=vendor,
+                native_session_id=native_session_id,
+                source_id=source_id,
+                source_epoch=local_epoch,
+                file_identity=segment.file_identity,
+                committed_offset=segment.complete_offset,
+                segment_id=segment.segment_id,
+                snapshot_schema_version=_SNAPSHOT_SCHEMA_VERSION,
+            )
+        self._upsert_logical_source(
+            vendor=vendor,
+            native_session_id=native_session_id,
             source_id=source_id,
             source_epoch=local_epoch,
-            file_identity=file_identity,
-            committed_offset=complete_offset,
             snapshot_schema_version=_SNAPSHOT_SCHEMA_VERSION,
         )
-        digest = _sha256(complete_bytes)
-        if source_id is None or (
-            state is not None and not rollover and state["last_digest"] == digest
-        ):
+        if source_id is None:
             self._connection.commit()
             return 0
         sequence = 0 if rollover else int(state["next_source_sequence"]) if state else 0
-        normalized = _normalized_session(candidate, source_id, complete_bytes)
+        normalized = _normalized_segments(segments, source_id, parent_turn_ids)
         payload = {
             "kind": _SNAPSHOT_SCHEMA_VERSION,
-            "source_checkpoint": {"committed_offset": complete_offset},
+            "source_checkpoint": {
+                "segments": [segment.complete_offset for segment in segments]
+            },
             "session": normalized,
         }
         content_sha256 = _sha256(canonical_json(payload).encode())
+        if (
+            state is not None
+            and not rollover
+            and state["last_digest"] == content_sha256
+        ):
+            self._connection.commit()
+            return 0
         event_id = f"snapshot:{content_sha256}"
         request = ObservationRequest(
             workspace_id=self.identity.workspace_id,
@@ -439,9 +512,7 @@ class LocalCollector:
             schema_version=_SNAPSHOT_SCHEMA_VERSION,
             parser_version=_PARSER_VERSION,
             content_sha256=content_sha256,
-            observed_at=datetime.fromtimestamp(
-                stat.st_mtime_ns / 1_000_000_000, tz=UTC
-            ),
+            observed_at=max(segment.modified_at for segment in segments),
             payload=payload,
         )
         idempotency_key = _sha256(
@@ -464,8 +535,18 @@ class LocalCollector:
             ),
         )
         self._connection.execute(
-            "update registered_sources set last_digest = ?, next_source_sequence = ?, snapshot_schema_version = ? where path = ?",
-            (digest, sequence + 1, _SNAPSHOT_SCHEMA_VERSION, str(source)),
+            "update logical_sources set last_digest = ?, next_source_sequence = ?, snapshot_schema_version = ? where vendor = ? and native_session_id = ?",
+            (
+                content_sha256,
+                sequence + 1,
+                _SNAPSHOT_SCHEMA_VERSION,
+                vendor,
+                native_session_id,
+            ),
+        )
+        self._connection.execute(
+            "update registered_sources set last_digest = ?, next_source_sequence = ? where vendor = ? and native_session_id = ?",
+            (content_sha256, sequence + 1, vendor, native_session_id),
         )
         self._connection.commit()
         return 1
@@ -474,7 +555,7 @@ class LocalCollector:
         source_watermarks = {
             row["source_id"]: int(row["next_source_sequence"]) - 1
             for row in self._connection.execute(
-                "select source_id, next_source_sequence from registered_sources where source_id is not null"
+                "select source_id, next_source_sequence from logical_sources where source_id is not null"
             )
         }
         pending = self._connection.execute(
@@ -583,12 +664,30 @@ class LocalCollector:
             "select * from registered_sources where path = ?", (str(source),)
         ).fetchone()
 
+    def _logical_source_state(
+        self, vendor: str, native_session_id: str
+    ) -> sqlite3.Row | None:
+        return self._connection.execute(
+            "select * from logical_sources where vendor = ? and native_session_id = ?",
+            (vendor, native_session_id),
+        ).fetchone()
+
     def _upsert_source(self, **values: Any) -> None:
         self._connection.execute(
-            "insert into registered_sources (path, vendor, native_session_id, source_id, source_epoch, file_identity, committed_offset, next_source_sequence, snapshot_schema_version) values (:path, :vendor, :native_session_id, :source_id, :source_epoch, :file_identity, :committed_offset, 0, :snapshot_schema_version) on conflict(path) do update set vendor = excluded.vendor, native_session_id = excluded.native_session_id, source_id = excluded.source_id, source_epoch = excluded.source_epoch, file_identity = excluded.file_identity, committed_offset = excluded.committed_offset, next_source_sequence = case when registered_sources.source_epoch <> excluded.source_epoch then 0 else registered_sources.next_source_sequence end, last_digest = case when registered_sources.source_epoch <> excluded.source_epoch then null else registered_sources.last_digest end, snapshot_schema_version = excluded.snapshot_schema_version",
+            "insert into registered_sources (path, vendor, native_session_id, source_id, source_epoch, file_identity, committed_offset, next_source_sequence, segment_id, snapshot_schema_version) values (:path, :vendor, :native_session_id, :source_id, :source_epoch, :file_identity, :committed_offset, 0, :segment_id, :snapshot_schema_version) on conflict(path) do update set vendor = excluded.vendor, native_session_id = excluded.native_session_id, source_id = excluded.source_id, source_epoch = excluded.source_epoch, file_identity = excluded.file_identity, committed_offset = excluded.committed_offset, segment_id = coalesce(registered_sources.segment_id, excluded.segment_id), snapshot_schema_version = excluded.snapshot_schema_version",
             {
                 **values,
                 "path": str(values["source"]),
+                "source_id": str(values["source_id"]) if values["source_id"] else None,
+                "segment_id": str(values["segment_id"]),
+            },
+        )
+
+    def _upsert_logical_source(self, **values: Any) -> None:
+        self._connection.execute(
+            "insert into logical_sources (vendor, native_session_id, source_id, source_epoch, next_source_sequence, snapshot_schema_version) values (:vendor, :native_session_id, :source_id, :source_epoch, 0, :snapshot_schema_version) on conflict(vendor, native_session_id) do update set source_id = excluded.source_id, source_epoch = excluded.source_epoch, next_source_sequence = case when logical_sources.source_epoch <> excluded.source_epoch then 0 else logical_sources.next_source_sequence end, last_digest = case when logical_sources.source_epoch <> excluded.source_epoch then null else logical_sources.last_digest end, snapshot_schema_version = excluded.snapshot_schema_version",
+            {
+                **values,
                 "source_id": str(values["source_id"]) if values["source_id"] else None,
             },
         )
@@ -613,7 +712,13 @@ class LocalCollector:
               path text primary key, vendor text not null, native_session_id text not null,
               source_id text, source_epoch integer not null, file_identity text not null,
               committed_offset integer not null, next_source_sequence integer not null,
-              last_digest text, snapshot_schema_version text
+              last_digest text, segment_id text, snapshot_schema_version text
+            );
+            create table if not exists logical_sources (
+              vendor text not null, native_session_id text not null, source_id text,
+              source_epoch integer not null, next_source_sequence integer not null,
+              last_digest text, snapshot_schema_version text,
+              primary key (vendor, native_session_id)
             );
             create table if not exists observation_outbox (
               idempotency_key text primary key, source_id text not null, source_epoch integer not null,
@@ -641,6 +746,16 @@ class LocalCollector:
             self._connection.execute(
                 "alter table registered_sources add column snapshot_schema_version text"
             )
+        if "segment_id" not in columns:
+            self._connection.execute(
+                "alter table registered_sources add column segment_id text"
+            )
+        self._connection.execute(
+            "update registered_sources set segment_id = lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))) where segment_id is null"
+        )
+        self._connection.execute(
+            "insert or ignore into logical_sources (vendor, native_session_id, source_id, source_epoch, next_source_sequence, last_digest, snapshot_schema_version) select vendor, native_session_id, max(source_id), max(source_epoch), max(next_source_sequence), null, max(snapshot_schema_version) from registered_sources group by vendor, native_session_id"
+        )
 
     def _retire_legacy_outbox(self) -> None:
         rows = self._connection.execute(
@@ -665,15 +780,50 @@ def _complete_prefix(source: Path, size: int) -> tuple[int, bytes]:
         return offset, handle.read(offset)
 
 
-def _normalized_session(
-    candidate: DiscoveryCandidate, source_id: UUID, raw: bytes
+def _parent_started_turn_ids(
+    sources: list[_FencedCandidate],
+) -> dict[UUID, set[str]]:
+    """Derive fork-cut inputs exclusively from the same fenced source bytes."""
+
+    referenced = {
+        source.header.parent_session_id
+        for source in sources
+        if source.header.parent_session_id is not None
+    }
+    started: dict[UUID, set[str]] = {}
+    for source in sources:
+        if source.header.session_id not in referenced:
+            continue
+        values = source.candidate.adapter_cls().scan_started_turn_ids_records(
+            source.records
+        )
+        if values is not None:
+            started.setdefault(source.header.session_id, set()).update(values)
+    return started
+
+
+def _normalized_segments(
+    segments: list[_FencedCandidate],
+    source_id: UUID,
+    parent_turn_ids: dict[UUID, set[str]],
 ) -> dict[str, Any]:
-    records = [json.loads(line) for line in raw.splitlines() if line.strip()]
-    # The opaque URI creates host-independent stable event/item IDs.  It is not
-    # opened and it deliberately cannot reveal the source path to the server.
-    portable_source = Path(f"ct-source-{source_id}")
-    session = build_remote_compact_session(
-        candidate, source=portable_source, records=records
+    ordered = sorted(segments, key=lambda segment: str(segment.segment_id))
+    # Opaque, durable segment URIs create collision-free canonical IDs without
+    # disclosing host paths. Resumed files are then coalesced as one session.
+    session = build_remote_compact_segments(
+        [
+            (
+                segment.candidate,
+                Path(f"ct-source-{source_id}-segment-{segment.segment_id}"),
+                segment.records,
+                (
+                    parent_turn_ids.get(segment.header.parent_session_id)
+                    if segment.header.parent_session_id is not None
+                    else None
+                ),
+            )
+            for segment in ordered
+        ]
     )
     return session.model_dump(mode="json")
 

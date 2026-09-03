@@ -133,6 +133,28 @@ class BaseAdapter(ABC):
         """
         return None
 
+    def scan_started_turn_ids_records(self, records: Iterable[dict]) -> set[str] | None:
+        """In-memory equivalent used when a caller has fenced source bytes."""
+
+        return None
+
+    def scan_identity_records(
+        self, source: Path, records: Iterable[dict]
+    ) -> SessionHeader | None:
+        """Read identity from an already-fenced in-memory source."""
+
+        try:
+            session = self.build_canonical_session(
+                source, records, retention="measurements"
+            )
+        except ValueError:
+            return None
+        return SessionHeader(
+            session_id=session.session_id,
+            vendor=session.vendor,
+            parent_session_id=session.parent_session_id,
+        )
+
     def scan_identity(self, source: Path) -> SessionHeader | None:
         """Extract only the fields needed to route a source to its component.
 

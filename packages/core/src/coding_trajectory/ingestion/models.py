@@ -83,6 +83,15 @@ class ClaudeCodeExtensions(BaseModel):
     spawn_depth: int | None = None
 
 
+class CanonicalSpawnOrigin(BaseModel):
+    """Content-free canonical origin for one spawned child session."""
+
+    event_id: UUID
+    turn_id: UUID | None = None
+    item_id: UUID | None = None
+    tool_name: str | None = None
+
+
 class CodexExtensions(BaseModel):
     sandbox_id: str | None = None
     sandbox_mode: str | None = None
@@ -105,6 +114,9 @@ class CodexExtensions(BaseModel):
     # sub_agent_activity{kind:started} events in THIS session's log. Backs the
     # forked_from edge origin for children spawned here.
     spawn_links: dict[str, str] = Field(default_factory=dict)
+    canonical_spawn_origins: dict[str, CanonicalSpawnOrigin] = Field(
+        default_factory=dict
+    )
 
 
 class PiExtensions(BaseModel):
