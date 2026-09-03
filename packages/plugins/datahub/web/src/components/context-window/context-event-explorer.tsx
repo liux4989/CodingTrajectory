@@ -297,7 +297,7 @@ function TurnGroupSection({
         </span>
       </AccordionTrigger>
       <AccordionContent className="pb-0 pt-0">
-        <ol className="m-0 mt-1.5 grid list-none gap-1.5 p-0">
+        <ol className="tree-children m-0 mt-1.5 grid list-none gap-1.5">
           {visible.map((event) => {
             const index = indexById.get(event.id) ?? 0;
             return (
@@ -326,7 +326,7 @@ function TurnGroupSection({
           <Button
             size="sm"
             variant="ghost"
-            className="mt-1.5 h-7 px-2 text-caption"
+            className="ml-[1.35rem] mt-1.5 h-7 px-2 text-caption"
             onClick={onShowAll}
           >
             Show {hiddenCount} more

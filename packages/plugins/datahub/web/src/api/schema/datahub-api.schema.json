@@ -6267,6 +6267,13 @@
     "SessionEvidenceTimelinePayload": {
       "additionalProperties": false,
       "properties": {
+        "branches": {
+          "items": {
+            "$ref": "#/$defs/TimelineBranch"
+          },
+          "title": "Branches",
+          "type": "array"
+        },
         "entries": {
           "items": {
             "$ref": "#/$defs/TimelineEntry"
@@ -6307,6 +6314,7 @@
         "root_session_id",
         "entrypoint_session_id",
         "entries",
+        "branches",
         "warnings"
       ],
       "title": "SessionEvidenceTimelinePayload",
@@ -6874,6 +6882,34 @@
         "turn"
       ],
       "title": "SessionTurnDistributionStats",
+      "type": "object"
+    },
+    "TimelineBranch": {
+      "additionalProperties": false,
+      "description": "One session branch of the graph, with its authoritative parent edge.\n\nParentage comes from the retained graph overview (``parent_session_id``),\nnot from frontend inference over spawn activities, so the evidence tree\nmatches the agent-graph view exactly.",
+      "properties": {
+        "parent_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Session Id"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "parent_session_id"
+      ],
+      "title": "TimelineBranch",
       "type": "object"
     },
     "TimelineBucketPayload": {

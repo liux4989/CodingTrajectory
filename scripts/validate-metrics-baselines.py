@@ -195,18 +195,23 @@ def pinned_pricing(artifact: PricingArtifact) -> Iterator[None]:
         rules[item.model] = rule
         rules[f"{item.provider}:{item.model}"] = rule
 
-    original_rules = pricing._load_live_price_rules
+    # Pin the pricing-source chain so only the committed artifact (plus the
+    # OpenAI static fallback) can price baselines.
+    original_sources = pricing._PRICING_SOURCES
     original_catalog = pricing._load_models_dev_cache
-    original_preindexed = pricing._preindexed_price_rules
-    pricing._load_live_price_rules = lambda *, now: rules
+    pricing._PRICING_SOURCES = [
+        pricing.PricingSource(name="pinned", loader=lambda *, now: rules),
+        pricing.PricingSource(
+            name="openai-standard",
+            loader=lambda *, now: pricing._openai_standard_price_rules(),
+        ),
+    ]
     pricing._load_models_dev_cache = lambda *, now, refresh: None
-    pricing._preindexed_price_rules = lambda: {}
     try:
         yield
     finally:
-        pricing._load_live_price_rules = original_rules
+        pricing._PRICING_SOURCES = original_sources
         pricing._load_models_dev_cache = original_catalog
-        pricing._preindexed_price_rules = original_preindexed
 
 
 def build_store(case: BaselineCase) -> DocumentStore:

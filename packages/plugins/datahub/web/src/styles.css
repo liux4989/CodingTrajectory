@@ -511,6 +511,26 @@
     border-color: color-mix(in srgb, var(--primary) 60%, transparent);
     background: var(--surface-emphasis);
   }
+
+  /* ---- Tree connectors (evidence tree, context history) ----
+   * Left rail + indent so child rows read as descendants of their group
+   * header, matching the graph-tree connector language. */
+  .tree-children {
+    margin-left: 0.45rem;
+    border-left: 1px solid var(--border-soft);
+    padding-left: 0.9rem;
+  }
+  .tree-child {
+    position: relative;
+  }
+  .tree-child::before {
+    content: "";
+    position: absolute;
+    top: 1rem;
+    left: -0.9rem;
+    width: 0.9rem;
+    border-top: 1px solid var(--border-soft);
+  }
 }
 
 @keyframes rise-in {

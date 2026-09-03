@@ -10,12 +10,15 @@ Context-window resolution tiers: the Claude Code alias suffix
 (e.g. ``glm-5.2[1m]`` -> 1_000_000), then a curated static map (offline-safe,
 used by ingestion), then the live https://models.dev catalog (24h disk cache,
 gated by ``CT_DISABLE_LIVE_PRICING`` so the ingestion hot path can stay
-offline). Pricing tiers: a curated static pre-index (offline-safe; canonical
-models.dev provider rates plus stable Anthropic list prices for models the
-catalog no longer lists), then the live models.dev catalog for the long tail,
-then the OpenAI standard rules. The pre-index also shields unscoped lookups
-from zero-priced catalog entries (coding-plan / free providers) that would
-otherwise floor a model's cost at 0.
+offline). Pricing resolution is an ordered plugin chain
+(``register_pricing_source``): the curated static pre-index (offline-safe;
+canonical models.dev provider rates plus stable Anthropic list prices for
+models the catalog no longer lists), then the live models.dev catalog for the
+long tail, then the OpenAI standard rules. The pre-index also shields
+unscoped lookups from zero-priced catalog entries (coding-plan / free
+providers) that would otherwise floor a model's cost at 0. Vendor adapters
+surface reported cost as ``usage["cost_usd"]``; the reported-vs-estimate
+policy lives once in ``cost_evidence_from_usage``.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ import json
 import os
 import re
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -576,21 +580,37 @@ def _threshold_rate(
     return threshold if above_threshold and threshold is not None else default
 
 
+# Provider labels whose usage reports input tokens net of cache
+# (anthropic-messages API style: cached/creation are separate buckets);
+# openai-style providers report input gross of cache. ``kimi-coding`` serves
+# the anthropic-messages API, and Pi normalizes its usage as
+# ANTHROPIC_UNCACHED. Extend via ``register_net_input_provider``.
+_NET_INPUT_PROVIDERS: set[str] = {
+    "anthropic",
+    "claude",
+    "claude-code",
+    "kimi-coding",
+}
+_NET_INPUT_MODEL_MARKERS: Final = ("claude",)
+
+
+def register_net_input_provider(provider: str) -> None:
+    """Declare that ``provider`` reports input tokens net of cache."""
+    normalized = provider.strip().lower()
+    if normalized:
+        _NET_INPUT_PROVIDERS.add(normalized)
+
+
 def _uses_net_input_convention(provider: str | None, model: str | None) -> bool:
-    """Anthropic-style APIs report ``input`` net of cache (cached/creation are
-    separate buckets); OpenAI-style report input gross of cache. Drives whether
-    the input bucket is split before pricing. Single copy — ``analysis.py``
-    reuses it. ``kimi-coding`` serves the anthropic-messages API, and Pi
-    normalizes its usage as ANTHROPIC_UNCACHED.
+    """Net-vs-gross input convention for one provider/model pair; drives
+    whether the input bucket is split before pricing. Single copy —
+    ``analysis.py`` and the attribution hot paths reuse it.
     """
     if provider:
-        return provider.strip().lower() in {
-            "anthropic",
-            "claude",
-            "claude-code",
-            "kimi-coding",
-        }
-    return "claude" in (model or "").lower()
+        return provider.strip().lower() in _NET_INPUT_PROVIDERS
+    return any(
+        marker in (model or "").lower() for marker in _NET_INPUT_MODEL_MARKERS
+    )
 
 
 def _price(tokens: int, rate_per_mtok: float | None) -> float:
@@ -612,7 +632,6 @@ def _load_live_price_rules(*, now: datetime) -> dict[str, PriceRule]:
                 return rules
         artifact = _load_models_dev_cache(now=now, refresh=True)
         rules = _catalog_to_price_rules(artifact) if artifact else {}
-        rules = {**_openai_standard_price_rules(), **rules}
         _LIVE_RULES_CACHE = (now, rules)
         return rules
 
@@ -826,6 +845,47 @@ def _lookup_price_rule(
     return rules.get(model)
 
 
+@dataclass(frozen=True)
+class PricingSource:
+    """One link in the pricing resolution chain: a named loader returning
+    ``{lookup_key: PriceRule}`` keyed by normalized model id, optionally
+    provider-scoped as ``provider:model``."""
+
+    name: str
+    loader: Callable[..., dict[str, PriceRule]]
+
+
+_PRICING_SOURCES: list[PricingSource] = []
+
+
+def register_pricing_source(
+    name: str,
+    loader: Callable[..., dict[str, PriceRule]],
+    *,
+    prepend: bool = False,
+) -> None:
+    """Add a pricing source to the resolution chain, replacing any same-named
+    entry. ``loader`` receives keyword-only ``now`` and returns the source's
+    lookup dict. Sources are consulted in registration order and the first
+    hit wins, so ``prepend=True`` overrides the built-in tiers.
+    """
+    _PRICING_SOURCES[:] = [
+        source for source in _PRICING_SOURCES if source.name != name
+    ]
+    source = PricingSource(name=name, loader=loader)
+    if prepend:
+        _PRICING_SOURCES.insert(0, source)
+    else:
+        _PRICING_SOURCES.append(source)
+
+
+register_pricing_source("preindexed", lambda *, now: _preindexed_price_rules())
+register_pricing_source("models.dev", _load_live_price_rules)
+register_pricing_source(
+    "openai-standard", lambda *, now: _openai_standard_price_rules()
+)
+
+
 def _resolve_price_rule(
     model: str | None,
     *,
@@ -833,7 +893,8 @@ def _resolve_price_rule(
     now: datetime | None = None,
     cache: dict[tuple[str | None, str], PriceRule | None] | None = None,
 ) -> PriceRule | None:
-    """Resolve one model price, optionally reusing a caller-owned cache.
+    """Resolve one model price along the registered pricing-source chain,
+    optionally reusing a caller-owned cache.
 
     The live catalog itself is already cached for 24 hours. This smaller cache
     avoids repeating the locked catalog access and provider/model dictionary
@@ -850,18 +911,16 @@ def _resolve_price_rule(
         if cached is not _PRICING_RULE_UNSET:
             return cached
 
-    rule = _lookup_price_rule(
-        _preindexed_price_rules(), provider=provider, model=normalized_model
-    )
-    if rule is None:
-        rules = _load_live_price_rules(now=now or datetime.now(UTC))
-        rule = _lookup_price_rule(rules, provider=provider, model=normalized_model)
-    if rule is None:
+    resolved_at = now or datetime.now(UTC)
+    rule: PriceRule | None = None
+    for source in _PRICING_SOURCES:
         rule = _lookup_price_rule(
-            _openai_standard_price_rules(),
+            source.loader(now=resolved_at),
             provider=provider,
             model=normalized_model,
         )
+        if rule is not None:
+            break
     if cache is not None:
         cache[key] = rule
     return rule
@@ -919,7 +978,10 @@ __all__ = [
     "MODELS_DEV_SOURCE",
     "CostEvidenceFlat",
     "PriceRule",
+    "PricingSource",
     "cache_break_waste_usd",
     "cost_evidence_from_usage",
     "get_model_context_window",
+    "register_net_input_provider",
+    "register_pricing_source",
 ]

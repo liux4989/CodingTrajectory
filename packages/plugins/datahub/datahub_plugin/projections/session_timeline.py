@@ -51,12 +51,25 @@ class TimelineEntry(_StrictModel):
     target_session_id: str | None = None
 
 
+class TimelineBranch(_StrictModel):
+    """One session branch of the graph, with its authoritative parent edge.
+
+    Parentage comes from the retained graph overview (``parent_session_id``),
+    not from frontend inference over spawn activities, so the evidence tree
+    matches the agent-graph view exactly.
+    """
+
+    session_id: str
+    parent_session_id: str | None = None
+
+
 class SessionEvidenceTimeline(_StrictModel):
     schema_version: Literal[1] = 1
     revision: int = Field(ge=0)
     root_session_id: str
     entrypoint_session_id: str
     entries: list[TimelineEntry] = Field(default_factory=list)
+    branches: list[TimelineBranch] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -185,13 +198,34 @@ def build_session_evidence_timeline(
             entry.position,
         )
     )
+    parent_by_session = _branch_parents(graph_overview or {})
+    branches = [
+        TimelineBranch(
+            session_id=session_id,
+            parent_session_id=parent_by_session.get(session_id),
+        )
+        for session_id in sessions
+    ]
     return SessionEvidenceTimeline(
         revision=revision,
         root_session_id=root_session_id,
         entrypoint_session_id=entrypoint_session_id,
         entries=entries,
+        branches=branches,
         warnings=list(dict.fromkeys(warnings)),
     )
+
+
+def _branch_parents(graph_overview: Mapping[str, Any]) -> dict[str, str]:
+    parents: dict[str, str] = {}
+    for node in graph_overview.get("sessions") or []:
+        if not isinstance(node, Mapping):
+            continue
+        session_id = _text(node.get("session_id"))
+        parent = _text(node.get("parent_session_id"))
+        if session_id and parent and parent != session_id:
+            parents[session_id] = parent
+    return parents
 
 
 def _target_sessions_by_item(graph_overview: Mapping[str, Any]) -> dict[str, str]:

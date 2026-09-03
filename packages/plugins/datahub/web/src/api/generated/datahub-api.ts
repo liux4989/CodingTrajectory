@@ -424,6 +424,9 @@ export type Usage = {
 export type Matches = SessionEventDetail[];
 export type RootSessionId3 = string | null;
 export type Type2 = string | null;
+export type ParentSessionId1 = string | null;
+export type SessionId7 = string;
+export type Branches = TimelineBranch[];
 export type AgentName = string | null;
 export type ArtifactKind = ("file" | "command" | "check" | "commit" | "link") | null;
 export type EndedAt = string | null;
@@ -434,7 +437,7 @@ export type ItemIds = string[];
 export type Kind = "user" | "assistant" | "tool" | "subagent" | "compaction";
 export type Label4 = string;
 export type Position = number;
-export type SessionId7 = string;
+export type SessionId8 = string;
 export type Status3 = string | null;
 export type Summary2 = string | null;
 export type TargetSessionId = string | null;
@@ -483,9 +486,9 @@ export type EndedAt1 = string | null;
 export type Model11 = string | null;
 export type MultiAgentMode1 = string | null;
 export type MultiAgentVersion = string | null;
-export type ParentSessionId1 = string | null;
+export type ParentSessionId2 = string | null;
 export type ReasoningEffort = string | null;
-export type SessionId8 = string;
+export type SessionId9 = string;
 export type StartedAt3 = string | null;
 export type Status4 = string | null;
 export type Title3 = string | null;
@@ -512,7 +515,7 @@ export type Turns12 = number | null;
 export type Scope = string | null;
 export type Sessions7 = GraphStatsSession[] | null;
 export type Role2 = string | null;
-export type SessionId9 = string;
+export type SessionId10 = string;
 export type CacheWriteTokens2 = number | null;
 export type CachedPromptTokens2 = number | null;
 export type CompletionTokens2 = number | null;
@@ -539,13 +542,13 @@ export type Turns13 = number | null;
 export type Models3 = GraphModelUsage[];
 export type Scope1 = string | null;
 export type SelectedTurnId = string | null;
-export type SessionId10 = string;
+export type SessionId11 = string;
 export type Sessions8 = GraphUsageSession[] | null;
 export type AgentName2 = string | null;
-export type ParentSessionId2 = string | null;
+export type ParentSessionId3 = string | null;
 export type Relationship1 = string | null;
 export type Role3 = string | null;
-export type SessionId11 = string;
+export type SessionId12 = string;
 export type Title4 = string | null;
 export type Turns14 =
   | {
@@ -557,7 +560,7 @@ export type EventIds1 = string[] | null;
 export type ItemId1 = string;
 export type Kind2 = string;
 export type Operations = string[] | null;
-export type SessionId12 = string;
+export type SessionId13 = string;
 export type Shape = {
   [k: string]: unknown;
 } | null;
@@ -597,8 +600,8 @@ export type Total = number;
 export type AgentName3 = string | null;
 export type Cwd1 = string | null;
 export type GraphSessionCount = number | null;
-export type ParentSessionId3 = string | null;
-export type SessionId13 = string;
+export type ParentSessionId4 = string | null;
+export type SessionId14 = string;
 export type SourceTurnId = string | null;
 export type SpawnedAgentCount1 = number | null;
 export type StartedAt6 = string | null;
@@ -606,7 +609,7 @@ export type Status6 = string | null;
 export type Title7 = string | null;
 export type TurnCount2 = number | null;
 export type Vendor9 = string | null;
-export type Branches = ConversationBranch[];
+export type Branches1 = ConversationBranch[];
 export type RootSessionId9 = string;
 export type SelectedBranchId = string | null;
 export type Bucket2 = string;
@@ -659,7 +662,7 @@ export type Calls1 = number;
 export type Pattern = string | null;
 export type PromptTokens3 = number;
 export type RepeatedCalls = number;
-export type SessionId14 = string;
+export type SessionId15 = string;
 export type Title8 = string | null;
 export type TurnId8 = string | null;
 export type Contributors = Contributor[];
@@ -680,7 +683,7 @@ export type MaxContextTokens = number | null;
 export type PrimaryPattern = string | null;
 export type PromptTokens4 = number;
 export type ReasonCodes = string[];
-export type SessionId15 = string;
+export type SessionId16 = string;
 export type SessionShare = number;
 export type Title9 = string | null;
 export type TurnId9 = string;
@@ -1726,12 +1729,27 @@ export interface SessionEventDetail {
  * via the `definition` "SessionEvidenceTimelinePayload".
  */
 export interface SessionEvidenceTimelinePayload {
+  branches: Branches;
   entries: Entries;
   entrypoint_session_id: EntrypointSessionId;
   revision: Revision8;
   root_session_id: RootSessionId4;
   schema_version: SchemaVersion5;
   warnings: Warnings5;
+}
+/**
+ * One session branch of the graph, with its authoritative parent edge.
+ *
+ * Parentage comes from the retained graph overview (``parent_session_id``),
+ * not from frontend inference over spawn activities, so the evidence tree
+ * matches the agent-graph view exactly.
+ *
+ * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
+ * via the `definition` "TimelineBranch".
+ */
+export interface TimelineBranch {
+  parent_session_id: ParentSessionId1;
+  session_id: SessionId7;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -1748,7 +1766,7 @@ export interface TimelineEntry {
   kind: Kind;
   label: Label4;
   position: Position;
-  session_id: SessionId7;
+  session_id: SessionId8;
   status: Status3;
   summary: Summary2;
   target_session_id: TargetSessionId;
@@ -1844,9 +1862,9 @@ export interface GraphSessionNode {
   model?: Model11;
   multi_agent_mode?: MultiAgentMode1;
   multi_agent_version?: MultiAgentVersion;
-  parent_session_id?: ParentSessionId1;
+  parent_session_id?: ParentSessionId2;
   reasoning_effort?: ReasoningEffort;
-  session_id: SessionId8;
+  session_id: SessionId9;
   started_at?: StartedAt3;
   status?: Status4;
   title?: Title3;
@@ -1917,7 +1935,7 @@ export interface GraphStatsSession {
   context_window?: GraphContextWindow | null;
   role?: Role2;
   runtime?: GraphRuntime | null;
-  session_id: SessionId9;
+  session_id: SessionId10;
   usage?: GraphUsageBuckets | null;
   vendor?: Vendor7;
   [k: string]: unknown;
@@ -1948,7 +1966,7 @@ export interface GraphUsagePayload {
   runtime?: GraphRuntime;
   scope?: Scope1;
   selected_turn_id?: SelectedTurnId;
-  session_id: SessionId10;
+  session_id: SessionId11;
   sessions?: Sessions8;
   total_usage?: GraphUsageBuckets;
   turns?: Turns14;
@@ -1984,11 +2002,11 @@ export interface GraphModelUsage {
 export interface GraphUsageSession {
   agent_name?: AgentName2;
   estimated_cost?: GraphCostEvidence | null;
-  parent_session_id?: ParentSessionId2;
+  parent_session_id?: ParentSessionId3;
   relationship?: Relationship1;
   role?: Role3;
   runtime?: GraphRuntime | null;
-  session_id: SessionId11;
+  session_id: SessionId12;
   title?: Title4;
   total_usage?: GraphUsageBuckets | null;
   [k: string]: unknown;
@@ -2002,7 +2020,7 @@ export interface SessionItemDetail {
   item_id: ItemId1;
   kind: Kind2;
   operations?: Operations;
-  session_id: SessionId12;
+  session_id: SessionId13;
   shape?: Shape;
   turn_id: TurnId7;
   type: Type4;
@@ -2073,7 +2091,7 @@ export interface TimelineSessionPayload {
  * via the `definition` "SessionTreePayload".
  */
 export interface SessionTreePayload {
-  branches: Branches;
+  branches: Branches1;
   root_session_id: RootSessionId9;
   selected_branch_id?: SelectedBranchId;
   [k: string]: unknown;
@@ -2086,8 +2104,8 @@ export interface ConversationBranch {
   agent_name?: AgentName3;
   cwd?: Cwd1;
   graph_session_count?: GraphSessionCount;
-  parent_session_id?: ParentSessionId3;
-  session_id: SessionId13;
+  parent_session_id?: ParentSessionId4;
+  session_id: SessionId14;
   source_turn_id?: SourceTurnId;
   spawned_agent_count?: SpawnedAgentCount1;
   started_at?: StartedAt6;
@@ -2270,7 +2288,7 @@ export interface Contributor {
   pattern: Pattern;
   prompt_tokens: PromptTokens3;
   repeated_calls: RepeatedCalls;
-  session_id: SessionId14;
+  session_id: SessionId15;
   title: Title8;
   turn_id: TurnId8;
   [k: string]: unknown;
@@ -2288,7 +2306,7 @@ export interface OutlierRow {
   primary_pattern: PrimaryPattern;
   prompt_tokens: PromptTokens4;
   reason_codes: ReasonCodes;
-  session_id: SessionId15;
+  session_id: SessionId16;
   session_share: SessionShare;
   title: Title9;
   turn_id: TurnId9;
