@@ -107,6 +107,14 @@ epoch preserves wait-streak boundaries after compact retention drops text.
 Each reconstructed wrapper child also retains a body-free `projection_only`
 measurement bit. Activity projections may show that semantic child, while
 context composition counts only the original provider-visible wrapper content.
+Runtime activity counts use the same semantic projection as overview: hidden
+transport wrappers and empty terminal polling are not counted as tool actions.
+The runtime item count retains semantic polling evidence but excludes wrappers;
+message output counts follow provider-visible content ownership instead.
+Claude stream fragments follow the same custody rule: repeated records sharing
+a provider response id remain available for content sizing, while message and
+runtime item counts treat them as one semantic assistant response. Reasoning
+items remain a separate reported message dimension.
 
 Consequently a legacy session can show `Searched the web for …`, `Updated plan:
 4 item(s)`, or an ungrouped bounded command such as `RunCommand: uv run ruff

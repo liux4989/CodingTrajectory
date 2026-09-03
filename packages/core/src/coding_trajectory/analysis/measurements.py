@@ -98,6 +98,32 @@ def is_projection_only_item(item: Item) -> bool:
     return isinstance(provenance, dict) and bool(provenance.get("parent_tool_call_id"))
 
 
+def semantic_assistant_response_count(session: Session) -> int:
+    """Count provider responses rather than persisted stream fragments."""
+
+    if session.measurements is not None:
+        return session.measurements.llm_response_count
+
+    agent_items = [
+        item
+        for turn in session.turns
+        for item in turn.items
+        if isinstance(item, AgentMessageItem)
+    ]
+    provider_response_ids = {
+        response_id
+        for item in agent_items
+        if isinstance(item.vendor_data, dict)
+        and isinstance(response_id := item.vendor_data.get("provider_response_id"), str)
+        and response_id
+    }
+    if provider_response_ids:
+        return len(provider_response_ids)
+
+    event_count = sum(event.type == EventType.LLM_RESPONSE for event in session.events)
+    return event_count or len(agent_items)
+
+
 def extract_session_measurements(session: Session) -> SessionMeasurements:
     """Measure session-level content: context sources and dropped LLM events."""
 
@@ -113,11 +139,9 @@ def extract_session_measurements(session: Session) -> SessionMeasurements:
         for source in session.context_sources
     ]
     llm_text_sizes: list[EventTextMeasurement] = []
-    llm_count = 0
     for event in session.events:
         if event.type != EventType.LLM_RESPONSE:
             continue
-        llm_count += 1
         text = event.payload.get("text")
         if not isinstance(text, str) or not text:
             continue
@@ -131,7 +155,7 @@ def extract_session_measurements(session: Session) -> SessionMeasurements:
         )
     return SessionMeasurements(
         context_sources=sources,
-        llm_response_count=llm_count,
+        llm_response_count=semantic_assistant_response_count(session),
         llm_response_text_sizes=llm_text_sizes,
     )
 
@@ -168,4 +192,5 @@ __all__ = [
     "extract_item_measurements",
     "extract_session_measurements",
     "is_projection_only_item",
+    "semantic_assistant_response_count",
 ]

@@ -15,13 +15,14 @@ from coding_trajectory.analysis.tool_summary_shared import (
     SEARCH_TEXT,
 )
 from coding_trajectory.ingestion.common import prune_nones
-from coding_trajectory.ingestion.models import AgentMessageItem, Item
+from coding_trajectory.ingestion.models import (
+    AgentMessageItem,
+    Item,
+    is_tool_shaped_item,
+)
 
 _OVERVIEW_TEXT_PREVIEW_LEN = 220
 
-_TOOL_SHAPED_KINDS: frozenset[str] = frozenset(
-    {"tool_call", "command_execution", "file_change", "plan"}
-)
 _OUTCOMELESS_ACTIVITY_KINDS = frozenset(
     {"background_terminal_wait", "background_terminal_interaction"}
 )
@@ -59,23 +60,36 @@ def is_control_only_activity_cell(item: dict[str, Any]) -> bool:
     Non-empty interaction remains visible because it changes terminal state.
     """
 
-    return item.get("type") == "background_terminal_wait"
+    return (
+        item.get("type") == "background_terminal_wait"
+        or item.get("activity_kind") == "background_terminal_wait"
+    )
+
+
+def project_tool_activity(item: Item) -> dict[str, Any] | None:
+    """Return one semantic tool activity, excluding transport envelopes."""
+
+    if not is_tool_shaped_item(item):
+        return None
+
+    from coding_trajectory.analysis.tool_summary import summarize_tool_call
+
+    summary = summarize_tool_call(item)
+    if summary is None or summary.get("activity_hidden") is True:
+        return None
+    summary.setdefault("item_id", str(item.item_id))
+    return {"type": "tool_call", **summary}
 
 
 def build_flows(
     items: list[Item], *, flatten_commands: bool = False
 ) -> list[dict[str, Any]]:
-    from coding_trajectory.analysis.tool_summary import summarize_tool_call
-
     result: list[dict[str, Any]] = []
     for item in items:
-        if item.kind in _TOOL_SHAPED_KINDS:
-            summary = summarize_tool_call(item)
-            if summary is not None:
-                if summary.get("activity_hidden") is True:
-                    continue
-                summary.setdefault("item_id", str(item.item_id))
-                result.append({"type": "tool_call", **summary})
+        if is_tool_shaped_item(item):
+            activity = project_tool_activity(item)
+            if activity is not None:
+                result.append(activity)
             continue
         if isinstance(item, AgentMessageItem):
             measurements = getattr(item, "measurements", None)
@@ -159,9 +173,7 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
         )
 
     if item.get("type") == "tool_call":
-        outcome_bearing = (
-            item.get("activity_kind") not in _OUTCOMELESS_ACTIVITY_KINDS
-        )
+        outcome_bearing = item.get("activity_kind") not in _OUTCOMELESS_ACTIVITY_KINDS
         profile = tool_optimization_profile(
             str(item.get("name") or ""),
             _profile_name(item),
@@ -216,9 +228,7 @@ def _project_activity_cells(
         active = None
 
     for item in items:
-        group_key = _tool_activity_group_key(
-            item, flatten_commands=flatten_commands
-        )
+        group_key = _tool_activity_group_key(item, flatten_commands=flatten_commands)
         if group_key is None:
             flush_active()
             projected.append(item)

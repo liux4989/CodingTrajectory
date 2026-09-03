@@ -267,6 +267,7 @@ class SessionMeasurements(BaseModel):
     """Session-level content primitives for body-free compact sessions."""
 
     context_sources: list[ContextSourceMeasurement] = Field(default_factory=list)
+    # Semantic provider responses, deduplicated from persisted stream fragments.
     llm_response_count: int = 0
     llm_response_text_sizes: list[EventTextMeasurement] = Field(default_factory=list)
 

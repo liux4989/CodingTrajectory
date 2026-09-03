@@ -5,6 +5,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from coding_trajectory.analysis.activity_flow import (
+    is_control_only_activity_cell,
+    project_tool_activity,
+)
+from coding_trajectory.analysis.measurements import (
+    is_projection_only_item,
+    semantic_assistant_response_count,
+)
 from coding_trajectory.analysis.request_lineage import is_low_value_turn
 from coding_trajectory.ingestion.models import (
     COMPACTION_KINDS as _COMPACTION_KINDS,
@@ -12,6 +20,7 @@ from coding_trajectory.ingestion.models import (
     EventType,
     Session,
     SessionGraph,
+    is_tool_shaped_item,
 )
 from coding_trajectory.metrics.models import (
     CompactionEventFlat,
@@ -65,18 +74,25 @@ def runtime_stats(
     ended = primary.ended_at or primary.started_at
     status_value = primary.status
     status = status_value.value if status_value else None
-    tool_calls = sum(
-        1
-        for session in session_graph.sessions
-        for event in session.events
-        if event.type == EventType.TOOL_CALL_REQUESTED
+    semantic_items = sum(
+        semantic_assistant_response_count(session) for session in session_graph.sessions
     )
-    failed_tool_calls = sum(
-        1
-        for session in session_graph.sessions
-        for event in session.events
-        if event.type == EventType.TOOL_CALL_FAILED
-    )
+    tool_calls = 0
+    failed_tool_calls = 0
+    for session in session_graph.sessions:
+        for turn in session.turns:
+            for item in turn.items:
+                if not is_tool_shaped_item(item):
+                    continue
+                activity = project_tool_activity(item)
+                if activity is None:
+                    continue
+                semantic_items += 1
+                if is_control_only_activity_cell(activity):
+                    continue
+                tool_calls += 1
+                if activity.get("activity_outcome") == "failed":
+                    failed_tool_calls += 1
     compactions = sum(
         1
         for session in session_graph.sessions
@@ -125,11 +141,7 @@ def runtime_stats(
             for turn in session.turns
             if not is_low_value_turn(turn.items, None)
         ),
-        items=sum(
-            len(turn.items)
-            for session in session_graph.sessions
-            for turn in session.turns
-        ),
+        items=semantic_items,
         tool_calls=tool_calls,
         failed_tool_calls=failed_tool_calls,
         subagent_sessions=sum(
@@ -304,12 +316,7 @@ def effort_change_stats(session_graph: SessionGraph) -> EffortChangeStatsFlat:
 
 def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:
     def _assistant_count(session: Any) -> int:
-        measurements = getattr(session, "measurements", None)
-        if measurements is not None:
-            return measurements.llm_response_count
-        return sum(
-            1 for event in session.events if event.type == EventType.LLM_RESPONSE
-        )
+        return semantic_assistant_response_count(session)
 
     def _developer_count(session: Any) -> int:
         measurements = getattr(session, "measurements", None)
@@ -326,17 +333,19 @@ def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:
         ),
         assistant=sum(_assistant_count(session) for session in session_graph.sessions),
         developer=sum(_developer_count(session) for session in session_graph.sessions),
+        # Provider-visible output blocks belong to their original wrapper.
+        # Reconstructed children are activity projections of that same block.
         tool_outputs=sum(
             1
             for session in session_graph.sessions
-            for event in session.events
-            if event.type in {EventType.TOOL_CALL_SUCCEEDED, EventType.TOOL_CALL_FAILED}
+            for turn in session.turns
+            for item in turn.items
+            if is_tool_shaped_item(item)
+            and not is_projection_only_item(item)
+            and item.status in {"completed", "failed"}
         ),
         reasoning_items=sum(
-            1
-            for session in session_graph.sessions
-            for observation in session.runtime_observations
-            if observation.kind == "reasoning"
+            _reasoning_count(session) for session in session_graph.sessions
         ),
         compacted_contexts=sum(
             1
@@ -344,6 +353,17 @@ def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:
             for observation in session.runtime_observations
             if observation.kind in _COMPACTION_KINDS
         ),
+    )
+
+
+def _reasoning_count(session: Session) -> int:
+    item_count = sum(
+        item.kind == "reasoning" for turn in session.turns for item in turn.items
+    )
+    if item_count:
+        return item_count
+    return sum(
+        observation.kind == "reasoning" for observation in session.runtime_observations
     )
 
 
