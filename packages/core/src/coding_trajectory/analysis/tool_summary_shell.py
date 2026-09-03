@@ -37,7 +37,7 @@ CommandFamily = Literal[
     "other",
 ]
 
-_TEST_TOKENS = frozenset(
+_TEST_RUNNER_HEADS = frozenset(
     {
         "pytest",
         "jest",
@@ -48,9 +48,10 @@ _TEST_TOKENS = frozenset(
         "unittest",
         "tox",
         "ctest",
-        "test",
-        "deno",
     }
+)
+_TEST_SUBCOMMAND_RUNNERS = frozenset(
+    {"npm", "pnpm", "yarn", "bun", "deno", "cargo", "go", "dotnet", "mix"}
 )
 _BUILD_TOKENS = frozenset(
     {
@@ -193,6 +194,12 @@ def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, st
 
 
 def classify_command_family(tool_input: Any) -> tuple[CommandFamily, str]:
+    """Return a best-effort internal hint, not a user-facing command label.
+
+    Overview labels use ``classify_shell``'s small structural vocabulary and
+    preserve unrecognized commands as ``RunCommand``.  Families support summary
+    ranking and metrics only, so ambiguous shell words must remain ``other``.
+    """
     cmd = shell_cmd(tool_input)
     if not cmd and isinstance(tool_input, str):
         cmd = tool_input
@@ -216,7 +223,9 @@ def classify_command_family(tool_input: Any) -> tuple[CommandFamily, str]:
         return "cli_report", head
     if head in {"git", "gh", "hg", "svn"} or tokens[0] in {"git", "gh", "hg", "svn"}:
         return "repository", head
-    if token_set & _TEST_TOKENS:
+    if head in _TEST_RUNNER_HEADS or (
+        tokens[0] in _TEST_SUBCOMMAND_RUNNERS and "test" in tokens[1:]
+    ):
         return "tests", head
     if token_set & _CODE_FIX_TOKENS:
         return "code_fix", head

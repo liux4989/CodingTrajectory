@@ -23,7 +23,20 @@ When the existing classifier can prove that a command reads a file, searches
 text, lists paths, or edits a file, the flat row retains that semantic action
 and target (`ReadFile: docs/example.md`) instead of being renamed to the generic
 `RunCommand`. Commands without a recognized behavior remain `RunCommand` with
-their bounded primary-command description.
+their bounded primary-command description. That fallback is authoritative for
+display: CT does not replace an explicit command with a broader family label
+such as `Ran tests`. Internal command-family hints may inform summary ranking or
+metrics, but they are not presentation semantics and ambiguous shell words such
+as the POSIX `test` predicate remain uncategorized.
+
+This is the update boundary for future Codex changes. Native Codex item types
+and lifecycle evidence take precedence. The adapter reconstructs only stable,
+structural concepts that are absent from historical JSONL, and an unrecognized
+command falls back to its bounded command text without losing its identity.
+Codex projection changes should therefore update this narrow mapping and its
+real-session validation examples, not grow an exhaustive registry of command
+names. CT may differ in layout where Codex relies on an interactive affordance,
+such as an expandable command transcript that a static overview does not have.
 
 Codex TUI receives those native command lifecycles while the session is live.
 CT instead reconstructs a completed historical JSONL file, so it preserves a

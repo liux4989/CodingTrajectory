@@ -141,7 +141,28 @@ def short_path(path: str | None) -> str | None:
 
 
 def short_command(cmd: str, *, max_len: int = 60) -> str:
+    """Return a bounded command while preserving its action and final target.
+
+    Generic shell commands are already the most faithful available description;
+    they should not be replaced by a speculative category.  Keeping both ends
+    also avoids making commands that differ only in their final argument look
+    identical in static activity views.
+    """
     cleaned = re.sub(r"\s+", " ", cmd).strip()
     if len(cleaned) <= max_len:
         return cleaned
-    return cleaned[: max_len - 1] + "…"
+    marker = " … "
+    if max_len <= len(marker):
+        return marker[:max_len]
+    parts = cleaned.split(" ")
+    if len(parts) > 1 and len(parts[0] + marker + parts[-1]) <= max_len:
+        head = parts[0]
+        for part in parts[1:-1]:
+            candidate = f"{head} {part}{marker}{parts[-1]}"
+            if len(candidate) > max_len:
+                break
+            head = f"{head} {part}"
+        return head + marker + parts[-1]
+    tail_len = max(12, (max_len - len(marker)) // 2)
+    head_len = max_len - len(marker) - tail_len
+    return cleaned[:head_len].rstrip() + marker + cleaned[-tail_len:].lstrip()
