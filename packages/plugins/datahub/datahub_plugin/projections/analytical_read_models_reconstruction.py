@@ -168,6 +168,9 @@ def _reconstruct(
 ) -> dict[str, Any]:
     payload = dict(_row_payload(meta_row))
     payload[detail] = [_row_payload(row) for row in rows]
+    # ModelUsagePayload requires both detail lists; the unfetched sibling
+    # page stays empty so single-detail responses still satisfy the contract.
+    payload.setdefault("turns" if detail == "sessions" else "sessions", [])
     payload["pages"] = {detail: page_metadata(page, limit=limit)}
     return payload
 
