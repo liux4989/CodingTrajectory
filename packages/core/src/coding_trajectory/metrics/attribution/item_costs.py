@@ -18,6 +18,7 @@ from coding_trajectory.analysis.content_size import (
     tool_input_summary,
     visible_text_size,
 )
+from coding_trajectory.analysis.measurements import is_projection_only_item
 from coding_trajectory.ingestion.indexes import (
     index_events_by_id,
 )
@@ -614,6 +615,8 @@ def _item_cost_entries_for_turn(
             )
 
     for item in sorted(turn.items, key=lambda item: (item.started_at, item.sequence)):
+        if is_projection_only_item(item):
+            continue
         entries.append(
             _ItemCostEntry(
                 item_id=item.item_id,

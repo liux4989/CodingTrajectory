@@ -15,6 +15,7 @@ from coding_trajectory.analysis.content_size import (
     item_text_size,
     visible_text_size,
 )
+from coding_trajectory.analysis.measurements import is_projection_only_item
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
 from coding_trajectory.analysis.tool_summary_shared import (
     EDIT_FILE,
@@ -669,6 +670,11 @@ def _add_tool_item(
     allocated_usage_by_item: dict[UUID, dict[str, int]],
 ) -> None:
     if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
+        return
+    # Static wrapper children are semantic activity projections, not additional
+    # provider-visible content blocks. Their original wrapper remains canonical
+    # and owns the content measurement.
+    if is_projection_only_item(item):
         return
     summary = summarize_tool_call(item) or {}
     concept = str(summary.get("name") or item.tool_name or item.kind)

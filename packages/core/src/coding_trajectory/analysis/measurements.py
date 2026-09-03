@@ -77,12 +77,25 @@ def extract_item_measurements(item: Item) -> ItemMeasurements:
         output_tokens=output_size.tokens,
         text_chars=text_size.chars,
         text_tokens=text_size.tokens,
+        projection_only=is_projection_only_item(item),
         output_truncated=output_is_truncated(output_text),
         output_original_tokens=reported_token_count(output_text),
         input_summary=input_summary,
         text_preview=text_preview,
         tool_summary=tool_summary,
     )
+
+
+def is_projection_only_item(item: Item) -> bool:
+    """Whether an item is a semantic child of provider-visible wrapper content."""
+
+    measurements = item.measurements
+    if measurements is not None and measurements.projection_only:
+        return True
+    vendor_data = item.vendor_data
+    activity = vendor_data.get("activity") if isinstance(vendor_data, dict) else None
+    provenance = activity.get("provenance") if isinstance(activity, dict) else None
+    return isinstance(provenance, dict) and bool(provenance.get("parent_tool_call_id"))
 
 
 def extract_session_measurements(session: Session) -> SessionMeasurements:
@@ -154,4 +167,5 @@ __all__ = [
     "attach_measurements",
     "extract_item_measurements",
     "extract_session_measurements",
+    "is_projection_only_item",
 ]

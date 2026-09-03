@@ -104,6 +104,9 @@ Measurements retention keeps only bounded compact markers for wrapper
 suppression and terminal grouping. Those markers contain no command body,
 stdin content, or process/session identifier; a content-free assistant-output
 epoch preserves wait-streak boundaries after compact retention drops text.
+Each reconstructed wrapper child also retains a body-free `projection_only`
+measurement bit. Activity projections may show that semantic child, while
+context composition counts only the original provider-visible wrapper content.
 
 Consequently a legacy session can show `Searched the web for …`, `Updated plan:
 4 item(s)`, or an ungrouped bounded command such as `RunCommand: uv run ruff

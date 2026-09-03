@@ -39,6 +39,7 @@ _BACKGROUND_INTERACTION_TOOL_NAME = "codex_background_terminal_interaction"
 # Moved signatures keep their original ``_ParseState`` spelling.
 _ParseState = CodexAdapter._ParseState
 
+
 def activity_data(
     *,
     outcome: str | None,
@@ -61,6 +62,7 @@ def activity_data(
         activity["wrapper_status"] = wrapper_status
     return {"activity": activity}
 
+
 def native_command_outcome(*, status: ToolStatus, exit_code: int | None) -> str:
     if exit_code == 0:
         return "succeeded"
@@ -68,12 +70,14 @@ def native_command_outcome(*, status: ToolStatus, exit_code: int | None) -> str:
         return "failed"
     return "unknown"
 
+
 def native_activity_outcome(*, status: ToolStatus) -> str:
     if status == ToolStatus.COMPLETED:
         return "succeeded"
     if status == ToolStatus.FAILED:
         return "failed"
     return "unknown"
+
 
 def native_terminal_status(item: dict[str, Any], *, completed: bool) -> ToolStatus:
     """Normalize explicit native terminal status without wrapper inference."""
@@ -84,6 +88,7 @@ def native_terminal_status(item: dict[str, Any], *, completed: bool) -> ToolStat
         item.get("status"),
         default=ToolStatus.COMPLETED if completed else ToolStatus.IN_PROGRESS,
     )
+
 
 def native_item_timing(
     payload: dict[str, Any], timestamp: datetime
@@ -116,6 +121,7 @@ def native_item_timing(
         if duration >= 0:
             timing["duration_ms"] = duration
     return started_at, completed_at, timing
+
 
 def pending_exec_wrapper_candidates(
     state: _ParseState,
@@ -151,6 +157,7 @@ def pending_exec_wrapper_candidates(
                 candidates.append((wrapper, index))
     return candidates
 
+
 def match_pending_exec_wrapper(
     state: _ParseState,
     *,
@@ -180,6 +187,7 @@ def match_pending_exec_wrapper(
         hide_expanded_exec_wrapper(wrapper)
     return wrapper, index
 
+
 def match_pending_exec_wrapper_invocation(
     state: _ParseState,
     *,
@@ -202,6 +210,7 @@ def match_pending_exec_wrapper_invocation(
     ):
         hide_expanded_exec_wrapper(wrapper)
     return wrapper, index
+
 
 def hide_expanded_exec_wrapper(wrapper: _PendingExecWrapper) -> None:
     vendor_data = wrapper.call_record.data.setdefault("vendor_data", {})
@@ -254,6 +263,7 @@ def static_activity_input(invocation: StaticExecInvocation) -> Any:
         if isinstance(reference, str) and reference:
             return {"patch_reference": reference}
     return {"patch_reference": "literal"}
+
 
 def _background_terminal_identity(
     invocation: StaticExecInvocation,
@@ -360,9 +370,7 @@ def append_derived_exec_activities(
             }
         activity_outcome: str | None = None
         if not (background_poll or background_interaction):
-            activity_outcome = (
-                "succeeded" if invocation_observed_result else "unknown"
-            )
+            activity_outcome = "succeeded" if invocation_observed_result else "unknown"
         activity = activity_data(
             outcome=activity_outcome,
             fidelity=(
@@ -427,6 +435,7 @@ def append_derived_exec_activities(
                     fidelity="derived",
                 )
             )
+
 
 def handle_static_exec_wrapper_output(
     payload: dict,
@@ -507,6 +516,7 @@ def handle_static_exec_wrapper_output(
         transcript=transcript,
     )
     hide_expanded_exec_wrapper(wrapper)
+
 
 def handle_native_command_execution(
     payload: dict,
@@ -592,6 +602,16 @@ def handle_native_command_execution(
                 )
             return
 
+    wrapper_provenance: dict[str, Any] = {}
+    if matching is not None:
+        wrapper, index = matching
+        wrapper_provenance = {
+            "parent_tool_call_id": wrapper.call_id,
+            "parent_tool_name": "exec",
+            "nested_index": index,
+            "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+        }
+
     command_input: dict[str, Any] = {}
     if command is not None:
         command_input["cmd"] = command
@@ -603,6 +623,7 @@ def handle_native_command_execution(
         fidelity="observed_native",
         source=_codex_command_activity_source(item.get("source")),
         provenance={
+            **wrapper_provenance,
             "native_command_id": command_id,
             "source": "event_msg.item_completed"
             if completed
@@ -623,8 +644,7 @@ def handle_native_command_execution(
                     data={
                         "tool_call_id": command_id,
                         "tool_name": "exec_command",
-                        "output": item.get("formatted_output")
-                        or item.get("stdout"),
+                        "output": item.get("formatted_output") or item.get("stdout"),
                         "exit_code": exit_code,
                         "status": status.value,
                         "vendor_data": native_data,
@@ -646,9 +666,7 @@ def handle_native_command_execution(
                 "tool_call_id": command_id,
                 "input": command_input,
                 "command": command_input,
-                "status": (
-                    ToolStatus.IN_PROGRESS.value if completed else status.value
-                ),
+                "status": (ToolStatus.IN_PROGRESS.value if completed else status.value),
                 "item_kind": "command_execution",
                 "vendor_data": native_data,
             },
@@ -673,6 +691,7 @@ def handle_native_command_execution(
                 },
             )
         )
+
 
 def resolve_derived_exec_activity(
     wrapper: _PendingExecWrapper,
@@ -754,6 +773,7 @@ def resolve_derived_exec_activity(
     )
     return True
 
+
 def record_native_activity(
     *,
     state: _ParseState,
@@ -817,17 +837,26 @@ def record_native_activity(
             state.native_activity_ids.add(native_key)
             return
 
+    wrapper_provenance: dict[str, Any] = {}
+    if matching is not None:
+        wrapper, index = matching
+        wrapper_provenance = {
+            "parent_tool_call_id": wrapper.call_id,
+            "parent_tool_name": "exec",
+            "nested_index": index,
+            "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+        }
+
     activity = activity_data(
         outcome=outcome,
         fidelity="observed_native",
         activity_kind=None,
         provenance={
+            **wrapper_provenance,
             "native_item_id": native_id,
             "native_item_type": native_type,
             "source": (
-                "event_msg.item_completed"
-                if completed
-                else "event_msg.item_started"
+                "event_msg.item_completed" if completed else "event_msg.item_started"
             ),
             **(provenance or {}),
         },
@@ -866,9 +895,7 @@ def record_native_activity(
                 "tool_name": tool_name,
                 "tool_call_id": native_id,
                 "input": input_data,
-                "status": (
-                    ToolStatus.IN_PROGRESS.value if completed else status.value
-                ),
+                "status": (ToolStatus.IN_PROGRESS.value if completed else status.value),
                 "item_kind": item_kind,
                 "path": path,
                 "operation": operation,
@@ -896,6 +923,7 @@ def record_native_activity(
                 },
             )
         )
+
 
 def native_file_change_input(
     item: dict[str, Any],
@@ -941,6 +969,7 @@ def native_file_change_input(
         paths[0] if len(paths) == 1 else None,
         operations[0] if len(operations) == 1 else None,
     )
+
 
 def handle_native_file_change(
     payload: dict,
@@ -988,6 +1017,7 @@ def handle_native_file_change(
         provenance={"native_item_kind": "FileChange", **timing},
     )
 
+
 def normalize_web_correlation_value(value: Any) -> str | None:
     """Normalize query/pattern values without evaluating wrapper code."""
 
@@ -997,6 +1027,7 @@ def normalize_web_correlation_value(value: Any) -> str | None:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
         text = text[1:-1].strip()
     return text or None
+
 
 def static_web_search_queries(input_data: Any) -> set[str]:
     if not isinstance(input_data, dict):
@@ -1023,6 +1054,7 @@ def static_web_search_queries(input_data: Any) -> set[str]:
                 queries.add(query)
     return queries
 
+
 def static_web_operation_values(
     input_data: Any,
     operation: str,
@@ -1042,6 +1074,7 @@ def static_web_operation_values(
             if value is not None:
                 values.add(value)
     return values
+
 
 def extension_web_correlation_values(
     query: str | None,
@@ -1067,6 +1100,7 @@ def extension_web_correlation_values(
                 values.add(value)
     return values
 
+
 def static_web_matches_extension(
     invocation: StaticExecInvocation,
     *,
@@ -1089,9 +1123,7 @@ def static_web_matches_extension(
     if action_type == "findInPage":
         return bool(
             query_values
-            & static_web_operation_values(
-                invocation.input, "find", ("pattern",)
-            )
+            & static_web_operation_values(invocation.input, "find", ("pattern",))
         )
     if action_type == "other":
         # Codex's historical Extension schema does not expose a more
@@ -1099,6 +1131,7 @@ def static_web_matches_extension(
         # still make a single pending matching wrapper unambiguous.
         return "click" in invocation.input or "screenshot" in invocation.input
     return False
+
 
 def handle_native_web_search(
     payload: dict,
@@ -1147,6 +1180,7 @@ def handle_native_web_search(
         completed_at=completed_at,
         provenance={"native_item_kind": "WebSearch", **timing},
     )
+
 
 def handle_native_extension_web_search(
     payload: dict,
@@ -1217,6 +1251,7 @@ def handle_native_extension_web_search(
             **timing,
         },
     )
+
 
 def handle_native_terminal_item(
     payload: dict,
@@ -1301,9 +1336,7 @@ def handle_native_terminal_item(
             if item.get(key) is not None
         }
         output = {
-            key: item[key]
-            for key in ("result", "error")
-            if item.get(key) is not None
+            key: item[key] for key in ("result", "error") if item.get(key) is not None
         } or None
 
     elif item_type == "DynamicToolCall":
@@ -1388,6 +1421,7 @@ def handle_native_terminal_item(
         completed_at=completed_at,
         provenance=provenance,
     )
+
 
 def handle_native_plan(
     payload: dict,

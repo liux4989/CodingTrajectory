@@ -236,6 +236,7 @@ class ItemMeasurements(BaseModel):
     output_tokens: int = 0
     text_chars: int = 0
     text_tokens: int = 0
+    projection_only: bool = False
     output_truncated: bool = False
     output_original_tokens: int | None = None
     input_summary: str | None = None
