@@ -84,9 +84,12 @@ stdin content, or process/session identifier; a content-free assistant-output
 epoch preserves wait-streak boundaries after compact retention drops text.
 
 Consequently a legacy session can show `Searched the web for …`, `Updated plan:
-4 item(s)`, or an ungrouped `RunCommand: rg` rather than a raw `exec` code cell.
-It carries no displayed outcome when only static evidence exists. A newer
-session with native exit-zero facts can show `Ran N commands`.
+4 item(s)`, or an ungrouped bounded command such as `RunCommand: uv run ruff
+check …` rather than a raw `exec` code cell. Command rows prefer this bounded
+primary-command description over a lossy family head such as `src`, so distinct
+commands do not become identical labels. The row carries no displayed outcome
+when only static evidence exists. A newer session with native exit-zero facts
+can show `Ran N commands`.
 
 ## Physical session segments
 

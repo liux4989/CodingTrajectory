@@ -79,8 +79,8 @@ def build_flows(items: list[Item]) -> list[dict[str, Any]]:
                     # in the item summary while the overview mirrors the cell.
                     summary["name"] = RUN_COMMAND
                     summary["optimization_profile"] = "activity:command"
-                    summary["description"] = summary.get("command") or summary.get(
-                        "description"
+                    summary["description"] = summary.get("description") or summary.get(
+                        "command"
                     )
                 summary.setdefault("item_id", str(item.item_id))
                 result.append({"type": "tool_call", **summary})

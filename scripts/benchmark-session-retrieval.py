@@ -604,7 +604,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
         sequence=0,
         started_at=datetime(2026, 1, 1, tzinfo=UTC),
         status=ToolStatus.REQUESTED.value,
-        command="synthetic-derived-command",
+        command="uv run ruff check packages/core/src",
         vendor_data={
             "activity": {
                 "kind": "command",
@@ -614,8 +614,17 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
             }
         },
     )
+    second_derived_static_item = derived_static_item.model_copy(
+        update={
+            "sequence": 1,
+            "command": "uv run ruff check packages/cli/src",
+        }
+    )
     internal_derived_activity = build_flows([derived_static_item])[0]
     public_derived_activity = build_overview_flows([derived_static_item])[0]
+    distinguished_command_activities = build_overview_flows(
+        [derived_static_item, second_derived_static_item]
+    )
     background_wait_item = CommandExecutionItem(
         session_id=fixture.root_session_id,
         turn_id=fixture.second_turn_id,
@@ -695,6 +704,13 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
                 entry.get("status") in {"succeeded", "failed"}
                 for entry in summary["verification"]
             )
+        ),
+        "command_labels_preserve_distinguishing_context": (
+            [entry.get("cmd") for entry in distinguished_command_activities]
+            == [
+                "uv run ruff check packages/core/src",
+                "uv run ruff check packages/cli/src",
+            ]
         ),
         "control_only_waits_stay_detail_only": (
             len(internal_wait_activity) == 1
