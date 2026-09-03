@@ -291,10 +291,11 @@ membership and full-detail local custody:
   full-detail local evidence are server-only or principal-private.
 - Remote payloads contain compact historical facts only.
 
-`session.events` and `session.items` use the same handlers remotely, returning
-the event and item evidence retained by measurements mode. The envelope and
-existing coverage fields make omitted bodies explicit; there is no parallel
-remote result contract.
+Remote historical calls retain the same handlers and result contracts. A
+content-capability gate rejects `session.search`, `session.events`, and
+`session.items(include_content=true)` before dispatch because compact custody
+cannot satisfy them. Metadata-only `session.items` remains available; there is
+no parallel remote result contract.
 
 ## Foundation and delivery plan
 
@@ -324,11 +325,18 @@ enter clients.
 
 The only remaining remote work is operational rather than architectural:
 
-1. Apply migrations through `20260902070000_ct_remote_api.sql`.
+1. Apply migrations through `20260902080000_ct_collector_living_sequence.sql`.
 2. Deploy `ct api serve`, `ct projector run`, and `ct estimator run` as supervised
    services with server-only worker credentials.
 3. Complete private-corpus compact compatibility/privacy validation and publish
    canonical living changes from collectors.
+
+Compact historical access is intentionally narrower than local access.
+`session.search` and `session.events` are unavailable remotely, and
+`session.items` rejects `include_content=true`. These calls fail explicitly
+rather than returning undocumented partial results. Other historical methods
+retain topology and numeric metrics while omitting private names, previews,
+paths, team state, runtime identifiers, and narrative evidence.
 
 Revision-bound disk caching remains optional. It is not required for API parity
 and will not be implemented before measurements demonstrate a latency need.
@@ -348,10 +356,12 @@ normalizes complete JSONL prefixes with the existing adapters, and persists
 compact `canonical_session_snapshot.v2` records in its local outbox. It applies
 measurements retention plus the remote-boundary scrubber before publishing with
 a stable idempotency key and heartbeat.
-Deployment and real-host validation remain
+The collector can register a portable project before source publication and
+uses one durable outbox sequence for canonical living changes and heartbeats.
+Producing those canonical living changes and real-host validation remain local
 operational work because they require a specific Supabase project, registered
-agent credentials, and local source access. Its fixed boundary and commands
-are documented in [`local-collector-handoff.md`](local-collector-handoff.md).
+agent credentials, and local source access. Its fixed boundary and commands are
+documented in [`local-collector-handoff.md`](local-collector-handoff.md).
 
 ## Acceptance criteria
 

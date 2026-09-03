@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Protocol, Self
 from uuid import UUID
 
+from coding_trajectory.contracts import LivingChange, LivingSessionsChange
 from coding_trajectory.control_plane.collector_protocol import (
     LeaseHeartbeatRequest,
     LeaseHeartbeatResponse,
@@ -303,9 +304,56 @@ class LocalCollector:
 
     def pending_count(self) -> int:
         row = self._connection.execute(
-            "select count(*) as count from observation_outbox where state = 'pending'"
+            "select (select count(*) from observation_outbox where state = 'pending') + (select count(*) from living_outbox where state = 'pending') as count"
         ).fetchone()
         return int(row["count"])
+
+    def publish_living_changes(
+        self,
+        *,
+        remote: CollectorRemote,
+        kind: str,
+        changes: list[dict[str, Any]],
+        observed_at: datetime | None = None,
+    ) -> int:
+        """Durably publish local canonical changes using the shared lease sequence."""
+
+        model = (
+            LivingChange
+            if kind == "living.events"
+            else LivingSessionsChange
+            if kind == "living.sessions"
+            else None
+        )
+        if model is None:
+            raise ValueError(f"unsupported living observation kind: {kind}")
+        if (
+            not self._connection.execute(
+                "select 1 from living_outbox where kind = 'heartbeat' and state = 'accepted' limit 1"
+            ).fetchone()
+            and self._heartbeat(remote) is None
+        ):
+            raise CollectorRemoteError(
+                "collector heartbeat must be accepted before living changes"
+            )
+        timestamp = observed_at or datetime.now(UTC)
+        queued_sequences: set[int] = set()
+        for change in changes:
+            validated = model.model_validate(change).model_dump(
+                mode="json", exclude_none=True
+            )
+            source_cursor = validated.pop("cursor")
+            validated.pop("revision")
+            sequence = self._queue_living_request(
+                kind=kind,
+                source_cursor=source_cursor,
+                observed_at=timestamp,
+                payload=validated,
+            )
+            if sequence is not None:
+                queued_sequences.add(sequence)
+        committed = self._flush_living(remote)
+        return len(queued_sequences & committed.keys())
 
     def _collect_candidate(
         self, candidate: DiscoveryCandidate, *, remote: CollectorRemote | None
@@ -429,9 +477,12 @@ class LocalCollector:
                 "select source_id, next_source_sequence from registered_sources where source_id is not null"
             )
         }
-        sequence = int(self._get_meta("next_heartbeat_sequence", "1"))
-        response = remote.heartbeat(
-            LeaseHeartbeatRequest(
+        pending = self._connection.execute(
+            "select observation_sequence from living_outbox where kind = 'heartbeat' and state = 'pending' order by observation_sequence limit 1"
+        ).fetchone()
+        if pending is None:
+            sequence = self._next_living_sequence()
+            request = LeaseHeartbeatRequest(
                 workspace_id=self.identity.workspace_id,
                 agent_id=self.identity.agent_id,
                 agent_instance_id=self.identity.agent_instance_id,
@@ -440,10 +491,92 @@ class LocalCollector:
                 source_watermarks=source_watermarks,
                 runtime_state="living" if source_watermarks else "unknown",
             )
+            self._connection.execute(
+                "insert into living_outbox (observation_sequence, kind, source_cursor, request_json, state, created_at) values (?, 'heartbeat', null, ?, 'pending', ?)",
+                (sequence, request.model_dump_json(), datetime.now(UTC).isoformat()),
+            )
+            self._connection.commit()
+        else:
+            sequence = int(pending["observation_sequence"])
+        committed = self._flush_living(remote)
+        return committed.get(sequence)
+
+    def _queue_living_request(
+        self,
+        *,
+        kind: str,
+        source_cursor: str,
+        observed_at: datetime,
+        payload: dict[str, Any],
+    ) -> int | None:
+        existing = self._connection.execute(
+            "select observation_sequence, state from living_outbox where kind = ? and source_cursor = ?",
+            (kind, source_cursor),
+        ).fetchone()
+        if existing is not None:
+            return (
+                int(existing["observation_sequence"])
+                if existing["state"] == "pending"
+                else None
+            )
+        sequence = self._next_living_sequence()
+        request = LivingObservationRequest(
+            workspace_id=self.identity.workspace_id,
+            agent_id=self.identity.agent_id,
+            agent_instance_id=self.identity.agent_instance_id,
+            observation_sequence=sequence,
+            observed_at=observed_at,
+            kind=kind,
+            payload=payload,
         )
-        self._set_meta("next_heartbeat_sequence", str(sequence + 1))
+        self._connection.execute(
+            "insert into living_outbox (observation_sequence, kind, source_cursor, request_json, state, created_at) values (?, ?, ?, ?, 'pending', ?)",
+            (
+                sequence,
+                kind,
+                source_cursor,
+                request.model_dump_json(),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
         self._connection.commit()
-        return response.committed_sequence
+        return sequence
+
+    def _next_living_sequence(self) -> int:
+        legacy = int(self._get_meta("next_heartbeat_sequence", "1"))
+        sequence = int(self._get_meta("next_living_observation_sequence", str(legacy)))
+        self._set_meta(
+            "next_living_observation_sequence", str(max(sequence, legacy) + 1)
+        )
+        return max(sequence, legacy)
+
+    def _flush_living(self, remote: CollectorRemote) -> dict[int, int]:
+        committed: dict[int, int] = {}
+        rows = self._connection.execute(
+            "select * from living_outbox where state = 'pending' order by observation_sequence"
+        ).fetchall()
+        for row in rows:
+            try:
+                if row["kind"] == "heartbeat":
+                    receipt = remote.heartbeat(
+                        LeaseHeartbeatRequest.model_validate_json(row["request_json"])
+                    )
+                else:
+                    receipt = remote.publish_living_observation(
+                        LivingObservationRequest.model_validate_json(
+                            row["request_json"]
+                        )
+                    )
+            except (CollectorRemoteError, OSError, ValueError):
+                break
+            self._connection.execute(
+                "update living_outbox set state = 'accepted', committed_sequence = ? where observation_sequence = ?",
+                (receipt.committed_sequence, row["observation_sequence"]),
+            )
+            sequence = int(row["observation_sequence"])
+            committed[sequence] = receipt.committed_sequence
+            self._connection.commit()
+        return committed
 
     def _source_state(self, source: Path) -> sqlite3.Row | None:
         return self._connection.execute(
@@ -491,6 +624,12 @@ class LocalCollector:
             create table if not exists remote_receipts (
               idempotency_key text primary key, receipt_id text not null, outcome text not null,
               committed_sequence integer, received_at text not null
+            );
+            create table if not exists living_outbox (
+              observation_sequence integer primary key, kind text not null,
+              source_cursor text, request_json text not null, state text not null,
+              committed_sequence integer, created_at text not null,
+              unique(kind, source_cursor)
             );
             """
         )

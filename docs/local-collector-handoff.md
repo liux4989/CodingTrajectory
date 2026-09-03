@@ -40,6 +40,12 @@ Heartbeat and canonical living records share the agent-instance observation
 sequence, so the local publisher must allocate one monotonically increasing
 sequence across both operations.
 
+`ct collector run --project-name NAME` registers the portable project before
+source publication. `--repository-identity` and repeatable `--project-alias`
+values are optional; they must be portable identifiers, never host paths. An
+existing `--project-id` remains supported and is checked against registration
+when both forms are supplied.
+
 ## Collector responsibilities
 
 ```text
@@ -120,8 +126,9 @@ prompts, credentials, and proprietary content remain local.
 8. The same accepted observations produce the same graph hash when replayed.
 9. The compact wire payload contains no tool body, command body, host path,
    file/media body, data URI, or base64 body.
-10. Remote `session.events` and `session.items` return retained compact evidence
-    through the shared API and declare their scope.
+10. Remote `session.items` returns metadata only. `session.search`,
+    `session.events`, and `session.items(include_content=true)` fail explicitly
+    because compact snapshots do not retain the content their contracts need.
 11. The host publishes `living.events` and `living.sessions` canonical changes;
     heartbeat-only coverage remains explicit until this publisher is enabled.
 
@@ -140,8 +147,9 @@ local credentials and identifiers, then run one collection pass:
 export CT_SUPABASE_URL=https://your-project.supabase.co
 export CT_SUPABASE_ANON_KEY=...
 export CT_COLLECTOR_ACCESS_TOKEN=...
-uv run ct collector run --global-scope --since-days 7 \
-  --workspace-id <workspace-uuid> --agent-id <agent-uuid> --project-id <project-uuid>
+uv run ct collector run --since-days 7 \
+  --workspace-id <workspace-uuid> --agent-id <agent-uuid> \
+  --project-name <portable-name> --repository-identity <portable-repository-id>
 ```
 
 ### Refreshable macOS credential profile

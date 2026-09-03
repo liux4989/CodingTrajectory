@@ -104,7 +104,9 @@ class SupabaseRpcClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(http_request, timeout=self._timeout) as response:
+            with urllib.request.urlopen(
+                http_request, timeout=self._timeout
+            ) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:500]
@@ -159,6 +161,15 @@ def _projected_artifact(
     *,
     sessions: dict[UUID, tuple[Session, list[ProjectionObservation]]],
 ) -> ProjectedArtifact:
+    for edge in graph.edges:
+        if edge.metadata is not None and (
+            set(edge.metadata) != {"tool_name"}
+            or not isinstance(edge.metadata["tool_name"], str)
+            or not edge.metadata["tool_name"]
+        ):
+            raise RemoteControlPlaneError(
+                "remote graph edge retained metadata other than canonical tool_name"
+            )
     payload = graph.model_dump(mode="json")
     encoded = canonical_json(payload).encode()
     observations = [
@@ -236,7 +247,7 @@ class SupabaseHistoricalRepository:
     def store_for(
         self, method: str, params: dict[str, Any]
     ) -> tuple[DocumentStore, str]:
-        del method, params
+        _require_compact_historical_scope(method, params)
         if self._store is None:
             request: dict[str, Any] = {"workspace_id": str(self.workspace_id)}
             if self.snapshot_sequence is not None:
@@ -247,16 +258,22 @@ class SupabaseHistoricalRepository:
             sequence = raw.get("snapshot_sequence")
             artifacts = raw.get("artifacts")
             if not isinstance(sequence, int) or sequence < 0:
-                raise RemoteControlPlaneError("historical snapshot has invalid sequence")
+                raise RemoteControlPlaneError(
+                    "historical snapshot has invalid sequence"
+                )
             if not isinstance(artifacts, list):
-                raise RemoteControlPlaneError("historical snapshot has no artifact list")
+                raise RemoteControlPlaneError(
+                    "historical snapshot has no artifact list"
+                )
             graphs = [
                 SessionGraph.model_validate(item["payload"])
                 for item in artifacts
                 if isinstance(item, dict) and "payload" in item
             ]
             if len(graphs) != len(artifacts):
-                raise RemoteControlPlaneError("historical snapshot contains invalid artifacts")
+                raise RemoteControlPlaneError(
+                    "historical snapshot contains invalid artifacts"
+                )
             self.snapshot_sequence = sequence
             self._store = DocumentStore.from_session_graphs(graphs)
         return self._store, f"remote workspace snapshot {self.snapshot_sequence}"
@@ -271,3 +288,20 @@ class SupabaseHistoricalRepository:
             "freshness": "authoritative",
             "content_scope": "compact",
         }
+
+
+def _require_compact_historical_scope(method: str, params: dict[str, Any]) -> None:
+    """Reject historical requests whose contract requires omitted private content."""
+
+    if method == "session.search":
+        raise RemoteControlPlaneError(
+            "session.search is unavailable for compact remote snapshots because searchable content is not retained"
+        )
+    if method == "session.events":
+        raise RemoteControlPlaneError(
+            "session.events is unavailable for compact remote snapshots because full event content is not retained"
+        )
+    if method == "session.items" and params.get("include_content"):
+        raise RemoteControlPlaneError(
+            "session.items include_content=true is unavailable for compact remote snapshots"
+        )

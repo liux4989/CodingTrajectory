@@ -285,6 +285,21 @@ These tables remain small control-plane records. Do not normalize compact graph
 payloads further or add a blob backend merely to reduce table count; measure the
 activated representation before introducing another storage layer.
 
+### Compact historical compatibility
+
+The private-corpus survey establishes the supported boundary after privacy
+scrubbing:
+
+| Remote method | Compact support |
+|---|---|
+| `session.usage`, `graph.usage`, `session.model_usage`, default `session.request_usage` | Equivalent numeric result |
+| `project.sessions`, overview, summary, tree, stats, `session.tool_usage` | Supported with documented narrative/composition coverage loss |
+| `session.items` | Metadata only; `include_content=true` is rejected |
+| `session.search`, `session.events` | Rejected because required content is omitted |
+
+Local methods retain their existing full behavior. This is one shared method
+implementation with a remote content-capability gate, not a second API ruleset.
+
 ## Validation and rollout
 
 ### Phase 1 — compact collection (implemented)
@@ -299,8 +314,9 @@ activated representation before introducing another storage layer.
 
 1. For a private representative corpus, compare local full and remote compact
    results for summaries, graphs, statistics, and usage methods.
-2. Confirm `session.events` and `session.items` return retained compact evidence
-   through the same handlers and contracts as local reads.
+2. Confirm `session.search`, `session.events`, and content-bearing
+   `session.items` fail explicitly while metadata-only `session.items` remains
+   available through the shared handler and contract.
 3. Confirm exact retry, source epoch rollover, and change-log ordering with the
    compact payload digest.
 4. Confirm no host paths, file contents, data URIs, base64 bodies, or tool

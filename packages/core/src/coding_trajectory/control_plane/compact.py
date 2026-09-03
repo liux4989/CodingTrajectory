@@ -10,26 +10,16 @@ from coding_trajectory.analysis.measurements import attach_measurements
 from coding_trajectory.discovery import DiscoveryCandidate, stabilize_session
 from coding_trajectory.ingestion.graph import build_session_graph
 from coding_trajectory.ingestion.models import (
+    ClaudeCodeExtensions,
+    CodexExtensions,
     EventType,
     Session,
-    TeamMemberState,
-    TeamTaskState,
-    TeamTurnState,
     VendorExtensions,
 )
 from coding_trajectory.token_counter import counter_for_session_graph, scoped_counter
 
-_REMOTE_TOOL_EVENT_KEYS = frozenset(
-    {
-        "tool_call_id",
-        "tool_name",
-        "name",
-        "status",
-        "exit_code",
-        "child_session_id",
-        "thread_id",
-    }
-)
+_REMOTE_TOOL_EVENT_KEYS = frozenset({"tool_name"})
+_MAX_REMOTE_STRING_LENGTH = 512
 
 
 def build_remote_compact_session(
@@ -59,12 +49,21 @@ def build_remote_compact_session(
 
 
 def scrub_remote_session(session: Session) -> Session:
-    """Remove the few private fields retained by measurements mode."""
+    """Project a measurements session onto the compact-v2 privacy boundary."""
 
     events = [
-        event.model_copy(update={"payload": {}})
-        if event.type == EventType.USER_PROMPT_SUBMITTED
-        else event
+        event.model_copy(
+            update={
+                "actor": None,
+                "payload": (
+                    {"tool_name": event.payload["tool_name"]}
+                    if event.type != EventType.USER_PROMPT_SUBMITTED
+                    and isinstance(event.payload.get("tool_name"), str)
+                    and event.payload["tool_name"]
+                    else {}
+                ),
+            }
+        )
         for event in session.events
     ]
     turns = []
@@ -72,8 +71,10 @@ def scrub_remote_session(session: Session) -> Session:
         items = []
         for item in turn.items:
             update: dict[str, Any] = {}
-            if hasattr(item, "path"):
-                update["path"] = None
+            for field in ("text", "input", "output", "command", "path", "tool_call_id"):
+                if hasattr(item, field):
+                    update[field] = None
+            update["vendor_data"] = {}
             if item.measurements is not None:
                 update["measurements"] = item.measurements.model_copy(
                     update={
@@ -87,7 +88,7 @@ def scrub_remote_session(session: Session) -> Session:
             turn.model_copy(
                 update={
                     "items": items,
-                    "team_state": _scrub_team_state(turn.team_state),
+                    "team_state": None,
                 }
             )
         )
@@ -97,19 +98,32 @@ def scrub_remote_session(session: Session) -> Session:
         measurements = measurements.model_copy(
             update={
                 "context_sources": [
-                    source.model_copy(update={"key": "", "label": ""})
-                    for source in measurements.context_sources
+                    source.model_copy(
+                        update={
+                            "key": f"context-source-{index}",
+                            "label": f"Context source {index}",
+                        }
+                    )
+                    for index, source in enumerate(measurements.context_sources, 1)
                 ]
             }
         )
     return session.model_copy(
         update={
             "cwd": None,
+            "agent_name": None,
             "events": events,
             "turns": turns,
             "measurements": measurements,
             "runtime_observations": [
-                observation.model_copy(update={"reason": None, "trigger": None})
+                observation.model_copy(
+                    update={
+                        "turn_id_raw": None,
+                        "trace_id": None,
+                        "reason": None,
+                        "trigger": None,
+                    }
+                )
                 for observation in session.runtime_observations
             ],
             "extensions": _scrub_extensions(session),
@@ -118,10 +132,21 @@ def scrub_remote_session(session: Session) -> Session:
 
 
 def validate_remote_compact_session(session: Session) -> None:
-    """Reject a compact payload if a known body or host location survived."""
+    """Fail closed unless the session is exactly the compact-v2 projection."""
 
-    if session.cwd is not None or session.context_sources:
-        raise ValueError("remote compact session retained a host location or context body")
+    _reject_embedded_content(session.model_dump(mode="json"))
+    scrubbed = scrub_remote_session(session)
+    if scrubbed.model_dump(mode="json") != session.model_dump(mode="json"):
+        raise ValueError("remote compact session contains non-canonical private data")
+
+    if (
+        session.cwd is not None
+        or session.agent_name is not None
+        or session.context_sources
+    ):
+        raise ValueError(
+            "remote compact session retained a host location or context body"
+        )
     for event in session.events:
         if event.type == EventType.USER_PROMPT_SUBMITTED and event.payload:
             raise ValueError("remote compact session retained a user prompt")
@@ -152,66 +177,41 @@ def validate_remote_compact_session(session: Session) -> None:
                 )
             ):
                 raise ValueError("remote compact item retained a content summary")
-        if turn.team_state is not None and (
-            any(
-                member.name or member.team_name or member.summary
-                for member in turn.team_state.members
-            )
-            or any(task.title or task.summary for task in turn.team_state.tasks)
-        ):
-            raise ValueError("remote compact turn retained team-state text")
+        if turn.team_state is not None:
+            raise ValueError("remote compact turn retained team state")
     if any(
-        observation.reason or observation.trigger
+        observation.turn_id_raw
+        or observation.trace_id
+        or observation.reason
+        or observation.trigger
         for observation in session.runtime_observations
     ):
         raise ValueError("remote compact session retained runtime text")
-    if session.measurements is not None and any(
-        source.key or source.label for source in session.measurements.context_sources
-    ):
-        raise ValueError("remote compact session retained context-source labels")
-    extensions = session.extensions
-    if extensions is not None:
-        claude = extensions.claude_code
-        codex = extensions.codex
-        pi = extensions.pi
-        if claude is not None and any(
-            (claude.description, claude.title, claude.last_prompt)
-        ):
-            raise ValueError("remote compact session retained Claude text")
-        if codex is not None and any(
-            (codex.agent_path, codex.cwd, codex.preview, codex.title)
-        ):
-            raise ValueError("remote compact session retained Codex location text")
-        if pi is not None and any((pi.session_file, pi.cwd, pi.title)):
-            raise ValueError("remote compact session retained Pi location text")
 
 
-def _scrub_team_state(team_state: TeamTurnState | None) -> TeamTurnState | None:
-    if team_state is None:
-        return None
-    return team_state.model_copy(
-        update={
-            "members": [
-                TeamMemberState(
-                    member_id=member.member_id,
-                    session_id=member.session_id,
-                    color=member.color,
-                    agent_type=member.agent_type,
-                )
-                for member in team_state.members
-            ],
-            "tasks": [
-                TeamTaskState(
-                    task_id=task.task_id,
-                    status=task.status,
-                    member_id=task.member_id,
-                    blocked_by=task.blocked_by,
-                    updated_fields=task.updated_fields,
-                )
-                for task in team_state.tasks
-            ],
-        }
-    )
+def _reject_embedded_content(value: Any, *, field: str = "") -> None:
+    """Reject inline content even if it appears in an otherwise allowed field."""
+
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = key.lower().replace("-", "_")
+            if child not in (None, "", [], {}) and (
+                "data_uri" in normalized
+                or "blob" in normalized
+                or "media" in normalized
+            ):
+                raise ValueError(f"remote compact session retained {key}")
+            _reject_embedded_content(child, field=key)
+    elif isinstance(value, list):
+        for child in value:
+            _reject_embedded_content(child, field=field)
+    elif isinstance(value, str):
+        if len(value) > _MAX_REMOTE_STRING_LENGTH:
+            raise ValueError(
+                f"remote compact session retained unbounded string in {field}"
+            )
+        if value.lstrip().lower().startswith("data:"):
+            raise ValueError(f"remote compact session retained data URI in {field}")
 
 
 def _scrub_extensions(session: Session) -> VendorExtensions | None:
@@ -220,21 +220,20 @@ def _scrub_extensions(session: Session) -> VendorExtensions | None:
         return None
     claude = extensions.claude_code
     if claude is not None:
-        claude = claude.model_copy(
-            update={
-                "description": None,
-                "title": None,
-                "last_prompt": None,
-            }
+        claude = ClaudeCodeExtensions(
+            is_sidechain=claude.is_sidechain,
+            spawn_depth=claude.spawn_depth,
         )
     codex = extensions.codex
     if codex is not None:
-        codex = codex.model_copy(
-            update={"agent_path": None, "cwd": None, "preview": None, "title": None}
+        codex = CodexExtensions(
+            forked_from_id=codex.forked_from_id,
+            spawn_parent_thread_id=codex.spawn_parent_thread_id,
+            spawn_depth=codex.spawn_depth,
+            spawn_links={
+                child_session_id: "" for child_session_id in codex.spawn_links
+            },
         )
-    pi = extensions.pi
-    if pi is not None:
-        pi = pi.model_copy(update={"session_file": None, "cwd": None, "title": None})
-    return extensions.model_copy(
-        update={"claude_code": claude, "codex": codex, "pi": pi}
-    )
+    if claude is None and codex is None:
+        return None
+    return VendorExtensions(claude_code=claude, codex=codex, pi=None)

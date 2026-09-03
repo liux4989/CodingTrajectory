@@ -16,6 +16,9 @@ from coding_trajectory.control_plane.collector import (
     LocalCollector,
     SupabaseCollectorRemote,
 )
+from coding_trajectory.control_plane.collector_protocol import (
+    ProjectRegistrationRequest,
+)
 from coding_trajectory.discovery import discover_source_candidates
 
 from coding_trajectory_cli._shared import (
@@ -75,7 +78,7 @@ def _remote_from_args(args: argparse.Namespace) -> SupabaseCollectorRemote:
 
 
 def _identity_from_args(
-    args: argparse.Namespace, state_path: Path
+    args: argparse.Namespace, state_path: Path, *, project_id: UUID | None = None
 ) -> CollectorIdentity:
     agent_instance_id = args.agent_instance_id or uuid5(
         NAMESPACE_URL, f"ct-collector:{args.agent_id}:{state_path.resolve()}"
@@ -84,7 +87,7 @@ def _identity_from_args(
         workspace_id=args.workspace_id,
         agent_id=args.agent_id,
         agent_instance_id=agent_instance_id,
-        project_id=args.project_id,
+        project_id=project_id if project_id is not None else args.project_id,
     )
 
 
@@ -135,17 +138,37 @@ def _handle_run(args: argparse.Namespace) -> dict[str, Any]:
     _apply_credential_profile(args)
     _require_identity(args)
     state_path = _state_path(args.state_path)
-    identity = _identity_from_args(args, state_path)
+    remote = _remote_from_args(args)
+    project_id = args.project_id
+    if args.project_name:
+        registration = remote.register_project(
+            ProjectRegistrationRequest(
+                workspace_id=args.workspace_id,
+                agent_id=args.agent_id,
+                display_name=args.project_name,
+                repository_identity=args.repository_identity,
+                aliases=args.project_alias,
+            )
+        )
+        if project_id is not None and registration.project_id != project_id:
+            raise ValueError(
+                "registered project does not match the configured --project-id"
+            )
+        project_id = registration.project_id
+    if project_id is None:
+        raise ValueError("collector run requires --project-id or --project-name")
+    identity = _identity_from_args(args, state_path, project_id=project_id)
     with LocalCollector(database_path=state_path, identity=identity) as collector:
         result = collector.collect(
             current_dir=Path.cwd(),
             global_scope=args.global_scope,
             agent_vendor=args.agent_vendor,
             since_days=args.since_days,
-            remote=_remote_from_args(args),
+            remote=remote,
             heartbeat=not args.no_heartbeat,
         )
     return {
+        "project_id": str(project_id),
         "discovered": result.discovered,
         "queued": result.queued,
         "accepted": result.accepted,
@@ -231,6 +254,20 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     run.add_argument("--workspace-id", type=_uuid_arg)
     run.add_argument("--agent-id", type=_uuid_arg)
     run.add_argument("--project-id", type=_uuid_arg)
+    run.add_argument(
+        "--project-name",
+        help="Register this portable project display name before publishing.",
+    )
+    run.add_argument(
+        "--repository-identity",
+        help="Optional portable repository identity; never a host path.",
+    )
+    run.add_argument(
+        "--project-alias",
+        action="append",
+        default=[],
+        help="Portable project alias; repeat for multiple aliases.",
+    )
     run.add_argument("--agent-instance-id", type=_uuid_arg)
     run.add_argument("--state-path", help="Private SQLite delivery state path.")
     run.add_argument("--supabase-url", help="Defaults to CT_SUPABASE_URL.")
