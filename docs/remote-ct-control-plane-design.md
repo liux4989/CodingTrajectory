@@ -1,6 +1,6 @@
 # Remote CT Control Plane Design
 
-- **Status:** Shareable historical path implemented locally; deployment pending
+- **Status:** Historical schema deployed; seven-day project upload and authenticated reads verified
 - **Date:** 2026-09-05
 - **Scope:** Public method authorities, historical artifacts, project inventory,
   living state, estimation, and collector handoff
@@ -226,6 +226,17 @@ clients.
 
 A failed gate stops rollout. Privacy, topology, checkpoint, snapshot, and
 idempotency rules are never weakened to continue deployment.
+
+## Verified rollout
+
+The authorized non-production reset, seven-day project upload, and authenticated
+historical reads completed on 2026-09-05. See
+[`remote-ct-rollout-2026-09-05.md`](remote-ct-rollout-2026-09-05.md) for aggregate
+evidence and the remaining supervision/living/estimation scope.
+
+Publication has a 60-second function-level database budget and a 90-second
+collector transport wait. A timeout retains the original request for exact
+retry; it does not relax the artifact integrity or size limits.
 
 ## Non-goals
 

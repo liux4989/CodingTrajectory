@@ -13,7 +13,7 @@ living leases, estimation records, and transactional worker delivery.
 
 Local SQLite files remain delivery state or disposable revision-bound read
 models. Do not convert or upload them as Supabase migrations. Vendor logs remain
-host-local upstream evidence and are published only through the future
+host-local upstream evidence and are published only through the
 authenticated collector protocol described in
 [`docs/local-collector-handoff.md`](../docs/local-collector-handoff.md).
 
@@ -69,3 +69,15 @@ supabase db push --linked
 
 `db push` deploys only committed migration files; it does not publish the
 project's current SQLite read models.
+
+## Current non-production rollout
+
+The CT application schema was reset and rebuilt on 2026-09-05 with explicit
+non-production authorization. The seven-day CodingTrajectory project snapshot
+was published and authenticated remote reads were verified. See the
+[aggregate rollout report](../docs/remote-ct-rollout-2026-09-05.md).
+
+The publication RPC has a scoped 60-second execution budget. Other API role
+timeouts remain unchanged. The current schema can be rebuilt from the committed
+migration files; old CT observations need not be converted after an authorized
+full application reset.

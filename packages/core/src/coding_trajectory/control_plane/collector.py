@@ -183,9 +183,14 @@ class SupabaseCollectorRemote:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(
-                http_request, timeout=self._timeout
-            ) as response:
+            # The publication RPC has a bounded 60s database budget. Allow
+            # transport overhead so a valid commit can return its receipt.
+            timeout = (
+                max(self._timeout, 90)
+                if name == "ct_collector_publish_artifacts"
+                else self._timeout
+            )
+            with urllib.request.urlopen(http_request, timeout=timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except (
             urllib.error.URLError,

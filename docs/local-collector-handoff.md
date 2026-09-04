@@ -1,6 +1,6 @@
 # Local Collector Handoff
 
-- **Status:** Direct shareable-artifact collector implemented; deployment pending
+- **Status:** Manual seven-day publication and authenticated reads verified; supervision not enabled
 - **Owner:** A host with authorized access to local vendor logs
 - **Depends on:** The shareable-graph migration and a capability-scoped collector
   principal
@@ -151,3 +151,12 @@ the aggregate pending count.
 12. Filtered scans preserve history outside their scope; incomplete overlapping
     graphs are rejected without blocking a later complete scan.
 13. Two agents publish disjoint graphs to one project without replacing each other.
+
+## Verified non-production run
+
+The 2026-09-05 run accepted 18 logical sources from 20 physical files and
+published eight graphs, with zero pending or rejected deliveries. Its private
+fresh delivery state must be used explicitly when resuming this publication
+stream; the previous default delivery database was preserved. The publication
+RPC has a 60-second database execution budget, with a 90-second client wait.
+See [`remote-ct-rollout-2026-09-05.md`](remote-ct-rollout-2026-09-05.md).

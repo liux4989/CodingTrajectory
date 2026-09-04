@@ -1,6 +1,6 @@
 # Shareable Historical Artifact Decision
 
-- **Status:** Implemented locally; non-production deployment pending
+- **Status:** Deployed to the authorized non-production target; seven-day project reads verified
 - **Date:** 2026-09-05
 - **Scope:** Historical collection, storage, replay, and API coverage
 - **Related:** [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md),
@@ -182,6 +182,8 @@ The four committed metric baselines pass without expected-value changes. All
 four fixture graphs replay byte-identically. Stats and usage responses match;
 model-usage responses differ only by the intentionally omitted titles.
 
-This is local execution evidence, not a deployed Supabase canary. Hosted Auth,
-PostgREST, RLS under real roles, concurrent collectors, and deployment remain
-subject to the existing authorized non-production rollout gate.
+These isolated checks were followed by an authorized non-production reset and
+publication through hosted Auth and PostgREST. Authenticated historical reads
+passed. The [rollout report](remote-ct-rollout-2026-09-05.md) records the deployed
+evidence and execution-budget adjustment. Concurrent collectors and ongoing
+supervision remain outside that verified scope.
