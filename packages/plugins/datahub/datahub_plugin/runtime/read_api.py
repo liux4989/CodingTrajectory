@@ -18,7 +18,7 @@ from coding_trajectory.datahub import (
 from pydantic import BaseModel, ConfigDict, Field
 
 from datahub_plugin.projections import context_window
-from datahub_plugin.projections.analytical_read_models import (
+from datahub_plugin.projections.analytical_read_models_facts import (
     CANONICAL_FACT_SCOPE,
     FACT_GRAPH_OVERVIEW,
     FACT_GRAPH_STATS,
@@ -35,10 +35,14 @@ from datahub_plugin.projections.analytical_read_models import (
     TOKEN_OUTLIER,
     TOKEN_PATTERN,
     TOKEN_PROJECT_META,
-    CanonicalFactsApiClient,
-    analytical_scope_key,
     build_token_efficiency_project_rows,
     canonical_fact_entity_kinds,
+)
+from datahub_plugin.projections.analytical_read_models_clients import (
+    CanonicalFactsApiClient,
+)
+from datahub_plugin.projections.analytical_read_models_reconstruction import (
+    analytical_scope_key,
     page_metadata,
     reconstruct_model_usage,
     reconstruct_token_efficiency_project,
@@ -47,7 +51,7 @@ from datahub_plugin.projections.detail_hydration import (
     DetailHydrator,
     DetailUnavailable,
 )
-from datahub_plugin.projections.read_models import (
+from datahub_plugin.projections.read_models_reconstruction import (
     reconstruct_recent_work,
 )
 from datahub_plugin.projections.session_timeline import build_session_evidence_timeline

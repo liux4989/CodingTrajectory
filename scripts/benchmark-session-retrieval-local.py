@@ -41,9 +41,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "packages" / "core" / "src"))
 
-from coding_trajectory.analysis.projection_utils import truncate_text_preview
-from coding_trajectory.analysis.request_lineage import extract_user_request
-from coding_trajectory.analysis.session_retrieval import (
+from coding_trajectory.analysis.projection_utils import truncate_text_preview  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.analysis.request_lineage import extract_user_request  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.analysis.session_retrieval import (  # noqa: E402 - repository-local imports after sys.path setup
     _SEARCH_SNIPPET_LIMIT,
     _SUMMARY_LIMITS,
     _SUMMARY_TEXT_LIMIT,
@@ -52,16 +52,16 @@ from coding_trajectory.analysis.session_retrieval import (
     _low_value_request,
     _search_documents,
 )
-from coding_trajectory.discovery import discover_store_from_files, locate_session_files
-from coding_trajectory.ingestion.indexes import build_session_graph_index
-from coding_trajectory.ingestion.models import (
+from coding_trajectory.discovery import discover_store_from_files, locate_session_files  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.ingestion.indexes import build_session_graph_index  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.ingestion.models import (  # noqa: E402 - repository-local imports after sys.path setup
     CommandExecutionItem,
     FileChangeItem,
     ReasoningItem,
     Session,
 )
-from coding_trajectory.query import DocumentStore
-from coding_trajectory.service import IndexCache, dispatch
+from coding_trajectory.query import DocumentStore  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.service import IndexCache, dispatch  # noqa: E402 - repository-local imports after sys.path setup
 
 BENCHMARK_NAME = "session-retrieval-local"
 SCHEMA_VERSION = 1

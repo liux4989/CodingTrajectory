@@ -10,13 +10,11 @@ with Pydantic again.
 
 # ruff: noqa: F401, I001
 from __future__ import annotations
-
 import hashlib
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
-
 from coding_trajectory.datahub import (
     DocumentError,
     DocumentStore,
@@ -36,8 +34,21 @@ from coding_trajectory.metrics import (
 )
 from coding_trajectory.runtime import ServiceApiClient
 from pydantic import ValidationError
+from datahub_plugin.projections import model_usage
+from datahub_plugin.projections import token_efficiency_assembly as token_efficiency
+from datahub_plugin.projections.analytical_read_models_facts import (
+    _build_canonical_fact_rows_from_store,
+)
+from datahub_plugin.projections.analytical_read_models_reconstruction import (
+    _adapter_execute,
+    _project_items_from_session_facts,
+    _project_list_from_store,
+    _row_payload,
+    _session_entrypoint,
+    _telemetry_payload_id,
+    _value,
+)
 
-from datahub_plugin.projections import model_usage, token_efficiency
 
 type Mutation = dict[str, Any]
 type PersistedRow = Mapping[str, Any] | Any
@@ -107,21 +118,6 @@ _FACT_ENTITY_KINDS = (
 
 DetailName = Literal["sessions", "turns", "errors", "breaks", "projects"]
 TokenDetailName = Literal["patterns", "hotspots", "outliers"]
-
-
-from datahub_plugin.projections.analytical_read_models_facts import (
-    _build_canonical_fact_rows_from_store,
-)
-
-from datahub_plugin.projections.analytical_read_models_reconstruction import (
-    _adapter_execute,
-    _project_items_from_session_facts,
-    _project_list_from_store,
-    _row_payload,
-    _session_entrypoint,
-    _telemetry_payload_id,
-    _value,
-)
 
 
 class DocumentStoreApiClient:

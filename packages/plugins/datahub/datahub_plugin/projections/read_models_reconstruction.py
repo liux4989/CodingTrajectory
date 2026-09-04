@@ -9,14 +9,12 @@ payload dictionaries so a hot read does not rebuild canonical models row by row.
 
 # ruff: noqa: F401
 from __future__ import annotations
-
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
-
 from coding_trajectory import debug
 from coding_trajectory.datahub import (
     DiscoveryResult,
@@ -29,6 +27,16 @@ from coding_trajectory.datahub import (
     dispatch,
 )
 from pydantic import BaseModel, ConfigDict, Field
+from datahub_plugin.projections.read_models_contracts import (
+    BuildIssue,
+    OverviewPayload,
+    ProjectDetailPayload,
+    ProjectPayload,
+    ReadModelEntity,
+    SessionTimelinePayload,
+    SourceGraphRelationship,
+)
+
 
 DEFAULT_RECENT_HORIZON_DAYS = 7
 
@@ -44,17 +52,6 @@ EntityKind = Literal[
 ]
 IssueDisposition = Literal["failed", "inconclusive"]
 BuildStatus = Literal["success", "partial", "failed", "inconclusive"]
-
-
-from datahub_plugin.projections.read_models_contracts import (
-    BuildIssue,
-    OverviewPayload,
-    ProjectDetailPayload,
-    ProjectPayload,
-    ReadModelEntity,
-    SessionTimelinePayload,
-    SourceGraphRelationship,
-)
 
 
 def reconstruct_projects(

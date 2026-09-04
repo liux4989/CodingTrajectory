@@ -4,7 +4,7 @@
 - **Date:** 2026-09-05
 - **Scope:** Public method authorities, historical artifacts, project inventory,
   living state, estimation, and collector handoff
-- **Supersedes:** [`remote-session-ledger-design.md`](remote-session-ledger-design.md)
+- **Supersedes:** [`remote-session-ledger-design.md`](archive/remote-session-ledger-design.md)
 
 ## Decision
 
@@ -160,7 +160,7 @@ is not introduced while representative artifacts remain safely within those
 bounds.
 
 The complete artifact contract and retention decision are documented in
-[`remote-ct-storage-optimization-proposal.md`](remote-ct-storage-optimization-proposal.md).
+[`shareable-history.md`](shareable-history.md).
 
 ## Content policy
 

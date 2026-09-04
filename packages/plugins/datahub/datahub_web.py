@@ -1,5 +1,4 @@
-"""Compatibility facade for Datahub's web server."""
-from datahub_plugin.serving.server import *
+"""Direct script entry point for the Datahub web server."""
 from datahub_plugin.serving.server import main
 
 if __name__ == "__main__":

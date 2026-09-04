@@ -2,10 +2,14 @@
 
 ## Status
 
-Proposed design, revision 2. No implementation exists yet.
+Original design, revision 2. Forecasting is now implemented under
+`packages/core/src/coding_trajectory/estimation/`, with public contracts under
+`contracts/estimate.py`. The details below preserve the design rationale; the
+current contracts and [control-plane design](remote-ct-control-plane-design.md)
+govern implemented behavior.
 
 The mechanism extends the Pydantic service contracts in
-`packages/core/src/coding_trajectory/contracts.py` and the `code-time`
+`packages/core/src/coding_trajectory/contracts/` and the `code-time`
 surfaces of the `datahub` plugin. It does not introduce a new plugin and does
 not make model output canonical CT data.
 

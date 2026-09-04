@@ -1,12 +1,12 @@
+# Product requirements
 
-# Background
-There are many scattered coding agent logs, either are for 'runtime' execution recording puporse which is too noisy for post-analysis and runtime monintoring, or each coding agent's has different representation for the the same concepts  and has each angonistic feature which both of them need pre-processing the contextural connection based on each offcial docs.
+CodingTrajectory reconstructs vendor logs into an agent-agnostic hierarchy for
+session analysis, token accounting, and observed runtime activity. Consumers
+progress from bounded summaries to exact local evidence through stable IDs.
 
-# Goals
-- Reconstruct the 'coding agent loop 
-- Enrich Specific vendors' feature
-
-# Architecture
+The canonical hierarchy is `SessionGraph → Session → Turn → Item`, with events
+providing underlying evidence. Ordinary conversation forks and spawned agent
+runs retain their distinct scopes.
 
 # Core Layer Boundary
 - `Event`, `Item`, `Turn`, and `Session` are canonical normalized resources.
@@ -25,15 +25,6 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - Retention policy must not introduce consumer concepts such as waste scores, rankings, dashboard cards, default horizons, or UI labels. Those remain projection-layer decisions, and immutable vendor logs remain the evidence authority for lazy detail reconstruction.
 - Consumer-owned derived stores are replaceable artifacts, not canonical compatibility boundaries. An incompatible SQLite format must be rebuilt from immutable logs; core vendor compatibility and versioned public API contracts remain separate responsibilities.
 
-# Evaluation Projection Layer
-- Evaluation terminology and grader selection follow the adaptation of Anthropic's [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) recorded in the session-evaluation high-level design; CodingTrajectory's versioned contracts remain authoritative.
-- Raw vendor logs are reconstruction and audit inputs, not default evaluator context.
-- Evaluation starts from canonical `session.overview` and `session.items` projections and builds a versioned task contract plus bounded evidence records with stable evidence IDs.
-- Rubric compilation receives requests, material requirement changes, compact turn structure, repository instructions, and validation authority without receiving the full outcome trajectory.
-- Semantic judgment receives the final response and criterion-relevant observable evidence. It may request one bounded expansion by canonical evidence kind and turn ID; CT resolves the request and never grants unrestricted raw-log or checkout access.
-- Executable verification and final aggregation remain deterministic CT-owned operations outside the evaluator agent.
-- Evaluation artifacts record evidence selection, expansion, evaluator versions, and source fingerprints so reduced context does not weaken provenance.
-
 # Activity Projection Layer
 - Activity projections have three separate layers: immutable vendor evidence, canonical item lifecycle reconstruction, and compact presentation. A presentation summary never replaces its underlying item evidence.
 - The projector owns an active activity cell and flushes it at every hard boundary. Consecutive successful read/list/search operations become one `Explore` cell; consecutive successful command executions become one `RunCommand` cell; web activity, mutations, external tools, failures, assistant messages, and unresolved item ownership remain distinct. Every cell keeps its item IDs for drill-down.
@@ -41,22 +32,18 @@ There are many scattered coding agent logs, either are for 'runtime' execution r
 - The same cell state machine applies after every vendor adapter emits canonical lifecycle facts. Vendor-specific parsing, static-fallback provenance, and raw wrapper preservation remain adapter-local.
 - The Codex-reference mapping, historical fallback boundary, and cross-agent contract are recorded in [`docs/codex-activity-reconstruction.md`](codex-activity-reconstruction.md).
 
-# Infrastructural layer
-- Discover : discocer all agent logs
+# Shareable history
 
-- Reconstruct Tree
-  - Trajector
-  - Session : {session-id}
-  - Turn : {user-request}  
-  - Steps :
-    -- LLMResponse: {response text}
-    -- Tool : {tool_name} {category}{type}{params} {output}  #The raw event logs  will have lots of chain toolevents for a single tool, we can category and reduce to one tool event
-    
+- The originating host constructs one strict `ct.shareable_graph.v1` artifact.
+- Local shareable calls and remote calls reuse that artifact and the same handlers.
+- Source observations contain checkpoint metadata only. Raw logs, transcript
+  bodies, and general event arrays are never historical upload payloads.
+- Detailed search, events, and contentful items remain local evidence APIs.
+- Remote history stores validated artifacts directly; there is no remote
+  canonical reconstruction worker or compact-session compatibility path.
+- The [shareable history contract](shareable-history.md) defines bounds and
+  reduced semantic coverage. The [control plane](remote-ct-control-plane-design.md)
+  defines inventory, living, and estimation authority separately.
 
-# Desing Consideration
-- there are many lifecycle events: like SESSION_STARTED,LLM_REQUEST_STARTED, e.t.c They are runtime execution logs. For our reconstruct tree, we don't need to show it. A hirerachy tree will show the current agent task status.
-    - Current implementation problem: different agnet has different lifecycle names and insufficient lifecycle support, we are trying to support it all which leads to a massive events library and 'confidence' mechanism
-- the event should be category first instead just show a chain events. 
-- remove nosiy events: the raw logs also has many message for execution recoridng purpose.
-- progressive disclousre: our api desing will be hireachy , we don't show all information via one method. and the details we prefer a deep id query.
-- do not store heuristic or presentation-only interpretation in canonical fields.
+Earlier evaluation proposals remain in the [design archive](archive/README.md);
+they do not establish a currently available evaluation API.

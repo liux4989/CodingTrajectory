@@ -7,7 +7,7 @@
 
 ## Status
 
-Implemented experimental plugin. Its validated cohort and reconciliation behavior is being retained while browser analytics migrate into Datahub's Compare route; see [`dashboard-plugins-redesign.md`](dashboard-plugins-redesign.md).
+Implemented experimental plugin. Its validated cohort and reconciliation behavior is being retained while browser analytics migrate into Datahub's Compare route; see [`dashboard-plugins-redesign.md`](../dashboard-plugins-redesign.md).
 
 ## Purpose
 

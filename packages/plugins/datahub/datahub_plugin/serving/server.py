@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import argparse
 import gzip
 import json
@@ -19,8 +18,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
-
 from coding_trajectory import datahub as _core_datahub  # noqa: F401
+import datahub_plugin.cli.code_time_cmd as code_time_mod
+from datahub_plugin.api_models import validate_api_response
+from datahub_plugin.runtime.runtime import DatahubIncrementalRuntime
+
 
 _FINGERPRINTED_ASSET = re.compile(r"-[A-Za-z0-9_-]{8,}\.[^.]+$")
 _GZIP_CONTENT_TYPES = (
@@ -32,9 +34,6 @@ _GZIP_CONTENT_TYPES = (
     "text/",
 )
 
-import datahub_plugin.cli.code_time as code_time_mod
-from datahub_plugin.api_models import validate_api_response
-from datahub_plugin.runtime.runtime import DatahubIncrementalRuntime
 
 _DEFAULT_PAGE_SIZE = 50
 _MAX_PAGE_SIZE = 200

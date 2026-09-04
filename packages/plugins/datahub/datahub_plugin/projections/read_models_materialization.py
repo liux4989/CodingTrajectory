@@ -9,14 +9,12 @@ payload dictionaries so a hot read does not rebuild canonical models row by row.
 
 # ruff: noqa: F401, I001
 from __future__ import annotations
-
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
-
 from coding_trajectory import debug
 from coding_trajectory.datahub import (
     DiscoveryResult,
@@ -29,6 +27,30 @@ from coding_trajectory.datahub import (
     dispatch,
 )
 from pydantic import BaseModel, ConfigDict, Field
+from datahub_plugin.projections.read_models_contracts import (
+    BuildIssue,
+    GraphMaterialization,
+    ProjectContributionPayload,
+    ReadModelBuild,
+    ReadModelEntity,
+    SessionPayload,
+    TimelineContributionPayload,
+    TimelineSessionPayload,
+)
+from datahub_plugin.projections.read_models_reconstruction import (
+    _build_status,
+    _debug_issues,
+    _entity,
+    _graph_cost,
+    _graph_started_at,
+    _issue,
+    _project_catalog_entities,
+    _project_path,
+    _recent_scope,
+    _source_relationships,
+    aggregate_read_models,
+)
+
 
 DEFAULT_RECENT_HORIZON_DAYS = 7
 
@@ -44,32 +66,6 @@ EntityKind = Literal[
 ]
 IssueDisposition = Literal["failed", "inconclusive"]
 BuildStatus = Literal["success", "partial", "failed", "inconclusive"]
-
-
-from datahub_plugin.projections.read_models_contracts import (
-    BuildIssue,
-    GraphMaterialization,
-    ProjectContributionPayload,
-    ReadModelBuild,
-    ReadModelEntity,
-    SessionPayload,
-    TimelineContributionPayload,
-    TimelineSessionPayload,
-)
-
-from datahub_plugin.projections.read_models_reconstruction import (
-    _build_status,
-    _debug_issues,
-    _entity,
-    _graph_cost,
-    _graph_started_at,
-    _issue,
-    _project_catalog_entities,
-    _project_path,
-    _recent_scope,
-    _source_relationships,
-    aggregate_read_models,
-)
 
 
 def build_read_models(

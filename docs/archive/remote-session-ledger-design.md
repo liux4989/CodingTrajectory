@@ -1,6 +1,6 @@
 # Remote Session Ledger Design (Superseded)
 
-- **Status:** Superseded by [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md)
+- **Status:** Superseded by [`remote-ct-control-plane-design.md`](../remote-ct-control-plane-design.md)
 - **Date:** 2026-09-02
 - **Scope:** CodingTrajectory session storage, API custody, and agent caches
 

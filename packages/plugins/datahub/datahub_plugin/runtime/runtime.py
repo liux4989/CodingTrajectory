@@ -8,7 +8,9 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from datahub_plugin.projections.read_models import DEFAULT_RECENT_HORIZON_DAYS
+from datahub_plugin.projections.read_models_contracts import (
+    DEFAULT_RECENT_HORIZON_DAYS,
+)
 from datahub_plugin.runtime.evidence import RuntimeEvidenceMixin
 from datahub_plugin.runtime.materialize import _default_database_path
 from datahub_plugin.runtime.monitor import (

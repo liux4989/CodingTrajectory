@@ -105,7 +105,7 @@ class SourceCheckpointPayload(CollectorModel):
 
 
 class ObservationRequest(CollectorModel):
-    """One idempotent, host-normalized source snapshot."""
+    """One idempotent, metadata-only source checkpoint."""
 
     version: Literal[1] = 1
     workspace_id: UUID
@@ -114,7 +114,7 @@ class ObservationRequest(CollectorModel):
     source_epoch: int = Field(ge=1)
     source_sequence: int = Field(ge=0)
     event_id: str = Field(min_length=1)
-    schema_version: str = Field(min_length=1)
+    schema_version: Literal["ct.source_checkpoint.v1"] = "ct.source_checkpoint.v1"
     parser_version: str = Field(min_length=1)
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     observed_at: datetime
@@ -122,8 +122,6 @@ class ObservationRequest(CollectorModel):
 
     @model_validator(mode="after")
     def validate_current_checkpoint(self) -> ObservationRequest:
-        if self.schema_version != "ct.source_checkpoint.v1":
-            return self
         SourceCheckpointPayload.model_validate(self.payload)
         digest = hashlib.sha256(canonical_json(self.payload).encode()).hexdigest()
         if digest != self.content_sha256:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import sys
+from pathlib import Path
 from enum import Enum, auto
 
 from .agent import run_agent
@@ -25,12 +26,16 @@ class BenchmarkFSM:
         self,
         log_file: str,
         task_case: str | None = None,
-        output_dir: str = "results",
+        output_dir: str | Path | None = None,
         interactive: bool = False,
     ) -> None:
         self.log_file = log_file
         self.task_case = task_case
-        self.output_dir = output_dir
+        self.output_dir = (
+            output_dir
+            if output_dir is not None
+            else Path(__file__).resolve().parents[3] / ".artifacts" / "benchmarks"
+        )
         self.interactive = interactive
         self.state = State.LOAD
         self.run = BenchmarkRun()

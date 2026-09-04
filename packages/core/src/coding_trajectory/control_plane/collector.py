@@ -272,7 +272,7 @@ class LocalCollector:
         self._connection.execute(
             "update artifact_outbox set state = 'pending' where state = 'in_flight'"
         )
-        self._retire_legacy_outbox()
+        self._reject_invalid_observations()
         self._connection.commit()
 
     def close(self) -> None:
@@ -1187,18 +1187,16 @@ class LocalCollector:
             "insert or ignore into logical_sources (vendor, native_session_id, source_id, source_epoch, next_source_sequence, last_digest, snapshot_schema_version) select vendor, native_session_id, max(source_id), max(source_epoch), max(next_source_sequence), null, max(snapshot_schema_version) from registered_sources group by vendor, native_session_id"
         )
 
-    def _retire_legacy_outbox(self) -> None:
+    def _reject_invalid_observations(self) -> None:
         rows = self._connection.execute(
             "select idempotency_key, request_json from observation_outbox where state in ('pending', 'in_flight')"
         ).fetchall()
         for row in rows:
             try:
-                request = ObservationRequest.model_validate_json(row["request_json"])
+                ObservationRequest.model_validate_json(row["request_json"])
             except ValueError:
-                continue
-            if request.schema_version != _SOURCE_SCHEMA_VERSION:
                 self._connection.execute(
-                    "update observation_outbox set state = 'rejected', last_error = 'superseded_schema_not_published' where idempotency_key = ?",
+                    "update observation_outbox set state = 'rejected', last_error = 'invalid_checkpoint_not_published' where idempotency_key = ?",
                     (row["idempotency_key"],),
                 )
 

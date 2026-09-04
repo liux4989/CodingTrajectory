@@ -105,7 +105,7 @@ into one project; overlapping ownership fails closed.
 
 The collector publishes the structural/numeric core and constrained semantic
 labels documented in
-[`remote-ct-storage-optimization-proposal.md`](remote-ct-storage-optimization-proposal.md).
+[`shareable-history.md`](shareable-history.md).
 It never uploads raw logs, complete sessions, event arrays, commands, tool
 inputs, tool outputs, prose previews, titles, or pending-plan text. A value
 visible only inside a tool output therefore does not enter remote history.

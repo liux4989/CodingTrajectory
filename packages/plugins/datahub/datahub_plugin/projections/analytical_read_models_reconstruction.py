@@ -37,7 +37,8 @@ from coding_trajectory.metrics import (
 from coding_trajectory.runtime import ServiceApiClient
 from pydantic import ValidationError
 
-from datahub_plugin.projections import model_usage, token_efficiency
+from datahub_plugin.projections import model_usage
+from datahub_plugin.projections import token_efficiency_assembly as token_efficiency
 
 type Mutation = dict[str, Any]
 type PersistedRow = Mapping[str, Any] | Any

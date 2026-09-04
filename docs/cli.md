@@ -185,6 +185,4 @@ There is no dedicated core CLI command for this service method.
    - `key=!` requires a payload field to be absent or null
    - dot paths such as `result.error=*` are supported
 
-See [`cli-agent-notebook.ipynb`](cli-agent-notebook.ipynb) for an interactive
-Jupyter tutorial with examples and workflow guidance.
 ---

@@ -17,7 +17,7 @@ SCHEMA = WEB / "src/api/schema/datahub-api.schema.json"
 TYPES = WEB / "src/api/generated/datahub-api.ts"
 sys.path.insert(0, str(PLUGIN))
 
-from datahub_plugin.api_models import (
+from datahub_plugin.api_models import (  # noqa: E402 - repository-local imports after sys.path setup
     API_RESPONSE_MODELS,
     DELIVERY_FAMILIES,
 )

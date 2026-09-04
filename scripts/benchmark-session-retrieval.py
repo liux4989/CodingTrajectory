@@ -32,8 +32,8 @@ from pydantic import BaseModel, Field
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "packages" / "core" / "src"))
 
-from coding_trajectory.analysis.activity_flow import build_flows, build_overview_flows
-from coding_trajectory.ingestion.models import (
+from coding_trajectory.analysis.activity_flow import build_flows, build_overview_flows  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.ingestion.models import (  # noqa: E402 - repository-local imports after sys.path setup
     AgentMessageItem,
     CommandExecutionItem,
     Event,
@@ -48,13 +48,13 @@ from coding_trajectory.ingestion.models import (
     Turn,
     Vendor,
 )
-from coding_trajectory.query import DocumentStore
-from coding_trajectory.service import IndexCache, dispatch
+from coding_trajectory.query import DocumentStore  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.service import IndexCache, dispatch  # noqa: E402 - repository-local imports after sys.path setup
 
 BENCHMARK_NAME = "session-retrieval-synthetic"
 SCHEMA_VERSION = 1
 DEFAULT_OUTPUT = (
-    REPO_ROOT / "benchmarks" / "results" / "session-retrieval-synthetic-v1.json"
+    REPO_ROOT / ".artifacts" / "benchmarks" / "session-retrieval-synthetic-v1.json"
 )
 _TOKEN_RE = re.compile(r"[\w./:@+-]+", re.UNICODE)
 

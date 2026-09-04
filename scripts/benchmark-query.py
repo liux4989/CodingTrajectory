@@ -18,7 +18,7 @@ Usage:
     uv run python scripts/benchmark-query.py --repeat 3
     uv run python scripts/benchmark-query.py --small                # use smallest graph (sanity)
 
-Writes a JSON baseline to benchmarks/results/query-baseline.json.
+Writes a JSON baseline to .artifacts/benchmarks/query-baseline.json.
 """
 
 from __future__ import annotations
@@ -357,7 +357,7 @@ def main() -> int:
                     print(line)
 
     # --- persist baseline ----------------------------------------------------
-    out_dir = REPO_ROOT / "benchmarks" / "results"
+    out_dir = REPO_ROOT / ".artifacts" / "benchmarks"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "query-baseline.json"
     out_path.write_text(json.dumps(baseline, indent=2, default=str) + "\n")

@@ -5,7 +5,6 @@ __pycache__/
 dist/
 build/
 .artifacts/
-.artifacts/session-retrieval-local/
 .pytest_cache/
 .ruff_cache/
 packages/*/web/dist/
@@ -43,3 +42,7 @@ bun.lock
 
 # Amp orb portals
 .amp/portals/*
+
+# Regenerable benchmark reports (including old output locations)
+benchmarks/results/
+/results/

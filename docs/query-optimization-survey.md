@@ -37,7 +37,7 @@ Two distinct cost layers:
 ## 2. Benchmark harness
 
 `scripts/benchmark-query.py` - isolates both layers, repeats measurements, and
-optionally cProfiles named methods. Writes `benchmarks/results/query-baseline.json`.
+optionally cProfiles named methods. Current runs write `.artifacts/benchmarks/query-baseline.json`.
 
 ## 3. Results
 
@@ -266,4 +266,5 @@ uv run python scripts/benchmark-query.py --no-store-build \
     --graph-id <uuid> --methods session.tool_usage --profile session.tool_usage
 ```
 
-Baseline: `benchmarks/results/query-baseline.json`.
+The original `benchmarks/results/query-baseline.json` is retained in Git history;
+current runs write `.artifacts/benchmarks/query-baseline.json`.

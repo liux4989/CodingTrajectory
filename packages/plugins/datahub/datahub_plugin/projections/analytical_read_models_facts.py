@@ -10,13 +10,11 @@ with Pydantic again.
 
 # ruff: noqa: F401
 from __future__ import annotations
-
 import hashlib
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
-
 from coding_trajectory.datahub import (
     DocumentError,
     DocumentStore,
@@ -36,8 +34,17 @@ from coding_trajectory.metrics import (
 )
 from coding_trajectory.runtime import ServiceApiClient
 from pydantic import ValidationError
+from datahub_plugin.projections import model_usage
+from datahub_plugin.projections import token_efficiency_assembly as token_efficiency
+from datahub_plugin.projections.analytical_read_models_reconstruction import (
+    _detail_mutations,
+    _fact_mutation,
+    _mutation,
+    _scope_key,
+    _token_row_id,
+    _without,
+)
 
-from datahub_plugin.projections import model_usage, token_efficiency
 
 if TYPE_CHECKING:
     from datahub_plugin.projections.analytical_read_models_clients import (
@@ -112,16 +119,6 @@ _FACT_ENTITY_KINDS = (
 
 DetailName = Literal["sessions", "turns", "errors", "breaks", "projects"]
 TokenDetailName = Literal["patterns", "hotspots", "outliers"]
-
-
-from datahub_plugin.projections.analytical_read_models_reconstruction import (
-    _detail_mutations,
-    _fact_mutation,
-    _mutation,
-    _scope_key,
-    _token_row_id,
-    _without,
-)
 
 
 def build_canonical_root_fact_rows(

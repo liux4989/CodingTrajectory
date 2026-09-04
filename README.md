@@ -10,12 +10,12 @@ Unified canonical models and CLI tooling for coding-agent session graphs.
 
 ## Docs
 
-- CLI usage: [`docs/cli.md`](docs/cli.md)
-- CLI agent notebook: [`docs/cli-agent-notebook.ipynb`](docs/cli-agent-notebook.ipynb)
-- Amp local collector: [`docs/amp-collector.md`](docs/amp-collector.md)
-- Remote control plane: [`docs/remote-ct-control-plane-design.md`](docs/remote-ct-control-plane-design.md)
-- Local collector and deployment handoff: [`docs/local-collector-handoff.md`](docs/local-collector-handoff.md)
-- PRD & Architecture: [`docs/prd.md`](docs/prd.md)
+- [Documentation index](docs/README.md)
+- [Product requirements](docs/prd.md) and [architecture](docs/architecture.md)
+- [Shareable historical artifacts](docs/shareable-history.md)
+- [CLI usage](docs/cli.md)
+- [Collector and deployment handoff](docs/local-collector-handoff.md)
+- [Benchmark and artifact policy](benchmarks/README.md)
 
 ## Checks
 

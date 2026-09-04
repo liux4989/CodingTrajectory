@@ -2,8 +2,9 @@
 
 CodingTrajectory includes a project Amp plugin at
 `.amp/plugins/coding-trajectory/index.ts`. It is the first transport for Amp
-threads and establishes the raw contract that a future hosted collector can
-accept without changing canonical ingestion.
+threads and establishes the host-local raw input for canonical ingestion.
+Hosted collection receives only metadata checkpoints and the locally assembled
+[shareable artifact](shareable-history.md), never these raw transcripts.
 
 ## Storage
 

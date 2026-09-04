@@ -1,6 +1,5 @@
 # ruff: noqa: F401, I001
 from __future__ import annotations
-
 import hashlib
 import json
 import math
@@ -10,9 +9,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Literal
-
 from coding_trajectory.runtime import ServiceApiClient
-
 from datahub_plugin.projections.stat_utils import parse_datetime as _parse_datetime
 from datahub_plugin.projections.stat_utils import percentile as _percentile
 from datahub_plugin.projections.stat_utils import safe_div as _safe_div
@@ -34,6 +31,24 @@ from datahub_plugin.projections.token_efficiency_models import (
     ProjectProjection,
     UnitDistributions,
 )
+from datahub_plugin.projections.token_efficiency_period_analysis import (
+    _attribution,
+    _comparison,
+    _hotspot_rows,
+    _optional_int,
+    _optional_text,
+    _outlier_rows,
+    _pattern_rows,
+    _period_summary,
+    _prompt_tokens,
+    _required_discovery_days,
+    _trend_periods,
+)
+from datahub_plugin.projections.token_efficiency_tool_analysis import (
+    _latest_periods,
+    _tool_records,
+)
+
 
 # A batch shares one ServiceRuntime and its resolved store.  Keep this bounded
 # so one CLI response cannot grow without limit, while avoiding repeated index
@@ -187,26 +202,6 @@ _COORDINATION_TOOL_NAMES = {
     "update_plan",
     "wait_agent",
 }
-
-
-from datahub_plugin.projections.token_efficiency_period_analysis import (
-    _attribution,
-    _comparison,
-    _hotspot_rows,
-    _optional_int,
-    _optional_text,
-    _outlier_rows,
-    _pattern_rows,
-    _period_summary,
-    _prompt_tokens,
-    _required_discovery_days,
-    _trend_periods,
-)
-
-from datahub_plugin.projections.token_efficiency_tool_analysis import (
-    _latest_periods,
-    _tool_records,
-)
 
 
 def build_project_projection(

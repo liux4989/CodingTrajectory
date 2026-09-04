@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 2 design. Implementation begins only after the contracts and acceptance gates in [`session-evaluation-foundation-lite.md`](session-evaluation-foundation-lite.md) pass. The product and mechanism are defined in [`session-evaluation-high-level-design.md`](session-evaluation-high-level-design.md).
+Phase 2 design. Implementation begins only after the contracts and acceptance gates in `session-evaluation-foundation-lite.md` (absent from the current tree) pass. The product and mechanism are defined in [`session-evaluation-high-level-design.md`](session-evaluation-high-level-design.md).
 
 ## Objective
 

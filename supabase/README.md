@@ -6,10 +6,12 @@ currently visible Supabase project's database major version.
 
 ## Source-of-truth boundary
 
-CodingTrajectory now defines the remote control-plane foundation in
-`migrations/20260902000000_ct_control_plane_foundation.sql`. It owns workspace
-identity, accepted observations, immutable graph revisions, portable projects,
-living leases, estimation records, and transactional worker delivery.
+Apply the complete ordered migration chain under `migrations/`. The foundation
+is extended by the shareable-graph migration and publication-budget migration.
+Current historical ingress accepts metadata-only checkpoints and locally built
+`ct.shareable_graph.v1` artifacts; the old historical projector and RPCs are
+retired. Inventory, living, and estimation have separate durable authorities.
+Do not squash or delete earlier migrations: later migrations depend on them.
 
 Local SQLite files remain delivery state or disposable revision-bound read
 models. Do not convert or upload them as Supabase migrations. Vendor logs remain

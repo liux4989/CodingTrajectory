@@ -17,7 +17,7 @@ from coding_trajectory.datahub import (
 )
 from coding_trajectory.analysis.measurements import MeasurementMismatchError
 
-from datahub_plugin.projections.analytical_read_models import (
+from datahub_plugin.projections.analytical_read_models_facts import (
     CANONICAL_FACT_SCOPE,
     FACT_PROJECT_SESSION,
     FACT_SESSION_STATS,
@@ -25,10 +25,12 @@ from datahub_plugin.projections.analytical_read_models import (
     MODEL_META,
     MODEL_SESSION,
     MODEL_TURN,
-    CanonicalFactsApiClient,
     build_canonical_root_fact_rows,
     build_model_usage_rows,
     canonical_fact_entity_kinds,
+)
+from datahub_plugin.projections.analytical_read_models_clients import (
+    CanonicalFactsApiClient,
 )
 from datahub_plugin.runtime.materialize import (
     _candidate_paths,
