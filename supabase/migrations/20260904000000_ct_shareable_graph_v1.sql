@@ -103,7 +103,8 @@ declare
 begin
   case jsonb_typeof(value)
     when 'object' then
-      for entry in select key, value from jsonb_each(value) loop
+      for entry in select kv.key, kv.value
+        from jsonb_each(ct_shareable_json_safe.value) kv loop
         normalized_key := lower(replace(entry.key, '-', '_'));
         if normalized_key = any(array[
           'input', 'output', 'command', 'cwd', 'vendor_data', 'event_ids',
@@ -112,6 +113,16 @@ begin
         ]) then
           return false;
         end if;
+        if normalized_key = any(array['title', 'preview', 'text_preview'])
+          and entry.value <> 'null'::jsonb then return false; end if;
+        if normalized_key = 'plan_actions' and entry.value <> '[]'::jsonb
+          then return false; end if;
+        if normalized_key = 'description' and entry.value not in (
+          'null'::jsonb, '"tests"'::jsonb, '"checks"'::jsonb, '"command"'::jsonb
+        ) then return false; end if;
+        if normalized_key = 'content' and entry.value not in (
+          'false'::jsonb, '"[content omitted]"'::jsonb
+        ) then return false; end if;
         if normalized_key = 'events' and entry.value <> 'false'::jsonb then
           return false;
         end if;
@@ -186,36 +197,36 @@ declare
   distinct_count integer;
 begin
   if not public.ct_jsonb_object_matches(
-    value,
+    ct_shareable_graph_valid.value,
     array['schema_version', 'graph', 'sessions', 'edges', 'coverage'],
     array['schema_version', 'graph', 'sessions', 'edges', 'coverage']
-  ) or value ->> 'schema_version' <> 'ct.shareable_graph.v1'
-    or not public.ct_shareable_json_safe(value) then
+  ) or ct_shareable_graph_valid.value ->> 'schema_version' <> 'ct.shareable_graph.v1'
+    or not public.ct_shareable_json_safe(ct_shareable_graph_valid.value) then
     return false;
   end if;
 
   if not public.ct_jsonb_object_matches(
-    value -> 'graph',
+    ct_shareable_graph_valid.value -> 'graph',
     array[
       'root_session_id', 'project', 'started_at', 'ended_at', 'status',
       'session_count', 'turn_count', 'item_count'
     ],
     array['root_session_id', 'session_count', 'turn_count', 'item_count']
   ) or not public.ct_jsonb_nonnegative_integer(
-      value -> 'graph' -> 'session_count'
+      ct_shareable_graph_valid.value -> 'graph' -> 'session_count'
     )
     or not public.ct_jsonb_nonnegative_integer(
-      value -> 'graph' -> 'turn_count'
+      ct_shareable_graph_valid.value -> 'graph' -> 'turn_count'
     )
     or not public.ct_jsonb_nonnegative_integer(
-      value -> 'graph' -> 'item_count'
+      ct_shareable_graph_valid.value -> 'graph' -> 'item_count'
     )
-    or (value -> 'graph' ->> 'root_session_id')::uuid is null then
+    or (ct_shareable_graph_valid.value -> 'graph' ->> 'root_session_id')::uuid is null then
     return false;
   end if;
 
   if not public.ct_jsonb_object_matches(
-    value -> 'coverage',
+    ct_shareable_graph_valid.value -> 'coverage',
     array[
       'content', 'events', 'topology', 'usage', 'measurements',
       'semantic_previews'
@@ -224,38 +235,38 @@ begin
       'content', 'events', 'topology', 'usage', 'measurements',
       'semantic_previews'
     ]
-  ) or value -> 'coverage' <> '{
+  ) or ct_shareable_graph_valid.value -> 'coverage' <> '{
     "content": false,
     "events": false,
     "topology": true,
     "usage": true,
     "measurements": true,
-    "semantic_previews": true
+    "semantic_previews": false
   }'::jsonb then
     return false;
   end if;
 
-  if jsonb_typeof(value -> 'sessions') <> 'array'
-    or jsonb_array_length(value -> 'sessions') = 0
-    or jsonb_typeof(value -> 'edges') <> 'array' then
+  if jsonb_typeof(ct_shareable_graph_valid.value -> 'sessions') <> 'array'
+    or jsonb_array_length(ct_shareable_graph_valid.value -> 'sessions') = 0
+    or jsonb_typeof(ct_shareable_graph_valid.value -> 'edges') <> 'array' then
     return false;
   end if;
 
   select count(distinct session_entry ->> 'session_id') into distinct_count
-  from jsonb_array_elements(value -> 'sessions') as sessions(session_entry);
-  if distinct_count <> jsonb_array_length(value -> 'sessions')
+  from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry);
+  if distinct_count <> jsonb_array_length(ct_shareable_graph_valid.value -> 'sessions')
     or not exists (
       select 1
-      from jsonb_array_elements(value -> 'sessions') as sessions(session_entry)
+      from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
       where session_entry ->> 'session_id' =
-        value -> 'graph' ->> 'root_session_id'
+        ct_shareable_graph_valid.value -> 'graph' ->> 'root_session_id'
     ) then
     return false;
   end if;
 
   for session_value in
     select session_entry
-    from jsonb_array_elements(value -> 'sessions') as sessions(session_entry)
+    from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
   loop
     if not public.ct_jsonb_object_matches(
       session_value,
@@ -638,27 +649,27 @@ begin
   end loop;
 
   select count(distinct turn_entry ->> 'turn_id') into distinct_count
-  from jsonb_array_elements(value -> 'sessions') as sessions(session_entry)
+  from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
   cross join lateral jsonb_array_elements(session_entry -> 'turns')
     as turns(turn_entry);
   if distinct_count <> turn_count then
     return false;
   end if;
   select count(distinct item_entry ->> 'item_id') into distinct_count
-  from jsonb_array_elements(value -> 'sessions') as sessions(session_entry)
+  from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
   cross join lateral jsonb_array_elements(session_entry -> 'turns')
     as turns(turn_entry)
   cross join lateral jsonb_array_elements(turn_entry -> 'items') as items(item_entry);
   if distinct_count <> item_count
-    or (value -> 'graph' ->> 'session_count')::integer <>
-      jsonb_array_length(value -> 'sessions')
-    or (value -> 'graph' ->> 'turn_count')::integer <> turn_count
-    or (value -> 'graph' ->> 'item_count')::integer <> item_count then
+    or (ct_shareable_graph_valid.value -> 'graph' ->> 'session_count')::integer <>
+      jsonb_array_length(ct_shareable_graph_valid.value -> 'sessions')
+    or (ct_shareable_graph_valid.value -> 'graph' ->> 'turn_count')::integer <> turn_count
+    or (ct_shareable_graph_valid.value -> 'graph' ->> 'item_count')::integer <> item_count then
     return false;
   end if;
   if exists (
     select 1
-    from jsonb_array_elements(value -> 'sessions') session_entry
+    from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') session_entry
     where (
       select count(*)
       from jsonb_array_elements(session_entry -> 'turns') turn_entry
@@ -668,7 +679,7 @@ begin
     )
   ) or exists (
     select 1
-    from jsonb_array_elements(value -> 'sessions') session_entry
+    from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') session_entry
     cross join lateral jsonb_array_elements(session_entry -> 'turns') turn_entry
     where (
       select count(*)
@@ -683,7 +694,7 @@ begin
 
   if exists (
     select 1
-    from jsonb_array_elements(value -> 'edges') edge_entry
+    from jsonb_array_elements(ct_shareable_graph_valid.value -> 'edges') edge_entry
     group by
       edge_entry ->> 'kind',
       edge_entry ->> 'source_session_id',
@@ -697,7 +708,7 @@ begin
 
   for edge_value in
     select edge_entry
-    from jsonb_array_elements(value -> 'edges') as edges(edge_entry)
+    from jsonb_array_elements(ct_shareable_graph_valid.value -> 'edges') as edges(edge_entry)
   loop
     if not public.ct_jsonb_object_matches(
       edge_value,
@@ -716,11 +727,11 @@ begin
       or edge_value ->> 'confidence' not in ('high', 'medium', 'low')
       or not exists (
       select 1
-      from jsonb_array_elements(value -> 'sessions') as sessions(session_entry)
+      from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
       where session_entry ->> 'session_id' = edge_value ->> 'source_session_id'
     ) or not exists (
       select 1
-      from jsonb_array_elements(value -> 'sessions') as sessions(session_entry)
+      from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
       where session_entry ->> 'session_id' = edge_value ->> 'target_session_id'
     ) then
       return false;
@@ -743,7 +754,7 @@ begin
         origin_value ? 'turn_id'
         and not exists (
           select 1
-          from jsonb_array_elements(value -> 'sessions') session_entry,
+          from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') session_entry,
             jsonb_array_elements(session_entry -> 'turns') turn_entry
           where session_entry ->> 'session_id' =
               edge_value ->> 'source_session_id'
@@ -756,7 +767,7 @@ begin
           not (origin_value ? 'turn_id')
           or not exists (
             select 1
-            from jsonb_array_elements(value -> 'sessions') session_entry,
+            from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') session_entry,
               jsonb_array_elements(session_entry -> 'turns') turn_entry,
               jsonb_array_elements(turn_entry -> 'items') item_entry
             where session_entry ->> 'session_id' =
@@ -782,12 +793,16 @@ immutable
 set search_path = public, pg_temp
 as $$
 begin
-  return jsonb_typeof(value) = 'object'
+  return coalesce(public.ct_jsonb_object_matches(
+      value,
+      array['kind', 'source_checkpoint', 'shareable_digest'],
+      array['kind', 'source_checkpoint', 'shareable_digest']
+    )
     and value - 'kind' - 'source_checkpoint' - 'shareable_digest' = '{}'::jsonb
     and value ->> 'kind' = 'ct.source_checkpoint.v1'
     and value ->> 'shareable_digest' ~ '^[0-9a-f]{64}$'
     and jsonb_typeof(value -> 'source_checkpoint') = 'object'
-    and value -> 'source_checkpoint' - 'segments' = '{}'::jsonb
+    and (value -> 'source_checkpoint') - 'segments' = '{}'::jsonb
     and jsonb_typeof(value -> 'source_checkpoint' -> 'segments') = 'array'
     and jsonb_array_length(value -> 'source_checkpoint' -> 'segments') > 0
     and not exists (
@@ -795,7 +810,7 @@ begin
       from jsonb_array_elements(value -> 'source_checkpoint' -> 'segments') entry
       where jsonb_typeof(entry) <> 'number'
         or entry #>> '{}' !~ '^[1-9][0-9]*$'
-    );
+    ), false);
 exception when others then
   return false;
 end;
@@ -893,7 +908,7 @@ create table public.ct_project_publishers (
   last_request_sha256 text,
   last_committed_sequence bigint,
   updated_at timestamptz not null default now(),
-  primary key (workspace_id, project_id),
+  primary key (workspace_id, project_id, agent_id),
   foreign key (workspace_id, project_id)
     references public.ct_projects(workspace_id, project_id) on delete cascade,
   foreign key (workspace_id, agent_id)
@@ -1164,6 +1179,7 @@ declare
   superseded_count integer := 0;
   omitted_count integer := 0;
   stale boolean := false;
+  incomplete_scope boolean := false;
   details jsonb;
 begin
   if not public.ct_collector_authorized(
@@ -1368,6 +1384,7 @@ begin
   from public.ct_project_publishers record
   where record.workspace_id = target_workspace_id
     and record.project_id = target_project_id
+    and record.agent_id = target_agent_id
   for update;
   if not found then
     if target_publication_sequence <> 0 then
@@ -1378,9 +1395,6 @@ begin
       workspace_id, project_id, agent_id
     ) values (target_workspace_id, target_project_id, target_agent_id)
     returning * into publisher;
-  elsif publisher.agent_id <> target_agent_id then
-    raise exception 'project publisher belongs to another collector agent'
-      using errcode = '42501';
   end if;
 
   if target_publication_sequence <= publisher.committed_publication_sequence then
@@ -1403,9 +1417,39 @@ begin
       using errcode = '22023';
   end if;
 
+  -- Any overlapping current graph must be replaced in full. A filtered scan
+  -- is not authority to remove its uncollected sessions or another host's data.
+  incomplete_scope := exists (
+    select 1 from public.ct_artifacts current_artifact
+    join public.ct_artifact_revision_sources previous
+      on previous.workspace_id = current_artifact.workspace_id
+      and previous.artifact_id = current_artifact.artifact_id
+      and previous.revision = current_artifact.current_revision
+    where current_artifact.workspace_id = target_workspace_id
+      and current_artifact.project_id = target_project_id
+      and exists (
+        select 1 from public.ct_artifact_revision_resources resource,
+          jsonb_array_elements(request -> 'artifacts') incoming,
+          jsonb_array_elements(incoming -> 'payload' -> 'sessions') session
+        where resource.workspace_id = current_artifact.workspace_id
+          and resource.artifact_id = current_artifact.artifact_id
+          and resource.revision = current_artifact.current_revision
+          and resource.resource_kind = 'session'
+          and resource.resource_id = (session ->> 'session_id')::uuid
+      )
+      and not exists (
+        select 1 from jsonb_array_elements(request -> 'source_vector') incoming
+        where (incoming ->> 'source_id')::uuid = previous.source_id
+      )
+  );
+
   allocated_sequence := public.ct_next_workspace_sequence(target_workspace_id);
-  if stale then
-    details := jsonb_build_object('publication_outcome', 'superseded');
+  if stale or incomplete_scope then
+    details := case when incomplete_scope then jsonb_build_object(
+      'reason', 'incomplete_graph_scope',
+      'publication_outcome', 'rejected',
+      'remedy', 'include all sources of overlapping published graphs'
+    ) else jsonb_build_object('publication_outcome', 'superseded') end;
     insert into public.ct_change_log (
       workspace_id, sequence, authority, kind, resource_id, payload
     ) values (
@@ -1420,16 +1464,19 @@ begin
         last_request_sha256 = request_sha256,
         last_committed_sequence = allocated_sequence,
         updated_at = clock_timestamp()
-    where workspace_id = target_workspace_id and project_id = target_project_id;
+    where workspace_id = target_workspace_id and project_id = target_project_id
+      and agent_id = target_agent_id;
     insert into public.ct_ingest_receipts (
       workspace_id, receipt_id, agent_id, idempotency_key, request_sha256,
       outcome, committed_sequence, details
     ) values (
       target_workspace_id, receipt_id, target_agent_id, idempotency_key,
-      request_sha256, 'accepted', allocated_sequence, details
+      request_sha256, case when incomplete_scope then 'rejected' else 'accepted' end,
+      allocated_sequence, details
     );
     return jsonb_build_object(
-      'receipt_id', receipt_id, 'outcome', 'accepted',
+      'receipt_id', receipt_id,
+      'outcome', case when incomplete_scope then 'rejected' else 'accepted' end,
       'committed_sequence', allocated_sequence, 'details', details
     );
   end if;
@@ -1568,6 +1615,22 @@ begin
     where artifact.workspace_id = target_workspace_id
       and artifact.project_id = target_project_id
       and artifact.current_revision > 0
+      and exists (
+        select 1 from public.ct_artifact_revision_sources previous
+        where previous.workspace_id = artifact.workspace_id
+          and previous.artifact_id = artifact.artifact_id
+          and previous.revision = artifact.current_revision
+      )
+      and not exists (
+        select 1 from public.ct_artifact_revision_sources previous
+        where previous.workspace_id = artifact.workspace_id
+          and previous.artifact_id = artifact.artifact_id
+          and previous.revision = artifact.current_revision
+          and not exists (
+            select 1 from jsonb_array_elements(request -> 'source_vector') incoming
+            where (incoming ->> 'source_id')::uuid = previous.source_id
+          )
+      )
       and not exists (
         select 1 from jsonb_array_elements(request -> 'artifacts') requested
         where (requested ->> 'artifact_id')::uuid = artifact.artifact_id
@@ -1614,7 +1677,8 @@ begin
       last_request_sha256 = request_sha256,
       last_committed_sequence = allocated_sequence,
       updated_at = clock_timestamp()
-  where workspace_id = target_workspace_id and project_id = target_project_id;
+  where workspace_id = target_workspace_id and project_id = target_project_id
+      and agent_id = target_agent_id;
 
   details := jsonb_build_object(
     'publication_outcome', 'published',
@@ -1776,3 +1840,78 @@ revoke all on function public.ct_projector_fail(jsonb)
 drop function public.ct_projector_claim(jsonb);
 drop function public.ct_projector_publish(jsonb);
 drop function public.ct_projector_fail(jsonb);
+
+-- Read only the caller's authoritative stream watermarks. No native identity
+-- or checkpoint body is returned; pending requests must be retried first.
+create or replace function public.ct_collector_recover(request jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  target_workspace_id uuid := (request ->> 'workspace_id')::uuid;
+  target_agent_id uuid := (request ->> 'agent_id')::uuid;
+  target_project_id uuid := (request ->> 'project_id')::uuid;
+  next_publication bigint;
+  recovered_source jsonb;
+  next_living bigint;
+begin
+  if not public.ct_collector_authorized(target_workspace_id, target_agent_id, 'ingest') then
+    raise exception 'collector ingest capability is required' using errcode = '42501';
+  end if;
+  if not public.ct_jsonb_object_matches(request,
+    array['workspace_id', 'agent_id', 'project_id', 'vendor', 'native_session_id', 'agent_instance_id'],
+    array['workspace_id', 'agent_id', 'project_id'])
+    or (request ? 'vendor') <> (request ? 'native_session_id') then
+    raise exception 'invalid recovery request' using errcode = '22023';
+  end if;
+  if not exists (select 1 from public.ct_projects
+    where workspace_id = target_workspace_id and project_id = target_project_id) then
+    raise exception 'project not found in workspace' using errcode = '22023';
+  end if;
+  select committed_publication_sequence + 1 into next_publication
+  from public.ct_project_publishers
+  where workspace_id = target_workspace_id and project_id = target_project_id
+    and agent_id = target_agent_id;
+  if request ? 'vendor' then
+    select jsonb_build_object(
+      'source_id', source.source_id,
+      'source_epoch', source.current_epoch,
+      'next_source_sequence', source.committed_source_sequence + 1,
+      'content_sha256', observation.content_sha256
+    ) into recovered_source
+    from public.ct_ingest_sources source
+    left join public.ct_source_observations observation
+      on observation.workspace_id = source.workspace_id
+      and observation.source_id = source.source_id
+      and observation.source_epoch = source.current_epoch
+      and observation.source_sequence = source.committed_source_sequence
+    where source.workspace_id = target_workspace_id
+      and source.project_id = target_project_id
+      and source.origin_agent_id = target_agent_id
+      and source.vendor = request ->> 'vendor'
+      and source.native_session_id = request ->> 'native_session_id';
+  end if;
+  if request ? 'agent_instance_id' then
+    if not public.ct_collector_authorized(target_workspace_id, target_agent_id, 'living')
+      or exists (select 1 from public.ct_agent_leases
+        where workspace_id = target_workspace_id
+          and agent_instance_id = (request ->> 'agent_instance_id')::uuid
+          and agent_id <> target_agent_id) then
+      raise exception 'living instance access denied' using errcode = '42501';
+    end if;
+    select coalesce(max(observation_sequence), 0) + 1 into next_living
+    from public.ct_living_observations
+    where workspace_id = target_workspace_id
+      and agent_instance_id = (request ->> 'agent_instance_id')::uuid;
+  end if;
+  return jsonb_build_object(
+    'next_living_sequence', next_living,
+    'next_publication_sequence', coalesce(next_publication, 0),
+    'source', recovered_source
+  );
+end;
+$$;
+revoke all on function public.ct_collector_recover(jsonb) from public, anon;
+grant execute on function public.ct_collector_recover(jsonb) to authenticated, service_role;

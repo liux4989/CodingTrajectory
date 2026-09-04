@@ -22,6 +22,8 @@ from uuid import UUID, uuid4
 from coding_trajectory.contracts import LivingChange, LivingSessionsChange
 from coding_trajectory.control_plane.collector_protocol import (
     ArtifactPublicationRequest,
+    CollectorRecoveryRequest,
+    CollectorRecoveryResponse,
     LeaseHeartbeatRequest,
     LeaseHeartbeatResponse,
     LivingObservationReceipt,
@@ -30,6 +32,7 @@ from coding_trajectory.control_plane.collector_protocol import (
     ObservationRequest,
     ProjectRegistrationRequest,
     ProjectRegistrationResponse,
+    RecoveredSource,
     ShareableArtifactPublication,
     SourceVectorEntry,
     SourceRegistrationRequest,
@@ -55,6 +58,10 @@ _SOURCE_SCHEMA_VERSION = "ct.source_checkpoint.v1"
 
 class CollectorRemote(Protocol):
     """The narrow remote authority used by a collector."""
+
+    def recover(
+        self, request: CollectorRecoveryRequest
+    ) -> CollectorRecoveryResponse: ...
 
     def register_project(
         self, request: ProjectRegistrationRequest
@@ -93,6 +100,14 @@ class SupabaseCollectorRemote:
         self._api_key = api_key
         self._access_token = access_token
         self._timeout = timeout
+
+    def recover(self, request: CollectorRecoveryRequest) -> CollectorRecoveryResponse:
+        return CollectorRecoveryResponse.model_validate(
+            self._rpc(
+                "ct_collector_recover",
+                request.model_dump(mode="json", exclude_none=True),
+            )
+        )
 
     def register_source(
         self, request: SourceRegistrationRequest, *, idempotency_key: str
@@ -208,6 +223,7 @@ class CollectorRunResult:
     artifacts_queued: int = 0
     artifacts_accepted: int = 0
     artifacts_rejected: int = 0
+    artifact_scope_incomplete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +255,7 @@ class LocalCollector:
     def __init__(self, *, database_path: Path, identity: CollectorIdentity) -> None:
         self.database_path = database_path.expanduser()
         self.identity = identity
+        self._recovered_sources: dict[UUID, RecoveredSource] = {}
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(self.database_path)
         self._connection.row_factory = sqlite3.Row
@@ -369,6 +386,18 @@ class LocalCollector:
                 and collected
                 and all(self._source_delivery_accepted(source) for source in collected)
             ):
+                recovery = remote.recover(
+                    CollectorRecoveryRequest(
+                        workspace_id=self.identity.workspace_id,
+                        agent_id=self.identity.agent_id,
+                        project_id=self.identity.project_id,
+                    )
+                )
+                self._set_meta(
+                    f"artifact_publication:{self.identity.project_id}:next_sequence",
+                    str(recovery.next_publication_sequence),
+                )
+                self._connection.commit()
                 artifacts_queued = self._queue_artifact_publication(collected)
                 current_accepted, current_rejected = self._flush_artifacts(remote)
                 artifacts_accepted += current_accepted
@@ -381,6 +410,10 @@ class LocalCollector:
                 # Delivery remains pending; lease freshness must never make a
                 # local source appear terminal when the network is unavailable.
                 heartbeat_sequence = None
+        latest_publication = self._connection.execute(
+            "select state from artifact_outbox where project_id = ? order by publication_sequence desc limit 1",
+            (str(self.identity.project_id),),
+        ).fetchone()
         return CollectorRunResult(
             discovered=len(candidates),
             queued=queued,
@@ -392,6 +425,9 @@ class LocalCollector:
             artifacts_queued=artifacts_queued,
             artifacts_accepted=artifacts_accepted,
             artifacts_rejected=artifacts_rejected,
+            artifact_scope_incomplete=bool(
+                latest_publication and latest_publication["state"] == "rejected_scope"
+            ),
         )
 
     def flush(self, remote: CollectorRemote) -> tuple[int, int]:
@@ -471,7 +507,14 @@ class LocalCollector:
                 source.content_sha256,
             ),
         ).fetchone()
-        return row is not None and row["state"] == "accepted"
+        if row is not None:
+            return row["state"] == "accepted"
+        recovered = self._recovered_sources.get(source.source_id)
+        return recovered is not None and (
+            recovered.source_epoch == source.source_epoch
+            and recovered.next_source_sequence == source.source_sequence + 1
+            and recovered.content_sha256 == source.content_sha256
+        )
 
     def _queue_artifact_publication(self, sources: list[_CollectedSource]) -> int:
         if self.identity.project_id is None:
@@ -592,7 +635,7 @@ class LocalCollector:
         accepted = 0
         rejected = 0
         rows = self._connection.execute(
-            "select * from artifact_outbox where state = 'pending' order by publication_sequence, created_at"
+            "select * from artifact_outbox where state = 'pending' or (state = 'rejected' and last_error = 'conflict') order by publication_sequence, created_at"
         ).fetchall()
         for row in rows:
             self._connection.execute(
@@ -615,6 +658,23 @@ class LocalCollector:
             if receipt.outcome in {"accepted", "duplicate"}:
                 state = "accepted"
                 accepted += 1
+            elif (
+                receipt.outcome == "rejected"
+                and receipt.details.get("reason") == "incomplete_graph_scope"
+            ):
+                # The server consumed this sequence without changing history.
+                # Keep the exact request as evidence; an expanded scope can
+                # publish next time without a permanently poisoned outbox.
+                state = "rejected_scope"
+                rejected += 1
+            elif (
+                receipt.outcome == "conflict"
+                and receipt.details.get("reason") == "stale_publication_sequence"
+            ):
+                state = "superseded"
+                self._set_meta(
+                    f"artifact_publication:{self.identity.project_id}:last_digest", ""
+                )
             else:
                 state = "rejected"
                 rejected += 1
@@ -708,6 +768,43 @@ class LocalCollector:
         artifact = _normalized_segments(segments, parent_turn_ids)
         observed_at = max(segment.modified_at for segment in segments)
         state = self._logical_source_state(vendor, native_session_id)
+        if remote is not None and (
+            state is None
+            or not self._connection.execute(
+                "select 1 from observation_outbox where source_id = ? limit 1",
+                (state["source_id"],),
+            ).fetchone()
+        ):
+            recovery = remote.recover(
+                CollectorRecoveryRequest(
+                    workspace_id=self.identity.workspace_id,
+                    agent_id=self.identity.agent_id,
+                    project_id=self.identity.project_id,
+                    vendor=vendor,
+                    native_session_id=native_session_id,
+                )
+            )
+            if recovery.source is not None:
+                recovered = recovery.source
+                self._recovered_sources[recovered.source_id] = recovered
+                self._upsert_logical_source(
+                    vendor=vendor,
+                    native_session_id=native_session_id,
+                    source_id=recovered.source_id,
+                    source_epoch=recovered.source_epoch,
+                    snapshot_schema_version=_SOURCE_SCHEMA_VERSION,
+                )
+                self._connection.execute(
+                    "update logical_sources set next_source_sequence = ?, last_digest = ? where vendor = ? and native_session_id = ?",
+                    (
+                        recovered.next_source_sequence,
+                        recovered.content_sha256,
+                        vendor,
+                        native_session_id,
+                    ),
+                )
+                self._connection.commit()
+                state = self._logical_source_state(vendor, native_session_id)
         rollover = any(segment.rollover for segment in segments) or (
             state is not None
             and state["snapshot_schema_version"] != _SOURCE_SCHEMA_VERSION
@@ -853,6 +950,26 @@ class LocalCollector:
         )
 
     def _heartbeat(self, remote: CollectorRemote) -> int | None:
+        if (
+            self.identity.project_id is not None
+            and not self._connection.execute(
+                "select 1 from living_outbox limit 1"
+            ).fetchone()
+        ):
+            recovery = remote.recover(
+                CollectorRecoveryRequest(
+                    workspace_id=self.identity.workspace_id,
+                    agent_id=self.identity.agent_id,
+                    project_id=self.identity.project_id,
+                    agent_instance_id=self.identity.agent_instance_id,
+                )
+            )
+            if recovery.next_living_sequence is None:
+                raise CollectorRemoteError("recovery omitted living watermark")
+            self._set_meta(
+                "next_living_observation_sequence", str(recovery.next_living_sequence)
+            )
+            self._connection.commit()
         source_watermarks = {
             row["source_id"]: int(row["next_source_sequence"]) - 1
             for row in self._connection.execute(

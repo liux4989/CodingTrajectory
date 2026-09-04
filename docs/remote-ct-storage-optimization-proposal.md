@@ -1,7 +1,7 @@
 # Shareable Historical Artifact Decision
 
 - **Status:** Implemented locally; non-production deployment pending
-- **Date:** 2026-09-04
+- **Date:** 2026-09-05
 - **Scope:** Historical collection, storage, replay, and API coverage
 - **Related:** [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md),
   [`local-collector-handoff.md`](local-collector-handoff.md)
@@ -20,7 +20,9 @@ the existing raw-log/canonical path.
 
 Source observations now carry checkpoint, ordering, parser, and digest metadata
 only. An authenticated project collector publishes the locally assembled graph
-artifacts atomically with a complete normalized source vector.
+artifacts atomically with a complete normalized source vector for those graphs.
+The agent/project stream is independent from other publishers of the project;
+omission from a filtered scan does not remove unrelated historical artifacts.
 
 ## Artifact boundary
 
@@ -31,25 +33,31 @@ The strict Pydantic artifact contains:
 - ordering, timestamps, lifecycle status, vendor, model, and reasoning effort;
 - normalized request usage, model usage inputs, runtime observations, and
   content-derived numeric measurements;
-- tool name, category, outcome, exit code, and bounded safe description;
-- bounded user-request and assistant-response previews;
+- tool name, category, outcome, exit code, and fixed verification labels;
+- user-request identity and original numeric text measurements;
 - portable file-change path and operation;
 - compact team membership/task state; and
-- bounded semantic capsules for verification, resolution, and pending-plan
-  projections.
+- bounded semantic identifiers for verification and resolution projections.
 
 It structurally excludes:
 
-- full prompts, responses, reasoning, commands, and event payloads;
+- prompts, responses, reasoning, commands, and event payloads;
+- session titles, prose previews, free-form tool descriptions, and plan text;
 - tool inputs, tool outputs, tool-call transport IDs, and vendor payloads;
 - raw context-source text, traces, reasons, triggers, and runtime IDs;
 - source files, host locations, working directories, and absolute file paths;
 - data URIs, media/blob bodies, and unbounded strings; and
 - a general events collection.
 
-The previews and semantic capsules are deliberate product data. They preserve
-the useful shape of overview and summary APIs without retaining the high-volume
-evidence bodies from which they were derived.
+User-request content is the fixed marker `[content omitted]`; its original
+character/token measurements remain available. Tool descriptions accept only
+`tests`, `checks`, or `command`. Titles and assistant/session previews are null,
+plan actions are empty, and coverage declares `semantic_previews=false`. Both
+Pydantic and SQL reject prose in these fields, even when it is short.
+
+Portable paths and bounded identifiers remain deliberate product data. This is
+a content-minimizing contract, not a claim of anonymization. Overview/summary
+coverage is reduced; local evidence methods retain detailed content.
 
 ## Size and persistence bounds
 
@@ -102,7 +110,7 @@ This avoids Python exponent formatting and PostgreSQL JSONB numeric
 normalization producing different digests without changing public results.
 
 An exact retry reuses the original serialized request and idempotency key.
-Conflicting reuse is rejected. A new publication advances one project-local
+Conflicting reuse is rejected. A new publication advances one agent/project-local
 monotonic sequence. A source vector older than the accepted source watermarks is
 recorded as superseded and never becomes current.
 
@@ -126,8 +134,9 @@ both local and remote execution:
 - `session.items` with `include_content=false`
 
 Numeric usage and stats results are retained exactly. Overview, tree, summary,
-tool descriptions, and metadata-only item views document bounded semantic
-coverage and do not imply complete evidence.
+tool descriptions, and metadata-only item views have reduced semantic
+coverage and do not imply complete evidence. Titles and narrative previews are
+unavailable in shared responses; numeric measurements are preserved.
 
 These evidence-body methods remain local and are rejected before remote
 dispatch:
@@ -155,3 +164,24 @@ The local privacy, topology, numeric, size, retry, and replay gates must pass
 before database access. Migration deployment additionally requires explicit
 confirmation that the configured Supabase target is authorized and
 non-production. A failed gate stops rollout; old evidence is preserved.
+
+## Review validation — 2026-09-05
+
+The pre-deployment migration was exercised in isolated embedded PostgreSQL with
+synthetic Auth and SHA-256 support, using only committed metric fixtures. This
+also exposed and fixed a checkpoint JSON operator-precedence error and ambiguous
+validator variable references that SQL parsing alone did not detect.
+
+Observed passing scenarios: filtered publication preserves older graphs; a fresh
+SQLite database resumes source/publication/living watermarks; two hosts publish
+disjoint graphs into one project; incomplete and cross-host overlapping graphs
+cannot overwrite history; expanding a rejected scan recovers; a lost response
+retries the identical request and key; Python and SQL reject prose previews.
+
+The four committed metric baselines pass without expected-value changes. All
+four fixture graphs replay byte-identically. Stats and usage responses match;
+model-usage responses differ only by the intentionally omitted titles.
+
+This is local execution evidence, not a deployed Supabase canary. Hosted Auth,
+PostgREST, RLS under real roles, concurrent collectors, and deployment remain
+subject to the existing authorized non-production rollout gate.

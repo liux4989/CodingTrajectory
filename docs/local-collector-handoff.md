@@ -23,8 +23,9 @@ discover project-scoped sources
   -> build and validate ct.shareable_graph.v1 locally
   -> queue metadata-only source checkpoints
   -> obtain accepted checkpoint receipts
-  -> assemble the complete project graph locally
-  -> queue one atomic artifact publication with a complete source vector
+  -> assemble the complete collected graphs locally
+  -> recover the agent/project publication watermark after pending retries
+  -> queue one atomic artifact publication with a complete collected source vector
   -> publish with the original bytes and idempotency key
   -> heartbeat on the shared living sequence
 ```
@@ -42,6 +43,7 @@ The collector uses:
 - `ct_collector_register_source` for stable logical sources and epochs;
 - `ct_collector_publish_observation` for metadata-only checkpoints;
 - `ct_collector_publish_artifacts` for direct atomic graph publication;
+- `ct_collector_recover` for authenticated source, publication, and living watermarks;
 - `ct_collector_heartbeat` for leases; and
 - `ct_collector_publish_living_observation` for canonical living changes.
 
@@ -66,7 +68,7 @@ observation_outbox
   exact checkpoint request, idempotency key, attempts, outcome
 
 artifact_outbox
-  exact project publication, project sequence, digest, attempts, outcome
+  exact project publication, agent/project sequence, digest, attempts, outcome
 
 living_outbox
   heartbeat and living changes on one monotonic observation sequence
@@ -80,17 +82,33 @@ checkpoint or artifact.
 
 On restart, in-flight records return to pending. A lost response retries the
 byte-identical stored request with the same idempotency key. A pending or
-rejected artifact publication blocks assignment of a newer project publication
-sequence. Source failures prevent a partial project artifact from being queued.
+unclassified rejected publication blocks assignment of a newer publication
+sequence. A confirmed stale-sequence conflict is retained as superseded and
+reconciled. An incomplete-graph rejection consumes its server sequence and is
+retained as `rejected_scope`; it does not block a later expanded scan. Source
+failures prevent a partial collected graph from being queued.
+
+A fresh SQLite database recovers the agent's existing source epochs and accepted
+checkpoint digests instead of assuming source sequence zero. It recovers the
+publication watermark before assigning work and the living watermark before its
+first heartbeat. Recovery never changes an uncertain pending request. Preserve
+separate state per agent and run one collector per agent/project stream.
+
+Time/vendor filtering preserves all unrelated remote artifacts. Replacing an
+overlapping graph requires its complete previously published source set; a
+partial scan cannot silently truncate the graph. The run result reports
+`artifact_scope_incomplete` and a content-free remedy. Expand the scan only within
+the authorized collection scope. Different agents can publish disjoint graphs
+into one project; overlapping ownership fails closed.
 
 ## Artifact content
 
-The collector publishes the bounded structural/numeric core and semantic
-capsules documented in
+The collector publishes the structural/numeric core and constrained semantic
+labels documented in
 [`remote-ct-storage-optimization-proposal.md`](remote-ct-storage-optimization-proposal.md).
 It never uploads raw logs, complete sessions, event arrays, commands, tool
-inputs, or tool outputs. A value visible only inside a tool output therefore
-does not enter remote history.
+inputs, tool outputs, prose previews, titles, or pending-plan text. A value
+visible only inside a tool output therefore does not enter remote history.
 
 The per-source checkpoint payload contains only:
 
@@ -129,3 +147,7 @@ the aggregate pending count.
 8. Lost-response retry reuses the exact request and idempotency key.
 9. Artifact and publication size bounds fail closed.
 10. Heartbeats and living changes retain one monotonic agent-instance sequence.
+11. Fresh collector state resumes committed source, publication, and living sequences.
+12. Filtered scans preserve history outside their scope; incomplete overlapping
+    graphs are rejected without blocking a later complete scan.
+13. Two agents publish disjoint graphs to one project without replacing each other.

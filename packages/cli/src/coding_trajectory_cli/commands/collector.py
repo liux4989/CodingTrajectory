@@ -182,6 +182,12 @@ def _handle_run(args: argparse.Namespace) -> dict[str, Any]:
         "artifacts_queued": result.artifacts_queued,
         "artifacts_accepted": result.artifacts_accepted,
         "artifacts_rejected": result.artifacts_rejected,
+        "artifact_scope_incomplete": result.artifact_scope_incomplete,
+        "scope_remedy": (
+            "Include all sources of overlapping published graphs within the authorized collection scope."
+            if result.artifact_scope_incomplete
+            else None
+        ),
     }
 
 

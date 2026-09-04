@@ -27,9 +27,7 @@ from coding_trajectory.analysis.measurements import (
     extract_item_measurements,
     extract_session_measurements,
 )
-from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.request_lineage import extract_user_request
-from coding_trajectory.analysis.session_retrieval import _pending_plan_actions
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
 from coding_trajectory.analysis.tool_summary_shell import classify_verification_command
 from coding_trajectory.ingestion.common import canonical_json
@@ -115,10 +113,6 @@ _HOST_PATH = re.compile(
     r"^(?:~/|/Users/|/home/|/root/|/private/|/tmp/|/var/|/Volumes/|"
     r"/workspace/|/workspaces/|/mnt/|/srv/|/opt/|[A-Za-z]:[\\/])"
 )
-_HOST_PATH_TOKEN = re.compile(
-    r"(?<![A-Za-z0-9])(?:~[/\\]|/(?:Users|home|root|private|tmp|var|Volumes|"
-    r"workspace|workspaces|mnt|srv|opt)/|[A-Za-z]:[/\\])[^\s\"'`<>]*"
-)
 
 
 class ShareableModel(BaseModel):
@@ -188,7 +182,7 @@ class ShareableSessionMeasurements(ShareableModel):
 
 class ShareableToolSummary(ShareableModel):
     name: _BoundedString
-    description: _Preview | None = None
+    description: Literal["tests", "checks", "command"] | None = None
     status: _BoundedString | None = None
     optimization_profile: _BoundedString | None = None
     activity_hidden: bool | None = None
@@ -209,14 +203,14 @@ class ShareableItemMeasurements(ShareableModel):
     projection_only: bool = False
     output_truncated: bool = False
     output_original_tokens: int | None = Field(default=None, ge=0)
-    text_preview: _Preview | None = None
+    text_preview: None = None
     tool_summary: ShareableToolSummary | None = None
 
 
 class ShareableItemSemantic(ShareableModel):
     verification_kind: _BoundedString | None = None
     resolution_key: _BoundedString | None = None
-    plan_actions: list[_Preview] = Field(default_factory=list, max_length=10)
+    plan_actions: list[_Preview] = Field(default_factory=list, max_length=0)
 
 
 class ShareableItem(ShareableModel):
@@ -241,7 +235,7 @@ class ShareableUserRequest(ShareableModel):
     request_id: UUID
     type: Literal["message", "command"] = "message"
     source: _BoundedString = "human_user"
-    content: _Preview
+    content: Literal["[content omitted]"] = "[content omitted]"
     chars: int | None = Field(default=None, ge=0)
     tokens: int | None = Field(default=None, ge=0)
 
@@ -321,8 +315,8 @@ class ShareableSession(ShareableModel):
     status: _BoundedString
     model: _BoundedString | None = None
     reasoning_effort: _BoundedString | None = None
-    title: _Preview | None = None
-    preview: _Preview | None = None
+    title: None = None
+    preview: None = None
     topology: ShareableSessionTopology = Field(default_factory=ShareableSessionTopology)
     runtime: list[ShareableRuntimeObservation] = Field(default_factory=list)
     measurements: ShareableSessionMeasurements = Field(
@@ -371,7 +365,7 @@ class ShareableCoverage(ShareableModel):
     topology: Literal[True] = True
     usage: Literal[True] = True
     measurements: Literal[True] = True
-    semantic_previews: Literal[True] = True
+    semantic_previews: Literal[False] = False
 
 
 class ShareableGraphArtifact(ShareableModel):
@@ -599,8 +593,8 @@ def _build_shareable_session(session: Session, *, index: Any) -> ShareableSessio
         status=session.status.value,
         model=session.model,
         reasoning_effort=session.reasoning_effort,
-        title=_session_title(session),
-        preview=_session_preview(session),
+        title=None,
+        preview=None,
         topology=_build_topology(session, origins),
         runtime=[
             ShareableRuntimeObservation(
@@ -651,9 +645,7 @@ def _build_user_request(
 ) -> ShareableUserRequest | None:
     if request is None or not request.get("content", "").strip():
         return None
-    content = _bounded_preview(request["content"])
-    if content is None:
-        return None
+    content = "[content omitted]"
     request_id = turn.user_request_event_id or uuid5(
         _SYNTHETIC_REQUEST_NAMESPACE, str(turn.turn_id)
     )
@@ -743,7 +735,7 @@ def _build_shareable_item(item: Item) -> ShareableItem:
             projection_only=measurements.projection_only,
             output_truncated=measurements.output_truncated,
             output_original_tokens=measurements.output_original_tokens,
-            text_preview=_bounded_preview(measurements.text_preview),
+            text_preview=None,
             tool_summary=tool_summary,
         ),
         semantic=semantic,
@@ -778,7 +770,9 @@ def _bounded_tool_summary(
         description = None
     return ShareableToolSummary(
         name=name,
-        description=_bounded_preview(description),
+        description=description
+        if description in {"tests", "checks", "command"}
+        else None,
         status=_bounded(raw.get("status")),
         optimization_profile=_bounded(raw.get("optimization_profile")),
         activity_hidden=(
@@ -818,25 +812,10 @@ def _item_semantic(
             resolution_key = "command:" + hashlib.sha256(summary.encode()).hexdigest()
     elif tool_summary is not None:
         resolution_key = f"tool:{tool_summary.name}"
-    plan_actions = (
-        [
-            preview
-            for action in _pending_plan_actions(item.input)[:10]
-            if (preview := _bounded_preview(action)) is not None
-        ]
-        if isinstance(item, PlanItem)
-        else []
-    )
-    if not plan_actions and isinstance(retained.get("plan_actions"), list):
-        plan_actions = [
-            preview
-            for value in retained["plan_actions"][:10]
-            if (preview := _bounded_preview(value)) is not None
-        ]
     return ShareableItemSemantic(
         verification_kind=_bounded(verification_kind),
         resolution_key=_bounded(resolution_key),
-        plan_actions=plan_actions,
+        plan_actions=[],
     )
 
 
@@ -1194,31 +1173,6 @@ def _to_edge(value: ShareableEdge) -> SessionEdge:
     )
 
 
-def _session_title(session: Session) -> str | None:
-    extensions = session.extensions
-    values = (
-        extensions.codex.title if extensions and extensions.codex else None,
-        extensions.claude_code.title if extensions and extensions.claude_code else None,
-        extensions.pi.title if extensions and extensions.pi else None,
-    )
-    return next(
-        (
-            _portable_path(value)
-            if _HOST_PATH.match(value.strip())
-            else _bounded_preview(value)
-            for value in values
-            if value
-        ),
-        None,
-    )
-
-
-def _session_preview(session: Session) -> str | None:
-    extensions = session.extensions
-    value = extensions.codex.preview if extensions and extensions.codex else None
-    return _bounded_preview(value)
-
-
 def _portable_project(value: str | None) -> str | None:
     if not value:
         return None
@@ -1247,13 +1201,6 @@ def _bounded(value: Any) -> str | None:
         return None
     normalized = " ".join(value.split()).strip()
     return normalized[:512] or None
-
-
-def _bounded_preview(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    sanitized = _HOST_PATH_TOKEN.sub("<local-path>", value)
-    return truncate_text_preview(sanitized, max_len=280) or None
 
 
 def _usage_int(value: dict[str, Any], *keys: str) -> int:

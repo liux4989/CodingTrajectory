@@ -1,7 +1,7 @@
 # Remote CT Control Plane Design
 
 - **Status:** Shareable historical path implemented locally; deployment pending
-- **Date:** 2026-09-04
+- **Date:** 2026-09-05
 - **Scope:** Public method authorities, historical artifacts, project inventory,
   living state, estimation, and collector handoff
 - **Supersedes:** [`remote-session-ledger-design.md`](remote-session-ledger-design.md)
@@ -88,21 +88,40 @@ One project publication contains:
 
 ```text
 workspace_id / agent_id / project_id
-project-local publication_sequence
-complete normalized source_vector
+agent/project-local publication_sequence
+complete normalized source_vector for the collected graphs
 one or more bounded ct.shareable_graph.v1 artifacts
 ```
 
 The transaction verifies collector capability, project ownership, source
 membership, accepted checkpoints, current watermarks, schema shape, content
 bounds, canonical sizes, request digest, artifact digests, and idempotency. It
-then publishes all revisions at one workspace sequence, supersedes prior
+then publishes all revisions at one workspace sequence, supersedes their prior
 revisions, updates inventory, records resource lookup rows, and commits one
-receipt.
+receipt. Sources outside the scan are not deletion evidence. Unrelated existing
+artifacts remain visible when a time or vendor filter excludes them.
+
+An overlapping current graph may only be replaced when the request includes all
+of its previously published sources. An omitted graph is retired only when all
+of its sources are represented in replacement graphs, such as a graph merge.
+An incomplete overlap consumes the publication sequence with a rejected receipt
+and leaves history unchanged. The collector reports `artifact_scope_incomplete`;
+a subsequent expanded, authorized scan can proceed without deleting its outbox.
+
+Each `(workspace, project, agent)` owns its publication sequence. Different hosts
+can publish disjoint graphs into the same portable project. Overlapping sessions
+from another agent are rejected rather than overwritten. Use separate collector
+state for each agent; automatic ownership transfer is not supported.
 
 The same request and idempotency key return the same receipt. Conflicting reuse
-is rejected. A publication sequence gap is rejected. A valid but stale source
-vector is consumed as superseded and never becomes visible.
+is rejected. A publication sequence gap is rejected. After pending requests are
+retried,
+`ct_collector_recover` returns the authenticated agent's committed publication
+watermark. A fresh local database also recovers source epochs/checkpoints and
+the existing living-instance sequence. The RPC does not reserve sequence numbers;
+run one active collector per agent/project stream. An already-consumed sequence
+conflict is retained locally as superseded and reconciled before new work. A
+valid but stale source vector is consumed as superseded and never becomes visible.
 
 Legacy source observations and artifact revisions remain immutable. They are
 not deleted or mixed with shareable history. Unfinished legacy projector jobs
@@ -142,6 +161,20 @@ bounds.
 
 The complete artifact contract and retention decision are documented in
 [`remote-ct-storage-optimization-proposal.md`](remote-ct-storage-optimization-proposal.md).
+
+## Content policy
+
+Shared artifacts retain structural and numeric facts, portable paths, and bounded
+identifiers. They omit session titles, user/assistant prose previews, plan text,
+and free-form tool descriptions. A user-request record carries the fixed marker
+`[content omitted]` with its original numeric measurements. Tool descriptions
+are limited to `tests`, `checks`, or `command`. Python and SQL enforce these
+restrictions; artifact coverage declares `semantic_previews=false`.
+
+Overview and summary responses consequently have reduced descriptive coverage.
+Detailed content remains available through the local evidence APIs. Bounded
+identifiers and portable paths remain intentional product data, not anonymized
+values.
 
 ## Project inventory
 

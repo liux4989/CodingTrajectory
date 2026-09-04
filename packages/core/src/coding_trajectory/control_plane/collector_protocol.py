@@ -43,6 +43,36 @@ class SourceRegistrationResponse(CollectorModel):
     source_epoch: int = Field(ge=1)
 
 
+class CollectorRecoveryRequest(CollectorModel):
+    workspace_id: UUID
+    agent_id: UUID
+    project_id: UUID
+    agent_instance_id: UUID | None = None
+    vendor: str | None = None
+    native_session_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source(self) -> CollectorRecoveryRequest:
+        if (self.vendor is None) != (self.native_session_id is None):
+            raise ValueError(
+                "source recovery requires vendor and native session identity"
+            )
+        return self
+
+
+class RecoveredSource(CollectorModel):
+    source_id: UUID
+    source_epoch: int = Field(ge=1)
+    next_source_sequence: int = Field(ge=0)
+    content_sha256: str | None = None
+
+
+class CollectorRecoveryResponse(CollectorModel):
+    next_publication_sequence: int = Field(ge=0)
+    next_living_sequence: int | None = Field(default=None, ge=1)
+    source: RecoveredSource | None = None
+
+
 class ProjectRegistrationRequest(CollectorModel):
     version: Literal[1] = 1
     workspace_id: UUID
@@ -140,7 +170,7 @@ class ShareableArtifactPublication(CollectorModel):
 
 
 class ArtifactPublicationRequest(CollectorModel):
-    """One complete, locally assembled project artifact publication."""
+    """One complete set of collected graphs in an agent/project publication."""
 
     version: Literal[1] = 1
     workspace_id: UUID
