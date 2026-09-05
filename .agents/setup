@@ -9,31 +9,46 @@ cd "$repo_root"
 
 step() { printf '\n\033[1m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
 
-# ---------------------------------------------------------------------------
-# 1. Install uv (standalone installer, idempotent)
-# ---------------------------------------------------------------------------
-step "Install uv"
-uv_bin="$HOME/.local/bin/uv"
-if [[ -x "$uv_bin" ]] && "$uv_bin" --version >/dev/null 2>&1; then
-  echo "uv already installed: $("$uv_bin" --version)"
-else
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-fi
-# Ensure uv is on PATH for the rest of this script and future shells.
+# Keep download caches snapshot-friendly and shared by checkout-local environments.
+# Two build jobs fit the project's default a1.medium orb without memory spikes.
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}"
+export BUN_INSTALL_CACHE_DIR="${BUN_INSTALL_CACHE_DIR:-$HOME/.cache/bun/install/cache}"
+export UV_CONCURRENT_BUILDS="${UV_CONCURRENT_BUILDS:-2}"
+export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
+export MAKEFLAGS="${MAKEFLAGS:--j2}"
+mkdir -p "$UV_CACHE_DIR" "$BUN_INSTALL_CACHE_DIR"
+
+uv_version="0.12.10"
 export PATH="$HOME/.local/bin:$PATH"
+step "Install uv $uv_version"
+if command -v uv >/dev/null 2>&1 && [[ "$(uv --version)" == "uv $uv_version "* ]]; then
+  echo "uv already installed: $(uv --version)"
+else
+  curl -LsSf "https://astral.sh/uv/$uv_version/install.sh" |
+    sh -s -- --no-modify-path
+fi
 
-# ---------------------------------------------------------------------------
-# 2. Sync the workspace — uv auto-installs Python 3.12 from .python-version
-# ---------------------------------------------------------------------------
-step "uv sync (installs Python 3.12 + all workspace dependencies)"
-uv sync
+bun_version="1.3.10"
+export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+export PATH="$BUN_INSTALL/bin:$PATH"
+step "Install Bun $bun_version"
+if command -v bun >/dev/null 2>&1 && [[ "$(bun --version)" == "$bun_version" ]]; then
+  echo "bun already installed: $(bun --version)"
+else
+  curl -fsSL https://bun.sh/install | bash -s -- "bun-v$bun_version"
+fi
 
-# ---------------------------------------------------------------------------
-# 3. Verify the toolchain
-# ---------------------------------------------------------------------------
+step "Sync locked Python workspace"
+time uv sync --all-packages --locked
+
+web_root="$repo_root/packages/plugins/datahub/web"
+step "Sync locked Datahub web dependencies"
+time bun install --cwd "$web_root" --frozen-lockfile --concurrent-scripts 2
+
 step "Verify"
 echo "uv:     $(uv --version)"
 echo "python: $(uv run python --version)"
 echo "ruff:   $(uv run ruff --version)"
+echo "bun:    $(bun --version)"
 
 step "Setup complete"

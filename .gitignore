@@ -27,9 +27,6 @@ packages/*/web/dist/
 # OS
 .DS_Store
 
-# uv
-uv.lock
-
 # Node
 node_modules/
 bun.lock

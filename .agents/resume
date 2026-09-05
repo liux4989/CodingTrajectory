@@ -8,17 +8,28 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 # Ensure uv is on PATH.
-export PATH="$HOME/.local/bin:$PATH"
+export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:$PATH"
 
-# Verify uv and the virtualenv exist; re-sync only if the venv is missing.
+# Resume must stay fast: setup owns toolchain and dependency installation.
 if ! command -v uv >/dev/null 2>&1; then
   echo "resume: uv not found — setup may have failed or was skipped" >&2
   exit 1
 fi
 
-if [[ ! -d .venv ]]; then
-  echo "resume: .venv missing — running uv sync"
-  uv sync
-else
-  echo "resume: uv and .venv present — ready"
+if ! command -v bun >/dev/null 2>&1; then
+  echo "resume: bun not found — setup may have failed or was skipped" >&2
+  exit 1
 fi
+
+if [[ ! -x .venv/bin/python ]]; then
+  echo "resume: .venv missing or incomplete — rerun .agents/setup" >&2
+  exit 1
+fi
+
+if [[ ! -d packages/plugins/datahub/web/node_modules ]]; then
+  echo "resume: Datahub web dependencies missing — rerun .agents/setup" >&2
+  exit 1
+fi
+
+echo "resume: toolchains and checkout-local dependencies present — ready"
