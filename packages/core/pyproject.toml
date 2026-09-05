@@ -9,8 +9,8 @@ dependencies = [
     "tiktoken>=0.7.0",
 ]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.0",
 ]
 

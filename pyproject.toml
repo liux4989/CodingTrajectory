@@ -8,8 +8,8 @@ requires-python = ">=3.12"
 [tool.uv.workspace]
 members = ["packages/core", "packages/cli", "packages/plugins/*", "benchmarks"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.0",
     "ruff>=0.15.16",
 ]

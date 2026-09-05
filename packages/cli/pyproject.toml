@@ -16,8 +16,8 @@ ct = "coding_trajectory_cli.cli:main"
 [tool.uv.sources]
 coding-trajectory-core = { workspace = true }
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.0",
 ]
 
