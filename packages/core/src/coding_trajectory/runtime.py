@@ -16,6 +16,7 @@ from coding_trajectory.control_plane import (
     MethodAuthority,
 )
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
+from coding_trajectory.contracts import service_contract
 from coding_trajectory.service import (
     IndexCache,
     dispatch,
@@ -141,6 +142,7 @@ class ServiceRuntime:
         authority_handlers: Mapping[MethodAuthority, Callable[..., Any]] | None = None,
         transport_metadata: Callable[[], dict[str, Any] | None] | None = None,
         local_evidence: bool = True,
+        before_read: Callable[..., dict[str, Any] | None] | None = None,
     ) -> None:
         if historical_repository is None:
             from coding_trajectory.control_plane.configuration import ApiConfiguration
@@ -151,12 +153,14 @@ class ServiceRuntime:
             historical_repository = options["historical_repository"]
             authority_handlers = options["authority_handlers"]
             transport_metadata = options["transport_metadata"]
+            before_read = options.get("before_read")
         self.global_scope = global_scope
         self.current_dir = current_dir
         self.historical_repository = historical_repository
         # API reads must not load or rewrite the local discovery index.
         self.cache = IndexCache()
         self._transport_metadata = transport_metadata
+        self.before_read = before_read
         handlers = dict(authority_handlers or {})
         handlers[MethodAuthority.HISTORICAL] = self._call_historical
         self._dispatcher = ApplicationDispatcher(handlers)
@@ -187,7 +191,21 @@ class ServiceRuntime:
             and not params.get("project_name")
         ):
             params = {**params, "project_name": self.current_dir.name}
+        params = service_contract(method).validate_request(params)
+        self._prepare_read(method, params)
         return self._dispatcher.call(method, params)
+
+    def _prepare_read(self, method: str, params: dict[str, Any]) -> None:
+        if self.before_read is None:
+            return
+        options = self.before_read(method, params, self.historical_repository)
+        if options is not None:
+            self.close()
+            self.historical_repository = options["historical_repository"]
+            self._transport_metadata = options["transport_metadata"]
+            handlers = dict(options["authority_handlers"])
+            handlers[MethodAuthority.HISTORICAL] = self._call_historical
+            self._dispatcher = ApplicationDispatcher(handlers)
 
     def _call_historical(self, method: str, params: dict[str, Any]) -> Any:
         store, discovery_note = self._store_for(method, params)
@@ -236,8 +254,35 @@ class ServiceRuntime:
         return response
 
     def batch(self, requests: list[dict[str, Any]]) -> dict[str, Any]:
+        errors: dict[int, dict[str, Any]] = {}
+        if self.before_read is not None:
+            for index, request in enumerate(requests):
+                try:
+                    method = request.get("method")
+                    if not isinstance(method, str) or not isinstance(
+                        request.get("params") or {}, dict
+                    ):
+                        continue
+                    params = service_contract(method).validate_request(
+                        request.get("params") or {}
+                    )
+                    self._prepare_read(method, params)
+                except (KeyError, ValueError, DocumentError) as exc:
+                    errors[index] = _error_item(
+                        request.get("id"), request.get("method"), str(exc)
+                    )
         self.prepare_batch(requests)
-        response = {"items": [self.execute(request) for request in requests]}
+        before_read = self.before_read
+        self.before_read = None
+        try:
+            response = {
+                "items": [
+                    errors[index] if index in errors else self.execute(request)
+                    for index, request in enumerate(requests)
+                ]
+            }
+        finally:
+            self.before_read = before_read
         metadata = self.transport_metadata()
         if metadata is not None:
             response["meta"] = metadata

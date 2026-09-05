@@ -124,8 +124,9 @@ Every service API reads the same canonical Supabase workspace, including local
 CLI calls, embedded `ServiceRuntime`/plugin clients, and the HTTP API. Local
 logs are ingestion inputs and optional evidence; they are never an alternative
 API inventory or metrics authority. Unpublished sessions do not appear in reads.
-Missing credentials, unavailable database state, and unpublished resources fail
-explicitly without local fallback.
+Missing credentials and unavailable database state fail explicitly without local
+fallback. Eligible local session queries can publish missing or updated data
+before returning its Supabase result, as described below.
 
 The CLI uses `CT_SUPABASE_URL`, `CT_SUPABASE_ANON_KEY`, `CT_ACCESS_TOKEN`, and
 `CT_REMOTE_WORKSPACE_ID`. If connection credentials are absent, it refreshes the
@@ -151,7 +152,8 @@ for ordinary reads. The database state reflects the last publication.
 Artifact caches live within a runtime and are keyed by method and scope;
 separate CLI calls create fresh runtimes. Batch calls share one runtime.
 The default plugin client also resolves a fresh snapshot per call. An explicitly
-owned `ServiceRuntime` stays pinned until the caller creates a new runtime.
+owned read-only `ServiceRuntime` stays pinned until the caller creates a new
+runtime. On-demand publication can advance an unpinned local runtime.
 
 Content is excluded by default on both surfaces. Explicit `session.search`,
 `session.events`, `session.items` with `include_content=true`, and
@@ -192,6 +194,55 @@ All 25 registered service methods are covered below. The registry in
 authenticated `POST /v1/call`, `POST /v1/batch`, and `POST /v1/schema` endpoints
 (default bind: `127.0.0.1:8765`). Requests need a bearer token. Local
 `ct api schema METHOD` remains offline and does not need credentials.
+
+### Fresh-session queries
+
+Local queries with an explicit `session_id` or `root_session_id` automatically
+synchronize that session's graph when eligible local sources are available.
+The configured Keychain profile supplies the collector identity. Embedded or
+environment-configured callers also set `CT_COLLECTOR_AGENT_ID` and need the
+corresponding collector capabilities. HTTP calls never get this capability.
+
+```text
+query Supabase -> locate eligible local graph sources
+  -> unchanged: use the published result
+  -> missing/changed: fence and publish the selected graph
+       -> verify the committed artifact -> read a fresh Supabase snapshot
+```
+
+The source window is seven days and the scope is the current project. Required
+parent/fork inputs are used for normalization, but unrelated canonical graphs
+are not published. Missing dependencies or an incomplete overlapping graph
+produce an explicit error; the query never widens its scope automatically.
+Source fingerprints avoid repeated normalization for unchanged files, and a
+canonical artifact comparison avoids re-publishing unchanged facts.
+
+Concurrent local queries share an agent publication lock and recheck the database
+after waiting. Exact retry state lives under the private
+`~/.coding-trajectory/control-plane/on-demand/` directory, separate from earlier
+collector databases. `CT_ON_DEMAND_STATE_DIR` can override that directory. A
+pending attempt must be retried for its original session before another target
+can use that on-demand stream. Normal CLI collector runs use the same agent lock.
+
+Progress goes to stderr. Stdout retains the existing result format. Failures
+return an error instead of an unpublished local response. This first read pays
+publication latency; it is not an instant local preview. Appends after the fence
+are left for a subsequent query or batch publication.
+
+`CT_AUTO_PUBLISH=0` disables on-demand writes. An explicit
+`--snapshot-sequence N` also disables them. A local API batch prepares eligible
+publications first, then executes its reads at one final snapshot. Collection
+queries and turn/item/event-ID-only queries do not initiate publication.
+
+For an explicit targeted collector pass:
+
+```sh
+ct collector run --credential-profile default --project-name CodingTrajectory \
+  --session-id SESSION_ID --since-days 7 --state-path "$CT_COLLECTOR_STATE"
+```
+
+Use the existing verified collector state for manual passes. The automatic
+on-demand state recovers remote source and publication watermarks on first use.
 
 ### Benchmarking remote reads
 

@@ -19,6 +19,7 @@ from coding_trajectory.control_plane.collector import (
 from coding_trajectory.control_plane.collector_protocol import (
     ProjectRegistrationRequest,
 )
+from coding_trajectory.control_plane.publication_lock import publication_lock
 from coding_trajectory.discovery import discover_source_candidates
 
 from coding_trajectory_cli._shared import (
@@ -161,7 +162,10 @@ def _handle_run(args: argparse.Namespace) -> dict[str, Any]:
     if not args.project_name:
         raise ValueError("collector run requires --project-name for artifact identity")
     identity = _identity_from_args(args, state_path, project_id=project_id)
-    with LocalCollector(database_path=state_path, identity=identity) as collector:
+    with (
+        publication_lock(identity.workspace_id, identity.agent_id),
+        LocalCollector(database_path=state_path, identity=identity) as collector,
+    ):
         result = collector.collect(
             current_dir=Path.cwd(),
             global_scope=args.global_scope,
@@ -169,6 +173,7 @@ def _handle_run(args: argparse.Namespace) -> dict[str, Any]:
             since_days=args.since_days,
             remote=remote,
             heartbeat=not args.no_heartbeat,
+            target_session_id=getattr(args, "session_id", None),
         )
     return {
         "project_id": str(project_id),
@@ -258,6 +263,11 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         formatter_class=GhFormatter,
     )
     add_agent_vendor_flag(run)
+    run.add_argument(
+        "--session-id",
+        type=_uuid_arg,
+        help="Publish only the requested session's complete canonical graph.",
+    )
     run.add_argument(
         "--since-days",
         type=_positive_int,

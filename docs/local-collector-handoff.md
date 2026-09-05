@@ -7,7 +7,8 @@
 
 ## Purpose
 
-The collector is the only component that reads Codex, Claude Code, and Pi logs.
+The collector is the publication component for local vendor logs. Local evidence
+loading can separately read bodies for already-published sessions.
 It fences complete source bytes, builds one body-free shareable artifact, stores
 delivery work durably, publishes project artifacts idempotently, and maintains
 the existing living sequence. Local SQLite is delivery state, never remote
@@ -120,6 +121,17 @@ digest of the locally built source artifact
 
 The remote graph payload exists only in the atomic artifact publication, not in
 every source observation.
+
+## On-demand queries
+
+Local session queries can invoke this same collector with `target_session_id`.
+The collector fences the selected source component, normalizes required fork
+inputs, and queues only the requested canonical graph. Matching published
+artifact digests skip publication. CLI batch and on-demand writers share an
+agent lock; the on-demand caller uses durable private retry state, verifies
+visibility of the requested artifact, and returns only a Supabase read.
+See [fresh-session queries](cli.md#fresh-session-queries) for configuration,
+scope, and explicit read-only behavior.
 
 ## Operational use
 

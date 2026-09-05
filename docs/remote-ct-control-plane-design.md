@@ -17,7 +17,10 @@ not create a new public API version while response contracts remain compatible.
 Content is excluded by default. Local evidence requests depend on a published
 session and lazily hydrate host content only when its retained canonical facts
 match. HTTP callers are denied evidence access. Missing configuration or
-unpublished data fails explicitly; there is no local canonical read fallback.
+publication failures are explicit; there is no local canonical read fallback.
+An unpinned local session query may publish its eligible graph on demand, then
+read the committed Supabase revision. HTTP and explicitly pinned calls do not
+initiate publication. See the [query flow](cli.md#fresh-session-queries).
 
 ## Authorities
 

@@ -51,6 +51,8 @@ def _read_batch_requests(args: argparse.Namespace) -> list[dict[str, Any]]:
 def _runtime(args: argparse.Namespace) -> ServiceRuntime:
     """Every CLI read uses Supabase; local evidence remains demand-loaded."""
 
+    agent_id = os.environ.get("CT_COLLECTOR_AGENT_ID")
+    project_id = None
     workspace_id = getattr(args, "remote_workspace_id", None) or os.environ.get(
         "CT_REMOTE_WORKSPACE_ID"
     )
@@ -71,20 +73,39 @@ def _runtime(args: argparse.Namespace) -> ServiceRuntime:
         api_key = credentials.profile.supabase_api_key
         access_token = credentials.access_token
         workspace_id = workspace_id or credentials.profile.workspace_id
+        agent_id = str(credentials.profile.agent_id)
+        project_id = credentials.profile.project_id
     if not all((url, api_key, access_token, workspace_id)):
         raise ValueError(
             "API reads require complete Supabase URL, API key, access token, and workspace configuration"
         )
-    runtime = RemoteRuntimeFactory(
+    factory = RemoteRuntimeFactory(
         url=str(url),
         api_key=str(api_key),
         workspace_id=UUID(str(workspace_id)),
-    ).build(
+    )
+    runtime = factory.build(
         str(access_token),
         snapshot_sequence=getattr(args, "snapshot_sequence", None),
         local_evidence=True,
     )
     runtime.global_scope = getattr(args, "global_scope", False)
+    if (
+        agent_id
+        and getattr(args, "snapshot_sequence", None) is None
+        and os.environ.get("CT_AUTO_PUBLISH", "1") != "0"
+    ):
+        from coding_trajectory.control_plane.on_demand import OnDemandPublisher
+
+        runtime.before_read = OnDemandPublisher(
+            factory=factory,
+            access_token=str(access_token),
+            agent_id=UUID(agent_id),
+            url=str(url),
+            api_key=str(api_key),
+            current_dir=Path.cwd(),
+            project_id=project_id,
+        ).prepare
     return runtime
 
 

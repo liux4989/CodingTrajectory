@@ -44,12 +44,30 @@ class ApiConfiguration(BaseModel):
     ) -> dict[str, Any]:
         from coding_trajectory.control_plane.http_service import RemoteRuntimeFactory
 
-        return RemoteRuntimeFactory(
+        factory = RemoteRuntimeFactory(
             url=str(self.url),
             api_key=self.api_key.get_secret_value(),
             workspace_id=self.workspace_id,
-        ).runtime_options(
+        )
+        options = factory.runtime_options(
             self.access_token.get_secret_value(),
             local_evidence=local_evidence,
             current_dir=current_dir,
         )
+        agent_id = os.environ.get("CT_COLLECTOR_AGENT_ID")
+        if (
+            local_evidence
+            and agent_id
+            and os.environ.get("CT_AUTO_PUBLISH", "1") != "0"
+        ):
+            from coding_trajectory.control_plane.on_demand import OnDemandPublisher
+
+            options["before_read"] = OnDemandPublisher(
+                factory=factory,
+                access_token=self.access_token.get_secret_value(),
+                agent_id=UUID(agent_id),
+                url=str(self.url),
+                api_key=self.api_key.get_secret_value(),
+                current_dir=current_dir or Path.cwd(),
+            ).prepare
+        return options

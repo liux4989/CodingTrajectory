@@ -46,6 +46,7 @@ from coding_trajectory.control_plane.shareable import (
 from coding_trajectory.discovery import (
     DiscoveryCandidate,
     discover_source_candidates,
+    locate_session_files,
 )
 from coding_trajectory.ingestion.adapters.base import SessionHeader
 from coding_trajectory.ingestion.common import canonical_json, last_complete_line_offset
@@ -229,6 +230,7 @@ class CollectorRunResult:
     artifacts_accepted: int = 0
     artifacts_rejected: int = 0
     artifact_scope_incomplete: bool = False
+    target_artifact_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,6 +295,8 @@ class LocalCollector:
         since_days: int | None = None,
         remote: CollectorRemote | None = None,
         heartbeat: bool = True,
+        target_session_id: UUID | None = None,
+        known_artifact_digests: set[str] | None = None,
     ) -> CollectorRunResult:
         """Discover, fence, publish checkpoints, and publish local graph artifacts."""
 
@@ -311,6 +315,24 @@ class LocalCollector:
             agent_vendor=agent_vendor,
             since_days=since_days,
         )
+        if target_session_id is not None:
+            paths = set(
+                locate_session_files(
+                    session_id=target_session_id,
+                    current_dir=current_dir,
+                    global_scope=False,
+                    since_days=since_days,
+                    agent_vendor=agent_vendor,
+                    include_descendants=True,
+                )
+            )
+            candidates = [
+                candidate for candidate in candidates if candidate.path in paths
+            ]
+            if not candidates:
+                raise CollectorRemoteError(
+                    "requested session has no eligible local source"
+                )
         fenced: list[_FencedCandidate] = []
         failed = 0
         for candidate in candidates:
@@ -362,12 +384,78 @@ class LocalCollector:
             grouped.setdefault(
                 (source.candidate.vendor.value, source.header.session_id), []
             ).append(source)
+        normalized: dict[tuple[str, UUID], ShareableGraphArtifact] = {}
+        target_artifact_digest: str | None = None
+        if target_session_id is not None:
+            if failed:
+                raise CollectorRemoteError(
+                    "targeted source fencing failed; nothing published"
+                )
+            local_ids = {key[1] for key in grouped}
+            if any(
+                source.header.parent_session_id is not None
+                and source.header.parent_session_id not in local_ids
+                for source in fenced
+            ):
+                raise CollectorRemoteError(
+                    "required parent source is outside the eligible collection scope"
+                )
+            # Parent/fork dependencies may be needed for normalization, but only
+            # the selected canonical graph is allowed into the upload queue.
+            normalized = {
+                key: _normalized_segments(group, parent_turn_ids)
+                for key, group in grouped.items()
+            }
+            graphs = assemble_project_session_graphs(
+                self.identity.project_name or current_dir.name,
+                [
+                    artifact.to_session_graph().sessions[0]
+                    for artifact in normalized.values()
+                ],
+            )
+            selected = next(
+                (
+                    graph
+                    for graph in graphs
+                    if any(
+                        session.session_id == target_session_id
+                        for session in graph.sessions
+                    )
+                ),
+                None,
+            )
+            if selected is None:
+                raise CollectorRemoteError(
+                    "requested session has no complete canonical source"
+                )
+            selected_ids = {session.session_id for session in selected.sessions}
+            grouped = {
+                key: group for key, group in grouped.items() if key[1] in selected_ids
+            }
+            target_artifact_digest = build_shareable_graph_artifact(selected).digest()
+            if (
+                not self.pending_count()
+                and not self._artifact_publication_blocked()
+                and target_artifact_digest in (known_artifact_digests or set())
+            ):
+                return CollectorRunResult(
+                    discovered=len(candidates),
+                    queued=0,
+                    accepted=0,
+                    rejected=0,
+                    pending=0,
+                    heartbeat_sequence=None,
+                    target_artifact_digest=target_artifact_digest,
+                )
         queued = 0
         collected: list[_CollectedSource] = []
-        for group in grouped.values():
+        for key, group in grouped.items():
             try:
                 source = self._collect_segments(
-                    group, parent_turn_ids=parent_turn_ids, remote=remote
+                    group,
+                    parent_turn_ids=parent_turn_ids,
+                    remote=remote,
+                    artifact=normalized.get(key),
                 )
                 queued += source.queued
                 collected.append(source)
@@ -420,6 +508,7 @@ class LocalCollector:
             (str(self.identity.project_id),),
         ).fetchone()
         return CollectorRunResult(
+            target_artifact_digest=target_artifact_digest,
             discovered=len(candidates),
             queued=queued,
             accepted=accepted,
@@ -765,12 +854,13 @@ class LocalCollector:
         *,
         parent_turn_ids: dict[UUID, set[str]],
         remote: CollectorRemote | None,
+        artifact: ShareableGraphArtifact | None = None,
     ) -> _CollectedSource:
         segments = sorted(segments, key=lambda segment: str(segment.segment_id))
         first = segments[0]
         vendor = first.candidate.vendor.value
         native_session_id = str(first.header.session_id)
-        artifact = _normalized_segments(segments, parent_turn_ids)
+        artifact = artifact or _normalized_segments(segments, parent_turn_ids)
         observed_at = max(segment.modified_at for segment in segments)
         state = self._logical_source_state(vendor, native_session_id)
         if remote is not None and (
