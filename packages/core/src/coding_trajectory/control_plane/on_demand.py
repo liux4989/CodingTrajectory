@@ -1,4 +1,4 @@
-"""Publish a requested local graph before reading its canonical database result."""
+"""Synchronize stored local projections before reading canonical remote results."""
 
 from __future__ import annotations
 
@@ -8,13 +8,14 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
-from uuid import UUID, NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, Field
 
 from coding_trajectory.control_plane.collector import (
-    LocalCollector,
     CollectorIdentity,
+    CollectorRemoteError,
+    LocalCollector,
     SupabaseCollectorRemote,
 )
 from coding_trajectory.control_plane.collector_protocol import (
@@ -33,7 +34,7 @@ class PublicationState(BaseModel):
 
 
 class OnDemandPublisher:
-    """Origin-host capability; never constructed by the HTTP request handler."""
+    """Store-first origin-host capability, never available to HTTP handlers."""
 
     def __init__(
         self,
@@ -95,9 +96,89 @@ class OnDemandPublisher:
         temporary.write_text(state.model_dump_json())
         temporary.replace(self.directory / "state.json")
 
+    def _prepare_living(self, method: str) -> dict[str, Any]:
+        from coding_trajectory.contracts import service_contract
+        from coding_trajectory.living_events import serve_living_events
+        from coding_trajectory.living_sessions import serve_living_sessions
+        from coding_trajectory.service import IndexCache
+
+        with publication_lock(self.factory.workspace_id, self.agent_id):
+            self.directory.mkdir(parents=True, exist_ok=True)
+            registration = self.remote.register_project(
+                ProjectRegistrationRequest(
+                    workspace_id=self.factory.workspace_id,
+                    agent_id=self.agent_id,
+                    display_name=self.current_dir.name,
+                )
+            )
+            if (
+                self.project_id is not None
+                and self.project_id != registration.project_id
+            ):
+                raise DocumentError(
+                    "local project does not match the collector credential profile"
+                )
+            identity = CollectorIdentity(
+                workspace_id=self.factory.workspace_id,
+                agent_id=self.agent_id,
+                agent_instance_id=uuid5(
+                    NAMESPACE_URL,
+                    f"ct-on-demand:{self.factory.workspace_id}:{self.agent_id}",
+                ),
+                project_id=registration.project_id,
+                project_name=self.current_dir.name,
+            )
+            with LocalCollector(
+                database_path=self.directory / "collector.sqlite3",
+                identity=identity,
+            ) as collector:
+                print(
+                    f"ct: synchronizing stored {method} observations with Supabase…",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                cache = IndexCache()
+
+                def load_page(params: dict[str, Any]) -> dict[str, Any]:
+                    if method == "living.events":
+                        response = serve_living_events(
+                            params,
+                            cache=cache,
+                            current_dir=self.current_dir,
+                            global_scope=False,
+                        )
+                    else:
+                        response = serve_living_sessions(
+                            params,
+                            current_dir=self.current_dir,
+                            global_scope=False,
+                        )
+                    return service_contract(method).validate_response(response)
+
+                collector.publish_living_projection(
+                    remote=self.remote,
+                    kind=method,
+                    load_page=load_page,
+                )
+                collector.refresh_lease(self.remote)
+                if collector.pending_count():
+                    raise DocumentError(
+                        "living publication is incomplete; retry this request"
+                    )
+        return self._options()
+
     def prepare(
         self, method: str, params: dict[str, Any], repository: Any
     ) -> dict[str, Any] | None:
+        if method in {"living.events", "living.sessions"}:
+            try:
+                return self._prepare_living(method)
+            except DocumentError:
+                raise
+            except (CollectorRemoteError, OSError, TypeError, ValueError) as exc:
+                raise DocumentError(
+                    f"on-demand living publication failed ({type(exc).__name__}); retry this request"
+                ) from None
         if not method.startswith(("session.", "graph.")):
             return None
         target = params.get("session_id") or params.get("root_session_id")

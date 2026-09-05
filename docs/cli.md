@@ -237,6 +237,14 @@ are left for a subsequent query or batch publication.
 publications first, then executes its reads at one final snapshot. Collection
 queries and turn/item/event-ID-only queries do not initiate publication.
 
+Local `living.events` and `living.sessions` requests use the same store-first
+boundary. Each request reconciles the host's persisted journals into its local
+SQLite living projection, durably publishes only changes after the retained
+projection cursor, refreshes the collector lease, and then reads a fresh remote
+snapshot. There is no watcher or in-memory-only path. HTTP and other hosts cannot
+trigger this reconciliation because they cannot access the source host's storage;
+they read the latest durable living observations already in Supabase.
+
 For an explicit targeted collector pass:
 
 ```sh

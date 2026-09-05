@@ -13,6 +13,7 @@ import json
 import sqlite3
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,9 +35,9 @@ from coding_trajectory.control_plane.collector_protocol import (
     ProjectRegistrationResponse,
     RecoveredSource,
     ShareableArtifactPublication,
-    SourceVectorEntry,
     SourceRegistrationRequest,
     SourceRegistrationResponse,
+    SourceVectorEntry,
 )
 from coding_trajectory.control_plane.shareable import (
     ShareableGraphArtifact,
@@ -847,6 +848,63 @@ class LocalCollector:
                 queued_sequences.add(sequence)
         committed = self._flush_living(remote)
         return len(queued_sequences & committed.keys())
+
+    def publish_living_projection(
+        self,
+        *,
+        remote: CollectorRemote,
+        kind: str,
+        load_page: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> int:
+        """Publish one stored local projection and retain its durable cursor."""
+
+        cursor_key = f"living_projection_cursor:{kind}"
+        after = self._get_meta(cursor_key, "") or None
+        through: str | None = None
+        published = 0
+        while True:
+            params: dict[str, Any] = {"limit": 200}
+            if after is not None:
+                params["after"] = after
+            if through is not None:
+                params["through"] = through
+            page = load_page(params)
+            changes = page.get("changes")
+            if not isinstance(changes, list):
+                raise TypeError("living projection returned invalid changes")
+            watermark = page.get("through")
+            if not isinstance(watermark, str) or not watermark:
+                raise ValueError("living projection returned no watermark")
+            published += self.publish_living_changes(
+                remote=remote,
+                kind=kind,
+                changes=changes,
+            )
+            cursors = [change.get("cursor") for change in changes]
+            if any(not isinstance(cursor, str) or not cursor for cursor in cursors):
+                raise ValueError("living projection returned an invalid change cursor")
+            if cursors and not all(
+                self._connection.execute(
+                    "select 1 from living_outbox where kind = ? and source_cursor = ? and state = 'accepted'",
+                    (kind, cursor),
+                ).fetchone()
+                for cursor in cursors
+            ):
+                return published
+            if not page.get("has_more"):
+                self._set_meta(cursor_key, watermark)
+                self._connection.commit()
+                return published
+            next_cursor = page.get("next_cursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                raise ValueError("living projection omitted its next cursor")
+            after = next_cursor
+            through = watermark
+
+    def refresh_lease(self, remote: CollectorRemote) -> int | None:
+        """Publish a fresh heartbeat on the shared living sequence."""
+
+        return self._heartbeat(remote)
 
     def _collect_segments(
         self,

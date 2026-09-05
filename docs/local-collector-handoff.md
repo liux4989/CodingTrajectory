@@ -36,6 +36,13 @@ records read from the fence. Bytes appended after the fence are deferred to the
 next pass. Parent fork-cut inputs are derived only from fenced records; the
 collector never rescans an unfenced parent during normalization.
 
+Living API requests remain request-driven. The source-owning host first stores
+vendor journal records, reconciles them into the existing local living SQLite
+projection, publishes projection deltas through the durable `living_outbox`, and
+only then reads the refreshed remote snapshot. The retained local projection
+cursor prevents unchanged resources from being republished and preserves remove
+or reset changes between requests.
+
 ## Required remote contract
 
 The collector uses:
