@@ -43,6 +43,9 @@ bun.lock
 # Amp orb portals
 .amp/portals/*
 
+# Local Amp capture probe evidence
+.amp/local/ct-capture-probe/
+
 # Regenerable benchmark reports (including old output locations)
 benchmarks/results/
 /results/
