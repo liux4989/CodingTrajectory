@@ -35,6 +35,7 @@ _LAZY_EXPORTS: dict[str, str] = {
     "Vendor": "coding_trajectory.ingestion",
     "VendorExtensions": "coding_trajectory.ingestion",
     # ingestion: adapters
+    "AmpAdapter": "coding_trajectory.ingestion",
     "BaseAdapter": "coding_trajectory.ingestion",
     "ClaudeCodeAdapter": "coding_trajectory.ingestion",
     "CodexAdapter": "coding_trajectory.ingestion",
@@ -75,6 +76,7 @@ if TYPE_CHECKING:
     )
     from coding_trajectory.ingestion import (
         AgentMessageItem as AgentMessageItem,
+        AmpAdapter as AmpAdapter,
         BaseAdapter as BaseAdapter,
         ClaudeCodeAdapter as ClaudeCodeAdapter,
         ClaudeCodeExtensions as ClaudeCodeExtensions,

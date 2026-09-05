@@ -35,6 +35,7 @@ class Vendor(str, Enum):
     CODEX_CLI = "codex_cli"
     CLAUDE_CODE = "claude_code"
     PI = "pi"
+    AMP = "amp"
 
 
 class ToolStatus(str, Enum):
@@ -128,10 +129,20 @@ class PiExtensions(BaseModel):
     thinking_level: str | None = None
 
 
+class AmpExtensions(BaseModel):
+    thread_id: str
+    title: str | None = None
+    spawn_links: dict[str, str] = Field(default_factory=dict)
+    canonical_spawn_origins: dict[str, CanonicalSpawnOrigin] = Field(
+        default_factory=dict
+    )
+
+
 class VendorExtensions(BaseModel):
     claude_code: ClaudeCodeExtensions | None = None
     codex: CodexExtensions | None = None
     pi: PiExtensions | None = None
+    amp: AmpExtensions | None = None
 
 
 # ---------------------------------------------------------------------------

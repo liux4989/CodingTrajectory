@@ -21,6 +21,7 @@ from coding_trajectory.ingestion.models import (
     Session,
     Turn,
     TurnStatus,
+    Vendor,
 )
 from coding_trajectory.query import DocumentStore
 
@@ -132,6 +133,10 @@ def candidate_for_turn(
     session = store.sessions.get(turn.session_id)
     if session is None:
         return TaskExclusion("session_not_found", str(turn.session_id))
+    if session.vendor == Vendor.AMP:
+        return TaskExclusion(
+            "amp_observed_timing_not_execution_ground_truth", str(turn_id)
+        )
     root_session_id = store.session_to_root.get(session.session_id)
     if root_session_id is None:
         return TaskExclusion("root_session_not_found", str(session.session_id))

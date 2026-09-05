@@ -22,6 +22,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, Field
 
+from coding_trajectory.ingestion.adapters.amp import AmpAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.adapters.claude_code import (
     ClaudeCodeAdapter,
@@ -41,8 +42,6 @@ from coding_trajectory.ingestion.retention import CanonicalRetention
 from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
     canonical_session_ids,
 )
-
-
 
 
 class SourceStatus(StrEnum):
@@ -162,6 +161,7 @@ class _SourceHeader(FrozenStrictModel):
     vendor: Vendor
     session_id: UUID
     parent_session_id: UUID | None = None
+    child_session_ids: tuple[UUID, ...] = ()
 
 
 class _BuiltSource(FrozenStrictModel):
@@ -223,6 +223,10 @@ def plan_session_graph_components_from_files(
 
     neighbours: dict[UUID, set[UUID]] = defaultdict(set)
     for header in headers.values():
+        for child_id in header.child_session_ids:
+            if child_id in canonical_path_by_session:
+                neighbours[header.session_id].add(child_id)
+                neighbours[child_id].add(header.session_id)
         parent_id = header.parent_session_id
         if parent_id is None or parent_id not in canonical_path_by_session:
             continue
@@ -532,7 +536,6 @@ def rebuild_affected_session_graphs(
     )
 
 
-
 def rebuild_affected_session_graphs_from_files(
     *,
     sources: Iterable[SourceInput],
@@ -695,6 +698,10 @@ def _file_source_header(snapshot: SourceSnapshot) -> _SourceHeader | None:
     vendor = _snapshot_vendor(snapshot) or _detect_vendor(snapshot.path, ())
     if vendor is None:
         raise ValueError("unable to identify source vendor")
+    if vendor == Vendor.AMP:
+        return _amp_source_header(
+            snapshot.path, AmpAdapter()._iter_records(Path(snapshot.path))
+        )
     adapter_cls: type[BaseAdapter]
     if vendor == Vendor.CODEX_CLI:
         adapter_cls = CodexAdapter
@@ -710,6 +717,31 @@ def _file_source_header(snapshot: SourceSnapshot) -> _SourceHeader | None:
         vendor=vendor,
         session_id=header.session_id,
         parent_session_id=header.parent_session_id,
+    )
+
+
+def _amp_source_header(
+    path: str, records: Iterable[dict[str, Any]]
+) -> _SourceHeader | None:
+    # Amp spawn evidence is in tool results, not the first metadata record.
+    rows = list(records)
+    adapter = AmpAdapter()
+    header = adapter.scan_identity_records(Path(path), rows)
+    if header is None:
+        return None
+    try:
+        session = adapter.build_canonical_session(Path(path), rows)
+    except ValueError as exc:
+        if str(exc) != "Amp journal has no captured activity":
+            raise
+        children = ()
+    else:
+        children = tuple(UUID(child) for child in session.extensions.amp.spawn_links)
+    return _SourceHeader(
+        path=path,
+        vendor=Vendor.AMP,
+        session_id=header.session_id,
+        child_session_ids=children,
     )
 
 
@@ -882,6 +914,9 @@ def _select_component_paths(
     children: dict[UUID, set[UUID]] = defaultdict(set)
     parent: dict[UUID, UUID] = {}
     for header in headers.values():
+        for child_id in header.child_session_ids:
+            children[header.session_id].add(child_id)
+            children[child_id].add(header.session_id)
         if header.parent_session_id is None:
             continue
         parent[header.session_id] = header.parent_session_id
@@ -924,7 +959,7 @@ def _source_header(
     metadata_parent = _uuid_or_none(
         snapshot.metadata.get("parent_session_id") or snapshot.parent_link
     )
-    if metadata_session is not None:
+    if metadata_session is not None and vendor != Vendor.AMP:
         return _SourceHeader(
             path=snapshot.path,
             vendor=vendor,
@@ -933,6 +968,8 @@ def _source_header(
         )
 
     records = _header_records(snapshot.path, messages_for_path(snapshot.path), vendor)
+    if vendor == Vendor.AMP:
+        return _amp_source_header(snapshot.path, records)
     if vendor == Vendor.CODEX_CLI:
         for record in records:
             if record.get("type") != "session_meta":
@@ -1056,12 +1093,20 @@ def _detect_vendor(path: str, messages: Iterable[MessageInput]) -> Vendor | None
         return Vendor.CLAUDE_CODE
     if ".pi" in normalized and "sessions" in normalized:
         return Vendor.PI
+    if "amp" in normalized and "sessions" in normalized:
+        return Vendor.AMP
     for raw in messages:
         message = _validated_message(path, raw)
         payload = message.payload
         if "sessionId" in payload:
             return Vendor.CLAUDE_CODE
         record_type = payload.get("type")
+        if (
+            payload.get("schema_version") == 1
+            and record_type in {"thread", "message", "observation"}
+            and ("thread_id" in payload or record_type == "thread")
+        ):
+            return Vendor.AMP
         if record_type in {
             "session_meta",
             "turn_context",
@@ -1144,6 +1189,8 @@ def _build_session_from_records(
     adapter_cls: type[BaseAdapter]
     if vendor == Vendor.CODEX_CLI:
         adapter_cls = CodexAdapter
+    elif vendor == Vendor.AMP:
+        adapter_cls = AmpAdapter
     elif vendor == Vendor.CLAUDE_CODE:
         adapter_cls = ClaudeCodeAdapter
     elif vendor == Vendor.PI:

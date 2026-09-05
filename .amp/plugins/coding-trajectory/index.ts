@@ -25,6 +25,24 @@ function sourcePath(threadID: string): string {
 
 function recordKey(record: Record<string, unknown>): string | null {
 	if (record.type === 'thread') return 'thread'
+	if (record.type === 'observation') {
+		const event = record.event
+		const threadID = record.thread_id
+		if (typeof event !== 'string' || typeof threadID !== 'string') return null
+		if (
+			(event === 'agent.start' || event === 'agent.end') &&
+			(typeof record.message_id === 'string' || typeof record.message_id === 'number')
+		) {
+			return `observation:${event}:${threadID}:${record.message_id}`
+		}
+		if (
+			(event === 'tool.call' || event === 'tool.result') &&
+			typeof record.tool_use_id === 'string'
+		) {
+			return `observation:${event}:${threadID}:${record.tool_use_id}`
+		}
+		return null
+	}
 	if (record.type !== 'message') return null
 	const message = record.message
 	if (!message || typeof message !== 'object' || !('id' in message)) return null
@@ -46,7 +64,14 @@ async function loadState(path: string): Promise<StoredState> {
 		try {
 			const record = JSON.parse(line) as Record<string, unknown>
 			const key = recordKey(record)
-			if (key) state.set(key, JSON.stringify(record.payload ?? record.message))
+			if (key) {
+				state.set(
+					key,
+					record.type === 'observation'
+						? JSON.stringify(key)
+						: JSON.stringify(record.payload ?? record.message),
+				)
+			}
 		} catch {
 			// Ignore a partial line left by an interrupted write. The next capture
 			// appends the current revision of every missing message.
@@ -100,17 +125,64 @@ export default function codingTrajectoryCollector(amp: PluginAPI) {
 		state.set(key, serializedPayload)
 	}
 
-	function capture(thread: PluginThread, trigger: string): Promise<void> {
-		const run = captures.then(async () => {
-			const path = sourcePath(thread.id)
-			await mkdir(logRoot(), { recursive: true, mode: 0o700 })
-			let state = states.get(path)
-			if (!state) {
-				state = await loadState(path)
-				states.set(path, state)
-			}
+	async function stateForThread(threadID: string): Promise<{
+		path: string
+		state: StoredState
+	}> {
+		const path = sourcePath(threadID)
+		await mkdir(logRoot(), { recursive: true, mode: 0o700 })
+		let state = states.get(path)
+		if (!state) {
+			state = await loadState(path)
+			states.set(path, state)
+		}
+		return { path, state }
+	}
 
-			const capturedAt = new Date().toISOString()
+	function queue(write: () => Promise<void>, failure: string): Promise<void> {
+		const run = captures.then(write)
+		captures = run.catch((error) => {
+			amp.logger.log(failure, error)
+		})
+		return captures
+	}
+
+	function observe(
+		threadID: string,
+		event: string,
+		observedAt: string,
+		fields: Record<string, unknown> = {},
+	): Promise<void> {
+		return queue(async () => {
+			const { path, state } = await stateForThread(threadID)
+			const record = {
+				schema_version: SCHEMA_VERSION,
+				type: 'observation',
+				captured_at: observedAt,
+				observed_at: observedAt,
+				thread_id: threadID,
+				event,
+				...fields,
+			}
+			const key = recordKey(record)
+			if (key) {
+				await appendChanged(path, state, key, key, record)
+			} else {
+				await appendFile(path, `${JSON.stringify(record)}\n`, {
+					encoding: 'utf8',
+					mode: 0o600,
+				})
+			}
+		}, `CodingTrajectory observation failed for ${threadID}:`)
+	}
+
+	function capture(
+		thread: PluginThread,
+		trigger: string,
+		capturedAt: string,
+	): Promise<void> {
+		return queue(async () => {
+			const { path, state } = await stateForThread(thread.id)
 			const title = await optional(() => thread.title.get())
 			const parentThreadID = await optional(() => thread.parentThreadID())
 			const threadPayload = {
@@ -138,25 +210,63 @@ export default function codingTrajectoryCollector(amp: PluginAPI) {
 					message,
 				})
 			}
-		})
-
-		captures = run.catch((error) => {
-			amp.logger.log(
-				`CodingTrajectory capture failed for ${thread.id}:`,
-				error,
-			)
-		})
-		return captures
+		}, `CodingTrajectory capture failed for ${thread.id}:`)
 	}
 
-	amp.on('session.start', (_event, ctx) => capture(ctx.thread, 'session.start'))
-	amp.on('agent.start', (_event, ctx) => capture(ctx.thread, 'agent.start'))
-	amp.on('agent.end', (_event, ctx) => capture(ctx.thread, 'agent.end'))
+	amp.on('session.start', (_event, ctx) => {
+		const observedAt = new Date().toISOString()
+		void observe(ctx.thread.id, 'session.start', observedAt)
+		return capture(ctx.thread, 'session.start', observedAt)
+	})
+	amp.on('agent.start', async (event, ctx) => {
+		const observedAt = new Date().toISOString()
+		await observe(ctx.thread.id, 'agent.start', observedAt, {
+			message_id: event.id,
+		})
+		await capture(ctx.thread, 'agent.start', observedAt)
+		return {}
+	})
+	amp.on('agent.end', (event, ctx) => {
+		const observedAt = new Date().toISOString()
+		void observe(ctx.thread.id, 'agent.end', observedAt, {
+			message_id: event.id,
+			status: event.status,
+		})
+		return capture(ctx.thread, 'agent.end', observedAt)
+	})
+	amp.on('tool.call', async (event, ctx) => {
+		const observedAt = new Date().toISOString()
+		await observe(ctx.thread.id, 'tool.call', observedAt, {
+			tool_use_id: event.toolUseID,
+			tool_name: event.tool,
+			...(event.input !== undefined ? { input: event.input } : {}),
+		})
+		return { action: 'allow' }
+	})
+	amp.on('tool.result', (event, ctx) => {
+		const observedAt = new Date().toISOString()
+		return observe(ctx.thread.id, 'tool.result', observedAt, {
+			tool_use_id: event.toolUseID,
+			status: event.status,
+			tool_name: event.tool,
+			...(event.input !== undefined ? { input: event.input } : {}),
+			...(event.output !== undefined ? { output: event.output } : {}),
+			...(event.error !== undefined ? { error: event.error } : {}),
+		})
+	})
 
 	const active = amp.activeThread.current
-	if (active) void capture(amp.threads.get(active.id), 'plugin.load')
+	if (active) {
+		void capture(amp.threads.get(active.id), 'plugin.load', new Date().toISOString())
+	}
 	const activeSubscription = amp.activeThread.subscribe((current) => {
-		if (current) void capture(amp.threads.get(current.id), 'thread.active')
+		if (current) {
+			void capture(
+				amp.threads.get(current.id),
+				'thread.active',
+				new Date().toISOString(),
+			)
+		}
 	})
 	amp.onDispose(() => activeSubscription.unsubscribe())
 }

@@ -15,6 +15,7 @@ from coding_trajectory.ingestion.models import (
     EventType,
     Item,
     SessionGraph,
+    Vendor,
 )
 
 
@@ -33,17 +34,61 @@ def _optional_positive_int(params: dict[str, Any], key: str) -> int | None:
     return parsed
 
 
-def _public_output_for_session_graph(_session_graph: SessionGraph, payload: Any) -> Any:
-    """Identity seam over canonical session-graph output.
-
-    The recursive public/internal session-id remapping machinery that lived
-    here has been removed: it produced an identical payload in practice
-    (every session id in canonical output is already a canonical UUID string),
-    so the deep-copy walk was pure overhead. Kept as a no-op wrapper so the
-    session.* handlers read uniformly; inline at the call sites if it ever
-    needs to diverge.
-    """
+def _public_output_for_session_graph(session_graph: SessionGraph, payload: Any) -> Any:
+    """Attach source coverage without presenting absent Amp usage as zero."""
+    amp_sessions = [s for s in session_graph.sessions if s.vendor == Vendor.AMP]
+    if not amp_sessions:
+        return payload
+    coverage = {
+        "source": "amp_live_plugin",
+        "provider_usage": "unavailable"
+        if len(amp_sessions) == len(session_graph.sessions)
+        else "partial",
+        "timestamps": "observed_not_provider_execution",
+        "relationships": "explicit_creation_results_only",
+        "content_tokens": "estimated_not_billed",
+    }
+    if isinstance(payload, dict):
+        payload["measurement_coverage"] = coverage
+        payload.setdefault("warnings", []).append(
+            "Amp capture contains observed activity, not provider usage or exact inference timing; "
+            "request counts describe recorded usage observations, not all inference requests."
+        )
+        if coverage["provider_usage"] == "unavailable":
+            _omit_unavailable_amp_usage(payload)
+    elif isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict):
+                item["measurement_coverage"] = coverage
+                if coverage["provider_usage"] == "unavailable":
+                    _omit_unavailable_amp_usage(item)
     return payload
+
+
+def _omit_unavailable_amp_usage(payload: dict[str, Any]) -> None:
+    # Walk projection containers only, never raw tool/message bodies.
+    for key in ("usage", "total_usage", "token_usage", "billed_token_usage"):
+        if key in payload:
+            payload[key] = {"availability": "unavailable", "source": "amp_live_plugin"}
+    for key in (
+        "estimated_cost",
+        "allocated_real_token_cost",
+        "item_real_token_costs",
+        "model_active_seconds",
+        "processed_tokens_per_second",
+    ):
+        if key in payload:
+            payload[key] = None
+    runtime = payload.get("runtime")
+    if isinstance(runtime, dict):
+        _omit_unavailable_amp_usage(runtime)
+    for key in ("turns", "sessions", "models", "requests", "items"):
+        entries = payload.get(key)
+        if not isinstance(entries, list):
+            continue
+        for item in entries:
+            if isinstance(item, dict):
+                _omit_unavailable_amp_usage(item)
 
 
 def serialize_session_graph_detail(session_graph: SessionGraph) -> dict[str, Any]:

@@ -596,7 +596,8 @@ class TranscriptProjector:
         # turn; preserve that unmatched start so a resumed thread becomes
         # living before its next terminal event arrives.
         if (
-            self._completable_turn_ids is not None
+            self.vendor != Vendor.AMP
+            and self._completable_turn_ids is not None
             and vendor_turn_id is not None
             and vendor_turn_id not in self._completable_turn_ids
             and self.active_status != TurnStatus.RUNNING

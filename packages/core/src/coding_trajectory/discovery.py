@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
 import tomllib
 from dataclasses import dataclass
@@ -30,7 +31,12 @@ from coding_trajectory.discovery_paths import (
     _is_recent_enough,
     _project_scope_matches_path,
 )
-from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
+from coding_trajectory.ingestion import (
+    AmpAdapter,
+    ClaudeCodeAdapter,
+    CodexAdapter,
+    PiAdapter,
+)
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.common import (
     canonical_json,
@@ -101,7 +107,13 @@ class _IngestedSession:
 
 def _vendor_configs() -> list[tuple[Vendor, type[BaseAdapter], Path, str]]:
     home = Path.home()
+    amp_root = Path(
+        os.environ.get(
+            "CT_AMP_LOG_DIR", home / ".coding-trajectory" / "amp" / "sessions"
+        )
+    ).expanduser()
     return [
+        (Vendor.AMP, AmpAdapter, amp_root, "*.jsonl"),
         (Vendor.CODEX_CLI, CodexAdapter, home / ".codex" / "sessions", "*.jsonl"),
         (
             Vendor.CLAUDE_CODE,
@@ -557,6 +569,15 @@ def discover_project_metadata(
                 modified_since=modified_since,
             )
         )
+    if Vendor.AMP in selected_vendors:
+        items.extend(
+            _amp_session_project_metadata(
+                current_dir=current_dir,
+                scoped_project=scoped_project,
+                scoped_project_key=scoped_project_key,
+                modified_since=modified_since,
+            )
+        )
 
     return items
 
@@ -614,6 +635,20 @@ def _candidate_files(
         return _pi_candidate_files_direct(
             base_dir, pattern, current_dir=current_dir, modified_since=modified_since
         )
+
+    if vendor == Vendor.AMP:
+        paths = _all_files(base_dir, pattern, modified_since=modified_since)
+        return [
+            path
+            for path in paths
+            if _path_matches_project_scope(
+                vendor,
+                path,
+                current_dir,
+                scoped_project=scoped_project,
+                scoped_project_key=scoped_project_key,
+            )
+        ]
 
     if vendor == Vendor.CODEX_CLI:
         # Pre-filter: check if current_dir is tracked in config.toml
@@ -740,6 +775,13 @@ def _path_matches_project_scope(
                 project_path, current_dir, scoped_project, scoped_project_key
             )
 
+    if vendor == Vendor.AMP:
+        project_path = _amp_project_path_from_source(path)
+        if project_path is not None:
+            return _project_scope_matches_path(
+                project_path, current_dir, scoped_project, scoped_project_key
+            )
+
     if vendor == Vendor.PI:
         project_path = _pi_project_path_from_source(path)
         if project_path is not None:
@@ -802,6 +844,41 @@ def _codex_project_path_from_source(path: Path, *, max_records: int = 8) -> Path
     except OSError:
         return None
     return None
+
+
+def _amp_project_path_from_source(path: Path) -> Path | None:
+    header = AmpAdapter().scan_header(path)
+    return Path(header.cwd) if header and header.cwd else None
+
+
+def _amp_session_project_metadata(
+    *,
+    current_dir: Path,
+    scoped_project: str | None,
+    scoped_project_key: str | None,
+    modified_since: datetime | None,
+) -> list[ProjectDiscoveryItem]:
+    amp_config = next(config for config in _vendor_configs() if config[0] == Vendor.AMP)
+    items: list[ProjectDiscoveryItem] = []
+    for path in _all_files(amp_config[2], amp_config[3], modified_since=modified_since):
+        project_path = _amp_project_path_from_source(path)
+        if project_path is None:
+            continue
+        if scoped_project_key and not _project_scope_matches_path(
+            project_path, current_dir, scoped_project, scoped_project_key
+        ):
+            continue
+        project_identifier = normalize_project_key(project_path.name)
+        if project_identifier:
+            items.append(
+                ProjectDiscoveryItem(
+                    project_identifier=project_identifier,
+                    path=project_path,
+                    source_path=path,
+                    vendor=Vendor.AMP,
+                )
+            )
+    return items
 
 
 def infer_project_identifier(

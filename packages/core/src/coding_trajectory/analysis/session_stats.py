@@ -45,6 +45,8 @@ def session_title(session: Session) -> str | None:
         return extensions.claude_code.title
     if extensions and extensions.pi and extensions.pi.title:
         return extensions.pi.title
+    if extensions and extensions.amp and extensions.amp.title:
+        return extensions.amp.title
     return None
 
 

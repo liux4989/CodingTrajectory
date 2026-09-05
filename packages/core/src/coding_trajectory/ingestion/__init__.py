@@ -1,3 +1,4 @@
+from coding_trajectory.ingestion.adapters.amp import AmpAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
 from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
@@ -11,28 +12,29 @@ from coding_trajectory.ingestion.graph import (
 )
 from coding_trajectory.ingestion.models import (
     AgentMessageItem,
+    AmpExtensions,
     ClaudeCodeExtensions,
     CodexExtensions,
     CommandExecutionItem,
     ContextCategoryObservation,
     ContextSourceObservation,
     ContextUsageObservation,
+    Event,
+    EventType,
     FileChangeItem,
     Item,
     ItemBase,
     PiExtensions,
     PlanItem,
     ReasoningItem,
-    SessionStatus,
     RuntimeObservation,
+    Session,
+    SessionEdge,
+    SessionGraph,
+    SessionGraphSummary,
+    SessionStatus,
     ToolCallItem,
     ToolStatus,
-    Event,
-    EventType,
-    Session,
-    SessionGraph,
-    SessionEdge,
-    SessionGraphSummary,
     Turn,
     TurnStatus,
     Vendor,
@@ -74,6 +76,7 @@ def __getattr__(name: str) -> object:
 __all__ = [
     # models
     "AgentMessageItem",
+    "AmpExtensions",
     "ClaudeCodeExtensions",
     "CanonicalRetention",
     "CodexExtensions",
@@ -121,6 +124,7 @@ __all__ = [
     "plan_session_graph_components_from_files",
     # adapters
     "BaseAdapter",
+    "AmpAdapter",
     "ClaudeCodeAdapter",
     "CodexAdapter",
     "PiAdapter",

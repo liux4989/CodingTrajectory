@@ -30,12 +30,12 @@ from coding_trajectory.analysis.measurements import (
 from coding_trajectory.analysis.request_lineage import extract_user_request
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
 from coding_trajectory.analysis.tool_summary_shell import classify_verification_command
-from coding_trajectory.ingestion.common import canonical_json
 from coding_trajectory.discovery import (
     DiscoveryCandidate,
     merge_session_segments,
     stabilize_session,
 )
+from coding_trajectory.ingestion.common import canonical_json
 from coding_trajectory.ingestion.graph import (
     build_session_graph,
     canonical_spawn_origins,
@@ -46,6 +46,7 @@ from coding_trajectory.ingestion.indexes import (
 )
 from coding_trajectory.ingestion.models import (
     AgentMessageItem,
+    AmpExtensions,
     CanonicalSpawnOrigin,
     ClaudeCodeExtensions,
     CommandExecutionItem,
@@ -75,7 +76,6 @@ from coding_trajectory.ingestion.models import (
     VendorExtensions,
 )
 from coding_trajectory.token_counter import counter_for_session_graph, scoped_counter
-
 
 SHAREABLE_GRAPH_SCHEMA_VERSION = "ct.shareable_graph.v1"
 MAX_SHAREABLE_ARTIFACT_BYTES = 8 * 1024 * 1024
@@ -889,10 +889,14 @@ def _build_topology(
     extensions = session.extensions
     claude = extensions.claude_code if extensions else None
     codex = extensions.codex if extensions else None
+    amp = extensions.amp if extensions else None
     return ShareableSessionTopology(
         sidechain=bool(claude and claude.is_sidechain),
         forked=bool(codex and codex.forked_from_id),
-        spawned=bool(codex and codex.spawn_parent_thread_id),
+        spawned=bool(
+            (codex and codex.spawn_parent_thread_id)
+            or (amp and session.parent_session_id)
+        ),
         spawn_depth=(
             codex.spawn_depth
             if codex and codex.spawn_depth is not None
@@ -917,7 +921,9 @@ def _build_topology(
 def _canonical_spawn_origins(session: Session) -> dict[str, CanonicalSpawnOrigin]:
     extensions = session.extensions
     existing = (
-        dict(extensions.codex.canonical_spawn_origins)
+        dict(extensions.amp.canonical_spawn_origins)
+        if extensions and extensions.amp
+        else dict(extensions.codex.canonical_spawn_origins)
         if extensions and extensions.codex
         else {}
     )
@@ -1126,7 +1132,30 @@ def _to_extensions(value: ShareableSession) -> VendorExtensions | None:
         else None
     )
     codex = None
+    amp = None
     pi = None
+    if value.vendor == Vendor.AMP:
+        amp = AmpExtensions(
+            thread_id=f"T-{value.session_id}",
+            title=value.title,
+            spawn_links={
+                str(origin.target_session_id): str(origin.item_id)
+                for origin in topology.spawn_origins
+                if origin.item_id is not None
+            },
+            canonical_spawn_origins={
+                str(origin.target_session_id): CanonicalSpawnOrigin(
+                    event_id=uuid5(
+                        _SYNTHETIC_REQUEST_NAMESPACE,
+                        f"spawn:{value.session_id}:{origin.target_session_id}",
+                    ),
+                    turn_id=origin.turn_id,
+                    item_id=origin.item_id,
+                    tool_name=origin.tool_name,
+                )
+                for origin in topology.spawn_origins
+            },
+        )
     if value.vendor == Vendor.CODEX_CLI:
         from coding_trajectory.ingestion.models import CodexExtensions
 
@@ -1155,9 +1184,9 @@ def _to_extensions(value: ShareableSession) -> VendorExtensions | None:
         from coding_trajectory.ingestion.models import PiExtensions
 
         pi = PiExtensions(title=value.title)
-    if claude is None and codex is None and pi is None:
+    if claude is None and codex is None and amp is None and pi is None:
         return None
-    return VendorExtensions(claude_code=claude, codex=codex, pi=pi)
+    return VendorExtensions(amp=amp, claude_code=claude, codex=codex, pi=pi)
 
 
 def _to_edge(value: ShareableEdge) -> SessionEdge:

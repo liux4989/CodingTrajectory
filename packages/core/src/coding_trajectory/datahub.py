@@ -29,6 +29,7 @@ from coding_trajectory.discovery import (
     scan_parent_turn_ids,
     stabilize_session,
 )
+from coding_trajectory.ingestion.adapters.amp import AmpAdapter
 from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
 from coding_trajectory.ingestion.adapters.pi import PiAdapter
@@ -79,6 +80,7 @@ _DETAIL_ADAPTERS = {
     Vendor.CODEX_CLI: CodexAdapter,
     Vendor.CLAUDE_CODE: ClaudeCodeAdapter,
     Vendor.PI: PiAdapter,
+    Vendor.AMP: AmpAdapter,
 }
 
 

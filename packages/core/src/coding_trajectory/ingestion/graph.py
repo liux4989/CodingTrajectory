@@ -30,6 +30,32 @@ from coding_trajectory.ingestion.vendor_mechanisms.relation_edges import (
 
 
 def decorate_sessions(sessions: list[Session]) -> list[Session]:
+    # Amp creation results are explicit parent-side evidence. Resolve only
+    # unique claims for captured children; never manufacture missing sessions.
+    by_id = {session.session_id: session for session in sessions}
+    claims: dict[UUID, set[UUID]] = {}
+    for parent in sessions:
+        amp = parent.extensions.amp if parent.extensions else None
+        if amp is not None:
+            for child in amp.spawn_links.keys() | amp.canonical_spawn_origins.keys():
+                claims.setdefault(UUID(child), set()).add(parent.session_id)
+    for child_id, parents in sorted(claims.items(), key=lambda entry: str(entry[0])):
+        child = by_id.get(child_id)
+        if child is None or not (child.extensions and child.extensions.amp):
+            continue
+        if len(parents) != 1 or child_id in parents:
+            continue
+        parent_id = next(iter(parents))
+        if child.parent_session_id not in (None, parent_id):
+            continue
+        ancestor = parent_id
+        seen = {child_id}
+        while ancestor in by_id and ancestor not in seen:
+            seen.add(ancestor)
+            ancestor = by_id[ancestor].parent_session_id
+        if ancestor in seen:
+            continue
+        child.parent_session_id = parent_id
     return sessions
 
 
@@ -183,11 +209,8 @@ class _EdgeOriginIndex:
     def from_session(cls, session: Session) -> _EdgeOriginIndex:
         """Index the parent facts shared by all of its child edges once."""
         extensions = session.extensions
-        spawn_links = (
-            dict(extensions.codex.spawn_links)
-            if extensions and extensions.codex
-            else {}
-        )
+        spawn_extension = (extensions.amp or extensions.codex) if extensions else None
+        spawn_links = dict(spawn_extension.spawn_links) if spawn_extension else {}
         canonical_origins = (
             {
                 child_id: _EdgeOrigin(
@@ -196,9 +219,9 @@ class _EdgeOriginIndex:
                     item_id=origin.item_id,
                     tool_name=origin.tool_name,
                 )
-                for child_id, origin in extensions.codex.canonical_spawn_origins.items()
+                for child_id, origin in spawn_extension.canonical_spawn_origins.items()
             }
-            if extensions and extensions.codex
+            if spawn_extension
             else {}
         )
         spawn_call_ids = set(spawn_links.values())
@@ -232,7 +255,11 @@ class _EdgeOriginIndex:
                 call_id: _edge_origin(event, item_index)
                 for call_id, event in first_events_by_call_id.items()
             },
-            latest_tool_origin=_edge_origin(latest_tool_event, item_index),
+            latest_tool_origin=(
+                None
+                if extensions and extensions.amp
+                else _edge_origin(latest_tool_event, item_index)
+            ),
         )
 
     def origin_for(self, child_session_id: UUID) -> _EdgeOrigin | None:
@@ -271,7 +298,7 @@ def _build_edge(
 ) -> SessionEdge:
     edge_type = (
         "spawned_subagent"
-        if _is_codex_spawn(child)
+        if _is_codex_spawn(child) or (child.extensions and child.extensions.amp)
         else "forked_from"
         if _is_codex_fork(child)
         else classify_edge_type(
