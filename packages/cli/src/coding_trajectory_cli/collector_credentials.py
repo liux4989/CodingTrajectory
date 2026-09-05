@@ -15,7 +15,7 @@ from typing import Any
 from uuid import UUID
 
 import keyring
-from pydantic import BaseModel, ConfigDict, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
 _PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -27,10 +27,11 @@ class CollectorCredentialError(RuntimeError):
 
 
 class CollectorCredentialProfile(BaseModel):
-    """Non-secret profile settings; the password is stored only in Keychain."""
+    """Profile settings; passwords stay in Keychain or the process environment."""
 
     model_config = ConfigDict(extra="forbid")
 
+    password_env: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     version: int = 1
     supabase_url: HttpUrl
     supabase_api_key: str
@@ -60,15 +61,18 @@ def configure_profile(
     supabase_url: str,
     supabase_api_key: str,
     email: str,
-    password: str,
+    password: str | None,
     workspace_id: UUID,
     agent_id: UUID,
     project_id: UUID | None,
+    password_env: str | None = None,
 ) -> CollectorCredentialProfile:
-    _require_macos_keychain()
-    if not password:
+    if password_env is None:
+        _require_macos_keychain()
+    if password_env is None and not password:
         raise CollectorCredentialError("collector password must not be empty")
     profile = CollectorCredentialProfile(
+        password_env=password_env,
         supabase_url=supabase_url,
         supabase_api_key=supabase_api_key,
         email=email,
@@ -76,18 +80,18 @@ def configure_profile(
         agent_id=agent_id,
         project_id=project_id,
     )
-    keyring.set_password(_keychain_service(profile_name), "password", password)
+    if password_env is None:
+        keyring.set_password(_keychain_service(profile_name), "password", password)
     _write_profile(profile_name, profile)
     return profile
 
 
 def refresh_profile(profile_name: str) -> RefreshedCollectorCredentials:
-    _require_macos_keychain()
     profile = _read_profile(profile_name)
-    password = keyring.get_password(_keychain_service(profile_name), "password")
+    password = _profile_password(profile_name, profile)
     if not password:
         raise CollectorCredentialError(
-            f"collector profile {profile_name!r} has no Keychain password; run credentials configure"
+            "collector password is unavailable in the configured secret backend"
         )
     payload = json.dumps({"email": profile.email, "password": password}).encode()
     request = urllib.request.Request(
@@ -113,17 +117,26 @@ def refresh_profile(profile_name: str) -> RefreshedCollectorCredentials:
 
 
 def profile_summary(profile_name: str) -> dict[str, Any]:
-    _require_macos_keychain()
-    _read_profile(profile_name)
+    profile = _read_profile(profile_name)
+    present = bool(_profile_password(profile_name, profile))
     return {
         "profile": profile_name,
         "configured": True,
-        "keychain_password_present": bool(
-            keyring.get_password(_keychain_service(profile_name), "password")
-        ),
+        "password_storage": "environment" if profile.password_env else "macOS Keychain",
+        "password_present": present,
+        "keychain_password_present": present if not profile.password_env else False,
         "workspace_configured": True,
         "agent_configured": True,
     }
+
+
+def _profile_password(
+    profile_name: str, profile: CollectorCredentialProfile
+) -> str | None:
+    if profile.password_env:
+        return os.environ.get(profile.password_env)
+    _require_macos_keychain()
+    return keyring.get_password(_keychain_service(profile_name), "password")
 
 
 def _read_profile(profile_name: str) -> CollectorCredentialProfile:

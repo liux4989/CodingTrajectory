@@ -137,7 +137,7 @@ scope, and explicit read-only behavior.
 
 Before a run, confirm that the target is authorized and non-production. Keep
 the API URL, publishable key, and collector access token in the local secret
-environment or the existing Keychain-backed credential profile. Never put
+environment or a refreshable credential profile. Never put
 secret values in command history, reports, or repository files.
 
 Run with a portable project name. The collector registers that name when

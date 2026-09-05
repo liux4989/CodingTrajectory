@@ -63,7 +63,7 @@ def _runtime(args: argparse.Namespace) -> ServiceRuntime:
     access_token = getattr(args, "access_token", None) or os.environ.get(
         "CT_ACCESS_TOKEN"
     )
-    if not any((url, api_key, access_token)):
+    if os.environ.get("CT_CREDENTIAL_PROFILE") or not any((url, api_key, access_token)):
         from coding_trajectory_cli.collector_credentials import refresh_profile
 
         credentials = refresh_profile(
@@ -72,7 +72,10 @@ def _runtime(args: argparse.Namespace) -> ServiceRuntime:
         url = str(credentials.profile.supabase_url)
         api_key = credentials.profile.supabase_api_key
         access_token = credentials.access_token
-        workspace_id = workspace_id or credentials.profile.workspace_id
+        workspace_id = (
+            getattr(args, "remote_workspace_id", None)
+            or credentials.profile.workspace_id
+        )
         agent_id = str(credentials.profile.agent_id)
         project_id = credentials.profile.project_id
     if not all((url, api_key, access_token, workspace_id)):

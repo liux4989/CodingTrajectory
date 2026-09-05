@@ -95,6 +95,7 @@ def _identity_from_args(
 
 def _apply_credential_profile(args: argparse.Namespace) -> None:
     profile_name = getattr(args, "credential_profile", None)
+    profile_name = profile_name or os.environ.get("CT_CREDENTIAL_PROFILE")
     if not profile_name:
         return
     refreshed = refresh_profile(profile_name)
@@ -138,6 +139,16 @@ def _handle_scan(args: argparse.Namespace) -> dict[str, Any]:
 
 def _handle_run(args: argparse.Namespace) -> dict[str, Any]:
     _apply_credential_profile(args)
+    args.workspace_id = args.workspace_id or (
+        _uuid_arg(os.environ["CT_REMOTE_WORKSPACE_ID"])
+        if os.environ.get("CT_REMOTE_WORKSPACE_ID")
+        else None
+    )
+    args.agent_id = args.agent_id or (
+        _uuid_arg(os.environ["CT_COLLECTOR_AGENT_ID"])
+        if os.environ.get("CT_COLLECTOR_AGENT_ID")
+        else None
+    )
     _require_identity(args)
     state_path = _state_path(args.state_path)
     remote = _remote_from_args(args)
@@ -207,11 +218,15 @@ def _handle_status(args: argparse.Namespace) -> dict[str, Any]:
 
 def _handle_credentials_configure(args: argparse.Namespace) -> dict[str, Any]:
     password = (
-        sys.stdin.readline().rstrip("\n")
-        if args.password_stdin
-        else getpass.getpass("Collector Auth password: ")
+        None
+        if args.password_env
+        else (
+            sys.stdin.readline().rstrip("\n")
+            if args.password_stdin
+            else getpass.getpass("Collector Auth password: ")
+        )
     )
-    if not password:
+    if not args.password_env and not password:
         raise CollectorCredentialError("collector password must not be empty")
     configure_profile(
         profile_name=args.profile,
@@ -219,6 +234,7 @@ def _handle_credentials_configure(args: argparse.Namespace) -> dict[str, Any]:
         supabase_api_key=args.supabase_api_key,
         email=args.email,
         password=password,
+        password_env=args.password_env,
         workspace_id=args.workspace_id,
         agent_id=args.agent_id,
         project_id=args.project_id,
@@ -226,7 +242,7 @@ def _handle_credentials_configure(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "profile": args.profile,
         "configured": True,
-        "password_storage": "macOS Keychain",
+        "password_storage": "environment" if args.password_env else "macOS Keychain",
     }
 
 
@@ -298,7 +314,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     run.add_argument("--access-token", help="Defaults to CT_COLLECTOR_ACCESS_TOKEN.")
     run.add_argument(
         "--credential-profile",
-        help="Refresh a private macOS Keychain-backed collector profile before publishing.",
+        help="Refresh a collector profile (defaults to CT_CREDENTIAL_PROFILE) before publishing.",
     )
     run.add_argument("--no-heartbeat", action="store_true")
     run.set_defaults(
@@ -325,7 +341,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     configure = credential_commands.add_parser(
         "configure",
-        help="Store a collector password in macOS Keychain.",
+        help="Configure Keychain storage or an injected password environment variable.",
         formatter_class=GhFormatter,
     )
     configure.add_argument("--profile", default="default")
@@ -335,7 +351,12 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     configure.add_argument("--supabase-url", required=True)
     configure.add_argument("--supabase-api-key", required=True)
     configure.add_argument("--email", required=True)
-    configure.add_argument(
+    secret_source = configure.add_mutually_exclusive_group()
+    secret_source.add_argument(
+        "--password-env",
+        help="Read the password from this environment variable at run time; store only its name.",
+    )
+    secret_source.add_argument(
         "--password-stdin",
         action="store_true",
         help="Read the password from standard input.",

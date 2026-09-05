@@ -129,9 +129,12 @@ fallback. Eligible local session queries can publish missing or updated data
 before returning its Supabase result, as described below.
 
 The CLI uses `CT_SUPABASE_URL`, `CT_SUPABASE_ANON_KEY`, `CT_ACCESS_TOKEN`, and
-`CT_REMOTE_WORKSPACE_ID`. If connection credentials are absent, it refreshes the
-configured macOS Keychain profile (`CT_CREDENTIAL_PROFILE`, default `default`).
-Partial environment credentials are rejected. Embedded clients require the four
+`CT_REMOTE_WORKSPACE_ID`. Setting `CT_CREDENTIAL_PROFILE` explicitly selects a
+profile and obtains a fresh token for each CLI read, superseding connection and
+token environment variables (including an expired `CT_ACCESS_TOKEN`). Profiles
+use macOS Keychain or an injected password environment variable on headless hosts.
+Without an explicit profile, absent connection credentials select profile
+`default`; partial environment credentials are rejected. Embedded clients require the four
 Supabase environment variables. `--remote-workspace-id` on `ct api call/batch`
 is a workspace override, not a backend switch.
 
