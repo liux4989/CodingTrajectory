@@ -49,23 +49,43 @@ def _read_batch_requests(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 
 def _runtime(args: argparse.Namespace) -> ServiceRuntime:
-    workspace_id = getattr(args, "remote_workspace_id", None)
-    if args.snapshot_sequence is not None and workspace_id is None:
-        raise ValueError("--snapshot-sequence requires --remote-workspace-id")
-    if workspace_id is not None:
-        url, api_key = _remote_service_config(args)
-        access_token = args.access_token or os.environ.get("CT_ACCESS_TOKEN")
-        if not access_token:
-            raise ValueError("remote API requires CT_ACCESS_TOKEN")
-        return RemoteRuntimeFactory(
-            url=url,
-            api_key=api_key,
-            workspace_id=workspace_id,
-        ).build(access_token, snapshot_sequence=args.snapshot_sequence)
-    return ServiceRuntime(
-        global_scope=args.global_scope,
-        current_dir=Path.cwd(),
+    """Every CLI read uses Supabase; local evidence remains demand-loaded."""
+
+    workspace_id = getattr(args, "remote_workspace_id", None) or os.environ.get(
+        "CT_REMOTE_WORKSPACE_ID"
     )
+    url = getattr(args, "supabase_url", None) or os.environ.get("CT_SUPABASE_URL")
+    api_key = getattr(args, "supabase_api_key", None) or os.environ.get(
+        "CT_SUPABASE_ANON_KEY"
+    )
+    access_token = getattr(args, "access_token", None) or os.environ.get(
+        "CT_ACCESS_TOKEN"
+    )
+    if not any((url, api_key, access_token)):
+        from coding_trajectory_cli.collector_credentials import refresh_profile
+
+        credentials = refresh_profile(
+            os.environ.get("CT_CREDENTIAL_PROFILE", "default")
+        )
+        url = str(credentials.profile.supabase_url)
+        api_key = credentials.profile.supabase_api_key
+        access_token = credentials.access_token
+        workspace_id = workspace_id or credentials.profile.workspace_id
+    if not all((url, api_key, access_token, workspace_id)):
+        raise ValueError(
+            "API reads require complete Supabase URL, API key, access token, and workspace configuration"
+        )
+    runtime = RemoteRuntimeFactory(
+        url=str(url),
+        api_key=str(api_key),
+        workspace_id=UUID(str(workspace_id)),
+    ).build(
+        str(access_token),
+        snapshot_sequence=getattr(args, "snapshot_sequence", None),
+        local_evidence=True,
+    )
+    runtime.global_scope = getattr(args, "global_scope", False)
+    return runtime
 
 
 def _remote_service_config(args: argparse.Namespace) -> tuple[str, str]:
@@ -114,7 +134,7 @@ def _add_remote_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--remote-workspace-id",
         type=UUID,
-        help="Use the authoritative remote historical snapshot for this workspace.",
+        help="Select the canonical Supabase workspace (defaults to environment or credential profile).",
     )
     parser.add_argument(
         "--snapshot-sequence",

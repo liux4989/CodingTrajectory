@@ -10,13 +10,16 @@
 
 CodingTrajectory has one body-free historical representation for shareable
 reads: `ct.shareable_graph.v1`. The originating host constructs it once from a
-fenced, complete source prefix. The same artifact and the same handlers serve
-local shareable calls and remote calls.
+fenced, complete source prefix. After publication, both local and remote API
+callers read that same Supabase artifact through the same handlers. APIs never
+rebuild a separate local canonical inventory from logs.
 
 The remote service does not receive raw logs, full canonical sessions, compact
 compatibility sessions, or general event arrays. It does not reconstruct
-graphs or recompute measurements. Detailed evidence reads remain local and use
-the existing raw-log/canonical path.
+graphs or recompute measurements. Evidence bodies are disabled by default.
+Explicit local evidence requests first resolve a published session, then lazily
+hydrate matching host evidence. HTTP requests are denied; no local API fallback
+exists.
 
 Source observations now carry checkpoint, ordering, parser, and digest metadata
 only. An authenticated project collector publishes the locally assembled graph
@@ -138,12 +141,14 @@ tool descriptions, and metadata-only item views have reduced semantic
 coverage and do not imply complete evidence. Titles and narrative previews are
 unavailable in shared responses; numeric measurements are preserved.
 
-These evidence-body methods remain local and are rejected before remote
-dispatch:
+These evidence-body requests lazily load local content only after resolving a
+published scope and matching retained canonical facts. They are rejected before
+HTTP historical dispatch:
 
 - `session.search`
 - `session.events`
 - `session.items` with `include_content=true`
+- `graph.overview` with `include:["narrative"]`
 
 There is no legacy remote handler or parallel remote result contract.
 

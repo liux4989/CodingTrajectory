@@ -9,12 +9,15 @@
 ## Decision
 
 CodingTrajectory has one public API contract and one shared historical handler
-implementation. Local and remote shareable calls consume the same
-`ct.shareable_graph.v1` artifact. Artifact schema changes do not create a new
-public API version while response contracts remain compatible.
+implementation. Every registered API reads Supabase as its canonical authority.
+Local and remote calls consume the same published `ct.shareable_graph.v1`
+artifact; local logs cannot replace database state. Artifact schema changes do
+not create a new public API version while response contracts remain compatible.
 
-Detailed evidence APIs stay local. They continue to hydrate the existing raw
-log and full canonical trajectory and do not depend on an uploaded artifact.
+Content is excluded by default. Local evidence requests depend on a published
+session and lazily hydrate host content only when its retained canonical facts
+match. HTTP callers are denied evidence access. Missing configuration or
+unpublished data fails explicitly; there is no local canonical read fallback.
 
 ## Authorities
 
@@ -51,6 +54,7 @@ Local-only evidence methods are:
 - `session.search`
 - `session.events`
 - `session.items` with `include_content=true`
+- `graph.overview` with `include:["narrative"]`
 
 Remote routing rejects those methods explicitly before dispatch. It does not
 return a partial evidence response or maintain a legacy compatibility handler.
@@ -61,14 +65,15 @@ return a partial evidence response or maintain a legacy compatibility handler.
 host-local logs
   -> fenced adapters
   -> ShareableGraphArtifact
-       |-> local shareable API -> shared handlers
-       |-> durable collector outbox
-             -> authenticated direct publication
-             -> bounded artifact revision + normalized source vector
-                    -> targeted remote snapshot
-                    -> shared handlers
+  -> durable collector outbox
+  -> authenticated publication
+  -> Supabase artifact revision + normalized source vector
+  -> one pinned snapshot and shared handlers
+       |-> local CLI / embedded APIs (content disabled by default)
+       |-> HTTP APIs (content requests denied)
 
-host-local logs -> full canonical hydration -> local-only evidence APIs
+published session -> explicit local evidence request
+  -> lazy host hydration -> retained-fact match -> scoped evidence response
 ```
 
 The remote side authenticates, authorizes, validates, sequences, stores, and

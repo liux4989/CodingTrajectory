@@ -14,7 +14,6 @@ from typing import Any
 from coding_trajectory import debug
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
-from coding_trajectory.runtime import ServiceRuntime
 from coding_trajectory_cli._shared import (
     GhFormatter,
     compact_payload,
@@ -23,34 +22,29 @@ from coding_trajectory_cli._shared import (
     selected_output,
 )
 from coding_trajectory_cli.commands import REGISTRARS, dispatch_plugin_argv
+from coding_trajectory_cli.commands.api import _runtime
 from coding_trajectory_cli.outcome import command_path, normalize_handler_result
 from coding_trajectory_cli.telemetry import write_invocation_record
 
 EPILOG = """\
 NOTE
   Use `ct project sessions` to choose the SESSION_ID required by session and
-  session graph analysis commands. `ct session events` may instead resolve one
-  or more explicit --event-id values.
+  session graph analysis commands. Evidence reads require a published session
+  scope even when selecting explicit --event-id values.
 """
 
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     method: str = args._method
     params: dict[str, Any] = args._params(args)
-    effective_global_scope = (
-        True if method == "project.list" else getattr(args, "global_scope", False)
-    )
-    with ServiceRuntime(
-        global_scope=effective_global_scope,
-        current_dir=Path.cwd(),
-    ) as runtime:
+    with _runtime(args) as runtime:
         return runtime.call(method, params)
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct",
-        description="Inspect coding sessions stored in JSONL log files.",
+        description="Inspect published coding sessions in the canonical Supabase workspace.",
         usage="ct <command> [args]",
         epilog=EPILOG,
         formatter_class=GhFormatter,
@@ -162,7 +156,9 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             plugin_handler = getattr(args, "_plugin_handler", None)
-            result = plugin_handler(args) if callable(plugin_handler) else _dispatch(args)
+            result = (
+                plugin_handler(args) if callable(plugin_handler) else _dispatch(args)
+            )
             outcome = normalize_handler_result(args, result)
             exit_code = outcome.exit_code
             ok = outcome.ok
@@ -173,13 +169,19 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 1
             ok = False
             error_message = str(exc)
-            print(json.dumps({"error": {"message": error_message}}, indent=2), file=sys.stderr)
+            print(
+                json.dumps({"error": {"message": error_message}}, indent=2),
+                file=sys.stderr,
+            )
             return exit_code
         except Exception as exc:  # pragma: no cover - defensive CLI fallback
             exit_code = 1
             ok = False
             error_message = str(exc)
-            print(json.dumps({"error": {"message": error_message}}, indent=2), file=sys.stderr)
+            print(
+                json.dumps({"error": {"message": error_message}}, indent=2),
+                file=sys.stderr,
+            )
             return exit_code
         finally:
             _record_invocation(

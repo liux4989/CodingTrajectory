@@ -7,7 +7,6 @@ from typing import Any
 
 from coding_trajectory_cli._shared import (
     GhFormatter,
-    add_global_scope_flag,
     add_json_output_flag,
     add_output_flags,
     add_session_source,
@@ -1272,20 +1271,19 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_events = session_sub.add_parser(
         "events",
         prog="ct session events",
-        help="Query events by session scope or explicit event IDs.",
+        help="Lazily load local events within a published session or turn.",
         epilog=EVENT_SCAN_EPILOG,
         formatter_class=GhFormatter,
     )
     add_session_source(session_events, required=False)
     add_json_output_flag(session_events)
-    add_global_scope_flag(session_events)
     session_events.add_argument(
         "--event-id",
         dest="event_ids",
         action="append",
         metavar="EVENT_ID",
         default=None,
-        help="Resolve an explicit event ID. Repeatable; SESSION_ID is optional.",
+        help="Resolve an event within SESSION_ID or --turn scope. Repeatable.",
     )
     session_events.add_argument(
         "--turn",

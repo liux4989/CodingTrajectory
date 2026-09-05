@@ -191,11 +191,23 @@ def pick_graph(
     *, global_scope: bool, current_dir: Path, smallest: bool
 ) -> tuple[str, dict[str, int]]:
     """Pick a graph id; return (graph_id, {sessions,turns,items})."""
-    from coding_trajectory.runtime import ServiceRuntime
-
-    rt = ServiceRuntime(global_scope=global_scope, current_dir=current_dir)
-    res = rt.call("project.sessions", {})
-    rt.close()
+    # This is an offline ingestion/projection benchmark, not a public API read.
+    cache = IndexCache.load()
+    store, note = resolve_store(
+        {},
+        global_scope=global_scope,
+        current_dir=current_dir,
+        cache=cache,
+    )
+    res = dispatch(
+        "project.sessions",
+        {},
+        store=store,
+        global_scope=global_scope,
+        current_dir=current_dir,
+        discovery_note=note,
+        cache=cache,
+    )
     items = res["items"]
     items.sort(key=lambda i: len(i.get("session_ids", [])), reverse=not smallest)
     top = items[0]

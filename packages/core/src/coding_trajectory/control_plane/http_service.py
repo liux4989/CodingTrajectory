@@ -21,7 +21,7 @@ from coding_trajectory.control_plane.remote_inventory import (
     SupabaseProjectInventoryRepository,
 )
 from coding_trajectory.control_plane.remote_living import SupabaseLivingAuthority
-from coding_trajectory.runtime import ServiceRuntime
+from coding_trajectory.runtime import HistoricalRepository, ServiceRuntime
 
 
 class RemoteRuntimeFactory:
@@ -33,8 +33,31 @@ class RemoteRuntimeFactory:
         self.workspace_id = workspace_id
 
     def build(
-        self, access_token: str, *, snapshot_sequence: int | None = None
+        self,
+        access_token: str,
+        *,
+        snapshot_sequence: int | None = None,
+        local_evidence: bool = False,
+        current_dir: Path | None = None,
     ) -> ServiceRuntime:
+        return ServiceRuntime(
+            **self.runtime_options(
+                access_token,
+                snapshot_sequence=snapshot_sequence,
+                local_evidence=local_evidence,
+                current_dir=current_dir,
+            )
+        )
+
+    def runtime_options(
+        self,
+        access_token: str,
+        *,
+        snapshot_sequence: int | None = None,
+        local_evidence: bool = False,
+        current_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        """Resolve the same database authorities for every client surface."""
         if not access_token:
             raise ValueError("access token must not be empty")
         if snapshot_sequence is not None and (
@@ -53,11 +76,19 @@ class RemoteRuntimeFactory:
         sequence = pinned.get("snapshot_sequence")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
             raise ValueError("remote workspace returned an invalid snapshot sequence")
-        historical = SupabaseHistoricalRepository(
+        historical: HistoricalRepository = SupabaseHistoricalRepository(
             client=client,
             workspace_id=self.workspace_id,
             snapshot_sequence=sequence,
         )
+        if local_evidence:
+            from coding_trajectory.control_plane.local_evidence import (
+                LocalEvidenceRepository,
+            )
+
+            historical = LocalEvidenceRepository(
+                historical, current_dir=current_dir or Path.cwd()
+            )
         inventory = SupabaseProjectInventoryRepository(
             client=client,
             workspace_id=self.workspace_id,
@@ -84,13 +115,13 @@ class RemoteRuntimeFactory:
             "freshness": "authoritative",
             "content_scope": "shareable",
         }
-        return ServiceRuntime(
-            global_scope=True,
-            current_dir=Path.cwd(),
-            historical_repository=historical,
-            authority_handlers=handlers,
-            transport_metadata=lambda: metadata,
-        )
+        return {
+            "global_scope": True,
+            "current_dir": current_dir or Path.cwd(),
+            "historical_repository": historical,
+            "authority_handlers": handlers,
+            "transport_metadata": lambda: metadata,
+        }
 
 
 def serve_http(

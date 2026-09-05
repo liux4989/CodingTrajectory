@@ -103,11 +103,11 @@ prompt-plus-completion total.
 
 Session and nested graph analysis commands require a session entry-point ID;
 they never guess the most-recent graph. Use `project sessions` to choose one.
-Explicit session, graph, and turn entry points are located globally through the
-cache/index, so those commands have no scope flag. `--global-scope` is reserved
-for collection discovery and event-ID queries that do not supply a session
-entry point. `project list` always uses the global project index and therefore
-has no scope flag.
+Explicit session, graph, and turn entry points are resolved through the
+Supabase resource index, so those commands have no scope flag. `--global-scope`
+is reserved for project collection discovery. Evidence reads require a published
+session or turn scope. `project list` always uses the workspace project inventory
+and therefore has no scope flag.
 
 Session `status` is a reversible liveness signal, with only `living` and
 `not_living` values. A session is `living` only while its current canonical
@@ -117,6 +117,104 @@ turn is running; completed, interrupted, and stale incomplete turns are all
 Use `latest_turn_status` to retain the current/last turn's `running`,
 `completed`, `interrupted`, or `incomplete` evidence alongside that liveness
 signal.
+
+## Local and remote execution
+
+Every service API reads the same canonical Supabase workspace, including local
+CLI calls, embedded `ServiceRuntime`/plugin clients, and the HTTP API. Local
+logs are ingestion inputs and optional evidence; they are never an alternative
+API inventory or metrics authority. Unpublished sessions do not appear in reads.
+Missing credentials, unavailable database state, and unpublished resources fail
+explicitly without local fallback.
+
+The CLI uses `CT_SUPABASE_URL`, `CT_SUPABASE_ANON_KEY`, `CT_ACCESS_TOKEN`, and
+`CT_REMOTE_WORKSPACE_ID`. If connection credentials are absent, it refreshes the
+configured macOS Keychain profile (`CT_CREDENTIAL_PROFILE`, default `default`).
+Partial environment credentials are rejected. Embedded clients require the four
+Supabase environment variables. `--remote-workspace-id` on `ct api call/batch`
+is a workspace override, not a backend switch.
+
+```sh
+ct api call project.sessions \
+  --params '{"project_name":"CodingTrajectory","since_days":7}'
+```
+
+Add `--snapshot-sequence N` to pin a published workspace sequence; otherwise
+runtime creation resolves the latest sequence. Historical responses identify
+that database source and snapshot, even when the caller runs locally.
+
+Historical reads fetch published `ct.shareable_graph.v1` artifacts through
+Supabase PostgREST RPCs. Python validates their identity, digest, and schema,
+reconstructs an in-memory graph, and executes the shared handlers. Local callers
+use this exact pipeline; they no longer assemble another graph from local logs
+for ordinary reads. The database state reflects the last publication.
+Artifact caches live within a runtime and are keyed by method and scope;
+separate CLI calls create fresh runtimes. Batch calls share one runtime.
+The default plugin client also resolves a fresh snapshot per call. An explicitly
+owned `ServiceRuntime` stays pinned until the caller creates a new runtime.
+
+Content is excluded by default on both surfaces. Explicit `session.search`,
+`session.events`, `session.items` with `include_content=true`, and
+`graph.overview` with `include:["narrative"]` request local evidence. A local
+caller first resolves the published session, then lazily loads host evidence
+and checks its retained canonical facts against the selected publication.
+Missing or mismatched evidence is an error. Hydration never changes the cached
+canonical snapshot or its default responses. The response identifies
+`content_scope: local_evidence` and `evidence_source: local` separately from the
+canonical database source.
+
+Evidence calls need a published session/root-session/turn scope; event IDs or
+item IDs alone cannot authorize local discovery. A changed session must be
+published before its new content can be loaded. Matching retained facts does
+not attest omitted body bytes: raw logs remain the local evidence authority.
+The HTTP runtime has no local evidence loader and rejects all four content
+requests, even if the server machine has those logs. Clients cannot enable that
+capability through request parameters. `ServiceRuntime(local_evidence=False)`
+also disables evidence loading for embedded callers.
+
+All 25 registered service methods are covered below. The registry in
+`packages/core/src/coding_trajectory/contracts/registry.py` is authoritative.
+
+| Methods | Remote behavior |
+| --- | --- |
+| `project.list` | Remote project inventory RPC |
+| `project.sessions` | Published historical artifacts, filtered by request scope |
+| `session.overview`, `session.summary`, `session.tree`, `graph.overview` | Historical artifact plus Python projection; content omitted by default; graph narrative requires local evidence |
+| `session.stats`, `graph.stats`, `session.usage`, `graph.usage`, `session.model_usage`, `session.request_usage`, `session.tool_usage` | Historical artifact plus Python projection; numeric measurements preserved |
+| `session.items` | Metadata-only remote support; `include_content=true` is rejected |
+| `session.events`, `session.search` | Lazy local evidence for a published scope; HTTP calls are rejected |
+| `living.events`, `living.sessions` | Remote living authority RPCs; availability depends on published living state |
+| `estimate.predict`, `estimate.bind`, `estimate.backfill.start` | Remote estimation operations that create or update state |
+| `estimate.get`, `estimate.list`, `estimate.calibration` | Remote estimation reads that can also persist refreshed actual comparisons |
+| `estimate.backfill.status` | Remote job status; requires an existing job ID |
+
+`ct api serve --remote-workspace-id "$CT_REMOTE_WORKSPACE_ID"` exposes
+authenticated `POST /v1/call`, `POST /v1/batch`, and `POST /v1/schema` endpoints
+(default bind: `127.0.0.1:8765`). Requests need a bearer token. Local
+`ct api schema METHOD` remains offline and does not need credentials.
+
+### Benchmarking remote reads
+
+```sh
+uv run python scripts/benchmark-remote-api.py \
+  --profile default --project CodingTrajectory --since-days 7 --repeat 3
+```
+
+Omit `--profile` to use the four environment variables above. The script uses an
+ordinary authenticated user, pins a snapshot, and disables local log resolution.
+It selects the first graph in the bounded project collection, or accepts an
+explicit `--session-id` within that scope. Project inventory and living-session
+inventory are workspace-wide; living events are scoped to the selected session.
+Estimation methods are recorded as skipped because of side effects or required
+job identifiers. Local-only rejection checks are separate from successful reads.
+
+The aggregate-only report is written to `.artifacts/benchmarks/remote-api.json`.
+For each query it measures one fresh runtime (including snapshot lookup) and
+repeated calls on the same runtime. Both include response validation and JSON
+serialization; neither includes CLI startup or the HTTP facade. Reused historical
+calls can avoid downloading the artifact. These samples measure latency for one
+graph, not concurrency, throughput, or a population percentile. The older
+`scripts/benchmark-query.py` measures local store/projection costs only.
 
 ## Intended Reading Flow
 
@@ -176,7 +274,7 @@ There is no dedicated core CLI command for this service method.
 
 ### Raw View
 
-1. `session events --event-id EVENT_ID [--event-id EVENT_ID ...] [--global-scope] [--output json]` — resolve the full JSON content of one or more events, including detached tool results; no session ID is required
+1. `session events SESSION_ID --event-id EVENT_ID [--event-id EVENT_ID ...] [--output json]` — lazily resolve full JSON events within a published session on the originating host
 2. `session events <SESSION_ID> [--turn TURN_ID] --type TYPE [--filter KEY=VALUE] [--output json]` — query raw JSON events by type, optionally narrowed by turn and payload predicates
    - `--type usage` selects provider request-usage observations
    - repeat `--filter` to combine predicates

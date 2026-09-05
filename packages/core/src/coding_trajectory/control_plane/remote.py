@@ -201,6 +201,9 @@ def _snapshot_artifact_graph(value: Any) -> SessionGraph:
 def _require_shareable_historical_scope(method: str, params: dict[str, Any]) -> None:
     """Reject requests whose contract requires host-local evidence bodies."""
 
+    if method == "graph.overview" and "narrative" in params.get("include", []):
+        raise RemoteControlPlaneError("graph.overview narrative is local-only")
+
     if method == "session.search":
         raise RemoteControlPlaneError(
             "session.search is local-only because searchable evidence is not retained remotely"

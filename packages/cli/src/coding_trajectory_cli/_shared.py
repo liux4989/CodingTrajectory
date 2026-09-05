@@ -96,7 +96,7 @@ def add_global_scope_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--global-scope",
         action="store_true",
-        help="Search all known log files instead of the current project.",
+        help="Query all published projects in the workspace instead of the current project.",
     )
 
 
