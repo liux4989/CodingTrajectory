@@ -34,6 +34,44 @@
       "title": "ActivityBucket",
       "type": "object"
     },
+    "ApiTransportMetadata": {
+      "additionalProperties": false,
+      "description": "Authority and snapshot facts carried outside versioned method results.",
+      "properties": {
+        "content_scope": {
+          "const": "shareable",
+          "title": "Content Scope",
+          "type": "string"
+        },
+        "freshness": {
+          "const": "authoritative",
+          "title": "Freshness",
+          "type": "string"
+        },
+        "snapshot_sequence": {
+          "title": "Snapshot Sequence",
+          "type": "integer"
+        },
+        "source": {
+          "const": "remote",
+          "title": "Source",
+          "type": "string"
+        },
+        "workspace_id": {
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "snapshot_sequence",
+        "source",
+        "freshness",
+        "content_scope"
+      ],
+      "title": "ApiTransportMetadata",
+      "type": "object"
+    },
     "BootstrapStatus": {
       "additionalProperties": false,
       "properties": {
@@ -1970,6 +2008,17 @@
           "title": "To Revision",
           "type": "integer"
         },
+        "transport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiTransportMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "upserts": {
           "items": {
             "$ref": "#/$defs/DatahubUpsert"
@@ -2080,6 +2129,17 @@
         },
         "source_status": {
           "$ref": "#/$defs/DatahubSourceStatus"
+        },
+        "transport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiTransportMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -6300,6 +6360,17 @@
           "title": "Schema Version",
           "type": "integer"
         },
+        "transport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiTransportMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "warnings": {
           "items": {
             "type": "string"
@@ -6315,7 +6386,8 @@
         "entrypoint_session_id",
         "entries",
         "branches",
-        "warnings"
+        "warnings",
+        "transport"
       ],
       "title": "SessionEvidenceTimelinePayload",
       "type": "object"

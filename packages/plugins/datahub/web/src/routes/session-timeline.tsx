@@ -1,12 +1,14 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { Cloud, HardDrive } from "lucide-react";
 
 import { fetchSessionEvidenceTimeline } from "@/api";
 import { LoadingState } from "@/components/loading-state";
 import { PageHeader } from "@/components/route-header";
 import { SessionViewTabs } from "@/components/session-view-tabs";
 import { StateBlock } from "@/components/state-block";
+import { Badge } from "@/components/ui/badge";
 import {
   EvidenceExplorer,
   type EvidenceFilterUpdate,
@@ -63,18 +65,30 @@ export function SessionTimelineRoute() {
         title="Evidence timeline"
         description="Source-linked requests, responses, tools, failures, and child-agent activity in recorded order"
         actions={
-          <div className="text-right">
-            <p className="m-0 mono text-heading font-bold leading-none text-moss">
-              rev {payload.revision}
-            </p>
-            <p className="m-0 mt-1 text-caption text-muted-foreground">
-              {lagSeconds == null ? "refresh lag unavailable" : `${Math.round(lagSeconds)}s refresh lag`}
-              {sourceFailures + incompleteSources > 0 ? (
-                <>
-                  {" "}· {sourceFailures} failed · {incompleteSources} incomplete sources
-                </>
-              ) : null}
-            </p>
+          <div className="flex items-center gap-3">
+            <Badge
+              variant="outline"
+              className="gap-1.5"
+              title={payload.transport
+                ? `Workspace ${payload.transport.workspace_id} · authoritative ${payload.transport.content_scope} snapshot`
+                : "Data materialized from sources on this machine"}
+            >
+              {payload.transport ? <Cloud aria-hidden="true" /> : <HardDrive aria-hidden="true" />}
+              {payload.transport ? `Remote snapshot · ${payload.transport.snapshot_sequence}` : "Local sources"}
+            </Badge>
+            <div className="text-right">
+              <p className="m-0 mono text-heading font-bold leading-none text-moss">
+                rev {payload.revision}
+              </p>
+              <p className="m-0 mt-1 text-caption text-muted-foreground">
+                {lagSeconds == null ? "refresh lag unavailable" : `${Math.round(lagSeconds)}s refresh lag`}
+                {sourceFailures + incompleteSources > 0 ? (
+                  <>
+                    {" "}· {sourceFailures} failed · {incompleteSources} incomplete sources
+                  </>
+                ) : null}
+              </p>
+            </div>
           </div>
         }
       />
@@ -86,7 +100,7 @@ export function SessionTimelineRoute() {
       <TurnWaterfall
         entries={payload.entries}
         onSelect={(turn: WaterfallTurn) =>
-          updateSearch({ kind: undefined, artifact: undefined, agent: turn.sessionId, outcome: undefined, entry: turn.entryId })
+          updateSearch({ kind: undefined, artifact: undefined, vendor: undefined, agent: turn.sessionId, outcome: undefined, entry: turn.entryId })
         }
       />
 
@@ -96,6 +110,7 @@ export function SessionTimelineRoute() {
         state={{
           kind: search.kind ?? "all",
           artifact: search.artifact ?? "all",
+          vendor: search.vendor ?? "all",
           agent: search.agent ?? "all",
           outcome: search.outcome ?? "all",
           entry: search.entry,

@@ -4,6 +4,7 @@ import {
   fetchDatahubChanges,
   fetchDatahubSnapshot,
   type ContextWindowPayload,
+  type ApiTransportMetadata,
   type DatahubChanges,
   type DatahubFreshness,
   type DatahubSnapshot,
@@ -38,6 +39,7 @@ export type DatahubDeliveryState = {
   freshness: DatahubFreshness | null;
   catchingUp: boolean;
   sourceStatus: DatahubSourceStatus | null;
+  transport: ApiTransportMetadata | null;
   minimumAvailableRevision: number | null;
   isLoading: boolean;
   isRefreshing: boolean;
@@ -89,6 +91,7 @@ function statusFromSnapshot(snapshot: DatahubSnapshot | undefined): DatahubDeliv
     freshness: snapshot?.freshness ?? null,
     catchingUp: snapshot?.catching_up ?? false,
     sourceStatus: snapshot?.source_status ?? null,
+    transport: snapshot?.transport ?? null,
     minimumAvailableRevision: snapshot?.minimum_available_revision ?? null,
     isLoading: !snapshot,
     isRefreshing: false,
@@ -215,7 +218,7 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
           if (payload.to_revision <= currentRevision) return;
           applyChanges(queryClient, payload);
           appliedRevision.current = payload.to_revision;
-          setDelivery((current) => ({ ...current, revision: payload.to_revision, freshness: payload.freshness, catchingUp: payload.catching_up, sourceStatus: payload.source_status, isLoading: false, error: null }));
+          setDelivery((current) => ({ ...current, revision: payload.to_revision, freshness: payload.freshness, catchingUp: payload.catching_up, sourceStatus: payload.source_status, transport: payload.transport ?? null, isLoading: false, error: null }));
         }
       })().catch((error: unknown) => {
         if (!disposed && !(error instanceof DOMException && error.name === "AbortError")) {

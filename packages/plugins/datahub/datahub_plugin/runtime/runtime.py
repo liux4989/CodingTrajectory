@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ class DatahubIncrementalRuntime(
         database_path: Path | None = None,
         since_days: int = DEFAULT_RECENT_HORIZON_DAYS,
         refresh_seconds: float = DEFAULT_REFRESH_SECONDS,
+        transport_metadata: Callable[[], dict[str, Any] | None] | None = None,
         autostart: bool = True,
     ) -> None:
         if since_days < 1:
@@ -43,6 +45,7 @@ class DatahubIncrementalRuntime(
         self.current_dir = current_dir.resolve()
         self.since_days = since_days
         self.refresh_seconds = max(1.0, refresh_seconds)
+        self._transport_metadata_provider = transport_metadata
         self._uses_default_database = database_path is None
         self._subscriber_lock = threading.Lock()
         self._subscribers: set[queue.Queue[int]] = set()

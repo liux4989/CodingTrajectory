@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import argparse
 import gzip
 import json
@@ -18,11 +19,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+
 from coding_trajectory import datahub as _core_datahub  # noqa: F401
+
 import datahub_plugin.cli.code_time_cmd as code_time_mod
 from datahub_plugin.api_models import validate_api_response
 from datahub_plugin.runtime.runtime import DatahubIncrementalRuntime
-
 
 _FINGERPRINTED_ASSET = re.compile(r"-[A-Za-z0-9_-]{8,}\.[^.]+$")
 _GZIP_CONTENT_TYPES = (
@@ -775,6 +777,7 @@ def _unavailable_snapshot() -> dict[str, Any]:
     return {
         "revision": 0,
         "generated_at": datetime.now(UTC).isoformat(),
+        "transport": None,
         "freshness": {"last_refresh_at": None, "lag_seconds": None},
         "catching_up": False,
         "source_status": {
@@ -803,6 +806,7 @@ def _unavailable_changes(after_revision: int) -> dict[str, Any]:
         "upserts": [],
         "deletions": [],
         "invalidations": [],
+        "transport": snapshot["transport"],
         "freshness": snapshot["freshness"],
         "catching_up": False,
         "source_status": snapshot["source_status"],

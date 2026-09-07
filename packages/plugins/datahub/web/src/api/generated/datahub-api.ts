@@ -204,6 +204,11 @@ export type Incomplete = number;
 export type Ingesting = number;
 export type Ready = number;
 export type ToRevision = number;
+export type ContentScope = "shareable";
+export type Freshness = "authoritative";
+export type SnapshotSequence = number;
+export type Source3 = "remote";
+export type WorkspaceId = string;
 export type EntityId1 = string;
 export type EntityType1 = string;
 export type Revision1 = number;
@@ -266,7 +271,7 @@ export type Model5 = string | null;
 export type ModelKey2 = string;
 export type Confidence3 = "reported" | "estimated" | "missing_price";
 export type EffectiveDate1 = string | null;
-export type Source3 = string | null;
+export type Source4 = string | null;
 export type Provider2 = string | null;
 export type Sessions2 = number;
 export type Turns4 = number;
@@ -288,7 +293,7 @@ export type FinalUsedPercent = number | null;
 export type FinalUsedTokens = number | null;
 export type MaxUsedPercent = number | null;
 export type MaxUsedTokens = number | null;
-export type Source4 = string | null;
+export type Source5 = string | null;
 export type Basis = string;
 export type Model6 = string | null;
 export type Provider3 = string | null;
@@ -534,7 +539,7 @@ export type EffortChanges = {
 } | null;
 export type Confidence6 = "reported" | "estimated";
 export type EffectiveDate2 = string | null;
-export type Source5 = string | null;
+export type Source6 = string | null;
 export type ValueUsd1 = number;
 export type Model13 = string | null;
 export type Provider8 = string | null;
@@ -1173,6 +1178,7 @@ export interface DatahubChanges {
   reset_required: ResetRequired;
   source_status: DatahubSourceStatus;
   to_revision: ToRevision;
+  transport?: ApiTransportMetadata | null;
   upserts: Upserts;
 }
 /**
@@ -1203,6 +1209,19 @@ export interface DatahubSourceStatus {
   ready: Ready;
 }
 /**
+ * Authority and snapshot facts carried outside versioned method results.
+ *
+ * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
+ * via the `definition` "ApiTransportMetadata".
+ */
+export interface ApiTransportMetadata {
+  content_scope: ContentScope;
+  freshness: Freshness;
+  snapshot_sequence: SnapshotSequence;
+  source: Source3;
+  workspace_id: WorkspaceId;
+}
+/**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
  * via the `definition` "DatahubUpsert".
  */
@@ -1228,6 +1247,7 @@ export interface DatahubSnapshot {
   minimum_available_revision: MinimumAvailableRevision;
   revision: Revision2;
   source_status: DatahubSourceStatus;
+  transport?: ApiTransportMetadata | null;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -1367,7 +1387,7 @@ export interface ModelUsagePricing {
   breakdown?: Breakdown;
   confidence: Confidence3;
   effective_date: EffectiveDate1;
-  source: Source3;
+  source: Source4;
 }
 export interface Breakdown {
   [k: string]: number;
@@ -1434,7 +1454,7 @@ export interface ModelUsageContext {
   final_used_tokens?: FinalUsedTokens;
   max_used_percent?: MaxUsedPercent;
   max_used_tokens?: MaxUsedTokens;
-  source?: Source4;
+  source?: Source5;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -1735,6 +1755,7 @@ export interface SessionEvidenceTimelinePayload {
   revision: Revision8;
   root_session_id: RootSessionId4;
   schema_version: SchemaVersion5;
+  transport: ApiTransportMetadata | null;
   warnings: Warnings5;
 }
 /**
@@ -1980,7 +2001,7 @@ export interface GraphUsagePayload {
 export interface GraphCostEvidence {
   confidence: Confidence6;
   effective_date?: EffectiveDate2;
-  source?: Source5;
+  source?: Source6;
   value_usd: ValueUsd1;
   [k: string]: unknown;
 }

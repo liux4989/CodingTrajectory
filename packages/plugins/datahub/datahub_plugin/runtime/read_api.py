@@ -12,12 +12,16 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import quote
 
+from coding_trajectory.contracts.envelope import ApiTransportMetadata
 from coding_trajectory.datahub import (
     ResourceNotFoundError,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
 from datahub_plugin.projections import context_window
+from datahub_plugin.projections.analytical_read_models_clients import (
+    CanonicalFactsApiClient,
+)
 from datahub_plugin.projections.analytical_read_models_facts import (
     CANONICAL_FACT_SCOPE,
     FACT_GRAPH_OVERVIEW,
@@ -37,9 +41,6 @@ from datahub_plugin.projections.analytical_read_models_facts import (
     TOKEN_PROJECT_META,
     build_token_efficiency_project_rows,
     canonical_fact_entity_kinds,
-)
-from datahub_plugin.projections.analytical_read_models_clients import (
-    CanonicalFactsApiClient,
 )
 from datahub_plugin.projections.analytical_read_models_reconstruction import (
     analytical_scope_key,
@@ -98,6 +99,7 @@ class RuntimeSnapshot(BaseModel):
 
     revision: int = Field(ge=0)
     generated_at: str
+    transport: ApiTransportMetadata | None = None
     freshness: dict[str, Any]
     catching_up: bool
     source_status: dict[str, int]
@@ -113,6 +115,17 @@ class RuntimeReadApiMixin:
         """Return whether the minimum product core is revisioned and publishable."""
 
         return self._has_route_models()
+
+    def transport_metadata(self) -> dict[str, Any] | None:
+        """Return validated provenance supplied by the runtime's data authority."""
+
+        provider = self._transport_metadata_provider
+        if provider is None:
+            return None
+        metadata = provider()
+        if metadata is None:
+            return None
+        return ApiTransportMetadata.model_validate(metadata).model_dump(mode="json")
 
     def snapshot(self) -> dict[str, Any]:
         revision = self.store.current_revision()
@@ -144,6 +157,7 @@ class RuntimeReadApiMixin:
         return RuntimeSnapshot(
             revision=revision,
             generated_at=datetime.now(UTC).isoformat(),
+            transport=self.transport_metadata(),
             freshness={
                 "last_refresh_at": last_ingested_at,
                 "lag_seconds": lag_seconds,
@@ -201,6 +215,7 @@ class RuntimeReadApiMixin:
             "upserts": upserts,
             "deletions": deletions,
             "invalidations": sorted(invalidations),
+            "transport": snapshot["transport"],
             "freshness": snapshot["freshness"],
             "catching_up": snapshot["catching_up"],
             "source_status": snapshot["source_status"],
@@ -686,7 +701,7 @@ class RuntimeReadApiMixin:
             cursor = usage_page.next_cursor
             if cursor is None:
                 break
-        return build_session_evidence_timeline(
+        payload = build_session_evidence_timeline(
             overview_payloads,
             revision=revision,
             root_session_id=root_id,
@@ -694,6 +709,8 @@ class RuntimeReadApiMixin:
             graph_overview=graph_overview,
             usage_payloads=usage_payloads,
         ).model_dump(mode="json")
+        payload["transport"] = self.transport_metadata()
+        return payload
 
     def session_event_details(
         self,

@@ -89,6 +89,7 @@ type SessionWorkspaceSearch = {
   view: "timeline" | "context" | "tree" | "graph";
   kind?: "user" | "assistant" | "tool" | "subagent" | "compaction";
   artifact?: "file" | "command" | "check" | "commit" | "link";
+  vendor?: string;
   agent?: string;
   outcome?: "failed" | "succeeded";
   entry?: string;
@@ -111,6 +112,7 @@ const contextWindowRoute = createRoute({
       view,
       kind: view === "timeline" ? kind : undefined,
       artifact: view === "timeline" ? artifact : undefined,
+      vendor: view === "timeline" && typeof search.vendor === "string" && search.vendor ? search.vendor : undefined,
       agent: view === "timeline" && typeof search.agent === "string" && search.agent ? search.agent : undefined,
       outcome: view === "timeline" && (search.outcome === "failed" || search.outcome === "succeeded") ? search.outcome : undefined,
       entry: view === "timeline" && typeof search.entry === "string" && search.entry ? search.entry : undefined,

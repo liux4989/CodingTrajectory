@@ -38,6 +38,8 @@ import {
   kindIcon,
   kindLabel,
   type OutcomeFilter,
+  vendorBadgeClass,
+  vendorLabel,
 } from "./shared";
 
 const TURN_PREVIEW_COUNT = 20;
@@ -45,6 +47,7 @@ const TURN_PREVIEW_COUNT = 20;
 export type EvidenceFilterState = {
   kind: TimelineKind | "all";
   artifact: TimelineArtifactKind | "all";
+  vendor: string;
   agent: string;
   outcome: OutcomeFilter;
   entry: string | undefined;
@@ -53,6 +56,7 @@ export type EvidenceFilterState = {
 export type EvidenceFilterUpdate = {
   kind?: TimelineKind;
   artifact?: TimelineArtifactKind;
+  vendor?: string;
   agent?: string;
   outcome?: Exclude<OutcomeFilter, "all">;
   entry?: string;
@@ -94,7 +98,7 @@ export function EvidenceExplorer({
   state: EvidenceFilterState;
   onChange: (updates: EvidenceFilterUpdate) => void;
 }) {
-  const { kind, artifact, agent, outcome } = state;
+  const { kind, artifact, vendor, agent, outcome } = state;
   const [expandedBranches, setExpandedBranches] = React.useState<string[] | null>(null);
   const [expandedTurns, setExpandedTurns] = React.useState<string[] | null>(null);
   const [fullTurns, setFullTurns] = React.useState<ReadonlySet<string>>(new Set());
@@ -112,6 +116,10 @@ export function EvidenceExplorer({
       Array.from(new Set(entries.map((entry) => entry.artifact_kind).filter(Boolean))) as TimelineArtifactKind[],
     [entries],
   );
+  const vendors = React.useMemo(
+    () => Array.from(new Set(entries.map((entry) => entry.vendor).filter(Boolean))).sort() as string[],
+    [entries],
+  );
   const hasFailures = React.useMemo(() => entries.some((entry) => entry.failed), [entries]);
 
   const filtered = React.useMemo(
@@ -119,12 +127,13 @@ export function EvidenceExplorer({
       entries.filter((entry) => {
         if (kind !== "all" && entry.kind !== kind) return false;
         if (artifact !== "all" && entry.artifact_kind !== artifact) return false;
+        if (vendor !== "all" && entry.vendor !== vendor) return false;
         if (agent !== "all" && entry.session_id !== agent) return false;
         if (outcome === "failed" && !entry.failed) return false;
         if (outcome === "succeeded" && (entry.failed || !isTerminalSuccess(entry.status))) return false;
         return true;
       }),
-    [entries, kind, artifact, agent, outcome],
+    [entries, kind, artifact, vendor, agent, outcome],
   );
 
   // Branch parentage is authoritative from the projection (`branches`), so
@@ -134,7 +143,7 @@ export function EvidenceExplorer({
     () => buildBranchTree(entries, filtered, branches),
     [entries, filtered, branches],
   );
-  const hasFilters = kind !== "all" || artifact !== "all" || agent !== "all" || outcome !== "all";
+  const hasFilters = kind !== "all" || artifact !== "all" || vendor !== "all" || agent !== "all" || outcome !== "all";
 
   const allBranchKeys = React.useMemo(() => roots.flatMap(collectBranchKeys), [roots]);
   const allTurnKeys = React.useMemo(
@@ -278,6 +287,24 @@ export function EvidenceExplorer({
               </SelectContent>
             </Select>
           ) : null}
+          {vendors.length > 1 ? (
+            <Select
+              value={vendor}
+              onValueChange={(value) => onChange({ vendor: value === "all" ? undefined : value, entry: undefined })}
+            >
+              <SelectTrigger className="h-8 min-w-36 text-caption" aria-label="Filter by vendor">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All vendors</SelectItem>
+                {vendors.map((entryVendor) => (
+                  <SelectItem key={entryVendor} value={entryVendor}>
+                    {vendorLabel(entryVendor)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
           {presentArtifacts.length > 0 ? (
             <Select
               value={artifact}
@@ -306,7 +333,7 @@ export function EvidenceExplorer({
               size="sm"
               variant="ghost"
               onClick={() =>
-                onChange({ kind: undefined, artifact: undefined, agent: undefined, outcome: undefined })
+                onChange({ kind: undefined, artifact: undefined, vendor: undefined, agent: undefined, outcome: undefined })
               }
               className="h-8 gap-1 px-2 text-caption"
             >
@@ -400,8 +427,8 @@ function BranchSection({
         <span className="flex min-w-0 flex-1 items-center gap-2 text-left">
           <span className="truncate font-medium text-body-sm text-foreground">{branch.label}</span>
           {branch.vendor ? (
-            <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-caption">
-              {branch.vendor}
+            <Badge variant="outline" className={cn("shrink-0 px-1.5 py-0 text-caption", vendorBadgeClass(branch.vendor))}>
+              {vendorLabel(branch.vendor)}
             </Badge>
           ) : null}
           {depth > 0 ? (
@@ -557,6 +584,11 @@ function TimelineRow({
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
             <span className="shrink-0">{kindLabel(entry.kind)}</span>
+            {entry.vendor ? (
+              <Badge variant="outline" className={cn("px-1.5 py-0 text-caption", vendorBadgeClass(entry.vendor))}>
+                {vendorLabel(entry.vendor)}
+              </Badge>
+            ) : null}
             {entry.artifact_kind ? (
               <>
                 <span aria-hidden="true">·</span>

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from coding_trajectory.contracts.envelope import ApiTransportMetadata
 from coding_trajectory.contracts.estimate import EstimateListResponse
 from coding_trajectory.contracts.session import (
     GraphOverviewResponse,
@@ -22,6 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 from datahub_plugin.projections.context_window.models import ContextWindowProjection
 from datahub_plugin.projections.read_models_contracts import (
     ProjectDetailPayload as ReadModelProjectDetailPayload,
+)
+from datahub_plugin.projections.read_models_contracts import (
     SessionTimelinePayload as ReadModelSessionTimelinePayload,
 )
 from datahub_plugin.projections.session_timeline import SessionEvidenceTimeline
@@ -216,6 +219,7 @@ class BootstrapStatus(StrictResponse):
 class DatahubSnapshot(StrictResponse):
     revision: int
     generated_at: str
+    transport: ApiTransportMetadata | None = None
     freshness: DatahubFreshness
     catching_up: bool
     source_status: DatahubSourceStatus
@@ -244,6 +248,7 @@ class DatahubChanges(StrictResponse):
     upserts: list[DatahubUpsert]
     deletions: list[DatahubDeletion]
     invalidations: list[str]
+    transport: ApiTransportMetadata | None = None
     freshness: DatahubFreshness
     catching_up: bool
     source_status: DatahubSourceStatus
@@ -254,7 +259,7 @@ class ContextWindowPayload(ContextWindowProjection):
 
 
 class SessionEvidenceTimelinePayload(SessionEvidenceTimeline):
-    pass
+    transport: ApiTransportMetadata | None = None
 
 
 class TokenEfficiencyProjectPayload(ProjectProjection):
