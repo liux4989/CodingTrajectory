@@ -1,9 +1,13 @@
 import * as React from "react";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { ApexOptions } from "apexcharts";
+import { GitBranch } from "lucide-react";
 import {
   fetchSessionGraph,
+  fetchSessionTree,
+  type ConversationBranch,
+  type GraphSessionNode,
   type GraphStatsSession,
   type GraphUsageSession,
   type SessionGraphPayload,
@@ -14,10 +18,11 @@ import { PageHeader } from "@/components/route-header";
 import { StaggerGroup } from "@/components/stagger-group";
 import { StateBlock } from "@/components/state-block";
 import { LoadingState } from "@/components/loading-state";
-import { SessionViewTabs } from "@/components/session-view-tabs";
-import { shortSessionId } from "@/components/session-link";
+import { SessionLink, shortSessionId } from "@/components/session-link";
 import { DonutChart } from "@/components/charts";
 import { ApexChart, escapeHtml, tooltipRow, useApexTheme } from "@/components/ui/apex-chart";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   formatCompactNumber,
@@ -28,6 +33,7 @@ import {
   formatTokens,
 } from "@/lib/format";
 import { relativeTime } from "@/lib/relative-time";
+import { cn } from "@/lib/utils";
 
 function compositionRows(payload: SessionGraphPayload) {
   const statsBySession = new Map(
@@ -83,11 +89,44 @@ function cachedShare(section?: GraphStatsSession) {
   return cached / prompt;
 }
 
-export function SessionGraphRoute() {
-  const { sessionId } = useParams({ from: "/sessions/$sessionId" });
+/** The selected conversation branch plus every agent session spawned under it. */
+function branchScopeIds(
+  nodes: GraphSessionNode[],
+  branchId: string | undefined,
+): ReadonlySet<string> | null {
+  if (!branchId) return null;
+  const childrenByParent = new Map<string, string[]>();
+  for (const node of nodes) {
+    if (!node.parent_session_id) continue;
+    const list = childrenByParent.get(node.parent_session_id);
+    if (list) list.push(node.session_id);
+    else childrenByParent.set(node.parent_session_id, [node.session_id]);
+  }
+  const scope = new Set<string>([branchId]);
+  const queue = [branchId];
+  while (queue.length) {
+    const current = queue.pop()!;
+    for (const child of childrenByParent.get(current) ?? []) {
+      if (scope.has(child)) continue;
+      scope.add(child);
+      queue.push(child);
+    }
+  }
+  return scope;
+}
+
+export function GraphOverviewRoute() {
+  const { rootId } = useParams({ from: "/graphs/$rootId" });
+  const { branch } = useSearch({ from: "/graphs/$rootId" });
   const query = useQuery({
-    queryKey: ["session-graph", sessionId],
-    queryFn: () => fetchSessionGraph(sessionId),
+    queryKey: ["session-graph", rootId],
+    queryFn: () => fetchSessionGraph(rootId),
+    placeholderData: (previous) => previous,
+    gcTime: 60_000,
+  });
+  const treeQuery = useQuery({
+    queryKey: ["session-tree", rootId],
+    queryFn: () => fetchSessionTree(rootId),
     placeholderData: (previous) => previous,
     gcTime: 60_000,
   });
@@ -97,7 +136,7 @@ export function SessionGraphRoute() {
       <div className="route-container-wide w-full min-w-0 pb-8">
         <LoadingState
           title="Loading session graph"
-          detail="Reading the retained graph projections for this session."
+          detail="Reading the retained graph projections for this session family."
         />
       </div>
     );
@@ -115,10 +154,29 @@ export function SessionGraphRoute() {
   }
 
   const payload = query.data;
+  // Canonicalize on the graph identity: the root session id.
+  if (payload.root_session_id && payload.root_session_id !== rootId) {
+    return <GraphRedirect rootId={payload.root_session_id} branch={branch} />;
+  }
+
   const { overview, stats, usage } = payload;
   const orchestration = overview.graph?.orchestration ?? {};
   const summary = overview.summary ?? {};
-  const rows = compositionRows(payload);
+  const scope = branchScopeIds(overview.sessions, branch);
+  const scopedNodes = scope
+    ? overview.sessions.filter((node) => scope.has(node.session_id))
+    : overview.sessions;
+  const scopedEdges = scope
+    ? overview.edges.filter(
+        (edge) =>
+          edge.source_session_id != null &&
+          edge.target_session_id != null &&
+          scope.has(edge.source_session_id) &&
+          scope.has(edge.target_session_id),
+      )
+    : overview.edges;
+  const allRows = compositionRows(payload);
+  const rows = scope ? allRows.filter((row) => scope.has(row.id)) : allRows;
   const tokensBySession = new Map<string, number>();
   for (const section of usage.sessions ?? []) {
     const value = section.total_usage?.processed_tokens;
@@ -132,15 +190,16 @@ export function SessionGraphRoute() {
   const turnCount = summary.turn_count ?? runtime.turns ?? 0;
   const versions = orchestration.multi_agent_versions ?? [];
   const modes = orchestration.multi_agent_modes ?? [];
+  const branches = treeQuery.data?.branches ?? [];
+  const currentBranchId = treeQuery.data?.selected_branch_id ?? undefined;
 
   return (
     <div className="route-container-wide w-full min-w-0 overflow-hidden pb-8">
       <div className="grid gap-4">
         <PageHeader
-          title="Agent graph"
+          title="Session graph"
           description={`${overview.project ?? "Unknown project"} · branch-local orchestration across ${orchestration.session_count ?? overview.sessions.length} session(s)`}
         />
-        <SessionViewTabs sessionId={sessionId} active="graph" />
 
         <section className="stat-grid min-w-0">
           <StaggerGroup className="contents">
@@ -174,20 +233,47 @@ export function SessionGraphRoute() {
           </StaggerGroup>
         </section>
 
+        {branches.length > 0 || treeQuery.isPending ? (
+          <Card className="min-w-0">
+            <CardHeader>
+              <CardTitle className="title-card">Conversation branches</CardTitle>
+              <CardDescription>
+                Ordinary human forks stay separate; each branch owns its agent graph. Scope the
+                hierarchy and composition below to one branch, or open a branch as a session.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {treeQuery.isPending ? (
+                <p className="m-0 text-body-sm text-muted-foreground">Loading branches…</p>
+              ) : treeQuery.isError ? (
+                <p className="m-0 text-body-sm text-destructive">{treeQuery.error.message}</p>
+              ) : (
+                <ConversationBranches
+                  branches={branches}
+                  rootId={payload.root_session_id}
+                  scopedBranchId={branch}
+                  currentBranchId={currentBranchId}
+                />
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
+
         <Card className="min-w-0">
           <CardHeader>
             <CardTitle className="title-card">Agent hierarchy</CardTitle>
             <CardDescription>
-              Only the selected conversation branch and agents spawned from it.
-              Ordinary human forks are available in Conversation tree.
+              {scope
+                ? "Only the selected conversation branch and agents spawned from it."
+                : "All conversation branches and the agents spawned from them."}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <GraphTree
-              nodes={overview.sessions}
-              edges={overview.edges}
+              nodes={scopedNodes}
+              edges={scopedEdges}
               tokensBySession={tokensBySession}
-              activeSessionId={sessionId}
+              activeSessionId={branch}
             />
           </CardContent>
         </Card>
@@ -196,7 +282,8 @@ export function SessionGraphRoute() {
           <CardHeader>
             <CardTitle className="title-card">Session Composition</CardTitle>
             <CardDescription>
-              Per-session processed tokens, split into cached and uncached portions. Select a bar to open the session.
+              Per-session processed tokens, split into cached and uncached portions. Select a bar to
+              open that session.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -243,6 +330,136 @@ export function SessionGraphRoute() {
   );
 }
 
+function GraphRedirect({ rootId, branch }: { rootId: string; branch?: string }) {
+  const navigate = useNavigate();
+  React.useEffect(() => {
+    void navigate({
+      to: "/graphs/$rootId",
+      params: { rootId },
+      search: { branch },
+      replace: true,
+    });
+  }, [navigate, rootId, branch]);
+  return (
+    <div className="route-container-wide w-full min-w-0 pb-8">
+      <LoadingState title="Opening session graph" detail="Canonicalizing on the graph root session." />
+    </div>
+  );
+}
+
+type BranchNode = ConversationBranch & { children: BranchNode[] };
+
+function branchTree(branches: ConversationBranch[]): BranchNode[] {
+  const nodes = new Map<string, BranchNode>(
+    branches.map((branch) => [
+      branch.session_id,
+      { ...branch, children: [] } as BranchNode,
+    ]),
+  );
+  const roots: BranchNode[] = [];
+  for (const node of nodes.values()) {
+    const parent = node.parent_session_id
+      ? nodes.get(node.parent_session_id)
+      : undefined;
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+  }
+  const byTime = (left: BranchNode, right: BranchNode) =>
+    (left.started_at ?? "").localeCompare(right.started_at ?? "");
+  roots.sort(byTime);
+  for (const node of nodes.values()) node.children.sort(byTime);
+  return roots;
+}
+
+function branchLabel(branch: ConversationBranch) {
+  return branch.title || branch.agent_name || shortSessionId(branch.session_id);
+}
+
+function ConversationBranches({
+  branches,
+  rootId,
+  scopedBranchId,
+  currentBranchId,
+}: {
+  branches: ConversationBranch[];
+  rootId: string;
+  scopedBranchId?: string;
+  currentBranchId?: string;
+}) {
+  const roots = React.useMemo(() => branchTree(branches), [branches]);
+
+  const renderBranch = (branch: BranchNode): React.ReactNode => {
+    const scoped = branch.session_id === scopedBranchId;
+    const current = branch.session_id === currentBranchId;
+    const agentCount = branch.spawned_agent_count ?? 0;
+    return (
+      <div key={branch.session_id}>
+        <div
+          role="treeitem"
+          aria-current={scoped ? "true" : undefined}
+          aria-expanded={branch.children.length ? true : undefined}
+          className={cn(
+            "flex min-w-0 flex-wrap items-center gap-2 rounded-lg px-3 py-2",
+            scoped && "bg-surface-emphasis",
+          )}
+        >
+          <GitBranch aria-hidden="true" className="text-muted-foreground" />
+          <SessionLink sessionId={branch.session_id} className="min-w-0 truncate">
+            {branchLabel(branch)}
+          </SessionLink>
+          {scoped ? <Badge>Branch scope</Badge> : null}
+          {!scoped && current ? <Badge variant="secondary">Current branch</Badge> : null}
+          {branch.vendor ? <Badge variant="secondary">{branch.vendor}</Badge> : null}
+          <Badge variant="outline">
+            {branch.turn_count ?? 0} turn{branch.turn_count === 1 ? "" : "s"}
+          </Badge>
+          <Badge variant="outline">
+            {agentCount} agent{agentCount === 1 ? "" : "s"}
+          </Badge>
+          <span className="text-caption text-muted-foreground">
+            {branch.status ?? "unknown"} · {relativeTime(branch.started_at)}
+          </span>
+          <div className="ml-auto flex flex-wrap gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link
+                to="/graphs/$rootId/sessions/$sessionId"
+                params={{ rootId, sessionId: branch.session_id }}
+                search={{ tab: "context" }}
+              >
+                Open session
+              </Link>
+            </Button>
+            {scoped ? (
+              <Button asChild size="sm" variant="ghost">
+                <Link to="/graphs/$rootId" params={{ rootId }} search={{ branch: undefined }}>
+                  Graph-wide
+                </Link>
+              </Button>
+            ) : (
+              <Button asChild size="sm">
+                <Link to="/graphs/$rootId" params={{ rootId }} search={{ branch: branch.session_id }}>
+                  Scope agents
+                </Link>
+              </Button>
+            )}
+          </div>
+        </div>
+        {branch.children.length ? (
+          <div role="group" className="ml-5 border-l border-border-soft pl-3">
+            {branch.children.map(renderBranch)}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  return (
+    <div role="tree" aria-label="Conversation branches" className="grid gap-1">
+      {roots.map(renderBranch)}
+    </div>
+  );
+}
+
 type CompositionRow = ReturnType<typeof compositionRows>[number];
 
 type GraphModel = NonNullable<SessionGraphPayload["usage"]["models"]>[number];
@@ -263,8 +480,8 @@ function bucketMix(totalUsage: SessionGraphPayload["usage"]["total_usage"]) {
 
 /**
  * Per-session processed tokens, stacked into cached and fresh portions.
- * Context usage, cached share, turns, and cost from the former table move
- * into the tooltip; clicking a bar opens the session detail.
+ * Cached share and cost live in the tooltip; context pressure and turn detail
+ * belong to the session scope, which selecting a bar opens.
  */
 function SessionCompositionChart({ rows, rootId }: { rows: CompositionRow[]; rootId: string }) {
   const theme = useApexTheme();
@@ -284,9 +501,9 @@ function SessionCompositionChart({ rows, rootId }: { rows: CompositionRow[]; roo
             const row = config ? rows[config.dataPointIndex] : undefined;
             if (row) {
               void navigate({
-                to: "/sessions/$sessionId",
-                params: { sessionId: row.id },
-                search: { view: "context" },
+                to: "/graphs/$rootId/sessions/$sessionId",
+                params: { rootId, sessionId: row.id },
+                search: { tab: "context" },
               });
             }
           },
@@ -310,17 +527,12 @@ function SessionCompositionChart({ rows, rootId }: { rows: CompositionRow[]; roo
           const row = rows[dataPointIndex];
           if (!row) return "";
           const role = formatLabel(row.stats?.role ?? row.usage?.role ?? (row.id === rootId ? "main" : undefined));
-          const context = row.stats?.context_window?.used_tokens != null
-            ? `${formatTokens(row.stats.context_window.used_tokens)}${row.stats.context_window.used_percent != null ? ` (${formatPercent(row.stats.context_window.used_percent)})` : ""}`
-            : "-";
           const processed = row.usage?.total_usage?.processed_tokens ?? row.stats?.usage?.processed_tokens;
           const share = cachedShare(row.stats);
           const tooltipRows = [
             tooltipRow("Role", escapeHtml(role), theme.axis),
-            tooltipRow("Context used", context, theme.axis),
             tooltipRow("Processed", formatTokens(processed), theme.axis),
             tooltipRow("Cached share", share != null ? formatPercent(share * 100) : "-", theme.axis),
-            tooltipRow("Turns", String(row.stats?.runtime?.turns ?? row.usage?.runtime?.turns ?? "-"), theme.axis),
             tooltipRow("Est. cost", formatCostUsd(row.usage?.estimated_cost?.value_usd), theme.axis),
           ].join("");
           return `<div style="padding:10px 12px;min-width:220px"><div style="font-weight:700;margin-bottom:6px">${escapeHtml(rowLabel(row))}</div>${tooltipRows}</div>`;

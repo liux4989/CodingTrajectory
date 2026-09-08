@@ -48,7 +48,6 @@ export type EvidenceFilterState = {
   kind: TimelineKind | "all";
   artifact: TimelineArtifactKind | "all";
   vendor: string;
-  agent: string;
   outcome: OutcomeFilter;
   entry: string | undefined;
 };
@@ -57,7 +56,6 @@ export type EvidenceFilterUpdate = {
   kind?: TimelineKind;
   artifact?: TimelineArtifactKind;
   vendor?: string;
-  agent?: string;
   outcome?: Exclude<OutcomeFilter, "all">;
   entry?: string;
 };
@@ -81,11 +79,12 @@ type BranchNode = {
 };
 
 /**
- * Filterable evidence tree: agent branch -> turn -> entry, so the session /
- * subagent hierarchy is explicit instead of a flat interleave. Chronology is
- * preserved inside each branch (position order) and via row timestamps.
- * Filters change presentation only; selection deep-links through the `entry`
- * search param. One row expands at a time and auto-loads source detail.
+ * Filterable evidence tree: session branch -> turn -> entry, so each session's
+ * evidence stays in its own explicit section instead of a flat interleave.
+ * Chronology is preserved inside each branch (position order) and via row
+ * timestamps. Filters change presentation only; selection deep-links through
+ * the `entry` search param. One row expands at a time and auto-loads source
+ * detail. Moving between sessions is graph navigation, not a filter.
  */
 export function EvidenceExplorer({
   entries,
@@ -98,15 +97,11 @@ export function EvidenceExplorer({
   state: EvidenceFilterState;
   onChange: (updates: EvidenceFilterUpdate) => void;
 }) {
-  const { kind, artifact, vendor, agent, outcome } = state;
+  const { kind, artifact, vendor, outcome } = state;
   const [expandedBranches, setExpandedBranches] = React.useState<string[] | null>(null);
   const [expandedTurns, setExpandedTurns] = React.useState<string[] | null>(null);
   const [fullTurns, setFullTurns] = React.useState<ReadonlySet<string>>(new Set());
 
-  const agents = React.useMemo(
-    () => Array.from(new Map(entries.map((entry) => [entry.session_id, agentLabel(entry)])).entries()),
-    [entries],
-  );
   const presentKinds = React.useMemo(
     () => Array.from(new Set(entries.map((entry) => entry.kind))),
     [entries],
@@ -128,12 +123,11 @@ export function EvidenceExplorer({
         if (kind !== "all" && entry.kind !== kind) return false;
         if (artifact !== "all" && entry.artifact_kind !== artifact) return false;
         if (vendor !== "all" && entry.vendor !== vendor) return false;
-        if (agent !== "all" && entry.session_id !== agent) return false;
         if (outcome === "failed" && !entry.failed) return false;
         if (outcome === "succeeded" && (entry.failed || !isTerminalSuccess(entry.status))) return false;
         return true;
       }),
-    [entries, kind, artifact, vendor, agent, outcome],
+    [entries, kind, artifact, vendor, outcome],
   );
 
   // Branch parentage is authoritative from the projection (`branches`), so
@@ -143,7 +137,7 @@ export function EvidenceExplorer({
     () => buildBranchTree(entries, filtered, branches),
     [entries, filtered, branches],
   );
-  const hasFilters = kind !== "all" || artifact !== "all" || vendor !== "all" || agent !== "all" || outcome !== "all";
+  const hasFilters = kind !== "all" || artifact !== "all" || vendor !== "all" || outcome !== "all";
 
   const allBranchKeys = React.useMemo(() => roots.flatMap(collectBranchKeys), [roots]);
   const allTurnKeys = React.useMemo(
@@ -269,24 +263,6 @@ export function EvidenceExplorer({
               </ToggleGroupItem>
             </ToggleGroup>
           ) : null}
-          {agents.length > 1 ? (
-            <Select
-              value={agent}
-              onValueChange={(value) => onChange({ agent: value === "all" ? undefined : value, entry: undefined })}
-            >
-              <SelectTrigger className="h-8 min-w-44 text-caption" aria-label="Filter by agent or branch">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All agents</SelectItem>
-                {agents.map(([id, label]) => (
-                  <SelectItem key={id} value={id}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
           {vendors.length > 1 ? (
             <Select
               value={vendor}
@@ -333,7 +309,7 @@ export function EvidenceExplorer({
               size="sm"
               variant="ghost"
               onClick={() =>
-                onChange({ kind: undefined, artifact: undefined, vendor: undefined, agent: undefined, outcome: undefined })
+                onChange({ kind: undefined, artifact: undefined, vendor: undefined, outcome: undefined })
               }
               className="h-8 gap-1 px-2 text-caption"
             >

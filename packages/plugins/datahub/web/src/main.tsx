@@ -11,7 +11,9 @@ import "@/styles.css";
 
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
 const SessionsRoute = React.lazy(() => import("@/routes/sessions").then((mod) => ({ default: mod.SessionsRoute })));
-const SessionWorkspaceRoute = React.lazy(() => import("@/routes/session-workspace").then((mod) => ({ default: mod.SessionWorkspaceRoute })));
+const SessionResolverRoute = React.lazy(() => import("@/routes/session-resolver").then((mod) => ({ default: mod.SessionResolverRoute })));
+const GraphOverviewRoute = React.lazy(() => import("@/routes/graph-overview").then((mod) => ({ default: mod.GraphOverviewRoute })));
+const SessionDetailRoute = React.lazy(() => import("@/routes/session-detail").then((mod) => ({ default: mod.SessionDetailRoute })));
 const ModelUsageRoute = React.lazy(() => import("@/routes/model-usage").then((mod) => ({ default: mod.ModelUsageRoute })));
 const CodeTimeRoute = React.lazy(() => import("@/routes/code-time").then((mod) => ({ default: mod.CodeTimeRoute })));
 
@@ -85,7 +87,7 @@ const todayRoute = createRoute({
   component: () => <RouteBoundary><OverviewRoute /></RouteBoundary>,
 });
 
-type SessionWorkspaceSearch = {
+type SessionResolverSearch = {
   view: "timeline" | "context" | "tree" | "graph";
   kind?: "user" | "assistant" | "tool" | "subagent" | "compaction";
   artifact?: "file" | "command" | "check" | "commit" | "link";
@@ -95,10 +97,57 @@ type SessionWorkspaceSearch = {
   entry?: string;
 };
 
-const contextWindowRoute = createRoute({
+type GraphSearch = {
+  branch?: string;
+};
+
+const graphRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/graphs/$rootId",
+  validateSearch: (search: Record<string, unknown>): GraphSearch => ({
+    branch: typeof search.branch === "string" && search.branch ? search.branch : undefined,
+  }),
+  component: () => <RouteBoundary><GraphOverviewRoute /></RouteBoundary>,
+});
+
+type SessionDetailSearch = {
+  tab: "context" | "timeline";
+  kind?: "user" | "assistant" | "tool" | "subagent" | "compaction";
+  artifact?: "file" | "command" | "check" | "commit" | "link";
+  vendor?: string;
+  outcome?: "failed" | "succeeded";
+  entry?: string;
+};
+
+const sessionDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/graphs/$rootId/sessions/$sessionId",
+  validateSearch: (search: Record<string, unknown>): SessionDetailSearch => {
+    const tab = search.tab === "timeline" ? "timeline" : "context";
+    const kind = search.kind === "user" || search.kind === "assistant" || search.kind === "tool" || search.kind === "subagent" || search.kind === "compaction"
+      ? search.kind
+      : undefined;
+    const artifact = search.artifact === "file" || search.artifact === "command" || search.artifact === "check" || search.artifact === "commit" || search.artifact === "link"
+      ? search.artifact
+      : undefined;
+    return {
+      tab,
+      kind: tab === "timeline" ? kind : undefined,
+      artifact: tab === "timeline" ? artifact : undefined,
+      vendor: tab === "timeline" && typeof search.vendor === "string" && search.vendor ? search.vendor : undefined,
+      outcome: tab === "timeline" && (search.outcome === "failed" || search.outcome === "succeeded") ? search.outcome : undefined,
+      entry: tab === "timeline" && typeof search.entry === "string" && search.entry ? search.entry : undefined,
+    };
+  },
+  component: () => <RouteBoundary><SessionDetailRoute /></RouteBoundary>,
+});
+
+// Canonical "open this session" entry: resolves the graph identity, then
+// redirects to the graph or session scope. Legacy `?view=` values accepted.
+const sessionResolverRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId",
-  validateSearch: (search: Record<string, unknown>): SessionWorkspaceSearch => {
+  validateSearch: (search: Record<string, unknown>): SessionResolverSearch => {
     const view = search.view === "timeline" || search.view === "tree" || search.view === "graph"
       ? search.view
       : "context";
@@ -118,7 +167,7 @@ const contextWindowRoute = createRoute({
       entry: view === "timeline" && typeof search.entry === "string" && search.entry ? search.entry : undefined,
     };
   },
-  component: () => <RouteBoundary><SessionWorkspaceRoute /></RouteBoundary>,
+  component: () => <RouteBoundary><SessionResolverRoute /></RouteBoundary>,
 });
 
 const legacySessionRoutes = (["graph", "timeline", "tree", "context-window"] as const).map((legacyView) =>
@@ -198,7 +247,9 @@ const router = createRouter({
     indexRoute,
     sessionsRoute,
     todayRoute,
-    contextWindowRoute,
+    graphRoute,
+    sessionDetailRoute,
+    sessionResolverRoute,
     ...legacySessionRoutes,
     compareRoute,
     legacyModelUsageRoute,

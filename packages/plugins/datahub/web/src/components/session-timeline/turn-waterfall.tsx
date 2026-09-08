@@ -43,15 +43,18 @@ function buildWaterfallTurns(entries: SessionTimelineEntry[]) {
 }
 
 /**
- * Observed turn intervals across agent branches. Rendered only when at least
- * two turns retain complete timing — a single interval is a summary-line
- * fact, not a chart.
+ * Observed turn intervals, one lane per session section. Rendered only when at
+ * least two turns retain complete timing — a single interval is a summary-line
+ * fact, not a chart. Selecting a bar in the current session inspects its first
+ * evidence entry; selecting another session's bar opens that session's scope.
  */
 export function TurnWaterfall({
   entries,
+  sessionId,
   onSelect,
 }: {
   entries: SessionTimelineEntry[];
+  sessionId: string;
   onSelect: (turn: WaterfallTurn) => void;
 }) {
   const { turns, omittedTurns } = React.useMemo(() => buildWaterfallTurns(entries), [entries]);
@@ -66,22 +69,26 @@ export function TurnWaterfall({
     if (lane) lane.turns.push(turn);
     else laneMap.set(turn.sessionId, { agent: turn.agent, turns: [turn] });
   }
-  const lanes = Array.from(laneMap.entries());
+  const lanes = Array.from(laneMap.entries()).sort(
+    ([leftId], [rightId]) => Number(rightId === sessionId) - Number(leftId === sessionId),
+  );
 
   return (
     <Card className="min-w-0">
       <CardHeader>
         <CardTitle className="title-card">Turn waterfall</CardTitle>
         <CardDescription>
-          Observed turn intervals across agent branches. Select a bar to filter and inspect its first evidence
-          entry.{omittedTurns ? ` ${omittedTurns} turn(s) without complete timing are omitted.` : ""}
+          Observed turn intervals, one lane per session section. Select a bar in this session to inspect its
+          first evidence entry; selecting another session&apos;s bar opens that session.
+          {omittedTurns ? ` ${omittedTurns} turn(s) without complete timing are omitted.` : ""}
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3 overflow-x-auto">
-        {lanes.map(([sessionId, lane]) => (
-          <div key={sessionId} className="grid min-w-[42rem] grid-cols-[9rem_1fr] items-center gap-3">
-            <span className="truncate text-caption font-medium" title={sessionId}>
+        {lanes.map(([laneSessionId, lane]) => (
+          <div key={laneSessionId} className="grid min-w-[42rem] grid-cols-[9rem_1fr] items-center gap-3">
+            <span className="truncate text-caption font-medium" title={laneSessionId}>
               {lane.agent}
+              {laneSessionId !== sessionId ? " · child session" : ""}
             </span>
             <div className="relative h-8 rounded-md bg-surface-emphasis">
               {lane.turns.map((turn) => {

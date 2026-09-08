@@ -1,12 +1,10 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Cloud, HardDrive } from "lucide-react";
 
 import { fetchSessionEvidenceTimeline } from "@/api";
 import { LoadingState } from "@/components/loading-state";
-import { PageHeader } from "@/components/route-header";
-import { SessionViewTabs } from "@/components/session-view-tabs";
 import { StateBlock } from "@/components/state-block";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -17,10 +15,15 @@ import { TimelineSummary } from "@/components/session-timeline/timeline-summary"
 import { TurnWaterfall, type WaterfallTurn } from "@/components/session-timeline/turn-waterfall";
 import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
 
-export function SessionTimelineRoute() {
-  const { sessionId } = useParams({ from: "/sessions/$sessionId" });
-  const search = useSearch({ from: "/sessions/$sessionId" });
-  const navigate = useNavigate({ from: "/sessions/$sessionId" });
+/**
+ * Evidence timeline panel for the session scope: source-linked requests,
+ * responses, tools, and failures in recorded order. Child-agent turns stay in
+ * their own explicitly labeled sections; selecting one opens that session
+ * instead of folding its evidence into this session.
+ */
+export function SessionTimelinePanel({ rootId, sessionId }: { rootId: string; sessionId: string }) {
+  const search = useSearch({ from: "/graphs/$rootId/sessions/$sessionId" });
+  const navigate = useNavigate({ from: "/graphs/$rootId/sessions/$sessionId" });
   const delivery = useDatahubDelivery();
   const query = useQuery({
     queryKey: ["session-timeline", sessionId],
@@ -32,23 +35,39 @@ export function SessionTimelineRoute() {
   const updateSearch = React.useCallback(
     (updates: EvidenceFilterUpdate) => {
       void navigate({
-        search: (current) => ({ ...current, ...updates, view: "timeline" }),
+        search: (current) => ({ ...current, ...updates, tab: "timeline" }),
         replace: true,
       });
     },
     [navigate],
   );
 
+  const selectTurn = React.useCallback(
+    (turn: WaterfallTurn) => {
+      if (turn.sessionId === sessionId) {
+        updateSearch({ kind: undefined, artifact: undefined, vendor: undefined, outcome: undefined, entry: turn.entryId });
+        return;
+      }
+      // A turn from another session belongs to that session's scope.
+      void navigate({
+        to: "/graphs/$rootId/sessions/$sessionId",
+        params: { rootId, sessionId: turn.sessionId },
+        search: { tab: "timeline" },
+      });
+    },
+    [navigate, rootId, sessionId, updateSearch],
+  );
+
   if (query.isPending) {
     return (
-      <div className="route-container-wide w-full min-w-0 pb-8">
+      <div className="pt-4">
         <LoadingState title="Loading evidence timeline" detail="Reading retained canonical session activity." />
       </div>
     );
   }
   if (query.isError) {
     return (
-      <div className="route-container-wide w-full min-w-0 pb-8">
+      <div className="pt-4">
         <StateBlock title="Evidence timeline failed" detail={query.error.message} onRetry={() => query.refetch()} />
       </div>
     );
@@ -60,49 +79,38 @@ export function SessionTimelineRoute() {
   const lagSeconds = delivery.freshness?.lag_seconds;
 
   return (
-    <div className="route-container-wide w-full min-w-0 pb-8">
-      <PageHeader
-        title="Evidence timeline"
-        description="Source-linked requests, responses, tools, failures, and child-agent activity in recorded order"
-        actions={
-          <div className="flex items-center gap-3">
-            <Badge
-              variant="outline"
-              className="gap-1.5"
-              title={payload.transport
-                ? `Workspace ${payload.transport.workspace_id} · authoritative ${payload.transport.content_scope} snapshot`
-                : "Data materialized from sources on this machine"}
-            >
-              {payload.transport ? <Cloud aria-hidden="true" /> : <HardDrive aria-hidden="true" />}
-              {payload.transport ? `Remote snapshot · ${payload.transport.snapshot_sequence}` : "Local sources"}
-            </Badge>
-            <div className="text-right">
-              <p className="m-0 mono text-heading font-bold leading-none text-moss">
-                rev {payload.revision}
-              </p>
-              <p className="m-0 mt-1 text-caption text-muted-foreground">
-                {lagSeconds == null ? "refresh lag unavailable" : `${Math.round(lagSeconds)}s refresh lag`}
-                {sourceFailures + incompleteSources > 0 ? (
-                  <>
-                    {" "}· {sourceFailures} failed · {incompleteSources} incomplete sources
-                  </>
-                ) : null}
-              </p>
-            </div>
+    <div className="grid gap-4 pt-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="ml-auto flex items-center gap-3">
+          <Badge
+            variant="outline"
+            className="gap-1.5"
+            title={payload.transport
+              ? `Workspace ${payload.transport.workspace_id} · authoritative ${payload.transport.content_scope} snapshot`
+              : "Data materialized from sources on this machine"}
+          >
+            {payload.transport ? <Cloud aria-hidden="true" /> : <HardDrive aria-hidden="true" />}
+            {payload.transport ? `Remote snapshot · ${payload.transport.snapshot_sequence}` : "Local sources"}
+          </Badge>
+          <div className="text-right">
+            <p className="m-0 mono text-heading font-bold leading-none text-moss">
+              rev {payload.revision}
+            </p>
+            <p className="m-0 mt-1 text-caption text-muted-foreground">
+              {lagSeconds == null ? "refresh lag unavailable" : `${Math.round(lagSeconds)}s refresh lag`}
+              {sourceFailures + incompleteSources > 0 ? (
+                <>
+                  {" "}· {sourceFailures} failed · {incompleteSources} incomplete sources
+                </>
+              ) : null}
+            </p>
           </div>
-        }
-      />
-
-      <SessionViewTabs sessionId={sessionId} active="timeline" />
+        </div>
+      </div>
 
       <TimelineSummary entries={payload.entries} warnings={payload.warnings} />
 
-      <TurnWaterfall
-        entries={payload.entries}
-        onSelect={(turn: WaterfallTurn) =>
-          updateSearch({ kind: undefined, artifact: undefined, vendor: undefined, agent: turn.sessionId, outcome: undefined, entry: turn.entryId })
-        }
-      />
+      <TurnWaterfall entries={payload.entries} sessionId={sessionId} onSelect={selectTurn} />
 
       <EvidenceExplorer
         entries={payload.entries}
@@ -111,7 +119,6 @@ export function SessionTimelineRoute() {
           kind: search.kind ?? "all",
           artifact: search.artifact ?? "all",
           vendor: search.vendor ?? "all",
-          agent: search.agent ?? "all",
           outcome: search.outcome ?? "all",
           entry: search.entry,
         }}

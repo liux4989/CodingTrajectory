@@ -13,8 +13,14 @@ const LABEL_FNS: Record<string, (params: Record<string, unknown>) => string> = {
     const id = String(p.sessionId ?? "");
     return id.length > 12 ? id.slice(0, 12) : id || "Session";
   },
-  "/sessions/$sessionId/tree": () => "Conversation tree",
-  "/sessions/$sessionId/graph": () => "Agent graph",
+  "/graphs/$rootId": (p) => {
+    const id = String(p.rootId ?? "");
+    return `Graph ${id.length > 12 ? id.slice(0, 12) : id || "-"}`;
+  },
+  "/graphs/$rootId/sessions/$sessionId": (p) => {
+    const id = String(p.sessionId ?? "");
+    return id.length > 12 ? id.slice(0, 12) : id || "Session";
+  },
 };
 
 type Props = {
@@ -38,7 +44,15 @@ export function Breadcrumbs({ className }: Props) {
         : humanize(m.routeId);
       return { key: m.id, label, to: m.pathname };
     });
-  if (routeId.startsWith("/sessions/$sessionId")) {
+  // The session detail route is registered flat, so synthesize its graph
+  // parent crumb to render the SessionGraph -> Session descent.
+  if (routeId === "/graphs/$rootId/sessions/$sessionId") {
+    const params = (matches.at(-1)?.params ?? {}) as Record<string, unknown>;
+    const rootId = String(params.rootId ?? "");
+    const label = LABEL_FNS["/graphs/$rootId"](params);
+    crumbs.unshift({ key: "graph", label, to: `/graphs/${rootId}` });
+  }
+  if (routeId.startsWith("/sessions/$sessionId") || routeId.startsWith("/graphs/")) {
     crumbs.unshift({ key: "sessions", label: "Sessions", to: "/sessions" });
   }
 
