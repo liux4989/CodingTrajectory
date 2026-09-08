@@ -8,7 +8,7 @@ serves indexed rows without rebuilding source transcripts on request threads.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -92,6 +92,90 @@ _GRAPH_FACT_PAYLOAD_KEYS = (
 )
 
 _SESSION_TREE_FACT_KEY = ("tree", FACT_SESSION_TREE)
+
+_CODE_TIME_TOKEN_KEYS = (
+    "prompt_tokens",
+    "cached_prompt_tokens",
+    "cache_write_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+    "processed_tokens",
+)
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _code_time_tokens(usage: dict[str, Any]) -> dict[str, int]:
+    return {key: int(usage.get(key) or 0) for key in _CODE_TIME_TOKEN_KEYS}
+
+
+def _sum_code_time_tokens(rows: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        key: sum(int((row.get("tokens") or {}).get(key) or 0) for row in rows)
+        for key in _CODE_TIME_TOKEN_KEYS
+    }
+
+
+def _code_time_projects(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for session in sessions:
+        grouped.setdefault(session.pop("project_name"), []).append(session)
+
+    projects = []
+    for project_name, project_sessions in sorted(grouped.items()):
+        costs = [
+            float(session["cost_usd"])
+            for session in project_sessions
+            if isinstance(session.get("cost_usd"), int | float)
+        ]
+        projects.append(
+            {
+                "project_name": project_name,
+                "session_count": len(project_sessions),
+                "execution_seconds": sum(
+                    session["execution_seconds"] for session in project_sessions
+                ),
+                "wait_seconds": sum(
+                    session["wait_seconds"] for session in project_sessions
+                ),
+                "turns": sum(session["turns"] for session in project_sessions),
+                "tool_calls": sum(
+                    session["tool_calls"] for session in project_sessions
+                ),
+                "tokens": _sum_code_time_tokens(project_sessions),
+                "cost_usd": sum(costs) if costs else None,
+                "sessions": project_sessions,
+            }
+        )
+    return projects
+
+
+def _code_time_totals(projects: list[dict[str, Any]]) -> dict[str, Any]:
+    costs = [
+        float(project["cost_usd"])
+        for project in projects
+        if isinstance(project.get("cost_usd"), int | float)
+    ]
+    return {
+        "session_count": sum(project["session_count"] for project in projects),
+        "project_count": len(projects),
+        "execution_seconds": sum(project["execution_seconds"] for project in projects),
+        "wait_seconds": sum(project["wait_seconds"] for project in projects),
+        "turns": sum(project["turns"] for project in projects),
+        "tool_calls": sum(project["tool_calls"] for project in projects),
+        "tokens": _sum_code_time_tokens(projects),
+        "cost_usd": sum(costs) if costs else None,
+    }
 
 
 class RuntimeSnapshot(BaseModel):
@@ -268,6 +352,75 @@ class RuntimeReadApiMixin:
         payload = reconstruct_recent_work(rows, since_days=1)
         payload["revision"] = self.store.current_revision()
         return payload
+
+    def code_time_report(
+        self,
+        *,
+        window: Literal["today", "72h", "7d", "30d"],
+        project_name: str | None,
+        agent_vendor: str | None,
+    ) -> dict[str, Any] | None:
+        """Serve Code Time from the same revisioned rows as the dashboard."""
+
+        if not self._has_route_models():
+            return None
+        since_days = {"today": 1, "72h": 3, "7d": 7, "30d": 30}[window]
+        if since_days > self.since_days:
+            raise ValueError(
+                f"only the last {self.since_days} days are available; "
+                "restart Datahub with a larger --since-days value"
+            )
+
+        rows: list[Any] = []
+        cursor: str | None = None
+        while True:
+            page = self.store.query_entities(
+                "session",
+                limit=500,
+                cursor=cursor,
+                direction="desc",
+                scope_key=f"recent:{self.since_days}d",
+                partition_key=project_name,
+            )
+            rows.extend(page.items)
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+
+        cutoff = datetime.now(UTC) - timedelta(days=since_days)
+        sessions: list[dict[str, Any]] = []
+        for row in rows:
+            payload = row.payload
+            runtime = payload.get("runtime") or {}
+            started_at = _parse_datetime(runtime.get("started_at"))
+            vendors = payload.get("vendors") or []
+            if started_at is None or started_at < cutoff:
+                continue
+            if agent_vendor and agent_vendor not in vendors:
+                continue
+            usage = payload.get("usage") or {}
+            sessions.append(
+                {
+                    "root_session_id": payload.get("root_session_id"),
+                    "project_name": str(payload.get("project") or "unknown"),
+                    "title": payload.get("title"),
+                    "vendor": str(vendors[0]) if vendors else "unknown",
+                    "execution_seconds": int(runtime.get("execution_seconds") or 0),
+                    "wait_seconds": int(runtime.get("wait_seconds") or 0),
+                    "turns": int(runtime.get("turns") or 0),
+                    "tool_calls": int(runtime.get("tool_calls") or 0),
+                    "tokens": _code_time_tokens(usage),
+                    "cost_usd": payload.get("cost_usd"),
+                }
+            )
+
+        projects = _code_time_projects(sessions)
+        return {
+            "window": window,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "totals": _code_time_totals(projects),
+            "projects": projects,
+        }
 
     def projects(
         self, *, agent_vendor: str | None, limit: int, cursor: str | None

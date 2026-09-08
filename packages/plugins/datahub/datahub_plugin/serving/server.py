@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
 
 from coding_trajectory import datahub as _core_datahub  # noqa: F401
@@ -469,7 +469,14 @@ def _handler_for(
         def _route_code_time_report(
             self, query: dict[str, list[str]]
         ) -> dict[str, Any]:
-            return _code_time_report_payload(query)
+            window = _code_time_window(query)
+            return self._revisioned(
+                lambda: runtime.code_time_report(
+                    window=window,
+                    project_name=_first(query, "project"),
+                    agent_vendor=_first(query, "agent_vendor"),
+                )
+            )
 
         def _route_code_time_forecasts(
             self, query: dict[str, list[str]]
@@ -717,16 +724,14 @@ def _optional_revision(query: dict[str, list[str]]) -> int | None:
 # ---------------------------------------------------------------------------
 
 
-def _code_time_report_payload(query: dict[str, list[str]]) -> dict[str, Any]:
+def _code_time_window(
+    query: dict[str, list[str]],
+) -> Literal["today", "72h", "7d", "30d"]:
     window = _first(query, "window") or "today"
     if window not in code_time_mod.WINDOW_SINCE_DAYS:
         choices = ", ".join(sorted(code_time_mod.WINDOW_SINCE_DAYS))
         raise ValueError(f"window must be one of: {choices}")
-    return code_time_mod.build_report(
-        window=window,
-        project_filter=_first(query, "project"),
-        agent_vendor=_first(query, "agent_vendor"),
-    )
+    return window  # type: ignore[return-value]
 
 
 def _code_time_forecasts_payload(query: dict[str, list[str]]) -> dict[str, Any]:

@@ -4,6 +4,7 @@ import {
   fetchCodeTimeCalibration,
   fetchCodeTimeForecasts,
   fetchCodeTimeReport,
+  fetchDatahubSnapshot,
   type CodeTimeWindow,
   type ForecastKind,
 } from "@/api";
@@ -20,11 +21,11 @@ import { CalibrationCohortCard } from "@/components/calibration-cohort-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
-const WINDOW_OPTIONS: { value: CodeTimeWindow; label: string }[] = [
-  { value: "today", label: "Today" },
-  { value: "72h", label: "72h" },
-  { value: "7d", label: "7 days" },
-  { value: "30d", label: "30 days" },
+const WINDOW_OPTIONS: { value: CodeTimeWindow; label: string; days: number }[] = [
+  { value: "today", label: "Today", days: 1 },
+  { value: "72h", label: "72h", days: 3 },
+  { value: "7d", label: "7 days", days: 7 },
+  { value: "30d", label: "30 days", days: 30 },
 ];
 
 const KIND_OPTIONS: { value: ForecastKind | "all"; label: string }[] = [
@@ -42,6 +43,12 @@ export function CodeTimeRoute() {
   const [activeTab, setActiveTab] = React.useState("projects");
   const [kind, setKind] = React.useState<ForecastKind | "all">("all");
   const [harness, setHarness] = React.useState("all");
+
+  const snapshot = useQuery({
+    queryKey: ["datahub", "snapshot"],
+    queryFn: ({ signal }) => fetchDatahubSnapshot(signal),
+  });
+  const horizonDays = snapshot.data?.horizon_days ?? 7;
 
   const report = useQuery({
     queryKey: ["code-time", "report", window],
@@ -100,7 +107,16 @@ export function CodeTimeRoute() {
             variant="outline"
           >
             {WINDOW_OPTIONS.map((option) => (
-              <ToggleGroupItem key={option.value} value={option.value}>
+              <ToggleGroupItem
+                key={option.value}
+                value={option.value}
+                disabled={option.days > horizonDays}
+                title={
+                  option.days > horizonDays
+                    ? `Requires a ${option.days}-day Datahub horizon`
+                    : undefined
+                }
+              >
                 {option.label}
               </ToggleGroupItem>
             ))}
