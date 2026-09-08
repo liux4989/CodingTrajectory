@@ -4,6 +4,7 @@
 - **Date**: 2026-09-01
 - **Scope**: `packages/plugins/datahub` (Python backend + React web UI)
 - **Direction**: Refined evolution — keep the dark/neutral + teal identity, make it cleaner, denser, and more consistent. Not a rebrand, not a maximal-density ops console.
+- **Hosted mode**: See the accepted [private Cloudflare hosting design](datahub-cloudflare-private-hosting.md); it does not deploy this localhost runtime unchanged.
 
 ## Overview
 

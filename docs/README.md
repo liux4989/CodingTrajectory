@@ -9,6 +9,7 @@ The accepted historical sharing design is [Shareable history](shareable-history.
 | --- | --- |
 | [Shareable history](shareable-history.md) | Artifact schema, privacy boundary, replay, and publication bounds |
 | [Remote control plane](remote-ct-control-plane-design.md) | Historical, inventory, living, and estimation authorities |
+| [Private Datahub hosting](datahub-cloudflare-private-hosting.md) | Accepted Access-only Cloudflare architecture, route capabilities, and rollout gates |
 | [Collector handoff](local-collector-handoff.md) | Local collection, delivery recovery, and deployment gates |
 | [September 5 rollout](remote-ct-rollout-2026-09-05.md) | Recorded non-production deployment evidence; supervision remains unverified |
 | [CLI](cli.md), [session API](session-api-redesign.md) | Public usage and progressive evidence retrieval |
