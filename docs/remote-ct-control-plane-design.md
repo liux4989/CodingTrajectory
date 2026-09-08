@@ -1,7 +1,7 @@
 # Remote CT Control Plane Design
 
-- **Status:** Chronicle refactor implemented locally; current schema not deployed
-- **Date:** 2026-09-05
+- **Status:** Chronicle locally qualified; linked deployment blocked on migration reconciliation
+- **Date:** 2026-09-08
 - **Scope:** Public method authorities, historical artifacts, project inventory,
   living state, estimation, and collector handoff
 - **Supersedes:** [`remote-session-ledger-design.md`](archive/remote-session-ledger-design.md)
@@ -243,6 +243,10 @@ clients.
 
 A failed gate stops rollout. Privacy, topology, checkpoint, snapshot, and
 idempotency rules are never weakened to continue deployment.
+
+The local qualification gate passed on 2026-09-08. A subsequent linked dry run
+stopped at migration-history reconciliation before executing SQL; see
+[`chronicle-deployment-readiness-2026-09-08.md`](chronicle-deployment-readiness-2026-09-08.md).
 
 ## Prior rollout evidence
 

@@ -5,7 +5,8 @@
 - **Scope:** Historical collection, storage, replay, and API coverage
 - **Related:** [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md),
   [`local-collector-handoff.md`](local-collector-handoff.md),
-  [`chronicle-local-qualification-2026-09-08.md`](chronicle-local-qualification-2026-09-08.md)
+  [`chronicle-local-qualification-2026-09-08.md`](chronicle-local-qualification-2026-09-08.md),
+  [`chronicle-deployment-readiness-2026-09-08.md`](chronicle-deployment-readiness-2026-09-08.md)
 
 ## Decision
 
