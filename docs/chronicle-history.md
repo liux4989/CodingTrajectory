@@ -1,10 +1,11 @@
 # Chronicle Operational History Contract
 
-- **Status:** Prototype contract implemented locally; not deployed
+- **Status:** Prototype contract locally qualified; not deployed
 - **Date:** 2026-09-08
 - **Scope:** Historical collection, storage, replay, and API coverage
 - **Related:** [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md),
-  [`local-collector-handoff.md`](local-collector-handoff.md)
+  [`local-collector-handoff.md`](local-collector-handoff.md),
+  [`chronicle-local-qualification-2026-09-08.md`](chronicle-local-qualification-2026-09-08.md)
 
 ## Decision
 
@@ -136,3 +137,8 @@ Before any remote change, validate the Python and SQL shapes, exact digest and
 size behavior, real-session operational output, metric reconciliation, and
 collector replay locally. Remote target classification and explicit deployment
 authorization are a separate gate.
+
+The bounded local qualification passed on 2026-09-08 across available Codex,
+Claude Code, Pi, and Amp sources. Its evidence and source-selection limits are
+recorded in
+[`chronicle-local-qualification-2026-09-08.md`](chronicle-local-qualification-2026-09-08.md).

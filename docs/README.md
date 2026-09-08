@@ -8,6 +8,7 @@ The private operational-history design is [Chronicle history](chronicle-history.
 | Document | Role |
 | --- | --- |
 | [Chronicle history](chronicle-history.md) | Private operational schema, privacy boundary, replay, and publication bounds |
+| [Chronicle local qualification](chronicle-local-qualification-2026-09-08.md) | Sanitized cross-vendor local admission evidence |
 | [Remote control plane](remote-ct-control-plane-design.md) | Historical, inventory, living, and estimation authorities |
 | [Private Datahub hosting](datahub-cloudflare-private-hosting.md) | Accepted Access-only Cloudflare architecture, route capabilities, and rollout gates |
 | [Collector handoff](local-collector-handoff.md) | Local collection, delivery recovery, and deployment gates |

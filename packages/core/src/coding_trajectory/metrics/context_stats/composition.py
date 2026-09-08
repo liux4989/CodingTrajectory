@@ -630,6 +630,7 @@ def _assemble_agent_categories(
         for key, label in (
             ("todolist", "Plans / todos"),
             ("subagenttask", "Subagent results"),
+            ("agentcollab", "Agent collaboration"),
             ("sessionhandoff", "Handoffs"),
         )
         if agent[key].items

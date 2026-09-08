@@ -1290,6 +1290,12 @@ _DETAIL_KIND_BY_CONCEPT = {
 def _projection_origin(
     item: Item, *, item_ids_by_tool_call: dict[str, UUID]
 ) -> tuple[UUID | None, int | None]:
+    chronicle = (
+        item.vendor_data.get("chronicle_projection")
+        if isinstance(item.vendor_data, dict)
+        and isinstance(item.vendor_data.get("chronicle_projection"), dict)
+        else {}
+    )
     activity = (
         item.vendor_data.get("activity")
         if isinstance(item.vendor_data, dict)
@@ -1307,7 +1313,12 @@ def _projection_origin(
         if isinstance(parent_tool_call_id, str)
         else None
     )
-    nested_index = provenance.get("nested_index")
+    if parent_item_id is None:
+        try:
+            parent_item_id = UUID(str(chronicle["parent_item_id"]))
+        except (KeyError, TypeError, ValueError):
+            parent_item_id = None
+    nested_index = provenance.get("nested_index", chronicle.get("nested_index"))
     return (
         parent_item_id,
         nested_index
