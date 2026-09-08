@@ -11,6 +11,10 @@ packages/*/web/dist/
 
 # Virtual environments
 .venv/
+python_modules/
+
+# Wrangler local state
+.wrangler/
 
 # Local environment and deployment credentials
 .env
