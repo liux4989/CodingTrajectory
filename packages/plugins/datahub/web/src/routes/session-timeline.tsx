@@ -45,7 +45,7 @@ export function SessionTimelinePanel({ rootId, sessionId }: { rootId: string; se
   const selectTurn = React.useCallback(
     (turn: WaterfallTurn) => {
       if (turn.sessionId === sessionId) {
-        updateSearch({ kind: undefined, artifact: undefined, vendor: undefined, outcome: undefined, entry: turn.entryId });
+        updateSearch({ kind: undefined, artifact: undefined, vendor: undefined, outcome: undefined, entry: turn.entryId, turn: undefined });
         return;
       }
       // A turn from another session belongs to that session's scope.
@@ -121,6 +121,7 @@ export function SessionTimelinePanel({ rootId, sessionId }: { rootId: string; se
           vendor: search.vendor ?? "all",
           outcome: search.outcome ?? "all",
           entry: search.entry,
+          turn: search.turn,
         }}
         onChange={updateSearch}
       />

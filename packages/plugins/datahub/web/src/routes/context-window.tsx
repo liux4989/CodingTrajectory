@@ -3,16 +3,17 @@ import { fetchContextWindow, type ContextWindowPayload } from "@/api";
 import { formatCostUsd } from "@/lib/cache-breaks";
 import { LoadingState } from "@/components/loading-state";
 import { StateBlock } from "@/components/state-block";
-import { ContextEventExplorer } from "@/components/context-window/context-event-explorer";
 import { ContextMaintenanceDetails } from "@/components/context-window/context-maintenance-details";
 import { ContextWindowSummary } from "@/components/context-window/context-window-summary";
+import { ContextTurnFootprint } from "@/components/context-window/turn-footprint";
 import { isEstimatedConfidence } from "@/components/context-window/shared";
 
 /**
  * Context-window panel for the session scope: how full the window is, what
- * consumes it, and where pressure builds. Rendered inside the session route.
+ * consumes it, and where pressure builds. Event-level evidence stays in the
+ * timeline tab; the footprint hands off to it per turn.
  */
-export function ContextWindowPanel({ sessionId }: { sessionId: string }) {
+export function ContextWindowPanel({ rootId, sessionId }: { rootId: string; sessionId: string }) {
   const query = useQuery({
     queryKey: ["context-window", sessionId],
     queryFn: () => fetchContextWindow(sessionId),
@@ -43,7 +44,7 @@ export function ContextWindowPanel({ sessionId }: { sessionId: string }) {
       </div>
       <ContextWindowSummary payload={payload} />
       <ContextMaintenanceDetails payload={payload} />
-      <ContextEventExplorer payload={payload} />
+      <ContextTurnFootprint payload={payload} rootId={rootId} sessionId={sessionId} />
     </div>
   );
 }

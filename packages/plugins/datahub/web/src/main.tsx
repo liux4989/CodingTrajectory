@@ -117,6 +117,7 @@ type SessionDetailSearch = {
   vendor?: string;
   outcome?: "failed" | "succeeded";
   entry?: string;
+  turn?: string;
 };
 
 const sessionDetailRoute = createRoute({
@@ -137,6 +138,7 @@ const sessionDetailRoute = createRoute({
       vendor: tab === "timeline" && typeof search.vendor === "string" && search.vendor ? search.vendor : undefined,
       outcome: tab === "timeline" && (search.outcome === "failed" || search.outcome === "succeeded") ? search.outcome : undefined,
       entry: tab === "timeline" && typeof search.entry === "string" && search.entry ? search.entry : undefined,
+      turn: tab === "timeline" && typeof search.turn === "string" && search.turn ? search.turn : undefined,
     };
   },
   component: () => <RouteBoundary><SessionDetailRoute /></RouteBoundary>,

@@ -1,5 +1,5 @@
-import * as React from "react";
-import type { ContextCategory, ContextEvent, TokenEvidence } from "@/api";
+import type * as React from "react";
+import type { ContextCategory, ContextEvent } from "@/api";
 
 export const categoryColors: Record<string, string> = {
   starting_context: "var(--color-category-starting-context)",
@@ -26,14 +26,6 @@ export function categoryDotStyle(category: string): React.CSSProperties {
   return { background: categoryColors[category] ?? categoryColors.unattributed };
 }
 
-export function eventColor(event: ContextEvent) {
-  return categoryColors[event.category] ?? categoryColors.unattributed;
-}
-
-export function categoryTint(color: string, alpha: number) {
-  return `color-mix(in srgb, ${color} ${alpha * 100}%, transparent)`;
-}
-
 export function categoryLabel(category: string) {
   if (category === "starting_context") return "Starting context";
   if (category === "user_input") return "User input";
@@ -47,14 +39,11 @@ export function isEstimatedConfidence(confidence: string | null | undefined) {
   return confidence === "estimated_tokens" || confidence === "structural" || confidence === "unknown";
 }
 
-export function evidenceLabel(evidence: TokenEvidence | null) {
-  if (!evidence) return "No event-level token evidence";
-  return `${evidence.value.toLocaleString()} tokens${isEstimatedConfidence(evidence.confidence) ? " (estimated)" : ""}`;
-}
-
 export type TurnGroup = {
   key: string;
   label: string;
+  /** Canonical turn id for turn groups; null for before/after-turn buckets. */
+  turnId: string | null;
   totalTokens: number;
   events: ContextEvent[];
 };
@@ -74,10 +63,14 @@ export function buildTurnGroups(events: ContextEvent[]): TurnGroup[] {
     let current = groups[groups.length - 1];
     if (!current || current.key !== key) {
       let label: string;
+      let turnId: string | null = null;
       if (key === "before_first_prompt") label = "Before first prompt";
       else if (key === "post_turn") label = "After last turn";
-      else label = `Turn ${++turnNumber}`;
-      current = { key, label, totalTokens: 0, events: [] };
+      else {
+        label = `Turn ${++turnNumber}`;
+        turnId = event.turn_id ?? null;
+      }
+      current = { key, label, turnId, totalTokens: 0, events: [] };
       groups.push(current);
     }
     current.events.push(event);
@@ -86,9 +79,3 @@ export function buildTurnGroups(events: ContextEvent[]): TurnGroup[] {
   return groups;
 }
 
-/** Identity line under a row: target excerpt, category, terminal visibility. */
-export function eventTarget(event: ContextEvent): string | null {
-  const summary = event.summary?.split(",")[0]?.trim();
-  if (!summary || summary === event.label) return null;
-  return summary;
-}

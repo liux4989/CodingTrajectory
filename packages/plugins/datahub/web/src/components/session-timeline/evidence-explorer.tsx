@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { formatCostUsd, formatDuration, formatTokens } from "@/lib/format";
+import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
   agentLabel,
@@ -50,6 +50,7 @@ export type EvidenceFilterState = {
   vendor: string;
   outcome: OutcomeFilter;
   entry: string | undefined;
+  turn: string | undefined;
 };
 
 export type EvidenceFilterUpdate = {
@@ -58,6 +59,7 @@ export type EvidenceFilterUpdate = {
   vendor?: string;
   outcome?: Exclude<OutcomeFilter, "all">;
   entry?: string;
+  turn?: string;
 };
 
 type TurnNode = {
@@ -165,6 +167,46 @@ export function EvidenceExplorer({
   const selected = state.entry
     ? (entries.find((entry) => entry.id === state.entry) ?? null)
     : null;
+
+  // Turn anchor from the context footprint handoff: expand and highlight the
+  // turn, scroll it into view. Anchoring changes presentation only.
+  const anchorTurnKey = React.useMemo(() => {
+    if (!state.turn) return null;
+    for (const root of roots) {
+      for (const turn of flattenTurns(root)) {
+        if (turn.entries[0]?.turn_id === state.turn) return turn.key;
+      }
+    }
+    return null;
+  }, [roots, state.turn]);
+  const anchorBranchKeys = React.useMemo(
+    () => (anchorTurnKey ? ancestorBranchKeysForTurn(roots, anchorTurnKey) : []),
+    [roots, anchorTurnKey],
+  );
+  React.useEffect(() => {
+    if (!anchorTurnKey || hasFilters) return;
+    setExpandedBranches((current) => {
+      const base = current ?? allBranchKeys;
+      const missing = anchorBranchKeys.filter((key) => !base.includes(key));
+      return missing.length ? [...base, ...missing] : current;
+    });
+    setExpandedTurns((current) => {
+      const base = current ?? (latestTurnKey ? [latestTurnKey] : []);
+      return base.includes(anchorTurnKey) ? current : [...base, anchorTurnKey];
+    });
+    setFullTurns((current) =>
+      current.has(anchorTurnKey) ? current : new Set(current).add(anchorTurnKey),
+    );
+  }, [anchorTurnKey, hasFilters, anchorBranchKeys, allBranchKeys, latestTurnKey]);
+  React.useEffect(() => {
+    if (!anchorTurnKey) return;
+    const frame = requestAnimationFrame(() => {
+      document
+        .getElementById(`evidence-turn-${anchorTurnKey}`)
+        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [anchorTurnKey]);
 
   // Keep the selected entry's branch/turn open and fully paged so a deep
   // link never lands on a hidden row.
@@ -343,6 +385,7 @@ export function EvidenceExplorer({
               key={turn.key}
               turn={turn}
               expandedEntryId={state.entry ?? null}
+              anchoredTurnKey={anchorTurnKey}
               onToggleEntry={toggleEntry}
               showAll={fullTurns.has(turn.key)}
               onShowAll={() => setFullTurns((current) => new Set(current).add(turn.key))}
@@ -364,6 +407,7 @@ export function EvidenceExplorer({
               turnValue={turnValue}
               onTurnValueChange={setExpandedTurns}
               expandedEntryId={state.entry ?? null}
+              anchoredTurnKey={anchorTurnKey}
               onToggleEntry={toggleEntry}
               fullTurns={fullTurns}
               onShowFullTurn={(key) => setFullTurns((current) => new Set(current).add(key))}
@@ -381,6 +425,7 @@ function BranchSection({
   turnValue,
   onTurnValueChange,
   expandedEntryId,
+  anchoredTurnKey,
   onToggleEntry,
   fullTurns,
   onShowFullTurn,
@@ -390,6 +435,7 @@ function BranchSection({
   turnValue: string[];
   onTurnValueChange: (value: string[]) => void;
   expandedEntryId: string | null;
+  anchoredTurnKey: string | null;
   onToggleEntry: (entry: SessionTimelineEntry) => void;
   fullTurns: ReadonlySet<string>;
   onShowFullTurn: (key: string) => void;
@@ -433,6 +479,7 @@ function BranchSection({
                 key={turn.key}
                 turn={turn}
                 expandedEntryId={expandedEntryId}
+                anchoredTurnKey={anchoredTurnKey}
                 onToggleEntry={onToggleEntry}
                 showAll={fullTurns.has(turn.key)}
                 onShowAll={() => onShowFullTurn(turn.key)}
@@ -447,6 +494,7 @@ function BranchSection({
               turnValue={turnValue}
               onTurnValueChange={onTurnValueChange}
               expandedEntryId={expandedEntryId}
+              anchoredTurnKey={anchoredTurnKey}
               onToggleEntry={onToggleEntry}
               fullTurns={fullTurns}
               onShowFullTurn={onShowFullTurn}
@@ -461,20 +509,27 @@ function BranchSection({
 function TurnSection({
   turn,
   expandedEntryId,
+  anchoredTurnKey,
   onToggleEntry,
   showAll,
   onShowAll,
 }: {
   turn: TurnNode;
   expandedEntryId: string | null;
+  anchoredTurnKey: string | null;
   onToggleEntry: (entry: SessionTimelineEntry) => void;
   showAll: boolean;
   onShowAll: () => void;
 }) {
   const visible = showAll ? turn.entries : turn.entries.slice(0, TURN_PREVIEW_COUNT);
   const hiddenCount = turn.entries.length - visible.length;
+  const anchored = turn.key === anchoredTurnKey;
   return (
-    <AccordionItem value={turn.key} className="border-b-0">
+    <AccordionItem
+      value={turn.key}
+      id={`evidence-turn-${turn.key}`}
+      className={cn("border-b-0 rounded-md scroll-mt-4", anchored && "ring-1 ring-primary/60")}
+    >
       <AccordionTrigger className="items-center rounded-md px-2.5 py-1.5 text-caption font-normal hover:no-underline">
         <span className="min-w-0 flex-1 truncate text-left font-medium text-foreground">
           Turn {turn.sequence + 1}
@@ -607,12 +662,6 @@ function RowDetail({ entry }: { entry: SessionTimelineEntry }) {
       </div>
       {accounting ? (
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground" aria-label="Turn accounting">
-          <span>{formatTokens(accounting.processed_tokens)} tokens</span>
-          <span>
-            {accounting.cost_usd == null
-              ? "Cost unavailable"
-              : `${formatCostUsd(accounting.cost_usd)} ${accounting.cost_confidence ?? "unknown"}`}
-          </span>
           {accounting.execution_seconds == null ? null : (
             <span>{formatDuration(accounting.execution_seconds)} elapsed</span>
           )}
@@ -764,6 +813,24 @@ function ancestorBranchKeys(roots: BranchNode[], sessionId: string): string[] {
   const walk = (branch: BranchNode): boolean => {
     path.push(branch.sessionId);
     if (branch.sessionId === sessionId) return true;
+    for (const child of branch.children) {
+      if (walk(child)) return true;
+    }
+    path.pop();
+    return false;
+  };
+  for (const root of roots) {
+    if (walk(root)) return path;
+  }
+  return [];
+}
+
+/** Branch key path from a root to the branch that contains `turnKey`. */
+function ancestorBranchKeysForTurn(roots: BranchNode[], turnKey: string): string[] {
+  const path: string[] = [];
+  const walk = (branch: BranchNode): boolean => {
+    path.push(branch.sessionId);
+    if (branch.turns.some((turn) => turn.key === turnKey)) return true;
     for (const child of branch.children) {
       if (walk(child)) return true;
     }

@@ -50,7 +50,7 @@ export function SessionDetailRoute() {
         {tab === "timeline" ? (
           <SessionTimelinePanel rootId={rootId} sessionId={sessionId} />
         ) : (
-          <ContextWindowPanel sessionId={sessionId} />
+          <ContextWindowPanel rootId={rootId} sessionId={sessionId} />
         )}
       </React.Fragment>
     </div>
