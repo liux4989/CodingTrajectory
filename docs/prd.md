@@ -35,12 +35,15 @@ runs retain their distinct scopes.
 # Shareable history
 
 - The originating host constructs one strict `ct.shareable_graph.v1` artifact.
-- All service APIs, including local callers, read the published Supabase authority
-  through the same handlers; local logs never substitute for database state.
+- Host-local service APIs read local sources first and use the published
+  Chronicles authority only when local discovery is unavailable or a targeted
+  record is missing. Both sources run through the same handlers and shareable
+  artifact contract.
 - Source observations contain checkpoint metadata only. Raw logs, transcript
   bodies, and general event arrays are never historical upload payloads.
-- Content is disabled by default. Explicit local evidence calls lazily hydrate
-  published sessions whose retained facts match; remote content requests are denied.
+- Content is disabled in shareable artifacts. Explicit local evidence calls read
+  the full local graph without requiring publication; remote content requests
+  are denied.
 - Remote history stores validated artifacts directly; there is no remote
   canonical reconstruction worker or compact-session compatibility path.
 - The [shareable history contract](shareable-history.md) defines bounds and

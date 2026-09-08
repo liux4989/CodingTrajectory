@@ -9,18 +9,23 @@
 ## Decision
 
 CodingTrajectory has one public API contract and one shared historical handler
-implementation. Every registered API reads Supabase as its canonical authority.
-Local and remote calls consume the same published `ct.shareable_graph.v1`
-artifact; local logs cannot replace database state. Artifact schema changes do
-not create a new public API version while response contracts remain compatible.
+implementation. Host-local callers select local sources first. Shareable local
+reads round-trip the locally reconstructed graph through
+`ct.shareable_graph.v1`; remote reads load the same artifact schema from
+Chronicles (the Supabase control plane). Artifact schema changes do not create a
+new public API version while response contracts remain compatible.
 
-Content is excluded by default. Local evidence requests depend on a published
-session and lazily hydrate host content only when its retained canonical facts
-match. HTTP callers are denied evidence access. Missing configuration or
-publication failures are explicit; there is no local canonical read fallback.
-An unpinned local session query may publish its eligible graph on demand, then
-read the committed Supabase revision. HTTP and explicitly pinned calls do not
-initiate publication. See the [query flow](cli.md#fresh-session-queries).
+The local result returns without opening a remote connection. Chronicles is
+consulted only when local discovery is unavailable or a targeted resource is
+not present locally. A valid local response, including an empty collection,
+does not fall through. Validation, parsing, ambiguity, and other legitimate
+local errors remain errors. If fallback also fails, the response reports both
+the local miss and the remote failure. Explicit snapshot-pinned and HTTP calls
+remain remote-only.
+
+Content is excluded from shareable artifacts by default. Local evidence methods
+read the full local canonical graph and never upload their bodies. Remote routing
+rejects evidence requests. Raw vendor logs remain the originating authority.
 
 ## Authorities
 
@@ -31,8 +36,9 @@ initiate publication. See the [query flow](cli.md#fresh-session-queries).
 | Living | `living.sessions`, `living.events` | Agent leases and ordered living observations |
 | Estimation | Seven `estimate.*` methods | Forecast events, jobs, attempts, leases, and results |
 
-Collector SQLite is not an authority. It stores only delivery state. Raw vendor
-logs remain authoritative evidence on their originating host.
+Collector SQLite is not an authority. It stores only delivery state. The local
+source and remote control plane are separate provenance domains; fallback does
+not merge their records into one response.
 
 ## API boundary
 
@@ -68,15 +74,15 @@ return a partial evidence response or maintain a legacy compatibility handler.
 host-local logs
   -> fenced adapters
   -> ShareableGraphArtifact
-  -> durable collector outbox
-  -> authenticated publication
-  -> Supabase artifact revision + normalized source vector
-  -> one pinned snapshot and shared handlers
-       |-> local CLI / embedded APIs (content disabled by default)
-       |-> HTTP APIs (content requests denied)
+  |-> local shareable artifact -> shared handlers -> return immediately
+  |-> explicit local evidence request -> full local graph -> shared handlers
+  |-> optional collector publication -> Chronicles artifact revision
 
-published session -> explicit local evidence request
-  -> lazy host hydration -> retained-fact match -> scoped evidence response
+local source unavailable or targeted resource missing
+  -> lazy Chronicles connection -> pinned snapshot -> shared handlers
+
+HTTP or explicitly snapshot-pinned request
+  -> Chronicles pinned snapshot -> shared handlers
 ```
 
 The remote side authenticates, authorizes, validates, sequences, stores, and
@@ -151,9 +157,11 @@ The returned artifact identity, digest, and schema are validated by the same
 Pydantic model before it is converted to an ephemeral `DocumentStore` for the
 existing handler.
 
-`project.sessions` is the intentional collection read; a targeted session call
-does not build a complete workspace store. A batch retains one pinned snapshot
-sequence across its historical calls.
+`project.sessions` is the intentional collection read; a successful empty local
+collection is authoritative for that request and does not trigger fallback. A
+targeted session call that cannot resolve its resource may fall back without
+building a complete remote workspace store. A fallback batch retains one pinned
+remote snapshot sequence across its remote historical calls.
 
 ## Artifact and JSONB rationale
 

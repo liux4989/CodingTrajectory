@@ -49,10 +49,20 @@ def _read_batch_requests(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 
 def _runtime(args: argparse.Namespace) -> ServiceRuntime:
-    """Every CLI read uses Supabase; local evidence remains demand-loaded."""
+    """Build a local-first runtime with a lazy remote Chronicles fallback."""
 
-    agent_id = os.environ.get("CT_COLLECTOR_AGENT_ID")
-    project_id = None
+    if getattr(args, "snapshot_sequence", None) is not None:
+        return _remote_runtime(args)
+    return ServiceRuntime(
+        global_scope=getattr(args, "global_scope", False),
+        current_dir=Path.cwd(),
+        fallback_factory=lambda: _remote_runtime(args),
+    )
+
+
+def _remote_runtime(args: argparse.Namespace) -> ServiceRuntime:
+    """Resolve remote configuration only after fallback is actually needed."""
+
     workspace_id = getattr(args, "remote_workspace_id", None) or os.environ.get(
         "CT_REMOTE_WORKSPACE_ID"
     )
@@ -76,8 +86,6 @@ def _runtime(args: argparse.Namespace) -> ServiceRuntime:
             getattr(args, "remote_workspace_id", None)
             or credentials.profile.workspace_id
         )
-        agent_id = str(credentials.profile.agent_id)
-        project_id = credentials.profile.project_id
     if not all((url, api_key, access_token, workspace_id)):
         raise ValueError(
             "API reads require complete Supabase URL, API key, access token, and workspace configuration"
@@ -87,29 +95,12 @@ def _runtime(args: argparse.Namespace) -> ServiceRuntime:
         api_key=str(api_key),
         workspace_id=UUID(str(workspace_id)),
     )
-    runtime = factory.build(
+    return factory.build(
         str(access_token),
         snapshot_sequence=getattr(args, "snapshot_sequence", None),
-        local_evidence=True,
+        local_evidence=False,
+        current_dir=Path.cwd(),
     )
-    runtime.global_scope = getattr(args, "global_scope", False)
-    if (
-        agent_id
-        and getattr(args, "snapshot_sequence", None) is None
-        and os.environ.get("CT_AUTO_PUBLISH", "1") != "0"
-    ):
-        from coding_trajectory.control_plane.on_demand import OnDemandPublisher
-
-        runtime.before_read = OnDemandPublisher(
-            factory=factory,
-            access_token=str(access_token),
-            agent_id=UUID(agent_id),
-            url=str(url),
-            api_key=str(api_key),
-            current_dir=Path.cwd(),
-            project_id=project_id,
-        ).prepare
-    return runtime
 
 
 def _remote_service_config(args: argparse.Namespace) -> tuple[str, str]:
@@ -158,12 +149,12 @@ def _add_remote_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--remote-workspace-id",
         type=UUID,
-        help="Select the canonical Supabase workspace (defaults to environment or credential profile).",
+        help="Select the fallback Chronicles workspace (defaults to environment or credential profile).",
     )
     parser.add_argument(
         "--snapshot-sequence",
         type=_nonnegative_int,
-        help="Pin remote reads to this workspace sequence (defaults to latest).",
+        help="Read directly from this pinned remote workspace sequence.",
     )
     parser.add_argument("--supabase-url", help="Defaults to CT_SUPABASE_URL.")
     parser.add_argument("--supabase-api-key", help="Defaults to CT_SUPABASE_ANON_KEY.")

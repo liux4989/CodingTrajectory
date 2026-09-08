@@ -103,11 +103,11 @@ prompt-plus-completion total.
 
 Session and nested graph analysis commands require a session entry-point ID;
 they never guess the most-recent graph. Use `project sessions` to choose one.
-Explicit session, graph, and turn entry points are resolved through the
-Supabase resource index, so those commands have no scope flag. `--global-scope`
-is reserved for project collection discovery. Evidence reads require a published
-session or turn scope. `project list` always uses the workspace project inventory
-and therefore has no scope flag.
+Explicit session, graph, and turn entry points are resolved from local source
+indexes first, so those commands have no scope flag. `--global-scope` is
+reserved for project collection discovery. A missing local entry point can be
+resolved through the configured remote Chronicles resource index. `project
+list` uses local project metadata unless local discovery is unavailable.
 
 Session `status` is a reversible liveness signal, with only `living` and
 `not_living` values. A session is `living` only while its current canonical
@@ -120,130 +120,93 @@ signal.
 
 ## Local and remote execution
 
-Every service API reads the same canonical Supabase workspace, including local
-CLI calls, embedded `ServiceRuntime`/plugin clients, and the HTTP API. Local
-logs are ingestion inputs and optional evidence; they are never an alternative
-API inventory or metrics authority. Unpublished sessions do not appear in reads.
-Missing credentials and unavailable database state fail explicitly without local
-fallback. Eligible local session queries can publish missing or updated data
-before returning its Supabase result, as described below.
+CLI and embedded API calls select host-local sources first. A usable local result
+returns immediately without resolving credentials, refreshing a token, or
+opening a remote connection. This includes a valid empty collection. Remote
+Chronicles is used only when the host exposes no supported local source or a
+targeted resource is absent from the local store. Request validation, malformed
+local evidence, ambiguous selection, and other errors are not fallback signals.
+If Chronicles is also unavailable, the error reports the local miss and the
+remote failure together.
+
+HTTP API calls remain remote-only. `--snapshot-sequence N` also selects a direct,
+pinned remote read because a local source cannot represent a remote workspace
+revision. Responses identify `source: local` or `source: remote`; fallback never
+merges records or evidence across the two authorities.
 
 The CLI uses `CT_SUPABASE_URL`, `CT_SUPABASE_ANON_KEY`, `CT_ACCESS_TOKEN`, and
 `CT_REMOTE_WORKSPACE_ID`. Setting `CT_CREDENTIAL_PROFILE` explicitly selects a
-profile and obtains a fresh token for each CLI read, superseding connection and
-token environment variables (including an expired `CT_ACCESS_TOKEN`). Profiles
-use macOS Keychain or an injected password environment variable on headless hosts.
-Without an explicit profile, absent connection credentials select profile
-`default`; partial environment credentials are rejected. Embedded clients require the four
-Supabase environment variables. `--remote-workspace-id` on `ct api call/batch`
-is a workspace override, not a backend switch.
+profile and obtains a fresh token when remote fallback is first needed,
+superseding connection and token environment variables (including an expired
+`CT_ACCESS_TOKEN`). Profiles use macOS Keychain or an injected password
+environment variable on headless hosts. Without an explicit profile, absent
+connection credentials select profile `default`; partial environment credentials
+are rejected when remote fallback is needed. Embedded clients enable fallback
+only when all four Supabase environment variables are present.
+`--remote-workspace-id` on `ct api call/batch` selects the fallback workspace; it
+does not make an unpinned request remote-first.
 
 ```sh
 ct api call project.sessions \
   --params '{"project_name":"CodingTrajectory","since_days":7}'
 ```
 
-Add `--snapshot-sequence N` to pin a published workspace sequence; otherwise
-runtime creation resolves the latest sequence. Historical responses identify
-that database source and snapshot, even when the caller runs locally.
+Add `--snapshot-sequence N` to bypass local selection and pin a published
+workspace sequence. An unpinned request resolves a remote snapshot only after a
+local fallback condition.
 
-Historical reads fetch published `ct.shareable_graph.v1` artifacts through
-Supabase PostgREST RPCs. Python validates their identity, digest, and schema,
-reconstructs an in-memory graph, and executes the shared handlers. Local callers
-use this exact pipeline; they no longer assemble another graph from local logs
-for ordinary reads. The database state reflects the last publication.
-Artifact caches live within a runtime and are keyed by method and scope;
-separate CLI calls create fresh runtimes. Batch calls share one runtime.
-The default plugin client also resolves a fresh snapshot per call. An explicitly
-owned read-only `ServiceRuntime` stays pinned until the caller creates a new
-runtime. On-demand publication can advance an unpinned local runtime.
+Historical local reads reconstruct the canonical graph from local logs, round
+shareable methods through `ct.shareable_graph.v1`, and execute the shared
+handlers. A remote fallback fetches published artifacts through Supabase
+PostgREST RPCs; Python validates identity, digest, and schema before invoking the
+same handlers. Local and remote stores remain separate and are cached within the
+owning runtime. A remote fallback runtime pins one snapshot for its lifetime.
 
-Content is excluded by default on both surfaces. Explicit `session.search`,
+Content is excluded from the shareable artifact. Explicit `session.search`,
 `session.events`, `session.items` with `include_content=true`, and
-`graph.overview` with `include:["narrative"]` request local evidence. A local
-caller first resolves the published session, then lazily loads host evidence
-and checks its retained canonical facts against the selected publication.
-Missing or mismatched evidence is an error. Hydration never changes the cached
-canonical snapshot or its default responses. The response identifies
-`content_scope: local_evidence` and `evidence_source: local` separately from the
-canonical database source.
+`graph.overview` with `include:["narrative"]` request local evidence from the
+full canonical local graph. These requests do not require publication and their
+bodies are never sent to Chronicles.
 
-Evidence calls need a published session/root-session/turn scope; event IDs or
-item IDs alone cannot authorize local discovery. A changed session must be
-published before its new content can be loaded. Matching retained facts does
-not attest omitted body bytes: raw logs remain the local evidence authority.
-The HTTP runtime has no local evidence loader and rejects all four content
-requests, even if the server machine has those logs. Clients cannot enable that
-capability through request parameters. `ServiceRuntime(local_evidence=False)`
-also disables evidence loading for embedded callers.
+The HTTP runtime rejects all four content requests, even if the server machine
+has matching logs. A missing local evidence record may attempt fallback, but the
+remote boundary still rejects content-bearing methods rather than returning a
+partial result.
 
 All 25 registered service methods are covered below. The registry in
 `packages/core/src/coding_trajectory/contracts/registry.py` is authoritative.
 
-| Methods | Remote behavior |
+| Methods | Local-first behavior |
 | --- | --- |
-| `project.list` | Remote project inventory RPC |
-| `project.sessions` | Published historical artifacts, filtered by request scope |
-| `session.overview`, `session.summary`, `session.tree`, `graph.overview` | Historical artifact plus Python projection; content omitted by default; graph narrative requires local evidence |
-| `session.stats`, `graph.stats`, `session.usage`, `graph.usage`, `session.model_usage`, `session.request_usage`, `session.tool_usage` | Historical artifact plus Python projection; numeric measurements preserved |
-| `session.items` | Metadata-only remote support; `include_content=true` is rejected |
-| `session.events`, `session.search` | Lazy local evidence for a published scope; HTTP calls are rejected |
-| `living.events`, `living.sessions` | Remote living authority RPCs; availability depends on published living state |
-| `estimate.predict`, `estimate.bind`, `estimate.backfill.start` | Remote estimation operations that create or update state |
-| `estimate.get`, `estimate.list`, `estimate.calibration` | Remote estimation reads that can also persist refreshed actual comparisons |
-| `estimate.backfill.status` | Remote job status; requires an existing job ID |
+| `project.list`, `project.sessions` | Local inventory/history; unavailable discovery may use remote inventory, while a valid empty collection remains local |
+| `session.overview`, `session.summary`, `session.tree`, `graph.overview` | Local graph; a missing targeted record may use the remote shareable artifact; narrative remains local-only |
+| `session.stats`, `graph.stats`, `session.usage`, `graph.usage`, `session.model_usage`, `session.request_usage`, `session.tool_usage` | Local measurements first; missing targeted records may use remote measurements |
+| `session.items` | Local items first; remote fallback is metadata-only and rejects `include_content=true` |
+| `session.events`, `session.search` | Local-only evidence; remote fallback preserves the explicit rejection |
+| `living.events`, `living.sessions` | Local living stores first; unavailable local discovery may use remote living state |
+| `estimate.*` | Local estimation authority first; missing targeted state may use the remote authority |
 
 `ct api serve --remote-workspace-id "$CT_REMOTE_WORKSPACE_ID"` exposes
 authenticated `POST /v1/call`, `POST /v1/batch`, and `POST /v1/schema` endpoints
 (default bind: `127.0.0.1:8765`). Requests need a bearer token. Local
 `ct api schema METHOD` remains offline and does not need credentials.
 
-### Fresh-session queries
+### Remote fallback and publication
 
-Local queries with an explicit `session_id` or `root_session_id` automatically
-synchronize that session's graph when eligible local sources are available.
-The configured Keychain profile supplies the collector identity. Embedded or
-environment-configured callers also set `CT_COLLECTOR_AGENT_ID` and need the
-corresponding collector capabilities. HTTP calls never get this capability.
+Remote fallback is read-only. It does not publish a missing local graph, update
+the selected workspace, or widen the request. A targeted miss reads the latest
+published Chronicles snapshot (or an explicitly pinned snapshot) and returns
+that source's result. If the record is absent there too, the missing-record error
+remains explicit.
 
 ```text
-query Supabase -> locate eligible local graph sources
-  -> unchanged: use the published result
-  -> missing/changed: fence and publish the selected graph
-       -> verify the committed artifact -> read a fresh Supabase snapshot
+local targeted read -> resource missing -> initialize Chronicles fallback
+  -> pin remote snapshot -> load targeted published artifact -> shared handler
 ```
 
-The source window is seven days and the scope is the current project. Required
-parent/fork inputs are used for normalization, but unrelated canonical graphs
-are not published. Missing dependencies or an incomplete overlapping graph
-produce an explicit error; the query never widens its scope automatically.
-Source fingerprints avoid repeated normalization for unchanged files, and a
-canonical artifact comparison avoids re-publishing unchanged facts.
-
-Concurrent local queries share an agent publication lock and recheck the database
-after waiting. Exact retry state lives under the private
-`~/.coding-trajectory/control-plane/on-demand/` directory, separate from earlier
-collector databases. `CT_ON_DEMAND_STATE_DIR` can override that directory. A
-pending attempt must be retried for its original session before another target
-can use that on-demand stream. Normal CLI collector runs use the same agent lock.
-
-Progress goes to stderr. Stdout retains the existing result format. Failures
-return an error instead of an unpublished local response. This first read pays
-publication latency; it is not an instant local preview. Appends after the fence
-are left for a subsequent query or batch publication.
-
-`CT_AUTO_PUBLISH=0` disables on-demand writes. An explicit
-`--snapshot-sequence N` also disables them. A local API batch prepares eligible
-publications first, then executes its reads at one final snapshot. Collection
-queries and turn/item/event-ID-only queries do not initiate publication.
-
-Local `living.events` and `living.sessions` requests use the same store-first
-boundary. Each request reconciles the host's persisted journals into its local
-SQLite living projection, durably publishes only changes after the retained
-projection cursor, refreshes the collector lease, and then reads a fresh remote
-snapshot. There is no watcher or in-memory-only path. HTTP and other hosts cannot
-trigger this reconciliation because they cannot access the source host's storage;
-they read the latest durable living observations already in Supabase.
+A fallback runtime is shared across one API batch and retains its pinned remote
+snapshot. A usable local result never waits for remote connectivity. Publishing
+new or changed local history remains an explicit collector operation:
 
 For an explicit targeted collector pass:
 
@@ -252,8 +215,8 @@ ct collector run --credential-profile default --project-name CodingTrajectory \
   --session-id SESSION_ID --since-days 7 --state-path "$CT_COLLECTOR_STATE"
 ```
 
-Use the existing verified collector state for manual passes. The automatic
-on-demand state recovers remote source and publication watermarks on first use.
+Use the existing verified collector state for manual passes. Collector recovery,
+privacy, and authorization rules remain unchanged.
 
 ### Benchmarking remote reads
 
@@ -336,7 +299,7 @@ There is no dedicated core CLI command for this service method.
 
 ### Raw View
 
-1. `session events SESSION_ID --event-id EVENT_ID [--event-id EVENT_ID ...] [--output json]` — lazily resolve full JSON events within a published session on the originating host
+1. `session events SESSION_ID --event-id EVENT_ID [--event-id EVENT_ID ...] [--output json]` — resolve full JSON events from the originating host's local evidence
 2. `session events <SESSION_ID> [--turn TURN_ID] --type TYPE [--filter KEY=VALUE] [--output json]` — query raw JSON events by type, optionally narrowed by turn and payload predicates
    - `--type usage` selects provider request-usage observations
    - repeat `--filter` to combine predicates

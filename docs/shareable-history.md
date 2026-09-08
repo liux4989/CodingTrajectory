@@ -10,16 +10,19 @@
 
 CodingTrajectory has one body-free historical representation for shareable
 reads: `ct.shareable_graph.v1`. The originating host constructs it once from a
-fenced, complete source prefix. After publication, both local and remote API
-callers read that same Supabase artifact through the same handlers. APIs never
-rebuild a separate local canonical inventory from logs.
+fenced, complete source prefix. Local callers reconstruct that artifact directly
+from local sources and run the shared handlers. Remote callers load a published
+copy from Chronicles and run the same handlers. The contract is shared; the
+source selection and provenance are not.
 
 The remote service does not receive raw logs, full canonical sessions, compact
 compatibility sessions, or general event arrays. It does not reconstruct
 graphs or recompute measurements. Evidence bodies are disabled by default.
-Explicit local evidence requests first resolve a published session, then lazily
-hydrate matching host evidence. HTTP requests are denied; no local API fallback
-exists.
+Explicit local evidence requests use the full host-local canonical graph. They
+never require publication and never upload bodies. HTTP requests are denied.
+Local-first callers use Chronicles only for an unavailable local source or a
+missing targeted record; a successful empty local collection does not fall
+through.
 
 Source observations now carry checkpoint, ordering, parser, and digest metadata
 only. An authenticated project collector publishes the locally assembled graph
@@ -119,8 +122,8 @@ recorded as superseded and never becomes current.
 
 ## API coverage
 
-The following methods use the same shareable artifact and existing handler in
-both local and remote execution:
+The following methods use the same shareable artifact schema and existing
+handler in both local and remote execution:
 
 - `project.sessions`
 - `session.overview`
@@ -141,16 +144,16 @@ tool descriptions, and metadata-only item views have reduced semantic
 coverage and do not imply complete evidence. Titles and narrative previews are
 unavailable in shared responses; numeric measurements are preserved.
 
-These evidence-body requests lazily load local content only after resolving a
-published scope and matching retained canonical facts. They are rejected before
-HTTP historical dispatch:
+These evidence-body requests read local content and are rejected before remote
+historical dispatch:
 
 - `session.search`
 - `session.events`
 - `session.items` with `include_content=true`
 - `graph.overview` with `include:["narrative"]`
 
-There is no legacy remote handler or parallel remote result contract.
+There is no legacy remote handler or parallel remote result contract. Response
+metadata identifies whether the selected source was `local` or `remote`.
 
 ## Transition
 

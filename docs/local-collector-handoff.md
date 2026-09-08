@@ -8,7 +8,7 @@
 ## Purpose
 
 The collector is the publication component for local vendor logs. Local evidence
-loading can separately read bodies for already-published sessions.
+loading reads bodies independently and does not require publication.
 It fences complete source bytes, builds one body-free shareable artifact, stores
 delivery work durably, publishes project artifacts idempotently, and maintains
 the existing living sequence. Local SQLite is delivery state, never remote
@@ -36,12 +36,12 @@ records read from the fence. Bytes appended after the fence are deferred to the
 next pass. Parent fork-cut inputs are derived only from fenced records; the
 collector never rescans an unfenced parent during normalization.
 
-Living API requests remain request-driven. The source-owning host first stores
-vendor journal records, reconciles them into the existing local living SQLite
-projection, publishes projection deltas through the durable `living_outbox`, and
-only then reads the refreshed remote snapshot. The retained local projection
-cursor prevents unchanged resources from being republished and preserves remove
-or reset changes between requests.
+Local-first living API requests read the host's persisted journals and local
+SQLite projection without publishing as a side effect. The retained publication
+machinery can separately reconcile projection changes through the durable
+`living_outbox`; remote-only callers see the latest observations that have
+already been published. The projection cursor prevents unchanged resources from
+being republished and preserves remove or reset changes.
 
 ## Required remote contract
 
@@ -129,16 +129,16 @@ digest of the locally built source artifact
 The remote graph payload exists only in the atomic artifact publication, not in
 every source observation.
 
-## On-demand queries
+## Targeted publication
 
-Local session queries can invoke this same collector with `target_session_id`.
+An explicit collector run can target one session with `target_session_id`.
 The collector fences the selected source component, normalizes required fork
 inputs, and queues only the requested canonical graph. Matching published
-artifact digests skip publication. CLI batch and on-demand writers share an
-agent lock; the on-demand caller uses durable private retry state, verifies
-visibility of the requested artifact, and returns only a Supabase read.
-See [fresh-session queries](cli.md#fresh-session-queries) for configuration,
-scope, and explicit read-only behavior.
+artifact digests skip publication. Collector writers share an agent lock and
+durable retry state. API fallback itself is read-only: it does not invoke the
+collector or change remote state.
+See [remote fallback and publication](cli.md#remote-fallback-and-publication) for
+source selection and explicit read-only behavior.
 
 ## Operational use
 

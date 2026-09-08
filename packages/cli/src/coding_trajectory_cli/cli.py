@@ -14,6 +14,7 @@ from typing import Any
 from coding_trajectory import debug
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.query import DocumentError, ResourceNotFoundError
+
 from coding_trajectory_cli._shared import (
     GhFormatter,
     compact_payload,
@@ -29,8 +30,8 @@ from coding_trajectory_cli.telemetry import write_invocation_record
 EPILOG = """\
 NOTE
   Use `ct project sessions` to choose the SESSION_ID required by session and
-  session graph analysis commands. Evidence reads require a published session
-  scope even when selecting explicit --event-id values.
+  session graph analysis commands. Local sources are preferred; missing
+  targeted records can fall back to configured remote Chronicles history.
 """
 
 
@@ -44,7 +45,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct",
-        description="Inspect published coding sessions in the canonical Supabase workspace.",
+        description="Inspect local coding sessions with remote Chronicles fallback.",
         usage="ct <command> [args]",
         epilog=EPILOG,
         formatter_class=GhFormatter,
