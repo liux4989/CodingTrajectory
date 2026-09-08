@@ -542,9 +542,12 @@ def _codex_prompt_block_name(text: str, index: int) -> str:
     return f"developer_block_{index}"
 
 
+def _is_codex_agents_md_prompt(text: str) -> bool:
+    return text.lstrip().startswith("# AGENTS.md instructions")
+
+
 def _codex_user_prompt_block_name(text: str) -> str | None:
-    stripped = text.lstrip()
-    if stripped.startswith("# AGENTS.md instructions"):
+    if _is_codex_agents_md_prompt(text):
         return "agents_md"
     return None
 
@@ -563,7 +566,7 @@ def _codex_context_source_key(*, block: str, role: str, text: str) -> str:
     haystack = f"{block}\n{text}".lower()
     if block == "base_instructions":
         return "base_system"
-    if "agents.md" in haystack:
+    if _is_codex_agents_md_prompt(text):
         return "agents_md"
     if "skills_instructions" in block or "### available skills" in haystack:
         return "skills"
