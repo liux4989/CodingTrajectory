@@ -97,7 +97,11 @@ class RemoteRuntimeFactory:
         living = SupabaseLivingAuthority(
             client=client,
             workspace_id=self.workspace_id,
-            snapshot_sequence=sequence,
+            # Living pagination carries its own snapshot in `through`. Only an
+            # explicitly pinned caller should force the workspace sequence;
+            # otherwise a publication between pages would invalidate the
+            # previous page's cursor.
+            snapshot_sequence=snapshot_sequence,
         )
         handlers: dict[MethodAuthority, Callable[..., Any]] = {
             MethodAuthority.PROJECT_INVENTORY: inventory,

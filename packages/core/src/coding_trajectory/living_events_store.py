@@ -323,6 +323,24 @@ class LivingEventsStore:
             for row in rows
         }
 
+    def current_resource_view(self, kind: str, key: str) -> dict[str, Any] | None:
+        """Return one current view payload without opening its source file."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT view_payload_json
+                  FROM living_resource_versions
+                 WHERE resource_kind = ? AND resource_key = ?
+                   AND valid_to_revision IS NULL
+                """,
+                (kind, key),
+            ).fetchone()
+        if row is None:
+            return None
+        value = json.loads(row["view_payload_json"])
+        return value if isinstance(value, dict) else None
+
     def save_source_snapshots(self, snapshots: list[LivingSourceSnapshot]) -> None:
         if not snapshots:
             return

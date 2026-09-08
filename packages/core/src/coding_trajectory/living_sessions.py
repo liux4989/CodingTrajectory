@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from pathlib import Path
 from typing import Any
 
 from coding_trajectory.discovery import discover_source_candidates, discover_store_from_files
-from coding_trajectory.ingestion.common import format_datetime
+from coding_trajectory.ingestion.common import LIVING_ACTIVITY_SECONDS, format_datetime
 from coding_trajectory.ingestion.models import Session, SessionGraph, SessionStatus
 from coding_trajectory.living_events import LivingEventsStore, ProjectedResource
 from coding_trajectory.living_sources import LivingSourceSnapshot, inventory_source_changes
@@ -59,6 +60,17 @@ def serve_living_sessions(
     rebuild_paths.update(
         path for path, state in states.items()
         if state.status in {"ready", "partial"} and state.materialized_revision is None
+    )
+    # Liveness is time-based, not solely content-based. Re-project a source once
+    # it crosses the activity window, then return to the unchanged fast path.
+    now_ns = time.time_ns()
+    activity_window_ns = LIVING_ACTIVITY_SECONDS * 1_000_000_000
+    rebuild_paths.update(
+        path for path, state in states.items()
+        if state.status in {"ready", "partial"}
+        and state.session_id is not None
+        and now_ns - state.mtime_ns > activity_window_ns
+        and (database.current_resource_view("session", state.session_id) or {}).get("state") == "living"
     )
     for change in inventory.changes:
         if change.current.status == "error":
