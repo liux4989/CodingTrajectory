@@ -1,50 +1,56 @@
-# Chronicle Deployment Readiness — 2026-09-08
+# Chronicle Deployment Readiness — 2026-09-09
 
-- **Result:** Blocked at migration-history reconciliation
-- **Mode:** Read-only inspection; no migration, reset, repair, or publication
-- **Target evidence:** The linked project was active and healthy; its project
-  reference and credentials are intentionally omitted
+- **Result:** Admitted for the designated disposable non-production project
+- **Mode:** Authorized CT-only reset, exact committed-schema rebuild, and one
+  bounded Chronicle canary
+- **Target evidence:** The linked project was reconfirmed active, healthy, and
+  non-production; its project reference and credentials are intentionally omitted
 
-## Observed state
+## Resolved blocker
 
-The remote migration ledger and local repository agreed through migration
-`20260905000000`. The remote also recorded `20260905010000`, the superseded Amp
-compatibility migration that the Chronicle cleanup removed locally.
+The user explicitly authorized the destructive reset after target identity,
+ownership, data bounds, and external dependencies were inspected. Preflight
+found 25 CT tables containing 7,971 rows, no unrelated public tables, and no
+external foreign-key or view dependencies. The authenticated principal was
+preserved.
 
-The committed Chronicle refactor also changed migration `20260904000000` under
-an already-applied version. A migration-list match at that version therefore
-does not prove that the remote schema matches the current Chronicle SQL.
+One transaction removed the CT application objects and rebuilt all 25 tables
+from the 11 committed migrations. It then restored the workspace owner,
+collector registration, and four collector capabilities. The remote migration
+ledger now exactly matches the repository, and a linked dry run reports no
+pending migrations.
 
-The linked dry run stopped before applying SQL and reported that local migration
-`20260905010000` was missing. The suggested migration-history repair was not
-run. Marking that migration reverted would change only the ledger; it would not
-undo schema objects already created by the superseded migration.
+## Admission evidence
 
-## Admission decision
+The bounded canary published one complete Codex graph through an ordinary
+authenticated collector credential. It produced one accepted source checkpoint
+and one accepted `ct.chronicle_graph.v1` artifact containing one session, two
+turns, and 20 items. No delivery failed, remained pending, was rejected, or had
+incomplete graph scope.
 
-The current repository is locally qualified but is not incrementally deployable
-to this existing database as-is. Remote deployment remains inadmissible until
-one of these paths is explicitly selected:
+A direct database audit found one current artifact revision with a matching
+canonical digest, one source-vector entry backed by its accepted checkpoint,
+and resource indexes for one session, two turns, and 20 items. Required
+Chronicle functions are installed and no retired Shareable function remains.
 
-1. **Authorized non-production reset.** Reconfirm the exact target and its
-   non-production classification, reset the CT application schema, apply the
-   complete committed migration chain, and then publish one bounded canary.
-2. **Forward-only reconciliation.** Restore the applied historical migrations
-   byte-for-byte and add a new migration that transforms the deployed schema to
-   Chronicle while preserving existing data and migration history.
+An exact publication retry returned the original receipt without creating a
+revision. A distinct request at the already committed publication sequence was
+rejected as stale without changing history. A deliberately retired
+`ct.shareable_graph.v1` publication was rejected without creating a revision.
 
-For the previously designated disposable non-production CT application, the
-reset path is the smaller and cleaner operation. It is destructive and requires
-fresh explicit authorization. The forward-only path is required if any retained
-remote data or shared environment must be preserved.
+A fresh authenticated remote-only client ran from an empty directory with local
+discovery disabled. It verified the artifact identity, strict schema, digest,
+and session/turn/item resource lookup, then passed response-schema validation
+for all 13 supported historical methods. `session.events`, `session.search`,
+and contentful `session.items` failed closed as local-only operations. No
+service-role credential was used for publication or reads.
 
-## Next verification after authorization
+## Boundary
 
-Whichever path is selected must establish:
+This admission applies only to the reconfirmed disposable non-production
+project. It does not authorize the same reset for a retained, shared, or
+production database. Continuous collection, a separate remote agent host, and
+living or estimation workload qualification remain outside this canary.
 
-- the migration ledger and deployed function definitions match committed SQL;
-- `ct.chronicle_graph.v1` is accepted and the retired schema is rejected;
-- one canary preserves digest, source-vector, and resource-index integrity;
-- exact retry is idempotent and stale publication is rejected; and
-- a fresh remote-only client passes supported reads while evidence-body methods
-  fail closed.
+The complete sanitized execution record is in
+`docs/chronicle-non-production-rollout-2026-09-09.md`.
