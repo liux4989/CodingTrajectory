@@ -19,11 +19,22 @@ export function vendorLabel(vendor: string) {
 }
 
 export function vendorBadgeClass(vendor: string) {
-  if (vendor === "amp") return "border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300";
-  if (vendor === "claude_code") return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
-  if (vendor === "codex_cli") return "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
-  if (vendor === "pi") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  if (vendor === "amp") return "border-vendor-amp/30 bg-vendor-amp/10 text-vendor-amp";
+  if (vendor === "claude_code")
+    return "border-vendor-claude-code/30 bg-vendor-claude-code/10 text-vendor-claude-code";
+  if (vendor === "codex_cli")
+    return "border-vendor-codex-cli/30 bg-vendor-codex-cli/10 text-vendor-codex-cli";
+  if (vendor === "pi") return "border-vendor-pi/30 bg-vendor-pi/10 text-vendor-pi";
   return "border-border bg-secondary text-secondary-foreground";
+}
+
+/** Tokenized accent for an evidence kind; failures override with destructive. */
+export function kindDotClass(kind: TimelineKind) {
+  if (kind === "user") return "border-kind-user text-kind-user";
+  if (kind === "assistant") return "border-kind-assistant text-kind-assistant";
+  if (kind === "subagent") return "border-kind-subagent text-kind-subagent";
+  if (kind === "compaction") return "border-kind-compaction text-kind-compaction";
+  return "border-kind-tool text-kind-tool";
 }
 
 export function kindLabel(kind: TimelineKind) {

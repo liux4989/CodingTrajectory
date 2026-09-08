@@ -85,7 +85,7 @@ export function TurnWaterfall({
       </CardHeader>
       <CardContent className="grid gap-3 overflow-x-auto">
         {lanes.map(([laneSessionId, lane]) => (
-          <div key={laneSessionId} className="grid min-w-[42rem] grid-cols-[9rem_1fr] items-center gap-3">
+          <div key={laneSessionId} className="grid min-w-[34rem] grid-cols-[6.5rem_1fr] items-center gap-3 sm:grid-cols-[9rem_1fr]">
             <span className="truncate text-caption font-medium" title={laneSessionId}>
               {lane.agent}
               {laneSessionId !== sessionId ? " · child session" : ""}
@@ -112,7 +112,7 @@ export function TurnWaterfall({
             </div>
           </div>
         ))}
-        <div className="flex min-w-[42rem] justify-between pl-[9.75rem] text-caption text-muted-foreground">
+        <div className="flex min-w-[34rem] justify-between pl-[7.25rem] text-caption text-muted-foreground sm:pl-[9.75rem]">
           <span>{new Date(startedAt).toLocaleTimeString()}</span>
           <span>{formatDuration(duration / 1000)} observed span</span>
           <span>{new Date(endedAt).toLocaleTimeString()}</span>

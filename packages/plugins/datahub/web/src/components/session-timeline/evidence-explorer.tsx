@@ -35,6 +35,7 @@ import {
   artifactLabel,
   formatWhen,
   isTerminalSuccess,
+  kindDotClass,
   kindIcon,
   kindLabel,
   type OutcomeFilter,
@@ -291,7 +292,7 @@ export function EvidenceExplorer({
                 aria-label={`Filter ${kindLabel(entryKind)}`}
                 className="gap-1.5 px-2 text-caption"
               >
-                {kindIcon(entryKind, "size-3")}
+                {kindIcon(entryKind, cn("size-3", kindDotClass(entryKind)))}
                 {kindLabel(entryKind)}
               </ToggleGroupItem>
             ))}
@@ -324,7 +325,7 @@ export function EvidenceExplorer({
             value={vendor}
             onValueChange={(value) => onChange({ vendor: value === "all" ? undefined : value, entry: undefined })}
           >
-            <SelectTrigger className="h-8 min-w-36 text-caption" aria-label="Filter by vendor">
+            <SelectTrigger className="h-8 min-w-36 flex-1 text-caption sm:flex-none" aria-label="Filter by vendor">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -347,7 +348,7 @@ export function EvidenceExplorer({
               })
             }
           >
-            <SelectTrigger className="h-8 min-w-36 text-caption" aria-label="Filter by artifact">
+            <SelectTrigger className="h-8 min-w-36 flex-1 text-caption sm:flex-none" aria-label="Filter by artifact">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -535,13 +536,13 @@ function TurnSection({
         anchored && "ring-1 ring-primary/60",
       )}
     >
-      <AccordionTrigger className="items-center rounded-lg px-3 py-2 text-caption font-normal hover:no-underline">
+      <AccordionTrigger className="flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-3 py-2 text-caption font-normal hover:no-underline">
         <span className="flex min-w-0 flex-1 items-baseline gap-2 text-left">
           <span className="shrink-0 font-medium text-body-sm text-foreground">
             Turn {turn.sequence + 1}
           </span>
           {timing ? (
-            <span className="mono min-w-0 truncate text-caption text-muted-foreground">
+            <span className="mono hidden min-w-0 truncate text-caption text-muted-foreground min-[26rem]:inline">
               {timing.range} · {timing.duration}
             </span>
           ) : null}
@@ -595,7 +596,7 @@ function TimelineRow({
       <span
         className={cn(
           "absolute top-2.5 left-[-1.28rem] z-10 grid size-3 place-items-center rounded-full border bg-background",
-          entry.failed ? "border-destructive text-destructive" : "border-primary text-primary",
+          entry.failed ? "border-destructive text-destructive" : kindDotClass(entry.kind),
         )}
       >
         {kindIcon(entry.kind, "size-2")}
@@ -625,7 +626,7 @@ function TimelineRow({
               {formatWhen(entry.timestamp)}
             </span>
           </span>
-          <span className="flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-caption text-muted-foreground">
             <span className="shrink-0">{kindLabel(entry.kind)}</span>
             {entry.vendor ? (
               <Badge variant="outline" className={cn("px-1.5 py-0 text-caption", vendorBadgeClass(entry.vendor))}>

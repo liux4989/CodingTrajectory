@@ -74,6 +74,17 @@
   --color-category-agent: var(--category-agent);
   --color-category-unattributed: var(--category-unattributed);
 
+  --color-vendor-claude-code: var(--vendor-claude-code);
+  --color-vendor-codex-cli: var(--vendor-codex-cli);
+  --color-vendor-amp: var(--vendor-amp);
+  --color-vendor-pi: var(--vendor-pi);
+
+  --color-kind-user: var(--kind-user);
+  --color-kind-assistant: var(--kind-assistant);
+  --color-kind-tool: var(--kind-tool);
+  --color-kind-subagent: var(--kind-subagent);
+  --color-kind-compaction: var(--kind-compaction);
+
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -162,6 +173,18 @@
     --category-agent: #475569;
     --category-unattributed: #737373;
 
+    /* Vendor + evidence-kind accents, drawn from the chart/category hues. */
+    --vendor-claude-code: #b45309;
+    --vendor-codex-cli: #0369a1;
+    --vendor-amp: #6d28d9;
+    --vendor-pi: #0f766e;
+
+    --kind-user: #0369a1;
+    --kind-assistant: #0f766e;
+    --kind-tool: #b45309;
+    --kind-subagent: #475569;
+    --kind-compaction: #6d28d9;
+
     color-scheme: light;
   }
 
@@ -187,6 +210,17 @@
     --category-agent: #94a3b8;
     --category-unattributed: #737373;
 
+    --vendor-claude-code: #fbbf24;
+    --vendor-codex-cli: #38bdf8;
+    --vendor-amp: #a78bfa;
+    --vendor-pi: #2dd4bf;
+
+    --kind-user: #38bdf8;
+    --kind-assistant: #2dd4bf;
+    --kind-tool: #fbbf24;
+    --kind-subagent: #94a3b8;
+    --kind-compaction: #a78bfa;
+
     color-scheme: dark;
   }
 
@@ -211,6 +245,17 @@
       --category-output: #fb7185;
       --category-agent: #94a3b8;
       --category-unattributed: #737373;
+
+      --vendor-claude-code: #fbbf24;
+      --vendor-codex-cli: #38bdf8;
+      --vendor-amp: #a78bfa;
+      --vendor-pi: #2dd4bf;
+
+      --kind-user: #38bdf8;
+      --kind-assistant: #2dd4bf;
+      --kind-tool: #fbbf24;
+      --kind-subagent: #94a3b8;
+      --kind-compaction: #a78bfa;
 
       color-scheme: dark;
     }

@@ -100,7 +100,7 @@ export function ContextTurnFootprint({
                 <button
                   type="button"
                   onClick={() => openTurn(group.turnId!)}
-                  className="grid w-full min-w-0 grid-cols-[9rem_1fr_4.5rem] items-center gap-3 rounded-md px-2 py-1.5 text-start transition-colors hover:bg-surface-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="grid w-full min-w-0 grid-cols-[5.5rem_1fr_3.5rem] items-center gap-2 rounded-md px-2 py-1.5 text-start transition-colors hover:bg-surface-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-[9rem_1fr_4.5rem] sm:gap-3"
                   aria-label={`Inspect ${group.label} in the evidence timeline`}
                 >
                   {label}
@@ -108,7 +108,7 @@ export function ContextTurnFootprint({
                   {total}
                 </button>
               ) : (
-                <div className="grid w-full min-w-0 grid-cols-[9rem_1fr_4.5rem] items-center gap-3 px-2 py-1.5">
+                <div className="grid w-full min-w-0 grid-cols-[5.5rem_1fr_3.5rem] items-center gap-2 px-2 py-1.5 sm:grid-cols-[9rem_1fr_4.5rem] sm:gap-3">
                   {label}
                   {bar}
                   {total}
