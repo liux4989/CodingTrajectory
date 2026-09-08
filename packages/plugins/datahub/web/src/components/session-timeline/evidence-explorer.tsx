@@ -257,108 +257,109 @@ export function EvidenceExplorer({
             {filtered.length} of {entries.length} entries
           </span>
         ) : null}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {presentKinds.length > 1 ? (
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              size="sm"
-              value={kind === "all" ? "" : kind}
-              onValueChange={(value) =>
-                onChange({ kind: (value || undefined) as TimelineKind | undefined, entry: undefined })
-              }
-              aria-label="Filter by evidence type"
-              className="flex-wrap"
-            >
-              {presentKinds.map((entryKind) => (
-                <ToggleGroupItem
-                  key={entryKind}
-                  value={entryKind}
-                  aria-label={`Filter ${kindLabel(entryKind)}`}
-                  className="gap-1.5 px-2 text-caption"
-                >
-                  {kindIcon(entryKind, "size-3")}
-                  {kindLabel(entryKind)}
-                </ToggleGroupItem>
+        {hasFilters ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              onChange({ kind: undefined, artifact: undefined, vendor: undefined, outcome: undefined })
+            }
+            className="ml-auto h-8 gap-1 px-2 text-caption"
+          >
+            <X size={14} /> Reset
+          </Button>
+        ) : null}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Evidence filters">
+        {presentKinds.length > 1 ? (
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={kind === "all" ? "" : kind}
+            onValueChange={(value) =>
+              onChange({ kind: (value || undefined) as TimelineKind | undefined, entry: undefined })
+            }
+            aria-label="Filter by evidence type"
+            className="flex-wrap"
+          >
+            {presentKinds.map((entryKind) => (
+              <ToggleGroupItem
+                key={entryKind}
+                value={entryKind}
+                aria-label={`Filter ${kindLabel(entryKind)}`}
+                className="gap-1.5 px-2 text-caption"
+              >
+                {kindIcon(entryKind, "size-3")}
+                {kindLabel(entryKind)}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        ) : null}
+        {hasFailures ? (
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={outcome === "all" ? "" : outcome}
+            onValueChange={(value) =>
+              onChange({
+                outcome: (value || undefined) as Exclude<OutcomeFilter, "all"> | undefined,
+                entry: undefined,
+              })
+            }
+            aria-label="Filter by outcome"
+          >
+            <ToggleGroupItem value="failed" aria-label="Show failures" className="px-2 text-caption">
+              Failures
+            </ToggleGroupItem>
+            <ToggleGroupItem value="succeeded" aria-label="Show succeeded" className="px-2 text-caption">
+              Succeeded
+            </ToggleGroupItem>
+          </ToggleGroup>
+        ) : null}
+        {vendors.length > 1 ? (
+          <Select
+            value={vendor}
+            onValueChange={(value) => onChange({ vendor: value === "all" ? undefined : value, entry: undefined })}
+          >
+            <SelectTrigger className="h-8 min-w-36 text-caption" aria-label="Filter by vendor">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All vendors</SelectItem>
+              {vendors.map((entryVendor) => (
+                <SelectItem key={entryVendor} value={entryVendor}>
+                  {vendorLabel(entryVendor)}
+                </SelectItem>
               ))}
-            </ToggleGroup>
-          ) : null}
-          {hasFailures ? (
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              size="sm"
-              value={outcome === "all" ? "" : outcome}
-              onValueChange={(value) =>
-                onChange({
-                  outcome: (value || undefined) as Exclude<OutcomeFilter, "all"> | undefined,
-                  entry: undefined,
-                })
-              }
-              aria-label="Filter by outcome"
-            >
-              <ToggleGroupItem value="failed" aria-label="Show failures" className="px-2 text-caption">
-                Failures
-              </ToggleGroupItem>
-              <ToggleGroupItem value="succeeded" aria-label="Show succeeded" className="px-2 text-caption">
-                Succeeded
-              </ToggleGroupItem>
-            </ToggleGroup>
-          ) : null}
-          {vendors.length > 1 ? (
-            <Select
-              value={vendor}
-              onValueChange={(value) => onChange({ vendor: value === "all" ? undefined : value, entry: undefined })}
-            >
-              <SelectTrigger className="h-8 min-w-36 text-caption" aria-label="Filter by vendor">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All vendors</SelectItem>
-                {vendors.map((entryVendor) => (
-                  <SelectItem key={entryVendor} value={entryVendor}>
-                    {vendorLabel(entryVendor)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
-          {presentArtifacts.length > 0 ? (
-            <Select
-              value={artifact}
-              onValueChange={(value) =>
-                onChange({
-                  artifact: value === "all" ? undefined : (value as TimelineArtifactKind),
-                  entry: undefined,
-                })
-              }
-            >
-              <SelectTrigger className="h-8 min-w-36 text-caption" aria-label="Filter by artifact">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All artifacts</SelectItem>
-                {presentArtifacts.map((artifactKind) => (
-                  <SelectItem key={artifactKind} value={artifactKind}>
-                    {artifactLabel(artifactKind)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
-          {hasFilters ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() =>
-                onChange({ kind: undefined, artifact: undefined, vendor: undefined, outcome: undefined })
-              }
-              className="h-8 gap-1 px-2 text-caption"
-            >
-              <X size={14} /> Reset
-            </Button>
-          ) : null}
-        </div>
+            </SelectContent>
+          </Select>
+        ) : null}
+        {presentArtifacts.length > 0 ? (
+          <Select
+            value={artifact}
+            onValueChange={(value) =>
+              onChange({
+                artifact: value === "all" ? undefined : (value as TimelineArtifactKind),
+                entry: undefined,
+              })
+            }
+          >
+            <SelectTrigger className="h-8 min-w-36 text-caption" aria-label="Filter by artifact">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All artifacts</SelectItem>
+              {presentArtifacts.map((artifactKind) => (
+                <SelectItem key={artifactKind} value={artifactKind}>
+                  {artifactLabel(artifactKind)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
       </div>
 
       {state.entry && !selected ? (
@@ -445,7 +446,7 @@ function BranchSection({
       value={branch.sessionId}
       className={cn("border-b-0", depth > 0 && "tree-child mt-2")}
     >
-      <AccordionTrigger className="items-center rounded-md px-2.5 py-2 text-caption font-normal hover:no-underline">
+      <AccordionTrigger className="items-center rounded-lg bg-surface-emphasis px-3 py-2 text-caption font-normal hover:no-underline">
         <span className="flex min-w-0 flex-1 items-center gap-2 text-left">
           <span className="truncate font-medium text-body-sm text-foreground">{branch.label}</span>
           {branch.vendor ? (
@@ -524,15 +525,26 @@ function TurnSection({
   const visible = showAll ? turn.entries : turn.entries.slice(0, TURN_PREVIEW_COUNT);
   const hiddenCount = turn.entries.length - visible.length;
   const anchored = turn.key === anchoredTurnKey;
+  const timing = turnTiming(turn);
   return (
     <AccordionItem
       value={turn.key}
       id={`evidence-turn-${turn.key}`}
-      className={cn("border-b-0 rounded-md scroll-mt-4", anchored && "ring-1 ring-primary/60")}
+      className={cn(
+        "scroll-mt-4 rounded-lg border border-border-soft bg-surface-subtle/40 data-[state=open]:bg-card",
+        anchored && "ring-1 ring-primary/60",
+      )}
     >
-      <AccordionTrigger className="items-center rounded-md px-2.5 py-1.5 text-caption font-normal hover:no-underline">
-        <span className="min-w-0 flex-1 truncate text-left font-medium text-foreground">
-          Turn {turn.sequence + 1}
+      <AccordionTrigger className="items-center rounded-lg px-3 py-2 text-caption font-normal hover:no-underline">
+        <span className="flex min-w-0 flex-1 items-baseline gap-2 text-left">
+          <span className="shrink-0 font-medium text-body-sm text-foreground">
+            Turn {turn.sequence + 1}
+          </span>
+          {timing ? (
+            <span className="mono min-w-0 truncate text-caption text-muted-foreground">
+              {timing.range} · {timing.duration}
+            </span>
+          ) : null}
         </span>
         {turn.failures > 0 ? (
           <span className="shrink-0 text-caption font-medium text-destructive">
@@ -543,7 +555,7 @@ function TurnSection({
           {turn.entries.length} entr{turn.entries.length === 1 ? "y" : "ies"}
         </span>
       </AccordionTrigger>
-      <AccordionContent className="pb-0 pt-0">
+      <AccordionContent className="px-1.5 pb-1.5 pt-0">
         <ol className="tree-children relative m-0 grid list-none gap-1.5">
           {visible.map((entry) => (
             <TimelineRow
@@ -805,6 +817,24 @@ function collectTurnKeys(branch: BranchNode): string[] {
 
 function flattenTurns(branch: BranchNode): TurnNode[] {
   return [...branch.turns, ...branch.children.flatMap(flattenTurns)];
+}
+
+/** Clock range and duration for a turn header, from its entries' timing. */
+function turnTiming(turn: TurnNode): { range: string; duration: string } | null {
+  let start = Number.POSITIVE_INFINITY;
+  let end = Number.NEGATIVE_INFINITY;
+  for (const entry of turn.entries) {
+    const startedAt = entry.timestamp ? Date.parse(entry.timestamp) : Number.NaN;
+    const endedAt = entry.ended_at ? Date.parse(entry.ended_at) : Number.NaN;
+    if (Number.isFinite(startedAt)) start = Math.min(start, startedAt);
+    if (Number.isFinite(endedAt)) end = Math.max(end, endedAt);
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour12: false });
+  return {
+    range: `${clock(start)}–${clock(end)}`,
+    duration: formatDuration((end - start) / 1000),
+  };
 }
 
 /** Branch key path from a root to the branch that owns `sessionId`. */

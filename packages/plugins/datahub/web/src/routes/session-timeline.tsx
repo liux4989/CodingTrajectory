@@ -80,35 +80,32 @@ export function SessionTimelinePanel({ rootId, sessionId }: { rootId: string; se
 
   return (
     <div className="grid gap-4 pt-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="ml-auto flex items-center gap-3">
-          <Badge
-            variant="outline"
-            className="gap-1.5"
-            title={payload.transport
-              ? `Workspace ${payload.transport.workspace_id} · authoritative ${payload.transport.content_scope} snapshot`
-              : "Data materialized from sources on this machine"}
-          >
-            {payload.transport ? <Cloud aria-hidden="true" /> : <HardDrive aria-hidden="true" />}
-            {payload.transport ? `Remote snapshot · ${payload.transport.snapshot_sequence}` : "Local sources"}
-          </Badge>
-          <div className="text-right">
-            <p className="m-0 mono text-heading font-bold leading-none text-moss">
-              rev {payload.revision}
-            </p>
-            <p className="m-0 mt-1 text-caption text-muted-foreground">
+      <TimelineSummary
+        entries={payload.entries}
+        warnings={payload.warnings}
+        meta={
+          <>
+            <Badge
+              variant="outline"
+              className="gap-1.5"
+              title={payload.transport
+                ? `Workspace ${payload.transport.workspace_id} · authoritative ${payload.transport.content_scope} snapshot`
+                : "Data materialized from sources on this machine"}
+            >
+              {payload.transport ? <Cloud aria-hidden="true" /> : <HardDrive aria-hidden="true" />}
+              {payload.transport ? `Remote snapshot · ${payload.transport.snapshot_sequence}` : "Local sources"}
+            </Badge>
+            <span className="text-caption text-muted-foreground">
+              <span className="mono text-foreground">rev {payload.revision}</span>
+              {" · "}
               {lagSeconds == null ? "refresh lag unavailable" : `${Math.round(lagSeconds)}s refresh lag`}
               {sourceFailures + incompleteSources > 0 ? (
-                <>
-                  {" "}· {sourceFailures} failed · {incompleteSources} incomplete sources
-                </>
+                <> · {sourceFailures} failed · {incompleteSources} incomplete sources</>
               ) : null}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <TimelineSummary entries={payload.entries} warnings={payload.warnings} />
+            </span>
+          </>
+        }
+      />
 
       <TurnWaterfall entries={payload.entries} sessionId={sessionId} onSelect={selectTurn} />
 

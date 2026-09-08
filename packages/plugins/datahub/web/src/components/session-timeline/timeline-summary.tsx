@@ -6,42 +6,48 @@ import { AlertCircle } from "lucide-react";
 
 /**
  * One-line session evidence summary plus the warnings block. Replaces the
- * previous grid of equal-weight metric cards.
+ * previous grid of equal-weight metric cards. Delivery metadata (transport,
+ * revision, refresh lag) shares the row via the `meta` slot.
  */
 export function TimelineSummary({
   entries,
   warnings,
+  meta,
 }: {
   entries: SessionTimelineEntry[];
   warnings: string[];
+  meta?: React.ReactNode;
 }) {
   const stats = React.useMemo(() => summarize(entries), [entries]);
   return (
     <>
-      <p className="m-0 text-body-sm text-muted-foreground">
-        <span className="mono text-foreground">{stats.entries}</span> entries ·{" "}
-        <span className="mono text-foreground">{stats.turns}</span> turns ·{" "}
-        <span className={cn("mono", stats.failed > 0 ? "font-medium text-destructive" : "text-foreground")}>
-          {stats.failed}
-        </span>{" "}
-        failure{stats.failed === 1 ? "" : "s"} ·{" "}
-        <span className="mono text-foreground">{stats.subagents}</span> child agent
-        {stats.subagents === 1 ? "" : "s"} ·{" "}
-        <span className="mono text-foreground">
-          {stats.linked}/{stats.entries}
-        </span>{" "}
-        source-linked
-        {stats.spanSeconds != null ? (
-          <>
-            {" "}· <span className="mono text-foreground">{formatDuration(stats.spanSeconds)}</span> observed span
-          </>
-        ) : null}
-        {stats.peakConcurrency > 1 ? (
-          <>
-            {" "}· peak <span className="mono text-foreground">{stats.peakConcurrency}</span> concurrent
-          </>
-        ) : null}
-      </p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <p className="m-0 text-body-sm text-muted-foreground">
+          <span className="mono text-foreground">{stats.entries}</span> entries ·{" "}
+          <span className="mono text-foreground">{stats.turns}</span> turns ·{" "}
+          <span className={cn("mono", stats.failed > 0 ? "font-medium text-destructive" : "text-foreground")}>
+            {stats.failed}
+          </span>{" "}
+          failure{stats.failed === 1 ? "" : "s"} ·{" "}
+          <span className="mono text-foreground">{stats.subagents}</span> child agent
+          {stats.subagents === 1 ? "" : "s"} ·{" "}
+          <span className="mono text-foreground">
+            {stats.linked}/{stats.entries}
+          </span>{" "}
+          source-linked
+          {stats.spanSeconds != null ? (
+            <>
+              {" "}· <span className="mono text-foreground">{formatDuration(stats.spanSeconds)}</span> observed span
+            </>
+          ) : null}
+          {stats.peakConcurrency > 1 ? (
+            <>
+              {" "}· peak <span className="mono text-foreground">{stats.peakConcurrency}</span> concurrent
+            </>
+          ) : null}
+        </p>
+        {meta ? <div className="ml-auto flex flex-wrap items-center gap-3">{meta}</div> : null}
+      </div>
       {warnings.length > 0 ? (
         <div className="alert alert-warning flex items-start gap-2 text-body-sm">
           <AlertCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-warning" />
