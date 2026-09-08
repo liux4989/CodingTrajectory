@@ -91,7 +91,7 @@ def visible_text_size(text: str, *, reported_tokens: int | None = None) -> Conte
 
 
 def event_text_size(event: Any, *, field: str = "text") -> ContentSize:
-    """Size event text, honoring a body-free shareable measurement when present."""
+    """Size event text, honoring a body-free chronicle measurement when present."""
 
     payload = getattr(event, "payload", None)
     if not isinstance(payload, dict):

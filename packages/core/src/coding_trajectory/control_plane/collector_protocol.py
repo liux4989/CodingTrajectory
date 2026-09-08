@@ -1,6 +1,6 @@
 """Versioned contracts shared by the local collector and remote ingress.
 
-These models describe checkpoint metadata and bounded shareable artifacts, not
+These models describe checkpoint metadata and bounded chronicle artifacts, not
 vendor JSONL records. The source files stay on the host that collected them.
 """
 
@@ -13,10 +13,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from coding_trajectory.control_plane.shareable import (
-    MAX_SHAREABLE_PUBLICATION_BYTES,
-    SHAREABLE_GRAPH_SCHEMA_VERSION,
-    ShareableGraphArtifact,
+from coding_trajectory.control_plane.chronicle import (
+    CHRONICLE_GRAPH_SCHEMA_VERSION,
+    MAX_CHRONICLE_PUBLICATION_BYTES,
+    ChronicleGraphArtifact,
 )
 from coding_trajectory.ingestion.common import canonical_json
 
@@ -101,7 +101,7 @@ class SourceCheckpoint(CollectorModel):
 class SourceCheckpointPayload(CollectorModel):
     kind: Literal["ct.source_checkpoint.v1"] = "ct.source_checkpoint.v1"
     source_checkpoint: SourceCheckpoint
-    shareable_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    chronicle_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ObservationRequest(CollectorModel):
@@ -145,25 +145,25 @@ class SourceVectorEntry(CollectorModel):
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-class ShareableArtifactPublication(CollectorModel):
+class ChronicleArtifactPublication(CollectorModel):
     artifact_id: UUID
-    schema_version: Literal["ct.shareable_graph.v1"] = SHAREABLE_GRAPH_SCHEMA_VERSION
-    payload: ShareableGraphArtifact
+    schema_version: Literal["ct.chronicle_graph.v1"] = CHRONICLE_GRAPH_SCHEMA_VERSION
+    payload: ChronicleGraphArtifact
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     serialized_bytes: int = Field(ge=1)
     source_ids: list[UUID] = Field(min_length=1)
     observed_at: datetime
 
     @model_validator(mode="after")
-    def validate_artifact(self) -> ShareableArtifactPublication:
+    def validate_artifact(self) -> ChronicleArtifactPublication:
         if self.artifact_id != self.payload.graph.root_session_id:
-            raise ValueError("artifact_id must match the shareable graph root")
+            raise ValueError("artifact_id must match the chronicle graph root")
         if self.content_sha256 != self.payload.digest():
-            raise ValueError("shareable artifact digest mismatch")
+            raise ValueError("chronicle artifact digest mismatch")
         if self.serialized_bytes != len(self.payload.canonical_bytes()):
-            raise ValueError("shareable artifact byte count mismatch")
+            raise ValueError("chronicle artifact byte count mismatch")
         if len(set(self.source_ids)) != len(self.source_ids):
-            raise ValueError("shareable artifact source_ids must be unique")
+            raise ValueError("chronicle artifact source_ids must be unique")
         return self
 
 
@@ -176,7 +176,7 @@ class ArtifactPublicationRequest(CollectorModel):
     project_id: UUID
     publication_sequence: int = Field(ge=0)
     source_vector: list[SourceVectorEntry] = Field(min_length=1)
-    artifacts: list[ShareableArtifactPublication] = Field(min_length=1)
+    artifacts: list[ChronicleArtifactPublication] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_publication(self) -> ArtifactPublicationRequest:
@@ -199,8 +199,8 @@ class ArtifactPublicationRequest(CollectorModel):
         encoded = canonical_json(
             self.model_dump(mode="json", exclude_none=True)
         ).encode()
-        if len(encoded) > MAX_SHAREABLE_PUBLICATION_BYTES:
-            raise ValueError("shareable project publication exceeds 16 MiB")
+        if len(encoded) > MAX_CHRONICLE_PUBLICATION_BYTES:
+            raise ValueError("chronicle project publication exceeds 16 MiB")
         return self
 
 

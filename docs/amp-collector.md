@@ -4,7 +4,7 @@ CodingTrajectory includes a project Amp plugin at
 `.amp/plugins/coding-trajectory/index.ts`. It is the first transport for Amp
 threads and establishes the host-local raw input for canonical ingestion.
 Hosted collection receives only metadata checkpoints and the locally assembled
-[shareable artifact](shareable-history.md), never these raw transcripts.
+[chronicle artifact](chronicle-history.md), never these raw transcripts.
 
 ## Storage
 
@@ -30,7 +30,7 @@ and `event`. Agent observations also contain `message_id`; agent-end and tool
 result observations contain `status`; and tool observations contain
 `tool_use_id` plus `tool_name`, `input`, `output`, or `error` when Amp makes
 those fields available. This detail remains in the private local journal and is
-not a shareable artifact by itself.
+not a chronicle artifact by itself.
 
 The collector reads `thread.messages({ full: true })`, paging through the whole
 transcript so compaction does not discard earlier messages. It appends only new
@@ -49,14 +49,14 @@ available.
 
 The plugin runs inside an orb and writes to that orb's local filesystem. Files
 are not synchronized across orbs. The existing CT collector discovers these
-journals as vendor `amp`, builds bounded shareable artifacts, and uses its normal
+journals as vendor `amp`, builds bounded chronicle artifacts, and uses its normal
 authenticated outbox/publication path. Never upload raw journal records.
 
-Remote acceptance requires migration
-`20260905010000_ct_shareable_graph_amp_vendor.sql`; it adds `amp` to the vendor
-allowlist without changing the other validation rules. Apply it only to an
-authorized target. This implementation does not provision collector credentials,
-start a supervised uploader, or apply a database migration automatically.
+The base Chronicle validator includes `amp` in its vendor allowlist. There is no
+follow-on Amp compatibility migration. Remote acceptance still requires an
+explicitly authorized deployment of the complete current schema. This
+implementation does not provision collector credentials, start a supervised
+uploader, or deploy database changes automatically.
 
 ## Discovery and deterministic relationships
 
@@ -151,7 +151,7 @@ process that refreshes the profile. Status reports secret presence only; the API
 read above verifies authentication without triggering on-demand publication.
 An explicit profile obtains a fresh access token even if `CT_ACCESS_TOKEN` is
 still set to an expired value. Authentication alone does not prove collector
-capabilities or that the required Amp migration is installed.
+capabilities or that the current Chronicle schema is installed.
 
 After read validation and target authorization, publish from the same project:
 

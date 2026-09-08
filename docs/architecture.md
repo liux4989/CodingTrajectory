@@ -10,7 +10,7 @@ Host-local vendor logs (immutable evidence)
   → vendor adapters → normalized transcript → Session → Turn → Item
   → SessionGraph + DocumentStore
       → local evidence handlers (content, events, search)
-      → locally assembled ct.shareable_graph.v1
+      → locally assembled ct.chronicle_graph.v1
           → shared historical handlers
           → authenticated collector → Supabase artifact revisions
               → snapshot-pinned DocumentStore → shared historical handlers
@@ -20,10 +20,10 @@ Local ingestion owns graph reconstruction and numeric measurements. Remote
 historical reads deserialize a validated artifact for the existing handlers;
 they do not ingest vendor logs or run the retired historical projector.
 
-The [shareable history contract](shareable-history.md) defines exact coverage,
+The [chronicle history contract](chronicle-history.md) defines exact coverage,
 privacy, digest, and size bounds. `session.search`, `session.events`, and
-`session.items` with content remain local. Metadata-only items are shareable.
-Reduced semantic coverage must not be presented as full evidence.
+`session.items` with content remain local. Metadata-only items are chronicle.
+Operational details must not be presented as complete transcript evidence.
 
 ## Code ownership
 

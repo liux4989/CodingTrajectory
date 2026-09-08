@@ -32,22 +32,22 @@ runs retain their distinct scopes.
 - The same cell state machine applies after every vendor adapter emits canonical lifecycle facts. Vendor-specific parsing, static-fallback provenance, and raw wrapper preservation remain adapter-local.
 - The Codex-reference mapping, historical fallback boundary, and cross-agent contract are recorded in [`docs/codex-activity-reconstruction.md`](codex-activity-reconstruction.md).
 
-# Shareable history
+# Chronicle history
 
-- The originating host constructs one strict `ct.shareable_graph.v1` artifact.
+- The originating host constructs one strict `ct.chronicle_graph.v1` artifact.
 - Host-local service APIs read local sources first and use the published
   Chronicles authority only when local discovery is unavailable or a targeted
-  record is missing. Both sources run through the same handlers and shareable
+  record is missing. Both sources run through the same handlers and chronicle
   artifact contract.
 - Source observations contain checkpoint metadata only. Raw logs, transcript
   bodies, and general event arrays are never historical upload payloads.
-- Content is disabled in shareable artifacts. Explicit local evidence calls read
+- Content is disabled in chronicle artifacts. Explicit local evidence calls read
   the full local graph without requiring publication; remote content requests
   are denied.
 - Remote history stores validated artifacts directly; there is no remote
   canonical reconstruction worker or compact-session compatibility path.
-- The [shareable history contract](shareable-history.md) defines bounds and
-  reduced semantic coverage. The [control plane](remote-ct-control-plane-design.md)
+- The [chronicle history contract](chronicle-history.md) defines bounds and
+  body-free operational coverage. The [control plane](remote-ct-control-plane-design.md)
   defines inventory, living, and estimation authority separately.
 
 Earlier evaluation proposals remain in the [design archive](archive/README.md);

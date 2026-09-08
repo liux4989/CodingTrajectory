@@ -1,15 +1,15 @@
 # Local Collector Handoff
 
-- **Status:** Manual seven-day publication and authenticated reads verified; supervision not enabled
+- **Status:** Chronicle refactor implemented locally; current schema not deployed
 - **Owner:** A host with authorized access to local vendor logs
-- **Depends on:** The shareable-graph migration and a capability-scoped collector
+- **Depends on:** The chronicle-graph migration and a capability-scoped collector
   principal
 
 ## Purpose
 
 The collector is the publication component for local vendor logs. Local evidence
 loading reads bodies independently and does not require publication.
-It fences complete source bytes, builds one body-free shareable artifact, stores
+It fences complete source bytes, builds one body-free chronicle artifact, stores
 delivery work durably, publishes project artifacts idempotently, and maintains
 the existing living sequence. Local SQLite is delivery state, never remote
 historical authority.
@@ -21,7 +21,7 @@ discover project-scoped sources
   -> record one complete-line byte fence per physical segment
   -> derive fork trimming from those same fenced parent bytes
   -> coalesce resumed segments into one logical source/session
-  -> build and validate ct.shareable_graph.v1 locally
+  -> build and validate ct.chronicle_graph.v1 locally
   -> queue metadata-only source checkpoints
   -> obtain accepted checkpoint receipts
   -> assemble the complete collected graphs locally
@@ -111,12 +111,13 @@ into one project; overlapping ownership fails closed.
 
 ## Artifact content
 
-The collector publishes the structural/numeric core and constrained semantic
-labels documented in
-[`shareable-history.md`](shareable-history.md).
-It never uploads raw logs, complete sessions, event arrays, commands, tool
-inputs, tool outputs, prose previews, titles, or pending-plan text. A value
-visible only inside a tool output therefore does not enter remote history.
+The collector publishes the structural/numeric core and sanitized operational
+details documented in
+[`chronicle-history.md`](chronicle-history.md).
+It never uploads raw logs, complete sessions, event arrays, complete commands,
+tool inputs, tool outputs, prose previews, titles, or pending-plan text. Bounded
+command signatures and portable targets are explicit Chronicle fields; a value
+visible only inside a tool output does not enter remote history.
 
 The per-source checkpoint payload contains only:
 

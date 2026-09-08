@@ -140,12 +140,12 @@ def _requires_local_evidence(method: str, params: dict[str, Any]) -> bool:
     )
 
 
-def _shareable_store(store: DocumentStore) -> DocumentStore:
-    from coding_trajectory.control_plane.shareable import shareable_session_graph
+def _chronicle_store(store: DocumentStore) -> DocumentStore:
+    from coding_trajectory.control_plane.chronicle import chronicle_session_graph
 
     return DocumentStore.from_session_graphs(
         [
-            shareable_session_graph(graph)
+            chronicle_session_graph(graph)
             for graph in sorted(
                 store.session_graphs.values(),
                 key=lambda graph: str(graph.root_session_id),
@@ -219,7 +219,7 @@ class LocalHistoricalRepository:
         self.cache = cache
         self._stores: dict[tuple[Any, ...], tuple[DocumentStore, str]] = {}
         self._batch_store: tuple[DocumentStore, str] | None = None
-        self._batch_shareable_store: tuple[DocumentStore, str] | None = None
+        self._batch_chronicle_store: tuple[DocumentStore, str] | None = None
 
     def pin_snapshot(self) -> int:
         """Local sources are read live and therefore have no snapshot number."""
@@ -230,7 +230,7 @@ class LocalHistoricalRepository:
         ids = _entrypoint_ids(requests)
         if not ids:
             return
-        self._batch_shareable_store = None
+        self._batch_chronicle_store = None
         self._batch_store = resolve_store(
             {"session_ids": ids},
             global_scope=self.global_scope,
@@ -246,16 +246,16 @@ class LocalHistoricalRepository:
             self._require_available(self._batch_store[0])
             if _requires_local_evidence(method, params):
                 return self._batch_store
-            if self._batch_shareable_store is None:
+            if self._batch_chronicle_store is None:
                 store, note = self._batch_store
-                self._batch_shareable_store = (_shareable_store(store), note)
-            return self._batch_shareable_store
+                self._batch_chronicle_store = (_chronicle_store(store), note)
+            return self._batch_chronicle_store
 
         include_descendants = _requires_session_component(method)
         key = (
             "local_evidence"
             if _requires_local_evidence(method, params)
-            else "shareable",
+            else "chronicle",
             *_store_key(
                 params,
                 global_scope=self.global_scope,
@@ -274,7 +274,7 @@ class LocalHistoricalRepository:
             self._stores[key] = (
                 store
                 if _requires_local_evidence(method, params)
-                else _shareable_store(store),
+                else _chronicle_store(store),
                 note,
             )
         return self._stores[key]

@@ -5,7 +5,7 @@
 - **Scope:** Access-only hosted Datahub UI and read-only API facade
 - **Related:** [Datahub design](datahub-redesign.md),
   [remote control plane](remote-ct-control-plane-design.md), and
-  [shareable history](shareable-history.md)
+  [chronicle history](chronicle-history.md)
 
 ## Decision
 
@@ -43,7 +43,7 @@ browser
                  -> pin one Supabase workspace snapshot
                  -> call PostgREST RPC with the user's Supabase JWT
                  -> validate artifact identity, digest, and schema
-                 -> execute existing shareable CT handlers
+                 -> execute existing chronicle CT handlers
                  -> adapt the result to the Datahub response contract
 ```
 
@@ -67,7 +67,7 @@ issuer and application audience.
 | Gateway Worker | Static assets, Access JWT verification, same-origin API boundary, security headers, request limits | Metric computation, CT data storage, service-role credentials |
 | CT facade Worker | Pydantic request/response validation, pinned remote runtime, Datahub response adapters | Local discovery, SQLite, raw logs, durable caches, publication or mutation |
 | Supabase Auth and RLS | User identity, workspace membership, row authorization | Cloudflare admission policy |
-| Supabase CT schema | Shareable artifacts, revisions, inventory, and approved read RPCs | Raw prompts, responses, commands, event bodies, or host paths |
+| Supabase CT schema | Chronicle artifacts, revisions, inventory, and approved read RPCs | Raw prompts, responses, commands, event bodies, or host paths |
 | Local Datahub | JSONL discovery, SQLite materialization, evidence hydration, local-only pages | Hosted authority or remote fallback |
 
 No Datahub data is copied into Workers KV, D1, R2, Cache API, browser storage,
@@ -112,7 +112,7 @@ must not reimplement metric semantics in TypeScript.
 
 | Datahub route | Hosted decision | Remote authority or reason |
 | --- | --- | --- |
-| `GET /api/datahub/snapshot` | Adapter | Pin `ct_workspace_snapshot`; report `source=remote`, `content_scope=shareable`, and the pinned sequence. Never report local source status. |
+| `GET /api/datahub/snapshot` | Adapter | Pin `ct_workspace_snapshot`; report `source=remote`, `content_scope=chronicle`, and the pinned sequence. Never report local source status. |
 | `GET /api/datahub/changes` | Adapter | Compare workspace sequence. A changed sequence invalidates hosted queries as one reset; do not fabricate local entity deltas. |
 | `GET /api/datahub/events` | Deferred | Hosted SSE is optional. Use bounded visible-tab snapshot polling first; living and continuous publication require separate verification. |
 | `GET /api/overview` | Adapter | Compose `project.list`, `project.sessions`, and body-free graph stats/usage at one pinned sequence. |
@@ -121,14 +121,14 @@ must not reimplement metric semantics in TypeScript.
 | `GET /api/projects/detail` | Adapter | `project.sessions` plus body-free graph stats/usage at one pinned sequence. |
 | `GET /api/sessions` | Adapter | `project.sessions`; titles and prose previews remain unavailable. |
 | `GET /api/sessions/timeline` | Omit | No current hosted UI consumer or approved remote projection. Do not expose it as a compatibility route. |
-| `GET /api/sessions/context-window` | Prohibited | Context/event evidence is not part of the shareable remote contract. |
+| `GET /api/sessions/context-window` | Prohibited | Context/event evidence is not part of the chronicle remote contract. |
 | `GET /api/sessions/graph` | Adapter | `graph.overview` without narrative plus `graph.stats` and `graph.usage`. |
 | `GET /api/sessions/tree` | Adapter | `session.tree`. |
 | `GET /api/sessions/evidence-timeline` | Prohibited | Depends on host-local evidence identities and hydration. |
 | `GET /api/sessions/events` | Prohibited | `session.events` is explicitly local-only. |
 | `GET /api/sessions/items` | Metadata only | Permit only `session.items` with `include_content=false`; reject content and do not link it from an evidence view. |
 | `GET /api/model-usage` | Adapter | Compose `project.sessions` and `session.model_usage` at one pinned sequence; omit unavailable titles. |
-| `GET /api/token-efficiency/project` | Deferred | Requires a reviewed pure Python projection over shareable stats/usage. Do not port analytical semantics into the gateway. |
+| `GET /api/token-efficiency/project` | Deferred | Requires a reviewed pure Python projection over chronicle stats/usage. Do not port analytical semantics into the gateway. |
 | `GET /api/code-time/report` | Adapter | Existing report composition already uses `project.list`, `project.sessions`, and `graph.usage`; refactor it to request-scoped async execution without its thread cache. |
 | `GET /api/code-time/forecasts` | Deferred | `estimate.list` authority exists, but hosted estimation reads require current remote verification before exposure. |
 | `GET /api/code-time/calibration` | Deferred | `estimate.calibration` authority exists, but hosted estimation reads require current remote verification before exposure. |
@@ -149,7 +149,7 @@ The frontend receives a build-time `hosted` capability manifest. Hosted mode:
 - removes Context and Timeline tabs rather than presenting failing controls;
 - removes evidence explorer actions and contentful item links;
 - labels the source as a remote pinned workspace snapshot;
-- labels missing titles/previews as unavailable under shareable coverage; and
+- labels missing titles/previews as unavailable under chronicle coverage; and
 - never falls back to localhost or silently mixes local and remote data.
 
 Capability checks exist at navigation, API routing, and CT remote dispatch. UI
@@ -168,7 +168,7 @@ spike must prove that a request-scoped facade can:
 
 1. import the required pure CT contracts and handlers;
 2. call Supabase through an asynchronous supported HTTP path;
-3. validate and replay representative shareable artifacts byte/digest exactly;
+3. validate and replay representative chronicle artifacts byte/digest exactly;
 4. execute the approved method matrix without filesystem or thread use;
 5. remain within current Worker bundle, CPU, memory, request, and response
    limits; and

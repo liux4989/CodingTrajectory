@@ -7,11 +7,13 @@ currently visible Supabase project's database major version.
 ## Source-of-truth boundary
 
 Apply the complete ordered migration chain under `migrations/`. The foundation
-is extended by the shareable-graph migration and publication-budget migration.
+is extended by the Chronicle contract and publication-budget migrations.
 Current historical ingress accepts metadata-only checkpoints and locally built
-`ct.shareable_graph.v1` artifacts; the old historical projector and RPCs are
+`ct.chronicle_graph.v1` artifacts; the old historical projector and RPCs are
 retired. Inventory, living, and estimation have separate durable authorities.
-Do not squash or delete earlier migrations: later migrations depend on them.
+The current prototype keeps Amp support in the base Chronicle validator rather
+than applying a second compatibility migration. Do not squash unrelated earlier
+migrations: later schema objects still depend on them.
 
 Local SQLite files remain delivery state or disposable revision-bound read
 models. Do not convert or upload them as Supabase migrations. Vendor logs remain

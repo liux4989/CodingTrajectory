@@ -293,7 +293,7 @@ def build_session_summary(
     warnings = []
     if not content_complete:
         warnings.append(
-            "Some transcript bodies were not retained; the summary uses shareable measurements and bounded semantic previews and may omit text-derived facts."
+            "Some transcript bodies were not retained; the summary uses chronicle measurements and bounded semantic previews and may omit text-derived facts."
         )
     return {
         "session_id": str(session.session_id),
@@ -486,7 +486,7 @@ class _ItemSignals:
         if item.item_id not in self._verification_kinds:
             self._verification_kinds[item.item_id] = classify_verification_command(
                 item.command
-            ) or _shareable_semantics(item).get("verification_kind")
+            ) or _chronicle_semantics(item).get("verification_kind")
         return self._verification_kinds[item.item_id]
 
     def outcome(self, item: Item) -> str:
@@ -553,7 +553,7 @@ class _ItemSignals:
         return item.kind
 
     def resolution_key(self, item: Item) -> str | None:
-        retained = _shareable_semantics(item).get("resolution_key")
+        retained = _chronicle_semantics(item).get("resolution_key")
         if isinstance(retained, str) and retained:
             return retained
         if isinstance(item, FileChangeItem):
@@ -565,10 +565,10 @@ class _ItemSignals:
         return f"tool:{tool_name}" if tool_name else None
 
 
-def _shareable_semantics(item: Item) -> dict[str, Any]:
+def _chronicle_semantics(item: Item) -> dict[str, Any]:
     vendor_data = item.vendor_data
     value = (
-        vendor_data.get("shareable_semantics")
+        vendor_data.get("chronicle_semantics")
         if isinstance(vendor_data, dict)
         else None
     )
@@ -579,7 +579,7 @@ def _pending_plan_actions_for_item(item: PlanItem) -> list[str]:
     actions = _pending_plan_actions(item.input)
     if actions:
         return actions
-    retained = _shareable_semantics(item).get("plan_actions")
+    retained = _chronicle_semantics(item).get("plan_actions")
     if not isinstance(retained, list):
         return []
     return [value for value in retained if isinstance(value, str) and value]

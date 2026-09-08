@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from coding_trajectory.control_plane.chronicle import build_chronicle_graph_artifact
 from coding_trajectory.control_plane.remote import (
     RemoteControlPlaneError,
     SupabaseHistoricalRepository,
 )
-from coding_trajectory.control_plane.shareable import build_shareable_graph_artifact
 from coding_trajectory.ingestion.models import Session, SessionGraph
 from coding_trajectory.query import DocumentStore
 
@@ -27,7 +27,7 @@ def requires_local_evidence(method: str, params: dict[str, Any]) -> bool:
 
 def _session_facts(session: Session) -> Any:
     graph = SessionGraph(root_session_id=session.session_id, sessions=[session])
-    return build_shareable_graph_artifact(graph).sessions[0]
+    return build_chronicle_graph_artifact(graph).sessions[0]
 
 
 class LocalEvidenceRepository:

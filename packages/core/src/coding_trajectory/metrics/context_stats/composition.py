@@ -19,6 +19,7 @@ from coding_trajectory.analysis.content_size import (
 from coding_trajectory.analysis.measurements import is_projection_only_item
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
 from coding_trajectory.analysis.tool_summary_shared import (
+    AGENT_COLLAB,
     EDIT_FILE,
     LIST_FILES,
     READ_FILE,
@@ -79,7 +80,7 @@ class _Measure:
         self.items += max(items, 0)
         self.allocated_usage = _sum_usage(self.allocated_usage, allocated_usage)
 
-    def plus(self, other: "_Measure") -> "_Measure":
+    def plus(self, other: _Measure) -> _Measure:
         return _Measure(
             tokens=self.tokens + other.tokens,
             chars=self.chars + other.chars,
@@ -101,7 +102,9 @@ _FILE_CONCEPT_LABELS = {
 }
 _CONTEXT_CONCEPTS = frozenset(_FILE_CONCEPT_LABELS)
 _CODE_CHANGE_CONCEPTS = frozenset({EDIT_FILE, WRITE_FILE})
-_COORDINATION_CONCEPTS = frozenset({TODO_LIST, SUBAGENT_TASK, SESSION_HANDOFF})
+_COORDINATION_CONCEPTS = frozenset(
+    {TODO_LIST, SUBAGENT_TASK, AGENT_COLLAB, SESSION_HANDOFF}
+)
 _OUTPUT_CONCEPT_LABELS = {
     SEARCH_TEXT: "Search output",
     LIST_FILES: "File listing output",
@@ -366,6 +369,8 @@ def _has_resident_conversation(
                 return True
         for turn in session.turns:
             for item in turn.items:
+                if is_projection_only_item(item):
+                    continue
                 if not _is_resident(item.started_at, boundary):
                     continue
                 if item.kind in {"reasoning", "agent_message"}:
@@ -545,7 +550,10 @@ def _agent_work(
                     )
 
         for turn in session.turns:
+            projection_children = _projection_children(turn.items)
             for item in turn.items:
+                if is_projection_only_item(item):
+                    continue
                 if not _is_resident(item.started_at, boundary):
                     evicted = evicted.plus(
                         _Measure(
@@ -568,6 +576,17 @@ def _agent_work(
                         tokens=size.tokens,
                         chars=size.chars,
                         allocated_usage=allocated_usage_by_item.get(item.item_id),
+                    )
+                    continue
+                children = projection_children.get(item.item_id, [])
+                if children:
+                    _add_projected_tool_item(
+                        item,
+                        children,
+                        files=files,
+                        agent=agent,
+                        output=output,
+                        allocated_usage_by_item=allocated_usage_by_item,
                     )
                     continue
                 _add_tool_item(
@@ -662,6 +681,141 @@ def _assemble_agent_categories(
     return children
 
 
+def _projection_children(items: list[Item]) -> dict[UUID, list[Item]]:
+    item_ids_by_tool_call = {
+        tool_call_id: item.item_id
+        for item in items
+        if isinstance((tool_call_id := getattr(item, "tool_call_id", None)), str)
+        and tool_call_id
+    }
+    children: dict[UUID, list[Item]] = defaultdict(list)
+    for item in items:
+        if not is_projection_only_item(item):
+            continue
+        parent_item_id = _projection_parent_item_id(
+            item, item_ids_by_tool_call=item_ids_by_tool_call
+        )
+        if parent_item_id is not None:
+            children[parent_item_id].append(item)
+    for values in children.values():
+        values.sort(key=_projection_sort_key)
+    return children
+
+
+def _projection_parent_item_id(
+    item: Item, *, item_ids_by_tool_call: dict[str, UUID]
+) -> UUID | None:
+    vendor_data = item.vendor_data if isinstance(item.vendor_data, dict) else {}
+    chronicle = vendor_data.get("chronicle_projection")
+    if isinstance(chronicle, dict):
+        value = chronicle.get("parent_item_id")
+        try:
+            return UUID(str(value)) if value is not None else None
+        except ValueError:
+            return None
+    activity = vendor_data.get("activity")
+    provenance = (
+        activity.get("provenance")
+        if isinstance(activity, dict)
+        and isinstance(activity.get("provenance"), dict)
+        else {}
+    )
+    parent_tool_call_id = provenance.get("parent_tool_call_id")
+    return (
+        item_ids_by_tool_call.get(parent_tool_call_id)
+        if isinstance(parent_tool_call_id, str)
+        else None
+    )
+
+
+def _projection_sort_key(item: Item) -> tuple[int, int]:
+    vendor_data = item.vendor_data if isinstance(item.vendor_data, dict) else {}
+    chronicle = vendor_data.get("chronicle_projection")
+    activity = vendor_data.get("activity")
+    provenance = (
+        activity.get("provenance")
+        if isinstance(activity, dict)
+        and isinstance(activity.get("provenance"), dict)
+        else {}
+    )
+    nested_index = (
+        chronicle.get("nested_index")
+        if isinstance(chronicle, dict)
+        else provenance.get("nested_index")
+    )
+    return (
+        nested_index
+        if isinstance(nested_index, int) and not isinstance(nested_index, bool)
+        else item.sequence,
+        item.sequence,
+    )
+
+
+def _add_projected_tool_item(
+    parent: Item,
+    children: list[Item],
+    *,
+    files: dict[str, _Measure],
+    agent: dict[str, _Measure],
+    output: dict[str, _Measure],
+    allocated_usage_by_item: dict[UUID, dict[str, int]],
+) -> None:
+    input_size = item_input_size(parent)
+    output_size = item_output_size(parent)
+    weights = [
+        max(
+            item_input_size(item).tokens + item_output_size(item).tokens,
+            item_input_size(item).chars + item_output_size(item).chars,
+            1,
+        )
+        for item in children
+    ]
+    token_shares = _allocate_integer(
+        input_size.tokens + output_size.tokens, weights
+    )
+    char_shares = _allocate_integer(input_size.chars + output_size.chars, weights)
+    usage_shares = _allocate_usage(allocated_usage_by_item.get(parent.item_id), weights)
+    for index, item in enumerate(children):
+        summary = summarize_tool_call(item) or {}
+        concept = str(summary.get("name") or item.tool_name or item.kind)
+        _add_tool_measure(
+            concept,
+            tokens=token_shares[index],
+            chars=char_shares[index],
+            allocated_usage=usage_shares[index],
+            files=files,
+            agent=agent,
+            output=output,
+        )
+
+
+def _allocate_integer(total: int, weights: list[int]) -> list[int]:
+    if not weights:
+        return []
+    denominator = sum(weights)
+    shares = [(total * weight) // denominator for weight in weights]
+    remainder = total - sum(shares)
+    order = sorted(
+        range(len(weights)),
+        key=lambda index: (-(total * weights[index] % denominator), index),
+    )
+    for index in order[:remainder]:
+        shares[index] += 1
+    return shares
+
+
+def _allocate_usage(
+    usage: dict[str, int] | None, weights: list[int]
+) -> list[dict[str, int] | None]:
+    if usage is None:
+        return [None for _ in weights]
+    shares: list[dict[str, int]] = [{} for _ in weights]
+    for key, value in usage.items():
+        for index, share in enumerate(_allocate_integer(value, weights)):
+            shares[index][key] = share
+    return shares
+
+
 def _add_tool_item(
     item: Item,
     *,
@@ -689,6 +843,27 @@ def _add_tool_item(
     # and other input-heavy tool calls by their full argument size.
     tokens = input_size.tokens + output_size.tokens
     chars = input_size.chars + output_size.chars
+    _add_tool_measure(
+        concept,
+        tokens=tokens,
+        chars=chars,
+        allocated_usage=allocated_usage,
+        files=files,
+        agent=agent,
+        output=output,
+    )
+
+
+def _add_tool_measure(
+    concept: str,
+    *,
+    tokens: int,
+    chars: int,
+    allocated_usage: dict[str, int] | None,
+    files: dict[str, _Measure],
+    agent: dict[str, _Measure],
+    output: dict[str, _Measure],
+) -> None:
 
     if concept in _CONTEXT_CONCEPTS:
         files[concept].add(

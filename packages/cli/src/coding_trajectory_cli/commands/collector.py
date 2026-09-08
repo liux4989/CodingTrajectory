@@ -275,7 +275,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     run = commands.add_parser(
         "run",
-        help="Queue checkpoints and publish bounded shareable graph artifacts.",
+        help="Queue checkpoints and publish bounded chronicle graph artifacts.",
         formatter_class=GhFormatter,
     )
     add_agent_vendor_flag(run)

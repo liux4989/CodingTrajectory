@@ -5,7 +5,7 @@ claims describe their historical context, not the current implementation.
 
 | Record | Current authority or disposition |
 | --- | --- |
-| [Remote session ledger](remote-session-ledger-design.md) | Superseded by [control plane](../remote-ct-control-plane-design.md) and [shareable history](../shareable-history.md) |
+| [Remote session ledger](remote-session-ledger-design.md) | Superseded by [control plane](../remote-ct-control-plane-design.md) and [Chronicle history](../chronicle-history.md) |
 | [Standalone metrics frontend](metrics-frontend-plugin-design.md) | Retired; comparison features live in Datahub |
 | [Step-to-item migration](remove-step-item-migration.md) | Completed hierarchy migration; current hierarchy uses Turn → Item |
 | [Item token attribution](item-token-attribution-refactor.md) | Completed refactor; [metrics gate](../metrics-validation-quality-gate.md) owns current validation |

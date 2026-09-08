@@ -1,6 +1,6 @@
 # Remote CT Control Plane Design
 
-- **Status:** Historical schema deployed; seven-day project upload and authenticated reads verified
+- **Status:** Chronicle refactor implemented locally; current schema not deployed
 - **Date:** 2026-09-05
 - **Scope:** Public method authorities, historical artifacts, project inventory,
   living state, estimation, and collector handoff
@@ -9,9 +9,9 @@
 ## Decision
 
 CodingTrajectory has one public API contract and one shared historical handler
-implementation. Host-local callers select local sources first. Shareable local
+implementation. Host-local callers select local sources first. Chronicle local
 reads round-trip the locally reconstructed graph through
-`ct.shareable_graph.v1`; remote reads load the same artifact schema from
+`ct.chronicle_graph.v1`; remote reads load the same artifact schema from
 Chronicles (the Supabase control plane). Artifact schema changes do not create a
 new public API version while response contracts remain compatible.
 
@@ -23,7 +23,7 @@ local errors remain errors. If fallback also fails, the response reports both
 the local miss and the remote failure. Explicit snapshot-pinned and HTTP calls
 remain remote-only.
 
-Content is excluded from shareable artifacts by default. Local evidence methods
+Content is excluded from chronicle artifacts by default. Local evidence methods
 read the full local canonical graph and never upload their bodies. Remote routing
 rejects evidence requests. Raw vendor logs remain the originating authority.
 
@@ -31,7 +31,7 @@ rejects evidence requests. Raw vendor logs remain the originating authority.
 
 | Authority | Public methods | Durable state |
 |---|---:|---|
-| Historical | 15 project/session/graph methods | Source checkpoints, shareable artifact revisions, normalized source vectors |
+| Historical | 15 project/session/graph methods | Source checkpoints, chronicle artifact revisions, normalized source vectors |
 | Project inventory | `project.list` | Portable projects, revisions, aliases, private agent locations |
 | Living | `living.sessions`, `living.events` | Agent leases and ordered living observations |
 | Estimation | Seven `estimate.*` methods | Forecast events, jobs, attempts, leases, and results |
@@ -42,7 +42,7 @@ not merge their records into one response.
 
 ## API boundary
 
-Shareable local and remote methods use the same artifact and handler:
+Chronicle local and remote methods use the same artifact and handler:
 
 - `project.sessions`
 - `session.overview`
@@ -73,8 +73,8 @@ return a partial evidence response or maintain a legacy compatibility handler.
 ```text
 host-local logs
   -> fenced adapters
-  -> ShareableGraphArtifact
-  |-> local shareable artifact -> shared handlers -> return immediately
+  -> ChronicleGraphArtifact
+  |-> local chronicle artifact -> shared handlers -> return immediately
   |-> explicit local evidence request -> full local graph -> shared handlers
   |-> optional collector publication -> Chronicles artifact revision
 
@@ -104,7 +104,7 @@ One project publication contains:
 workspace_id / agent_id / project_id
 agent/project-local publication_sequence
 complete normalized source_vector for the collected graphs
-one or more bounded ct.shareable_graph.v1 artifacts
+one or more bounded ct.chronicle_graph.v1 artifacts
 ```
 
 The transaction verifies collector capability, project ownership, source
@@ -138,7 +138,7 @@ conflict is retained locally as superseded and reconciled before new work. A
 valid but stale source vector is consumed as superseded and never becomes visible.
 
 Legacy source observations and artifact revisions remain immutable. They are
-not deleted or mixed with shareable history. Unfinished legacy projector jobs
+not deleted or mixed with chronicle history. Unfinished legacy projector jobs
 are retired, and the projector RPCs and worker are removed.
 
 ## Historical reads
@@ -148,7 +148,7 @@ A request pins workspace sequence `S`. Visible revisions satisfy:
 ```text
 published_sequence <= S
 and (superseded_sequence is null or superseded_sequence > S)
-and schema_version = ct.shareable_graph.v1
+and schema_version = ct.chronicle_graph.v1
 ```
 
 Session, turn, and item requests use normalized resource rows to load only the
@@ -176,16 +176,17 @@ is not introduced while representative artifacts remain safely within those
 bounds.
 
 The complete artifact contract and retention decision are documented in
-[`shareable-history.md`](shareable-history.md).
+[`chronicle-history.md`](chronicle-history.md).
 
 ## Content policy
 
-Shared artifacts retain structural and numeric facts, portable paths, and bounded
-identifiers. They omit session titles, user/assistant prose previews, plan text,
-and free-form tool descriptions. A user-request record carries the fixed marker
-`[content omitted]` with its original numeric measurements. Tool descriptions
-are limited to `tests`, `checks`, or `command`. Python and SQL enforce these
-restrictions; artifact coverage declares `semantic_previews=false`.
+Private Chronicle artifacts retain structural and numeric facts, portable paths,
+bounded identifiers, and typed sanitized operational details. They omit session
+titles, user/assistant prose previews, plan text, complete commands, tool bodies,
+and vendor payloads. A user-request record carries the fixed marker
+`[content omitted]` with its original numeric measurements. Python and SQL bound
+tool-detail targets and enforce `operational_details=true`, `content=false`, and
+`events=false`.
 
 Overview and summary responses consequently have reduced descriptive coverage.
 Detailed content remains available through the local evidence APIs. Bounded
@@ -214,7 +215,7 @@ SSE is an optional transport over the same durable sequence.
 Estimation remains a separate append-only job and forecast authority. A
 server-side worker owns provider credentials, claims, retry policy, and result
 publication. Historical inputs are pinned to one workspace snapshot. The
-shareable-artifact change does not place estimator credentials on collectors or
+chronicle-artifact change does not place estimator credentials on collectors or
 clients.
 
 ## Access control
@@ -225,7 +226,7 @@ clients.
 - Collector writes occur only through capability-checked RPCs.
 - Estimator service-role credentials remain server-only.
 - Host paths and source files remain local or principal-private.
-- Remote artifacts contain only the bounded shareable contract.
+- Remote artifacts contain only the bounded chronicle contract.
 
 ## Rollout gates
 
@@ -237,16 +238,18 @@ clients.
 6. Confirm every artifact is below 8 MiB and the atomic publication below
    16 MiB.
 7. Confirm the configured Supabase target is authorized and non-production.
-8. Apply the migration, publish a canary, and verify snapshot/idempotency/stale
+8. Deploy the schema, publish a canary, and verify snapshot/idempotency/stale
    behavior before enabling supervised collection.
 
 A failed gate stops rollout. Privacy, topology, checkpoint, snapshot, and
 idempotency rules are never weakened to continue deployment.
 
-## Verified rollout
+## Prior rollout evidence
 
-The authorized non-production reset, seven-day project upload, and authenticated
-historical reads completed on 2026-09-05. See
+The superseded shareable-artifact schema completed an authorized non-production
+reset, seven-day project upload, and authenticated historical reads on
+2026-09-05. That evidence does not establish deployment or acceptance of the
+current Chronicle schema. See
 [`remote-ct-rollout-2026-09-05.md`](remote-ct-rollout-2026-09-05.md) for aggregate
 evidence and the remaining supervision/living/estimation scope.
 

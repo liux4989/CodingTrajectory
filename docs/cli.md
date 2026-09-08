@@ -156,13 +156,13 @@ workspace sequence. An unpinned request resolves a remote snapshot only after a
 local fallback condition.
 
 Historical local reads reconstruct the canonical graph from local logs, round
-shareable methods through `ct.shareable_graph.v1`, and execute the shared
+chronicle methods through `ct.chronicle_graph.v1`, and execute the shared
 handlers. A remote fallback fetches published artifacts through Supabase
 PostgREST RPCs; Python validates identity, digest, and schema before invoking the
 same handlers. Local and remote stores remain separate and are cached within the
 owning runtime. A remote fallback runtime pins one snapshot for its lifetime.
 
-Content is excluded from the shareable artifact. Explicit `session.search`,
+Content is excluded from the chronicle artifact. Explicit `session.search`,
 `session.events`, `session.items` with `include_content=true`, and
 `graph.overview` with `include:["narrative"]` request local evidence from the
 full canonical local graph. These requests do not require publication and their
@@ -179,7 +179,7 @@ All 25 registered service methods are covered below. The registry in
 | Methods | Local-first behavior |
 | --- | --- |
 | `project.list`, `project.sessions` | Local inventory/history; unavailable discovery may use remote inventory, while a valid empty collection remains local |
-| `session.overview`, `session.summary`, `session.tree`, `graph.overview` | Local graph; a missing targeted record may use the remote shareable artifact; narrative remains local-only |
+| `session.overview`, `session.summary`, `session.tree`, `graph.overview` | Local graph; a missing targeted record may use the remote chronicle artifact; narrative remains local-only |
 | `session.stats`, `graph.stats`, `session.usage`, `graph.usage`, `session.model_usage`, `session.request_usage`, `session.tool_usage` | Local measurements first; missing targeted records may use remote measurements |
 | `session.items` | Local items first; remote fallback is metadata-only and rejects `include_content=true` |
 | `session.events`, `session.search` | Local-only evidence; remote fallback preserves the explicit rejection |

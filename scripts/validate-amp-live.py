@@ -12,9 +12,9 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from coding_trajectory.control_plane.shareable import (
-    build_shareable_graph_artifact,
-    shareable_session_graph,
+from coding_trajectory.control_plane.chronicle import (
+    build_chronicle_graph_artifact,
+    chronicle_session_graph,
 )
 from coding_trajectory.datahub import (
     hydrate_retained_session,
@@ -182,7 +182,7 @@ def main() -> None:
             )
             assert len(start_only.turns) == 1
             assert start_only.turns[0].status.value == "running"
-            artifact = build_shareable_graph_artifact(graph)
+            artifact = build_chronicle_graph_artifact(graph)
             assert b"PRIVATE" not in artifact.canonical_bytes()
             replay = artifact.to_session_graph()
             assert replay.sessions[0].vendor == Vendor.AMP and len(replay.edges) == 1
@@ -208,7 +208,7 @@ def main() -> None:
                 for p in paths
             ]
             assert (
-                build_shareable_graph_artifact(
+                build_chronicle_graph_artifact(
                     assemble_project_session_graphs(graph.project_identifier, full)[0]
                 ).digest()
                 == artifact.digest()
@@ -274,7 +274,7 @@ def main() -> None:
                     if method == "project.sessions"
                     else {"session_id": str(parent.session_id)},
                     store=DocumentStore.from_session_graphs(
-                        [shareable_session_graph(graph)]
+                        [chronicle_session_graph(graph)]
                     ),
                     global_scope=True,
                     current_dir=directory,

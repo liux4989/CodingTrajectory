@@ -117,7 +117,7 @@ class RemoteRuntimeFactory:
             "snapshot_sequence": sequence,
             "source": "remote",
             "freshness": "authoritative",
-            "content_scope": "shareable",
+            "content_scope": "chronicle",
         }
         return {
             "global_scope": True,

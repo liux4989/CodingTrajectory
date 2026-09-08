@@ -12,7 +12,7 @@ Unified canonical models and CLI tooling for coding-agent session graphs.
 
 - [Documentation index](docs/README.md)
 - [Product requirements](docs/prd.md) and [architecture](docs/architecture.md)
-- [Shareable historical artifacts](docs/shareable-history.md)
+- [Chronicle operational history](docs/chronicle-history.md)
 - [CLI usage](docs/cli.md)
 - [Collector and deployment handoff](docs/local-collector-handoff.md)
 - [Benchmark and artifact policy](benchmarks/README.md)

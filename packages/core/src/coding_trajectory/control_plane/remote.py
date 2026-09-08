@@ -11,7 +11,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from coding_trajectory.contracts import service_contract
-from coding_trajectory.control_plane.shareable import ShareableGraphArtifact
+from coding_trajectory.control_plane.chronicle import ChronicleGraphArtifact
 from coding_trajectory.ingestion.common import canonical_json, format_datetime
 from coding_trajectory.ingestion.models import SessionGraph
 from coding_trajectory.query import DocumentError, DocumentStore
@@ -107,7 +107,7 @@ class SupabaseHistoricalRepository:
     def store_for(
         self, method: str, params: dict[str, Any]
     ) -> tuple[DocumentStore, str]:
-        _require_shareable_historical_scope(method, params)
+        _require_chronicle_historical_scope(method, params)
         validated = service_contract(method).validate_request(params)
         request = _historical_snapshot_request(
             workspace_id=self.workspace_id,
@@ -153,7 +153,7 @@ class SupabaseHistoricalRepository:
             "snapshot_sequence": self.snapshot_sequence,
             "source": "remote",
             "freshness": "authoritative",
-            "content_scope": "shareable",
+            "content_scope": "chronicle",
         }
 
 
@@ -186,7 +186,7 @@ def _snapshot_artifact_graph(value: Any) -> SessionGraph:
     if not isinstance(value, dict) or "payload" not in value:
         raise RemoteControlPlaneError("historical snapshot contains invalid artifacts")
     try:
-        artifact = ShareableGraphArtifact.model_validate(value["payload"])
+        artifact = ChronicleGraphArtifact.model_validate(value["payload"])
     except ValidationError as exc:
         raise RemoteControlPlaneError(
             "historical snapshot artifact schema is invalid"
@@ -198,7 +198,7 @@ def _snapshot_artifact_graph(value: Any) -> SessionGraph:
     return artifact.to_session_graph()
 
 
-def _require_shareable_historical_scope(method: str, params: dict[str, Any]) -> None:
+def _require_chronicle_historical_scope(method: str, params: dict[str, Any]) -> None:
     """Reject requests whose contract requires host-local evidence bodies."""
 
     if method == "graph.overview" and "narrative" in params.get("include", []):

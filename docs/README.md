@@ -1,13 +1,13 @@
 # Documentation
 
 Start with the [product requirements](prd.md) and [architecture](architecture.md).
-The accepted historical sharing design is [Shareable history](shareable-history.md).
+The private operational-history design is [Chronicle history](chronicle-history.md).
 
 ## Current contracts and operations
 
 | Document | Role |
 | --- | --- |
-| [Shareable history](shareable-history.md) | Artifact schema, privacy boundary, replay, and publication bounds |
+| [Chronicle history](chronicle-history.md) | Private operational schema, privacy boundary, replay, and publication bounds |
 | [Remote control plane](remote-ct-control-plane-design.md) | Historical, inventory, living, and estimation authorities |
 | [Private Datahub hosting](datahub-cloudflare-private-hosting.md) | Accepted Access-only Cloudflare architecture, route capabilities, and rollout gates |
 | [Collector handoff](local-collector-handoff.md) | Local collection, delivery recovery, and deployment gates |

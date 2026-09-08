@@ -1,9 +1,9 @@
-"""Strict, bounded historical artifact shared by local and remote APIs.
+"""Strict, bounded private Chronicle artifact shared by local and remote APIs.
 
-The artifact is a semantic projection, not a second canonical trajectory. Raw
-events and transcript/tool bodies never enter the model. Existing historical
-handlers consume an ephemeral canonical graph reconstructed from these facts,
-so local and remote shareable reads retain one implementation.
+The artifact is the operational history contract, not a public sharing format.
+Raw events and transcript/tool bodies never enter the model. Bounded sanitized
+tool details retain useful command targets and activity semantics for Chronicle
+views without publishing raw commands, outputs, prompts, or host-local paths.
 """
 
 from __future__ import annotations
@@ -11,9 +11,11 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import shlex
 from datetime import datetime
 from pathlib import Path, PurePath
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -29,6 +31,20 @@ from coding_trajectory.analysis.measurements import (
 )
 from coding_trajectory.analysis.request_lineage import extract_user_request
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
+from coding_trajectory.analysis.tool_summary_shared import (
+    AGENT_COLLAB,
+    EDIT_FILE,
+    LIST_FILES,
+    READ_FILE,
+    RUN_COMMAND,
+    SEARCH_TEXT,
+    SESSION_HANDOFF,
+    SUBAGENT_TASK,
+    TODO_LIST,
+    WEB_FETCH,
+    WEB_SEARCH,
+    WRITE_FILE,
+)
 from coding_trajectory.analysis.tool_summary_shell import classify_verification_command
 from coding_trajectory.discovery import (
     DiscoveryCandidate,
@@ -77,11 +93,11 @@ from coding_trajectory.ingestion.models import (
 )
 from coding_trajectory.token_counter import counter_for_session_graph, scoped_counter
 
-SHAREABLE_GRAPH_SCHEMA_VERSION = "ct.shareable_graph.v1"
-MAX_SHAREABLE_ARTIFACT_BYTES = 8 * 1024 * 1024
-MAX_SHAREABLE_PUBLICATION_BYTES = 16 * 1024 * 1024
+CHRONICLE_GRAPH_SCHEMA_VERSION = "ct.chronicle_graph.v1"
+MAX_CHRONICLE_ARTIFACT_BYTES = 8 * 1024 * 1024
+MAX_CHRONICLE_PUBLICATION_BYTES = 16 * 1024 * 1024
 _SYNTHETIC_REQUEST_NAMESPACE = uuid5(
-    NAMESPACE_URL, "codingtrajectory:shareable-request"
+    NAMESPACE_URL, "codingtrajectory:chronicle-request"
 )
 _ITEM_KINDS = Literal[
     "agent_message",
@@ -113,13 +129,18 @@ _HOST_PATH = re.compile(
     r"^(?:~/|/Users/|/home/|/root/|/private/|/tmp/|/var/|/Volumes/|"
     r"/workspace/|/workspaces/|/mnt/|/srv/|/opt/|[A-Za-z]:[\\/])"
 )
+_HOST_PATH_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9])(?:~/|/Users/|/home/|/root/|/private/|/tmp/|/var/|/Volumes/|"
+    r"/workspace/|/workspaces/|/mnt/|/srv/|/opt/|[A-Za-z]:[\\/])"
+    r"[^\s'\"]+"
+)
 
 
-class ShareableModel(BaseModel):
+class ChronicleModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ShareableUsage(ShareableModel):
+class ChronicleUsage(ChronicleModel):
     input_tokens: int = Field(default=0, ge=0)
     cached_input_tokens: int = Field(default=0, ge=0)
     cache_creation_input_tokens: int = Field(default=0, ge=0)
@@ -133,7 +154,7 @@ class ShareableUsage(ShareableModel):
     cost_usd: _CostText | None = None
 
 
-class ShareableUsageCategory(ShareableModel):
+class ChronicleUsageCategory(ChronicleModel):
     key: _BoundedString
     label: _BoundedString
     tokens: int = Field(ge=0)
@@ -141,7 +162,7 @@ class ShareableUsageCategory(ShareableModel):
     source: _BoundedString | None = None
 
 
-class ShareableRequestUsage(ShareableModel):
+class ChronicleRequestUsage(ChronicleModel):
     request_id: UUID
     timestamp: datetime
     source: _BoundedString
@@ -149,13 +170,13 @@ class ShareableRequestUsage(ShareableModel):
     provider: _BoundedString | None = None
     context_window_tokens: int | None = Field(default=None, ge=0)
     used_input_tokens: int = Field(default=0, ge=0)
-    usage: ShareableUsage = Field(default_factory=ShareableUsage)
-    categories: list[ShareableUsageCategory] = Field(
+    usage: ChronicleUsage = Field(default_factory=ChronicleUsage)
+    categories: list[ChronicleUsageCategory] = Field(
         default_factory=list, max_length=32
     )
 
 
-class ShareableContextSourceMeasurement(ShareableModel):
+class ChronicleContextSourceMeasurement(ChronicleModel):
     timestamp: datetime
     key: _BoundedString
     label: _BoundedString
@@ -164,25 +185,25 @@ class ShareableContextSourceMeasurement(ShareableModel):
     tokens: int = Field(default=0, ge=0)
 
 
-class ShareableEventTextMeasurement(ShareableModel):
+class ChronicleEventTextMeasurement(ChronicleModel):
     timestamp: datetime
     chars: int = Field(default=0, ge=0)
     tokens: int = Field(default=0, ge=0)
 
 
-class ShareableSessionMeasurements(ShareableModel):
-    context_sources: list[ShareableContextSourceMeasurement] = Field(
+class ChronicleSessionMeasurements(ChronicleModel):
+    context_sources: list[ChronicleContextSourceMeasurement] = Field(
         default_factory=list
     )
     llm_response_count: int = Field(default=0, ge=0)
-    llm_response_text_sizes: list[ShareableEventTextMeasurement] = Field(
+    llm_response_text_sizes: list[ChronicleEventTextMeasurement] = Field(
         default_factory=list
     )
 
 
-class ShareableToolSummary(ShareableModel):
+class ChronicleToolSummary(ChronicleModel):
     name: _BoundedString
-    description: Literal["tests", "checks", "command"] | None = None
+    detail: ChronicleToolDetail | None = None
     status: _BoundedString | None = None
     optimization_profile: _BoundedString | None = None
     activity_hidden: bool | None = None
@@ -193,7 +214,14 @@ class ShareableToolSummary(ShareableModel):
     activity_wrapper_status: _BoundedString | None = None
 
 
-class ShareableItemMeasurements(ShareableModel):
+class ChronicleToolDetail(ChronicleModel):
+    kind: Literal["file", "search", "command", "web", "coordination", "tool"]
+    target: _Preview
+    scope: _Preview | None = None
+    safety: Literal["sanitized"] = "sanitized"
+
+
+class ChronicleItemMeasurements(ChronicleModel):
     input_chars: int = Field(default=0, ge=0)
     input_tokens: int = Field(default=0, ge=0)
     output_chars: int = Field(default=0, ge=0)
@@ -204,16 +232,16 @@ class ShareableItemMeasurements(ShareableModel):
     output_truncated: bool = False
     output_original_tokens: int | None = Field(default=None, ge=0)
     text_preview: None = None
-    tool_summary: ShareableToolSummary | None = None
+    tool_summary: ChronicleToolSummary | None = None
 
 
-class ShareableItemSemantic(ShareableModel):
+class ChronicleItemSemantic(ChronicleModel):
     verification_kind: _BoundedString | None = None
     resolution_key: _BoundedString | None = None
     plan_actions: list[_Preview] = Field(default_factory=list, max_length=0)
 
 
-class ShareableItem(ShareableModel):
+class ChronicleItem(ChronicleModel):
     item_id: UUID
     sequence: int = Field(ge=0)
     kind: _ITEM_KINDS
@@ -225,13 +253,15 @@ class ShareableItem(ShareableModel):
     operation: _BoundedString | None = None
     exit_code: int | None = None
     path: _BoundedString | None = None
-    measurements: ShareableItemMeasurements = Field(
-        default_factory=ShareableItemMeasurements
+    projection_parent_item_id: UUID | None = None
+    nested_index: int | None = Field(default=None, ge=0)
+    measurements: ChronicleItemMeasurements = Field(
+        default_factory=ChronicleItemMeasurements
     )
-    semantic: ShareableItemSemantic = Field(default_factory=ShareableItemSemantic)
+    semantic: ChronicleItemSemantic = Field(default_factory=ChronicleItemSemantic)
 
 
-class ShareableUserRequest(ShareableModel):
+class ChronicleUserRequest(ChronicleModel):
     request_id: UUID
     type: Literal["message", "command"] = "message"
     source: _BoundedString = "human_user"
@@ -240,43 +270,43 @@ class ShareableUserRequest(ShareableModel):
     tokens: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
-    def validate_measurement(self) -> ShareableUserRequest:
+    def validate_measurement(self) -> ChronicleUserRequest:
         if (self.chars is None) != (self.tokens is None):
-            raise ValueError("shareable user-request measurement is incomplete")
+            raise ValueError("chronicle user-request measurement is incomplete")
         return self
 
 
-class ShareableTeamMember(ShareableModel):
+class ChronicleTeamMember(ChronicleModel):
     member_id: _BoundedString
     session_id: UUID | None = None
     agent_type: _BoundedString | None = None
 
 
-class ShareableTeamTask(ShareableModel):
+class ChronicleTeamTask(ChronicleModel):
     task_id: _BoundedString
     status: _BoundedString | None = None
     member_id: _BoundedString | None = None
     blocked_by: list[_BoundedString] = Field(default_factory=list, max_length=64)
 
 
-class ShareableTeamState(ShareableModel):
-    members: list[ShareableTeamMember] = Field(default_factory=list)
-    tasks: list[ShareableTeamTask] = Field(default_factory=list)
+class ChronicleTeamState(ChronicleModel):
+    members: list[ChronicleTeamMember] = Field(default_factory=list)
+    tasks: list[ChronicleTeamTask] = Field(default_factory=list)
 
 
-class ShareableTurn(ShareableModel):
+class ChronicleTurn(ChronicleModel):
     turn_id: UUID
     sequence: int = Field(ge=0)
     started_at: datetime
     completed_at: datetime | None = None
     status: _BoundedString
-    user_request: ShareableUserRequest | None = None
-    requests: list[ShareableRequestUsage] = Field(default_factory=list)
-    items: list[ShareableItem] = Field(default_factory=list)
-    team_state: ShareableTeamState | None = None
+    user_request: ChronicleUserRequest | None = None
+    requests: list[ChronicleRequestUsage] = Field(default_factory=list)
+    items: list[ChronicleItem] = Field(default_factory=list)
+    team_state: ChronicleTeamState | None = None
 
 
-class ShareableRuntimeObservation(ShareableModel):
+class ChronicleRuntimeObservation(ChronicleModel):
     timestamp: datetime
     kind: _BoundedString
     duration_ms: int | None = Field(default=None, ge=0)
@@ -289,24 +319,24 @@ class ShareableRuntimeObservation(ShareableModel):
     effort_to: _BoundedString | None = None
 
 
-class ShareableSpawnOrigin(ShareableModel):
+class ChronicleSpawnOrigin(ChronicleModel):
     target_session_id: UUID
     turn_id: UUID | None = None
     item_id: UUID | None = None
     tool_name: _BoundedString | None = None
 
 
-class ShareableSessionTopology(ShareableModel):
+class ChronicleSessionTopology(ChronicleModel):
     sidechain: bool = False
     forked: bool = False
     spawned: bool = False
     spawn_depth: int | None = Field(default=None, ge=0)
     multi_agent_version: _BoundedString | None = None
     multi_agent_mode: _BoundedString | None = None
-    spawn_origins: list[ShareableSpawnOrigin] = Field(default_factory=list)
+    spawn_origins: list[ChronicleSpawnOrigin] = Field(default_factory=list)
 
 
-class ShareableSession(ShareableModel):
+class ChronicleSession(ChronicleModel):
     session_id: UUID
     parent_session_id: UUID | None = None
     vendor: Vendor
@@ -317,21 +347,21 @@ class ShareableSession(ShareableModel):
     reasoning_effort: _BoundedString | None = None
     title: None = None
     preview: None = None
-    topology: ShareableSessionTopology = Field(default_factory=ShareableSessionTopology)
-    runtime: list[ShareableRuntimeObservation] = Field(default_factory=list)
-    measurements: ShareableSessionMeasurements = Field(
-        default_factory=ShareableSessionMeasurements
+    topology: ChronicleSessionTopology = Field(default_factory=ChronicleSessionTopology)
+    runtime: list[ChronicleRuntimeObservation] = Field(default_factory=list)
+    measurements: ChronicleSessionMeasurements = Field(
+        default_factory=ChronicleSessionMeasurements
     )
-    turns: list[ShareableTurn] = Field(default_factory=list)
+    turns: list[ChronicleTurn] = Field(default_factory=list)
 
 
-class ShareableEdgeOrigin(ShareableModel):
+class ChronicleEdgeOrigin(ChronicleModel):
     session_id: UUID
     turn_id: UUID | None = None
     item_id: UUID | None = None
 
 
-class ShareableEdge(ShareableModel):
+class ChronicleEdge(ChronicleModel):
     source_session_id: UUID
     target_session_id: UUID
     kind: Literal[
@@ -342,13 +372,13 @@ class ShareableEdge(ShareableModel):
         "resumed_from",
         "teammate_of",
     ]
-    origin: ShareableEdgeOrigin
+    origin: ChronicleEdgeOrigin
     tool_name: _BoundedString | None = None
     provenance: Literal["observed", "derived"] = "derived"
     confidence: Literal["high", "medium", "low"] = "medium"
 
 
-class ShareableGraphSummary(ShareableModel):
+class ChronicleGraphSummary(ChronicleModel):
     root_session_id: UUID
     project: _BoundedString | None = None
     started_at: datetime | None = None
@@ -359,39 +389,39 @@ class ShareableGraphSummary(ShareableModel):
     item_count: int = Field(ge=0)
 
 
-class ShareableCoverage(ShareableModel):
+class ChronicleCoverage(ChronicleModel):
     content: Literal[False] = False
     events: Literal[False] = False
     topology: Literal[True] = True
     usage: Literal[True] = True
     measurements: Literal[True] = True
-    semantic_previews: Literal[False] = False
+    operational_details: Literal[True] = True
 
 
-class ShareableGraphArtifact(ShareableModel):
-    schema_version: Literal["ct.shareable_graph.v1"] = SHAREABLE_GRAPH_SCHEMA_VERSION
-    graph: ShareableGraphSummary
-    sessions: list[ShareableSession]
-    edges: list[ShareableEdge] = Field(default_factory=list)
-    coverage: ShareableCoverage = Field(default_factory=ShareableCoverage)
+class ChronicleGraphArtifact(ChronicleModel):
+    schema_version: Literal["ct.chronicle_graph.v1"] = CHRONICLE_GRAPH_SCHEMA_VERSION
+    graph: ChronicleGraphSummary
+    sessions: list[ChronicleSession]
+    edges: list[ChronicleEdge] = Field(default_factory=list)
+    coverage: ChronicleCoverage = Field(default_factory=ChronicleCoverage)
 
     @model_validator(mode="after")
-    def validate_boundary(self) -> ShareableGraphArtifact:
+    def validate_boundary(self) -> ChronicleGraphArtifact:
         if not self.sessions:
-            raise ValueError("shareable graph requires at least one session")
+            raise ValueError("chronicle graph requires at least one session")
         session_ids = {session.session_id for session in self.sessions}
         if len(session_ids) != len(self.sessions):
-            raise ValueError("shareable graph contains duplicate sessions")
+            raise ValueError("chronicle graph contains duplicate sessions")
         if self.graph.root_session_id not in session_ids:
-            raise ValueError("shareable graph root is not retained")
+            raise ValueError("chronicle graph root is not retained")
         if self.graph.session_count != len(self.sessions):
-            raise ValueError("shareable graph session count mismatch")
+            raise ValueError("chronicle graph session count mismatch")
         turn_count = sum(len(session.turns) for session in self.sessions)
         item_count = sum(
             len(turn.items) for session in self.sessions for turn in session.turns
         )
         if self.graph.turn_count != turn_count or self.graph.item_count != item_count:
-            raise ValueError("shareable graph hierarchy count mismatch")
+            raise ValueError("chronicle graph hierarchy count mismatch")
 
         turn_owners: dict[UUID, UUID] = {}
         item_owners: dict[UUID, tuple[UUID, UUID]] = {}
@@ -400,34 +430,53 @@ class ShareableGraphArtifact(ShareableModel):
             if turn_sequences != sorted(turn_sequences) or len(turn_sequences) != len(
                 set(turn_sequences)
             ):
-                raise ValueError("shareable graph turn ordering is invalid")
+                raise ValueError("chronicle graph turn ordering is invalid")
             for turn in session.turns:
                 if turn.turn_id in turn_owners:
-                    raise ValueError("shareable graph contains duplicate turns")
+                    raise ValueError("chronicle graph contains duplicate turns")
                 turn_owners[turn.turn_id] = session.session_id
                 item_sequences = [item.sequence for item in turn.items]
                 if item_sequences != sorted(item_sequences) or len(
                     item_sequences
                 ) != len(set(item_sequences)):
-                    raise ValueError("shareable graph item ordering is invalid")
+                    raise ValueError("chronicle graph item ordering is invalid")
                 for item in turn.items:
                     if item.item_id in item_owners:
-                        raise ValueError("shareable graph contains duplicate items")
+                        raise ValueError("chronicle graph contains duplicate items")
                     item_owners[item.item_id] = (session.session_id, turn.turn_id)
+                turn_items = {item.item_id: item for item in turn.items}
+                for item in turn.items:
+                    if item.projection_parent_item_id is None:
+                        if item.nested_index is not None:
+                            raise ValueError(
+                                "chronicle graph nested index has no projection parent"
+                            )
+                        continue
+                    parent = turn_items.get(item.projection_parent_item_id)
+                    if parent is None or parent.item_id == item.item_id:
+                        raise ValueError(
+                            "chronicle graph projection parent ownership mismatch"
+                        )
+                    if parent.measurements.projection_only:
+                        raise ValueError(
+                            "chronicle graph projection parent is not canonical"
+                        )
+                    if not item.measurements.projection_only:
+                        raise ValueError(
+                            "chronicle graph projection child owns canonical content"
+                        )
             for origin in session.topology.spawn_origins:
                 if (
                     origin.turn_id is not None
                     and turn_owners.get(origin.turn_id) != session.session_id
                 ):
-                    raise ValueError("shareable graph spawn turn ownership mismatch")
-                if origin.item_id is not None:
-                    if origin.turn_id is None or item_owners.get(origin.item_id) != (
-                        session.session_id,
-                        origin.turn_id,
-                    ):
-                        raise ValueError(
-                            "shareable graph spawn item ownership mismatch"
-                        )
+                    raise ValueError("chronicle graph spawn turn ownership mismatch")
+                if origin.item_id is not None and (
+                    origin.turn_id is None
+                    or item_owners.get(origin.item_id)
+                    != (session.session_id, origin.turn_id)
+                ):
+                    raise ValueError("chronicle graph spawn item ownership mismatch")
 
         edge_identities: set[tuple[str, UUID, UUID, UUID | None, UUID | None]] = set()
         for edge in self.edges:
@@ -436,20 +485,18 @@ class ShareableGraphArtifact(ShareableModel):
                 or edge.target_session_id not in session_ids
                 or edge.origin.session_id != edge.source_session_id
             ):
-                raise ValueError("shareable graph edge endpoint mismatch")
+                raise ValueError("chronicle graph edge endpoint mismatch")
             if (
                 edge.origin.turn_id is not None
                 and turn_owners.get(edge.origin.turn_id) != edge.source_session_id
             ):
-                raise ValueError("shareable graph edge turn ownership mismatch")
-            if edge.origin.item_id is not None:
-                if edge.origin.turn_id is None or item_owners.get(
-                    edge.origin.item_id
-                ) != (
-                    edge.source_session_id,
-                    edge.origin.turn_id,
-                ):
-                    raise ValueError("shareable graph edge item ownership mismatch")
+                raise ValueError("chronicle graph edge turn ownership mismatch")
+            if edge.origin.item_id is not None and (
+                edge.origin.turn_id is None
+                or item_owners.get(edge.origin.item_id)
+                != (edge.source_session_id, edge.origin.turn_id)
+            ):
+                raise ValueError("chronicle graph edge item ownership mismatch")
             identity = (
                 edge.kind,
                 edge.source_session_id,
@@ -458,13 +505,13 @@ class ShareableGraphArtifact(ShareableModel):
                 edge.origin.item_id,
             )
             if identity in edge_identities:
-                raise ValueError("shareable graph contains duplicate edges")
+                raise ValueError("chronicle graph contains duplicate edges")
             edge_identities.add(identity)
         payload = self.model_dump(mode="json", exclude_none=True)
         _reject_embedded_content(payload)
         encoded = canonical_json(payload).encode()
-        if len(encoded) > MAX_SHAREABLE_ARTIFACT_BYTES:
-            raise ValueError("shareable graph exceeds the 8 MiB artifact bound")
+        if len(encoded) > MAX_CHRONICLE_ARTIFACT_BYTES:
+            raise ValueError("chronicle graph exceeds the 8 MiB artifact bound")
         return self
 
     def canonical_bytes(self) -> bytes:
@@ -495,15 +542,15 @@ class ShareableGraphArtifact(ShareableModel):
         )
 
 
-def build_shareable_graph_artifact(
+def build_chronicle_graph_artifact(
     session_graph: SessionGraph,
-) -> ShareableGraphArtifact:
-    """Project one canonical graph onto the bounded shared API source."""
+) -> ChronicleGraphArtifact:
+    """Project one canonical graph onto the bounded private Chronicle source."""
 
     index = build_session_graph_index(session_graph)
     with scoped_counter(counter_for_session_graph(session_graph)):
         sessions = [
-            _build_shareable_session(session, index=index)
+            _build_chronicle_session(session, index=index)
             for session in session_graph.sessions
         ]
     started_at = min((session.started_at for session in sessions), default=None)
@@ -519,8 +566,8 @@ def build_shareable_graph_artifact(
         ),
         None,
     )
-    return ShareableGraphArtifact(
-        graph=ShareableGraphSummary(
+    return ChronicleGraphArtifact(
+        graph=ChronicleGraphSummary(
             root_session_id=session_graph.root_session_id,
             project=_portable_project(session_graph.project_identifier),
             started_at=started_at,
@@ -533,15 +580,15 @@ def build_shareable_graph_artifact(
             ),
         ),
         sessions=sessions,
-        edges=[_build_shareable_edge(edge) for edge in session_graph.edges],
+        edges=[_build_chronicle_edge(edge) for edge in session_graph.edges],
     )
 
 
-def build_shareable_segments(
+def build_chronicle_segments(
     segments: list[
         tuple[DiscoveryCandidate, Path, list[dict[str, Any]], set[str] | None]
     ],
-) -> ShareableGraphArtifact:
+) -> ChronicleGraphArtifact:
     """Build one logical source artifact from exactly fenced source records."""
 
     canonical_segments: list[tuple[Path, Session]] = []
@@ -569,22 +616,22 @@ def build_shareable_segments(
     )
     graph = build_session_graph(
         root_session_id=session.session_id,
-        project_identifier="shareable-source",
+        project_identifier="chronicle-source",
         sessions=[session],
     )
-    return build_shareable_graph_artifact(graph)
+    return build_chronicle_graph_artifact(graph)
 
 
-def shareable_session_graph(session_graph: SessionGraph) -> SessionGraph:
+def chronicle_session_graph(session_graph: SessionGraph) -> SessionGraph:
     """Round-trip a graph through the exact artifact used by remote reads."""
 
-    return build_shareable_graph_artifact(session_graph).to_session_graph()
+    return build_chronicle_graph_artifact(session_graph).to_session_graph()
 
 
-def _build_shareable_session(session: Session, *, index: Any) -> ShareableSession:
+def _build_chronicle_session(session: Session, *, index: Any) -> ChronicleSession:
     measurements = session.measurements or extract_session_measurements(session)
     origins = _canonical_spawn_origins(session)
-    return ShareableSession(
+    return ChronicleSession(
         session_id=session.session_id,
         parent_session_id=session.parent_session_id,
         vendor=session.vendor,
@@ -597,7 +644,7 @@ def _build_shareable_session(session: Session, *, index: Any) -> ShareableSessio
         preview=None,
         topology=_build_topology(session, origins),
         runtime=[
-            ShareableRuntimeObservation(
+            ChronicleRuntimeObservation(
                 timestamp=observation.timestamp,
                 kind=observation.kind,
                 duration_ms=observation.duration_ms,
@@ -613,16 +660,22 @@ def _build_shareable_session(session: Session, *, index: Any) -> ShareableSessio
         ],
         measurements=_build_session_measurements(measurements),
         turns=[
-            _build_shareable_turn(turn, session=session, index=index)
+            _build_chronicle_turn(turn, session=session, index=index)
             for turn in session.turns
         ],
     )
 
 
-def _build_shareable_turn(turn: Turn, *, session: Session, index: Any) -> ShareableTurn:
+def _build_chronicle_turn(turn: Turn, *, session: Session, index: Any) -> ChronicleTurn:
     event_ids = set(turn.event_ids)
     request = extract_user_request(index, turn, session=session)
-    return ShareableTurn(
+    item_ids_by_tool_call = {
+        tool_call_id: item.item_id
+        for item in turn.items
+        if isinstance((tool_call_id := getattr(item, "tool_call_id", None)), str)
+        and tool_call_id
+    }
+    return ChronicleTurn(
         turn_id=turn.turn_id,
         sequence=turn.sequence,
         started_at=turn.started_at,
@@ -635,14 +688,21 @@ def _build_shareable_turn(turn: Turn, *, session: Session, index: Any) -> Sharea
             if observation.source_event_id in event_ids
             and observation.source_event_id is not None
         ],
-        items=[_build_shareable_item(item) for item in turn.items],
+        items=[
+            _build_chronicle_item(
+                item,
+                cwd=session.cwd,
+                item_ids_by_tool_call=item_ids_by_tool_call,
+            )
+            for item in turn.items
+        ],
         team_state=_build_team_state(turn.team_state),
     )
 
 
 def _build_user_request(
     turn: Turn, request: dict[str, str] | None, *, index: Any
-) -> ShareableUserRequest | None:
+) -> ChronicleUserRequest | None:
     if request is None or not request.get("content", "").strip():
         return None
     content = "[content omitted]"
@@ -652,7 +712,7 @@ def _build_user_request(
     source_event = event_for_turn_user_request(index, turn)
     text_size = event_text_size(source_event) if source_event is not None else None
     request_type = request.get("type")
-    return ShareableUserRequest(
+    return ChronicleUserRequest(
         request_id=request_id,
         type=request_type if request_type in {"message", "command"} else "message",
         source=request.get("source") or "human_user",
@@ -662,9 +722,9 @@ def _build_user_request(
     )
 
 
-def _build_request_usage(observation: ContextUsageObservation) -> ShareableRequestUsage:
+def _build_request_usage(observation: ContextUsageObservation) -> ChronicleRequestUsage:
     usage = observation.usage
-    return ShareableRequestUsage(
+    return ChronicleRequestUsage(
         request_id=observation.source_event_id,
         timestamp=observation.timestamp,
         source=observation.source,
@@ -672,7 +732,7 @@ def _build_request_usage(observation: ContextUsageObservation) -> ShareableReque
         provider=observation.provider,
         context_window_tokens=observation.context_window_tokens,
         used_input_tokens=observation.used_input_tokens,
-        usage=ShareableUsage(
+        usage=ChronicleUsage(
             input_tokens=_usage_int(usage, "input_tokens", "inputTokens"),
             cached_input_tokens=_usage_int(
                 usage, "cached_input_tokens", "cachedInputTokens"
@@ -693,7 +753,7 @@ def _build_request_usage(observation: ContextUsageObservation) -> ShareableReque
             cost_usd=_cost_text(_usage_optional_float(usage, "cost_usd", "costUsd")),
         ),
         categories=[
-            ShareableUsageCategory(
+            ChronicleUsageCategory(
                 key=category.key,
                 label=category.label,
                 tokens=category.tokens,
@@ -705,11 +765,19 @@ def _build_request_usage(observation: ContextUsageObservation) -> ShareableReque
     )
 
 
-def _build_shareable_item(item: Item) -> ShareableItem:
+def _build_chronicle_item(
+    item: Item,
+    *,
+    cwd: str | None,
+    item_ids_by_tool_call: dict[str, UUID],
+) -> ChronicleItem:
     measurements = item.measurements or extract_item_measurements(item)
-    tool_summary = _bounded_tool_summary(item, measurements)
+    tool_summary = _bounded_tool_summary(item, measurements, cwd=cwd)
     semantic = _item_semantic(item, tool_summary)
-    return ShareableItem(
+    projection_parent_item_id, nested_index = _projection_origin(
+        item, item_ids_by_tool_call=item_ids_by_tool_call
+    )
+    return ChronicleItem(
         item_id=item.item_id,
         sequence=item.sequence,
         kind=item.kind,
@@ -724,8 +792,14 @@ def _build_shareable_item(item: Item) -> ShareableItem:
         tool_category=tool_summary.name if tool_summary is not None else None,
         operation=_bounded(getattr(item, "operation", None)),
         exit_code=getattr(item, "exit_code", None),
-        path=(_portable_path(item.path) if isinstance(item, FileChangeItem) else None),
-        measurements=ShareableItemMeasurements(
+        path=(
+            _portable_path(item.path, cwd=cwd)
+            if isinstance(item, FileChangeItem)
+            else None
+        ),
+        projection_parent_item_id=projection_parent_item_id,
+        nested_index=nested_index,
+        measurements=ChronicleItemMeasurements(
             input_chars=measurements.input_chars,
             input_tokens=measurements.input_tokens,
             output_chars=measurements.output_chars,
@@ -743,8 +817,8 @@ def _build_shareable_item(item: Item) -> ShareableItem:
 
 
 def _bounded_tool_summary(
-    item: Item, measurements: ItemMeasurements
-) -> ShareableToolSummary | None:
+    item: Item, measurements: ItemMeasurements, *, cwd: str | None
+) -> ChronicleToolSummary | None:
     raw = measurements.tool_summary or summarize_tool_call(item)
     if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
         return None
@@ -752,27 +826,10 @@ def _bounded_tool_summary(
     if not name:
         return None
     description = raw.get("description")
-    if name == "RunCommand":
-        verification = (
-            classify_verification_command(item.command)
-            if isinstance(item, CommandExecutionItem)
-            else None
-        )
-        retained_description = (
-            description if description in {"tests", "checks", "command"} else None
-        )
-        description = verification or retained_description or "command"
-    elif name in {"WebSearch", "WebFetch"}:
-        description = None
-    elif isinstance(description, str):
-        description = _portable_path(description)
-    else:
-        description = None
-    return ShareableToolSummary(
+    detail = _tool_detail(name, description, cwd=cwd)
+    return ChronicleToolSummary(
         name=name,
-        description=description
-        if description in {"tests", "checks", "command"}
-        else None,
+        detail=detail,
         status=_bounded(raw.get("status")),
         optimization_profile=_bounded(raw.get("optimization_profile")),
         activity_hidden=(
@@ -789,13 +846,13 @@ def _bounded_tool_summary(
 
 
 def _item_semantic(
-    item: Item, tool_summary: ShareableToolSummary | None
-) -> ShareableItemSemantic:
+    item: Item, tool_summary: ChronicleToolSummary | None
+) -> ChronicleItemSemantic:
     vendor_data = item.vendor_data
     retained = (
-        vendor_data.get("shareable_semantics")
+        vendor_data.get("chronicle_semantics")
         if isinstance(vendor_data, dict)
-        and isinstance(vendor_data.get("shareable_semantics"), dict)
+        and isinstance(vendor_data.get("chronicle_semantics"), dict)
         else {}
     )
     verification_kind = (
@@ -812,7 +869,7 @@ def _item_semantic(
             resolution_key = "command:" + hashlib.sha256(summary.encode()).hexdigest()
     elif tool_summary is not None:
         resolution_key = f"tool:{tool_summary.name}"
-    return ShareableItemSemantic(
+    return ChronicleItemSemantic(
         verification_kind=_bounded(verification_kind),
         resolution_key=_bounded(resolution_key),
         plan_actions=[],
@@ -821,14 +878,14 @@ def _item_semantic(
 
 def _build_session_measurements(
     measurements: SessionMeasurements,
-) -> ShareableSessionMeasurements:
-    return ShareableSessionMeasurements(
+) -> ChronicleSessionMeasurements:
+    return ChronicleSessionMeasurements(
         context_sources=[
             _build_context_source(source) for source in measurements.context_sources
         ],
         llm_response_count=measurements.llm_response_count,
         llm_response_text_sizes=[
-            ShareableEventTextMeasurement(
+            ChronicleEventTextMeasurement(
                 timestamp=value.timestamp,
                 chars=value.chars,
                 tokens=value.tokens,
@@ -840,7 +897,7 @@ def _build_session_measurements(
 
 def _build_context_source(
     source: ContextSourceMeasurement,
-) -> ShareableContextSourceMeasurement:
+) -> ChronicleContextSourceMeasurement:
     labels = _CONTEXT_SOURCE_LABELS.get(source.key)
     if labels is not None and source.label in labels:
         key = source.key
@@ -848,7 +905,7 @@ def _build_context_source(
     else:
         key = "other_context"
         label = "Other context"
-    return ShareableContextSourceMeasurement(
+    return ChronicleContextSourceMeasurement(
         timestamp=source.timestamp,
         key=key,
         label=label,
@@ -858,12 +915,12 @@ def _build_context_source(
     )
 
 
-def _build_team_state(value: TeamTurnState | None) -> ShareableTeamState | None:
+def _build_team_state(value: TeamTurnState | None) -> ChronicleTeamState | None:
     if value is None:
         return None
-    state = ShareableTeamState(
+    state = ChronicleTeamState(
         members=[
-            ShareableTeamMember(
+            ChronicleTeamMember(
                 member_id=_bounded(member.member_id) or "member",
                 session_id=member.session_id,
                 agent_type=_bounded(member.agent_type),
@@ -871,7 +928,7 @@ def _build_team_state(value: TeamTurnState | None) -> ShareableTeamState | None:
             for member in value.members
         ],
         tasks=[
-            ShareableTeamTask(
+            ChronicleTeamTask(
                 task_id=_bounded(task.task_id) or "task",
                 status=_bounded(task.status),
                 member_id=_bounded(task.member_id),
@@ -885,12 +942,12 @@ def _build_team_state(value: TeamTurnState | None) -> ShareableTeamState | None:
 
 def _build_topology(
     session: Session, origins: dict[str, CanonicalSpawnOrigin]
-) -> ShareableSessionTopology:
+) -> ChronicleSessionTopology:
     extensions = session.extensions
     claude = extensions.claude_code if extensions else None
     codex = extensions.codex if extensions else None
     amp = extensions.amp if extensions else None
-    return ShareableSessionTopology(
+    return ChronicleSessionTopology(
         sidechain=bool(claude and claude.is_sidechain),
         forked=bool(codex and codex.forked_from_id),
         spawned=bool(
@@ -907,7 +964,7 @@ def _build_topology(
         multi_agent_version=_bounded(codex.multi_agent_version if codex else None),
         multi_agent_mode=_bounded(codex.multi_agent_mode if codex else None),
         spawn_origins=[
-            ShareableSpawnOrigin(
+            ChronicleSpawnOrigin(
                 target_session_id=UUID(child_id),
                 turn_id=origin.turn_id,
                 item_id=origin.item_id,
@@ -930,15 +987,15 @@ def _canonical_spawn_origins(session: Session) -> dict[str, CanonicalSpawnOrigin
     return {**existing, **canonical_spawn_origins(session)}
 
 
-def _build_shareable_edge(edge: SessionEdge) -> ShareableEdge:
+def _build_chronicle_edge(edge: SessionEdge) -> ChronicleEdge:
     tool_name = None
     if isinstance(edge.metadata, dict):
         tool_name = _bounded(edge.metadata.get("tool_name"))
-    return ShareableEdge(
+    return ChronicleEdge(
         source_session_id=edge.source_session_id,
         target_session_id=edge.target_session_id,
         kind=edge.type,
-        origin=ShareableEdgeOrigin(
+        origin=ChronicleEdgeOrigin(
             session_id=edge.source_session_id,
             turn_id=edge.source_turn_id,
             item_id=edge.source_item_id,
@@ -949,7 +1006,7 @@ def _build_shareable_edge(edge: SessionEdge) -> ShareableEdge:
     )
 
 
-def _to_session(value: ShareableSession) -> Session:
+def _to_session(value: ChronicleSession) -> Session:
     events: list[Event] = []
     turns: list[Turn] = []
     context_usage: list[ContextUsageObservation] = []
@@ -1059,15 +1116,35 @@ def _to_session(value: ShareableSession) -> Session:
     )
 
 
-def _to_item(value: ShareableItem, session_id: UUID, turn_id: UUID) -> Item:
+def _to_item(value: ChronicleItem, session_id: UUID, turn_id: UUID) -> Item:
+    tool_summary = value.measurements.tool_summary
+    restored_tool_summary: dict[str, Any] | None = None
+    if tool_summary is not None:
+        restored_tool_summary = tool_summary.model_dump(
+            mode="python", exclude_none=True, exclude={"detail"}
+        )
+        if tool_summary.detail is not None:
+            restored_tool_summary["description"] = _detail_description(
+                tool_summary.detail
+            )
     measurements = ItemMeasurements(
         **value.measurements.model_dump(mode="python", exclude={"tool_summary"}),
-        tool_summary=(
-            value.measurements.tool_summary.model_dump(mode="python", exclude_none=True)
-            if value.measurements.tool_summary is not None
-            else None
-        ),
+        tool_summary=restored_tool_summary,
     )
+    vendor_data: dict[str, Any] = {
+        "chronicle_semantics": value.semantic.model_dump(
+            mode="json", exclude_none=True
+        )
+    }
+    if value.projection_parent_item_id is not None:
+        vendor_data["chronicle_projection"] = {
+            "parent_item_id": str(value.projection_parent_item_id),
+            **(
+                {"nested_index": value.nested_index}
+                if value.nested_index is not None
+                else {}
+            ),
+        }
     common: dict[str, Any] = {
         "item_id": value.item_id,
         "session_id": session_id,
@@ -1078,11 +1155,7 @@ def _to_item(value: ShareableItem, session_id: UUID, turn_id: UUID) -> Item:
         "status": value.status,
         "event_ids": [],
         "measurements": measurements,
-        "vendor_data": {
-            "shareable_semantics": value.semantic.model_dump(
-                mode="json", exclude_none=True
-            )
-        },
+        "vendor_data": vendor_data,
     }
     if value.kind == "agent_message":
         return AgentMessageItem(**common)
@@ -1106,7 +1179,7 @@ def _to_item(value: ShareableItem, session_id: UUID, turn_id: UUID) -> Item:
     return ToolCallItem(**common, tool_name=value.tool_name)
 
 
-def _to_team_state(value: ShareableTeamState | None) -> TeamTurnState | None:
+def _to_team_state(value: ChronicleTeamState | None) -> TeamTurnState | None:
     if value is None:
         return None
     return TeamTurnState(
@@ -1120,7 +1193,7 @@ def _to_team_state(value: ShareableTeamState | None) -> TeamTurnState | None:
     )
 
 
-def _to_extensions(value: ShareableSession) -> VendorExtensions | None:
+def _to_extensions(value: ChronicleSession) -> VendorExtensions | None:
     topology = value.topology
     claude = (
         ClaudeCodeExtensions(
@@ -1162,8 +1235,8 @@ def _to_extensions(value: ShareableSession) -> VendorExtensions | None:
         codex = CodexExtensions(
             title=value.title,
             preview=value.preview,
-            forked_from_id="shareable" if topology.forked else None,
-            spawn_parent_thread_id="shareable" if topology.spawned else None,
+            forked_from_id="chronicle" if topology.forked else None,
+            spawn_parent_thread_id="chronicle" if topology.spawned else None,
             spawn_depth=topology.spawn_depth,
             multi_agent_version=topology.multi_agent_version,
             multi_agent_mode=topology.multi_agent_mode,
@@ -1189,7 +1262,7 @@ def _to_extensions(value: ShareableSession) -> VendorExtensions | None:
     return VendorExtensions(amp=amp, claude_code=claude, codex=codex, pi=pi)
 
 
-def _to_edge(value: ShareableEdge) -> SessionEdge:
+def _to_edge(value: ChronicleEdge) -> SessionEdge:
     return SessionEdge(
         type=value.kind,
         source_session_id=value.source_session_id,
@@ -1202,6 +1275,146 @@ def _to_edge(value: ShareableEdge) -> SessionEdge:
     )
 
 
+_DETAIL_KIND_BY_CONCEPT = {
+    READ_FILE: "file",
+    EDIT_FILE: "file",
+    WRITE_FILE: "file",
+    LIST_FILES: "file",
+    SEARCH_TEXT: "search",
+    RUN_COMMAND: "command",
+    WEB_FETCH: "web",
+    WEB_SEARCH: "web",
+}
+
+
+def _projection_origin(
+    item: Item, *, item_ids_by_tool_call: dict[str, UUID]
+) -> tuple[UUID | None, int | None]:
+    activity = (
+        item.vendor_data.get("activity")
+        if isinstance(item.vendor_data, dict)
+        and isinstance(item.vendor_data.get("activity"), dict)
+        else {}
+    )
+    provenance = (
+        activity.get("provenance")
+        if isinstance(activity.get("provenance"), dict)
+        else {}
+    )
+    parent_tool_call_id = provenance.get("parent_tool_call_id")
+    parent_item_id = (
+        item_ids_by_tool_call.get(parent_tool_call_id)
+        if isinstance(parent_tool_call_id, str)
+        else None
+    )
+    nested_index = provenance.get("nested_index")
+    return (
+        parent_item_id,
+        nested_index
+        if isinstance(nested_index, int) and not isinstance(nested_index, bool)
+        else None,
+    )
+
+
+def _tool_detail(
+    concept: str, description: Any, *, cwd: str | None
+) -> ChronicleToolDetail | None:
+    if not isinstance(description, str) or not description.strip():
+        return None
+    if concept in {WEB_FETCH, WEB_SEARCH}:
+        kind = "web"
+    elif concept in {TODO_LIST, SUBAGENT_TASK, AGENT_COLLAB, SESSION_HANDOFF}:
+        kind = "coordination"
+    else:
+        kind = _DETAIL_KIND_BY_CONCEPT.get(concept, "tool")
+    target = (
+        _safe_command_target(description, cwd=cwd)
+        if kind == "command"
+        else _safe_detail_target(description, cwd=cwd)
+    )
+    if not target:
+        return None
+    return ChronicleToolDetail(kind=kind, target=target)
+
+
+def _safe_command_target(value: str, *, cwd: str | None) -> str | None:
+    try:
+        tokens = shlex.split(value)
+    except ValueError:
+        tokens = value.split()
+    redact_next = False
+    sensitive = re.compile(
+        r"(?:password|passwd|token|secret|api[-_]?key|authorization|cookie)",
+        re.IGNORECASE,
+    )
+    retained: list[str] = []
+    for token in tokens[:16]:
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
+            continue
+        if redact_next:
+            redact_next = False
+            retained.append("[redacted]")
+            continue
+        key = token.split("=", 1)[0]
+        if sensitive.search(key):
+            if "=" in token:
+                retained.append(f"{key}=[redacted]")
+            else:
+                retained.append(token)
+                redact_next = True
+            continue
+        retained.append(_safe_detail_target(token, cwd=cwd) or token)
+    return _bounded_preview(shlex.join(retained)) if retained else None
+
+
+def _safe_detail_target(value: str, *, cwd: str | None) -> str | None:
+    normalized = " ".join(value.split()).strip()
+    if not normalized:
+        return None
+    if cwd:
+        cwd_normalized = cwd.rstrip("/").replace("\\", "/")
+        normalized = normalized.replace(cwd_normalized + "/", "")
+        normalized = normalized.replace(cwd_normalized, ".")
+    normalized = re.sub(
+        r"https?://[^\s'\"]+",
+        lambda match: _safe_url(match.group(0)),
+        normalized,
+    )
+    normalized = _HOST_PATH_TOKEN.sub(
+        lambda match: _portable_path(match.group(0), cwd=cwd) or "[path]",
+        normalized,
+    )
+    if _HOST_PATH.match(normalized):
+        normalized = _portable_path(normalized, cwd=cwd) or ""
+    normalized = re.sub(
+        r"(?i)(password|passwd|token|secret|api[-_]?key|authorization|cookie)"
+        r"(\s*[:=]\s*)([^\s,;]+)",
+        r"\1\2[redacted]",
+        normalized,
+    )
+    return _bounded_preview(normalized)
+
+
+def _safe_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port is not None else ""
+    except ValueError:
+        return "[url]"
+    return urlunsplit((parsed.scheme, f"{hostname}{port}", parsed.path, "", ""))
+
+
+def _bounded_preview(value: str) -> str | None:
+    return value[:280].strip() or None
+
+
+def _detail_description(description: ChronicleToolDetail) -> str:
+    if description.scope:
+        return f"{description.target} within {description.scope}"
+    return description.target
+
+
 def _portable_project(value: str | None) -> str | None:
     if not value:
         return None
@@ -1212,10 +1425,16 @@ def _portable_project(value: str | None) -> str | None:
     return _bounded(value)
 
 
-def _portable_path(value: str | None) -> str | None:
+def _portable_path(value: str | None, *, cwd: str | None = None) -> str | None:
     if not value:
         return None
     normalized = value.strip().replace("\\", "/")
+    if cwd:
+        cwd_normalized = cwd.rstrip("/").replace("\\", "/")
+        if normalized == cwd_normalized:
+            return "."
+        if normalized.startswith(cwd_normalized + "/"):
+            normalized = normalized[len(cwd_normalized) + 1 :]
     path = PurePath(normalized)
     safe_parts = [part for part in path.parts if part not in {"/", "..", "."}]
     if not safe_parts:
@@ -1268,28 +1487,28 @@ def _reject_embedded_content(value: Any, *, field: str = "") -> None:
             if child not in (None, "", [], {}) and any(
                 marker in normalized for marker in ("data_uri", "blob", "media")
             ):
-                raise ValueError(f"shareable graph retained {key}")
+                raise ValueError(f"chronicle graph retained {key}")
             _reject_embedded_content(child, field=key)
     elif isinstance(value, list):
         for child in value:
             _reject_embedded_content(child, field=field)
     elif isinstance(value, str):
         if len(value) > 512:
-            raise ValueError(f"shareable graph retained unbounded string in {field}")
+            raise ValueError(f"chronicle graph retained unbounded string in {field}")
         if value.lstrip().lower().startswith("data:"):
-            raise ValueError(f"shareable graph retained data URI in {field}")
-        if _HOST_PATH.match(value):
-            raise ValueError(f"shareable graph retained a host path in {field}")
+            raise ValueError(f"chronicle graph retained data URI in {field}")
+        if _HOST_PATH_TOKEN.search(value):
+            raise ValueError(f"chronicle graph retained a host path in {field}")
         if len(value) >= 128 and _BASE64_BODY.fullmatch(value):
-            raise ValueError(f"shareable graph retained a base64-like body in {field}")
+            raise ValueError(f"chronicle graph retained a base64-like body in {field}")
 
 
 __all__ = [
-    "MAX_SHAREABLE_ARTIFACT_BYTES",
-    "MAX_SHAREABLE_PUBLICATION_BYTES",
-    "SHAREABLE_GRAPH_SCHEMA_VERSION",
-    "ShareableGraphArtifact",
-    "build_shareable_graph_artifact",
-    "build_shareable_segments",
-    "shareable_session_graph",
+    "CHRONICLE_GRAPH_SCHEMA_VERSION",
+    "MAX_CHRONICLE_ARTIFACT_BYTES",
+    "MAX_CHRONICLE_PUBLICATION_BYTES",
+    "ChronicleGraphArtifact",
+    "build_chronicle_graph_artifact",
+    "build_chronicle_segments",
+    "chronicle_session_graph",
 ]

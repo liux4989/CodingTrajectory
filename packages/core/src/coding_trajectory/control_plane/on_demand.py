@@ -12,6 +12,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, Field
 
+from coding_trajectory.control_plane.chronicle import build_chronicle_graph_artifact
 from coding_trajectory.control_plane.collector import (
     CollectorIdentity,
     CollectorRemoteError,
@@ -22,7 +23,6 @@ from coding_trajectory.control_plane.collector_protocol import (
     ProjectRegistrationRequest,
 )
 from coding_trajectory.control_plane.publication_lock import publication_lock
-from coding_trajectory.control_plane.shareable import build_shareable_graph_artifact
 from coding_trajectory.discovery import locate_session_files
 from coding_trajectory.query import DocumentError
 
@@ -228,7 +228,7 @@ class OnDemandPublisher:
                     and session_id in published.sessions
                     and state.digests.get(target)
                     in {
-                        build_shareable_graph_artifact(graph).digest()
+                        build_chronicle_graph_artifact(graph).digest()
                         for graph in published.session_graphs.values()
                     }
                 ):
@@ -242,7 +242,7 @@ class OnDemandPublisher:
                     and session_id in latest.sessions
                     and state.digests.get(target)
                     in {
-                        build_shareable_graph_artifact(graph).digest()
+                        build_chronicle_graph_artifact(graph).digest()
                         for graph in latest.session_graphs.values()
                     }
                 ):
@@ -290,7 +290,7 @@ class OnDemandPublisher:
                             heartbeat=False,
                             target_session_id=session_id,
                             known_artifact_digests={
-                                build_shareable_graph_artifact(graph).digest()
+                                build_chronicle_graph_artifact(graph).digest()
                                 for graph in latest.session_graphs.values()
                             },
                         )
@@ -317,7 +317,7 @@ class OnDemandPublisher:
                         "publication completed but the requested session is not visible"
                     )
                 if result.target_artifact_digest not in {
-                    build_shareable_graph_artifact(graph).digest()
+                    build_chronicle_graph_artifact(graph).digest()
                     for graph in visible.session_graphs.values()
                 }:
                     raise DocumentError(

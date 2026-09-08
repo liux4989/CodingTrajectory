@@ -3,7 +3,7 @@
 The collector is deliberately a delivery client: its SQLite database holds
 paths, offsets, and unacknowledged checkpoint/artifact requests, but is never a
 query authority. Vendor JSONL is parsed locally through the existing adapters;
-only metadata checkpoints and bounded shareable graphs are queued remotely.
+only metadata checkpoints and bounded chronicle graphs are queued remotely.
 """
 
 from __future__ import annotations
@@ -21,8 +21,14 @@ from typing import Any, Protocol, Self
 from uuid import UUID, uuid4
 
 from coding_trajectory.contracts import LivingChange, LivingSessionsChange
+from coding_trajectory.control_plane.chronicle import (
+    ChronicleGraphArtifact,
+    build_chronicle_graph_artifact,
+    build_chronicle_segments,
+)
 from coding_trajectory.control_plane.collector_protocol import (
     ArtifactPublicationRequest,
+    ChronicleArtifactPublication,
     CollectorRecoveryRequest,
     CollectorRecoveryResponse,
     LeaseHeartbeatRequest,
@@ -34,15 +40,9 @@ from coding_trajectory.control_plane.collector_protocol import (
     ProjectRegistrationRequest,
     ProjectRegistrationResponse,
     RecoveredSource,
-    ShareableArtifactPublication,
     SourceRegistrationRequest,
     SourceRegistrationResponse,
     SourceVectorEntry,
-)
-from coding_trajectory.control_plane.shareable import (
-    ShareableGraphArtifact,
-    build_shareable_graph_artifact,
-    build_shareable_segments,
 )
 from coding_trajectory.discovery import (
     DiscoveryCandidate,
@@ -248,7 +248,7 @@ class _FencedCandidate:
 
 @dataclass(frozen=True, slots=True)
 class _CollectedSource:
-    artifact: ShareableGraphArtifact
+    artifact: ChronicleGraphArtifact
     source_id: UUID | None
     source_epoch: int
     source_sequence: int | None
@@ -303,12 +303,12 @@ class LocalCollector:
 
         if remote is not None and global_scope:
             raise ValueError(
-                "remote shareable publication requires project-scoped collection"
+                "remote chronicle publication requires project-scoped collection"
             )
         if remote is not None and self.identity.project_id is None:
-            raise ValueError("remote shareable publication requires a project_id")
+            raise ValueError("remote chronicle publication requires a project_id")
         if remote is not None and not (self.identity.project_name or "").strip():
-            raise ValueError("remote shareable publication requires a project_name")
+            raise ValueError("remote chronicle publication requires a project_name")
 
         candidates = discover_source_candidates(
             current_dir=current_dir,
@@ -385,7 +385,7 @@ class LocalCollector:
             grouped.setdefault(
                 (source.candidate.vendor.value, source.header.session_id), []
             ).append(source)
-        normalized: dict[tuple[str, UUID], ShareableGraphArtifact] = {}
+        normalized: dict[tuple[str, UUID], ChronicleGraphArtifact] = {}
         target_artifact_digest: str | None = None
         if target_session_id is not None:
             if failed:
@@ -433,7 +433,7 @@ class LocalCollector:
             grouped = {
                 key: group for key, group in grouped.items() if key[1] in selected_ids
             }
-            target_artifact_digest = build_shareable_graph_artifact(selected).digest()
+            target_artifact_digest = build_chronicle_graph_artifact(selected).digest()
             if (
                 not self.pending_count()
                 and not self._artifact_publication_blocked()
@@ -613,7 +613,7 @@ class LocalCollector:
 
     def _queue_artifact_publication(self, sources: list[_CollectedSource]) -> int:
         if self.identity.project_id is None:
-            raise ValueError("shareable publication requires a project_id")
+            raise ValueError("chronicle publication requires a project_id")
         session_sources: dict[UUID, tuple[Session, list[_CollectedSource]]] = {}
         for source in sources:
             graph = source.artifact.to_session_graph()
@@ -647,18 +647,18 @@ class LocalCollector:
             and source.content_sha256 is not None
         ]
         if len(source_vector) != len(sources):
-            raise ValueError("shareable publication has an incomplete source vector")
+            raise ValueError("chronicle publication has an incomplete source vector")
 
-        artifacts: list[ShareableArtifactPublication] = []
+        artifacts: list[ChronicleArtifactPublication] = []
         for graph in sorted(graphs, key=lambda entry: str(entry.root_session_id)):
             graph_sources = [
                 source
                 for session in graph.sessions
                 for source in session_sources[session.session_id][1]
             ]
-            artifact = build_shareable_graph_artifact(graph)
+            artifact = build_chronicle_graph_artifact(graph)
             artifacts.append(
-                ShareableArtifactPublication(
+                ChronicleArtifactPublication(
                     artifact_id=artifact.graph.root_session_id,
                     payload=artifact,
                     content_sha256=artifact.digest(),
@@ -912,7 +912,7 @@ class LocalCollector:
         *,
         parent_turn_ids: dict[UUID, set[str]],
         remote: CollectorRemote | None,
-        artifact: ShareableGraphArtifact | None = None,
+        artifact: ChronicleGraphArtifact | None = None,
     ) -> _CollectedSource:
         segments = sorted(segments, key=lambda segment: str(segment.segment_id))
         first = segments[0]
@@ -1026,7 +1026,7 @@ class LocalCollector:
             "source_checkpoint": {
                 "segments": [segment.complete_offset for segment in segments]
             },
-            "shareable_digest": artifact.digest(),
+            "chronicle_digest": artifact.digest(),
         }
         content_sha256 = _sha256(canonical_json(payload).encode())
         if (
@@ -1381,12 +1381,12 @@ def _parent_started_turn_ids(
 def _normalized_segments(
     segments: list[_FencedCandidate],
     parent_turn_ids: dict[UUID, set[str]],
-) -> ShareableGraphArtifact:
+) -> ChronicleGraphArtifact:
     ordered = sorted(segments, key=lambda segment: str(segment.segment_id))
     # The source path participates only in deterministic canonical IDs and is
-    # never serialized into the shareable artifact. Using the same identity
+    # never serialized into the chronicle artifact. Using the same identity
     # input as local discovery keeps local and remote turn/item IDs identical.
-    artifact = build_shareable_segments(
+    artifact = build_chronicle_segments(
         [
             (
                 segment.candidate,

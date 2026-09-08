@@ -1,4 +1,4 @@
--- Direct publication of locally assembled, bounded shareable graph artifacts.
+-- Direct publication of locally assembled, bounded chronicle graph artifacts.
 --
 -- Existing v1/v2 observations and revisions remain immutable. New source
 -- observations contain checkpoint metadata only; graph bodies are validated
@@ -89,7 +89,7 @@ as $$
   );
 $$;
 
-create or replace function public.ct_shareable_json_safe(value jsonb)
+create or replace function public.ct_chronicle_json_safe(value jsonb)
 returns boolean
 language plpgsql
 immutable
@@ -104,7 +104,7 @@ begin
   case jsonb_typeof(value)
     when 'object' then
       for entry in select kv.key, kv.value
-        from jsonb_each(ct_shareable_json_safe.value) kv loop
+        from jsonb_each(ct_chronicle_json_safe.value) kv loop
         normalized_key := lower(replace(entry.key, '-', '_'));
         if normalized_key = any(array[
           'input', 'output', 'command', 'cwd', 'vendor_data', 'event_ids',
@@ -131,14 +131,14 @@ begin
           or normalized_key like '%blob%' then
           return false;
         end if;
-        if not public.ct_shareable_json_safe(entry.value) then
+        if not public.ct_chronicle_json_safe(entry.value) then
           return false;
         end if;
       end loop;
       return true;
     when 'array' then
       for child in select item from jsonb_array_elements(value) item loop
-        if not public.ct_shareable_json_safe(child) then
+        if not public.ct_chronicle_json_safe(child) then
           return false;
         end if;
       end loop;
@@ -147,9 +147,7 @@ begin
       text_value := value #>> '{}';
       if length(text_value) > 512
         or lower(ltrim(text_value)) like 'data:%'
-        or text_value ~ '^(?:/Users/|/home/|/root/|/private/|/tmp/|/var/|/Volumes/|/workspace/|/workspaces/|/mnt/|/srv/|/opt/)'
-        or text_value like '~/%'
-        or text_value ~ '^[A-Za-z]:[\\/]'
+        or text_value ~ '(?:^|[^A-Za-z0-9])(?:~/|/Users/|/home/|/root/|/private/|/tmp/|/var/|/Volumes/|/workspace/|/workspaces/|/mnt/|/srv/|/opt/|[A-Za-z]:[\\/])'
         or (
           length(text_value) >= 128
           and text_value ~ '^[A-Za-z0-9+/]+={0,2}$'
@@ -165,7 +163,7 @@ begin
 end;
 $$;
 
-create or replace function public.ct_shareable_graph_valid(value jsonb)
+create or replace function public.ct_chronicle_graph_valid(value jsonb)
 returns boolean
 language plpgsql
 immutable
@@ -190,6 +188,7 @@ declare
   item_value jsonb;
   item_measurements_value jsonb;
   summary_value jsonb;
+  detail_value jsonb;
   semantic_value jsonb;
   edge_value jsonb;
   turn_count integer := 0;
@@ -197,76 +196,76 @@ declare
   distinct_count integer;
 begin
   if not public.ct_jsonb_object_matches(
-    ct_shareable_graph_valid.value,
+    ct_chronicle_graph_valid.value,
     array['schema_version', 'graph', 'sessions', 'edges', 'coverage'],
     array['schema_version', 'graph', 'sessions', 'edges', 'coverage']
-  ) or ct_shareable_graph_valid.value ->> 'schema_version' <> 'ct.shareable_graph.v1'
-    or not public.ct_shareable_json_safe(ct_shareable_graph_valid.value) then
+  ) or ct_chronicle_graph_valid.value ->> 'schema_version' <> 'ct.chronicle_graph.v1'
+    or not public.ct_chronicle_json_safe(ct_chronicle_graph_valid.value) then
     return false;
   end if;
 
   if not public.ct_jsonb_object_matches(
-    ct_shareable_graph_valid.value -> 'graph',
+    ct_chronicle_graph_valid.value -> 'graph',
     array[
       'root_session_id', 'project', 'started_at', 'ended_at', 'status',
       'session_count', 'turn_count', 'item_count'
     ],
     array['root_session_id', 'session_count', 'turn_count', 'item_count']
   ) or not public.ct_jsonb_nonnegative_integer(
-      ct_shareable_graph_valid.value -> 'graph' -> 'session_count'
+      ct_chronicle_graph_valid.value -> 'graph' -> 'session_count'
     )
     or not public.ct_jsonb_nonnegative_integer(
-      ct_shareable_graph_valid.value -> 'graph' -> 'turn_count'
+      ct_chronicle_graph_valid.value -> 'graph' -> 'turn_count'
     )
     or not public.ct_jsonb_nonnegative_integer(
-      ct_shareable_graph_valid.value -> 'graph' -> 'item_count'
+      ct_chronicle_graph_valid.value -> 'graph' -> 'item_count'
     )
-    or (ct_shareable_graph_valid.value -> 'graph' ->> 'root_session_id')::uuid is null then
+    or (ct_chronicle_graph_valid.value -> 'graph' ->> 'root_session_id')::uuid is null then
     return false;
   end if;
 
   if not public.ct_jsonb_object_matches(
-    ct_shareable_graph_valid.value -> 'coverage',
+    ct_chronicle_graph_valid.value -> 'coverage',
     array[
       'content', 'events', 'topology', 'usage', 'measurements',
-      'semantic_previews'
+      'operational_details'
     ],
     array[
       'content', 'events', 'topology', 'usage', 'measurements',
-      'semantic_previews'
+      'operational_details'
     ]
-  ) or ct_shareable_graph_valid.value -> 'coverage' <> '{
+  ) or ct_chronicle_graph_valid.value -> 'coverage' <> '{
     "content": false,
     "events": false,
     "topology": true,
     "usage": true,
     "measurements": true,
-    "semantic_previews": false
+    "operational_details": true
   }'::jsonb then
     return false;
   end if;
 
-  if jsonb_typeof(ct_shareable_graph_valid.value -> 'sessions') <> 'array'
-    or jsonb_array_length(ct_shareable_graph_valid.value -> 'sessions') = 0
-    or jsonb_typeof(ct_shareable_graph_valid.value -> 'edges') <> 'array' then
+  if jsonb_typeof(ct_chronicle_graph_valid.value -> 'sessions') <> 'array'
+    or jsonb_array_length(ct_chronicle_graph_valid.value -> 'sessions') = 0
+    or jsonb_typeof(ct_chronicle_graph_valid.value -> 'edges') <> 'array' then
     return false;
   end if;
 
   select count(distinct session_entry ->> 'session_id') into distinct_count
-  from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry);
-  if distinct_count <> jsonb_array_length(ct_shareable_graph_valid.value -> 'sessions')
+  from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') as sessions(session_entry);
+  if distinct_count <> jsonb_array_length(ct_chronicle_graph_valid.value -> 'sessions')
     or not exists (
       select 1
-      from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
+      from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') as sessions(session_entry)
       where session_entry ->> 'session_id' =
-        ct_shareable_graph_valid.value -> 'graph' ->> 'root_session_id'
+        ct_chronicle_graph_valid.value -> 'graph' ->> 'root_session_id'
     ) then
     return false;
   end if;
 
   for session_value in
     select session_entry
-    from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
+    from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') as sessions(session_entry)
   loop
     if not public.ct_jsonb_object_matches(
       session_value,
@@ -280,7 +279,7 @@ begin
         'measurements', 'turns'
       ]
     ) or (session_value ->> 'session_id')::uuid is null
-      or session_value ->> 'vendor' not in ('codex_cli', 'claude_code', 'pi')
+      or session_value ->> 'vendor' not in ('codex_cli', 'claude_code', 'pi', 'amp')
       or (
         session_value ? 'parent_session_id'
         and (session_value ->> 'parent_session_id')::uuid is null
@@ -565,16 +564,29 @@ begin
         select item_entry
         from jsonb_array_elements(turn_value -> 'items') as items(item_entry)
       loop
+        item_measurements_value := item_value -> 'measurements';
         if not public.ct_jsonb_object_matches(
           item_value,
           array[
             'item_id', 'sequence', 'kind', 'started_at', 'completed_at', 'status',
             'tool_name', 'tool_category', 'operation', 'exit_code', 'path',
-            'measurements', 'semantic'
+            'projection_parent_item_id', 'nested_index', 'measurements', 'semantic'
           ],
           array['item_id', 'sequence', 'kind', 'started_at', 'measurements', 'semantic']
         ) or (item_value ->> 'item_id')::uuid is null
           or not public.ct_jsonb_nonnegative_integer(item_value -> 'sequence')
+          or (
+            item_value ? 'projection_parent_item_id'
+            and (item_value ->> 'projection_parent_item_id')::uuid is null
+          )
+          or (
+            item_value ? 'nested_index'
+            and not public.ct_jsonb_nonnegative_integer(item_value -> 'nested_index')
+          )
+          or (
+            item_value ? 'nested_index'
+            and not (item_value ? 'projection_parent_item_id')
+          )
           or (
             item_value ? 'exit_code'
             and (
@@ -603,7 +615,6 @@ begin
             ) <> 'boolean' then
           return false;
         end if;
-        item_measurements_value := item_value -> 'measurements';
         if not public.ct_jsonb_object_matches(
           item_measurements_value,
           array[
@@ -623,7 +634,7 @@ begin
           if not public.ct_jsonb_object_matches(
             summary_value,
             array[
-              'name', 'description', 'status', 'optimization_profile',
+              'name', 'detail', 'status', 'optimization_profile',
               'activity_hidden', 'activity_kind', 'activity_source',
               'activity_outcome', 'activity_fidelity', 'activity_wrapper_status'
             ],
@@ -632,6 +643,42 @@ begin
             summary_value ? 'activity_hidden'
             and jsonb_typeof(summary_value -> 'activity_hidden') <> 'boolean'
           ) then
+            return false;
+          end if;
+          if summary_value ? 'detail' then
+            detail_value := summary_value -> 'detail';
+            if not public.ct_jsonb_object_matches(
+              detail_value,
+              array['kind', 'target', 'scope', 'safety'],
+              array['kind', 'target', 'safety']
+            ) or detail_value ->> 'kind' not in (
+              'file', 'search', 'command', 'web', 'coordination', 'tool'
+            ) or detail_value ->> 'safety' <> 'sanitized'
+              or jsonb_typeof(detail_value -> 'target') <> 'string'
+              or length(detail_value ->> 'target') > 280
+              or (
+                detail_value ? 'scope'
+                and (
+                  jsonb_typeof(detail_value -> 'scope') <> 'string'
+                  or length(detail_value ->> 'scope') > 280
+                )
+              ) then
+              return false;
+            end if;
+          end if;
+        end if;
+        if item_value ? 'projection_parent_item_id' then
+          if item_measurements_value -> 'projection_only' <> 'true'::jsonb
+            or not exists (
+              select 1
+              from jsonb_array_elements(turn_value -> 'items')
+                as parents(parent_item)
+              where parent_item ->> 'item_id' =
+                item_value ->> 'projection_parent_item_id'
+                and parent_item ->> 'item_id' <> item_value ->> 'item_id'
+                and parent_item -> 'measurements' -> 'projection_only' =
+                  'false'::jsonb
+            ) then
             return false;
           end if;
         end if;
@@ -649,27 +696,27 @@ begin
   end loop;
 
   select count(distinct turn_entry ->> 'turn_id') into distinct_count
-  from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
+  from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') as sessions(session_entry)
   cross join lateral jsonb_array_elements(session_entry -> 'turns')
     as turns(turn_entry);
   if distinct_count <> turn_count then
     return false;
   end if;
   select count(distinct item_entry ->> 'item_id') into distinct_count
-  from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
+  from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') as sessions(session_entry)
   cross join lateral jsonb_array_elements(session_entry -> 'turns')
     as turns(turn_entry)
   cross join lateral jsonb_array_elements(turn_entry -> 'items') as items(item_entry);
   if distinct_count <> item_count
-    or (ct_shareable_graph_valid.value -> 'graph' ->> 'session_count')::integer <>
-      jsonb_array_length(ct_shareable_graph_valid.value -> 'sessions')
-    or (ct_shareable_graph_valid.value -> 'graph' ->> 'turn_count')::integer <> turn_count
-    or (ct_shareable_graph_valid.value -> 'graph' ->> 'item_count')::integer <> item_count then
+    or (ct_chronicle_graph_valid.value -> 'graph' ->> 'session_count')::integer <>
+      jsonb_array_length(ct_chronicle_graph_valid.value -> 'sessions')
+    or (ct_chronicle_graph_valid.value -> 'graph' ->> 'turn_count')::integer <> turn_count
+    or (ct_chronicle_graph_valid.value -> 'graph' ->> 'item_count')::integer <> item_count then
     return false;
   end if;
   if exists (
     select 1
-    from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') session_entry
+    from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') session_entry
     where (
       select count(*)
       from jsonb_array_elements(session_entry -> 'turns') turn_entry
@@ -679,7 +726,7 @@ begin
     )
   ) or exists (
     select 1
-    from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') session_entry
+    from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') session_entry
     cross join lateral jsonb_array_elements(session_entry -> 'turns') turn_entry
     where (
       select count(*)
@@ -694,7 +741,7 @@ begin
 
   if exists (
     select 1
-    from jsonb_array_elements(ct_shareable_graph_valid.value -> 'edges') edge_entry
+    from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'edges') edge_entry
     group by
       edge_entry ->> 'kind',
       edge_entry ->> 'source_session_id',
@@ -708,7 +755,7 @@ begin
 
   for edge_value in
     select edge_entry
-    from jsonb_array_elements(ct_shareable_graph_valid.value -> 'edges') as edges(edge_entry)
+    from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'edges') as edges(edge_entry)
   loop
     if not public.ct_jsonb_object_matches(
       edge_value,
@@ -727,11 +774,11 @@ begin
       or edge_value ->> 'confidence' not in ('high', 'medium', 'low')
       or not exists (
       select 1
-      from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
+      from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') as sessions(session_entry)
       where session_entry ->> 'session_id' = edge_value ->> 'source_session_id'
     ) or not exists (
       select 1
-      from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') as sessions(session_entry)
+      from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') as sessions(session_entry)
       where session_entry ->> 'session_id' = edge_value ->> 'target_session_id'
     ) then
       return false;
@@ -754,7 +801,7 @@ begin
         origin_value ? 'turn_id'
         and not exists (
           select 1
-          from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') session_entry,
+          from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') session_entry,
             jsonb_array_elements(session_entry -> 'turns') turn_entry
           where session_entry ->> 'session_id' =
               edge_value ->> 'source_session_id'
@@ -767,7 +814,7 @@ begin
           not (origin_value ? 'turn_id')
           or not exists (
             select 1
-            from jsonb_array_elements(ct_shareable_graph_valid.value -> 'sessions') session_entry,
+            from jsonb_array_elements(ct_chronicle_graph_valid.value -> 'sessions') session_entry,
               jsonb_array_elements(session_entry -> 'turns') turn_entry,
               jsonb_array_elements(turn_entry -> 'items') item_entry
             where session_entry ->> 'session_id' =
@@ -795,12 +842,12 @@ as $$
 begin
   return coalesce(public.ct_jsonb_object_matches(
       value,
-      array['kind', 'source_checkpoint', 'shareable_digest'],
-      array['kind', 'source_checkpoint', 'shareable_digest']
+      array['kind', 'source_checkpoint', 'chronicle_digest'],
+      array['kind', 'source_checkpoint', 'chronicle_digest']
     )
-    and value - 'kind' - 'source_checkpoint' - 'shareable_digest' = '{}'::jsonb
+    and value - 'kind' - 'source_checkpoint' - 'chronicle_digest' = '{}'::jsonb
     and value ->> 'kind' = 'ct.source_checkpoint.v1'
-    and value ->> 'shareable_digest' ~ '^[0-9a-f]{64}$'
+    and value ->> 'chronicle_digest' ~ '^[0-9a-f]{64}$'
     and jsonb_typeof(value -> 'source_checkpoint') = 'object'
     and (value -> 'source_checkpoint') - 'segments' = '{}'::jsonb
     and jsonb_typeof(value -> 'source_checkpoint' -> 'segments') = 'array'
@@ -824,8 +871,8 @@ revoke all on function public.ct_canonical_json(jsonb)
   from public, anon, authenticated;
 revoke all on function public.ct_jsonb_sha256(jsonb)
   from public, anon, authenticated;
-revoke all on function public.ct_shareable_json_safe(jsonb) from public, anon, authenticated;
-revoke all on function public.ct_shareable_graph_valid(jsonb) from public, anon, authenticated;
+revoke all on function public.ct_chronicle_json_safe(jsonb) from public, anon, authenticated;
+revoke all on function public.ct_chronicle_graph_valid(jsonb) from public, anon, authenticated;
 revoke all on function public.ct_source_checkpoint_valid(jsonb) from public, anon, authenticated;
 
 -- Stop legacy projector work without deleting its observations or audit rows.
@@ -834,7 +881,7 @@ set state = 'completed',
     lease_owner = null,
     lease_expires_at = null,
     completed_at = coalesce(completed_at, clock_timestamp()),
-    last_error = 'superseded_by_direct_shareable_publication',
+    last_error = 'superseded_by_direct_chronicle_publication',
     payload = payload || jsonb_build_object('direct_publication_superseded', true)
 where projection_name = 'project_source_observation'
   and state <> 'completed';
@@ -851,13 +898,13 @@ alter table public.ct_source_observations
   ) not valid;
 
 alter table public.ct_artifact_revisions
-  add constraint ct_artifact_revisions_shareable_v1_new
+  add constraint ct_artifact_revisions_chronicle_v1_new
   check (
-    schema_version = 'ct.shareable_graph.v1'
+    schema_version = 'ct.chronicle_graph.v1'
     and source_vector = '{}'::jsonb
     and content_sha256 = public.ct_jsonb_sha256(payload)
     and octet_length(convert_to(public.ct_canonical_json(payload), 'UTF8')) <= 8388608
-    and public.ct_shareable_graph_valid(payload)
+    and public.ct_chronicle_graph_valid(payload)
   ) not valid;
 
 -- One atomic project publication can contain multiple graph revisions at the
@@ -1313,7 +1360,7 @@ begin
         ]
       )
       or artifact ->> 'artifact_id' is null
-      or artifact ->> 'schema_version' <> 'ct.shareable_graph.v1'
+      or artifact ->> 'schema_version' <> 'ct.chronicle_graph.v1'
       or artifact ->> 'content_sha256' !~ '^[0-9a-f]{64}$'
       or artifact ->> 'serialized_bytes' !~ '^[1-9][0-9]*$'
       or (artifact ->> 'serialized_bytes')::bigint > 8388608
@@ -1323,7 +1370,7 @@ begin
         ))
       or artifact ->> 'content_sha256' <>
         public.ct_jsonb_sha256(artifact -> 'payload')
-      or not public.ct_shareable_graph_valid(artifact -> 'payload')
+      or not public.ct_chronicle_graph_valid(artifact -> 'payload')
       or artifact ->> 'artifact_id' <>
         artifact -> 'payload' -> 'graph' ->> 'root_session_id'
       or jsonb_typeof(artifact -> 'source_ids') <> 'array'
@@ -1343,7 +1390,7 @@ begin
     group by artifact ->> 'artifact_id', source_entry.source_id
     having count(*) > 1
   ) then
-    raise exception 'invalid shareable graph artifact' using errcode = '22023';
+    raise exception 'invalid chronicle graph artifact' using errcode = '22023';
   end if;
   if exists (
     select 1
@@ -1454,7 +1501,7 @@ begin
       workspace_id, sequence, authority, kind, resource_id, payload
     ) values (
       target_workspace_id, allocated_sequence, 'historical',
-      'shareable_publication_superseded', target_project_id::text,
+      'chronicle_publication_superseded', target_project_id::text,
       jsonb_build_object(
         'publication_sequence', target_publication_sequence
       )
@@ -1551,7 +1598,7 @@ begin
       content_sha256, source_vector, published_sequence, observed_at
     ) values (
       target_workspace_id, artifact_record.artifact_id, next_revision,
-      'ct.shareable_graph.v1', artifact_record.payload,
+      'ct.chronicle_graph.v1', artifact_record.payload,
       artifact_record.content_sha256, '{}'::jsonb,
       allocated_sequence, artifact_record.observed_at
     );
@@ -1661,7 +1708,7 @@ begin
     workspace_id, sequence, authority, kind, resource_id, payload
   ) values (
     target_workspace_id, allocated_sequence, 'historical',
-    'shareable_graphs_published', target_project_id::text,
+    'chronicle_graphs_published', target_project_id::text,
     jsonb_build_object(
       'publication_sequence', target_publication_sequence,
       'revision_count', revision_count,
@@ -1759,7 +1806,7 @@ begin
         on artifact.workspace_id = revision.workspace_id
         and artifact.artifact_id = revision.artifact_id
       where revision.workspace_id = target_workspace_id
-        and revision.schema_version = 'ct.shareable_graph.v1'
+        and revision.schema_version = 'ct.chronicle_graph.v1'
         and revision.published_sequence <= snapshot_sequence
         and (
           revision.superseded_sequence is null
