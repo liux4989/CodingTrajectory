@@ -45,6 +45,42 @@ concurrent threads. Durable agent and tool observations are deduplicated by
 their event plus stable message or tool-use identity when those IDs are
 available.
 
+## Proactive publication
+
+After the plugin-load reconciliation and each completed agent turn, the plugin
+debounces and launches `~/.coding-trajectory/bin/run-chronicle-collector` as a
+detached local process. Amp hooks wait only for the journal write; they never
+wait for authentication, parsing, or network publication. Changes captured
+while one collector is running cause one follow-up run, and the collector's
+cross-process lock and SQLite outbox retain serialization, idempotency, and
+durable retries.
+
+The executable receives no transcript content, credentials, or shell-expanded
+arguments from the plugin. It must set its own collector profile, portable
+project name, Amp-only vendor filter, and stable private state path. For example:
+
+```sh
+#!/bin/zsh
+set -euo pipefail
+umask 077
+cd /path/to/CodingTrajectory
+exec /path/to/uv run ct collector run \
+  --credential-profile default \
+  --project-name CodingTrajectory \
+  --agent-vendor amp \
+  --since-days 7 \
+  --state-path "$HOME/.coding-trajectory/control-plane/chronicle-continuous.sqlite3"
+```
+
+Keep the wrapper mode executable and its parent directory private. Set
+`CT_AMP_PUBLISH_COMMAND` to an alternate absolute executable path, or set
+`CT_AMP_AUTO_PUBLISH=0` to retain capture without automatic publication. The
+plugin does not call the hosted Datahub Worker: that facade remains read-only.
+Only the local collector builds and validates the bounded Chronicle artifact
+before publishing it through authenticated Supabase RPC. The publication path
+replaces user-request content with `[content omitted]` and removes assistant
+text previews even if a local Chronicle projection retains bounded narrative.
+
 ## Orb behavior
 
 The plugin runs inside an orb and writes to that orb's local filesystem. Files

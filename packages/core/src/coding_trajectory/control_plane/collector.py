@@ -434,7 +434,9 @@ class LocalCollector:
             grouped = {
                 key: group for key, group in grouped.items() if key[1] in selected_ids
             }
-            target_artifact_digest = build_chronicle_graph_artifact(selected).digest()
+            target_artifact_digest = _body_free_artifact(
+                build_chronicle_graph_artifact(selected)
+            ).digest()
             if (
                 not self.pending_count()
                 and not self._artifact_publication_blocked()
@@ -657,7 +659,7 @@ class LocalCollector:
                 for session in graph.sessions
                 for source in session_sources[session.session_id][1]
             ]
-            artifact = build_chronicle_graph_artifact(graph)
+            artifact = _body_free_artifact(build_chronicle_graph_artifact(graph))
             artifacts.append(
                 ChronicleArtifactPublication(
                     artifact_id=artifact.graph.root_session_id,
@@ -1348,6 +1350,35 @@ class LocalCollector:
                     "update observation_outbox set state = 'rejected', last_error = 'invalid_checkpoint_not_published' where idempotency_key = ?",
                     (row["idempotency_key"],),
                 )
+
+
+def _body_free_artifact(artifact: ChronicleGraphArtifact) -> ChronicleGraphArtifact:
+    sessions = []
+    for session in artifact.sessions:
+        turns = []
+        for turn in session.turns:
+            user_request = (
+                turn.user_request.model_copy(update={"content": "[content omitted]"})
+                if turn.user_request is not None
+                else None
+            )
+            items = [
+                item.model_copy(
+                    update={
+                        "measurements": item.measurements.model_copy(
+                            update={"text_preview": None}
+                        )
+                    }
+                )
+                for item in turn.items
+            ]
+            turns.append(
+                turn.model_copy(update={"user_request": user_request, "items": items})
+            )
+        sessions.append(session.model_copy(update={"turns": turns}))
+    return ChronicleGraphArtifact.model_validate(
+        artifact.model_copy(update={"sessions": sessions}).model_dump(mode="python")
+    )
 
 
 def _complete_prefix(source: Path, size: int) -> tuple[int, bytes]:

@@ -1,13 +1,16 @@
 import type { PluginAPI, PluginThread, ThreadMessage } from '@ampcode/plugin'
-import { appendFile, mkdir, readFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { constants } from 'node:fs'
+import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 export const description =
-	'Captures Amp thread transcripts as local append-only JSONL for CodingTrajectory.'
+	'Captures Amp threads locally and triggers privacy-safe Chronicle publication.'
 
 const SCHEMA_VERSION = 1
 const PAGE_SIZE = 20
+const PUBLISH_DEBOUNCE_MS = 2_000
 
 type StoredState = Map<string, string>
 
@@ -21,6 +24,17 @@ function logRoot(): string {
 function sourcePath(threadID: string): string {
 	const safeID = threadID.replace(/[^a-zA-Z0-9-]/g, '_')
 	return join(logRoot(), `${safeID}.jsonl`)
+}
+
+function publisherCommand(): string | null {
+	if (process.env.CT_AMP_AUTO_PUBLISH === '0') return null
+	const configured = process.env.CT_AMP_PUBLISH_COMMAND
+	if (!configured) {
+		return join(homedir(), '.coding-trajectory', 'bin', 'run-chronicle-collector')
+	}
+	return configured.startsWith('~/')
+		? join(homedir(), configured.slice(2))
+		: configured
 }
 
 function recordKey(record: Record<string, unknown>): string | null {
@@ -108,6 +122,58 @@ async function optional<T>(read: () => Promise<T>): Promise<T | null> {
 export default function codingTrajectoryCollector(amp: PluginAPI) {
 	const states = new Map<string, StoredState>()
 	let captures = Promise.resolve()
+	let publishTimer: ReturnType<typeof setTimeout> | undefined
+	let publishRunning = false
+	let publishRequested = false
+	let disposed = false
+	let unavailableLogged = false
+
+	function requestPublication(): void {
+		const command = publisherCommand()
+		const workspaceRoot = amp.system.workspaceRoot
+		if (!command || !workspaceRoot) return
+		publishRequested = true
+		if (publishRunning || publishTimer) return
+		publishTimer = setTimeout(() => {
+			publishTimer = undefined
+			void launchPublisher(command, amp.helpers.filePathFromURI(workspaceRoot))
+		}, PUBLISH_DEBOUNCE_MS)
+	}
+
+	async function launchPublisher(command: string, cwd: string): Promise<void> {
+		try {
+			await access(command, constants.X_OK)
+		} catch (error) {
+			if (!unavailableLogged && process.env.CT_AMP_PUBLISH_COMMAND) {
+				unavailableLogged = true
+				amp.logger.log('CodingTrajectory publisher is not executable:', error)
+			}
+			return
+		}
+
+		publishRequested = false
+		publishRunning = true
+		const child = spawn(command, [], {
+			cwd,
+			detached: true,
+			stdio: 'ignore',
+		})
+		child.once('error', (error) => {
+			publishRunning = false
+			if (!disposed) {
+				amp.logger.log('CodingTrajectory publisher failed to start:', error)
+				if (publishRequested) requestPublication()
+			}
+		})
+		child.once('exit', (code) => {
+			publishRunning = false
+			if (!disposed && code !== 0) {
+				amp.logger.log(`CodingTrajectory publisher exited with status ${code}.`)
+			}
+			if (!disposed && publishRequested) requestPublication()
+		})
+		child.unref()
+	}
 
 	async function appendChanged(
 		path: string,
@@ -232,7 +298,7 @@ export default function codingTrajectoryCollector(amp: PluginAPI) {
 			message_id: event.id,
 			status: event.status,
 		})
-		return capture(ctx.thread, 'agent.end', observedAt)
+		return capture(ctx.thread, 'agent.end', observedAt).then(requestPublication)
 	})
 	amp.on('tool.call', async (event, ctx) => {
 		const observedAt = new Date().toISOString()
@@ -257,7 +323,11 @@ export default function codingTrajectoryCollector(amp: PluginAPI) {
 
 	const active = amp.activeThread.current
 	if (active) {
-		void capture(amp.threads.get(active.id), 'plugin.load', new Date().toISOString())
+		void capture(
+			amp.threads.get(active.id),
+			'plugin.load',
+			new Date().toISOString(),
+		).then(requestPublication)
 	}
 	const activeSubscription = amp.activeThread.subscribe((current) => {
 		if (current) {
@@ -268,5 +338,9 @@ export default function codingTrajectoryCollector(amp: PluginAPI) {
 			)
 		}
 	})
-	amp.onDispose(() => activeSubscription.unsubscribe())
+	amp.onDispose(() => {
+		disposed = true
+		if (publishTimer) clearTimeout(publishTimer)
+		activeSubscription.unsubscribe()
+	})
 }
