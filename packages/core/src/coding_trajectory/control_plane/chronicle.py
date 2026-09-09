@@ -1369,12 +1369,19 @@ def _safe_command_target(value: str, *, cwd: str | None) -> str | None:
         key = token.split("=", 1)[0]
         if sensitive.search(key):
             if "=" in token:
-                retained.append(f"{key}=[redacted]")
+                safe_key = _safe_detail_target(key, cwd=cwd)
+                retained.append(
+                    f"{safe_key}=[redacted]" if safe_key else "[redacted]"
+                )
             else:
-                retained.append(token)
+                safe_token = _safe_detail_target(token, cwd=cwd)
+                if safe_token:
+                    retained.append(safe_token)
                 redact_next = True
             continue
-        retained.append(_safe_detail_target(token, cwd=cwd) or token)
+        safe_token = _safe_detail_target(token, cwd=cwd)
+        if safe_token:
+            retained.append(safe_token)
     return _bounded_preview(shlex.join(retained)) if retained else None
 
 
