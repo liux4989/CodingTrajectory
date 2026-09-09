@@ -987,6 +987,18 @@
     "CompactionEventRecord": {
       "additionalProperties": false,
       "properties": {
+        "before_turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before Turn Id"
+        },
         "dropped_tokens": {
           "anyOf": [
             {
@@ -1050,7 +1062,8 @@
         "trigger",
         "pre_tokens",
         "post_tokens",
-        "dropped_tokens"
+        "dropped_tokens",
+        "before_turn_id"
       ],
       "title": "CompactionEventRecord",
       "type": "object"
@@ -1576,6 +1589,13 @@
           ],
           "default": null
         },
+        "turn_spans": {
+          "items": {
+            "$ref": "#/$defs/TurnSpan"
+          },
+          "title": "Turn Spans",
+          "type": "array"
+        },
         "used_percent": {
           "anyOf": [
             {
@@ -1626,6 +1646,7 @@
         "session_sections",
         "expensive_items",
         "events",
+        "turn_spans",
         "compaction",
         "cache_breaks",
         "warnings"
@@ -3914,6 +3935,19 @@
     "GraphUsagePayload": {
       "additionalProperties": true,
       "properties": {
+        "cache_attribution": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Attribution"
+        },
         "compaction": {
           "anyOf": [
             {
@@ -7571,6 +7605,60 @@
         "source"
       ],
       "title": "TokenEvidence",
+      "type": "object"
+    },
+    "TurnSpan": {
+      "additionalProperties": false,
+      "description": "Wall-clock span of one turn, for the time-aware footprint rows.",
+      "properties": {
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Seconds"
+        },
+        "idle_before_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idle Before Seconds"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "turn_id": {
+          "title": "Turn Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "started_at",
+        "duration_seconds",
+        "idle_before_seconds"
+      ],
+      "title": "TurnSpan",
       "type": "object"
     },
     "UnitDistributions": {

@@ -28,6 +28,7 @@ from datahub_plugin.projections.context_window.models import (
     CostEvidence,
     ExpensiveItem,
     TokenEvidence,
+    TurnSpan,
     _category_sort_key,
     _visible_text_size,
 )
@@ -101,7 +102,8 @@ def build_projection(
     if turn_id and not any(event.turn_id == turn_id for event in events):
         raise SystemExit(f"turn not found in session overview: {turn_id}")
 
-    compaction = _project_compaction(selected_stats)
+    compaction = _project_compaction(selected_stats, usage=selected_usage)
+    turn_spans = _project_turn_spans(selected_usage)
     cache_breaks = _project_cache_breaks(
         selected_usage, vendor=vendor, compaction=compaction
     )
@@ -156,6 +158,7 @@ def build_projection(
         session_sections=session_sections,
         expensive_items=expensive_items,
         events=events,
+        turn_spans=turn_spans,
         compaction=compaction,
         cache_breaks=cache_breaks,
         warnings=_dedupe(warnings),
@@ -308,7 +311,57 @@ def _project_session_sections(
     return sections
 
 
-def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
+def _project_turn_spans(usage: dict[str, Any]) -> list[TurnSpan]:
+    """Per-turn wall-clock spans from ``session.usage`` runtime blocks."""
+    spans: list[TurnSpan] = []
+    for turn in usage.get("turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        turn_id = str(turn.get("id") or turn.get("turn_id") or "")
+        if not turn_id:
+            continue
+        runtime = turn.get("runtime") or {}
+        started = _optional_text(runtime.get("start") or runtime.get("started_at"))
+        start = _parse_iso_timestamp(started)
+        end = _parse_iso_timestamp(runtime.get("end") or runtime.get("ended_at"))
+        duration = None
+        if start is not None and end is not None and end >= start:
+            duration = (end - start).total_seconds()
+        spans.append(
+            TurnSpan(
+                turn_id=turn_id,
+                started_at=started if start is not None else None,
+                duration_seconds=duration,
+                idle_before_seconds=_optional_float(
+                    runtime.get("wait_before_seconds")
+                ),
+            )
+        )
+    return spans
+
+
+def _turn_start_index(
+    usage: dict[str, Any] | None,
+) -> list[tuple[datetime, str]]:
+    """Sorted ``(start, turn_id)`` pairs for placing evidence on the timeline."""
+    if not isinstance(usage, dict):
+        return []
+    starts: list[tuple[datetime, str]] = []
+    for turn in usage.get("turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        runtime = turn.get("runtime") or {}
+        start = _parse_iso_timestamp(runtime.get("start") or runtime.get("started_at"))
+        turn_id = str(turn.get("id") or turn.get("turn_id") or "")
+        if start is not None and turn_id:
+            starts.append((start, turn_id))
+    starts.sort()
+    return starts
+
+
+def _project_compaction(
+    stats: dict[str, Any], *, usage: dict[str, Any] | None = None
+) -> CompactionSummary | None:
     """Lift the compaction timeline from ``ct session stats`` or ``session.usage`` JSON.
 
     ``stats`` carries ``compaction`` (count, cumulative dropped, last event,
@@ -325,6 +378,7 @@ def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
     compaction = stats.get("compaction")
     if not isinstance(compaction, dict) or not compaction.get("count"):
         return None
+    turn_starts = _turn_start_index(usage)
     events = [
         CompactionEventRecord(
             timestamp=str(event.get("timestamp") or ""),
@@ -334,6 +388,9 @@ def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
             post_tokens=_optional_int(event.get("post") or event.get("post_tokens")),
             dropped_tokens=_optional_int(
                 event.get("dropped") or event.get("dropped_tokens")
+            ),
+            before_turn_id=_first_turn_at_or_after(
+                turn_starts, _parse_iso_timestamp(event.get("timestamp"))
             ),
         )
         for event in compaction.get("events") or []
@@ -346,6 +403,16 @@ def _project_compaction(stats: dict[str, Any]) -> CompactionSummary | None:
             or compaction.get("cumulative_dropped_tokens")
         ),
         events=events,
+    )
+
+
+def _first_turn_at_or_after(
+    turn_starts: list[tuple[datetime, str]], timestamp: datetime | None
+) -> str | None:
+    if timestamp is None:
+        return None
+    return next(
+        (turn_id for start, turn_id in turn_starts if start >= timestamp), None
     )
 
 

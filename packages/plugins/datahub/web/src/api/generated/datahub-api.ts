@@ -152,6 +152,7 @@ export type Value2 = number;
 export type Categories = ContextCategory[];
 export type Count1 = number;
 export type CumulativeDroppedTokens = number | null;
+export type BeforeTurnId = string | null;
 export type DroppedTokens = number | null;
 export type Mechanism = string;
 export type PostTokens = number | null;
@@ -190,6 +191,11 @@ export type Role1 = string;
 export type SessionId2 = string;
 export type UsedPercent = number | null;
 export type SessionSections = ContextSessionSection[];
+export type DurationSeconds = number | null;
+export type IdleBeforeSeconds = number | null;
+export type StartedAt = string | null;
+export type TurnId5 = string;
+export type TurnSpans = TurnSpan[];
 export type UsedPercent1 = number | null;
 export type Vendor1 = string;
 export type Warnings = string[];
@@ -314,7 +320,7 @@ export type Turns5 = number;
 export type Models1 = ModelUsageSessionModel[];
 export type Project = string | null;
 export type RuntimeAvailable = boolean;
-export type StartedAt = string | null;
+export type StartedAt1 = string | null;
 export type Title1 = string | null;
 export type EstimatedCostUsd4 = number;
 export type Model8 = string | null;
@@ -324,8 +330,8 @@ export type Provider5 = string | null;
 export type Sequence = number;
 export type SessionId3 = string;
 export type SessionTitle1 = string | null;
-export type StartedAt1 = string | null;
-export type TurnId5 = string;
+export type StartedAt2 = string | null;
+export type TurnId6 = string;
 export type Vendor2 = string | null;
 export type Turns6 = ModelUsageTurn[];
 export type Vendor3 = string | null;
@@ -380,7 +386,7 @@ export type FailedToolCalls1 = number;
 export type Id3 = string | null;
 export type ProcessedTokens4 = number;
 export type Project3 = string | null;
-export type StartedAt2 = string | null;
+export type StartedAt3 = string | null;
 export type Title2 = string | null;
 export type ToolCalls4 = number;
 export type Turns11 = number;
@@ -459,7 +465,7 @@ export type ModelActiveSeconds = number | null;
 export type ProcessedTokens6 = number;
 export type Provider7 = string | null;
 export type WaitBeforeSeconds = number | null;
-export type TurnId6 = string;
+export type TurnId7 = string;
 export type TurnSequence = number;
 export type Vendor5 = string | null;
 export type Entries = TimelineEntry[];
@@ -498,14 +504,14 @@ export type MultiAgentVersion = string | null;
 export type ParentSessionId2 = string | null;
 export type ReasoningEffort = string | null;
 export type SessionId9 = string;
-export type StartedAt3 = string | null;
+export type StartedAt4 = string | null;
 export type Status4 = string | null;
 export type Title3 = string | null;
 export type Vendor6 = string | null;
 export type Sessions6 = GraphSessionNode[];
 export type EndedAt2 = string | null;
 export type SessionCount4 = number | null;
-export type StartedAt4 = string | null;
+export type StartedAt5 = string | null;
 export type TurnCount1 = number | null;
 export type Vendors6 = string[] | null;
 export type RootSessionId6 = string;
@@ -535,6 +541,9 @@ export type UncachedPromptTokens1 = number | null;
 export type Vendor7 = string | null;
 export type Vendor8 = string | null;
 export type Warnings6 = string[];
+export type CacheAttribution = {
+  [k: string]: unknown;
+} | null;
 export type Compaction = {
   [k: string]: unknown;
 } | null;
@@ -573,7 +582,7 @@ export type SessionId13 = string;
 export type Shape = {
   [k: string]: unknown;
 } | null;
-export type TurnId7 = string;
+export type TurnId8 = string;
 export type Type4 = string;
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -592,7 +601,7 @@ export type ProcessedTokens8 = number | null;
 export type Project6 = string | null;
 export type RootSessionId8 = string;
 export type SessionIds = string[];
-export type StartedAt5 = string | null;
+export type StartedAt6 = string | null;
 export type Status5 = string | null;
 export type Title5 = string | null;
 export type Turns15 = number | null;
@@ -613,7 +622,7 @@ export type ParentSessionId4 = string | null;
 export type SessionId14 = string;
 export type SourceTurnId = string | null;
 export type SpawnedAgentCount1 = number | null;
-export type StartedAt6 = string | null;
+export type StartedAt7 = string | null;
 export type Status6 = string | null;
 export type Title7 = string | null;
 export type TurnCount2 = number | null;
@@ -645,7 +654,7 @@ export type Max1 = number;
 export type Median1 = number;
 export type P901 = number;
 export type P951 = number;
-export type StartedAt7 = string;
+export type StartedAt8 = string;
 export type TotalPromptTokens = number;
 export type TurnCount3 = number;
 export type SessionMedianPct = number | null;
@@ -673,7 +682,7 @@ export type PromptTokens3 = number;
 export type RepeatedCalls = number;
 export type SessionId15 = string;
 export type Title8 = string | null;
-export type TurnId8 = string | null;
+export type TurnId9 = string | null;
 export type Contributors = Contributor[];
 export type DeltaPct = number | null;
 export type EnclosingPromptTokens = number;
@@ -695,7 +704,7 @@ export type ReasonCodes = string[];
 export type SessionId16 = string;
 export type SessionShare = number;
 export type Title9 = string | null;
-export type TurnId9 = string;
+export type TurnId10 = string;
 export type Contributors1 = Contributor[];
 export type Calls2 = number;
 export type IncidenceCount = number;
@@ -1027,6 +1036,7 @@ export interface ContextWindowPayload {
   session_id: SessionId1;
   session_sections: SessionSections;
   token_cost: CostEvidence | null;
+  turn_spans: TurnSpans;
   used_percent: UsedPercent1;
   used_tokens: TokenEvidence | null;
   vendor: Vendor1;
@@ -1109,6 +1119,7 @@ export interface CompactionSummary {
  * via the `definition` "CompactionEventRecord".
  */
 export interface CompactionEventRecord {
+  before_turn_id: BeforeTurnId;
   dropped_tokens: DroppedTokens;
   mechanism: Mechanism;
   post_tokens: PostTokens;
@@ -1168,6 +1179,18 @@ export interface ContextSessionSection {
   token_cost: CostEvidence | null;
   used_percent: UsedPercent;
   used_tokens: TokenEvidence | null;
+}
+/**
+ * Wall-clock span of one turn, for the time-aware footprint rows.
+ *
+ * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
+ * via the `definition` "TurnSpan".
+ */
+export interface TurnSpan {
+  duration_seconds: DurationSeconds;
+  idle_before_seconds: IdleBeforeSeconds;
+  started_at: StartedAt;
+  turn_id: TurnId5;
 }
 /**
  * This interface was referenced by `DatahubApiContracts`'s JSON-Schema
@@ -1439,7 +1462,7 @@ export interface ModelUsageSession {
   models: Models1;
   project: Project;
   runtime_available: RuntimeAvailable;
-  started_at: StartedAt;
+  started_at: StartedAt1;
   title: Title1;
   turns?: Turns6;
   usage: UsageBuckets;
@@ -1497,8 +1520,8 @@ export interface ModelUsageTurn {
   sequence: Sequence;
   session_id: SessionId3;
   session_title?: SessionTitle1;
-  started_at: StartedAt1;
-  turn_id: TurnId5;
+  started_at: StartedAt2;
+  turn_id: TurnId6;
   usage: UsageBuckets;
   vendor?: Vendor2;
 }
@@ -1647,7 +1670,7 @@ export interface SessionSummary {
   id?: Id3;
   processed_tokens: ProcessedTokens4;
   project?: Project3;
-  started_at?: StartedAt2;
+  started_at?: StartedAt3;
   title?: Title2;
   tool_calls: ToolCalls4;
   turns: Turns11;
@@ -1797,7 +1820,7 @@ export interface TimelineEntry {
   target_session_id: TargetSessionId;
   timestamp: Timestamp2;
   turn_accounting: TimelineTurnAccounting | null;
-  turn_id: TurnId6;
+  turn_id: TurnId7;
   turn_sequence: TurnSequence;
   vendor: Vendor5;
 }
@@ -1890,7 +1913,7 @@ export interface GraphSessionNode {
   parent_session_id?: ParentSessionId2;
   reasoning_effort?: ReasoningEffort;
   session_id: SessionId9;
-  started_at?: StartedAt3;
+  started_at?: StartedAt4;
   status?: Status4;
   title?: Title3;
   vendor?: Vendor6;
@@ -1903,7 +1926,7 @@ export interface GraphSessionNode {
 export interface GraphOverviewSummary {
   ended_at?: EndedAt2;
   session_count?: SessionCount4;
-  started_at?: StartedAt4;
+  started_at?: StartedAt5;
   turn_count?: TurnCount1;
   vendors?: Vendors6;
   [k: string]: unknown;
@@ -1984,6 +2007,7 @@ export interface GraphUsageBuckets {
  * via the `definition` "GraphUsagePayload".
  */
 export interface GraphUsagePayload {
+  cache_attribution?: CacheAttribution;
   compaction?: Compaction;
   effort_changes?: EffortChanges;
   estimated_cost?: GraphCostEvidence | null;
@@ -2047,7 +2071,7 @@ export interface SessionItemDetail {
   operations?: Operations;
   session_id: SessionId13;
   shape?: Shape;
-  turn_id: TurnId7;
+  turn_id: TurnId8;
   type: Type4;
   [k: string]: unknown;
 }
@@ -2076,7 +2100,7 @@ export interface SessionItem {
   project?: Project6;
   root_session_id: RootSessionId8;
   session_ids: SessionIds;
-  started_at?: StartedAt5;
+  started_at?: StartedAt6;
   status?: Status5;
   title?: Title5;
   turns?: Turns15;
@@ -2133,7 +2157,7 @@ export interface ConversationBranch {
   session_id: SessionId14;
   source_turn_id?: SourceTurnId;
   spawned_agent_count?: SpawnedAgentCount1;
-  started_at?: StartedAt6;
+  started_at?: StartedAt7;
   status?: Status6;
   title?: Title7;
   turn_count?: TurnCount2;
@@ -2222,7 +2246,7 @@ export interface PeriodSummary {
   pattern_share: PatternShare;
   session_count: SessionCount5;
   session_prompt: Distribution;
-  started_at: StartedAt7;
+  started_at: StartedAt8;
   total_prompt_tokens: TotalPromptTokens;
   turn_count: TurnCount3;
   turn_prompt: Distribution;
@@ -2315,7 +2339,7 @@ export interface Contributor {
   repeated_calls: RepeatedCalls;
   session_id: SessionId15;
   title: Title8;
-  turn_id: TurnId8;
+  turn_id: TurnId9;
   [k: string]: unknown;
 }
 export interface Outliers {
@@ -2334,7 +2358,7 @@ export interface OutlierRow {
   session_id: SessionId16;
   session_share: SessionShare;
   title: Title9;
-  turn_id: TurnId9;
+  turn_id: TurnId10;
   [k: string]: unknown;
 }
 export interface Patterns {

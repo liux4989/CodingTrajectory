@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Turn footprint — progressive disclosure (mockup)</title>
+<style>
+  body { margin: 0; padding: 32px; background: #fafaf9; color: #1c1917;
+         font-family: ui-sans-serif, system-ui, sans-serif; }
+  .card { max-width: 920px; margin: 0 auto; background: #fff;
+          border: 1px solid #e7e5e4; border-radius: 10px; padding: 22px 26px; }
+  h1 { font-size: 16px; margin: 0 0 2px; }
+  .sub { font-size: 12px; color: #78716c; margin: 0 0 14px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(4px); } }
+  .chart > .row, .chart > .idle { animation: rise .4s both; animation-delay: var(--d, 0s); }
+
+  /* scale: whisper-quiet until the chart is hovered */
+  .scale { position: relative; height: 14px; margin-bottom: 4px; opacity: .35;
+           transition: opacity .3s; }
+  .chart:hover .scale { opacity: 1; }
+  .scale span { position: absolute; transform: translateX(-50%); font-size: 10px; color: #a8a29e; }
+  .scale .limit { color: #b91c1c; transform: translateX(-100%); }
+  .scale, .row { display: grid; grid-template-columns: 6.5rem 1fr 5.5rem; column-gap: 12px; }
+  .scale > .trackS { position: relative; grid-column: 2; }
+  .scale > .trackS span { top: 0; }
+
+  .row { cursor: pointer; transition: opacity .2s; }
+  .chart:hover .row, .chart:hover .idle { opacity: .45; }
+  .chart:hover .row:hover, .chart:hover .idle:hover { opacity: 1; }
+
+  .lab { font-size: 12px; font-weight: 600; padding: 6px 0 6px 8px; }
+  .lab small { font-weight: 400; color: #a8a29e; font-size: 10.5px; margin-left: 6px; }
+  .val { font-size: 11px; color: #57534e; text-align: right; padding: 6px 8px 6px 0;
+         font-family: ui-monospace, Menlo, monospace; }
+  .val .d { color: #a8a29e; opacity: 0; transition: opacity .2s; }
+  .row:hover .val .d { opacity: 1; }
+
+  .track { position: relative; border-right: 1.5px dashed #fca5a5; }
+  .row:hover .track { border-right-color: #b91c1c; }
+  .track::before { content: ""; position: absolute; inset: 0;
+    background-image: repeating-linear-gradient(to right,
+      transparent 0 calc(25% - 1px), #f4f3f2 calc(25% - 1px) 25%);
+    opacity: 0; transition: opacity .3s; }
+  .chart:hover .track::before { opacity: 1; }
+
+  .seg { position: absolute; top: 50%; translate: 0 -50%; height: 8px; border-radius: 3px;
+         left: var(--x); width: var(--w); transition: height .2s ease; }
+  .seg.base { background: #ecebea; border-radius: 3px 0 0 3px; }
+  .seg.base.compacted { background: #d9f3ec; }
+  .seg.sum { background: #4d7c0f; transition: opacity .18s ease, height .2s ease; }
+  .seg.cat { width: 0; opacity: 0; background: var(--c);
+             transition: width .28s cubic-bezier(.4,0,.2,1), opacity .18s ease, height .2s ease; }
+  .row:hover .seg { height: 14px; }
+  .row:hover .seg.sum { opacity: 0; }
+  .row:hover .seg.cat { width: var(--w); opacity: 1; }
+
+  /* idle hairline */
+  .idle { display: block; font-size: 10.5px; color: #b6b2ad; padding: 0 0 0 8px;
+          line-height: 16px; transition: color .2s; }
+  .idle .more { display: inline-block; max-width: 0; opacity: 0; overflow: hidden;
+                white-space: nowrap; vertical-align: bottom; transition: all .3s ease; }
+  .idle:hover { color: #57534e; }
+  .idle:hover .more { max-width: 360px; opacity: 1; }
+  .idle .warn { color: #b91c1c; }
+
+  /* compaction */
+  .seg.drop { background-image: repeating-linear-gradient(-45deg,
+      rgba(185,28,28,.16) 0 5px, rgba(185,28,28,.05) 5px 10px);
+      border: 1px solid rgba(185,28,28,.3); }
+  .droplab { position: absolute; top: 50%; translate: 0 -50%; font-size: 10.5px;
+             color: #b91c1c; font-family: ui-monospace, Menlo, monospace;
+             opacity: 0; transition: opacity .2s; white-space: nowrap; }
+  .row:hover .droplab { opacity: 1; }
+
+  /* inline drawer on click */
+  .drawer { grid-column: 1 / -1; max-height: 0; overflow: hidden;
+            transition: max-height .35s ease; }
+  .row.open .drawer { max-height: 150px; }
+  .drawer-in { padding: 4px 8px 12px; }
+  .bar-lg { position: relative; height: 16px; margin: 6px 0 8px; }
+  .bar-lg .seg { height: 16px; top: 0; translate: 0 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: #78716c; }
+  .chips .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+               margin-right: 4px; vertical-align: -1px; }
+  .go { margin-left: auto; font-size: 11px; color: #4d7c0f; text-decoration: none; }
+  .go:hover { text-decoration: underline; }
+
+  /* tooltip */
+  #tip { position: fixed; z-index: 10; pointer-events: none; opacity: 0;
+         transition: opacity .15s; background: #1c1917; color: #fafaf9;
+         border-radius: 8px; padding: 10px 12px; font-size: 11.5px; line-height: 1.5;
+         box-shadow: 0 8px 24px rgba(0,0,0,.22); max-width: 260px; }
+  #tip .t { display: flex; justify-content: space-between; gap: 12px; }
+  #tip .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+             margin-right: 5px; }
+  #tip .hd { color: #d6d3d1; font-weight: 600; margin-bottom: 4px; }
+  #tip .mut { color: #a8a29e; }
+
+  .hint { margin-top: 12px; font-size: 11.5px; color: #a8a29e;
+          border-top: 1px dashed #e7e5e4; padding-top: 9px; }
+  code { background: #f5f5f4; border-radius: 4px; padding: 1px 4px; font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Turn footprint</h1>
+  <p class="sub">Hover a row for the breakdown · click to pin it open · open in timeline from the drawer.</p>
+
+  <div class="chart">
+    <div class="scale">
+      <div></div>
+      <div class="trackS mono">
+        <span style="left:0%">0</span>
+        <span style="left:25%">50k</span>
+        <span style="left:50%">100k</span>
+        <span style="left:75%">150k</span>
+        <span class="limit" style="left:100%">200k</span>
+      </div>
+      <div></div>
+    </div>
+
+    <!-- Start -->
+    <div class="row" style="--d:.02s"
+         data-tip="<div class='hd'>Starting context</div><div class='t'><span>System prompt · tools · env</span><span class='mut'>18k</span></div>">
+      <div class="lab">Start</div>
+      <div class="track">
+        <i class="seg sum" style="--x:0%;--w:9%;background:#78716c"></i>
+      </div>
+      <div class="val"><b>18k</b></div>
+    </div>
+
+    <!-- T1 -->
+    <div class="row turn" style="--d:.06s"
+         data-tip="<div class='hd'>Turn 1 · 2m</div><div class='t'><span><span class='sw' style='background:#16a34a'></span>User input</span><span>+2k</span></div><div class='t'><span><span class='sw' style='background:#2563eb'></span>Files</span><span>+6k</span></div><div class='t'><span><span class='sw' style='background:#d97706'></span>Output</span><span>+4k</span></div><div class='t mut'><span>window after</span><span>30k · 15%</span></div>">
+      <div class="lab">Turn 1<small>2m</small></div>
+      <div class="track">
+        <i class="seg base" style="--x:0%;--w:9%"></i>
+        <i class="seg sum" style="--x:9%;--w:6%"></i>
+        <i class="seg cat" style="--x:9%;--w:1%;--c:#16a34a"></i>
+        <i class="seg cat" style="--x:10%;--w:3%;--c:#2563eb"></i>
+        <i class="seg cat" style="--x:13%;--w:2%;--c:#d97706"></i>
+      </div>
+      <div class="val"><span class="d">+12k · </span><b>30k</b></div>
+      <div class="drawer"><div class="drawer-in">
+        <div class="bar-lg">
+          <i class="seg" style="--x:0%;--w:9%;background:#ecebea"></i>
+          <i class="seg" style="--x:9%;--w:1%;background:#16a34a"></i>
+          <i class="seg" style="--x:10%;--w:3%;background:#2563eb"></i>
+          <i class="seg" style="--x:13%;--w:2%;background:#d97706"></i>
+        </div>
+        <div class="chips">
+          <span><span class="sw" style="background:#16a34a"></span>User input +2k</span>
+          <span><span class="sw" style="background:#2563eb"></span>Files +6k</span>
+          <span><span class="sw" style="background:#d97706"></span>Output +4k</span>
+          <span class="mut">carried 18k → 30k · 15%</span>
+          <a class="go" href="#">Open in timeline →</a>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- T2 -->
+    <div class="row turn" style="--d:.1s"
+         data-tip="<div class='hd'>Turn 2 · 4m</div><div class='t'><span><span class='sw' style='background:#16a34a'></span>User input</span><span>+3k</span></div><div class='t'><span><span class='sw' style='background:#2563eb'></span>Files</span><span>+30k</span></div><div class='t'><span><span class='sw' style='background:#d97706'></span>Output</span><span>+9k</span></div><div class='t'><span><span class='sw' style='background:#9333ea'></span>Agent</span><span>+5k</span></div><div class='t mut'><span>window after</span><span>65k · 33%</span></div>">
+      <div class="lab">Turn 2<small>4m</small></div>
+      <div class="track">
+        <i class="seg base" style="--x:0%;--w:15%"></i>
+        <i class="seg sum" style="--x:15%;--w:23.5%"></i>
+        <i class="seg cat" style="--x:15%;--w:1.5%;--c:#16a34a"></i>
+        <i class="seg cat" style="--x:16.5%;--w:15%;--c:#2563eb"></i>
+        <i class="seg cat" style="--x:31.5%;--w:4.5%;--c:#d97706"></i>
+        <i class="seg cat" style="--x:36%;--w:2.5%;--c:#9333ea"></i>
+      </div>
+      <div class="val"><span class="d">+47k · </span><b>65k</b></div>
+      <div class="drawer"><div class="drawer-in">
+        <div class="bar-lg">
+          <i class="seg" style="--x:0%;--w:15%;background:#ecebea"></i>
+          <i class="seg" style="--x:15%;--w:1.5%;background:#16a34a"></i>
+          <i class="seg" style="--x:16.5%;--w:15%;background:#2563eb"></i>
+          <i class="seg" style="--x:31.5%;--w:4.5%;background:#d97706"></i>
+          <i class="seg" style="--x:36%;--w:2.5%;background:#9333ea"></i>
+        </div>
+        <div class="chips">
+          <span><span class="sw" style="background:#16a34a"></span>User input +3k</span>
+          <span><span class="sw" style="background:#2563eb"></span>Files +30k</span>
+          <span><span class="sw" style="background:#d97706"></span>Output +9k</span>
+          <span><span class="sw" style="background:#9333ea"></span>Agent +5k</span>
+          <span class="mut">carried 30k → 65k · 33%</span>
+          <a class="go" href="#">Open in timeline →</a>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- idle hairline -->
+    <div class="idle" style="--d:.14s">··· idle 12m<span class="more"> · <span class="warn">cache TTL expired ⚡ re-read 65k</span></span></div>
+
+    <!-- T3 -->
+    <div class="row turn" style="--d:.18s"
+         data-tip="<div class='hd'>Turn 3 · 3m</div><div class='t'><span><span class='sw' style='background:#16a34a'></span>User input</span><span>+2k</span></div><div class='t'><span><span class='sw' style='background:#2563eb'></span>Files</span><span>+25k</span></div><div class='t'><span><span class='sw' style='background:#d97706'></span>Output</span><span>+11k</span></div><div class='t'><span><span class='sw' style='background:#9333ea'></span>Agent</span><span>+7k</span></div><div class='t mut'><span>window after</span><span>110k · 55%</span></div>">
+      <div class="lab">Turn 3<small>3m</small></div>
+      <div class="track">
+        <i class="seg base" style="--x:0%;--w:32.5%"></i>
+        <i class="seg sum" style="--x:32.5%;--w:22.5%"></i>
+        <i class="seg cat" style="--x:32.5%;--w:1%;--c:#16a34a"></i>
+        <i class="seg cat" style="--x:33.5%;--w:12.5%;--c:#2563eb"></i>
+        <i class="seg cat" style="--x:46%;--w:5.5%;--c:#d97706"></i>
+        <i class="seg cat" style="--x:51.5%;--w:3.5%;--c:#9333ea"></i>
+      </div>
+      <div class="val"><span class="d">+45k · </span><b>110k</b></div>
+      <div class="drawer"><div class="drawer-in">
+        <div class="bar-lg">
+          <i class="seg" style="--x:0%;--w:32.5%;background:#ecebea"></i>
+          <i class="seg" style="--x:32.5%;--w:1%;background:#16a34a"></i>
+          <i class="seg" style="--x:33.5%;--w:12.5%;background:#2563eb"></i>
+          <i class="seg" style="--x:46%;--w:5.5%;background:#d97706"></i>
+          <i class="seg" style="--x:51.5%;--w:3.5%;background:#9333ea"></i>
+        </div>
+        <div class="chips">
+          <span><span class="sw" style="background:#16a34a"></span>User input +2k</span>
+          <span><span class="sw" style="background:#2563eb"></span>Files +25k</span>
+          <span><span class="sw" style="background:#d97706"></span>Output +11k</span>
+          <span><span class="sw" style="background:#9333ea"></span>Agent +7k</span>
+          <span class="mut">carried 65k → 110k · 55%</span>
+          <a class="go" href="#">Open in timeline →</a>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- T4 -->
+    <div class="row turn" style="--d:.22s"
+         data-tip="<div class='hd'>Turn 4 · 6m</div><div class='t'><span><span class='sw' style='background:#16a34a'></span>User input</span><span>+4k</span></div><div class='t'><span><span class='sw' style='background:#2563eb'></span>Files</span><span>+25k</span></div><div class='t'><span><span class='sw' style='background:#d97706'></span>Output</span><span>+20k</span></div><div class='t'><span><span class='sw' style='background:#9333ea'></span>Agent</span><span>+16k</span></div><div class='t mut'><span>window after</span><span>175k · 88% — near limit</span></div>">
+      <div class="lab">Turn 4<small>6m</small></div>
+      <div class="track">
+        <i class="seg base" style="--x:0%;--w:55%"></i>
+        <i class="seg sum" style="--x:55%;--w:32.5%;background:#b91c1c"></i>
+        <i class="seg cat" style="--x:55%;--w:2%;--c:#16a34a"></i>
+        <i class="seg cat" style="--x:57%;--w:12.5%;--c:#2563eb"></i>
+        <i class="seg cat" style="--x:69.5%;--w:10%;--c:#d97706"></i>
+        <i class="seg cat" style="--x:79.5%;--w:8%;--c:#9333ea"></i>
+      </div>
+      <div class="val"><span class="d">+65k · </span><b>175k</b></div>
+      <div class="drawer"><div class="drawer-in">
+        <div class="bar-lg">
+          <i class="seg" style="--x:0%;--w:55%;background:#ecebea"></i>
+          <i class="seg" style="--x:55%;--w:2%;background:#16a34a"></i>
+          <i class="seg" style="--x:57%;--w:12.5%;background:#2563eb"></i>
+          <i class="seg" style="--x:69.5%;--w:10%;background:#d97706"></i>
+          <i class="seg" style="--x:79.5%;--w:8%;background:#9333ea"></i>
+        </div>
+        <div class="chips">
+          <span><span class="sw" style="background:#16a34a"></span>User input +4k</span>
+          <span><span class="sw" style="background:#2563eb"></span>Files +25k</span>
+          <span><span class="sw" style="background:#d97706"></span>Output +20k</span>
+          <span><span class="sw" style="background:#9333ea"></span>Agent +16k</span>
+          <span class="mut" style="color:#b91c1c">175k · 88% — auto-compaction triggered after this turn</span>
+          <a class="go" href="#">Open in timeline →</a>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- Compaction -->
+    <div class="row" style="--d:.26s"
+         data-tip="<div class='hd'>Compaction · auto</div><div class='t'><span>dropped</span><span>−110k</span></div><div class='t'><span>history → summary</span><span>45k</span></div><div class='t mut'><span>window</span><span>175k → 65k</span></div>">
+      <div class="lab" style="color:#b91c1c">Compaction</div>
+      <div class="track">
+        <i class="seg base compacted" style="--x:0%;--w:32.5%"></i>
+        <i class="seg drop" style="--x:32.5%;--w:55%"></i>
+        <span class="droplab" style="left:40%">−110k · 175k → 65k</span>
+      </div>
+      <div class="val" style="color:#b91c1c"><b>65k</b></div>
+    </div>
+
+    <!-- T5 -->
+    <div class="row turn" style="--d:.3s"
+         data-tip="<div class='hd'>Turn 5 · 2m</div><div class='t'><span><span class='sw' style='background:#16a34a'></span>User input</span><span>+3k</span></div><div class='t'><span><span class='sw' style='background:#2563eb'></span>Files</span><span>+12k</span></div><div class='t'><span><span class='sw' style='background:#d97706'></span>Output</span><span>+6k</span></div><div class='t'><span><span class='sw' style='background:#9333ea'></span>Agent</span><span>+4k</span></div><div class='t mut'><span>window after</span><span>90k · 45%</span></div>">
+      <div class="lab">Turn 5<small>2m</small></div>
+      <div class="track">
+        <i class="seg base compacted" style="--x:0%;--w:32.5%"></i>
+        <i class="seg sum" style="--x:32.5%;--w:12.5%"></i>
+        <i class="seg cat" style="--x:32.5%;--w:1.5%;--c:#16a34a"></i>
+        <i class="seg cat" style="--x:34%;--w:6%;--c:#2563eb"></i>
+        <i class="seg cat" style="--x:40%;--w:3%;--c:#d97706"></i>
+        <i class="seg cat" style="--x:43%;--w:2%;--c:#9333ea"></i>
+      </div>
+      <div class="val"><span class="d">+25k · </span><b>90k</b></div>
+      <div class="drawer"><div class="drawer-in">
+        <div class="bar-lg">
+          <i class="seg" style="--x:0%;--w:32.5%;background:#d9f3ec"></i>
+          <i class="seg" style="--x:32.5%;--w:1.5%;background:#16a34a"></i>
+          <i class="seg" style="--x:34%;--w:6%;background:#2563eb"></i>
+          <i class="seg" style="--x:40%;--w:3%;background:#d97706"></i>
+          <i class="seg" style="--x:43%;--w:2%;background:#9333ea"></i>
+        </div>
+        <div class="chips">
+          <span><span class="sw" style="background:#16a34a"></span>User input +3k</span>
+          <span><span class="sw" style="background:#2563eb"></span>Files +12k</span>
+          <span><span class="sw" style="background:#d97706"></span>Output +6k</span>
+          <span><span class="sw" style="background:#9333ea"></span>Agent +4k</span>
+          <span class="mut">carried 65k (compacted) → 90k · 45%</span>
+          <a class="go" href="#">Open in timeline →</a>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- T6 -->
+    <div class="row turn" style="--d:.34s"
+         data-tip="<div class='hd'>Turn 6 · 6m</div><div class='t'><span><span class='sw' style='background:#16a34a'></span>User input</span><span>+2k</span></div><div class='t'><span><span class='sw' style='background:#2563eb'></span>Files</span><span>+20k</span></div><div class='t'><span><span class='sw' style='background:#d97706'></span>Output</span><span>+10k</span></div><div class='t'><span><span class='sw' style='background:#9333ea'></span>Agent</span><span>+8k</span></div><div class='t mut'><span>window after</span><span>130k · 65%</span></div>">
+      <div class="lab">Turn 6<small>6m</small></div>
+      <div class="track">
+        <i class="seg base compacted" style="--x:0%;--w:45%"></i>
+        <i class="seg sum" style="--x:45%;--w:20%"></i>
+        <i class="seg cat" style="--x:45%;--w:1%;--c:#16a34a"></i>
+        <i class="seg cat" style="--x:46%;--w:10%;--c:#2563eb"></i>
+        <i class="seg cat" style="--x:56%;--w:5%;--c:#d97706"></i>
+        <i class="seg cat" style="--x:61%;--w:4%;--c:#9333ea"></i>
+      </div>
+      <div class="val"><span class="d">+40k · </span><b>130k</b></div>
+      <div class="drawer"><div class="drawer-in">
+        <div class="bar-lg">
+          <i class="seg" style="--x:0%;--w:45%;background:#d9f3ec"></i>
+          <i class="seg" style="--x:45%;--w:1%;background:#16a34a"></i>
+          <i class="seg" style="--x:46%;--w:10%;background:#2563eb"></i>
+          <i class="seg" style="--x:56%;--w:5%;background:#d97706"></i>
+          <i class="seg" style="--x:61%;--w:4%;background:#9333ea"></i>
+        </div>
+        <div class="chips">
+          <span><span class="sw" style="background:#16a34a"></span>User input +2k</span>
+          <span><span class="sw" style="background:#2563eb"></span>Files +20k</span>
+          <span><span class="sw" style="background:#d97706"></span>Output +10k</span>
+          <span><span class="sw" style="background:#9333ea"></span>Agent +8k</span>
+          <span class="mut">carried 90k (compacted) → 130k · 65%</span>
+          <a class="go" href="#">Open in timeline →</a>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <p class="hint">
+    Default: carried base + single-color delta + running total. Hover: bar thickens, delta splits into
+    categories, tooltip follows cursor, siblings dim. Click: inline drawer with the full stack +
+    timeline link. Idle/compaction stay hairline until hovered. Scale + gridlines fade in only on chart hover.
+  </p>
+</div>
+
+<div id="tip"></div>
+<script>
+  const tip = document.getElementById('tip');
+  document.querySelectorAll('.row[data-tip]').forEach((row) => {
+    row.addEventListener('mouseenter', () => {
+      tip.innerHTML = row.dataset.tip;
+      tip.style.opacity = 1;
+    });
+    row.addEventListener('mousemove', (e) => {
+      const pad = 14;
+      let x = e.clientX + pad, y = e.clientY + pad;
+      const r = tip.getBoundingClientRect();
+      if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
+      if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
+      tip.style.left = x + 'px';
+      tip.style.top = y + 'px';
+    });
+    row.addEventListener('mouseleave', () => (tip.style.opacity = 0));
+    row.addEventListener('click', () => {
+      if (row.classList.contains('turn')) row.classList.toggle('open');
+    });
+  });
+</script>
+</body>
+</html>

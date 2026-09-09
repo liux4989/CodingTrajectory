@@ -118,6 +118,24 @@ class CompactionEventRecord(BaseModel):
     pre_tokens: int | None = None
     post_tokens: int | None = None
     dropped_tokens: int | None = None
+    # First turn whose runtime start follows the compaction timestamp — the
+    # footprint row boundary the compaction belongs to. ``None`` when the
+    # compaction followed the last turn or turn timing is unavailable.
+    before_turn_id: str | None = None
+
+
+class TurnSpan(BaseModel):
+    """Wall-clock span of one turn, for the time-aware footprint rows."""
+
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
+
+    turn_id: str
+    started_at: str | None = None
+    duration_seconds: float | None = None
+    # ``runtime.wait_before_seconds`` — the idle gap preceding this turn.
+    idle_before_seconds: float | None = None
 
 
 class CompactionSummary(BaseModel):
@@ -243,6 +261,7 @@ class ContextWindowProjection(BaseModel):
     session_sections: list[ContextSessionSection] = Field(default_factory=list)
     expensive_items: list[ExpensiveItem] = Field(default_factory=list)
     events: list[ContextEvent]
+    turn_spans: list[TurnSpan] = Field(default_factory=list)
     compaction: CompactionSummary | None = None
     cache_breaks: CacheBreakSummary | None = None
     warnings: list[str]
