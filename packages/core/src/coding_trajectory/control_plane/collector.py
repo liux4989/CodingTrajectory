@@ -946,7 +946,7 @@ class LocalCollector:
                     native_session_id=native_session_id,
                     source_id=recovered.source_id,
                     source_epoch=recovered.source_epoch,
-                    snapshot_schema_version=_SOURCE_SCHEMA_VERSION,
+                    snapshot_schema_version=_SNAPSHOT_STATE_VERSION,
                 )
                 self._connection.execute(
                     "update logical_sources set next_source_sequence = ?, last_digest = ? where vendor = ? and native_session_id = ?",
