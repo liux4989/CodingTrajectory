@@ -7,6 +7,8 @@ import logging
 import mimetypes
 import queue
 import re
+import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -75,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
         static_dir=_static_dir(args.static_dir),
         since_days=args.since_days,
     )
+    if args.static_dir is None and not args.no_build:
+        if not _rebuild_if_stale(config.static_dir):
+            return 1
     if not config.static_dir.is_dir():
         print(
             "error: datahub web assets were not found; run `bun install && bun run build` "
@@ -127,6 +132,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--open", action="store_true", help="Open the datahub in a browser."
     )
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="Serve the current web build without rebuilding stale assets.",
+    )
     parser.add_argument("--static-dir", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--since-days",
@@ -141,6 +151,44 @@ def _static_dir(raw: str | None) -> Path:
     if raw:
         return Path(raw).expanduser().resolve()
     return Path(__file__).resolve().parents[2] / "web" / "dist"
+
+
+_BUILD_INPUT_NAMES = (
+    "index.html",
+    "package.json",
+    "bun.lock",
+    "vite.config.ts",
+    "tsconfig.json",
+)
+
+
+def _rebuild_if_stale(static_dir: Path) -> bool:
+    """Rebuild the web bundle when its sources are newer than the output."""
+    web_dir = static_dir.parent
+    newest = 0.0
+    for name in _BUILD_INPUT_NAMES:
+        path = web_dir / name
+        if path.is_file():
+            newest = max(newest, path.stat().st_mtime)
+    src_dir = web_dir / "src"
+    if src_dir.is_dir():
+        for path in src_dir.rglob("*"):
+            if path.is_file():
+                newest = max(newest, path.stat().st_mtime)
+    marker = static_dir / "index.html"
+    if newest == 0.0 or (marker.is_file() and marker.stat().st_mtime >= newest):
+        return True
+    command = (
+        ["bun", "run", "build"] if shutil.which("bun") else ["npm", "run", "build"]
+    )
+    print(
+        f"Datahub web assets are stale; rebuilding with `{' '.join(command)}` "
+        "(skip with --no-build)..."
+    )
+    if subprocess.run(command, cwd=web_dir, check=False).returncode != 0:
+        print("error: datahub web build failed", file=sys.stderr)
+        return False
+    return True
 
 
 def _handler_for(
