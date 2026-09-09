@@ -39,7 +39,7 @@
       "description": "Authority and snapshot facts carried outside versioned method results.",
       "properties": {
         "content_scope": {
-          "const": "shareable",
+          "const": "chronicle",
           "title": "Content Scope",
           "type": "string"
         },
