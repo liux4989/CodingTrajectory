@@ -163,24 +163,33 @@ class CacheBreakRecord(BaseModel):
     #   align with the same measured cache loss.
     # model_switch: the dominant (provider, model) changed across the turn
     #   boundary, so the prefix was re-processed under a new cache key.
+    # model_config_switch: Codex's compaction-compatibility hash changed.
+    # runtime_config_change: one or more hashed turn-context fields changed.
+    # context_reset: an observed rollback/reset precedes the request.
+    # request_shape_change/cache_scope_change: reserved for exact evidence once
+    #   providers expose those boundary identities.
+    # insufficient_evidence: a measured loss whose remaining possible causes
+    #   cannot be ruled out because required evidence is unavailable.
     # intra_turn_drop: a measured cache-hit collapse between two provider
     #   calls inside the same turn (``cache_intra_turn_loss_tokens``) — a
     #   mid-turn invalidation below the boundary detector's resolution
     #   (tool-result prefix churn, backend re-keying). Reported with
     #   ``idle_seconds = 0.0`` since no inter-turn idle is involved.
-    # unattributed: a measured cache-hit loss across a turn boundary with no
-    #   aligned effort change, no model switch, and no TTL-sized idle gap.
-    #   Surfaced instead of dropped so the miss is visible - the cause (e.g. a
-    #   cold start, a backend that doesn't couple cache to effort like
-    #   glm-5.2, tool reorder/removal, nondeterministic enumeration,
-    #   system-prompt churn, or a proxy dropping session affinity) is simply
-    #   unknown.
+    # unattributed: a measured cache-hit loss across a turn boundary after all
+    #   supported evidence is present and stable. Surfaced instead of dropped
+    #   so the miss stays visible even though its cause remains unknown.
     type: Literal[
         "ttl_confirmed",
         "ttl_likely",
         "effort_switch",
         "model_switch",
+        "model_config_switch",
+        "runtime_config_change",
+        "context_reset",
+        "request_shape_change",
+        "cache_scope_change",
         "intra_turn_drop",
+        "insufficient_evidence",
         "unattributed",
     ]
     idle_seconds: float
@@ -198,6 +207,11 @@ class CacheBreakRecord(BaseModel):
     # after a reset where the prior context is unknown.
     model_from: str | None = None
     model_to: str | None = None
+    comp_hash_from: str | None = None
+    comp_hash_to: str | None = None
+    changed_fields: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    evidence_status: Literal["complete", "incomplete"] = "complete"
 
 
 class CacheBreakSummary(BaseModel):

@@ -123,16 +123,32 @@ export type ActiveSessionId = string;
 export type Count = number;
 export type EstimatedWasteUsd = number | null;
 export type CachedAfterTokens = number | null;
+export type ChangedFields = string[];
+export type CompHashFrom = string | null;
+export type CompHashTo = string | null;
 export type EffortFrom = string | null;
 export type EffortTo = string | null;
 export type EstCostUsd = number | null;
+export type EvidenceStatus = "complete" | "incomplete";
 export type IdleSeconds = number;
+export type MissingEvidence = string[];
 export type ModelFrom = string | null;
 export type ModelTo = string | null;
 export type ReReadTokens = number;
 export type TurnId2 = string;
 export type Type =
-  "ttl_confirmed" | "ttl_likely" | "effort_switch" | "model_switch" | "intra_turn_drop" | "unattributed";
+  | "ttl_confirmed"
+  | "ttl_likely"
+  | "effort_switch"
+  | "model_switch"
+  | "model_config_switch"
+  | "runtime_config_change"
+  | "context_reset"
+  | "request_shape_change"
+  | "cache_scope_change"
+  | "intra_turn_drop"
+  | "insufficient_evidence"
+  | "unattributed";
 export type Events = CacheBreakRecord[];
 export type FloorTokens = number | null;
 export type TotalReReadTokens = number;
@@ -1063,10 +1079,15 @@ export interface ByType {
  */
 export interface CacheBreakRecord {
   cached_after_tokens: CachedAfterTokens;
+  changed_fields: ChangedFields;
+  comp_hash_from: CompHashFrom;
+  comp_hash_to: CompHashTo;
   effort_from: EffortFrom;
   effort_to: EffortTo;
   est_cost_usd: EstCostUsd;
+  evidence_status: EvidenceStatus;
   idle_seconds: IdleSeconds;
+  missing_evidence: MissingEvidence;
   model_from: ModelFrom;
   model_to: ModelTo;
   re_read_tokens: ReReadTokens;

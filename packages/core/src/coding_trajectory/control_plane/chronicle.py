@@ -315,6 +315,11 @@ class ChronicleRuntimeObservation(ChronicleModel):
     cumulative_dropped_tokens: int | None = Field(default=None, ge=0)
     effort_from: _BoundedString | None = None
     effort_to: _BoundedString | None = None
+    comp_hash: _BoundedString | None = None
+    runtime_config_hashes: dict[_BoundedString, _BoundedString] | None = Field(
+        default=None,
+        max_length=32,
+    )
 
 
 class ChronicleSpawnOrigin(ChronicleModel):
@@ -687,6 +692,8 @@ def _build_chronicle_session(session: Session, *, index: Any) -> ChronicleSessio
                 cumulative_dropped_tokens=observation.cumulative_dropped_tokens,
                 effort_from=observation.effort_from,
                 effort_to=observation.effort_to,
+                comp_hash=observation.comp_hash,
+                runtime_config_hashes=observation.runtime_config_hashes,
             )
             for observation in session.runtime_observations
         ],

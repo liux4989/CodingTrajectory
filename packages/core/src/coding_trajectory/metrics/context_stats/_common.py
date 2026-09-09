@@ -23,6 +23,9 @@ from coding_trajectory.ingestion.models import (
     is_tool_shaped_item,
 )
 from coding_trajectory.metrics.models import (
+    CacheAttributionEvidenceFlat,
+    CacheContextResetFlat,
+    CacheContextSnapshotFlat,
     CompactionEventFlat,
     CompactionStatsFlat,
     EffortChangeEventFlat,
@@ -312,6 +315,48 @@ def effort_change_stats(session_graph: SessionGraph) -> EffortChangeStatsFlat:
         for observation in changes
     ]
     return EffortChangeStatsFlat(count=len(changes), events=events)
+
+
+def cache_attribution_evidence(
+    session_graph: SessionGraph,
+) -> CacheAttributionEvidenceFlat:
+    """Expose content-free request-boundary evidence with capability markers."""
+    snapshots = sorted(
+        (
+            CacheContextSnapshotFlat(
+                session_id=session.session_id,
+                timestamp=observation.timestamp,
+                comp_hash=observation.comp_hash,
+                runtime_config_hashes=observation.runtime_config_hashes or {},
+            )
+            for session in session_graph.sessions
+            for observation in session.runtime_observations
+            if observation.kind == "turn_context_snapshot"
+        ),
+        key=lambda item: item.timestamp,
+    )
+    context_resets = sorted(
+        (
+            CacheContextResetFlat(
+                session_id=session.session_id,
+                timestamp=observation.timestamp,
+                kind="thread_rolled_back",
+            )
+            for session in session_graph.sessions
+            for observation in session.runtime_observations
+            if observation.kind == "thread_rolled_back"
+        ),
+        key=lambda item: item.timestamp,
+    )
+    return CacheAttributionEvidenceFlat(
+        # Neither vendor currently logs an exact provider-visible request-shape
+        # digest or provider cache-scope identity.
+        request_shape="unavailable",
+        cache_scope="unavailable",
+        turn_context="observed" if snapshots else "unavailable",
+        snapshots=snapshots,
+        context_resets=context_resets,
+    )
 
 
 def message_stats(session_graph: SessionGraph) -> MessageStatsFlat:

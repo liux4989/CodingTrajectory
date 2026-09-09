@@ -453,6 +453,8 @@ def compact_usage_turn(turn: Any) -> Any:
             ),
             "cache_intra_turn_loss_tokens": turn.get("cache_intra_turn_loss_tokens"),
             "cache_intra_turn_waste_usd": turn.get("cache_intra_turn_waste_usd"),
+            "provider": turn.get("provider"),
+            "model": turn.get("model"),
         }
     )
 
@@ -509,6 +511,7 @@ def compact_usage_session(session: Any) -> Any:
                     or None,
                 }
             ),
+            "cache_attribution": session.get("cache_attribution"),
             "turns": [
                 compact_usage_turn(turn)
                 for turn in session.get("turns") or []
@@ -841,6 +844,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                     }
                 )
                 or None,
+                "cache_attribution": payload.get("cache_attribution"),
                 "turns": [
                     compact_usage_turn(turn)
                     for turn in payload.get("turns") or []

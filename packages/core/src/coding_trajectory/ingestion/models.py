@@ -205,6 +205,11 @@ class RuntimeObservation(BaseModel):
     # (Codex ``turn_context.effort``); both ends are real strings.
     effort_from: str | None = None
     effort_to: str | None = None
+    # Content-free cache-attribution evidence captured from Codex turn_context.
+    # Values are hashes of named request/runtime configuration fields, never the
+    # underlying prompt or permission payloads.
+    comp_hash: str | None = None
+    runtime_config_hashes: dict[str, str] | None = None
 
 
 # Evicting-compaction observation kinds. Codex emits ``context_compacted`` (a

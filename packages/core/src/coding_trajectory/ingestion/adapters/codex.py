@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -67,6 +68,24 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
 _CODEX_PREVIEW_MAX_LEN = 96
+
+_CACHE_RELEVANT_TURN_CONTEXT_FIELDS = (
+    "cwd",
+    "workspace_roots",
+    "current_date",
+    "timezone",
+    "approval_policy",
+    "approvals_reviewer",
+    "sandbox_policy",
+    "permission_profile",
+    "active_permission_profile",
+    "file_system_sandbox_policy",
+    "personality",
+    "collaboration_mode",
+    "multi_agent_version",
+    "multi_agent_mode",
+    "realtime_active",
+)
 
 _CODEX_TOOL_TAXONOMY = ToolTaxonomy(
     plan_names=SHARED_PLAN_TOOL_NAMES,
@@ -623,6 +642,22 @@ def _record_context_source(
     state.context_source_by_block.setdefault((role, block), observation)
 
 
+def _runtime_config_hashes(payload: dict[str, Any]) -> dict[str, str]:
+    """Hash named turn-context fields without retaining their raw values."""
+    hashes: dict[str, str] = {}
+    for key in _CACHE_RELEVANT_TURN_CONTEXT_FIELDS:
+        if key not in payload:
+            continue
+        canonical = json.dumps(
+            payload[key],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        hashes[key] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashes
+
+
 class CodexAdapter(BaseAdapter):
     """Ingest Codex CLI JSONL rollout files from ~/.codex/sessions/."""
 
@@ -647,6 +682,10 @@ class CodexAdapter(BaseAdapter):
         # string only). Drives effort_changed observation emission: a new turn
         # whose effort differs from this baseline marks a cache-key change-point.
         prev_effort: str | None = None
+        # Full content-free field hashes from the prior turn_context. Stable
+        # turns omit the repeated mapping from the Chronicle artifact while
+        # retaining a timestamped snapshot as an evidence-coverage marker.
+        prev_runtime_config_hashes: dict[str, str] | None = None
         multi_agent_version: str | None = None
         multi_agent_mode: str | None = None
         # Last cumulative ``total_token_usage`` seen on a Codex token_count
@@ -1756,6 +1795,24 @@ class CodexAdapter(BaseAdapter):
         change (the warm prefix is served from a different effort-bucket cache).
         """
         state.turn_context = payload
+        if ts is not None:
+            runtime_config_hashes = _runtime_config_hashes(payload)
+            changed_runtime_config_hashes = (
+                runtime_config_hashes
+                if state.prev_runtime_config_hashes is None
+                or runtime_config_hashes != state.prev_runtime_config_hashes
+                else None
+            )
+            state.runtime_observations.append(
+                RuntimeObservation(
+                    timestamp=ts,
+                    kind="turn_context_snapshot",
+                    turn_id_raw=_as_non_empty_str(payload.get("turn_id")),
+                    comp_hash=_as_non_empty_str(payload.get("comp_hash")),
+                    runtime_config_hashes=changed_runtime_config_hashes,
+                )
+            )
+            state.prev_runtime_config_hashes = runtime_config_hashes
         multi_agent_version = _as_non_empty_str(payload.get("multi_agent_version"))
         if multi_agent_version is not None:
             state.multi_agent_version = multi_agent_version

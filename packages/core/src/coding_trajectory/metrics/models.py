@@ -381,6 +381,40 @@ class EffortChangeStatsFlat(BaseModel):
         return data
 
 
+class CacheContextSnapshotFlat(BaseModel):
+    session_id: UUID
+    timestamp: datetime
+    comp_hash: str | None = None
+    runtime_config_hashes: dict[str, str] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("comp_hash") is None:
+            data.pop("comp_hash", None)
+        if not data.get("runtime_config_hashes"):
+            data.pop("runtime_config_hashes", None)
+        return data
+
+
+class CacheContextResetFlat(BaseModel):
+    session_id: UUID
+    timestamp: datetime
+    kind: Literal["thread_rolled_back"]
+
+
+class CacheAttributionEvidenceFlat(BaseModel):
+    """Capability-marked evidence available to cache-break classifiers."""
+
+    schema_version: Literal[1] = 1
+    request_shape: Literal["observed", "unavailable"] = "unavailable"
+    cache_scope: Literal["observed", "unavailable"] = "unavailable"
+    turn_context: Literal["observed", "unavailable"] = "unavailable"
+    lifecycle: Literal["observed", "unavailable"] = "observed"
+    snapshots: list[CacheContextSnapshotFlat] = Field(default_factory=list)
+    context_resets: list[CacheContextResetFlat] = Field(default_factory=list)
+
+
 class SessionContextStatsFlat(BaseModel):
     root_session_id: UUID
     vendor: str
@@ -467,6 +501,7 @@ class SessionUsageCompactFlat(BaseModel):
     estimated_cost: CostEvidenceFlat | None = None
     compaction: CompactionStatsFlat | None = None
     effort_changes: EffortChangeStatsFlat | None = None
+    cache_attribution: CacheAttributionEvidenceFlat | None = None
     warnings: list[str] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
@@ -480,6 +515,8 @@ class SessionUsageCompactFlat(BaseModel):
             data.pop("compaction", None)
         if data.get("effort_changes") is None:
             data.pop("effort_changes", None)
+        if data.get("cache_attribution") is None:
+            data.pop("cache_attribution", None)
         return data
 
 

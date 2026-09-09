@@ -163,6 +163,37 @@
           "default": null,
           "title": "Cached After Tokens"
         },
+        "changed_fields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Changed Fields",
+          "type": "array"
+        },
+        "comp_hash_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comp Hash From"
+        },
+        "comp_hash_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comp Hash To"
+        },
         "effort_from": {
           "anyOf": [
             {
@@ -199,9 +230,25 @@
           "default": null,
           "title": "Est Cost Usd"
         },
+        "evidence_status": {
+          "default": "complete",
+          "enum": [
+            "complete",
+            "incomplete"
+          ],
+          "title": "Evidence Status",
+          "type": "string"
+        },
         "idle_seconds": {
           "title": "Idle Seconds",
           "type": "number"
+        },
+        "missing_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Evidence",
+          "type": "array"
         },
         "model_from": {
           "anyOf": [
@@ -241,7 +288,13 @@
             "ttl_likely",
             "effort_switch",
             "model_switch",
+            "model_config_switch",
+            "runtime_config_change",
+            "context_reset",
+            "request_shape_change",
+            "cache_scope_change",
             "intra_turn_drop",
+            "insufficient_evidence",
             "unattributed"
           ],
           "title": "Type",
@@ -258,7 +311,12 @@
         "effort_from",
         "effort_to",
         "model_from",
-        "model_to"
+        "model_to",
+        "comp_hash_from",
+        "comp_hash_to",
+        "changed_fields",
+        "missing_evidence",
+        "evidence_status"
       ],
       "title": "CacheBreakRecord",
       "type": "object"

@@ -153,9 +153,15 @@ def render_markdown(projection: ContextWindowProjection) -> str:
             for key in (
                 "effort_switch",
                 "model_switch",
+                "model_config_switch",
+                "runtime_config_change",
+                "context_reset",
+                "request_shape_change",
+                "cache_scope_change",
                 "ttl_confirmed",
                 "ttl_likely",
                 "intra_turn_drop",
+                "insufficient_evidence",
                 "unattributed",
             )
             if cb.by_type.get(key)
@@ -233,7 +239,13 @@ def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
         "ttl_likely": "⏳",
         "effort_switch": "⚡",
         "model_switch": "🔄",
+        "model_config_switch": "🔄",
+        "runtime_config_change": "⚙",
+        "context_reset": "↩",
+        "request_shape_change": "⚙",
+        "cache_scope_change": "🔄",
         "intra_turn_drop": "🔻",
+        "insufficient_evidence": "?",
         "unattributed": "❓",
     }[record.type]
     label = {
@@ -241,7 +253,13 @@ def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
         "ttl_likely": "TTL break?",
         "effort_switch": "effort-switch",
         "model_switch": "model-switch",
+        "model_config_switch": "model-config",
+        "runtime_config_change": "runtime-config",
+        "context_reset": "context-reset",
+        "request_shape_change": "request-shape",
+        "cache_scope_change": "cache-scope",
         "intra_turn_drop": "mid-turn drop",
+        "insufficient_evidence": "evidence incomplete",
         "unattributed": "cache miss",
     }[record.type]
     base = (
@@ -262,6 +280,12 @@ def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
             else f"→{record.model_to}"
         )
         return f"{base} ({change})"
+    if record.comp_hash_to:
+        return f"{base} (comp_hash changed)"
+    if record.changed_fields:
+        return f"{base} (changed: {', '.join(record.changed_fields)})"
+    if record.missing_evidence:
+        return f"{base} (missing: {', '.join(record.missing_evidence)})"
     return base
 
 
@@ -273,9 +297,15 @@ def _cache_breaks_teaser(summary: CacheBreakSummary | None) -> str | None:
         for key in (
             "effort_switch",
             "model_switch",
+            "model_config_switch",
+            "runtime_config_change",
+            "context_reset",
+            "request_shape_change",
+            "cache_scope_change",
             "ttl_confirmed",
             "ttl_likely",
             "intra_turn_drop",
+            "insufficient_evidence",
             "unattributed",
         )
         if summary.by_type.get(key)

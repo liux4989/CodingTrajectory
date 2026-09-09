@@ -23,7 +23,19 @@ export function formatIdleSeconds(seconds: number | null | undefined) {
   return `${Math.round(seconds)}s`;
 }
 
-export type CacheBreakType = "ttl_confirmed" | "ttl_likely" | "effort_switch" | "model_switch" | "intra_turn_drop" | "unattributed";
+export type CacheBreakType =
+  | "ttl_confirmed"
+  | "ttl_likely"
+  | "effort_switch"
+  | "model_switch"
+  | "model_config_switch"
+  | "runtime_config_change"
+  | "context_reset"
+  | "request_shape_change"
+  | "cache_scope_change"
+  | "intra_turn_drop"
+  | "insufficient_evidence"
+  | "unattributed";
 
 // Effort changes are actionable (amber); TTL breaks are age evictions
 // (neutral). ``ttl_likely`` remains explicitly tentative.
@@ -48,6 +60,21 @@ export function cacheBreakTone(type: CacheBreakType, effortFrom: string | null, 
       className: "border-warning/45 bg-warning/10 text-warning",
     };
   }
+  const observedChanges: Partial<Record<CacheBreakType, string>> = {
+    model_config_switch: "Model config change",
+    runtime_config_change: "Runtime config change",
+    context_reset: "Context reset",
+    request_shape_change: "Request shape change",
+    cache_scope_change: "Cache scope change",
+  };
+  const observedChange = observedChanges[type];
+  if (observedChange) {
+    return {
+      icon: <Zap size={12} />,
+      label: observedChange,
+      className: "border-warning/45 bg-warning/10 text-warning",
+    };
+  }
   if (type === "intra_turn_drop") {
     return {
       icon: <Hourglass size={12} />,
@@ -55,10 +82,10 @@ export function cacheBreakTone(type: CacheBreakType, effortFrom: string | null, 
       className: "border-border-soft bg-surface-emphasis text-muted-foreground",
     };
   }
-  if (type === "unattributed") {
+  if (type === "insufficient_evidence" || type === "unattributed") {
     return {
       icon: <Hourglass size={12} />,
-      label: "Unattributed",
+      label: type === "insufficient_evidence" ? "Evidence incomplete" : "Unattributed",
       className: "border-border-soft bg-surface-emphasis text-muted-foreground",
     };
   }
@@ -73,8 +100,14 @@ export function cacheBreakTone(type: CacheBreakType, effortFrom: string | null, 
 export const CACHE_BREAK_TYPE_ORDER: CacheBreakType[] = [
   "effort_switch",
   "model_switch",
+  "model_config_switch",
+  "runtime_config_change",
+  "context_reset",
+  "request_shape_change",
+  "cache_scope_change",
   "ttl_confirmed",
   "ttl_likely",
   "intra_turn_drop",
+  "insufficient_evidence",
   "unattributed",
 ];

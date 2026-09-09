@@ -148,6 +148,16 @@ function CacheBreakRow({ record }: { record: CacheBreakRecord }) {
         <span>{formatIdleSeconds(record.idle_seconds)} idle</span>
         {record.est_cost_usd != null ? <span>{formatCostUsd(record.est_cost_usd)}</span> : null}
       </span>
+      {record.changed_fields.length > 0 ? (
+        <span className="basis-full text-caption text-muted-foreground">
+          Changed: {record.changed_fields.join(", ")}
+        </span>
+      ) : null}
+      {record.missing_evidence.length > 0 ? (
+        <span className="basis-full text-caption text-muted-foreground">
+          Missing evidence: {record.missing_evidence.join(", ")}
+        </span>
+      ) : null}
     </li>
   );
 }

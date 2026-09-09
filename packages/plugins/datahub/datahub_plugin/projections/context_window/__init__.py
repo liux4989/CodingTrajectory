@@ -470,6 +470,8 @@ def _project_cache_breaks(
 
     skip_turns = _post_compaction_turn_ids(usage, compaction)
     effort_change_by_turn = _effort_changed_turns(usage)
+    context_change_by_turn, context_evidence_turns = _cache_context_changes(usage)
+    context_reset_turns = _context_reset_turns(usage)
     ttl_confirmed_s, ttl_likely_min_s = _vendor_ttl_thresholds(vendor)
     records: list[CacheBreakRecord] = []
     prev_model_key: str | None = None
@@ -489,13 +491,25 @@ def _project_cache_breaks(
         # overrides everything (an observed fact, not a heuristic). A model
         # switch overrides TTL: a new cache key re-bills the whole prefix
         # regardless of idle. TTL applies when nothing else explains the loss.
-        # Anything left is ``unattributed`` — the no-cause boundary bucket —
-        # filtered by a noise floor so breakpoint-granularity churn does not
-        # drown the signal.
+        # Residual losses are ``insufficient_evidence`` while any required
+        # capability is absent; ``unattributed`` is reserved for boundaries
+        # where the supported evidence is complete and stable. Both remain
+        # subject to the noise floor below.
+        comp_hash_from = None
+        comp_hash_to = None
+        changed_fields: list[str] = []
+        missing_evidence: list[str] = []
+        evidence_status = "complete"
         confirmed = effort_change_by_turn.get(turn_id)
         if confirmed is not None:
             break_type = "effort_switch"
             effort_from, effort_to = confirmed
+            model_from = None
+            model_to = None
+        elif turn_id in context_reset_turns:
+            break_type = "context_reset"
+            effort_from = None
+            effort_to = None
             model_from = None
             model_to = None
         elif _is_synthetic_model_bootstrap_boundary(
@@ -521,6 +535,19 @@ def _project_cache_breaks(
             effort_to = None
             model_from = prev_model_key
             model_to = model_key
+        elif (context_change := context_change_by_turn.get(turn_id)) is not None:
+            comp_hash_from = context_change.get("comp_hash_from")
+            comp_hash_to = context_change.get("comp_hash_to")
+            changed_fields = list(context_change.get("changed_fields") or [])
+            break_type = (
+                "model_config_switch"
+                if comp_hash_from is not None and comp_hash_to is not None
+                else "runtime_config_change"
+            )
+            effort_from = None
+            effort_to = None
+            model_from = None
+            model_to = None
         else:
             break_type = (
                 "ttl_confirmed"
@@ -541,7 +568,28 @@ def _project_cache_breaks(
                     prev_model_key = model_key or prev_model_key
                     continue
 
-                break_type = "unattributed"
+                previous_turn_id = (
+                    str(
+                        turns[index - 1].get("id")
+                        or turns[index - 1].get("turn_id")
+                        or ""
+                    )
+                    if index > 0
+                    else ""
+                )
+                missing_evidence = _missing_cache_attribution_evidence(
+                    usage,
+                    previous_turn=turns[index - 1] if index > 0 else None,
+                    turn=turn,
+                    previous_turn_id=previous_turn_id,
+                    turn_id=turn_id,
+                    context_evidence_turns=context_evidence_turns,
+                )
+                if missing_evidence:
+                    break_type = "insufficient_evidence"
+                    evidence_status = "incomplete"
+                else:
+                    break_type = "unattributed"
             effort_from = None
             effort_to = None
             model_from = None
@@ -562,6 +610,11 @@ def _project_cache_breaks(
                 effort_to=effort_to,
                 model_from=model_from,
                 model_to=model_to,
+                comp_hash_from=comp_hash_from,
+                comp_hash_to=comp_hash_to,
+                changed_fields=changed_fields,
+                missing_evidence=missing_evidence,
+                evidence_status=evidence_status,
             )
         )
     # Intra-turn collapses: a cache-hit drop between two provider calls *inside*
@@ -639,6 +692,138 @@ def _is_synthetic_model_bootstrap_boundary(
         return False
     separation = (start - previous_start).total_seconds()
     return 0 <= separation <= 1
+
+
+def _turn_id_for_evidence_timestamp(
+    usage: dict[str, Any], timestamp: datetime
+) -> str | None:
+    candidates: list[tuple[datetime, datetime | None, str]] = []
+    for turn in usage.get("turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        runtime = turn.get("runtime") or {}
+        start = _parse_iso_timestamp(runtime.get("start") or runtime.get("started_at"))
+        end = _parse_iso_timestamp(runtime.get("end") or runtime.get("ended_at"))
+        turn_id = str(turn.get("id") or turn.get("turn_id") or "")
+        if start is not None and turn_id:
+            candidates.append((start, end, turn_id))
+    candidates.sort()
+    containing = next(
+        (
+            turn_id
+            for start, end, turn_id in candidates
+            if start <= timestamp and (end is None or timestamp <= end)
+        ),
+        None,
+    )
+    if containing is not None:
+        return containing
+    return next(
+        (turn_id for start, _end, turn_id in candidates if start >= timestamp),
+        None,
+    )
+
+
+def _cache_context_changes(
+    usage: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    block = usage.get("cache_attribution") or {}
+    snapshots = [
+        snapshot
+        for snapshot in block.get("snapshots") or []
+        if isinstance(snapshot, dict)
+        and _parse_iso_timestamp(snapshot.get("timestamp")) is not None
+    ]
+    snapshots.sort(key=lambda item: str(item.get("timestamp")))
+    changes: dict[str, dict[str, Any]] = {}
+    covered_turns: set[str] = set()
+    previous: dict[str, Any] | None = None
+    previous_hashes: dict[str, str] | None = None
+    for snapshot in snapshots:
+        timestamp = _parse_iso_timestamp(snapshot.get("timestamp"))
+        if timestamp is None:
+            continue
+        turn_id = _turn_id_for_evidence_timestamp(usage, timestamp)
+        if turn_id is not None:
+            covered_turns.add(turn_id)
+        stored_hashes = snapshot.get("runtime_config_hashes")
+        current_hashes = (
+            stored_hashes
+            if isinstance(stored_hashes, dict) and stored_hashes
+            else previous_hashes or {}
+        )
+        if previous is None or turn_id is None:
+            previous = snapshot
+            previous_hashes = current_hashes
+            continue
+        changed_fields = sorted(
+            key
+            for key in set(previous_hashes or {}) | set(current_hashes)
+            if (previous_hashes or {}).get(key) != current_hashes.get(key)
+        )
+        comp_hash_from = _optional_text(previous.get("comp_hash"))
+        comp_hash_to = _optional_text(snapshot.get("comp_hash"))
+        comp_hash_changed = (
+            comp_hash_from is not None
+            and comp_hash_to is not None
+            and comp_hash_from != comp_hash_to
+        )
+        if changed_fields or comp_hash_changed:
+            changes[turn_id] = {
+                "changed_fields": changed_fields,
+                "comp_hash_from": comp_hash_from if comp_hash_changed else None,
+                "comp_hash_to": comp_hash_to if comp_hash_changed else None,
+            }
+        previous = snapshot
+        previous_hashes = current_hashes
+    return changes, covered_turns
+
+
+def _context_reset_turns(usage: dict[str, Any]) -> set[str]:
+    block = usage.get("cache_attribution") or {}
+    reset_turns: set[str] = set()
+    for reset in block.get("context_resets") or []:
+        if not isinstance(reset, dict):
+            continue
+        timestamp = _parse_iso_timestamp(reset.get("timestamp"))
+        if timestamp is None:
+            continue
+        turn_id = _turn_id_for_evidence_timestamp(usage, timestamp)
+        if turn_id is not None:
+            reset_turns.add(turn_id)
+    return reset_turns
+
+
+def _missing_cache_attribution_evidence(
+    usage: dict[str, Any],
+    *,
+    previous_turn: dict[str, Any] | None,
+    turn: dict[str, Any],
+    previous_turn_id: str,
+    turn_id: str,
+    context_evidence_turns: set[str],
+) -> list[str]:
+    block = usage.get("cache_attribution") or {}
+    missing: list[str] = []
+    if (
+        previous_turn is None
+        or not _turn_model_key(previous_turn)
+        or not _turn_model_key(turn)
+    ):
+        missing.append("model_identity")
+    if block.get("lifecycle") != "observed":
+        missing.append("lifecycle")
+    if (
+        block.get("turn_context") != "observed"
+        or previous_turn_id not in context_evidence_turns
+        or turn_id not in context_evidence_turns
+    ):
+        missing.append("turn_context")
+    if block.get("request_shape") != "observed":
+        missing.append("request_shape")
+    if block.get("cache_scope") != "observed":
+        missing.append("cache_scope")
+    return missing
 
 
 def _vendor_ttl_thresholds(vendor: str) -> tuple[float, float]:

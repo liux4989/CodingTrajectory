@@ -275,6 +275,7 @@ def _compact_usage_api(payload: dict[str, Any]) -> dict[str, Any]:
             "models": _compact_usage_models(payload.get("models")),
             "compaction": _compact_compaction(payload.get("compaction")),
             "effort_changes": _compact_effort_changes(effort_changes),
+            "cache_attribution": payload.get("cache_attribution"),
             "turns": [
                 _compact_usage_turn(turn)
                 for turn in payload.get("turns") or []
@@ -388,6 +389,7 @@ def _compact_usage_session(value: dict[str, Any]) -> dict[str, Any]:
             "effort_changes": _compact_effort_changes(
                 value.get("effort_changes") or {}
             ),
+            "cache_attribution": value.get("cache_attribution"),
             "turns": [
                 _compact_usage_turn(turn)
                 for turn in value.get("turns") or []

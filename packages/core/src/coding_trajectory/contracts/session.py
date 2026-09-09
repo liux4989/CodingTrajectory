@@ -320,6 +320,7 @@ class SessionUsageResponse(ContractModel):
     estimated_cost: dict[str, Any] | None = None
     compaction: dict[str, Any] | None = None
     effort_changes: dict[str, Any] | None = None
+    cache_attribution: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
 
 

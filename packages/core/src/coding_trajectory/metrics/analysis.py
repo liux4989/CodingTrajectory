@@ -30,6 +30,7 @@ from coding_trajectory.metrics._build import (
 )
 from coding_trajectory.metrics.accounting import usage_accounting_payload
 from coding_trajectory.metrics.context_stats._common import (
+    cache_attribution_evidence,
     compaction_stats,
     effort_change_stats,
     runtime_stats,
@@ -163,6 +164,9 @@ def build_session_graph_usage(
             ).model_dump(mode="json"),
             "compaction": _optional_model_dump(compaction_stats(single)),
             "effort_changes": effort_change_stats(single).model_dump(mode="json"),
+            "cache_attribution": cache_attribution_evidence(single).model_dump(
+                mode="json"
+            ),
             "turns": [turn.model_dump(mode="json") for turn in session_turns],
             "total_usage": _token_usage_payload(session_usage),
             "models": [row.model_dump(mode="json") for row in model_breakdown],
@@ -187,6 +191,7 @@ def build_session_graph_usage(
         estimated_cost=_aggregate_model_cost(graph_model_breakdown),
         compaction=compaction_stats(session_graph),
         effort_changes=effort_change_stats(session_graph),
+        cache_attribution=cache_attribution_evidence(session_graph),
         warnings=full.warnings,
     ).model_dump(mode="json")
     payload["scope"] = "session_graph" if multi_session else "session"
