@@ -37,6 +37,7 @@ export function SessionTimelinePanel({ rootId, sessionId }: { rootId: string; se
       void navigate({
         search: (current) => ({ ...current, ...updates, tab: "timeline" }),
         replace: true,
+        resetScroll: false,
       });
     },
     [navigate],
