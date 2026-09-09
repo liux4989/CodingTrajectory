@@ -20,13 +20,16 @@ SQLite materialization, content hydration, and evidence views. The hosted
 application consumes the same Supabase-backed public CT contracts as other
 remote readers.
 
-The initial release keeps two independent authorization decisions:
+The preview keeps two independent authorization decisions:
 
 1. Cloudflare Access decides whether a browser may reach Datahub.
-2. Supabase Auth and RLS decide which CT workspace data that user may read.
+2. Supabase Auth and RLS decide which CT workspace data the dedicated hosted
+   reader may read.
 
-Cloudflare identity does not become a Supabase principal implicitly. An identity
-broker or service-role bypass is outside this design.
+Cloudflare identity does not become a Supabase principal implicitly. The
+private facade signs in as one dedicated, read-only Supabase Auth user after
+Access has admitted the browser. An identity broker or service-role bypass is
+outside this design.
 
 ## Target topology
 
@@ -40,7 +43,8 @@ browser
             -> private CT Python facade Worker
                  -> validate request with existing Pydantic contracts
                  -> pin one Supabase workspace snapshot
-                 -> call PostgREST RPC with the user's Supabase JWT
+                 -> obtain/cache a short-lived dedicated-reader JWT
+                 -> call PostgREST RPC with that reader JWT
                  -> validate artifact identity, digest, and schema
                  -> execute existing chronicle CT handlers
                  -> adapt the result to the Datahub response contract
@@ -48,8 +52,10 @@ browser
 
 The gateway Worker is the only publicly routed Worker. The CT facade has no
 public route and accepts calls only through its service binding. The raw Access
-JWT is not forwarded to Supabase. The user's short-lived Supabase token is
-forwarded only to the CT facade and PostgREST, and is never persisted or logged.
+JWT and browser `Authorization` headers are not forwarded to the facade or
+Supabase. Reader credentials exist only as facade Worker secrets. The facade
+caches the short-lived access token in memory until shortly before expiry,
+never persists a refresh token, and never returns or logs credentials.
 
 The Worker configuration uses the Vite build output as Static Assets, SPA
 fallback for client-side routes, and Worker-first routing for `/api/*`. API
@@ -63,9 +69,9 @@ issuer and application audience.
 | Component | Owns | Must not own |
 | --- | --- | --- |
 | Cloudflare Access | Browser admission, IdP authentication, allow policy, session policy, audit decision | CT workspace membership or Supabase roles |
-| Gateway Worker | Static assets, Access JWT verification, same-origin API boundary, security headers, request limits | Metric computation, CT data storage, service-role credentials |
-| CT facade Worker | Pydantic request/response validation, pinned remote runtime, Datahub response adapters | Local discovery, SQLite, raw logs, durable caches, publication or mutation |
-| Supabase Auth and RLS | User identity, workspace membership, row authorization | Cloudflare admission policy |
+| Gateway Worker | Static assets, Access JWT verification, same-origin API boundary, security headers, request limits | Metric computation, CT data storage, Supabase credentials |
+| CT facade Worker | Dedicated-reader sign-in, ephemeral access-token cache, Pydantic request/response validation, pinned remote runtime, Datahub response adapters | Local discovery, SQLite, refresh-token persistence, durable data caches, service-role access, publication or mutation |
+| Supabase Auth and RLS | Dedicated reader identity, workspace membership, row authorization | Cloudflare admission policy |
 | Supabase CT schema | Chronicle artifacts, revisions, inventory, and approved read RPCs | Raw prompts, responses, commands, event bodies, or host paths |
 | Local Datahub | JSONL discovery, SQLite materialization, evidence hydration, local-only pages | Hosted authority or remote fallback |
 
@@ -93,13 +99,19 @@ Missing configuration, missing claims, key-fetch failure, and validation failure
 all fail closed. The gateway never trusts the Access cookie, email headers, or
 arbitrary client-provided identity headers as proof by themselves.
 
-After Access admission, the browser obtains an ordinary short-lived Supabase
-user session. The CT facade forwards that bearer token with the publishable key;
-RLS and workspace membership remain authoritative. Database passwords,
-collector credentials, refresh credentials, and service-role keys are prohibited
-from the browser and both Workers. The initial implementation may therefore
-show a separate Supabase sign-in after Access; removing that second sign-in
-requires a separately reviewed token-broker design.
+After Access admission, the browser calls only same-origin Datahub APIs and sees
+no Supabase URL, publishable key, credentials, or tokens. The private facade
+uses Worker secrets to perform the Supabase password grant for a dedicated
+reader and forwards its access token with the publishable key. RLS and the
+reader's single workspace membership remain authoritative. The reader must have
+no agent capability, collector credential, ingestion authority, or schema role.
+Database passwords, collector credentials, refresh-token persistence, and
+service-role keys remain prohibited.
+
+The access-token cache is an optimization, not authorization state: it is
+ephemeral, bounded by the token's expiry with a safety buffer, and discarded on
+an unauthorized PostgREST response before one reauthentication attempt. Neither
+the gateway nor the browser can select the Supabase principal.
 
 ## Hosted route capability matrix
 
@@ -213,8 +225,8 @@ Supabase error bodies. User-facing errors are bounded and sanitized.
 - Run gateway and facade Workers locally with synthetic credentials/data.
 - Verify Access JWT validation with valid, absent, expired, wrong-issuer,
   wrong-audience, and forged tokens.
-- Verify Supabase authorization independently with member, non-member, expired,
-  and missing user tokens.
+- Verify Supabase authorization independently with the dedicated reader's
+  membership, a non-member principal, and expired or missing tokens.
 - Verify direct/deep SPA navigation and that `/api/*` never resolves to the SPA
   fallback.
 
@@ -243,10 +255,10 @@ The preview was deployed on 2026-09-10:
   `https://coding-trajectory-datahub-preview.liux4989.workers.dev`.
 
 Signed-out requests and requests carrying a forged Access assertion were both
-redirected to Access at the edge. An Access-admitted Chrome session reached the
-separate Supabase sign-in. Supabase member/RLS behavior and the approved data
-route schemas still require a completed Supabase user sign-in; do not treat the
-static shell or Access admission as proof of authenticated data access.
+redirected to Access at the edge. The original release required a second
+browser Supabase sign-in. The dedicated-reader cutover removes that browser
+credential flow; deployment receipts and post-cutover data-route validation
+must be recorded before treating the redesign as live.
 
 ### Phase 3 — production promotion
 
@@ -272,7 +284,7 @@ The design intentionally does not guess these account-specific values:
 - Access team domain and application audience;
 - configured IdP and exact owner identity or verified group claim;
 - chosen Access session duration;
-- Supabase browser sign-in method; and
+- dedicated Supabase reader identity; and
 - authorized non-production workspace identifier.
 
 Resolve and verify them read-only before any Cloudflare resource creation or

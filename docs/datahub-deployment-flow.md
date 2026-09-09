@@ -62,8 +62,9 @@ versions before resuming instead of blindly repeating deployment.
 
 ### 1. Freeze and build
 
-Build from a clean checkout of a recorded commit with frozen Python and npm
-lockfiles and recorded uv, pywrangler, Wrangler, and Supabase CLI versions.
+Build from a clean checkout of a recorded commit with frozen Python and frontend
+lockfiles (uv and the frontend Bun lockfile) and recorded uv, Bun, pywrangler,
+Wrangler, and Supabase CLI versions.
 Review and commit the existing cutover edits before making them a release input.
 
 Build Python dependencies into a fresh staging directory using pywrangler's

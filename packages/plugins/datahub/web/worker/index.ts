@@ -21,54 +21,34 @@ export default {
     if (!authenticated) return jsonError(403, "Cloudflare Access authentication required.");
 
     const url = new URL(request.url);
-    if (url.pathname === "/api/hosted/config") {
-      if (request.method !== "GET") return jsonError(404, "Not found.");
-      return withSecurityHeaders(
-        Response.json({
-          supabase_url: configuration.supabaseUrl,
-          supabase_anon_key: env.CT_SUPABASE_ANON_KEY,
-          horizon_days: 7,
-          content_scope: "chronicle",
-        }),
-        configuration.supabaseOrigin,
-        true,
-      );
-    }
-
     if (url.pathname.startsWith("/api/")) {
       if (request.method !== "GET" || !API_PATHS.has(url.pathname)) {
-        return withSecurityHeaders(jsonError(404, "Not found."), configuration.supabaseOrigin, true);
+        return withSecurityHeaders(jsonError(404, "Not found."), true);
       }
       const forwarded = requestForFacade(request);
       const response = await env.DATAHUB_FACADE.fetch(forwarded);
-      return withSecurityHeaders(response, configuration.supabaseOrigin, true);
+      return withSecurityHeaders(response, true);
     }
 
     if (request.method !== "GET" && request.method !== "HEAD") {
-      return withSecurityHeaders(jsonError(404, "Not found."), configuration.supabaseOrigin, false);
+      return withSecurityHeaders(jsonError(404, "Not found."), false);
     }
     const response = await env.ASSETS.fetch(request);
-    return withSecurityHeaders(response, configuration.supabaseOrigin, false, url.pathname);
+    return withSecurityHeaders(response, false, url.pathname);
   },
 } satisfies ExportedHandler<Env>;
 
 function configurationFor(env: Env) {
   try {
-    const supabaseUrl = new URL(env.CT_SUPABASE_URL);
     const teamDomain = new URL(env.CF_ACCESS_TEAM_DOMAIN);
     if (
-      supabaseUrl.protocol !== "https:" ||
       teamDomain.protocol !== "https:" ||
       !teamDomain.hostname.endsWith(".cloudflareaccess.com") ||
-      !env.CT_SUPABASE_ANON_KEY ||
-      env.CT_SUPABASE_ANON_KEY.length > 8_192 ||
       !env.CF_ACCESS_AUD
     ) {
       return null;
     }
     return {
-      supabaseUrl: supabaseUrl.origin,
-      supabaseOrigin: supabaseUrl.origin,
       teamDomain: teamDomain.origin,
     };
   } catch {
@@ -107,6 +87,7 @@ function requestForFacade(request: Request) {
     "cf-access-authenticated-user-email",
     "cf-connecting-ip",
     "cookie",
+    "authorization",
     "x-forwarded-for",
     "x-real-ip",
   ]) {
@@ -122,7 +103,6 @@ function jsonError(status: number, message: string) {
 
 function withSecurityHeaders(
   response: Response,
-  supabaseOrigin: string,
   api: boolean,
   pathname = "",
 ) {
@@ -136,7 +116,7 @@ function withSecurityHeaders(
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self'",
-    `connect-src 'self' ${supabaseOrigin}`,
+    "connect-src 'self'",
   ].join("; "));
   headers.set("Cross-Origin-Resource-Policy", "same-origin");
   headers.set("Permissions-Policy", "camera=(), geolocation=(), microphone=()");

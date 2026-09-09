@@ -9,7 +9,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { CommandPalette } from "@/components/command-palette";
 import { DatahubDeliveryProvider } from "@/hooks/use-datahub-delivery";
 import { HOSTED_MODE } from "@/hosted/mode";
-import { HostedSessionProvider } from "@/hosted/session";
 import "@/styles.css";
 
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
@@ -296,9 +295,7 @@ function DatahubApplication() {
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <MotionConfig reducedMotion="user">
-      <HostedSessionProvider>
-        <DatahubApplication />
-      </HostedSessionProvider>
+      <DatahubApplication />
     </MotionConfig>
   </React.StrictMode>,
 );

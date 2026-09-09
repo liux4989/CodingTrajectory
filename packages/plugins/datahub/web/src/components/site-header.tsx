@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CircleAlert, Cloud, HardDrive, LoaderCircle, LogOut, Moon, Sun } from "lucide-react";
+import { CircleAlert, Cloud, HardDrive, LoaderCircle, Moon, Sun } from "lucide-react";
 import { useTheme } from "@/hooks/use-theme";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -9,7 +9,6 @@ import { RefreshButton } from "@/components/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
-import { useHostedAuth } from "@/hosted/session";
 
 function DeliveryStatus() {
   const delivery = useDatahubDelivery();
@@ -48,7 +47,6 @@ function DeliveryStatus() {
 
 export function SiteHeader() {
   const { theme, toggle } = useTheme();
-  const auth = useHostedAuth();
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-2 border-b border-sidebar-border bg-background/80 backdrop-blur-lg transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-16">
@@ -62,18 +60,6 @@ export function SiteHeader() {
         <div className="ml-auto flex items-center gap-2">
           <DeliveryStatus />
           <RefreshButton />
-          {auth.hosted ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void auth.signOut()}
-              aria-label={auth.email ? `Sign out ${auth.email}` : "Sign out"}
-              className="gap-1.5"
-            >
-              <LogOut aria-hidden="true" size={16} />
-              <span className="hidden sm:inline">Sign out</span>
-            </Button>
-          ) : null}
           <Button
             variant="outline"
             size="icon"

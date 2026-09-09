@@ -20,8 +20,6 @@
   ],
   "secrets": {
     "required": [
-      "CT_SUPABASE_URL",
-      "CT_SUPABASE_ANON_KEY",
       "CF_ACCESS_TEAM_DOMAIN",
       "CF_ACCESS_AUD"
     ]

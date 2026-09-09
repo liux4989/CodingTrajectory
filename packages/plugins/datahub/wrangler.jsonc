@@ -21,7 +21,9 @@
     "required": [
       "CT_SUPABASE_URL",
       "CT_SUPABASE_ANON_KEY",
-      "CT_REMOTE_WORKSPACE_ID"
+      "CT_REMOTE_WORKSPACE_ID",
+      "CT_READER_EMAIL",
+      "CT_READER_PASSWORD"
     ]
   }
 }
