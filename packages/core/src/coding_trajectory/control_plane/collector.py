@@ -335,6 +335,12 @@ class LocalCollector:
                 raise CollectorRemoteError(
                     "requested session has no eligible local source"
                 )
+        if remote is not None and since_days is not None:
+            candidates = _expand_scoped_graph_candidates(
+                candidates,
+                current_dir=current_dir,
+                agent_vendor=agent_vendor,
+            )
         fenced: list[_FencedCandidate] = []
         failed = 0
         for candidate in candidates:
@@ -1350,6 +1356,53 @@ class LocalCollector:
                     "update observation_outbox set state = 'rejected', last_error = 'invalid_checkpoint_not_published' where idempotency_key = ?",
                     (row["idempotency_key"],),
                 )
+
+
+def _expand_scoped_graph_candidates(
+    candidates: list[DiscoveryCandidate],
+    *,
+    current_dir: Path,
+    agent_vendor: str | None,
+) -> list[DiscoveryCandidate]:
+    """Expand time-filtered seeds to their complete local project graphs."""
+
+    selected = {candidate.path: candidate for candidate in candidates}
+    component_paths: set[Path] = set()
+    for candidate in candidates:
+        if candidate.path in component_paths:
+            continue
+        try:
+            header = candidate.adapter_cls().scan_identity(candidate.path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            # Normal fencing below owns malformed/changing-source accounting.
+            continue
+        if header is None:
+            continue
+        component_paths.update(
+            locate_session_files(
+                session_id=header.session_id,
+                current_dir=current_dir,
+                global_scope=False,
+                since_days=None,
+                agent_vendor=agent_vendor,
+                include_descendants=True,
+            )
+        )
+
+    if component_paths:
+        selected.update(
+            {
+                candidate.path: candidate
+                for candidate in discover_source_candidates(
+                    current_dir=current_dir,
+                    global_scope=False,
+                    agent_vendor=agent_vendor,
+                    since_days=None,
+                )
+                if candidate.path in component_paths
+            }
+        )
+    return sorted(selected.values(), key=lambda value: str(value.path))
 
 
 def _body_free_artifact(artifact: ChronicleGraphArtifact) -> ChronicleGraphArtifact:
