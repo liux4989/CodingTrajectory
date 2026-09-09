@@ -3,8 +3,7 @@
 - **Status:** Accepted design; facade implemented locally, not deployed
 - **Date:** 2026-09-08
 - **Scope:** Access-only hosted Datahub UI and read-only API facade
-- **Related:** [Datahub design](datahub-redesign.md),
-  [remote control plane](remote-ct-control-plane-design.md), and
+- **Related:** [remote control plane](remote-ct-control-plane-design.md) and
   [chronicle history](chronicle-history.md)
 
 ## Decision
@@ -105,7 +104,7 @@ requires a separately reviewed token-broker design.
 ## Hosted route capability matrix
 
 The inventory below is derived from
-`datahub_plugin.serving.server.ROUTES`. “Adapter” means the remote authority is
+`datahub_plugin.serving.routes.ROUTES`. “Adapter” means the remote authority is
 safe but the existing localhost response projection is not directly deployable.
 The adapter must reuse Python CT handlers and Pydantic response contracts; it
 must not reimplement metric semantics in TypeScript.
@@ -161,10 +160,10 @@ Cloudflare Python Workers currently support Pydantic and ASGI applications but
 run on Pyodide, have non-functional threading, and provide only an ephemeral
 filesystem. The existing `ThreadingHTTPServer`, `urllib` transport, local SQLite
 runtime, thread pools, and process-global caches are therefore not deployable as
-written.
+written; the hosted path is a request-scoped facade instead.
 
-Before implementation is committed to Python Workers, an isolated compatibility
-spike must prove that a request-scoped facade can:
+Before any hosted deployment, the committed facade must demonstrate that it
+can:
 
 1. import the required pure CT contracts and handlers;
 2. call Supabase through an asynchronous supported HTTP path;

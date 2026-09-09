@@ -4,10 +4,7 @@
 - **Date:** 2026-09-09
 - **Scope:** Historical collection, storage, replay, and API coverage
 - **Related:** [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md),
-  [`local-collector-handoff.md`](local-collector-handoff.md),
-  [`chronicle-local-qualification-2026-09-08.md`](chronicle-local-qualification-2026-09-08.md),
-  [`chronicle-deployment-readiness-2026-09-09.md`](chronicle-deployment-readiness-2026-09-09.md),
-  [`chronicle-non-production-rollout-2026-09-09.md`](chronicle-non-production-rollout-2026-09-09.md)
+  [`local-collector-handoff.md`](local-collector-handoff.md)
 
 ## Decision
 
@@ -128,19 +125,12 @@ Evidence-body requests remain local-only:
 Remote routing rejects these requests instead of returning partial evidence.
 Response metadata reports the selected source.
 
-## Prototype rollout boundary
+## Deployment boundary
 
-This refactor changes the repository contract only. It does not reset, migrate,
-or deploy a remote database, publish a canary, or claim remote acceptance. The
-repository keeps a single current Chronicle validator with Amp included in its
-vendor allowlist; there is no follow-on compatibility migration for Amp.
-
-Before any remote change, validate the Python and SQL shapes, exact digest and
+The contract is qualified locally and was admitted to the designated disposable
+non-production project on 2026-09-09; production remains undeployed. Before any
+further remote change, re-validate the Python and SQL shapes, exact digest and
 size behavior, real-session operational output, metric reconciliation, and
 collector replay locally. Remote target classification and explicit deployment
-authorization are a separate gate.
-
-The bounded local qualification passed on 2026-09-08 across available Codex,
-Claude Code, Pi, and Amp sources. Its evidence and source-selection limits are
-recorded in
-[`chronicle-local-qualification-2026-09-08.md`](chronicle-local-qualification-2026-09-08.md).
+authorization remain a separate gate. Git history retains the dated
+qualification, readiness, and rollout evidence.

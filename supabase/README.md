@@ -74,12 +74,12 @@ supabase db push --linked
 `db push` deploys only committed migration files; it does not publish the
 project's current SQLite read models.
 
-## Current non-production rollout
+## Current non-production deployment
 
-The CT application schema was reset and rebuilt on 2026-09-05 with explicit
-non-production authorization. The seven-day CodingTrajectory project snapshot
-was published and authenticated remote reads were verified. See the
-[aggregate rollout report](../docs/remote-ct-rollout-2026-09-05.md).
+The CT application schema was reset and rebuilt from all committed migrations
+on 2026-09-09 with explicit non-production authorization, and a bounded
+Chronicle canary verified publication and authenticated remote reads. Git
+history retains the dated rollout evidence.
 
 The publication RPC has a scoped 60-second execution budget. Other API role
 timeouts remain unchanged. The current schema can be rebuilt from the committed

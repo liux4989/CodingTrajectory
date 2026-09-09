@@ -90,8 +90,7 @@ Do not derive new expected metric values from a run alone. Intentional changes
 require reconstruction from committed source evidence and an updated audit.
 See the [metrics quality gate](metrics-validation-quality-gate.md).
 
-The [September 9 rollout record](chronicle-non-production-rollout-2026-09-09.md)
-records verified non-production Chronicle publication and reads under the
-current schema; the [September 5 report](remote-ct-rollout-2026-09-05.md)
-retains the superseded Shareable-schema run. Concurrent collectors and ongoing
-supervision remain outside that verified scope.
+The Chronicle schema is deployed to the designated disposable non-production
+project, where a bounded canary verified publication and authenticated reads on
+2026-09-09. Continuous collection, concurrent collectors, and ongoing
+supervision remain outside that verified scope; production is not deployed.

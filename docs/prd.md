@@ -50,5 +50,4 @@ runs retain their distinct scopes.
   body-free operational coverage. The [control plane](remote-ct-control-plane-design.md)
   defines inventory, living, and estimation authority separately.
 
-Earlier evaluation proposals remain in the [design archive](archive/README.md);
-they do not establish a currently available evaluation API.
+There is no currently available evaluation API; earlier proposals are retired.

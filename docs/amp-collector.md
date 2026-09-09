@@ -67,7 +67,11 @@ uv run ct api call project.sessions --params '{"agent_vendor":"amp"}'
 ```
 
 The adapter accepts only the versioned plugin journal, not `amp threads export`.
-It replaces repeated message revisions, matches tool calls/results by tool-use
+Exports use a different ID space: plugin message IDs only partially match export
+`protocolMessageID` and never the numeric export `messageId`, and plugin tool
+IDs appear that exports omit. Do not join the two sources or count both as
+independent activity. It replaces repeated message revisions, matches tool
+calls/results by tool-use
 ID, and recognizes only successful `create_thread` results with an explicit
 valid `threadID` and a matched live call/result observation pair as creation
 evidence. Replay-only calls are not sufficient: replay can include internal
@@ -91,7 +95,9 @@ uv run python scripts/validate-amp-live.py
 
 The stable Amp plugin transcript includes prompts, assistant text and thinking,
 tool inputs/results, and message IDs. Parent lookup was observed to return null;
-creation-tool evidence is used instead. The transcript does not expose
+creation-tool evidence is used instead. Hook event status and replayed
+`tool_result` block status are not equivalent surfaces; consumers must not treat
+them interchangeably. The transcript does not expose
 provider inference timestamps, token usage, cost, or complete model-routing
 metadata. Those fields require a separate enrichment source and must not be
 inferred from the collector records.

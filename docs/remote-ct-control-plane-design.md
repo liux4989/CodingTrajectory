@@ -4,7 +4,6 @@
 - **Date:** 2026-09-09
 - **Scope:** Public method authorities, historical artifacts, project inventory,
   living state, estimation, and collector handoff
-- **Supersedes:** [`remote-session-ledger-design.md`](archive/remote-session-ledger-design.md)
 
 ## Decision
 
@@ -244,21 +243,11 @@ clients.
 A failed gate stops rollout. Privacy, topology, checkpoint, snapshot, and
 idempotency rules are never weakened to continue deployment.
 
-The local qualification gate passed on 2026-09-08. On 2026-09-09 an authorized
-CT-only reset rebuilt the linked disposable project from the committed
-migrations and one bounded Chronicle canary passed publication, integrity,
-idempotency, and authenticated remote-read checks; see
-[`chronicle-deployment-readiness-2026-09-09.md`](chronicle-deployment-readiness-2026-09-09.md) and
-[`chronicle-non-production-rollout-2026-09-09.md`](chronicle-non-production-rollout-2026-09-09.md).
-
-## Prior rollout evidence
-
-The superseded shareable-artifact schema completed an authorized non-production
-reset, seven-day project upload, and authenticated historical reads on
-2026-09-05. That evidence does not establish deployment or acceptance of the
-current Chronicle schema. See
-[`remote-ct-rollout-2026-09-05.md`](remote-ct-rollout-2026-09-05.md) for aggregate
-evidence and the remaining supervision/living/estimation scope.
+All gates passed for the designated disposable non-production project on
+2026-09-09: an authorized CT-only reset rebuilt the schema from the committed
+migrations, and one bounded canary passed publication, integrity, idempotency,
+and authenticated remote-read checks. Production deployment remains
+unauthorized. Git history retains the dated evidence.
 
 Publication has a 60-second function-level database budget and a 90-second
 collector transport wait. A timeout retains the original request for exact

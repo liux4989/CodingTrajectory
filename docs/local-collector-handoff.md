@@ -172,17 +172,10 @@ the aggregate pending count.
     graphs are rejected without blocking a later complete scan.
 13. Two agents publish disjoint graphs to one project without replacing each other.
 
-## Verified non-production runs
+## Verified non-production deployment
 
-The 2026-09-09 run reset the authorized disposable project, rebuilt the schema
-from all 11 committed migrations, and published one bounded Chronicle canary
-graph with zero failed, rejected, or pending deliveries. See
-[`chronicle-non-production-rollout-2026-09-09.md`](chronicle-non-production-rollout-2026-09-09.md).
-
-The superseded 2026-09-05 run accepted 18 logical sources from 20 physical files
-and published eight graphs under the retired Shareable schema, with zero pending
-or rejected deliveries. Its private fresh delivery state must be used explicitly
-when resuming that publication stream; the previous default delivery database
-was preserved. The publication RPC has a 60-second database execution budget,
-with a 90-second client wait.
-See [`remote-ct-rollout-2026-09-05.md`](remote-ct-rollout-2026-09-05.md).
+On 2026-09-09 the authorized disposable project was reset, rebuilt from all 11
+committed migrations, and passed a bounded Chronicle canary with zero failed,
+rejected, or pending deliveries. The publication RPC carries a 60-second
+database execution budget with a 90-second client wait. Earlier Shareable-era
+rollout evidence is superseded; git history retains it.
