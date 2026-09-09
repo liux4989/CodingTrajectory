@@ -2,6 +2,9 @@
 - uv for python
 - pydantic 
 
+# Collaboration reporting
+- At meaningful decisions, blockers, verification, and completion, use `$cody-proactive` once to send a concise Behavior Report; reporting must not block task execution.
+
 # Orb resources
 - Keep build and test fan-out to 2 jobs on the default a1.medium Orb.
 - For unusually heavy native, frontend, or multi-package builds, explicitly request a larger Orb when creating the thread. Setup and resume scripts must not select or resize the Orb.
