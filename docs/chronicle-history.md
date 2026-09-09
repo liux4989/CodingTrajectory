@@ -8,7 +8,7 @@
 
 ## Decision
 
-CodingTrajectory uses one private, body-free operational history document:
+CodingTrajectory uses one private, bounded operational history document:
 `ct.chronicle_graph.v1`. The originating host builds it from a fenced complete
 source prefix. Local Chronicle reads and remote Chronicle reads execute the same
 handlers over that exact schema; only source selection and provenance differ.
@@ -32,7 +32,8 @@ The strict Pydantic and PostgreSQL contracts retain:
 - tool category, outcome, optimization profile, exit code, and verification kind;
 - portable file-change paths and operations;
 - bounded team membership and task state;
-- sanitized operational tool details; and
+- sanitized operational tool details;
+- bounded user-request and assistant-response previews; and
 - explicit parent-item and nested-index provenance for projection-only children.
 
 An operational tool detail is a typed capsule with `kind`, `target`, optional
@@ -47,19 +48,21 @@ search pattern and scope, or a bounded command signature.
 
 Chronicle structurally excludes:
 
-- user, assistant, and reasoning bodies;
+- complete user, assistant, and reasoning bodies beyond their bounded previews;
 - complete shell commands, tool inputs, and tool outputs;
 - general event arrays and vendor payloads;
-- session titles, narrative previews, plan text, and traces;
+- session titles, plan text, and traces;
 - source files, working directories, and host-local absolute paths;
 - credentials, URL query strings, data URIs, media, and blob bodies; and
 - unbounded strings.
 
-User-request content is always `[content omitted]`; its original character and
-token measurements may remain. Titles and prose previews are null, plan actions
-are empty, and coverage declares `operational_details=true`, `content=false`,
-and `events=false`. This is content-minimizing private product data, not an
-anonymization claim.
+User-request content and assistant-response text are retained as previews of at
+most 280 characters. Their original character and token measurements may also
+remain. Titles are null, plan actions are empty, and coverage declares
+`operational_details=true`, `content=false`, and `events=false`; `content=false`
+means that complete evidence bodies are unavailable, not that Chronicle lacks
+narrative previews. This is bounded private product data, not an anonymization
+claim.
 
 ## Expanded execution accounting
 

@@ -289,7 +289,7 @@ def main() -> None:
                 "PASS Amp live: discovery, dedup, observed timing, failed tools, spawn provenance,"
             )
             print(
-                "  compact identity parity, full replay parity, body-free artifact, child-seeded rebuild, 13 shared APIs"
+                "  compact identity parity, full replay parity, bounded artifact, child-seeded rebuild, 13 shared APIs"
             )
         finally:
             if old is None:

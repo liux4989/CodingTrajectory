@@ -9,7 +9,7 @@
 
 The collector is the publication component for local vendor logs. Local evidence
 loading reads bodies independently and does not require publication.
-It fences complete source bytes, builds one body-free chronicle artifact, stores
+It fences complete source bytes, builds one bounded Chronicle artifact, stores
 delivery work durably, publishes project artifacts idempotently, and maintains
 the existing living sequence. Local SQLite is delivery state, never remote
 historical authority.
@@ -121,9 +121,9 @@ The collector publishes the structural/numeric core and sanitized operational
 details documented in
 [`chronicle-history.md`](chronicle-history.md).
 It never uploads raw logs, complete sessions, event arrays, complete commands,
-tool inputs, tool outputs, prose previews, titles, or pending-plan text. Bounded
-command signatures and portable targets are explicit Chronicle fields; a value
-visible only inside a tool output does not enter remote history.
+tool inputs, tool outputs, titles, or pending-plan text. Bounded user/assistant
+previews, command signatures, and portable targets are explicit Chronicle
+fields; a value visible only inside a tool output does not enter remote history.
 
 The per-source checkpoint payload contains only:
 

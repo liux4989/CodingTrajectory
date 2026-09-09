@@ -180,17 +180,17 @@ The complete artifact contract and retention decision are documented in
 ## Content policy
 
 Private Chronicle artifacts retain structural and numeric facts, portable paths,
-bounded identifiers, and typed sanitized operational details. They omit session
-titles, user/assistant prose previews, plan text, complete commands, tool bodies,
-and vendor payloads. A user-request record carries the fixed marker
-`[content omitted]` with its original numeric measurements. Python and SQL bound
-tool-detail targets and enforce `operational_details=true`, `content=false`, and
-`events=false`.
+bounded identifiers, typed sanitized operational details, and user/assistant
+prose previews of at most 280 characters. They omit session titles, plan text,
+complete transcripts, complete commands, tool bodies, and vendor payloads.
+Python and SQL bound narrative previews and tool-detail targets and enforce
+`operational_details=true`, `content=false`, and `events=false`; `content=false`
+denotes the absence of complete evidence bodies.
 
-Overview and summary responses consequently have reduced descriptive coverage.
-Detailed content remains available through the local evidence APIs. Bounded
-identifiers and portable paths remain intentional product data, not anonymized
-values.
+Overview and summary responses retain their most useful narrative context while
+detailed content remains available through the local evidence APIs. Narrative
+previews, bounded identifiers, and portable paths are intentional product data,
+not anonymized values.
 
 ## Project inventory
 

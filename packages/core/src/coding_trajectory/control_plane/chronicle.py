@@ -1,9 +1,9 @@
 """Strict, bounded private Chronicle artifact shared by local and remote APIs.
 
 The artifact is the operational history contract, not a public sharing format.
-Raw events and transcript/tool bodies never enter the model. Bounded sanitized
-tool details retain useful command targets and activity semantics for Chronicle
-views without publishing raw commands, outputs, prompts, or host-local paths.
+Raw events and tool bodies never enter the model. Bounded user/assistant previews
+and sanitized tool details retain the narrative and operational context needed by
+Chronicle views without publishing complete commands, outputs, or transcripts.
 """
 
 from __future__ import annotations
@@ -108,7 +108,7 @@ _ITEM_KINDS = Literal[
     "plan",
 ]
 _BoundedString = Annotated[str, Field(max_length=512)]
-_Preview = Annotated[str, Field(max_length=280)]
+_Preview = Annotated[str, Field(min_length=1, max_length=280)]
 _CostText = Annotated[
     str,
     Field(
@@ -231,7 +231,7 @@ class ChronicleItemMeasurements(ChronicleModel):
     projection_only: bool = False
     output_truncated: bool = False
     output_original_tokens: int | None = Field(default=None, ge=0)
-    text_preview: None = None
+    text_preview: _Preview | None = None
     tool_summary: ChronicleToolSummary | None = None
 
 
@@ -265,7 +265,7 @@ class ChronicleUserRequest(ChronicleModel):
     request_id: UUID
     type: Literal["message", "command"] = "message"
     source: _BoundedString = "human_user"
-    content: Literal["[content omitted]"] = "[content omitted]"
+    content: _Preview
     chars: int | None = Field(default=None, ge=0)
     tokens: int | None = Field(default=None, ge=0)
 
@@ -705,7 +705,9 @@ def _build_user_request(
 ) -> ChronicleUserRequest | None:
     if request is None or not request.get("content", "").strip():
         return None
-    content = "[content omitted]"
+    content = _bounded_preview(request["content"])
+    if content is None:
+        return None
     request_id = turn.user_request_event_id or uuid5(
         _SYNTHETIC_REQUEST_NAMESPACE, str(turn.turn_id)
     )
@@ -809,7 +811,7 @@ def _build_chronicle_item(
             projection_only=measurements.projection_only,
             output_truncated=measurements.output_truncated,
             output_original_tokens=measurements.output_original_tokens,
-            text_preview=None,
+            text_preview=_bounded_preview(measurements.text_preview),
             tool_summary=tool_summary,
         ),
         semantic=semantic,
@@ -1423,7 +1425,9 @@ def _safe_url(value: str) -> str:
     return urlunsplit((parsed.scheme, f"{hostname}{port}", parsed.path, "", ""))
 
 
-def _bounded_preview(value: str) -> str | None:
+def _bounded_preview(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
     return value[:280].strip() or None
 
 
@@ -1513,6 +1517,12 @@ def _reject_embedded_content(value: Any, *, field: str = "") -> None:
     elif isinstance(value, str):
         if len(value) > 512:
             raise ValueError(f"chronicle graph retained unbounded string in {field}")
+        if field in {"content", "text_preview"}:
+            if not value or len(value) > 280:
+                raise ValueError(
+                    f"chronicle graph retained invalid narrative preview in {field}"
+                )
+            return
         if value.lstrip().lower().startswith("data:"):
             raise ValueError(f"chronicle graph retained data URI in {field}")
         if _HOST_PATH_TOKEN.search(value):

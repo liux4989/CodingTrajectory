@@ -37,6 +37,7 @@ from coding_trajectory.ingestion.common import (
 from coding_trajectory.ingestion.models import (
     ContextSourceObservation,
     ContextUsageObservation,
+    EventType,
     RuntimeObservation,
     Session,
     SessionStatus,
@@ -639,6 +640,8 @@ class CodexAdapter(BaseAdapter):
         # inferred thread name. Current Codex rollouts can encode it as either
         # a legacy user_message event or a native UserMessage item.
         session_preview: str | None = None
+        # One canonical user request per provider lifecycle turn, regardless of
+        # whether legacy and native message records are both present.
         projected_turn_ids: set[str] = field(default_factory=set)
         # Most recent reasoning effort seen on a turn_context record (real
         # string only). Drives effort_changed observation emission: a new turn
@@ -867,13 +870,32 @@ class CodexAdapter(BaseAdapter):
                 self, "last_provenance", provenance
             ),
         )
-        return assemble_session(
+        session = assemble_session(
             vendor=Vendor.CODEX_CLI,
             source=source,
             session_id=state.session_id,
             transcript=transcript,
             retention=retention,
             hooks=hooks,
+        )
+        # A Codex lifecycle turn has one canonical request. Native streams can
+        # repeat UserMessage items during steering or inherited incomplete
+        # turns; keep only the request selected by the projected turn so event
+        # counts and Chronicle replay describe the same canonical hierarchy.
+        request_event_ids = {
+            turn.user_request_event_id
+            for turn in session.turns
+            if turn.user_request_event_id is not None
+        }
+        return session.model_copy(
+            update={
+                "events": [
+                    event
+                    for event in session.events
+                    if event.type != EventType.USER_PROMPT_SUBMITTED
+                    or event.event_id in request_event_ids
+                ]
+            }
         )
 
     def _build_transcript(
@@ -1382,8 +1404,12 @@ class CodexAdapter(BaseAdapter):
         elif inner_type == "item_completed":
             item = payload.get("item")
             if isinstance(item, dict) and item.get("type") == "UserMessage":
-                _capture_codex_session_preview(
-                    state, _extract_content_text(item.get("content"))
+                self._record_user_message(
+                    text=_extract_content_text(item.get("content")),
+                    turn_id=turn_id,
+                    ts=ts,
+                    state=state,
+                    transcript=transcript,
                 )
             codex_native_items.handle_native_command_execution(
                 payload,
@@ -1435,27 +1461,12 @@ class CodexAdapter(BaseAdapter):
             )
 
         elif inner_type == "user_message":
-            _capture_codex_session_preview(state, _extract_message_text(payload))
-            turn_id_text = _as_non_empty_str(turn_id)
-            starts_turn = (
-                turn_id_text is None or turn_id_text not in state.projected_turn_ids
-            )
-            if turn_id_text is not None:
-                state.projected_turn_ids.add(turn_id_text)
-            transcript.append(
-                TranscriptRecord(
-                    sequence=len(transcript),
-                    timestamp=ts,
-                    vendor=Vendor.CODEX_CLI,
-                    role="user",
-                    kind="user_message",
-                    data={
-                        "turn_id_raw": turn_id,
-                        "text": _extract_message_text(payload),
-                        "previous_turn_status": TurnStatus.INTERRUPTED.value,
-                        "starts_turn": starts_turn,
-                    },
-                )
+            self._record_user_message(
+                text=_extract_message_text(payload),
+                turn_id=turn_id,
+                ts=ts,
+                state=state,
+                transcript=transcript,
             )
 
         elif inner_type == "agent_message":
@@ -1643,6 +1654,42 @@ class CodexAdapter(BaseAdapter):
 
         elif inner_type == "sub_agent_activity":
             codex_collab.record_spawn_link(state, payload)
+
+    @staticmethod
+    def _record_user_message(
+        *,
+        text: str | None,
+        turn_id: Any,
+        ts: datetime,
+        state: _ParseState,
+        transcript: list[TranscriptRecord],
+    ) -> None:
+        """Project legacy and native Codex user-message records identically."""
+
+        turn_id_text = _as_non_empty_str(turn_id)
+        if turn_id_text is not None and turn_id_text in state.projected_turn_ids:
+            return
+        _capture_codex_session_preview(state, text)
+        starts_turn = (
+            turn_id_text is None or turn_id_text not in state.projected_turn_ids
+        )
+        if turn_id_text is not None:
+            state.projected_turn_ids.add(turn_id_text)
+        transcript.append(
+            TranscriptRecord(
+                sequence=len(transcript),
+                timestamp=ts,
+                vendor=Vendor.CODEX_CLI,
+                role="user",
+                kind="user_message",
+                data={
+                    "turn_id_raw": turn_id,
+                    "text": text,
+                    "previous_turn_status": TurnStatus.INTERRUPTED.value,
+                    "starts_turn": starts_turn,
+                },
+            )
+        )
 
     def _handle_session_meta(
         self,

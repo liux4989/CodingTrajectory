@@ -14,13 +14,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from coding_trajectory.analysis.measurements import extract_item_measurements
+from coding_trajectory.analysis.request_lineage import extract_user_request
 from coding_trajectory.control_plane.chronicle import (
     MAX_CHRONICLE_ARTIFACT_BYTES,
     MAX_CHRONICLE_PUBLICATION_BYTES,
+    ChronicleGraphArtifact,
     build_chronicle_graph_artifact,
 )
 from coding_trajectory.discovery import discover_store
-from coding_trajectory.ingestion.models import SessionGraph
+from coding_trajectory.ingestion.indexes import build_session_graph_index
+from coding_trajectory.ingestion.models import AgentMessageItem, SessionGraph
 from coding_trajectory.query import DocumentError, DocumentStore
 from coding_trajectory.service.handlers import dispatch
 from coding_trajectory.service.store import IndexCache
@@ -76,6 +80,8 @@ class VendorQualification(StrictModel):
     artifact_bytes_max: int = 0
     operational_detail_count: int = 0
     projection_link_count: int = 0
+    user_request_preview_count: int = 0
+    assistant_response_preview_count: int = 0
     api_calls: int = 0
     numeric_values_checked: int = 0
     checks: list[str] = Field(default_factory=list)
@@ -196,6 +202,54 @@ def _numeric_values(value: Any, path: str = "$") -> dict[str, int | float]:
     return result
 
 
+def _preview(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value[:280].strip() or None
+
+
+def _validate_narrative_previews(
+    graph: SessionGraph, artifact: ChronicleGraphArtifact
+) -> tuple[int, int]:
+    index = build_session_graph_index(graph)
+    artifact_sessions = {
+        session.session_id: session for session in artifact.sessions
+    }
+    user_requests = 0
+    assistant_responses = 0
+    for session in graph.sessions:
+        artifact_session = artifact_sessions[session.session_id]
+        artifact_turns = {turn.turn_id: turn for turn in artifact_session.turns}
+        for turn in session.turns:
+            artifact_turn = artifact_turns[turn.turn_id]
+            request = extract_user_request(index, turn, session=session)
+            expected_request = _preview(
+                request.get("content") if request is not None else None
+            )
+            actual_request = (
+                artifact_turn.user_request.content
+                if artifact_turn.user_request is not None
+                else None
+            )
+            if actual_request != expected_request:
+                raise ValueError("user-request preview parity failed")
+            user_requests += expected_request is not None
+
+            artifact_items = {item.item_id: item for item in artifact_turn.items}
+            for item in turn.items:
+                if not isinstance(item, AgentMessageItem):
+                    continue
+                measurements = item.measurements or extract_item_measurements(item)
+                expected_response = _preview(measurements.text_preview)
+                actual_response = (
+                    artifact_items[item.item_id].measurements.text_preview
+                )
+                if actual_response != expected_response:
+                    raise ValueError("assistant-response preview parity failed")
+                assistant_responses += expected_response is not None
+    return user_requests, assistant_responses
+
+
 def _api_params(method: str, graph: SessionGraph) -> dict[str, Any]:
     if method == "project.sessions":
         return {"include": ["usage", "runtime"]}
@@ -255,6 +309,11 @@ def _validate_vendor(
                 raise ValueError("artifact replay changed canonical bytes")
             if _structure(graph) != _structure(replay_graph):
                 raise ValueError("identity or topology changed during replay")
+            request_previews, response_previews = _validate_narrative_previews(
+                graph, artifact
+            )
+            report.user_request_preview_count += request_previews
+            report.assistant_response_preview_count += response_previews
             if len(encoded) > MAX_CHRONICLE_ARTIFACT_BYTES:
                 raise ValueError("artifact exceeded its byte limit")
             publication_bytes[graph.project_identifier or "unknown"] += len(encoded)
@@ -300,10 +359,11 @@ def _validate_vendor(
 
     report.status = "pass"
     report.checks = [
-        "strict body-free model validation",
+        "strict bounded-history model validation",
         "artifact and per-project publication byte limits",
         "canonical byte and digest replay stability",
         "session, turn, item, and edge identity parity",
+        "bounded user-request and assistant-response preview parity",
         "13 Chronicle API executions per graph",
         "numeric API parity against the full local graph",
     ]

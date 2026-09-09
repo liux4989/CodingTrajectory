@@ -47,7 +47,7 @@ runs retain their distinct scopes.
 - Remote history stores validated artifacts directly; there is no remote
   canonical reconstruction worker or compact-session compatibility path.
 - The [chronicle history contract](chronicle-history.md) defines bounds and
-  body-free operational coverage. The [control plane](remote-ct-control-plane-design.md)
+  bounded operational and narrative coverage. The [control plane](remote-ct-control-plane-design.md)
   defines inventory, living, and estimation authority separately.
 
 There is no currently available evaluation API; earlier proposals are retired.

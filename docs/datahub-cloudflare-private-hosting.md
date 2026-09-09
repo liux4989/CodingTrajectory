@@ -10,7 +10,7 @@
 
 Publish Datahub as a private Cloudflare application. Cloudflare Access protects
 the complete application hostname. The hosted application reads only the
-body-free, workspace-scoped data already approved for remote use; it never
+bounded, workspace-scoped Chronicle data already approved for remote use; it never
 serves host-local evidence or initiates collection, projection, estimation, or
 publication writes.
 
@@ -114,11 +114,11 @@ must not reimplement metric semantics in TypeScript.
 | `GET /api/datahub/snapshot` | Adapter | Pin `ct_workspace_snapshot`; report `source=remote`, `content_scope=chronicle`, and the pinned sequence. Never report local source status. |
 | `GET /api/datahub/changes` | Adapter | Compare workspace sequence. A changed sequence invalidates hosted queries as one reset; do not fabricate local entity deltas. |
 | `GET /api/datahub/events` | Deferred | Hosted SSE is optional. Use bounded visible-tab snapshot polling first; living and continuous publication require separate verification. |
-| `GET /api/overview` | Adapter | Compose `project.list`, `project.sessions`, and body-free graph stats/usage at one pinned sequence. |
+| `GET /api/overview` | Adapter | Compose `project.list`, `project.sessions`, and bounded graph stats/usage at one pinned sequence. |
 | `GET /api/today` | Adapter | Same approved inputs as overview, with a one-day filter and explicit reduced semantic coverage. |
 | `GET /api/projects` | Adapter | `project.list`. Never return principal-private agent locations. |
-| `GET /api/projects/detail` | Adapter | `project.sessions` plus body-free graph stats/usage at one pinned sequence. |
-| `GET /api/sessions` | Adapter | `project.sessions`; titles and prose previews remain unavailable. |
+| `GET /api/projects/detail` | Adapter | `project.sessions` plus bounded graph stats/usage at one pinned sequence. |
+| `GET /api/sessions` | Adapter | `project.sessions`; titles remain unavailable, while session overview carries bounded turn prose. |
 | `GET /api/sessions/timeline` | Omit | No current hosted UI consumer or approved remote projection. Do not expose it as a compatibility route. |
 | `GET /api/sessions/context-window` | Prohibited | Context/event evidence is not part of the chronicle remote contract. |
 | `GET /api/sessions/graph` | Adapter | `graph.overview` without narrative plus `graph.stats` and `graph.usage`. |
@@ -142,7 +142,7 @@ options are rejected before any Supabase request.
 
 The frontend receives a build-time `hosted` capability manifest. Hosted mode:
 
-- keeps Sessions and body-free Tree/Graph views;
+- keeps Sessions and bounded Tree/Graph views;
 - enables Today, Compare, and Code Time sections only as their adapters pass
   response parity and privacy gates;
 - removes Context and Timeline tabs rather than presenting failing controls;
