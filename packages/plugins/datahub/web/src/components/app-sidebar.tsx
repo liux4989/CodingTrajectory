@@ -18,6 +18,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { HOSTED_MODE } from "@/hosted/mode";
 
 type NavItem = {
   title: string;
@@ -34,25 +35,30 @@ type NavGroup = {
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const matchRoute = useMatchRoute();
 
+  const observe: NavGroup = {
+    label: "Observe",
+    items: [
+      {
+        title: "Sessions",
+        url: "/sessions",
+        icon: MessageSquare,
+        match: () => Boolean(matchRoute({ to: "/sessions", fuzzy: true })),
+      },
+      ...(
+        HOSTED_MODE
+          ? []
+          : [{
+              title: "Today",
+              url: "/today",
+              icon: CalendarDays,
+              match: () => Boolean(matchRoute({ to: "/today" })),
+            }]
+      ),
+    ],
+  };
   const groups: NavGroup[] = [
-    {
-      label: "Observe",
-      items: [
-        {
-          title: "Sessions",
-          url: "/sessions",
-          icon: MessageSquare,
-          match: () => Boolean(matchRoute({ to: "/sessions", fuzzy: true })),
-        },
-        {
-          title: "Today",
-          url: "/today",
-          icon: CalendarDays,
-          match: () => Boolean(matchRoute({ to: "/today" })),
-        },
-      ],
-    },
-    {
+    observe,
+    ...(HOSTED_MODE ? [] : [{
       label: "Analyze",
       items: [
         {
@@ -68,7 +74,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           match: () => Boolean(matchRoute({ to: "/code-time" })),
         },
       ],
-    },
+    }]),
   ];
 
   return (

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { motion } from "motion/react";
 import { refreshDatahubData } from "@/api";
 import { Button } from "@/components/ui/button";
+import { HOSTED_MODE } from "@/hosted/mode";
 
 export function RefreshButton() {
   const client = useQueryClient();
@@ -13,9 +14,9 @@ export function RefreshButton() {
   async function refresh() {
     setIsRefreshing(true);
     try {
-      await refreshDatahubData();
+      if (!HOSTED_MODE) await refreshDatahubData();
       await client.invalidateQueries();
-      toast.success("Datahub data refreshed");
+      toast.success(HOSTED_MODE ? "Remote snapshot refreshed" : "Datahub data refreshed");
     } catch (error) {
       toast.error(`Refresh failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {

@@ -8,6 +8,8 @@ import { StateBlock } from "@/components/state-block";
 import { Toaster } from "@/components/ui/sonner";
 import { CommandPalette } from "@/components/command-palette";
 import { DatahubDeliveryProvider } from "@/hooks/use-datahub-delivery";
+import { HOSTED_MODE } from "@/hosted/mode";
+import { HostedSessionProvider } from "@/hosted/session";
 import "@/styles.css";
 
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
@@ -26,15 +28,17 @@ function RouteBoundary({ children }: { children: React.ReactNode }) {
   );
 }
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 30_000,
-      gcTime: 10 * 60_000,
-      refetchOnWindowFocus: false,
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 30_000,
+        gcTime: 10 * 60_000,
+        refetchOnWindowFocus: false,
+      },
     },
-  },
-});
+  });
+}
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -85,6 +89,9 @@ const sessionsRoute = createRoute({
 const todayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/today",
+  beforeLoad: () => {
+    if (HOSTED_MODE) throw redirect({ to: "/sessions", search: { projectName: undefined }, replace: true });
+  },
   component: () => <RouteBoundary><OverviewRoute /></RouteBoundary>,
 });
 
@@ -124,6 +131,9 @@ type SessionDetailSearch = {
 const sessionDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/graphs/$rootId/sessions/$sessionId",
+  beforeLoad: ({ params }) => {
+    if (HOSTED_MODE) throw redirect({ to: "/graphs/$rootId", params: { rootId: params.rootId }, search: { branch: params.sessionId }, replace: true });
+  },
   validateSearch: (search: Record<string, unknown>): SessionDetailSearch => {
     const tab = search.tab === "timeline" ? "timeline" : "context";
     const kind = search.kind === "user" || search.kind === "assistant" || search.kind === "tool" || search.kind === "subagent" || search.kind === "compaction"
@@ -222,12 +232,18 @@ function validateCompareSearch(search: Record<string, unknown>): CompareSearch {
 const codeTimeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/code-time",
+  beforeLoad: () => {
+    if (HOSTED_MODE) throw redirect({ to: "/sessions", search: { projectName: undefined }, replace: true });
+  },
   component: () => <RouteBoundary><CodeTimeRoute /></RouteBoundary>,
 });
 
 const compareRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/compare",
+  beforeLoad: () => {
+    if (HOSTED_MODE) throw redirect({ to: "/sessions", search: { projectName: undefined }, replace: true });
+  },
   validateSearch: validateCompareSearch,
   component: () => <RouteBoundary><ModelUsageRoute /></RouteBoundary>,
 });
@@ -266,14 +282,23 @@ declare module "@tanstack/react-router" {
   }
 }
 
+function DatahubApplication() {
+  const [client] = React.useState(createQueryClient);
+  return (
+    <QueryClientProvider client={client}>
+      <DatahubDeliveryProvider>
+        <RouterProvider router={router} />
+      </DatahubDeliveryProvider>
+    </QueryClientProvider>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <MotionConfig reducedMotion="user">
-      <QueryClientProvider client={queryClient}>
-        <DatahubDeliveryProvider>
-          <RouterProvider router={router} />
-        </DatahubDeliveryProvider>
-      </QueryClientProvider>
+      <HostedSessionProvider>
+        <DatahubApplication />
+      </HostedSessionProvider>
     </MotionConfig>
   </React.StrictMode>,
 );

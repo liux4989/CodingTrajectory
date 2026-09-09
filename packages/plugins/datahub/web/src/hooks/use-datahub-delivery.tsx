@@ -10,6 +10,7 @@ import {
   type DatahubSnapshot,
   type DatahubSourceStatus,
 } from "@/api";
+import { HOSTED_MODE } from "@/hosted/mode";
 
 const CHANGE_POLL_MS = 12_000;
 const MAX_STREAM_RECONNECTS = 3;
@@ -266,7 +267,8 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
         }
       };
     };
-    connect();
+    if (HOSTED_MODE) startPolling();
+    else connect();
     return () => {
       disposed = true;
       controller.abort();

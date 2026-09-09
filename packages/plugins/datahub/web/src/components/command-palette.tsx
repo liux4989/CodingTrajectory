@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Search, CornerDownLeft } from "lucide-react";
 import { fetchProjects, fetchSessions } from "@/api";
 import { cn } from "@/lib/utils";
+import { HOSTED_MODE } from "@/hosted/mode";
 
 type CommandItem = {
   id: string;
@@ -41,9 +42,11 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const items = React.useMemo<CommandItem[]>(() => {
     const navItems: CommandItem[] = [
       { id: "nav-sessions", label: "Sessions", group: "Navigate", onSelect: () => navigate({ to: "/sessions", search: { projectName: undefined } }) },
-      { id: "nav-today", label: "Today", group: "Navigate", onSelect: () => navigate({ to: "/today" }) },
-      { id: "nav-compare", label: "Compare", group: "Navigate", onSelect: () => navigate({ to: "/compare", search: { projectName: undefined, modelKey: undefined, view: undefined, grain: undefined, unit: undefined } }) },
-      { id: "nav-code-time", label: "Code Time", group: "Navigate", onSelect: () => navigate({ to: "/code-time" }) },
+      ...(HOSTED_MODE ? [] : [
+        { id: "nav-today", label: "Today", group: "Navigate" as const, onSelect: () => navigate({ to: "/today" }) },
+        { id: "nav-compare", label: "Compare", group: "Navigate" as const, onSelect: () => navigate({ to: "/compare", search: { projectName: undefined, modelKey: undefined, view: undefined, grain: undefined, unit: undefined } }) },
+        { id: "nav-code-time", label: "Code Time", group: "Navigate" as const, onSelect: () => navigate({ to: "/code-time" }) },
+      ]),
     ];
 
     const sessionItems: CommandItem[] = (sessions.data?.items ?? [])
@@ -57,7 +60,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           navigate({
             to: "/sessions/$sessionId",
             params: { sessionId: s.root_session_id },
-            search: { view: "context" },
+            search: { view: HOSTED_MODE ? "graph" : "context" },
           });
         },
       }));

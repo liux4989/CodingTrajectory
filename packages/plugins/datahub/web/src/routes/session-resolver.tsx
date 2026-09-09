@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchSessionGraph } from "@/api";
 import { LoadingState } from "@/components/loading-state";
 import { StateBlock } from "@/components/state-block";
+import { HOSTED_MODE } from "@/hosted/mode";
 
 /**
  * Canonical "open this session" entry: resolves the session's graph identity
@@ -37,6 +38,17 @@ export function SessionResolverRoute() {
   }
 
   const rootId = query.data.root_session_id || sessionId;
+
+  if (HOSTED_MODE) {
+    return (
+      <Navigate
+        to="/graphs/$rootId"
+        params={{ rootId }}
+        search={{ branch: sessionId === rootId ? undefined : sessionId }}
+        replace
+      />
+    );
+  }
 
   if (search.view === "timeline" || search.view === "context") {
     return (

@@ -24,6 +24,7 @@ import type {
   TodayPayload,
   TokenEfficiencyProjectPayload,
 } from "./api/generated/datahub-api";
+import { datahubFetch } from "@/hosted/session";
 
 export type * from "./api/generated/datahub-api";
 
@@ -242,7 +243,7 @@ export async function fetchCodeTimeCalibration(params?: {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await datahubFetch(url, init);
   const body = await response.text();
   let payload: T | { error?: { message?: string } } | undefined;
   if (body) {

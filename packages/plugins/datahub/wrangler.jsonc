@@ -2,7 +2,7 @@
   "$schema": "./web/node_modules/wrangler/config-schema.json",
   "name": "coding-trajectory-datahub-facade-preview",
   "main": "datahub_plugin/hosted/worker.py",
-  "compatibility_date": "2026-09-08",
+  "compatibility_date": "2026-09-09",
   "compatibility_flags": ["python_workers"],
   "workers_dev": false,
   "preview_urls": false,
@@ -15,6 +15,13 @@
       "**/*.pyc",
       "**/__pycache__",
       "datahub_plugin/hosted/worker.py"
+    ]
+  },
+  "secrets": {
+    "required": [
+      "CT_SUPABASE_URL",
+      "CT_SUPABASE_ANON_KEY",
+      "CT_REMOTE_WORKSPACE_ID"
     ]
   }
 }

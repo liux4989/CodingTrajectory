@@ -14,6 +14,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { formatCostUsd, formatDuration, formatTokens, shortId } from "@/lib/format";
 import { relativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import { HOSTED_MODE } from "@/hosted/mode";
 
 const CURSOR_PAGE_SIZE = 50;
 
@@ -85,7 +86,7 @@ function StatusDot({ item }: { item: SessionItem }) {
   const failed = (item.failed_tool_calls ?? 0) > 0;
   const living = item.status === "living";
   const label = living
-    ? "Live now"
+    ? HOSTED_MODE ? "Published as active" : "Live now"
     : failed
       ? `${item.failed_tool_calls} failed tool call${item.failed_tool_calls === 1 ? "" : "s"}`
       : "Completed";
@@ -95,7 +96,7 @@ function StatusDot({ item }: { item: SessionItem }) {
       aria-label={label}
       className={cn(
         "mt-1.5 size-2 shrink-0 self-start rounded-full",
-        living && "animate-pulse bg-success",
+        living && (HOSTED_MODE ? "bg-success" : "animate-pulse bg-success"),
         !living && failed && "bg-warning",
         !living && !failed && "bg-surface-emphasis",
       )}
@@ -104,7 +105,7 @@ function StatusDot({ item }: { item: SessionItem }) {
 }
 
 function SessionRow({ item, onOpen }: { item: SessionItem; onOpen: () => void }) {
-  const title = item.title ?? item.preview ?? "Untitled";
+  const title = item.title ?? item.preview ?? (HOSTED_MODE ? "Title unavailable remotely" : "Untitled");
   return (
     <button
       type="button"
@@ -210,7 +211,7 @@ export function SessionsRoute() {
     void router.navigate({
       to: "/sessions/$sessionId",
       params: { sessionId: id },
-      search: { view: "context" },
+      search: { view: HOSTED_MODE ? "graph" : "context" },
     });
 
   return (
@@ -218,7 +219,7 @@ export function SessionsRoute() {
       <PageHeader
         eyebrow="Observe"
         title="Sessions"
-        description="Conversation branches and their agent runs."
+        description={HOSTED_MODE ? "Remote Chronicle sessions published during the last seven days." : "Conversation branches and their agent runs."}
         actions={
           windowOptions.length > 1 ? (
             <ToggleGroup
@@ -257,7 +258,7 @@ export function SessionsRoute() {
           </Badge>
         </div>
       ) : null}
-      <Toolbar value={filter} onChange={setFilter} placeholder="Filter sessions by title, preview, vendor, project, or id" />
+      <Toolbar value={filter} onChange={setFilter} placeholder={HOSTED_MODE ? "Filter sessions by vendor, project, or id" : "Filter sessions by title, preview, vendor, project, or id"} />
       {sessions.isPending ? <SessionListSkeleton /> : null}
       {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} onRetry={() => sessions.refetch()} /> : null}
       {sessions.data ? (

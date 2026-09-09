@@ -1,7 +1,7 @@
 # Datahub Private Cloudflare Hosting
 
-- **Status:** Accepted design; facade implemented locally, not deployed
-- **Date:** 2026-09-08
+- **Status:** Private non-production preview deployed
+- **Date:** 2026-09-10
 - **Scope:** Access-only hosted Datahub UI and read-only API facade
 - **Related:** [remote control plane](remote-ct-control-plane-design.md) and
   [chronicle history](chronicle-history.md)
@@ -114,10 +114,10 @@ must not reimplement metric semantics in TypeScript.
 | `GET /api/datahub/snapshot` | Adapter | Pin `ct_workspace_snapshot`; report `source=remote`, `content_scope=chronicle`, and the pinned sequence. Never report local source status. |
 | `GET /api/datahub/changes` | Adapter | Compare workspace sequence. A changed sequence invalidates hosted queries as one reset; do not fabricate local entity deltas. |
 | `GET /api/datahub/events` | Deferred | Hosted SSE is optional. Use bounded visible-tab snapshot polling first; living and continuous publication require separate verification. |
-| `GET /api/overview` | Adapter | Compose `project.list`, `project.sessions`, and bounded graph stats/usage at one pinned sequence. |
-| `GET /api/today` | Adapter | Same approved inputs as overview, with a one-day filter and explicit reduced semantic coverage. |
+| `GET /api/overview` | Omit | The first preview exposes the session inventory and graph directly; it does not synthesize the local overview response. |
+| `GET /api/today` | Omit | The first preview is fixed to a seven-day Chronicle horizon and does not present local Today semantics. |
 | `GET /api/projects` | Adapter | `project.list`. Never return principal-private agent locations. |
-| `GET /api/projects/detail` | Adapter | `project.sessions` plus bounded graph stats/usage at one pinned sequence. |
+| `GET /api/projects/detail` | Omit | The session inventory requests projects and sessions separately in the first preview. |
 | `GET /api/sessions` | Adapter | `project.sessions`; titles remain unavailable, while session overview carries bounded turn prose. |
 | `GET /api/sessions/timeline` | Omit | No current hosted UI consumer or approved remote projection. Do not expose it as a compatibility route. |
 | `GET /api/sessions/context-window` | Prohibited | Context/event evidence is not part of the chronicle remote contract. |
@@ -126,9 +126,9 @@ must not reimplement metric semantics in TypeScript.
 | `GET /api/sessions/evidence-timeline` | Prohibited | Depends on host-local evidence identities and hydration. |
 | `GET /api/sessions/events` | Prohibited | `session.events` is explicitly local-only. |
 | `GET /api/sessions/items` | Metadata only | Permit only `session.items` with `include_content=false`; reject content and do not link it from an evidence view. |
-| `GET /api/model-usage` | Adapter | Compose `project.sessions` and `session.model_usage` at one pinned sequence; omit unavailable titles. |
+| `GET /api/model-usage` | Omit | Compare and aggregate usage pages remain local-only in the first preview. |
 | `GET /api/token-efficiency/project` | Deferred | Requires a reviewed pure Python projection over chronicle stats/usage. Do not port analytical semantics into the gateway. |
-| `GET /api/code-time/report` | Adapter | Existing report composition already uses `project.list`, `project.sessions`, and `graph.usage`; refactor it to request-scoped async execution without its thread cache. |
+| `GET /api/code-time/report` | Omit | Code Time remains local-only in the first preview. |
 | `GET /api/code-time/forecasts` | Deferred | `estimate.list` authority exists, but hosted estimation reads require current remote verification before exposure. |
 | `GET /api/code-time/calibration` | Deferred | `estimate.calibration` authority exists, but hosted estimation reads require current remote verification before exposure. |
 | `POST /api/refresh` | Prohibited | A hosted read must not discover local files, publish artifacts, start jobs, or mutate state. Browser refresh only refetches a pinned remote snapshot. |
@@ -143,8 +143,8 @@ options are rejected before any Supabase request.
 The frontend receives a build-time `hosted` capability manifest. Hosted mode:
 
 - keeps Sessions and bounded Tree/Graph views;
-- enables Today, Compare, and Code Time sections only as their adapters pass
-  response parity and privacy gates;
+- removes Today, Compare, and Code Time until their response-parity and privacy
+  gates pass;
 - removes Context and Timeline tabs rather than presenting failing controls;
 - removes evidence explorer actions and contentful item links;
 - labels the source as a remote pinned workspace snapshot;
@@ -229,6 +229,24 @@ Supabase error bodies. User-facing errors are bounded and sanitized.
 - Validate signed-out denial, authorized owner access, forged-header denial,
   RLS non-member denial, all approved route schemas, and all prohibited-route
   rejections.
+
+The preview was deployed on 2026-09-10:
+
+- gateway: `coding-trajectory-datahub-preview`, version
+  `8527e54d-ede7-494e-8c95-b935ab06ec8e`;
+- private facade: `coding-trajectory-datahub-facade-preview`, version
+  `f347f6c3-e9ec-439a-969c-f8318de9da03`;
+- Access application: `coding-trajectory-datahub-preview - Cloudflare Workers`,
+  audience `32915103b0827280f642f8eca2d6df2b28b060479eb6d6e7b258b19caafd2d12`;
+- Access policy: reusable exact-email allow policy with a 24-hour session; and
+- public entry point:
+  `https://coding-trajectory-datahub-preview.liux4989.workers.dev`.
+
+Signed-out requests and requests carrying a forged Access assertion were both
+redirected to Access at the edge. An Access-admitted Chrome session reached the
+separate Supabase sign-in. Supabase member/RLS behavior and the approved data
+route schemas still require a completed Supabase user sign-in; do not treat the
+static shell or Access admission as proof of authenticated data access.
 
 ### Phase 3 — production promotion
 
