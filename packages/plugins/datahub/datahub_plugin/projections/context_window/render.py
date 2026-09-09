@@ -76,8 +76,10 @@ def render_markdown(projection: ContextWindowProjection) -> str:
         lines.extend(
             [
                 "",
-                "Most Expensive Items "
-                "(cost · input/cached/cache write/output/reasoning)",
+                (
+                    "Most Expensive Items "
+                    "(cost · input/cached/cache write/output/reasoning)"
+                ),
             ]
         )
         for item in projection.expensive_items[:12]:

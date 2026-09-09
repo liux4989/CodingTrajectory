@@ -11,12 +11,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Literal
 
+from coding_trajectory.analysis.measurements import MeasurementMismatchError
 from coding_trajectory.datahub import (
     DocumentStore,
     rebuild_affected_session_graphs_with_measurements,
 )
-from coding_trajectory.analysis.measurements import MeasurementMismatchError
 
+from datahub_plugin.projections.analytical_read_models_clients import (
+    CanonicalFactsApiClient,
+)
 from datahub_plugin.projections.analytical_read_models_facts import (
     CANONICAL_FACT_SCOPE,
     FACT_PROJECT_SESSION,
@@ -28,9 +31,6 @@ from datahub_plugin.projections.analytical_read_models_facts import (
     build_canonical_root_fact_rows,
     build_model_usage_rows,
     canonical_fact_entity_kinds,
-)
-from datahub_plugin.projections.analytical_read_models_clients import (
-    CanonicalFactsApiClient,
 )
 from datahub_plugin.runtime.materialize import (
     _candidate_paths,

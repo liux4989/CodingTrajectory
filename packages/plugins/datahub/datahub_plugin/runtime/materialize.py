@@ -15,6 +15,9 @@ from coding_trajectory.datahub import (
     rebuild_affected_session_graphs_from_files,
 )
 
+from datahub_plugin.projections.analytical_read_models_clients import (
+    CanonicalFactsApiClient,
+)
 from datahub_plugin.projections.analytical_read_models_facts import (
     CANONICAL_FACT_SCOPE,
     FACT_PROJECT_SESSION,
@@ -29,14 +32,11 @@ from datahub_plugin.projections.analytical_read_models_facts import (
     build_model_usage_rows,
     canonical_fact_entity_kinds,
 )
-from datahub_plugin.projections.analytical_read_models_clients import (
-    CanonicalFactsApiClient,
+from datahub_plugin.projections.read_models_materialization import (
+    materialize_graph,
 )
 from datahub_plugin.projections.read_models_reconstruction import (
     aggregate_read_models,
-)
-from datahub_plugin.projections.read_models_materialization import (
-    materialize_graph,
 )
 from datahub_plugin.store.core import (
     DetailEventRow,

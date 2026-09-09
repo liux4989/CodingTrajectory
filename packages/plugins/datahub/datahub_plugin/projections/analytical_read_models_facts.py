@@ -10,11 +10,13 @@ with Pydantic again.
 
 # ruff: noqa: F401
 from __future__ import annotations
+
 import hashlib
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
+
 from coding_trajectory.datahub import (
     DocumentError,
     DocumentStore,
@@ -34,6 +36,7 @@ from coding_trajectory.metrics import (
 )
 from coding_trajectory.runtime import ServiceApiClient
 from pydantic import ValidationError
+
 from datahub_plugin.projections import model_usage
 from datahub_plugin.projections import token_efficiency_assembly as token_efficiency
 from datahub_plugin.projections.analytical_read_models_reconstruction import (
@@ -44,7 +47,6 @@ from datahub_plugin.projections.analytical_read_models_reconstruction import (
     _token_row_id,
     _without,
 )
-
 
 if TYPE_CHECKING:
     from datahub_plugin.projections.analytical_read_models_clients import (
