@@ -9,6 +9,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     AGENT_COLLAB,
     EDIT_FILE,
     LIST_FILES,
+    PUBLIC_ACTIVITY_CONCEPTS,
     READ_FILE,
     RUN_COMMAND,
     SEARCH_TEXT,
@@ -20,6 +21,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     WEB_SEARCH,
     WRITE_FILE,
     first_str,
+    short_command,
     short_path,
 )
 from coding_trajectory.analysis.tool_summary_shell import classify_shell
@@ -92,7 +94,7 @@ def _activity_metadata(item: Item) -> dict[str, str | bool | int]:
 def summarize_tool_call(item: Item) -> dict[str, Any] | None:
     measurements = getattr(item, "measurements", None)
     if measurements is not None and measurements.tool_summary:
-        return dict(measurements.tool_summary)
+        return _finalize_activity_summary(dict(measurements.tool_summary))
     # The remote-boundary scrubber deliberately removes content-derived tool
     # summaries while retaining the body-free canonical item. Fall through to
     # its bounded compact marker/tool identity instead of erasing the activity.
@@ -175,26 +177,28 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         result["name"] = "Interacted with background terminal"
         result["optimization_profile"] = "activity:background_terminal_interaction"
         result.pop("description", None)
-    if _is_low_value_success(result):
-        result["activity_hidden"] = True
-    return result
+    return _finalize_activity_summary(result)
 
 
-def _is_low_value_success(summary: dict[str, Any]) -> bool:
-    """Hide successful transport activity that cannot identify its subject.
+def _finalize_activity_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Apply the stable public-activity boundary to any retained summary.
 
-    Canonical items still retain the full call and result for detail views.
-    Failures remain visible because the failure itself is useful orientation.
-    Semantic calls such as a counted command group or web search remain useful
-    even when their compact source omitted individual subjects.
+    Provider and transport names are open-ended. Default views admit only
+    canonical semantic concepts; unclassified calls stay available through
+    item detail regardless of status. This rule also applies to summaries
+    restored from compact history.
     """
 
     name = str(summary.get("name") or "")
-    return (
-        summary.get("activity_outcome") == "succeeded"
-        and not summary.get("description")
-        and (name in {"exec", WEB_FETCH} or name.startswith("mcp__"))
-    )
+    description = summary.get("description")
+    if name == RUN_COMMAND and isinstance(description, str):
+        summary["description"] = short_command(description)
+    if (
+        name not in PUBLIC_ACTIVITY_CONCEPTS
+        and summary.get("activity_kind") != "background_terminal_interaction"
+    ):
+        summary["activity_hidden"] = True
+    return summary
 
 
 def _other_output_breakdown(tool_name: str, tool_input: Any) -> str:
@@ -315,7 +319,7 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
             return direct_url
         action = tool_input.get("action")
         if isinstance(action, dict):
-            target = first_str(action, ("url", "uri", "ref_id", "pattern", "query"))
+            target = first_str(action, ("url", "uri"))
             if target is not None:
                 return target
         for key in ("open", "click", "find", "screenshot"):
@@ -325,7 +329,10 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
             for operation in operations:
                 if not isinstance(operation, dict):
                     continue
-                target = first_str(operation, ("url", "uri", "ref_id", "pattern"))
+                target = first_str(operation, ("url", "uri"))
+                if target is None:
+                    ref = first_str(operation, ("ref_id",))
+                    target = ref if ref and ref.startswith(("http://", "https://")) else None
                 if target is not None:
                     return target
         return None

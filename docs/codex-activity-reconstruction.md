@@ -9,14 +9,12 @@ CT's typed activity reconstruction references the Codex TUI implementation in
 `chatwidget/tool_lifecycle.rs`, and `history_cell/plans.rs`: commands,
 web-searches, file changes, plan updates, and collaboration calls are distinct
 history cells rather than variants of a generic shell command. CT reuses those
-typed categories and lifecycle rules, but deliberately does not copy Codex's
-command-cell compaction for evidence-rich Codex history. Codex can pair `Ran N
-commands` with an interactive, expandable transcript; CT's static overview
-cannot. Each retained Codex command therefore remains a separate bounded,
-evidence-linked row. Compact-retention and other-vendor projections preserve
-their established grouping contracts. Compatible repeated non-command
-activities may still use the 32-item cell state machine when their details
-remain visible in the compact projection.
+typed categories and lifecycle rules. CT's static overview keeps distinct
+commands as separate bounded, evidence-linked rows because it cannot pair a
+generic `Ran N commands` label with an interactive transcript. Exact contiguous
+repeats coalesce into one counted row without losing their source references.
+Compact-retention and other-vendor projections preserve their established
+grouping contracts.
 
 The shell invocation remains transport evidence, not the display behavior.
 When the existing classifier can prove that a command reads a file, searches
@@ -39,6 +37,16 @@ real-session validation examples, not grow an exhaustive registry of command
 names. CT may differ in layout where Codex relies on an interactive affordance,
 such as an expandable command transcript that a static overview does not have.
 
+Default activity projection follows one evidence rule rather than a registry of
+transport spellings. Adapters may admit an item to overview only by mapping it
+to CT's closed semantic activity vocabulary. Unknown provider tools, wrapper
+names, control calls, and future native records remain available through item
+detail but never leak their implementation names into overview. An admitted
+singleton must identify its subject; an exact repeated sequence may instead
+carry a count. Contiguous equal actions are coalesced across every semantic
+category while retaining all source item IDs. Assistant messages continue to
+form sequence boundaries.
+
 Codex TUI receives those native command lifecycles while the session is live.
 CT instead reconstructs a completed historical JSONL file, so it preserves a
 separate evidence and canonical-lifecycle layer before projecting the compact
@@ -54,18 +62,18 @@ cell.
    historical `Extension(kind="web.search")` spelling, whose action/query and
    result cards are an observed web result—not an unknown `exec` child.
    `CommandExecution`, `FileChange`, `WebSearch`, `Plan`, and
-   `CollabAgentToolCall` retain their specialized mappings. Adjacent commands
-   remain flat so their bounded descriptions and individual references survive
-   in the static overview.
+   `CollabAgentToolCall` retain their specialized mappings. Distinct adjacent
+   commands remain flat; exact repeats coalesce while retaining every individual
+   reference.
 2. Older JSONL may retain only a `custom_tool_call(name="exec")` JavaScript
    wrapper. CT recognizes direct literal calls to `tools.exec_command`,
    `tools.web__run` search/image-query and browse operations,
    `tools.apply_patch`, `tools.update_plan`, and known collaboration methods,
    plus a literal `await Promise.all([...])` list of those calls. To discover
-   actions it does not evaluate JavaScript or follow aliases/control flow; an
-   unknown web operation or direct `tools.*` reference keeps the raw wrapper
-   visible. Once every direct tool reference has been recognized, an opaque
-   display tail is ignored.
+   actions it does not evaluate JavaScript or follow aliases/control flow;
+   unknown operations remain canonical wrapper evidence but are not admitted to
+   default activity projection. Once every direct tool reference has been
+   recognized, an opaque display tail is ignored.
 3. A native terminal item binds to the single matching open static wrapper
    child only when turn scope, time ordering, and the action-specific input
    agree unambiguously. Native data wins: for example, `FileChange` contributes
@@ -78,19 +86,19 @@ cell.
    result payload. Public projections omit an outcome for those children;
    Codex has no `unknown` command status. The `Script completed` / `Script
    failed` banner alone is never nested-outcome evidence; only the wrapper
-   itself can be marked failed from it. A JavaScript syntax error remains a
-   visible failed `exec`, because no nested action could have started.
+   itself can be marked failed from it. A JavaScript syntax error remains on the
+   canonical failed `exec` evidence even though that unclassified wrapper is
+   omitted from default activity projection.
 5. The raw `exec` wrapper remains canonical evidence. It is hidden from
    semantic activity projections when every nested activity was safely
    reconstructed or bound to native or explicit wrapper-result evidence.
-   Successful unresolved `exec` or raw MCP calls that cannot identify what
-   they acted on, along with successful web fetches that have no retained
-   target, are also omitted from overview and summary as low-value activity;
-   failed calls remain visible. Overview and summary recent activity consume
-   the same cell projector, so a superseded transport wrapper cannot disappear
-   from one view and reappear in another. Summary excludes its own
-   `session.summary` / `session.search` commands at the projector boundary to
-   avoid recursively reporting retrieval activity.
+   Unresolved wrappers and raw MCP calls are unclassified evidence and are
+   omitted from overview regardless of outcome. A classified failed child stays
+   visible when it identifies the action that failed. Overview and summary
+   recent activity consume the same cell projector, so a superseded transport
+   wrapper cannot disappear from one view and reappear in another. Summary
+   excludes its own `session.summary` / `session.search` commands at the
+   projector boundary to avoid recursively reporting retrieval activity.
 Empty `write_stdin` calls are background-terminal polls, not shell commands.
 Contiguous polls for the same namespaced terminal identity become one wait
 cell while retaining every canonical item reference. That cell is control-only
@@ -124,8 +132,8 @@ Consequently a legacy session can show `Searched the web for …`, `Updated plan
 check …` rather than a raw `exec` code cell. Command rows prefer this bounded
 primary-command description over a lossy family head such as `src`, so distinct
 commands do not become identical labels. The row carries no displayed outcome
-when only static evidence exists. Native successful commands use the same flat
-presentation rather than collapsing into `Ran N commands`.
+when only static evidence exists. Exact native command repeats may use a counted
+row; otherwise native successful commands keep the same flat presentation.
 
 ## Physical session segments
 

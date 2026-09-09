@@ -40,7 +40,7 @@ def split_shell_stages(command: str) -> list[str]:
             buffer = []
             index += 2
             continue
-        if char in {"|", ";"}:
+        if char in {"|", ";", "\n"}:
             stages.append("".join(buffer))
             buffer = []
             index += 1

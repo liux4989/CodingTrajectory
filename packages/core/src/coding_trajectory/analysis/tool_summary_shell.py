@@ -16,6 +16,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     READ_FILE,
     RUN_COMMAND,
     SEARCH_TEXT,
+    WRITE_FILE,
     short_command,
     short_path,
 )
@@ -89,9 +90,15 @@ def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, st
     head = primary_command(primary)
     description = short_command(primary)
 
+    redirected_path = _stdout_redirect_path(primary)
+    if redirected_path is not None:
+        return WRITE_FILE, short_path(redirected_path), "shell:write"
     if head in {"cat", "bat", "head", "tail", "less", "more", "nl"}:
         path = first_path_arg(primary, head)
         return READ_FILE, short_path(path) or description, "shell:read"
+    if head == "sed" and _sed_edits_in_place(primary):
+        path = _sed_edit_path(primary)
+        return EDIT_FILE, short_path(path) or description, "shell:edit"
     if head == "sed":
         path = first_path_arg(primary, head)
         return READ_FILE, short_path(path) or description, "shell:read"
@@ -194,6 +201,60 @@ def _stage_has_standalone_subject(stage: str, head: str) -> bool:
     if head in {"cat", "bat", "head", "tail", "less", "more", "nl", "sed"}:
         return first_path_arg(stage, head) is not None
     return True
+
+
+def _sed_edits_in_place(stage: str) -> bool:
+    return any(
+        token == "--in-place" or token.startswith(("--in-place=", "-i"))
+        for token in safe_split(stage)[1:]
+    )
+
+
+def _sed_edit_path(stage: str) -> str | None:
+    """Return the first file operand after sed's expression arguments."""
+
+    tokens = safe_split(stage)[1:]
+    operands: list[str] = []
+    skip_next = False
+    expression_is_explicit = False
+    for index, token in enumerate(tokens):
+        if skip_next:
+            skip_next = False
+            continue
+        if token in {"-e", "--expression", "-f", "--file"}:
+            expression_is_explicit = True
+            skip_next = True
+            continue
+        if token.startswith(("--expression=", "--file=")) or (
+            token.startswith(("-e", "-f")) and len(token) > 2
+        ):
+            expression_is_explicit = True
+            continue
+        if token in {"-i", "--in-place"}:
+            if index + 1 < len(tokens) and tokens[index + 1] == "":
+                skip_next = True
+            continue
+        if token.startswith("-"):
+            continue
+        operands.append(token)
+    file_index = 0 if expression_is_explicit else 1
+    return operands[file_index] if len(operands) > file_index else None
+
+
+def _stdout_redirect_path(stage: str) -> str | None:
+    """Return a regular-file target of the stage's stdout redirection."""
+
+    tokens = safe_split(stage)
+    for index, token in enumerate(tokens):
+        match = re.fullmatch(r"(?:1)?(?:>>|>\||>)(.*)", token)
+        if match is None:
+            continue
+        target = match.group(1)
+        if not target and index + 1 < len(tokens):
+            target = tokens[index + 1]
+        if target and target != "/dev/null":
+            return target
+    return None
 
 
 def shell_cmd(tool_input: Any) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from typing import Any
 
 READ_FILE = "ReadFile"
@@ -11,6 +12,7 @@ WRITE_FILE = "WriteFile"
 SEARCH_TEXT = "SearchText"
 LIST_FILES = "ListFiles"
 RUN_COMMAND = "RunCommand"
+EXPLORE = "Explore"
 WEB_FETCH = "WebFetch"
 WEB_SEARCH = "WebSearch"
 TODO_LIST = "TodoList"
@@ -58,6 +60,14 @@ VENDOR_TOOL_CONCEPT: dict[str, str] = {
     "read_web_page": WEB_FETCH,
     "handoff": SESSION_HANDOFF,
     "handoff_to": SESSION_HANDOFF,
+}
+
+# Default activity views expose a deliberately closed semantic vocabulary.
+# Unknown provider, transport, and future-native names remain canonical item
+# evidence until an adapter can map them to one of these stable concepts.
+PUBLIC_ACTIVITY_CONCEPTS: frozenset[str] = frozenset(VENDOR_TOOL_CONCEPT.values()) | {
+    EXPLORE,
+    RUN_COMMAND,
 }
 
 SHELL_TOOL_NAMES: frozenset[str] = frozenset(
@@ -148,9 +158,13 @@ def short_command(cmd: str, *, max_len: int = 60) -> str:
     also avoids making commands that differ only in their final argument look
     identical in static activity views.
     """
-    cleaned = re.sub(r"\s+", " ", cmd).strip()
+    try:
+        tokens = shlex.split(cmd, posix=True)
+    except ValueError:
+        tokens = cmd.split()
+    cleaned = re.sub(r"\s+", " ", " ".join(tokens)).strip()
     if len(cleaned) <= max_len:
-        return cleaned
+        return _balance_command_preview_quotes(cleaned)
     marker = " … "
     if max_len <= len(marker):
         return marker[:max_len]
@@ -162,7 +176,18 @@ def short_command(cmd: str, *, max_len: int = 60) -> str:
             if len(candidate) > max_len:
                 break
             head = f"{head} {part}"
-        return head + marker + parts[-1]
+        return _balance_command_preview_quotes(head + marker + parts[-1])
     tail_len = max(12, (max_len - len(marker)) // 2)
     head_len = max_len - len(marker) - tail_len
-    return cleaned[:head_len].rstrip() + marker + cleaned[-tail_len:].lstrip()
+    return _balance_command_preview_quotes(
+        cleaned[:head_len].rstrip() + marker + cleaned[-tail_len:].lstrip()
+    )
+
+
+def _balance_command_preview_quotes(preview: str) -> str:
+    """Remove quote marks whose matching context was lost during compaction."""
+
+    for quote in ("'", '"'):
+        if preview.count(quote) % 2:
+            preview = preview.replace(quote, "")
+    return preview

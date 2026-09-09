@@ -137,6 +137,15 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
             annotations.append("wrapper failed")
         annotation = f" [{'; '.join(annotations)}]" if annotations else ""
         if tool == "RunCommand" and count and count != 1:
+            command = activity.get("cmd")
+            if isinstance(command, str) and command:
+                return f"RunCommand x{count}: {one_line(command, limit=72)}{annotation}"
+            commands = activity.get("commands")
+            if isinstance(commands, list) and len(commands) == 1:
+                return (
+                    f"RunCommand x{count}: {one_line(commands[0], limit=72)}"
+                    f"{annotation}"
+                )
             command_word = "command" if count == 1 else "commands"
             return f"Ran {count} {command_word}{annotation}"
         if tool == "WebSearch":
@@ -152,7 +161,10 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
         if tool == "TodoList" and activity.get("items"):
             return f"Updated plan: {one_line(activity['items'], limit=72)}{annotation}"
         if tool == "EditFile" and activity.get("path"):
-            return f"Edited files: {one_line(activity['path'], limit=72)}{annotation}"
+            return (
+                f"Edited files{suffix}: {one_line(activity['path'], limit=72)}"
+                f"{annotation}"
+            )
         if tool == "SubagentTask" and activity.get("task"):
             return (
                 f"Subagent activity: {one_line(activity['task'], limit=72)}{annotation}"

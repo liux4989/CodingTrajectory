@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pydantic import BaseModel
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.tool_optimization import tool_optimization_profile
 from coding_trajectory.analysis.tool_summary_shared import (
+    EXPLORE,
     LIST_FILES,
     READ_FILE,
     RUN_COMMAND,
@@ -66,6 +68,18 @@ def is_control_only_activity_cell(item: dict[str, Any]) -> bool:
     )
 
 
+def is_low_value_activity_cell(item: dict[str, Any]) -> bool:
+    """Whether an admitted semantic cell lacks overview-level information."""
+
+    if item.get("type") == "tool_call_group":
+        return not item.get("descriptions") and int(item.get("count") or 0) < 2
+    if item.get("type") != "tool_call":
+        return False
+    if item.get("activity_kind") == "background_terminal_interaction":
+        return False
+    return not item.get("description")
+
+
 def project_tool_activity(item: Item) -> dict[str, Any] | None:
     """Return one semantic tool activity, excluding transport envelopes."""
 
@@ -120,7 +134,7 @@ def build_overview_flows(
 ) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
     for item in build_flows(items, flatten_commands=flatten_commands):
-        if is_control_only_activity_cell(item):
+        if is_control_only_activity_cell(item) or is_low_value_activity_cell(item):
             continue
         if item.get("type") == "assistant_response":
             text = _truncate_text(item.get("text"))
@@ -136,7 +150,11 @@ def build_overview_flows(
                 )
             continue
 
-        compacted.append(_compact_flow_item(item))
+        compact = _compact_flow_item(item)
+        if compacted and _same_projected_tool_action(compacted[-1], compact):
+            _merge_projected_tool_actions(compacted[-1], compact)
+        else:
+            compacted.append(compact)
 
     return [prune_nones(item) for item in compacted]
 
@@ -150,13 +168,23 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
             str(item.get("name") or ""),
             _profile_name(item),
         )
+        exact_description = item.get("exact_description")
+        details = {
+            profile.detail_key: exact_description
+            if isinstance(exact_description, str)
+            else None,
+            profile.detail_list_key: item.get("descriptions")
+            if not isinstance(exact_description, str)
+            else None,
+        }
+        if profile.detail_counts_key:
+            details[profile.detail_counts_key] = item.get("description_counts")
         return prune_nones(
             {
                 "tool": item.get("name"),
                 "status": item.get("status"),
                 "count": item.get("count"),
-                profile.detail_list_key: item.get("descriptions"),
-                profile.detail_counts_key or "": item.get("description_counts"),
+                **details,
                 "item_ids": item.get("item_ids"),
                 "outcome": public_activity_outcome(item.get("activity_outcome")),
                 "wrapper_status": item.get("activity_wrapper_status"),
@@ -196,6 +224,40 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
         )
 
     return item
+
+
+def _same_projected_tool_action(
+    left: dict[str, Any], right: dict[str, Any]
+) -> bool:
+    if "tool" not in left or "tool" not in right:
+        return False
+    ignored = {"count", "item_ids"}
+    return (
+        {key: value for key, value in left.items() if key not in ignored}
+        == {key: value for key, value in right.items() if key not in ignored}
+    )
+
+
+def _merge_projected_tool_actions(
+    target: dict[str, Any], addition: dict[str, Any]
+) -> None:
+    target["count"] = int(target.get("count") or 1) + int(addition.get("count") or 1)
+    item_ids = [
+        item_id
+        for item_id in (*target.get("item_ids", []), *addition.get("item_ids", []))
+        if isinstance(item_id, str) and item_id
+    ]
+    if item_ids:
+        target["item_ids"] = item_ids
+    for key, values in addition.items():
+        if not key.endswith("_counts") or not isinstance(values, dict):
+            continue
+        existing = target.get(key)
+        if not isinstance(existing, dict):
+            target[key] = dict(values)
+            continue
+        for value, count in values.items():
+            existing[value] = int(existing.get(value) or 0) + int(count or 0)
 
 
 def _truncate_text(
@@ -276,21 +338,38 @@ def _tool_activity_group_key(
         # transcript, so their commands remain inspectable rows. Compact and
         # other-vendor projections retain their established grouping contract.
         if flatten_commands and item.get("activity_fidelity"):
-            return None
+            return _exact_activity_group_key(item)
         if item.get("activity_outcome") == "succeeded":
             return _COMMAND_CELL_KEY
-        return None
+        return _exact_activity_group_key(item)
     if item.get("activity_outcome") != "succeeded":
-        return None
+        return _exact_activity_group_key(item)
 
     name = str(item.get("name") or "")
     profile_name = _profile_name(item)
     profile = tool_optimization_profile(name, profile_name)
     if not profile.group_repeated:
-        return None
+        return _exact_activity_group_key(item)
     if name in _EXPLORATION_CONCEPTS:
         return _EXPLORATION_CELL_KEY
     return ("repeated", name, profile_name)
+
+
+def _exact_activity_group_key(
+    item: dict[str, Any],
+) -> tuple[str, str | None, str | None]:
+    signature = json.dumps(
+        {
+            "description": item.get("description"),
+            "status": item.get("status"),
+            "outcome": item.get("activity_outcome"),
+            "wrapper_status": item.get("activity_wrapper_status"),
+            "profile": _profile_name(item),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return ("exact", str(item.get("name") or ""), signature)
 
 
 def _project_tool_activity_cell(cell: _ToolActivityCell) -> list[dict[str, Any]]:
@@ -298,11 +377,38 @@ def _project_tool_activity_cell(cell: _ToolActivityCell) -> list[dict[str, Any]]
         return [_project_background_terminal_wait_cell(cell.items)]
     if len(cell.items) == 1:
         return [cell.items[0]]
+    if cell.group_key[0] == "exact":
+        return [_project_exact_tool_cell(cell.items)]
     if cell.group_key == _COMMAND_CELL_KEY:
         return [_project_command_cell(cell.items)]
     if cell.group_key == _EXPLORATION_CELL_KEY:
         return [_project_exploration_cell(cell.items)]
     return [_project_repeated_tool_cell(cell.items)]
+
+
+def _project_exact_tool_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
+    first = items[0]
+    description = first.get("description")
+    item_ids = [
+        item["item_id"]
+        for item in items
+        if isinstance(item.get("item_id"), str) and item.get("item_id")
+    ]
+    return prune_nones(
+        {
+            "type": "tool_call_group",
+            "name": first.get("name"),
+            "optimization_profile": _profile_name(first),
+            "status": first.get("status"),
+            "count": len(items),
+            "exact_description": description
+            if isinstance(description, str)
+            else None,
+            "item_ids": item_ids or None,
+            "activity_outcome": first.get("activity_outcome"),
+            "activity_wrapper_status": first.get("activity_wrapper_status"),
+        }
+    )
 
 
 def _project_background_terminal_wait_cell(
@@ -338,7 +444,7 @@ def _project_exploration_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
     return prune_nones(
         {
             "type": "tool_call_group",
-            "name": "Explore",
+            "name": EXPLORE,
             "optimization_profile": "activity:exploration",
             "count": len(items),
             "descriptions": targets or None,
