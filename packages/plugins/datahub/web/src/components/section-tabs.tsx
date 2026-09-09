@@ -3,6 +3,16 @@ import { motion } from "motion/react";
 import { fadeSoft } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
+/** Shared pill styling for tab triggers (SectionTabs buttons, SessionTabs links). */
+export function sectionTabClass(isActive: boolean) {
+  return cn(
+    "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-body-sm font-medium transition-colors",
+    isActive
+      ? "bg-primary text-primary-foreground shadow-sm"
+      : "text-muted-foreground hover:bg-surface-emphasis hover:text-foreground",
+  );
+}
+
 type SectionTab = {
   id: string;
   label: string;
@@ -55,12 +65,7 @@ export function SectionTabs({
                 role="tab"
                 aria-selected={isActive}
                 onClick={() => onTabChange(tab.id)}
-                className={cn(
-                  "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-body-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "text-muted-foreground hover:bg-surface-emphasis hover:text-foreground",
-                )}
+                className={sectionTabClass(isActive)}
               >
                 {tab.label}
                 {tab.badge != null ? (

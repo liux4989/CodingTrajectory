@@ -1,10 +1,12 @@
 import * as React from "react";
 import { Link, useParams, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { motion } from "motion/react";
 import { fetchSessionGraph } from "@/api";
 import { PageHeader } from "@/components/route-header";
 import { shortSessionId } from "@/components/session-link";
 import { SessionTabs } from "@/components/session-tabs";
+import { fadeSoft } from "@/lib/motion";
 import { ContextWindowPanel } from "@/routes/context-window";
 import { SessionTimelinePanel } from "@/routes/session-timeline";
 
@@ -47,11 +49,18 @@ export function SessionDetailRoute() {
 
       {/* Keyed so filters/selection reset when the route session changes. */}
       <React.Fragment key={sessionId}>
-        {tab === "timeline" ? (
-          <SessionTimelinePanel rootId={rootId} sessionId={sessionId} />
-        ) : (
-          <ContextWindowPanel rootId={rootId} sessionId={sessionId} />
-        )}
+        <motion.div
+          key={tab}
+          variants={fadeSoft}
+          initial="hidden"
+          animate="visible"
+        >
+          {tab === "timeline" ? (
+            <SessionTimelinePanel rootId={rootId} sessionId={sessionId} />
+          ) : (
+            <ContextWindowPanel rootId={rootId} sessionId={sessionId} />
+          )}
+        </motion.div>
       </React.Fragment>
     </div>
   );

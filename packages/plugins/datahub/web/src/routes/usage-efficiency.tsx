@@ -12,6 +12,7 @@ import {
   type TokenEfficiencyUnit,
 } from "@/api";
 import { MetricCard } from "@/components/metric-card";
+import { StaggerGroup } from "@/components/stagger-group";
 import { LoadingShell } from "@/components/loading-shell";
 import { SessionLink } from "@/components/session-link";
 import { StateBlock } from "@/components/state-block";
@@ -270,6 +271,7 @@ function ComparisonSection({
   return (
     <>
       <section className="stat-grid" aria-label={`${unit} prompt-token distribution`}>
+      <StaggerGroup className="contents">
         <MetricCard
           label="Total prompt tokens"
           value={formatTokens(current.total_prompt_tokens)}
@@ -293,6 +295,7 @@ function ComparisonSection({
           detail={formatExactTokens(distribution.p90)}
           trend={trendBadge(deltaForUnit(comparison, unit, "p90"))}
         />
+      </StaggerGroup>
       </section>
       <TrendChart summaries={data.trends[grain]} unit={unit} grain={grain} />
     </>

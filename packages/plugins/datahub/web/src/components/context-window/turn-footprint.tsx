@@ -113,7 +113,7 @@ function ScaleRow({ scale }: { scale: number }) {
   return (
     <div className={cn("grid", GRID_COLS, "gap-2 px-2 sm:gap-3")}>
       <span />
-      <span className="relative block h-4 opacity-40 transition-opacity duration-300 group-hover/foot:opacity-100">
+      <span className="relative block h-4 opacity-40 transition-opacity duration-(--duration-slow) group-hover/foot:opacity-100">
         {[0, 0.25, 0.5, 0.75].map((at) => (
           <span
             key={at}
@@ -159,7 +159,7 @@ function TurnRow({
     : { background: "var(--color-surface-emphasis)" };
 
   return (
-    <li className="list-none transition-opacity duration-200 group-hover/foot:opacity-50 hover:opacity-100">
+    <li className="list-none transition-opacity duration-(--duration-base) group-hover/foot:opacity-50 hover:opacity-100">
       <Tooltip>
         <TooltipTrigger asChild>
           <button
@@ -183,12 +183,12 @@ function TurnRow({
             </span>
             <span className="relative block h-4 border-r border-dashed border-destructive/40">
               <span
-                className="absolute top-1/2 h-2 -translate-y-1/2 rounded-l-sm transition-[height] duration-200 group-hover/row:h-3.5"
+                className="absolute top-1/2 h-2 -translate-y-1/2 rounded-l-sm transition-[height] duration-(--duration-base) group-hover/row:h-3.5"
                 style={{ left: 0, width: pct(row.carriedBefore), ...carriedStyle }}
                 aria-hidden
               />
               <span
-                className="absolute top-1/2 h-2 -translate-y-1/2 rounded-sm transition-[height,opacity] duration-200 group-hover/row:h-3.5 group-hover/row:opacity-0"
+                className="absolute top-1/2 h-2 -translate-y-1/2 rounded-sm transition-[height,opacity] duration-(--duration-base) group-hover/row:h-3.5 group-hover/row:opacity-0"
                 style={{
                   left: pct(row.carriedBefore),
                   width: pct(row.deltaTokens),
@@ -202,7 +202,7 @@ function TurnRow({
                 return (
                   <span
                     key={delta.category}
-                    className="absolute top-1/2 h-2 w-0 -translate-y-1/2 opacity-0 transition-[width,height,opacity] duration-300 group-hover/row:h-3.5 group-hover/row:w-(--w) group-hover/row:opacity-100"
+                    className="absolute top-1/2 h-2 w-0 -translate-y-1/2 opacity-0 transition-[width,height,opacity] duration-(--duration-slow) group-hover/row:h-3.5 group-hover/row:w-(--w) group-hover/row:opacity-100"
                     style={
                       {
                         left,
@@ -216,7 +216,7 @@ function TurnRow({
               })}
             </span>
             <span className="mono shrink-0 text-right text-caption text-muted-foreground">
-              <span className="opacity-0 transition-opacity duration-200 group-hover/row:opacity-100">
+              <span className="opacity-0 transition-opacity duration-(--duration-base) group-hover/row:opacity-100">
                 +{formatTokens(row.deltaTokens)} ·{" "}
               </span>
               <b className="font-semibold text-foreground">
@@ -255,7 +255,7 @@ function TurnRow({
 
       <div
         className={cn(
-          "grid transition-[grid-template-rows] duration-300",
+          "grid transition-[grid-template-rows] duration-(--duration-slow)",
           open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
         )}
       >
@@ -311,10 +311,10 @@ function IdleRow({ row }: { row: FootprintIdleRow }) {
   const idle = formatDuration(row.idleSeconds);
   if (!idle && !row.cacheBreak) return null;
   return (
-    <li className="group/idle list-none px-2 text-caption leading-5 text-muted-foreground/60 transition-colors duration-200 hover:text-muted-foreground">
+    <li className="group/idle list-none px-2 text-caption leading-5 text-muted-foreground/60 transition-colors duration-(--duration-base) hover:text-muted-foreground">
       ···{idle ? ` idle ${idle}` : ""}
       {row.cacheBreak ? (
-        <span className="inline-block max-w-0 overflow-hidden whitespace-nowrap align-bottom opacity-0 transition-all duration-300 group-hover/idle:max-w-96 group-hover/idle:opacity-100">
+        <span className="inline-block max-w-0 overflow-hidden whitespace-nowrap align-bottom opacity-0 transition-all duration-(--duration-slow) group-hover/idle:max-w-96 group-hover/idle:opacity-100">
           {" "}
           · <span className="text-destructive">{cacheBreakLabel(row.cacheBreak)}</span> ·
           re-read {formatTokens(row.cacheBreak.re_read_tokens)}
@@ -334,7 +334,7 @@ function CompactionRow({
   const post = row.postTokens ?? Math.max((row.preTokens ?? 0) - (row.droppedTokens ?? 0), 0);
   const pre = row.preTokens ?? post + (row.droppedTokens ?? 0);
   return (
-    <li className="list-none transition-opacity duration-200 group-hover/foot:opacity-50 hover:opacity-100">
+    <li className="list-none transition-opacity duration-(--duration-base) group-hover/foot:opacity-50 hover:opacity-100">
       <Tooltip>
         <TooltipTrigger asChild>
           <div
@@ -348,7 +348,7 @@ function CompactionRow({
             </span>
             <span className="relative block h-4 border-r border-dashed border-destructive/40">
               <span
-                className="absolute top-1/2 h-2 -translate-y-1/2 rounded-l-sm transition-[height] duration-200 group-hover/row:h-3.5"
+                className="absolute top-1/2 h-2 -translate-y-1/2 rounded-l-sm transition-[height] duration-(--duration-base) group-hover/row:h-3.5"
                 style={{
                   left: 0,
                   width: pct(post),
@@ -358,7 +358,7 @@ function CompactionRow({
                 aria-hidden
               />
               <span
-                className="absolute top-1/2 h-2 -translate-y-1/2 rounded-r-sm border border-destructive/30 transition-[height] duration-200 group-hover/row:h-3.5"
+                className="absolute top-1/2 h-2 -translate-y-1/2 rounded-r-sm border border-destructive/30 transition-[height] duration-(--duration-base) group-hover/row:h-3.5"
                 style={{
                   left: pct(post),
                   width: pct(Math.max(pre - post, 0)),
@@ -367,7 +367,7 @@ function CompactionRow({
                 }}
                 aria-hidden
               />
-              <span className="mono absolute top-1/2 -translate-y-1/2 text-[10px] text-destructive opacity-0 transition-opacity duration-200 group-hover/row:opacity-100"
+              <span className="mono absolute top-1/2 -translate-y-1/2 text-[10px] text-destructive opacity-0 transition-opacity duration-(--duration-base) group-hover/row:opacity-100"
                 style={{ left: `calc(${pct(post)} + 8px)` }}
               >
                 −{formatTokens(Math.max(pre - post, 0))} · {formatTokens(pre)} →{" "}

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link } from "@tanstack/react-router";
-import { cn } from "@/lib/utils";
+import { sectionTabClass } from "@/components/section-tabs";
 
 type SessionTabsProps = {
   rootId: string;
@@ -27,12 +27,7 @@ export function SessionTabs({ rootId, sessionId, active }: SessionTabsProps) {
               params={{ rootId, sessionId }}
               search={{ tab: tab.id }}
               aria-current={isActive ? "page" : undefined}
-              className={cn(
-                "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-body-sm font-medium transition-colors",
-                isActive
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "text-muted-foreground hover:bg-surface-emphasis hover:text-foreground",
-              )}
+              className={sectionTabClass(isActive)}
             >
               {tab.label}
             </Link>

@@ -16,6 +16,7 @@ import { DataTable } from "@/components/data-table";
 import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { MetricCard } from "@/components/metric-card";
+import { StaggerGroup } from "@/components/stagger-group";
 import { PageHeader } from "@/components/route-header";
 import { SectionTabs } from "@/components/section-tabs";
 import { SessionLink, shortSessionId } from "@/components/session-link";
@@ -435,10 +436,12 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     const turnStats = data.summary.token_stats.turn;
     return (
       <section className="stat-grid min-w-0">
+      <StaggerGroup className="contents">
         <MetricCard label="Processed Tokens" value={formatCompactNumber(data.summary.processed_tokens)} detail={`${data.summary.sessions.toLocaleString()} sessions`} />
         <MetricCard label="Session Tokens" value={formatCompactNumber(sessionStats.avg)} detail={distributionDetail(sessionStats)} />
         <MetricCard label="Turn Tokens" value={formatCompactNumber(turnStats.avg)} detail={distributionDetail(turnStats)} />
         <MetricCard label="Turns" value={formatCompactNumber(data.summary.turns)} detail={`${data.summary.models.toLocaleString()} models in scope`} />
+      </StaggerGroup>
       </section>
     );
   }
@@ -446,10 +449,12 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     const sessionStats = data.summary.elapsed_stats.session;
     return (
       <section className="stat-grid min-w-0">
+      <StaggerGroup className="contents">
         <MetricCard label="Active Execution" value={formatDuration(data.summary.total_execution_seconds)} detail={`${data.summary.runtime_eligible}/${data.summary.sessions} sessions with runtime telemetry`} />
         <MetricCard label="Waiting" value={formatDuration(data.summary.total_wait_seconds)} detail="Observed non-execution time" />
         <MetricCard label="Elapsed Time" value={formatDuration(data.summary.total_elapsed_seconds)} detail={distributionDetail(sessionStats, formatDuration)} />
         <MetricCard label="Throughput" value={formatCompactNumber(tokensPerMinute(data.summary.processed_tokens, data.summary.total_execution_seconds))} detail="tokens/min across active execution" />
+      </StaggerGroup>
       </section>
     );
   }
@@ -458,15 +463,18 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
     const turnStats = data.summary.cost_stats.turn;
     return (
       <section className="stat-grid min-w-0">
+      <StaggerGroup className="contents">
         <MetricCard label="Estimated Cost" value={formatCostUsd(data.summary.estimated_cost_usd)} detail={`${data.summary.sessions.toLocaleString()} sessions in ${data.filters.since_days} days`} />
         <MetricCard label="Session Cost" value={formatCostUsd(sessionStats.avg)} detail={distributionDetail(sessionStats, formatCostUsd)} />
         <MetricCard label="Turn Cost" value={formatCostUsd(turnStats.avg)} detail={distributionDetail(turnStats, formatCostUsd)} />
         <MetricCard label="Pricing Gaps" value={data.summary.missing_price_count} detail={data.summary.top_model_by_sessions ? `Most sessions: ${data.summary.top_model_by_sessions}` : "No sessions"} />
+      </StaggerGroup>
       </section>
     );
   }
   return (
     <section className="stat-grid min-w-0">
+    <StaggerGroup className="contents">
       <MetricCard
         label="Estimated Cost"
         value={formatCostUsd(data.summary.estimated_cost_usd)}
@@ -487,6 +495,7 @@ function SummaryCards({ data, view }: { data: ModelUsagePayload; view: UsageView
         value={data.summary.missing_price_count}
         detail={data.summary.top_model_by_sessions ? `Most sessions: ${data.summary.top_model_by_sessions}` : "No sessions"}
       />
+    </StaggerGroup>
     </section>
   );
 }

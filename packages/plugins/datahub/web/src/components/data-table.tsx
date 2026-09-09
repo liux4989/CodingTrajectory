@@ -248,7 +248,7 @@ export function DataTable<TData extends RowData>({
                             e.stopPropagation();
                             row.toggleExpanded();
                           }}
-                          className="flex size-6 items-center justify-center rounded text-muted-foreground transition-transform hover:text-foreground"
+                          className="flex size-6 items-center justify-center rounded text-muted-foreground transition-transform duration-(--duration-fast) hover:text-foreground"
                           style={{ transform: isExpanded ? "rotate(90deg)" : "none" }}
                           aria-label={isExpanded ? "Collapse row" : "Expand row"}
                         >
