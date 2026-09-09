@@ -1,7 +1,10 @@
 # Non-production reset and seven-day publication
 
 - **Date:** 2026-09-05
-- **Status:** Completed for the CodingTrajectory project
+- **Status:** Completed for the CodingTrajectory project; superseded by the
+  2026-09-09 Chronicle reset and canary
+  ([record](chronicle-non-production-rollout-2026-09-09.md)), which wiped this
+  run's published artifacts with the retired Shareable schema
 - **Scope:** Current-project sources modified within seven days; one fenced snapshot
 - **Authorization:** The user confirmed the configured target was non-production and authorized the CT reset.
 

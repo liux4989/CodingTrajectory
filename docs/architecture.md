@@ -90,6 +90,8 @@ Do not derive new expected metric values from a run alone. Intentional changes
 require reconstruction from committed source evidence and an updated audit.
 See the [metrics quality gate](metrics-validation-quality-gate.md).
 
-The [September 5 rollout report](remote-ct-rollout-2026-09-05.md) records verified
-non-production historical publication and reads. Concurrent collectors and
-ongoing supervision remain outside that verified scope.
+The [September 9 rollout record](chronicle-non-production-rollout-2026-09-09.md)
+records verified non-production Chronicle publication and reads under the
+current schema; the [September 5 report](remote-ct-rollout-2026-09-05.md)
+retains the superseded Shareable-schema run. Concurrent collectors and ongoing
+supervision remain outside that verified scope.

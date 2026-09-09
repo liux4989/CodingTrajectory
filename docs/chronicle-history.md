@@ -1,12 +1,13 @@
 # Chronicle Operational History Contract
 
-- **Status:** Prototype contract locally qualified; not deployed
-- **Date:** 2026-09-08
+- **Status:** Locally qualified; admitted to the designated disposable non-production project; production not deployed
+- **Date:** 2026-09-09
 - **Scope:** Historical collection, storage, replay, and API coverage
 - **Related:** [`remote-ct-control-plane-design.md`](remote-ct-control-plane-design.md),
   [`local-collector-handoff.md`](local-collector-handoff.md),
   [`chronicle-local-qualification-2026-09-08.md`](chronicle-local-qualification-2026-09-08.md),
-  [`chronicle-deployment-readiness-2026-09-08.md`](chronicle-deployment-readiness-2026-09-08.md)
+  [`chronicle-deployment-readiness-2026-09-09.md`](chronicle-deployment-readiness-2026-09-09.md),
+  [`chronicle-non-production-rollout-2026-09-09.md`](chronicle-non-production-rollout-2026-09-09.md)
 
 ## Decision
 

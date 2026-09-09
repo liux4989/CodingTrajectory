@@ -1,6 +1,6 @@
 # Datahub Private Cloudflare Hosting
 
-- **Status:** Accepted design; not implemented or deployed
+- **Status:** Accepted design; facade implemented locally, not deployed
 - **Date:** 2026-09-08
 - **Scope:** Access-only hosted Datahub UI and read-only API facade
 - **Related:** [Datahub design](datahub-redesign.md),

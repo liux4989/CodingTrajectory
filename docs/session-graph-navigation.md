@@ -1,5 +1,8 @@
 # Session graph navigation restructure
 
+- **Status:** Implemented
+- **Date:** 2026-09-08
+
 The session workspace presents four peer tabs (Timeline, Context window,
 Conversation tree, Agent graph) over scopes that the [PRD](prd.md) defines as a
 hierarchy: `SessionGraph -> Session -> Turn -> Item`. Two problems follow:

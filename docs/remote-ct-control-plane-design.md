@@ -1,7 +1,7 @@
 # Remote CT Control Plane Design
 
-- **Status:** Chronicle locally qualified; linked deployment blocked on migration reconciliation
-- **Date:** 2026-09-08
+- **Status:** Chronicle admitted to the designated disposable non-production project; production deployment not authorized
+- **Date:** 2026-09-09
 - **Scope:** Public method authorities, historical artifacts, project inventory,
   living state, estimation, and collector handoff
 - **Supersedes:** [`remote-session-ledger-design.md`](archive/remote-session-ledger-design.md)
@@ -244,9 +244,12 @@ clients.
 A failed gate stops rollout. Privacy, topology, checkpoint, snapshot, and
 idempotency rules are never weakened to continue deployment.
 
-The local qualification gate passed on 2026-09-08. A subsequent linked dry run
-stopped at migration-history reconciliation before executing SQL; see
-[`chronicle-deployment-readiness-2026-09-08.md`](chronicle-deployment-readiness-2026-09-08.md).
+The local qualification gate passed on 2026-09-08. On 2026-09-09 an authorized
+CT-only reset rebuilt the linked disposable project from the committed
+migrations and one bounded Chronicle canary passed publication, integrity,
+idempotency, and authenticated remote-read checks; see
+[`chronicle-deployment-readiness-2026-09-09.md`](chronicle-deployment-readiness-2026-09-09.md) and
+[`chronicle-non-production-rollout-2026-09-09.md`](chronicle-non-production-rollout-2026-09-09.md).
 
 ## Prior rollout evidence
 
