@@ -180,8 +180,10 @@ the aggregate pending count.
 
 ## Verified non-production deployment
 
-On 2026-09-09 the authorized disposable project was reset, rebuilt from all 11
-committed migrations, and passed a bounded Chronicle canary with zero failed,
-rejected, or pending deliveries. The publication RPC carries a 60-second
-database execution budget with a 90-second client wait. Earlier Shareable-era
-rollout evidence is superseded; git history retains it.
+On 2026-09-09 the authorized disposable project was reset, rebuilt from all 12
+committed migrations, and cut over exclusively to sparse Chronicle v2. A full
+seven-day publication with graph closure accepted 45 sources, 26 artifacts, and
+9,534 items in one 8,135,476-byte request. Exact replay, remote reads, recovery,
+and the five-minute Amp publication job passed with zero failed, rejected, or
+pending deliveries. The publication RPC carries a 60-second database execution
+budget with a 90-second client wait.

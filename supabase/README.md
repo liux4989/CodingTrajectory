@@ -76,10 +76,12 @@ project's current SQLite read models.
 
 ## Current non-production deployment
 
-The CT application schema was reset and rebuilt from all committed migrations
-on 2026-09-09 with explicit non-production authorization, and a bounded
-Chronicle canary verified publication and authenticated remote reads. Git
-history retains the dated rollout evidence.
+The CT application schema was reset and rebuilt from all 12 committed migrations
+on 2026-09-09 with explicit non-production authorization. The breaking sparse
+Chronicle v2 cutover then accepted a 45-source, 26-artifact seven-day publication
+containing 9,534 items in an 8,135,476-byte request. Authenticated historical
+reads, exact replay, recovery watermarks, the five-minute Amp publication job,
+and an empty local outbox were verified afterward.
 
 The publication RPC has a scoped 60-second execution budget. Other API role
 timeouts remain unchanged. The current schema can be rebuilt from the committed

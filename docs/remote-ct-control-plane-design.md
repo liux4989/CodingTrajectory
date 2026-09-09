@@ -248,9 +248,11 @@ A failed gate stops rollout. Privacy, topology, checkpoint, snapshot, and
 idempotency rules are never weakened to continue deployment.
 
 All gates passed for the designated disposable non-production project on
-2026-09-09: an authorized CT-only reset rebuilt the schema from the committed
-migrations, and one bounded canary passed publication, integrity, idempotency,
-and authenticated remote-read checks. Production deployment remains
+2026-09-09: an authorized CT-only reset rebuilt all 12 migrations with the
+breaking sparse Chronicle v2 contract. A 45-source, 26-artifact, 9,534-item
+seven-day publication was accepted in one 8,135,476-byte request. Exact replay,
+recovery, authenticated remote reads, and the supervised Amp publisher passed
+with no pending or rejected deliveries. Production deployment remains
 unauthorized. Git history retains the dated evidence.
 
 Publication has a 60-second function-level database budget and a 90-second
