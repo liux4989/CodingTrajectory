@@ -3,7 +3,7 @@
 
 This script deliberately delegates serialization and delivery to ``ct collector
 run``.  That command fences the local source bytes, validates the body-free
-``ct.chronicle_graph.v1`` artifact, and uses the credential profile to refresh
+``ct.chronicle_graph.v2`` artifact, and uses the credential profile to refresh
 an access token in memory.  It never exports raw vendor logs or prints a token.
 """
 

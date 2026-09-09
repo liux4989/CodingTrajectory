@@ -147,7 +147,7 @@ class SourceVectorEntry(CollectorModel):
 
 class ChronicleArtifactPublication(CollectorModel):
     artifact_id: UUID
-    schema_version: Literal["ct.chronicle_graph.v1"] = CHRONICLE_GRAPH_SCHEMA_VERSION
+    schema_version: Literal["ct.chronicle_graph.v2"] = CHRONICLE_GRAPH_SCHEMA_VERSION
     payload: ChronicleGraphArtifact
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     serialized_bytes: int = Field(ge=1)
@@ -196,12 +196,21 @@ class ArtifactPublicationRequest(CollectorModel):
         }
         if represented != known:
             raise ValueError("every source_vector entry must belong to an artifact")
-        encoded = canonical_json(
-            self.model_dump(mode="json", exclude_none=True)
-        ).encode()
+        encoded = canonical_json(self.wire_payload()).encode()
         if len(encoded) > MAX_CHRONICLE_PUBLICATION_BYTES:
             raise ValueError("chronicle project publication exceeds 16 MiB")
         return self
+
+    def wire_payload(self) -> dict[str, Any]:
+        """Return the exact compact request persisted and sent by collectors."""
+
+        payload = self.model_dump(mode="json", exclude_none=True)
+        for encoded, artifact in zip(payload["artifacts"], self.artifacts, strict=True):
+            encoded["payload"] = artifact.payload.wire_payload()
+        return payload
+
+    def wire_json(self) -> str:
+        return canonical_json(self.wire_payload())
 
 
 class LeaseHeartbeatRequest(CollectorModel):

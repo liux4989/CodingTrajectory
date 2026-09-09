@@ -34,7 +34,7 @@ runs retain their distinct scopes.
 
 # Chronicle history
 
-- The originating host constructs one strict `ct.chronicle_graph.v1` artifact.
+- The originating host constructs one strict `ct.chronicle_graph.v2` artifact.
 - Host-local service APIs read local sources first and use the published
   Chronicles authority only when local discovery is unavailable or a targeted
   record is missing. Both sources run through the same handlers and chronicle

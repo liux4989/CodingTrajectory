@@ -9,7 +9,7 @@ currently visible Supabase project's database major version.
 Apply the complete ordered migration chain under `migrations/`. The foundation
 is extended by the Chronicle contract and publication-budget migrations.
 Current historical ingress accepts metadata-only checkpoints and locally built
-`ct.chronicle_graph.v1` artifacts; the old historical projector and RPCs are
+`ct.chronicle_graph.v2` artifacts; the old historical projector and RPCs are
 retired. Inventory, living, and estimation have separate durable authorities.
 The current prototype keeps Amp support in the base Chronicle validator rather
 than applying a second compatibility migration. Do not squash unrelated earlier

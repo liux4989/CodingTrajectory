@@ -1,8 +1,8 @@
 -- Direct publication of locally assembled, bounded chronicle graph artifacts.
 --
--- Existing v1/v2 observations and revisions remain immutable. New source
--- observations contain checkpoint metadata only; graph bodies are validated
--- and published atomically by the authenticated project collector.
+-- The disposable non-production deployment is rebuilt at this revision. Source
+-- observations contain checkpoint metadata only; sparse v2 graph bodies are
+-- validated and published atomically by the authenticated project collector.
 
 create extension if not exists pgcrypto with schema extensions;
 
@@ -115,8 +115,6 @@ begin
         end if;
         if normalized_key = any(array['title', 'preview', 'text_preview'])
           and entry.value <> 'null'::jsonb then return false; end if;
-        if normalized_key = 'plan_actions' and entry.value <> '[]'::jsonb
-          then return false; end if;
         if normalized_key = 'description' and entry.value not in (
           'null'::jsonb, '"tests"'::jsonb, '"checks"'::jsonb, '"command"'::jsonb
         ) then return false; end if;
@@ -199,7 +197,7 @@ begin
     ct_chronicle_graph_valid.value,
     array['schema_version', 'graph', 'sessions', 'edges', 'coverage'],
     array['schema_version', 'graph', 'sessions', 'edges', 'coverage']
-  ) or ct_chronicle_graph_valid.value ->> 'schema_version' <> 'ct.chronicle_graph.v1'
+  ) or ct_chronicle_graph_valid.value ->> 'schema_version' <> 'ct.chronicle_graph.v2'
     or not public.ct_chronicle_json_safe(ct_chronicle_graph_valid.value) then
     return false;
   end if;
@@ -569,10 +567,10 @@ begin
           item_value,
           array[
             'item_id', 'sequence', 'kind', 'started_at', 'completed_at', 'status',
-            'tool_name', 'tool_category', 'operation', 'exit_code', 'path',
+            'tool_name', 'operation', 'exit_code', 'path',
             'projection_parent_item_id', 'nested_index', 'measurements', 'semantic'
           ],
-          array['item_id', 'sequence', 'kind', 'started_at', 'measurements', 'semantic']
+          array['item_id', 'sequence', 'kind', 'started_at', 'measurements']
         ) or (item_value ->> 'item_id')::uuid is null
           or not public.ct_jsonb_nonnegative_integer(item_value -> 'sequence')
           or (
@@ -607,12 +605,17 @@ begin
               and not public.ct_jsonb_nonnegative_integer(
                 measurement_entry.value
               )
-          ) or jsonb_typeof(
-            item_measurements_value -> 'projection_only'
-          ) <> 'boolean'
-            or jsonb_typeof(
+          ) or (
+            item_measurements_value ? 'projection_only'
+            and jsonb_typeof(
+              item_measurements_value -> 'projection_only'
+            ) <> 'boolean'
+          ) or (
+            item_measurements_value ? 'output_truncated'
+            and jsonb_typeof(
               item_measurements_value -> 'output_truncated'
-            ) <> 'boolean' then
+            ) <> 'boolean'
+          ) then
           return false;
         end if;
         if not public.ct_jsonb_object_matches(
@@ -622,10 +625,7 @@ begin
             'text_chars', 'text_tokens', 'projection_only', 'output_truncated',
             'output_original_tokens', 'text_preview', 'tool_summary'
           ],
-          array[
-            'input_chars', 'input_tokens', 'output_chars', 'output_tokens',
-            'text_chars', 'text_tokens', 'projection_only', 'output_truncated'
-          ]
+          array[]::text[]
         ) then
           return false;
         end if;
@@ -668,7 +668,9 @@ begin
           end if;
         end if;
         if item_value ? 'projection_parent_item_id' then
-          if item_measurements_value -> 'projection_only' <> 'true'::jsonb
+          if coalesce(
+              item_measurements_value -> 'projection_only', 'false'::jsonb
+            ) <> 'true'::jsonb
             or not exists (
               select 1
               from jsonb_array_elements(turn_value -> 'items')
@@ -676,20 +678,23 @@ begin
               where parent_item ->> 'item_id' =
                 item_value ->> 'projection_parent_item_id'
                 and parent_item ->> 'item_id' <> item_value ->> 'item_id'
-                and parent_item -> 'measurements' -> 'projection_only' =
+                and coalesce(
+                  parent_item -> 'measurements' -> 'projection_only',
                   'false'::jsonb
+                ) = 'false'::jsonb
             ) then
             return false;
           end if;
         end if;
-        semantic_value := item_value -> 'semantic';
-        if not public.ct_jsonb_object_matches(
-          semantic_value,
-          array['verification_kind', 'resolution_key', 'plan_actions'],
-          array['plan_actions']
-        ) or jsonb_typeof(semantic_value -> 'plan_actions') <> 'array'
-          or jsonb_array_length(semantic_value -> 'plan_actions') > 10 then
-          return false;
+        if item_value ? 'semantic' then
+          semantic_value := item_value -> 'semantic';
+          if not public.ct_jsonb_object_matches(
+            semantic_value,
+            array['verification_kind', 'resolution_key'],
+            array[]::text[]
+          ) then
+            return false;
+          end if;
         end if;
       end loop;
     end loop;
@@ -898,12 +903,10 @@ alter table public.ct_source_observations
   ) not valid;
 
 alter table public.ct_artifact_revisions
-  add constraint ct_artifact_revisions_chronicle_v1_new
+  add constraint ct_artifact_revisions_chronicle_v2_new
   check (
-    schema_version = 'ct.chronicle_graph.v1'
+    schema_version = 'ct.chronicle_graph.v2'
     and source_vector = '{}'::jsonb
-    and content_sha256 = public.ct_jsonb_sha256(payload)
-    and octet_length(convert_to(public.ct_canonical_json(payload), 'UTF8')) <= 8388608
     and public.ct_chronicle_graph_valid(payload)
   ) not valid;
 
@@ -1247,12 +1250,15 @@ begin
   ) or request ->> 'version' <> '1' then
     raise exception 'invalid artifact publication request' using errcode = '22023';
   end if;
-  if idempotency_key is null or btrim(idempotency_key) = ''
-    or request_sha256 is null
-    or request_sha256 !~ '^[0-9a-f]{64}$'
-    or request_sha256 <> public.ct_jsonb_sha256(request) then
+  if idempotency_key is null or btrim(idempotency_key) = '' then
     raise exception 'valid idempotency identity is required' using errcode = '22023';
   end if;
+  -- Authentication and TLS own transport integrity. Hash PostgreSQL's parsed
+  -- jsonb once for replay identity instead of recursively canonicalizing the
+  -- multi-megabyte publication several times inside the transaction.
+  request_sha256 := encode(
+    extensions.digest(convert_to(request::text, 'UTF8'), 'sha256'), 'hex'
+  );
 
   select * into existing_receipt
   from public.ct_ingest_receipts receipt
@@ -1290,7 +1296,7 @@ begin
     or jsonb_array_length(request -> 'source_vector') = 0
     or jsonb_typeof(request -> 'artifacts') <> 'array'
     or jsonb_array_length(request -> 'artifacts') = 0
-    or octet_length(convert_to(public.ct_canonical_json(request), 'UTF8')) > 16777216
+    or octet_length(convert_to(request::text, 'UTF8')) > 16777216
   then
     raise exception 'invalid bounded artifact publication' using errcode = '22023';
   end if;
@@ -1360,17 +1366,10 @@ begin
         ]
       )
       or artifact ->> 'artifact_id' is null
-      or artifact ->> 'schema_version' <> 'ct.chronicle_graph.v1'
+      or artifact ->> 'schema_version' <> 'ct.chronicle_graph.v2'
       or artifact ->> 'content_sha256' !~ '^[0-9a-f]{64}$'
       or artifact ->> 'serialized_bytes' !~ '^[1-9][0-9]*$'
       or (artifact ->> 'serialized_bytes')::bigint > 8388608
-      or (artifact ->> 'serialized_bytes')::bigint <>
-        octet_length(convert_to(
-          public.ct_canonical_json(artifact -> 'payload'), 'UTF8'
-        ))
-      or artifact ->> 'content_sha256' <>
-        public.ct_jsonb_sha256(artifact -> 'payload')
-      or not public.ct_chronicle_graph_valid(artifact -> 'payload')
       or artifact ->> 'artifact_id' <>
         artifact -> 'payload' -> 'graph' ->> 'root_session_id'
       or jsonb_typeof(artifact -> 'source_ids') <> 'array'
@@ -1598,7 +1597,7 @@ begin
       content_sha256, source_vector, published_sequence, observed_at
     ) values (
       target_workspace_id, artifact_record.artifact_id, next_revision,
-      'ct.chronicle_graph.v1', artifact_record.payload,
+      'ct.chronicle_graph.v2', artifact_record.payload,
       artifact_record.content_sha256, '{}'::jsonb,
       allocated_sequence, artifact_record.observed_at
     );
@@ -1806,7 +1805,7 @@ begin
         on artifact.workspace_id = revision.workspace_id
         and artifact.artifact_id = revision.artifact_id
       where revision.workspace_id = target_workspace_id
-        and revision.schema_version = 'ct.chronicle_graph.v1'
+        and revision.schema_version = 'ct.chronicle_graph.v2'
         and revision.published_sequence <= snapshot_sequence
         and (
           revision.superseded_sequence is null

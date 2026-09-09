@@ -21,7 +21,7 @@ discover project-scoped sources
   -> record one complete-line byte fence per physical segment
   -> derive fork trimming from those same fenced parent bytes
   -> coalesce resumed segments into one logical source/session
-  -> build and validate ct.chronicle_graph.v1 locally
+  -> build and validate ct.chronicle_graph.v2 locally
   -> queue metadata-only source checkpoints
   -> obtain accepted checkpoint receipts
   -> assemble the complete collected graphs locally

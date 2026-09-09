@@ -10,7 +10,7 @@ Host-local vendor logs (immutable evidence)
   → vendor adapters → normalized transcript → Session → Turn → Item
   → SessionGraph + DocumentStore
       → local evidence handlers (content, events, search)
-      → locally assembled ct.chronicle_graph.v1
+      → locally assembled ct.chronicle_graph.v2
           → shared historical handlers
           → authenticated collector → Supabase artifact revisions
               → snapshot-pinned DocumentStore → shared historical handlers

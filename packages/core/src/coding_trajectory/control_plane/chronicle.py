@@ -93,7 +93,7 @@ from coding_trajectory.ingestion.models import (
 )
 from coding_trajectory.token_counter import counter_for_session_graph, scoped_counter
 
-CHRONICLE_GRAPH_SCHEMA_VERSION = "ct.chronicle_graph.v1"
+CHRONICLE_GRAPH_SCHEMA_VERSION = "ct.chronicle_graph.v2"
 MAX_CHRONICLE_ARTIFACT_BYTES = 8 * 1024 * 1024
 MAX_CHRONICLE_PUBLICATION_BYTES = 16 * 1024 * 1024
 _SYNTHETIC_REQUEST_NAMESPACE = uuid5(
@@ -238,7 +238,6 @@ class ChronicleItemMeasurements(ChronicleModel):
 class ChronicleItemSemantic(ChronicleModel):
     verification_kind: _BoundedString | None = None
     resolution_key: _BoundedString | None = None
-    plan_actions: list[_Preview] = Field(default_factory=list, max_length=0)
 
 
 class ChronicleItem(ChronicleModel):
@@ -249,7 +248,6 @@ class ChronicleItem(ChronicleModel):
     completed_at: datetime | None = None
     status: _BoundedString | None = None
     tool_name: _BoundedString | None = None
-    tool_category: _BoundedString | None = None
     operation: _BoundedString | None = None
     exit_code: int | None = None
     path: _BoundedString | None = None
@@ -399,7 +397,7 @@ class ChronicleCoverage(ChronicleModel):
 
 
 class ChronicleGraphArtifact(ChronicleModel):
-    schema_version: Literal["ct.chronicle_graph.v1"] = CHRONICLE_GRAPH_SCHEMA_VERSION
+    schema_version: Literal["ct.chronicle_graph.v2"] = CHRONICLE_GRAPH_SCHEMA_VERSION
     graph: ChronicleGraphSummary
     sessions: list[ChronicleSession]
     edges: list[ChronicleEdge] = Field(default_factory=list)
@@ -507,15 +505,49 @@ class ChronicleGraphArtifact(ChronicleModel):
             if identity in edge_identities:
                 raise ValueError("chronicle graph contains duplicate edges")
             edge_identities.add(identity)
-        payload = self.model_dump(mode="json", exclude_none=True)
+        payload = self.wire_payload()
         _reject_embedded_content(payload)
         encoded = canonical_json(payload).encode()
         if len(encoded) > MAX_CHRONICLE_ARTIFACT_BYTES:
             raise ValueError("chronicle graph exceeds the 8 MiB artifact bound")
         return self
 
+    def wire_payload(self) -> dict[str, Any]:
+        """Return the intentionally sparse v2 wire representation."""
+
+        payload = self.model_dump(mode="json", exclude_none=True)
+        for session in payload["sessions"]:
+            for turn in session["turns"]:
+                for item in turn["items"]:
+                    measurements = item["measurements"]
+                    for key in (
+                        "input_chars",
+                        "input_tokens",
+                        "output_chars",
+                        "output_tokens",
+                        "text_chars",
+                        "text_tokens",
+                    ):
+                        if measurements.get(key) == 0:
+                            measurements.pop(key)
+                    if measurements.get("projection_only") is False:
+                        measurements.pop("projection_only")
+                    if measurements.get("output_truncated") is False:
+                        measurements.pop("output_truncated")
+
+                    summary = measurements.get("tool_summary")
+                    if isinstance(summary, dict) and item.get("tool_name") == summary.get(
+                        "name"
+                    ):
+                        item.pop("tool_name")
+
+                    semantic = item.get("semantic")
+                    if semantic == {}:
+                        item.pop("semantic")
+        return payload
+
     def canonical_bytes(self) -> bytes:
-        return canonical_json(self.model_dump(mode="json", exclude_none=True)).encode()
+        return canonical_json(self.wire_payload()).encode()
 
     def digest(self) -> str:
         return hashlib.sha256(self.canonical_bytes()).hexdigest()
@@ -791,7 +823,6 @@ def _build_chronicle_item(
             else None
         ),
         tool_name=_bounded(getattr(item, "tool_name", None)),
-        tool_category=tool_summary.name if tool_summary is not None else None,
         operation=_bounded(getattr(item, "operation", None)),
         exit_code=getattr(item, "exit_code", None),
         path=(
@@ -874,7 +905,6 @@ def _item_semantic(
     return ChronicleItemSemantic(
         verification_kind=_bounded(verification_kind),
         resolution_key=_bounded(resolution_key),
-        plan_actions=[],
     )
 
 
@@ -1163,22 +1193,25 @@ def _to_item(value: ChronicleItem, session_id: UUID, turn_id: UUID) -> Item:
         return AgentMessageItem(**common)
     if value.kind == "reasoning":
         return ReasoningItem(**common)
+    restored_tool_name = value.tool_name or (
+        tool_summary.name if tool_summary is not None else None
+    )
     if value.kind == "command_execution":
         return CommandExecutionItem(
             **common,
-            tool_name=value.tool_name,
+            tool_name=restored_tool_name,
             exit_code=value.exit_code,
         )
     if value.kind == "file_change":
         return FileChangeItem(
             **common,
-            tool_name=value.tool_name,
+            tool_name=restored_tool_name,
             path=value.path,
             operation=value.operation,
         )
     if value.kind == "plan":
-        return PlanItem(**common, tool_name=value.tool_name)
-    return ToolCallItem(**common, tool_name=value.tool_name)
+        return PlanItem(**common, tool_name=restored_tool_name)
+    return ToolCallItem(**common, tool_name=restored_tool_name)
 
 
 def _to_team_state(value: ChronicleTeamState | None) -> TeamTurnState | None:

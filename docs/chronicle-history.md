@@ -9,9 +9,13 @@
 ## Decision
 
 CodingTrajectory uses one private, bounded operational history document:
-`ct.chronicle_graph.v1`. The originating host builds it from a fenced complete
+`ct.chronicle_graph.v2`. The originating host builds it from a fenced complete
 source prefix. Local Chronicle reads and remote Chronicle reads execute the same
 handlers over that exact schema; only source selection and provenance differ.
+V2 is intentionally sparse on the wire: zero measurements, false flags, empty
+semantic objects, and tool names recoverable from their normalized summary are
+omitted and restored by the Pydantic model on read. The disposable deployment
+does not accept or translate Chronicle v1 artifacts.
 
 Chronicle is not a public-sharing format. A future public export must be a
 separate, more restrictive projection. The old `ct.shareable_graph.v1` name and
@@ -29,7 +33,8 @@ The strict Pydantic and PostgreSQL contracts retain:
 - graph, session, turn, item, request, and edge identities;
 - topology, ordering, timestamps, lifecycle status, vendor, model, and effort;
 - request usage, runtime observations, and numeric content measurements;
-- tool category, outcome, optimization profile, exit code, and verification kind;
+- normalized tool summary, outcome, optimization profile, exit code, and
+  verification kind;
 - portable file-change paths and operations;
 - bounded team membership and task state;
 - sanitized operational tool details;
@@ -89,7 +94,7 @@ ct_source_observations
   immutable source checkpoint and digest metadata
 
 ct_artifact_revisions
-  bounded ct.chronicle_graph.v1 documents
+  bounded ct.chronicle_graph.v2 documents
 
 ct_artifact_revision_sources
   normalized complete source vectors

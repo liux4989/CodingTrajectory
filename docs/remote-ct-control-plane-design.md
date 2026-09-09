@@ -10,7 +10,7 @@
 CodingTrajectory has one public API contract and one shared historical handler
 implementation. Host-local callers select local sources first. Chronicle local
 reads round-trip the locally reconstructed graph through
-`ct.chronicle_graph.v1`; remote reads load the same artifact schema from
+`ct.chronicle_graph.v2`; remote reads load the same artifact schema from
 Chronicles (the Supabase control plane). Artifact schema changes do not create a
 new public API version while response contracts remain compatible.
 
@@ -103,16 +103,20 @@ One project publication contains:
 workspace_id / agent_id / project_id
 agent/project-local publication_sequence
 complete normalized source_vector for the collected graphs
-one or more bounded ct.chronicle_graph.v1 artifacts
+one or more bounded ct.chronicle_graph.v2 artifacts
 ```
 
-The transaction verifies collector capability, project ownership, source
-membership, accepted checkpoints, current watermarks, schema shape, content
-bounds, canonical sizes, request digest, artifact digests, and idempotency. It
-then publishes all revisions at one workspace sequence, supersedes their prior
-revisions, updates inventory, records resource lookup rows, and commits one
-receipt. Sources outside the scan are not deletion evidence. Unrelated existing
-artifacts remain visible when a time or vendor filter excludes them.
+The originating collector validates canonical artifact sizes and digests before
+delivery. The transaction verifies collector capability, project ownership,
+source membership, accepted checkpoints, current watermarks, schema shape,
+privacy constraints, the overall JSONB bound, and idempotency. It hashes the
+already parsed request once for replay identity; it does not recursively
+canonicalize each multi-megabyte JSON subtree again. It then publishes all
+revisions at one workspace sequence, supersedes their prior revisions, updates
+inventory, records resource lookup rows, and commits one receipt. Remote reads
+revalidate the stored artifact digest with the shared Pydantic model. Sources
+outside the scan are not deletion evidence. Unrelated existing artifacts remain
+visible when a time or vendor filter excludes them.
 
 An overlapping current graph may only be replaced when the request includes all
 of its previously published sources. An omitted graph is retired only when all
@@ -147,7 +151,7 @@ A request pins workspace sequence `S`. Visible revisions satisfy:
 ```text
 published_sequence <= S
 and (superseded_sequence is null or superseded_sequence > S)
-and schema_version = ct.chronicle_graph.v1
+and schema_version = ct.chronicle_graph.v2
 ```
 
 Session, turn, and item requests use normalized resource rows to load only the
@@ -257,7 +261,7 @@ retry; it does not relax the artifact integrity or size limits.
 
 - Uploading raw logs, full sessions, or general events.
 - Synchronizing SQLite or allowing cache write-back.
-- Maintaining compact-v2 or historical remote compatibility handlers.
+- Maintaining pre-reset Chronicle v1 or historical compatibility handlers.
 - Treating filesystem paths as shared project identity.
 - Reimplementing Python API semantics in SQL or TypeScript.
 - Reconstructing graphs in a remote projector.

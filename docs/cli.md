@@ -156,7 +156,7 @@ workspace sequence. An unpinned request resolves a remote snapshot only after a
 local fallback condition.
 
 Historical local reads reconstruct the canonical graph from local logs, round
-chronicle methods through `ct.chronicle_graph.v1`, and execute the shared
+chronicle methods through `ct.chronicle_graph.v2`, and execute the shared
 handlers. A remote fallback fetches published artifacts through Supabase
 PostgREST RPCs; Python validates identity, digest, and schema before invoking the
 same handlers. Local and remote stores remain separate and are cached within the

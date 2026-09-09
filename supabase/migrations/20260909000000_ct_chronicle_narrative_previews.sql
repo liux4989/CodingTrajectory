@@ -49,8 +49,6 @@ begin
         end if;
         if normalized_key = any(array['title', 'preview'])
           and entry.value <> 'null'::jsonb then return false; end if;
-        if normalized_key = 'plan_actions' and entry.value <> '[]'::jsonb
-          then return false; end if;
         if normalized_key = 'description' and entry.value not in (
           'null'::jsonb, '"tests"'::jsonb, '"checks"'::jsonb, '"command"'::jsonb
         ) then return false; end if;

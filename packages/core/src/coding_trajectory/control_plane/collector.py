@@ -54,7 +54,7 @@ from coding_trajectory.ingestion.common import canonical_json, last_complete_lin
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.ingestion.models import Session
 
-_PARSER_VERSION = "ct-local-collector-v8"
+_PARSER_VERSION = "ct-local-collector-v9"
 _SOURCE_SCHEMA_VERSION = "ct.source_checkpoint.v1"
 _SNAPSHOT_STATE_VERSION = f"{_SOURCE_SCHEMA_VERSION}:{_PARSER_VERSION}"
 
@@ -147,7 +147,7 @@ class SupabaseCollectorRemote:
         return ObservationReceipt.model_validate(
             self._rpc(
                 "ct_collector_publish_artifacts",
-                request.model_dump(mode="json", exclude_none=True),
+                request.wire_payload(),
                 idempotency_key=idempotency_key,
             )
         )
@@ -726,7 +726,7 @@ class LocalCollector:
                 str(self.identity.project_id),
                 sequence,
                 publication_digest,
-                request.model_dump_json(exclude_none=True),
+                request.wire_json(),
                 datetime.now(UTC).isoformat(),
             ),
         )
