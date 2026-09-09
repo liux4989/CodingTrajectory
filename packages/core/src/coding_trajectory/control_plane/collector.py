@@ -56,6 +56,7 @@ from coding_trajectory.ingestion.models import Session
 
 _PARSER_VERSION = "ct-local-collector-v5"
 _SOURCE_SCHEMA_VERSION = "ct.source_checkpoint.v1"
+_SNAPSHOT_STATE_VERSION = f"{_SOURCE_SCHEMA_VERSION}:{_PARSER_VERSION}"
 
 
 class CollectorRemote(Protocol):
@@ -960,7 +961,7 @@ class LocalCollector:
                 state = self._logical_source_state(vendor, native_session_id)
         rollover = any(segment.rollover for segment in segments) or (
             state is not None
-            and state["snapshot_schema_version"] != _SOURCE_SCHEMA_VERSION
+            and state["snapshot_schema_version"] != _SNAPSHOT_STATE_VERSION
         )
         local_epoch = (
             int(state["source_epoch"]) + 1
@@ -1000,14 +1001,14 @@ class LocalCollector:
                 file_identity=segment.file_identity,
                 committed_offset=segment.complete_offset,
                 segment_id=segment.segment_id,
-                snapshot_schema_version=_SOURCE_SCHEMA_VERSION,
+                snapshot_schema_version=_SNAPSHOT_STATE_VERSION,
             )
         self._upsert_logical_source(
             vendor=vendor,
             native_session_id=native_session_id,
             source_id=source_id,
             source_epoch=local_epoch,
-            snapshot_schema_version=_SOURCE_SCHEMA_VERSION,
+            snapshot_schema_version=_SNAPSHOT_STATE_VERSION,
         )
         if source_id is None:
             self._connection.commit()
@@ -1082,7 +1083,7 @@ class LocalCollector:
             (
                 content_sha256,
                 sequence + 1,
-                _SOURCE_SCHEMA_VERSION,
+                _SNAPSHOT_STATE_VERSION,
                 vendor,
                 native_session_id,
             ),

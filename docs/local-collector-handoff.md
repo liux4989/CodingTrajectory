@@ -96,6 +96,12 @@ reconciled. An incomplete-graph rejection consumes its server sequence and is
 retained as `rejected_scope`; it does not block a later expanded scan. Source
 failures prevent a partial collected graph from being queued.
 
+The local snapshot-state marker combines the wire schema and collector parser
+version. Changing either rolls the logical source epoch before publishing a
+new derived digest for unchanged fenced bytes. The wire payload can therefore
+remain on `ct.source_checkpoint.v1` while its parser provenance advances,
+without violating immutable checkpoint identity within an existing epoch.
+
 A fresh SQLite database recovers the agent's existing source epochs and accepted
 checkpoint digests instead of assuming source sequence zero. It recovers the
 publication watermark before assigning work and the living watermark before its
