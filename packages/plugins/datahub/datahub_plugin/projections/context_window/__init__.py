@@ -406,7 +406,7 @@ def _project_cache_breaks(
     ttl_confirmed_s, ttl_likely_min_s = _vendor_ttl_thresholds(vendor)
     records: list[CacheBreakRecord] = []
     prev_model_key: str | None = None
-    for turn in turns:
+    for index, turn in enumerate(turns):
         turn_id = str(turn.get("id") or turn.get("turn_id") or "")
         if turn_id in skip_turns:
             continue
@@ -431,6 +431,19 @@ def _project_cache_breaks(
             effort_from, effort_to = confirmed
             model_from = None
             model_to = None
+        elif _is_synthetic_model_bootstrap_boundary(
+            turns[index - 1] if index > 0 else None,
+            turn,
+            idle=idle,
+            model_key=model_key,
+        ):
+            # Some child-session captures split their inherited prompt and
+            # first modeled request into adjacent turns less than a second
+            # apart. Core consequently reports a boundary loss even though no
+            # user-visible turn boundary occurred. Do not present that
+            # normalization artifact as an unexplained cache break.
+            prev_model_key = model_key
+            continue
         elif (
             prev_model_key is not None
             and model_key is not None
@@ -533,6 +546,32 @@ def _project_cache_breaks(
         by_type=by_type,
         events=records,
     )
+
+
+def _is_synthetic_model_bootstrap_boundary(
+    previous_turn: dict[str, Any] | None,
+    turn: dict[str, Any],
+    *,
+    idle: float,
+    model_key: str | None,
+) -> bool:
+    """Identify a split first-request observation, not a real turn boundary."""
+    if previous_turn is None or idle != 0 or model_key is None:
+        return False
+    if _turn_model_key(previous_turn) is not None:
+        return False
+    if _optional_int(previous_turn.get("cache_first_call_cached_tokens")) is None:
+        return False
+    previous_runtime = previous_turn.get("runtime") or {}
+    runtime = turn.get("runtime") or {}
+    previous_start = _parse_iso_timestamp(
+        previous_runtime.get("start") or previous_runtime.get("started_at")
+    )
+    start = _parse_iso_timestamp(runtime.get("start") or runtime.get("started_at"))
+    if previous_start is None or start is None:
+        return False
+    separation = (start - previous_start).total_seconds()
+    return 0 <= separation <= 1
 
 
 def _vendor_ttl_thresholds(vendor: str) -> tuple[float, float]:
@@ -814,6 +853,7 @@ def _category_leaves(categories: Iterable[Any]) -> Iterable[dict[str, Any]]:
 
 
 _STARTING_CONTEXT_KEYS = {
+    "starting_context",
     "base_system",
     "developer_instructions",
     "agents_md",
@@ -821,7 +861,7 @@ _STARTING_CONTEXT_KEYS = {
     "mcp",
     "memory",
 }
-_USER_INPUT_KEYS = {"user_initial_request", "user_follow_up_requests"}
+_USER_INPUT_KEYS = {"user_input", "user_initial_request", "user_follow_up_requests"}
 _AGENT_FILES_KEYS = {
     "context_readfile",
 }

@@ -345,6 +345,10 @@ def _compact_usage_turn(value: dict[str, Any]) -> dict[str, Any]:
             ),
             "cache_intra_turn_loss_tokens": value.get("cache_intra_turn_loss_tokens"),
             "cache_intra_turn_waste_usd": value.get("cache_intra_turn_waste_usd"),
+            # Preserve the per-turn cache-key identity consumed by the
+            # context-window cache-break classifier.
+            "provider": value.get("provider"),
+            "model": value.get("model"),
         }
     )
 
