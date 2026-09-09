@@ -82,12 +82,14 @@ cell.
    visible failed `exec`, because no nested action could have started.
 5. The raw `exec` wrapper remains canonical evidence. It is hidden from
    semantic activity projections when every nested activity was safely
-   reconstructed or bound to native or explicit wrapper-result evidence;
-   unresolved or unsupported wrappers remain visible as `exec`. Overview and
-   summary recent activity consume the same cell projector, so a superseded
-   transport wrapper cannot disappear from one view and reappear in another.
-   Summary excludes its own `session.summary` / `session.search` commands at
-   the projector boundary to avoid recursively reporting retrieval activity.
+   reconstructed or bound to native or explicit wrapper-result evidence.
+   Successful unresolved `exec` or raw MCP calls that cannot identify what
+   they acted on are also omitted from overview and summary as low-value
+   transport activity; failed calls remain visible. Overview and summary
+   recent activity consume the same cell projector, so a superseded transport
+   wrapper cannot disappear from one view and reappear in another. Summary
+   excludes its own `session.summary` / `session.search` commands at the
+   projector boundary to avoid recursively reporting retrieval activity.
 Empty `write_stdin` calls are background-terminal polls, not shell commands.
 Contiguous polls for the same namespaced terminal identity become one wait
 cell while retaining every canonical item reference. That cell is control-only

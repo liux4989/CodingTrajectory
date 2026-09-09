@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from coding_trajectory.analysis.tool_summary_shell import classify_shell
 from coding_trajectory.analysis.tool_summary_shared import (
     AGENT_COLLAB,
     EDIT_FILE,
@@ -23,8 +22,8 @@ from coding_trajectory.analysis.tool_summary_shared import (
     first_str,
     short_path,
 )
+from coding_trajectory.analysis.tool_summary_shell import classify_shell
 from coding_trajectory.ingestion.models import Item, ToolStatus
-
 
 _EXPANDED_EXEC_TOOL_NAME = "codex_exec_expanded"
 _BACKGROUND_WAIT_TOOL_PREFIX = "codex_background_terminal_wait:"
@@ -142,6 +141,8 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         else getattr(item, "input", None)
     )
     concept, description, optimization_profile = _classify(tool_name, tool_input)
+    if concept == WEB_FETCH and description is None:
+        description = _describe_web_output(getattr(item, "output", None))
 
     result: dict[str, Any] = {"name": concept}
     if optimization_profile:
@@ -176,7 +177,46 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         result["name"] = "Interacted with background terminal"
         result["optimization_profile"] = "activity:background_terminal_interaction"
         result.pop("description", None)
+    if _is_low_value_success(result):
+        result["activity_hidden"] = True
     return result
+
+
+def _is_low_value_success(summary: dict[str, Any]) -> bool:
+    """Hide successful transport activity that cannot identify its subject.
+
+    Canonical items still retain the full call and result for detail views.
+    Failures remain visible because the failure itself is useful orientation.
+    Semantic calls such as a counted command group or web search remain useful
+    even when their compact source omitted individual subjects.
+    """
+
+    name = str(summary.get("name") or "")
+    return (
+        summary.get("activity_outcome") == "succeeded"
+        and not summary.get("description")
+        and (name in {"exec", WEB_FETCH} or name.startswith("mcp__"))
+    )
+
+
+def _describe_web_output(tool_output: Any) -> str | None:
+    """Recover a browsed target from a native web result when input omits it."""
+
+    if not isinstance(tool_output, dict):
+        return None
+    direct = first_str(tool_output, ("url", "uri", "ref_id"))
+    if direct is not None:
+        return direct
+    results = tool_output.get("results")
+    if not isinstance(results, list):
+        return None
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        target = first_str(result, ("url", "uri", "ref_id"))
+        if target is not None:
+            return target
+    return None
 
 
 def _other_output_breakdown(tool_name: str, tool_input: Any) -> str:

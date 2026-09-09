@@ -7,6 +7,7 @@ import re
 import shlex
 from typing import Any, Literal
 
+from coding_trajectory.analysis.shell_parser import split_shell_stages
 from coding_trajectory.analysis.tool_summary_shared import (
     EDIT_FILE,
     GREP_FLAG_VALUE_OPTS,
@@ -18,8 +19,6 @@ from coding_trajectory.analysis.tool_summary_shared import (
     short_command,
     short_path,
 )
-from coding_trajectory.analysis.shell_parser import split_shell_stages
-
 
 VerificationKind = Literal["tests", "checks"]
 
@@ -174,12 +173,27 @@ def primary_stage(cmd: str) -> str:
     if not stages:
         return cmd.strip()
     for stage in stages:
-        if primary_command(stage) in INFORMATIVE_HEADS:
+        head = primary_command(stage)
+        if head in INFORMATIVE_HEADS and _stage_has_standalone_subject(stage, head):
             return stage.strip()
     for stage in stages:
         if primary_command(stage) not in _SHELL_SETUP_HEADS:
             return stage.strip()
     return stages[0].strip()
+
+
+def _stage_has_standalone_subject(stage: str, head: str) -> bool:
+    """Whether an informative shell stage identifies its own subject.
+
+    Filters such as ``head -3`` and ``sed -n 1,3p`` often consume a prior
+    pipeline stage. Treating them as file reads produces labels whose alleged
+    path is only an option or expression. Prefer the command that supplies
+    their stdin unless the read stage names a file itself.
+    """
+
+    if head in {"cat", "bat", "head", "tail", "less", "more", "nl", "sed"}:
+        return first_path_arg(stage, head) is not None
+    return True
 
 
 def shell_cmd(tool_input: Any) -> str:
