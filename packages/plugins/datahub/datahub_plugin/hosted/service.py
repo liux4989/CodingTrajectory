@@ -454,7 +454,6 @@ def _session_item(value: Any) -> dict[str, Any]:
         "lineage_root_session_id": value.get("lineage_root_session_id"),
         "graph_id": value.get("graph_id"),
         "vendors": vendors,
-        "vendor": vendors[0] if vendors else "unknown",
         "session_ids": [str(item) for item in value.get("session_ids") or []],
         "title": None,
         "preview": None,
