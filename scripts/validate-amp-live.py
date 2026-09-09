@@ -16,6 +16,7 @@ from coding_trajectory.control_plane.chronicle import (
     build_chronicle_graph_artifact,
     chronicle_session_graph,
 )
+from coding_trajectory.control_plane.collector import _body_free_artifact
 from coding_trajectory.datahub import (
     hydrate_retained_session,
     rebuild_affected_session_graphs_with_measurements,
@@ -183,7 +184,24 @@ def main() -> None:
             assert len(start_only.turns) == 1
             assert start_only.turns[0].status.value == "running"
             artifact = build_chronicle_graph_artifact(graph)
-            assert b"PRIVATE" not in artifact.canonical_bytes()
+            encoded = artifact.canonical_bytes()
+            assert b"PRIVATE task" in encoded
+            assert b"PRIVATE final" in encoded
+            assert b"PRIVATE output" not in encoded
+            publication = _body_free_artifact(artifact)
+            assert b"PRIVATE" not in publication.canonical_bytes()
+            assert all(
+                turn.user_request is None
+                or turn.user_request.content == "[content omitted]"
+                for session in publication.sessions
+                for turn in session.turns
+            )
+            assert all(
+                item.measurements.text_preview is None
+                for session in publication.sessions
+                for turn in session.turns
+                for item in turn.items
+            )
             replay = artifact.to_session_graph()
             assert replay.sessions[0].vendor == Vendor.AMP and len(replay.edges) == 1
             # Compact ingestion preserves IDs/topology; content measurements are
@@ -289,7 +307,7 @@ def main() -> None:
                 "PASS Amp live: discovery, dedup, observed timing, failed tools, spawn provenance,"
             )
             print(
-                "  compact identity parity, full replay parity, bounded artifact, child-seeded rebuild, 13 shared APIs"
+                "  compact identity parity, full replay parity, local narrative, body-free publication, child-seeded rebuild, 13 shared APIs"
             )
         finally:
             if old is None:
