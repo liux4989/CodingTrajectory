@@ -87,3 +87,9 @@ The publication RPC has a scoped 60-second execution budget. Other API role
 timeouts remain unchanged. The current schema can be rebuilt from the committed
 migration files; old CT observations need not be converted after an authorized
 full application reset.
+
+Chronicle graph revisions now stage content-addressed Zstandard payloads and
+small read projections before publication. Existing inline JSONB is retained as
+a rollback authority during the verified backfill window; run
+`scripts/backfill-chronicle-artifact-payloads.py` after deploying the additive
+migration before evaluating compressed-read coverage.

@@ -155,10 +155,13 @@ and schema_version = ct.chronicle_graph.v2
 ```
 
 Session, turn, and item requests use normalized resource rows to load only the
-owning artifact. Project and vendor filters are applied in the snapshot query.
-The returned artifact identity, digest, and schema are validated by the same
-Pydantic model before it is converted to an ephemeral `DocumentStore` for the
-existing handler.
+owning artifact. New revisions stage a content-addressed Zstandard body before
+publication; the read transport verifies its uncompressed byte count and digest
+before Pydantic validation. Legacy JSONB remains a temporary fallback for
+unbackfilled revisions. Project and vendor filters are applied in the snapshot
+query. `project.sessions` uses a small versioned publication-time projection
+when every selected revision has one, avoiding graph hydration for the primary
+collection read.
 
 `project.sessions` is the intentional collection read; a successful empty local
 collection is authoritative for that request and does not trigger fallback. A
@@ -166,17 +169,20 @@ targeted session call that cannot resolve its resource may fall back without
 building a complete remote workspace store. A fallback batch retains one pinned
 remote snapshot sequence across its remote historical calls.
 
-## Artifact and JSONB rationale
+## Artifact persistence boundary
 
-The artifact is a bounded, nested API document rather than a queryable event
-lake. JSONB preserves its ordered hierarchy and optional typed capsules without
-creating a second relational canonical model. The fields needed for integrity
-or lookup are normalized separately.
+The artifact is a bounded, nested canonical document rather than a queryable
+event lake. Large graph bodies are content-addressed compressed payloads, while
+relations remain authoritative for visibility, integrity, lookup, ownership,
+and sequence. Small versioned read projections may use JSONB as an API envelope;
+normal reads must not aggregate and serialize complete graph JSONB documents.
 
 The 8 MiB per-artifact and 16 MiB per-publication limits are hard gates. Exact
-replay compares deterministic SHA-256 digests. Storage or delta infrastructure
-is not introduced while representative artifacts remain safely within those
-bounds.
+replay compares deterministic SHA-256 digests of the uncompressed canonical
+bytes. Inline `ct_artifact_revisions.payload` remains during the verified
+dual-write and backfill window only; removing it requires complete compressed
+coverage, replay equivalence, a rollback rehearsal, and contract-compatible
+read projections.
 
 The complete artifact contract and retention decision are documented in
 [`chronicle-history.md`](chronicle-history.md).

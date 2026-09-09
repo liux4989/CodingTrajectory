@@ -304,8 +304,7 @@ class HostedDatahubService:
             method_params["project_name"] = params.project_name
         if params.agent_vendor is not None:
             method_params["agent_vendor"] = params.agent_vendor
-        store = await self._store_for("project.sessions", method_params, sequence)
-        result = _dispatch("project.sessions", method_params, store, sequence)
+        result = await self._project_sessions(method_params, sequence)
         rows = [_session_item(item) for item in result.get("items") or []]
         rows.sort(
             key=lambda item: (item.get("started_at") or "", item["root_session_id"]),
@@ -320,6 +319,31 @@ class HostedDatahubService:
                 "has_more": next_cursor is not None,
             },
         }
+
+    async def _project_sessions(
+        self, params: dict[str, Any], sequence: int
+    ) -> dict[str, Any]:
+        """Prefer the small exact projection, retaining JSONB as rollback."""
+
+        validated = service_contract("project.sessions").validate_request(params)
+        request = {
+            "workspace_id": str(self._workspace_id),
+            "snapshot_sequence": sequence,
+            **validated,
+        }
+        raw = await self._rpc.call("ct_project_sessions_projection", request)
+        if str(raw.get("workspace_id")) != str(self._workspace_id):
+            raise RemoteControlPlaneError("project sessions workspace mismatch")
+        if raw.get("snapshot_sequence") != sequence:
+            raise RemoteControlPlaneError("project sessions snapshot mismatch")
+        if raw.get("complete") is True:
+            result = raw.get("result")
+            if not isinstance(result, dict):
+                raise RemoteControlPlaneError("project sessions projection is invalid")
+            return service_contract("project.sessions").validate_response(result)
+
+        store = await self._store_for("project.sessions", params, sequence)
+        return _dispatch("project.sessions", params, store, sequence)
 
     async def _graph(self, params: SessionQuery) -> dict[str, Any]:
         sequence = await self._pin()

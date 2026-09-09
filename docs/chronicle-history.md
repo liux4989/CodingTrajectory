@@ -94,7 +94,13 @@ ct_source_observations
   immutable source checkpoint and digest metadata
 
 ct_artifact_revisions
-  bounded ct.chronicle_graph.v2 documents
+  revision visibility plus temporary rollback JSONB
+
+ct_artifact_payloads
+  content-addressed Zstandard canonical documents
+
+ct_artifact_read_projections
+  small versioned publication-time read projections
 
 ct_artifact_revision_sources
   normalized complete source vectors
@@ -106,9 +112,12 @@ ct_artifacts
   current revision and small inventory fields
 ```
 
-JSONB is appropriate for the bounded, ordered document. Relations remain the
-authority for integrity, lookup, ownership, sequences, and receipts. Storage
-blobs, graph deltas, and a remote projector are outside this design.
+JSONB remains appropriate for small variable envelopes and metadata checkpoints,
+not for hot-path aggregation of complete Chronicle graphs. Relations remain the
+authority for integrity, lookup, ownership, sequences, and receipts. Compressed
+payloads preserve exact replay while versioned read projections avoid loading
+the canonical document for supported collection queries. Graph deltas and a
+remote projector remain outside this design.
 
 ## API coverage
 

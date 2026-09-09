@@ -559,6 +559,11 @@ class ServiceRuntime:
             self._dispatcher = ApplicationDispatcher(handlers)
 
     def _call_historical(self, method: str, params: dict[str, Any]) -> Any:
+        response_for = getattr(self.historical_repository, "response_for", None)
+        if response_for is not None:
+            projected = response_for(method, params)
+            if projected is not None:
+                return projected
         store, discovery_note = self._store_for(method, params)
         return dispatch(
             method,

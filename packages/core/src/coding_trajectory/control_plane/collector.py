@@ -8,17 +8,19 @@ only metadata checkpoints and bounded chronicle graphs are queued remotely.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import sqlite3
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, Self
 from uuid import UUID, uuid4
+
+import httpx
+import zstandard
 
 from coding_trajectory.contracts import LivingChange, LivingSessionsChange
 from coding_trajectory.control_plane.chronicle import (
@@ -103,6 +105,17 @@ class SupabaseCollectorRemote:
         self._api_key = api_key
         self._access_token = access_token
         self._timeout = timeout
+        self._client = httpx.Client(
+            headers={
+                "apikey": api_key,
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            timeout=timeout,
+        )
+
+    def close(self) -> None:
+        self._client.close()
 
     def recover(self, request: CollectorRecoveryRequest) -> CollectorRecoveryResponse:
         return CollectorRecoveryResponse.model_validate(
@@ -144,12 +157,50 @@ class SupabaseCollectorRemote:
     def publish_artifacts(
         self, request: ArtifactPublicationRequest, *, idempotency_key: str
     ) -> ObservationReceipt:
+        for artifact in request.artifacts:
+            self.stage_artifact_payload(
+                workspace_id=request.workspace_id,
+                agent_id=request.agent_id,
+                artifact=artifact.payload,
+                content_sha256=artifact.content_sha256,
+            )
         return ObservationReceipt.model_validate(
             self._rpc(
                 "ct_collector_publish_artifacts",
                 request.wire_payload(),
                 idempotency_key=idempotency_key,
             )
+        )
+
+    def stage_artifact_payload(
+        self,
+        *,
+        workspace_id: UUID,
+        agent_id: UUID,
+        artifact: ChronicleGraphArtifact,
+        content_sha256: str,
+    ) -> None:
+        """Idempotently stage one compressed canonical body and read projections."""
+
+        compressor = zstandard.ZstdCompressor(level=3)
+        canonical = artifact.canonical_bytes()
+        if hashlib.sha256(canonical).hexdigest() != content_sha256:
+            raise ValueError("chronicle artifact digest mismatch before staging")
+        compressed = compressor.compress(canonical)
+        projections = _project_session_list_variants(artifact)
+        self._rpc(
+            "ct_collector_stage_artifact_payload",
+            {
+                "workspace_id": str(workspace_id),
+                "agent_id": str(agent_id),
+                "schema_version": artifact.schema_version,
+                "content_sha256": content_sha256,
+                "encoding": "zstd",
+                "uncompressed_bytes": len(canonical),
+                "compressed_bytes": len(compressed),
+                "payload_base64": base64.b64encode(compressed).decode("ascii"),
+                "projections": projections,
+            },
         )
 
     def heartbeat(self, request: LeaseHeartbeatRequest) -> LeaseHeartbeatResponse:
@@ -174,17 +225,6 @@ class SupabaseCollectorRemote:
         if idempotency_key is not None:
             body["idempotency_key"] = idempotency_key
             body["request_sha256"] = _sha256(canonical_json(request).encode())
-        encoded = json.dumps(body, separators=(",", ":")).encode()
-        http_request = urllib.request.Request(
-            self._url + name,
-            data=encoded,
-            headers={
-                "apikey": self._api_key,
-                "Authorization": f"Bearer {self._access_token}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
         try:
             # The publication RPC has a bounded 60s database budget. Allow
             # transport overhead so a valid commit can return its receipt.
@@ -193,13 +233,14 @@ class SupabaseCollectorRemote:
                 if name == "ct_collector_publish_artifacts"
                 else self._timeout
             )
-            with urllib.request.urlopen(http_request, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (
-            urllib.error.URLError,
-            urllib.error.HTTPError,
-            json.JSONDecodeError,
-        ) as exc:
+            response = self._client.post(
+                self._url + name,
+                json=body,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
             raise CollectorRemoteError(
                 f"collector remote {name} failed: {exc}"
             ) from exc
@@ -208,6 +249,35 @@ class SupabaseCollectorRemote:
                 f"collector remote {name} returned a non-object response"
             )
         return payload
+
+
+def _project_session_list_variants(
+    artifact: ChronicleGraphArtifact,
+) -> dict[str, dict[str, Any]]:
+    """Build small exact read projections while the canonical graph is local."""
+
+    from coding_trajectory.query import DocumentStore
+    from coding_trajectory.service import IndexCache, dispatch
+
+    store = DocumentStore.from_session_graphs([artifact.to_session_graph()])
+    variants = {
+        "default": [],
+        "runtime": ["runtime"],
+        "usage": ["usage"],
+        "runtime_usage": ["runtime", "usage"],
+    }
+    return {
+        name: dispatch(
+            "project.sessions",
+            {"include": include},
+            store=store,
+            global_scope=True,
+            current_dir=Path.cwd(),
+            discovery_note="collector projection",
+            cache=IndexCache(),
+        )
+        for name, include in variants.items()
+    }
 
 
 @dataclass(frozen=True, slots=True)
