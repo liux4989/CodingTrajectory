@@ -54,7 +54,7 @@ from coding_trajectory.ingestion.common import canonical_json, last_complete_lin
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.ingestion.models import Session
 
-_PARSER_VERSION = "ct-local-collector-v4"
+_PARSER_VERSION = "ct-local-collector-v5"
 _SOURCE_SCHEMA_VERSION = "ct.source_checkpoint.v1"
 
 

@@ -141,8 +141,6 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         else getattr(item, "input", None)
     )
     concept, description, optimization_profile = _classify(tool_name, tool_input)
-    if concept == WEB_FETCH and description is None:
-        description = _describe_web_output(getattr(item, "output", None))
 
     result: dict[str, Any] = {"name": concept}
     if optimization_profile:
@@ -197,26 +195,6 @@ def _is_low_value_success(summary: dict[str, Any]) -> bool:
         and not summary.get("description")
         and (name in {"exec", WEB_FETCH} or name.startswith("mcp__"))
     )
-
-
-def _describe_web_output(tool_output: Any) -> str | None:
-    """Recover a browsed target from a native web result when input omits it."""
-
-    if not isinstance(tool_output, dict):
-        return None
-    direct = first_str(tool_output, ("url", "uri", "ref_id"))
-    if direct is not None:
-        return direct
-    results = tool_output.get("results")
-    if not isinstance(results, list):
-        return None
-    for result in results:
-        if not isinstance(result, dict):
-            continue
-        target = first_str(result, ("url", "uri", "ref_id"))
-        if target is not None:
-            return target
-    return None
 
 
 def _other_output_breakdown(tool_name: str, tool_input: Any) -> str:

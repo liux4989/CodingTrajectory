@@ -84,12 +84,13 @@ cell.
    semantic activity projections when every nested activity was safely
    reconstructed or bound to native or explicit wrapper-result evidence.
    Successful unresolved `exec` or raw MCP calls that cannot identify what
-   they acted on are also omitted from overview and summary as low-value
-   transport activity; failed calls remain visible. Overview and summary
-   recent activity consume the same cell projector, so a superseded transport
-   wrapper cannot disappear from one view and reappear in another. Summary
-   excludes its own `session.summary` / `session.search` commands at the
-   projector boundary to avoid recursively reporting retrieval activity.
+   they acted on, along with successful web fetches that have no retained
+   target, are also omitted from overview and summary as low-value activity;
+   failed calls remain visible. Overview and summary recent activity consume
+   the same cell projector, so a superseded transport wrapper cannot disappear
+   from one view and reappear in another. Summary excludes its own
+   `session.summary` / `session.search` commands at the projector boundary to
+   avoid recursively reporting retrieval activity.
 Empty `write_stdin` calls are background-terminal polls, not shell commands.
 Contiguous polls for the same namespaced terminal identity become one wait
 cell while retaining every canonical item reference. That cell is control-only
