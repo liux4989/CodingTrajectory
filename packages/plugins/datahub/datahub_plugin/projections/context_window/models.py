@@ -13,6 +13,7 @@ CategoryKey = Literal[
     "files",
     "output",
     "agent",
+    "compacted_history",
     "unattributed",
 ]
 Confidence = Literal[
@@ -35,6 +36,7 @@ CategoryKey = Literal[
     "files",
     "output",
     "agent",
+    "compacted_history",
     "unattributed",
 ]
 Confidence = Literal[
@@ -143,15 +145,25 @@ class CacheBreakRecord(BaseModel):
     #   align with the same measured cache loss.
     # model_switch: the dominant (provider, model) changed across the turn
     #   boundary, so the prefix was re-processed under a new cache key.
-    # unattributed: a measured cache-hit loss (boundary or intra-turn) with no
+    # intra_turn_drop: a measured cache-hit collapse between two provider
+    #   calls inside the same turn (``cache_intra_turn_loss_tokens``) — a
+    #   mid-turn invalidation below the boundary detector's resolution
+    #   (tool-result prefix churn, backend re-keying). Reported with
+    #   ``idle_seconds = 0.0`` since no inter-turn idle is involved.
+    # unattributed: a measured cache-hit loss across a turn boundary with no
     #   aligned effort change, no model switch, and no TTL-sized idle gap.
     #   Surfaced instead of dropped so the miss is visible - the cause (e.g. a
-    #   mid-turn cache invalidation, a cold start, a backend that doesn't couple
-    #   cache to effort like glm-5.2, tool reorder/removal, nondeterministic
-    #   enumeration, system-prompt churn, or a proxy dropping session affinity)
-    #   is simply unknown.
+    #   cold start, a backend that doesn't couple cache to effort like
+    #   glm-5.2, tool reorder/removal, nondeterministic enumeration,
+    #   system-prompt churn, or a proxy dropping session affinity) is simply
+    #   unknown.
     type: Literal[
-        "ttl_confirmed", "ttl_likely", "effort_switch", "model_switch", "unattributed"
+        "ttl_confirmed",
+        "ttl_likely",
+        "effort_switch",
+        "model_switch",
+        "intra_turn_drop",
+        "unattributed",
     ]
     idle_seconds: float
     re_read_tokens: int

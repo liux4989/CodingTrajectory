@@ -7,10 +7,11 @@ export const categoryColors: Record<string, string> = {
   files: "var(--color-category-files)",
   output: "var(--color-category-output)",
   agent: "var(--color-category-agent)",
+  compacted_history: "var(--color-category-compacted-history)",
   unattributed: "var(--color-category-unattributed)",
 };
 
-const CATEGORY_ORDER = ["starting_context", "user_input", "files", "output", "agent", "unattributed"];
+const CATEGORY_ORDER = ["starting_context", "user_input", "files", "output", "agent", "compacted_history", "unattributed"];
 
 export function aggregateCategories(categories: ContextCategory[]) {
   const totals = new Map<string, number>();
@@ -32,6 +33,7 @@ export function categoryLabel(category: string) {
   if (category === "files") return "Files";
   if (category === "output") return "Output";
   if (category === "agent") return "Agent";
+  if (category === "compacted_history") return "Compacted history";
   return category.replaceAll("_", " ");
 }
 

@@ -72,6 +72,7 @@
   --color-category-files: var(--category-files);
   --color-category-output: var(--category-output);
   --color-category-agent: var(--category-agent);
+  --color-category-compacted-history: var(--category-compacted-history);
   --color-category-unattributed: var(--category-unattributed);
 
   --color-vendor-claude-code: var(--vendor-claude-code);
@@ -171,6 +172,7 @@
     --category-files: #b45309;
     --category-output: #be123c;
     --category-agent: #475569;
+    --category-compacted-history: #a8a29e;
     --category-unattributed: #737373;
 
     /* Vendor + evidence-kind accents, drawn from the chart/category hues. */
@@ -208,6 +210,7 @@
     --category-files: #fbbf24;
     --category-output: #fb7185;
     --category-agent: #94a3b8;
+    --category-compacted-history: #78716c;
     --category-unattributed: #737373;
 
     --vendor-claude-code: #fbbf24;
@@ -244,6 +247,7 @@
       --category-files: #fbbf24;
       --category-output: #fb7185;
       --category-agent: #94a3b8;
+      --category-compacted-history: #78716c;
       --category-unattributed: #737373;
 
       --vendor-claude-code: #fbbf24;

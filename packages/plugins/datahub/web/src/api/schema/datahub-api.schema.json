@@ -241,6 +241,7 @@
             "ttl_likely",
             "effort_switch",
             "model_switch",
+            "intra_turn_drop",
             "unattributed"
           ],
           "title": "Type",
@@ -1173,6 +1174,7 @@
             "files",
             "output",
             "agent",
+            "compacted_history",
             "unattributed"
           ],
           "title": "Category",
@@ -1239,6 +1241,7 @@
             "files",
             "output",
             "agent",
+            "compacted_history",
             "unattributed"
           ],
           "title": "Category",
@@ -2912,6 +2915,7 @@
             "files",
             "output",
             "agent",
+            "compacted_history",
             "unattributed"
           ],
           "title": "Category",

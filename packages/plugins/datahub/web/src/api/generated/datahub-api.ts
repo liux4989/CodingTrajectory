@@ -131,11 +131,13 @@ export type ModelFrom = string | null;
 export type ModelTo = string | null;
 export type ReReadTokens = number;
 export type TurnId2 = string;
-export type Type = "ttl_confirmed" | "ttl_likely" | "effort_switch" | "model_switch" | "unattributed";
+export type Type =
+  "ttl_confirmed" | "ttl_likely" | "effort_switch" | "model_switch" | "intra_turn_drop" | "unattributed";
 export type Events = CacheBreakRecord[];
 export type FloorTokens = number | null;
 export type TotalReReadTokens = number;
-export type Category = "starting_context" | "user_input" | "files" | "output" | "agent" | "unattributed";
+export type Category =
+  "starting_context" | "user_input" | "files" | "output" | "agent" | "compacted_history" | "unattributed";
 export type Confidence = "reported" | "estimated";
 export type EffectiveDate = string | null;
 export type Source = string;
@@ -157,7 +159,8 @@ export type PreTokens = number | null;
 export type Timestamp = string;
 export type Trigger = string | null;
 export type Events1 = CompactionEventRecord[];
-export type Category1 = "starting_context" | "user_input" | "files" | "output" | "agent" | "unattributed";
+export type Category1 =
+  "starting_context" | "user_input" | "files" | "output" | "agent" | "compacted_history" | "unattributed";
 export type Confidence2 = "exact_usage" | "exact_text" | "estimated_tokens" | "structural" | "unknown";
 export type Group = "before_first_prompt" | "turn" | "post_turn";
 export type Id1 = string;
@@ -169,7 +172,8 @@ export type Summary = string | null;
 export type TerminalVisible = boolean;
 export type TurnId3 = string | null;
 export type Events2 = ContextEvent[];
-export type Category2 = "starting_context" | "user_input" | "files" | "output" | "agent" | "unattributed";
+export type Category2 =
+  "starting_context" | "user_input" | "files" | "output" | "agent" | "compacted_history" | "unattributed";
 export type ItemId = string;
 export type Label2 = string;
 export type Summary1 = string;

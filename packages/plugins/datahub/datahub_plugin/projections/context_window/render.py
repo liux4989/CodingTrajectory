@@ -155,6 +155,7 @@ def render_markdown(projection: ContextWindowProjection) -> str:
                 "model_switch",
                 "ttl_confirmed",
                 "ttl_likely",
+                "intra_turn_drop",
                 "unattributed",
             )
             if cb.by_type.get(key)
@@ -232,6 +233,7 @@ def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
         "ttl_likely": "⏳",
         "effort_switch": "⚡",
         "model_switch": "🔄",
+        "intra_turn_drop": "🔻",
         "unattributed": "❓",
     }[record.type]
     label = {
@@ -239,6 +241,7 @@ def _cache_break_flag(record: CacheBreakRecord | None) -> str | None:
         "ttl_likely": "TTL break?",
         "effort_switch": "effort-switch",
         "model_switch": "model-switch",
+        "intra_turn_drop": "mid-turn drop",
         "unattributed": "cache miss",
     }[record.type]
     base = (
@@ -272,6 +275,7 @@ def _cache_breaks_teaser(summary: CacheBreakSummary | None) -> str | None:
             "model_switch",
             "ttl_confirmed",
             "ttl_likely",
+            "intra_turn_drop",
             "unattributed",
         )
         if summary.by_type.get(key)

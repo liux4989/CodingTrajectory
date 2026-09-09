@@ -422,8 +422,9 @@ def _project_cache_breaks(
         # overrides everything (an observed fact, not a heuristic). A model
         # switch overrides TTL: a new cache key re-bills the whole prefix
         # regardless of idle. TTL applies when nothing else explains the loss.
-        # Anything left is ``unattributed`` — the bad-behavior bucket — filtered
-        # by a noise floor so breakpoint-granularity churn does not drown the signal.
+        # Anything left is ``unattributed`` — the no-cause boundary bucket —
+        # filtered by a noise floor so breakpoint-granularity churn does not
+        # drown the signal.
         confirmed = effort_change_by_turn.get(turn_id)
         if confirmed is not None:
             break_type = "effort_switch"
@@ -485,7 +486,7 @@ def _project_cache_breaks(
         )
     # Intra-turn collapses: a cache-hit drop between two provider calls *inside*
     # the same turn (below the turn-boundary detector's resolution). Emit one
-    # ``unattributed`` record per turn whose largest intra-turn drop is > 0. This
+    # ``intra_turn_drop`` record per turn whose largest intra-turn drop is > 0. This
     # is independent of the inter-turn gate above (``idle``/``re_read``), so a
     # turn with no boundary loss but a mid-turn invalidation still surfaces.
     for turn in turns:
@@ -500,7 +501,7 @@ def _project_cache_breaks(
         records.append(
             CacheBreakRecord(
                 turn_id=turn_id,
-                type="unattributed",
+                type="intra_turn_drop",
                 # Intra-call gap; not TTL-driven. ``wait_before_seconds`` only
                 # covers the inter-turn think-time, so report the within-turn
                 # collapse with a zero idle marker.
@@ -730,7 +731,7 @@ def _project_provider_usage_buckets(
         projected.append(
             ContextCategory(
                 id=f"provider:{source_key}:{index}",
-                category="unattributed",
+                category=_category_key(source_key),
                 source_key=source_key,
                 label=str(category.get("label") or source_key),
                 tokens=TokenEvidence(
@@ -834,6 +835,7 @@ _AGENT_AGENT_KEYS = {
     "writefile",
     "todolist",
     "subagenttask",
+    "agentcollab",
     "sessionhandoff",
 }
 
@@ -845,6 +847,8 @@ def _category_key(source_key: str) -> CategoryKey:
         return "user_input"
     if source_key in _AGENT_FILES_KEYS:
         return "files"
+    if source_key == "compacted_history":
+        return "compacted_history"
     if source_key == "output" or source_key.startswith("output_"):
         return "output"
     if source_key in _AGENT_AGENT_KEYS or source_key.startswith(
