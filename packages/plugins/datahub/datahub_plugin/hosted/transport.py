@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from typing import Any
@@ -16,7 +17,7 @@ _MAX_ACCESS_TOKEN_BYTES = 8192
 _TOKEN_EXPIRY_BUFFER_SECONDS = 60
 _cached_access_token: str | None = None
 _cached_access_token_until = 0.0
-_cached_reader_identity: tuple[str, str] | None = None
+_cached_reader_identity: bytes | None = None
 
 
 class SupabaseAsyncRpcClient:
@@ -56,19 +57,27 @@ class SupabaseAsyncRpcClient:
         return payload
 
     async def _access_token(self) -> str:
+        identity = _reader_identity(
+            self._origin,
+            self._api_key,
+            self._reader_email,
+            self._reader_password,
+        )
+        access_token = _valid_cached_access_token(identity)
+        if access_token is not None:
+            return access_token
+        # Do not await process-global locks or tasks here: workerd forbids one
+        # request from waiting on async state created by another request. Two
+        # concurrent cache misses may authenticate twice; both remain bounded,
+        # and later requests reuse the last equivalent token.
+        return await self._authenticate(identity)
+
+    async def _authenticate(self, identity: bytes) -> str:
         global _cached_access_token
         global _cached_access_token_until
         global _cached_reader_identity
 
-        identity = (self._origin, self._reader_email)
         now = time.monotonic()
-        if (
-            _cached_reader_identity == identity
-            and _cached_access_token is not None
-            and now < _cached_access_token_until
-        ):
-            return _cached_access_token
-
         url = self._origin + "/auth/v1/token?grant_type=password"
         try:
             response = await self._bounded_request(
@@ -176,6 +185,27 @@ def _invalidate_access_token(access_token: str) -> None:
     if _cached_access_token == access_token:
         _cached_access_token = None
         _cached_access_token_until = 0.0
+
+
+def _reader_identity(
+    origin: str, api_key: str, reader_email: str, reader_password: str
+) -> bytes:
+    digest = hashlib.sha256()
+    for value in (origin, api_key, reader_email, reader_password):
+        encoded = value.encode()
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.digest()
+
+
+def _valid_cached_access_token(identity: bytes) -> str | None:
+    if (
+        _cached_reader_identity == identity
+        and _cached_access_token is not None
+        and time.monotonic() < _cached_access_token_until
+    ):
+        return _cached_access_token
+    return None
 
 
 def _decode_object(content: bytes, *, operation: str) -> dict[str, Any]:

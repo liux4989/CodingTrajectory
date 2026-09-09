@@ -19,9 +19,17 @@ class Default(WorkerEntrypoint):
             from uuid import UUID
 
             from coding_trajectory.control_plane.remote import RemoteControlPlaneError
-            from service import HostedDatahubService, HostedRequestError
-            from transport import SupabaseAsyncRpcClient
-        except Exception:  # noqa: BLE001 - fail closed on runtime import failure
+
+            from datahub_plugin.hosted.service import (
+                HostedDatahubService,
+                HostedRequestError,
+            )
+            from datahub_plugin.hosted.transport import SupabaseAsyncRpcClient
+        except Exception as exc:  # noqa: BLE001 - fail closed on import failure
+            print(
+                "hosted Datahub runtime import failed: "
+                f"{type(exc).__name__}: {str(exc)[:300]}"
+            )
             return _error(
                 503, "hosted Datahub runtime is unavailable", response_headers
             )
@@ -56,7 +64,11 @@ class Default(WorkerEntrypoint):
             return _error(
                 502, "remote Datahub authority is unavailable", response_headers
             )
-        except Exception:  # noqa: BLE001 - Worker boundary returns a sanitized error
+        except Exception as exc:  # noqa: BLE001 - Worker boundary stays sanitized
+            print(
+                "unexpected hosted Datahub error: "
+                f"{type(exc).__name__}"
+            )
             return _error(500, "unexpected hosted Datahub error", response_headers)
         finally:
             if rpc is not None:

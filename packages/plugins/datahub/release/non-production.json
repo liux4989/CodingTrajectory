@@ -1,0 +1,24 @@
+{
+  "environment": "non-production",
+  "supabase_project_ref": "mjwgqmvsvarvcbghhodx",
+  "serving": {
+    "gateway": "coding-trajectory-datahub-preview",
+    "facade": "coding-trajectory-datahub-facade-preview",
+    "url": "https://coding-trajectory-datahub-preview.liux4989.workers.dev"
+  },
+  "candidate": {
+    "gateway": "coding-trajectory-datahub-preview-candidate",
+    "facade": "coding-trajectory-datahub-facade-preview-candidate",
+    "hostname": "coding-trajectory-datahub-preview-candidate.liux4989.workers.dev"
+  },
+  "cloudflare_account_id_env": "CLOUDFLARE_ACCOUNT_ID",
+  "access_team_domain_env": "CF_ACCESS_TEAM_DOMAIN",
+  "access_audience_env": "CF_ACCESS_AUD",
+  "facade_secret_envs": [
+    "CT_SUPABASE_URL",
+    "CT_SUPABASE_ANON_KEY",
+    "CT_REMOTE_WORKSPACE_ID",
+    "CT_READER_EMAIL",
+    "CT_READER_PASSWORD"
+  ]
+}

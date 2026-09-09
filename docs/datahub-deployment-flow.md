@@ -1,6 +1,7 @@
 # Datahub deployment flow
 
-Status: proposed release design; implementation and live qualification pending.
+Status: staged runner implemented; non-production credentials and live qualification
+pending.
 Date: 2026-09-10.
 
 This runbook redesigns delivery of the private non-production Datahub described
@@ -183,6 +184,36 @@ Production promotion remains a separately authorized operation.
 5. Connect the same runner to CI once its local execution is proven; CI must not
    create a second competing release path.
 
-No runner, candidate infrastructure, or live deployment is introduced by this
-design document. The Python runtime gate must pass before choosing deployment
-dates; persistent incompatibility requires an explicit compute-platform decision.
+The implementation lives in `scripts/datahub-release.py` and the explicit
+`packages/plugins/datahub/release/non-production.json` manifest. Detailed receipts
+are written under ignored `.artifacts/datahub-release/`. Run stages sequentially:
+
+```bash
+uv run python scripts/datahub-release.py preflight
+uv run python scripts/datahub-release.py build
+uv run python scripts/datahub-release.py runtime
+uv run python scripts/datahub-release.py reconcile
+uv run python scripts/datahub-release.py reader
+uv run python scripts/datahub-release.py deploy-candidate
+uv run python scripts/datahub-release.py validate-candidate
+uv run python scripts/datahub-release.py promote
+```
+
+`build` creates fresh Python staging, records source/module hashes, and dry-runs
+both candidate bundles. `runtime` executes that facade in workerd against a
+synthetic bounded Auth/RPC fixture. `reconcile` is read-only and records actual
+serving/candidate deployments plus exact Access coverage. `reader` uses the real
+dedicated-reader JWT to prove intended reads, foreign-workspace denial, and
+collector mutation denial. Mutating stages are locked, bounded by subprocess
+timeouts, require prior receipts for the same commit, and refuse candidate
+deployment unless the candidate hostname already has a verified Access app.
+
+Candidate validation requires `DATAHUB_ACCESS_COOKIE` from the owner's explicitly
+authorized browser session. It checks signed-out and forged denial, all seven
+allowed route schemas, representative Sessions and Graph data, invalid and
+prohibited API routes, JSON-vs-SPA routing, and deep navigation. Promotion records
+the serving rollback pair before changing only the serving gateway binding; it
+does not reset or migrate Supabase and cannot target production.
+
+The Python runtime gate must pass before choosing deployment dates; persistent
+incompatibility requires an explicit compute-platform decision.
