@@ -85,6 +85,6 @@ queries remain usable. Remote reads show the last valid committed data and its a
 not a guessed empty workspace. Feature capability is reported by the adapter, not
 inferred from a build flag or a label saying remote/local.
 
-Website code changes require deployment. Session publication does not. The static
-snapshot exporter remains an optional named frozen source, with explicit captured
-revision and limited capabilities, rather than an invisible fallback for live reads.
+Website code changes require deployment. Session publication does not. Frozen
+static exports are no longer supported. Revision snapshots still pin consistent
+reads; an unavailable live authority is reported explicitly.

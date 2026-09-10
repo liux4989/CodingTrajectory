@@ -97,7 +97,7 @@ missing-source conditions. A successful empty local result remains success.
 
 Manual and automatic modes control delivery, not discovery or read behavior.
 The existing Mac upload LaunchAgent stays disabled unless explicitly enabled.
-Frozen exports remain optional archive artifacts, not the main live read path.
+Frozen export compatibility has been removed; hosted reads use the live authority.
 Public website code deployment is independent of data publication.
 
 ## Non-goals for this refactor

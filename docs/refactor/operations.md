@@ -1,7 +1,7 @@
 # Implemented collection and query workflow
 
 These commands describe the initial implementation, now deployed to the private
-Cloudflare workspace. The frozen snapshot site remains independently available.
+Cloudflare workspace. Hosted Datahub reads the live shared authority.
 Replace uppercase identity placeholders with your workspace's assigned UUIDs.
 
 ## One connection per role
@@ -107,7 +107,8 @@ metadata items, snapshots, and changes. Canonical Python functions generate deta
 projections, capped at 128 KiB per artifact; missing or oversized detail fails
 explicitly. Shared catalog pages are revision-pinned and bounded by rows and bytes; shared
 sessions are ordered by observed activity, with artifact identity as a stable tie-breaker.
-The named frozen snapshot Worker remains independently available.
+Frozen static exports are no longer supported. Revision snapshots remain required
+for consistent reads, pagination, and change polling.
 
 ## First deployment evidence (2026-09-10)
 
@@ -135,8 +136,8 @@ Diagnostic logs retain bounded failure categories and HTTP status, not payloads
 or credentials. The 11-check adapter qualification and Worker type check passed
 after the repair; all four metric baselines still pass.
 
-Rollback: direct readers to the existing
-[frozen snapshot](https://coding-trajectory-datahub-preview-candidate.liux4989.workers.dev/sessions).
+Rollback: restore a known-good live Datahub Worker version compatible with the
+authority. The former frozen export deployment is no longer a supported fallback.
 If the authority itself needs rollback, restore pre-rollout version
 `e9bcb1f4-a2a9-4d65-ad04-88c95da9a98e` only after suspending publication and preserving
 the current principal registry; that version lacks the live catalog API. Do not

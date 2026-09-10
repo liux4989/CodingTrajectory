@@ -35,7 +35,7 @@ latencies, and bounded failure codes, never raw source bodies or secrets.
 | Q19 | Remote restore, local schema rollback, credential rotation | Incarnation reconciliation and compatible delivery recovery; no false ACK or privilege widening |
 | Q20 | Retention races with stage, commit, cursor, and rollback references | No referenced payload deleted; abandoned data eventually reclaimed |
 | Q21 | New shared publication after website deployment | Datahub sees it via the API without a site rebuild |
-| Q22 | Frozen export selected intentionally | Captured revision/capabilities clear; not silently substituted for live service |
+| Q22 | Live authority unavailable | Explicit unavailability; no frozen-export fallback |
 
 ## Workload and measurements
 
@@ -72,7 +72,7 @@ npm --prefix cloudflare/control-plane run check
 npm --prefix packages/plugins/datahub/web run check:worker
 ```
 
-Run the existing control-plane and snapshot qualification scripts against their
+Run the existing control-plane and live Datahub qualification scripts against their
 isolated local harnesses as documented. The upload candidate adds
 `scripts/qualify-incremental-upload.py`; reconcile its setup and assertions with
 Q01-Q22 before treating it as the new qualification entry point. Do not run the
@@ -90,6 +90,10 @@ Docs-only changes require link/consistency validation, not runtime tests. Runtim
 changes require the relevant scenario subset plus mandatory repository gates.
 Once checks pass, repeat only after changes or unresolved failures justify it.
 
+
+Historical frozen-export results below describe the recorded revisions only;
+the frozen exporter, Worker, and qualification harness have since been removed.
+Use `uv run python scripts/qualify-live-datahub.py` for the supported hosted path.
 
 ## Initial implementation evidence (2026-09-10)
 

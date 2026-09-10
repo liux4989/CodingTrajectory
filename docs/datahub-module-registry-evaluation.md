@@ -1,5 +1,10 @@
 # Cloudflare module registry evaluation — 2026-09-10
 
+> Historical evaluation of the frozen snapshot Worker at the revisions below.
+> Frozen export support and its benchmark/qualification scripts have since been
+> removed. Reproduction requires the historical checkout; these results do not
+> qualify the current live Datahub Worker.
+
 **Recommendation: defer.** The current snapshot Worker has no demonstrated module
 compatibility problem and the flag alone provides no meaningful local request
 latency improvement. Leave its deployment configuration unchanged. Revisit when

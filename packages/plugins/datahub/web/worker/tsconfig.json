@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["access.ts", "snapshot.ts", "worker-configuration.d.ts"]
+  "include": ["access.ts", "http.ts", "live.ts", "worker-configuration.d.ts"]
 }

@@ -1,4 +1,4 @@
-import { handle, UNSUPPORTED } from "./snapshot";
+import { handle, UNSUPPORTED } from "./http";
 
 type Row = Record<string, any>;
 const METHODS = ["datahub.snapshot","datahub.changes","projects","sessions","session.graph","session.tree","session.items"];
