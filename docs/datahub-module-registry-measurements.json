@@ -1,0 +1,645 @@
+{
+  "baseline_commit": "d9e6156391cfbf451daee3ea74a05da564c82af6",
+  "measured_at": "2026-09-10T04:15:39.118Z",
+  "worker_source_sha256": "109bd7df9a3ba973dacfbccecb1abe721d0cade2dc4ce18dfdfed66bec112c22",
+  "lock_sha256": "5d8319e720401c6e297cba18285bd43fb07117864b9b8d08cb8219b60c6d27ea",
+  "node": "v22.22.0",
+  "platform": "darwin",
+  "arch": "arm64",
+  "versions": {
+    "wrangler": "4.129.1",
+    "miniflare": "5.20260907.0-alpha",
+    "workerd": "1.20260907.1",
+    "jose": "6.2.12",
+    "esbuild": "0.27.7"
+  },
+  "asset_files": 144,
+  "asset_inventory_sha256": "35530ef35a570f21566fbe7de53e788b93687c75aef4113584ad3cc1b0d46307",
+  "manifest_checks": 120,
+  "bundles": {
+    "baseline": {
+      "bytes": 46046,
+      "gzip_bytes": 12637,
+      "sha256": "2c8622a7f40978d546ddba4310336c4cf379dba63d2d7dbc3e9ef5935c338fa0",
+      "outputs": [
+        {
+          "bytes": 86401,
+          "imports": []
+        },
+        {
+          "bytes": 46046,
+          "imports": []
+        }
+      ],
+      "contributing_inputs": [
+        {
+          "name": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "bytes": 1511
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/util/errors.js",
+          "bytes": 3303
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/util/base64url.js",
+          "bytes": 286
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/validate.js",
+          "bytes": 3667
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/key.js",
+          "bytes": 7627
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/key_descriptor.js",
+          "bytes": 171
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/jws_algorithms.js",
+          "bytes": 1763
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/jws_verify.js",
+          "bytes": 3602
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/jwt_claims_set.js",
+          "bytes": 5054
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/jwt/verify.js",
+          "bytes": 363
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/jwks/local.js",
+          "bytes": 2657
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/jwks/remote.js",
+          "bytes": 4351
+        },
+        {
+          "name": "packages/plugins/datahub/web/worker/index.ts",
+          "bytes": 2493
+        },
+        {
+          "name": "packages/plugins/datahub/web/worker/snapshot.ts",
+          "bytes": 7595
+        }
+      ]
+    },
+    "new": {
+      "bytes": 46046,
+      "gzip_bytes": 12637,
+      "sha256": "2c8622a7f40978d546ddba4310336c4cf379dba63d2d7dbc3e9ef5935c338fa0",
+      "outputs": [
+        {
+          "bytes": 86396,
+          "imports": []
+        },
+        {
+          "bytes": 46046,
+          "imports": []
+        }
+      ],
+      "contributing_inputs": [
+        {
+          "name": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "bytes": 1511
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/util/errors.js",
+          "bytes": 3303
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/util/base64url.js",
+          "bytes": 286
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/validate.js",
+          "bytes": 3667
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/key.js",
+          "bytes": 7627
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/key_descriptor.js",
+          "bytes": 171
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/jws_algorithms.js",
+          "bytes": 1763
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/jws_verify.js",
+          "bytes": 3602
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/lib/jwt_claims_set.js",
+          "bytes": 5054
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/jwt/verify.js",
+          "bytes": 363
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/jwks/local.js",
+          "bytes": 2657
+        },
+        {
+          "name": "node_modules/jose/dist/webapi/jwks/remote.js",
+          "bytes": 4351
+        },
+        {
+          "name": "packages/plugins/datahub/web/worker/index.ts",
+          "bytes": 2493
+        },
+        {
+          "name": "packages/plugins/datahub/web/worker/snapshot.ts",
+          "bytes": 7595
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "name": "snapshot",
+      "status": 200
+    },
+    {
+      "name": "sessions",
+      "status": 200
+    },
+    {
+      "name": "projects",
+      "status": 200
+    },
+    {
+      "name": "changes",
+      "status": 200
+    },
+    {
+      "name": "asset",
+      "status": 200
+    },
+    {
+      "name": "hidden",
+      "status": 404
+    },
+    {
+      "name": "bad-query",
+      "status": 400
+    },
+    {
+      "name": "bad-days",
+      "status": 400
+    },
+    {
+      "name": "duplicate-query",
+      "status": 400
+    },
+    {
+      "name": "bad-id",
+      "status": 400
+    },
+    {
+      "name": "content",
+      "status": 404
+    },
+    {
+      "name": "unknown",
+      "status": 404
+    },
+    {
+      "name": "method",
+      "status": 404
+    },
+    {
+      "name": "no-token",
+      "status": 403
+    },
+    {
+      "name": "bad-token",
+      "status": 403
+    }
+  ],
+  "profiles": [
+    {
+      "variant": "baseline",
+      "round": 0,
+      "active_ms": 2.6
+    },
+    {
+      "variant": "new",
+      "round": 0,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "new",
+      "round": 1,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "active_ms": 0
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "active_ms": 0
+    },
+    {
+      "variant": "new",
+      "round": 2,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "new",
+      "round": 3,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "active_ms": 0
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "active_ms": 2.6
+    },
+    {
+      "variant": "new",
+      "round": 4,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "new",
+      "round": 5,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "active_ms": 0
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "active_ms": 0
+    },
+    {
+      "variant": "new",
+      "round": 6,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "new",
+      "round": 7,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "baseline",
+      "round": 7,
+      "active_ms": 0
+    },
+    {
+      "variant": "baseline",
+      "round": 8,
+      "active_ms": 2.6
+    },
+    {
+      "variant": "new",
+      "round": 8,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "new",
+      "round": 9,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "baseline",
+      "round": 9,
+      "active_ms": 2.6
+    },
+    {
+      "variant": "baseline",
+      "round": 10,
+      "active_ms": 0
+    },
+    {
+      "variant": "new",
+      "round": 10,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "new",
+      "round": 11,
+      "active_ms": 1.3
+    },
+    {
+      "variant": "baseline",
+      "round": 11,
+      "active_ms": 0
+    }
+  ],
+  "measurements": [
+    {
+      "variant": "baseline",
+      "round": 0,
+      "ready_ms": 54.470584000000144,
+      "first_ms": 5.287125000000287,
+      "steady_n": 50,
+      "steady_median_ms": 0.8328960000001189,
+      "steady_p95_ms": 1.4089159999998628
+    },
+    {
+      "variant": "new",
+      "round": 0,
+      "ready_ms": 61.51383299999998,
+      "first_ms": 5.245915999999852,
+      "steady_n": 50,
+      "steady_median_ms": 0.8043745000004492,
+      "steady_p95_ms": 1.3063329999995403
+    },
+    {
+      "variant": "new",
+      "round": 1,
+      "ready_ms": 63.75866700000006,
+      "first_ms": 5.952374999999847,
+      "steady_n": 50,
+      "steady_median_ms": 0.8742495000001327,
+      "steady_p95_ms": 1.375040999999328
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "ready_ms": 56.10491699999966,
+      "first_ms": 5.757416999999805,
+      "steady_n": 50,
+      "steady_median_ms": 0.8513330000000678,
+      "steady_p95_ms": 1.37695900000017
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "ready_ms": 55.02716700000019,
+      "first_ms": 5.8154169999997976,
+      "steady_n": 50,
+      "steady_median_ms": 0.8756249999996726,
+      "steady_p95_ms": 1.3496670000004087
+    },
+    {
+      "variant": "new",
+      "round": 2,
+      "ready_ms": 81.87495800000033,
+      "first_ms": 6.511667000000671,
+      "steady_n": 50,
+      "steady_median_ms": 1.5366250000001855,
+      "steady_p95_ms": 4.388334000000214
+    },
+    {
+      "variant": "new",
+      "round": 3,
+      "ready_ms": 71.77016600000024,
+      "first_ms": 6.799417000000176,
+      "steady_n": 50,
+      "steady_median_ms": 0.8921249999998508,
+      "steady_p95_ms": 1.3872500000006767
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "ready_ms": 68.30366700000013,
+      "first_ms": 9.878500000000713,
+      "steady_n": 50,
+      "steady_median_ms": 1.0254375000004075,
+      "steady_p95_ms": 2.338999999999942
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "ready_ms": 125.69350000000122,
+      "first_ms": 12.457125000000815,
+      "steady_n": 50,
+      "steady_median_ms": 2.9505419999995866,
+      "steady_p95_ms": 10.17595799999981
+    },
+    {
+      "variant": "new",
+      "round": 4,
+      "ready_ms": 74.97687500000029,
+      "first_ms": 5.822374999999738,
+      "steady_n": 50,
+      "steady_median_ms": 0.8876879999997982,
+      "steady_p95_ms": 1.6325420000011945
+    },
+    {
+      "variant": "new",
+      "round": 5,
+      "ready_ms": 65.8470840000009,
+      "first_ms": 6.018040999999357,
+      "steady_n": 50,
+      "steady_median_ms": 0.7908335000010993,
+      "steady_p95_ms": 1.2428749999999127
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "ready_ms": 101.73766699999942,
+      "first_ms": 6.87408300000061,
+      "steady_n": 50,
+      "steady_median_ms": 0.9500205000003916,
+      "steady_p95_ms": 1.721332999999504
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "ready_ms": 55.11041599999953,
+      "first_ms": 5.593584000000192,
+      "steady_n": 50,
+      "steady_median_ms": 0.9099585000003572,
+      "steady_p95_ms": 1.6942499999986467
+    },
+    {
+      "variant": "new",
+      "round": 6,
+      "ready_ms": 61.50074999999924,
+      "first_ms": 7.940875000000233,
+      "steady_n": 50,
+      "steady_median_ms": 0.8436039999996865,
+      "steady_p95_ms": 1.6048749999990832
+    },
+    {
+      "variant": "new",
+      "round": 7,
+      "ready_ms": 64.37708400000156,
+      "first_ms": 5.725500000000466,
+      "steady_n": 50,
+      "steady_median_ms": 0.7892920000003869,
+      "steady_p95_ms": 1.615750000000844
+    },
+    {
+      "variant": "baseline",
+      "round": 7,
+      "ready_ms": 57.81604100000004,
+      "first_ms": 5.548208000000159,
+      "steady_n": 50,
+      "steady_median_ms": 0.7216460000008738,
+      "steady_p95_ms": 1.24908300000061
+    },
+    {
+      "variant": "baseline",
+      "round": 8,
+      "ready_ms": 56.8408330000002,
+      "first_ms": 5.6223749999990105,
+      "steady_n": 50,
+      "steady_median_ms": 0.7028744999997798,
+      "steady_p95_ms": 1.1415830000005371
+    },
+    {
+      "variant": "new",
+      "round": 8,
+      "ready_ms": 65.5097910000004,
+      "first_ms": 5.515708999999333,
+      "steady_n": 50,
+      "steady_median_ms": 0.79760399999941,
+      "steady_p95_ms": 1.2226250000003347
+    },
+    {
+      "variant": "new",
+      "round": 9,
+      "ready_ms": 64.65845799999988,
+      "first_ms": 5.602375000000393,
+      "steady_n": 50,
+      "steady_median_ms": 0.7714999999998327,
+      "steady_p95_ms": 1.3397910000003321
+    },
+    {
+      "variant": "baseline",
+      "round": 9,
+      "ready_ms": 56.27299999999923,
+      "first_ms": 6.200124999999389,
+      "steady_n": 50,
+      "steady_median_ms": 0.8038960000003499,
+      "steady_p95_ms": 1.4043750000000728
+    },
+    {
+      "variant": "baseline",
+      "round": 10,
+      "ready_ms": 66.15750000000116,
+      "first_ms": 5.726082999999562,
+      "steady_n": 50,
+      "steady_median_ms": 1.1210420000006707,
+      "steady_p95_ms": 3.3151249999991705
+    },
+    {
+      "variant": "new",
+      "round": 10,
+      "ready_ms": 71.55274999999892,
+      "first_ms": 7.070125000002008,
+      "steady_n": 50,
+      "steady_median_ms": 0.9561875000017608,
+      "steady_p95_ms": 1.9697919999998703
+    },
+    {
+      "variant": "new",
+      "round": 11,
+      "ready_ms": 83.1451249999991,
+      "first_ms": 6.6281659999986005,
+      "steady_n": 50,
+      "steady_median_ms": 1.2042289999990317,
+      "steady_p95_ms": 2.125957999996899
+    },
+    {
+      "variant": "baseline",
+      "round": 11,
+      "ready_ms": 60.541832999999315,
+      "first_ms": 6.266916000000492,
+      "steady_n": 50,
+      "steady_median_ms": 0.8742084999994404,
+      "steady_p95_ms": 8.550666999999521
+    }
+  ],
+  "summary": {
+    "baseline": {
+      "profile_active": {
+        "n": 12,
+        "median_ms": 0,
+        "p95_ms": 2.6,
+        "min_ms": 0,
+        "max_ms": 2.6
+      },
+      "ready": {
+        "n": 12,
+        "median_ms": 57.32843700000012,
+        "p95_ms": 125.69350000000122,
+        "min_ms": 54.470584000000144,
+        "max_ms": 125.69350000000122
+      },
+      "first_authenticated": {
+        "n": 12,
+        "median_ms": 5.786416999999801,
+        "p95_ms": 12.457125000000815,
+        "min_ms": 5.287125000000287,
+        "max_ms": 12.457125000000815
+      },
+      "steady": {
+        "n": 600,
+        "median_ms": 0.8903960000002371,
+        "p95_ms": 3.283332999999402,
+        "min_ms": 0.5777079999988928,
+        "max_ms": 14.576457999999548
+      },
+      "steady_per_run_medians": {
+        "n": 12,
+        "median_ms": 0.8749167499995565,
+        "p95_ms": 2.9505419999995866,
+        "min_ms": 0.7028744999997798,
+        "max_ms": 2.9505419999995866
+      }
+    },
+    "new": {
+      "profile_active": {
+        "n": 12,
+        "median_ms": 1.3,
+        "p95_ms": 1.3,
+        "min_ms": 1.3,
+        "max_ms": 1.3
+      },
+      "ready": {
+        "n": 12,
+        "median_ms": 65.67843750000065,
+        "p95_ms": 83.1451249999991,
+        "min_ms": 61.50074999999924,
+        "max_ms": 83.1451249999991
+      },
+      "first_authenticated": {
+        "n": 12,
+        "median_ms": 5.985207999999602,
+        "p95_ms": 7.940875000000233,
+        "min_ms": 5.245915999999852,
+        "max_ms": 7.940875000000233
+      },
+      "steady": {
+        "n": 600,
+        "median_ms": 0.8738750000002256,
+        "p95_ms": 1.9089999999996508,
+        "min_ms": 0.6107499999998254,
+        "max_ms": 6.043999999999869
+      },
+      "steady_per_run_medians": {
+        "n": 12,
+        "median_ms": 0.8589267499999096,
+        "p95_ms": 1.5366250000001855,
+        "min_ms": 0.7714999999998327,
+        "max_ms": 1.5366250000001855
+      }
+    }
+  }
+}
