@@ -1,15 +1,18 @@
 # Live API requirements and removal map
 
-Review date: 2026-09-10. Source baseline: `e4112cb`, plus the working-tree
-version of `web/worker/live.ts` inspected during this review. Collection and
-deployment work was already uncommitted. This is a proposed contract and migration
-decision record, not an implementation or a claim about deployed behavior.
+Review updated: 2026-09-10. Source baseline: `d98f496`. The implementation and
+deployment evidence recorded in `implementation.md` and `operations.md` is part of
+this review; it is identified separately from work that remains proposed. This
+update did not re-query the deployed authority or browser.
 
-The expensive boundaries should change: prepare durable resources incrementally,
-publish their validated references atomically, and answer selective queries from
-the same indexed published resources in Python and the hosted adapter. Keep
-canonical semantics, ownership, privacy, and recovery guarantees. Existing callers
-determine migration work; they do not by themselves justify the mechanism they use.
+The current implementation has moved staging work outside the serial workspace
+coordinator, connected the hosted adapter through a Core service binding, and made
+bootstrap status and unknown collector health truthful. The expensive data
+boundaries still need to change: prepare durable resources incrementally, publish
+their validated references atomically, and answer selective queries from the same
+indexed published resources in Python and the hosted adapter. Keep canonical
+semantics, ownership, privacy, and recovery guarantees. Existing callers determine
+migration work; they do not by themselves justify the mechanism they use.
 
 ## 1. Requirements before mechanisms
 
@@ -56,28 +59,28 @@ as “historical” describe today's code organization, not a requirement conclu
 
 | Evidence | Current execution and consequence |
 | --- | --- |
-| [UploadService.prepare / _deliver](../../packages/core/src/coding_trajectory/control_plane/upload_service.py), [CanonicalRepository](../../packages/core/src/coding_trajectory/control_plane/canonical_repository.py) | Inventory can skip unchanged sources, but changed preparation invokes `LocalCollector.collect`, assembles graphs and builds whole Chronicle artifacts. Repository versions and outbox captures contain whole bodies; delivery validates/serializes them again. A one-graph page bounds count, not preparation work. |
+| [UploadService.prepare / _deliver](../../packages/core/src/coding_trajectory/control_plane/upload_service.py), [CanonicalRepository](../../packages/core/src/coding_trajectory/control_plane/canonical_repository.py) | Inventory skips unchanged sources and the collector can reuse byte-identical normalized source groups. A changed source set still invokes `LocalCollector.collect`, reads and fences complete prefixes, assembles graphs and builds whole Chronicle artifacts. Repository versions and outbox captures contain whole bodies; delivery validates/serializes them again. A one-graph page bounds count, not preparation work. |
 | [CloudflareCollectorRemote.stage_artifact_payload](../../packages/core/src/coding_trajectory/control_plane/collector.py), [build_chunks](../../packages/core/src/coding_trajectory/control_plane/upload_chunks.py) | Canonical bytes and the full chunk dictionary are built before missing-node negotiation. Node reuse reduces transfer; it does not eliminate whole-graph traversal, hashing or allocation. |
-| [Workspace.rpc / stage](../../cloudflare/control-plane/src/workspace.ts), [reconstruct](../../cloudflare/control-plane/src/upload.ts) | Chunk staging reads packs, reconstructs canonical JSON, hashes it, gzips and base64-encodes it, then calls staging which decodes and decompresses it, parses and validates the whole graph, and stores a gzip copy. Chunk packs and gzip bodies both survive. |
+| [stageArtifact](../../cloudflare/control-plane/src/ingress.ts), [Workspace staging index](../../cloudflare/control-plane/src/workspace.ts), [reconstruct](../../cloudflare/control-plane/src/upload.ts) | Both legacy and chunk staging now perform body reconstruction, hashing, gzip handling and validation outside the serial workspace coordinator. Chunk staging still reconstructs and validates the whole graph, then writes resource/member indexes back in 128-entry pages before finalizing a ready descriptor. Chunk packs and gzip bodies both survive; the former immediate gzip/decompression bridge is gone. |
 | [ServiceRuntime._call_historical](../../packages/core/src/coding_trajectory/runtime.py), [CloudflareHistoricalRepository](../../packages/core/src/coding_trajectory/control_plane/remote.py) | Only `project.sessions` has a direct projection shortcut. Other supported shared canonical queries select artifacts, download gzip/base64 bodies, validate and convert graphs, construct `DocumentStore`, then dispatch. An incomplete list projection falls back to the same reconstruction. |
 | [Workspace.historical](../../cloudflare/control-plane/src/workspace.ts) | Selects `State.all` project/artifact rows and filters them in memory before artifact reads. Resource IDs narrow the selected artifacts, not the fields transferred. A 32 MiB compressed-response selection ceiling does not make a narrow item query resource selective. |
 | [RemoteRuntimeFactory.runtime_options](../../packages/core/src/coding_trajectory/control_plane/http_service.py), [CLI remote flags](../../packages/cli/src/coding_trajectory_cli/commands/api.py) | Shared API/CLI runtime construction pins `ct_workspace_snapshot`; `--snapshot-sequence` and the HTTP envelope expose an explicit old-sequence option. This is a concrete compatibility caller, not proof of an ongoing retention requirement. |
 | [RemoteEstimationAuthority._snapshot](../../packages/core/src/coding_trajectory/control_plane/remote_estimation.py) | Calls `store_for("project.sessions", {})` directly, bypassing the projection shortcut and requesting workspace-wide artifacts. Predict/bind/get/list/calibration use it; `_refresh_one` can request it again. Some callers initially discard the store just to obtain a sequence. |
 | [LocalEvidenceRepository.store_for](../../packages/core/src/coding_trajectory/control_plane/local_evidence.py) | Resolves published canonical membership/facts through the graph reader before attaching and verifying host-local evidence. Removal needs a selective fact/membership verification replacement. |
 | [CloudflareProjectInventoryRepository](../../packages/core/src/coding_trajectory/control_plane/remote_inventory.py), [catalogRead](../../cloudflare/control-plane/src/catalog.ts) | `project.list` lists registered projects, with `modified_since`; hosted `projects` derives projects from nondeleted published artifacts. Empty registered projects and filter/result shapes differ. They cannot be redirected without an explicit population contract. |
-| [dispatchLive / query / health](../../packages/plugins/datahub/web/worker/live.ts) | Snapshot requests `ct_published_catalog(limit=1)` for its revision. `health()` returns fixed `ready:1` and zero failure counts without source observations. Detail reads fetch `canonical` with graph, all retained trees and items before selecting. Item requests can perform up to eight such graph-bundle reads. |
+| [dispatchLive / query / health](../../packages/plugins/datahub/web/worker/live.ts) | The hosted adapter uses a `CORE` service binding plus a scoped read credential. Snapshot requests metadata-only `ct_published_catalog(kind=status)`, reports publication and authority times, and leaves unobserved collector counts/catch-up nullable. Detail reads still fetch `canonical` with graph, all retained trees and items before selecting. Item requests can perform up to eight such graph-bundle reads. |
 | [build_read_projections](../../packages/core/src/coding_trajectory/control_plane/read_projections.py), [list variant builder](../../packages/core/src/coding_trajectory/control_plane/collector.py) | Separate graph-to-DocumentStore construction for four list variants and detailed projections. The 128 KiB detail budget can drop graph output, individual trees and later item batches. It bounds stored output, not all computation, and does not carry an explicit per-resource coverage manifest. |
 | [Browser API](../../packages/plugins/datahub/web/src/api.ts), [delivery provider](../../packages/plugins/datahub/web/src/hooks/use-datahub-delivery.tsx) | Session requests expose cursor pagination; `fetchProjects()` has no continuation argument. Delivery consumes snapshot/change revisions and resets route queries on gaps. Adding server pagination alone does not migrate all browser callers. |
 
 ### Revision domains already diverge
 
-`State.head()` advances for more than publication. `ct_publication_watermark`
-queries artifact/publication-watermark records, while the catalog and change feed
-use `max(sequence)` from `published_catalog`. Project registration also changes
-project metadata independently. Before switching bootstrap to the existing
-watermark operation, establish one visible revision definition for catalog,
-status, details and changes. A revision change with no affected artifact row, or a
-project metadata edit with no publication, needs a specified effect on readers.
+Bootstrap now reads `ct_published_catalog(kind=status)`, so its revision, catalog
+lists, details and change feed all derive from `max(sequence)` in
+`published_catalog`. `State.head()` still advances for more than publication, and
+`ct_publication_watermark` still queries artifact/publication-watermark records.
+Project registration also changes project metadata independently. The remaining
+contract must specify whether a revision change with no affected artifact row, or
+a project metadata edit with no publication, has any effect on catalog readers.
 Do not numerically substitute one revision domain for another.
 
 ## 3. API keep / replace / remove map
@@ -90,8 +93,8 @@ schemas generated from Pydantic definitions.
 | Existing API or boundary | Decision | Callers and migration steps | Necessary data/consistency |
 | --- | --- | --- | --- |
 | `datahub.capabilities` | **Keep**, qualify per method | Hosted `dispatchLive` and browser source/capability discovery; advertise independently from data coverage | Supported operations and versions; a supported operation can have unavailable data |
-| `datahub.snapshot` | **Replace backing read** | `fetchDatahubSnapshot` / delivery provider → metadata-only publication status | Published revision/time, authority observation, retained floor and explicit unknown health; no catalog rows or R2 bodies |
-| `ct_publication_watermark` | **Keep and consolidate** | Currently exercised by upload qualification; adopt for bootstrap only after revision semantics match catalog/change reads | Latest visible publication status, optional project scope; remove ordinary arbitrary old-sequence input |
+| `datahub.snapshot` | **Interim backing read replaced; finish contract** | `fetchDatahubSnapshot` / delivery provider now use metadata-only catalog status. Replace the placeholder retention horizon when policy exists | Published revision/time, authority observation, retained floor and explicit unknown health; no catalog rows or R2 bodies |
+| `ct_publication_watermark` | **Keep; consolidate only after revision decision** | Upload qualification still uses it; bootstrap now uses catalog status instead | Latest visible publication status, optional project scope; remove ordinary arbitrary old-sequence input only when callers have migrated |
 | `ct_workspace_snapshot` and metadata-only `ct_historical_snapshot` | **Replace publication uses**, then **remove redundant historical status branch** | Runtime factory and `CloudflareHistoricalRepository.pin_snapshot`; use publication read context for canonical queries. Estimation/living may still require their own consistent state selection | Do not replace an estimation/workspace fence with a publication-only integer |
 | `ct_published_catalog(kind=sessions)` | **Keep concept, replace shared contract where necessary** | Hosted sessions, then Python `project.sessions`; common indexed selection, filters, ordering, coverage and cursor behavior | Summary fields requested by the operation; one retained selection across pages |
 | `ct_project_sessions_projection` | **Consolidate and remove after parity** | `CloudflareHistoricalRepository.response_for`; migrate all four include variants and `modified_since`, vendor and project filters to common catalog result shaping | Existing Core all-items result needs a versioned bounded page contract or an explicitly capped compatibility collector of pages |
@@ -102,8 +105,8 @@ schemas generated from Pydantic definitions.
 | `ct_artifact_chunk_manifest` / `ct_artifact_chunks` | **Keep storage authorization primitive; replace product read role** | Repository search found qualification callers, no ordinary browser/Python reader. Resource lookup should resolve authorized manifest membership internally | Digests and membership are internal storage concerns. Keep raw chunk API only if migration/recovery tooling actually uses it; otherwise retire its reader exposure |
 | `ct_publication_changes` / `datahub.changes` | **Keep, align revision and retention** | Delivery provider; current adapter requests one page and resets on overflow | Bounded changed identities and tombstones, fixed upper revision, reset on expired interval. Coarse invalidation remains valid; incremental row patches need demonstrated benefit |
 | `ct_collector_missing_chunks` / `ct_collector_upload_chunks` | **Keep behavior** | `CloudflareCollectorRemote.stage_artifact_payload` used by `UploadService._deliver` | Bounded content-addressed packs, ownership, digest validation and retry; producer should supply durable changed-node references |
-| `ct_collector_stage_chunk_manifest` | **Replace validation/storage path** | Chunked collector → manifest-native candidate validation → ready descriptor | Validate resource schemas, ownership, topology closure, dependencies and projections in bounded resumable work; no whole-graph reserialization requirement |
-| `ct_collector_stage_artifact_payload` | **Remove after old writers/readers migrate** | Nonchunked `CloudflareCollectorRemote` plus internal chunk-stage bridge; first separate shared validation from gzip decoding | A decoding entry point for legacy uploads only during migration. Do not require new chunk callers to encode gzip to reach common validation |
+| `ct_collector_stage_chunk_manifest` | **Interim coordinator split landed; replace final validation/storage path** | Chunked staging now runs through `ingress.ts` outside the workspace coordinator, but still reconstructs the whole graph → manifest-native candidate validation → ready descriptor | Validate resource schemas, ownership, topology closure, dependencies and projections in bounded resumable work; no whole-graph reserialization requirement |
+| `ct_collector_stage_artifact_payload` | **Remove after nonchunked writers and rollback requirements migrate** | Nonchunked `CloudflareCollectorRemote` shares the external ingress validation path; chunk staging no longer encodes gzip merely to call this route | Retain the decoding entry point for legacy uploads only during migration; keep common schema/ownership/projection validation independent of transport encoding |
 | `ct_collector_publish_artifacts` | **Keep semantics, replace artifact-oriented manifest input** | `UploadService._deliver`, `commit_artifact_manifest` | Atomic visible references/indexes/change position/receipt; preserve source fences, ownership, explicit replacement scope and idempotency |
 | Project/source registration, checkpoint, recover RPCs | **Keep guarantees; consolidate only where justified** | Collector preparation/delivery/reconcile; `ct_project_register`, `ct_collector_register_source`, `ct_collector_publish_observation`, `ct_collector_recover` | Durable lineage and recovery positions; checkpoint receipt is not publication success. Endpoint combination is secondary to eliminating full-body work |
 | `ct_remote_living`, heartbeat and living observations | **Keep separate timing semantics** | `CloudflareLivingAuthority`, collector living publishers | Leases and evaluations; may share identity/index infrastructure with catalog, never substitute lease freshness for publication age |
@@ -179,26 +182,34 @@ updates should touch changed resources and affected ancestors/projections. Vendo
 adapters that cannot yet do this retain an explicit bounded rebuild path until
 qualified; transport chunking must not claim incremental parsing.
 
+The current source cache avoids renormalizing byte-identical source groups, and
+the current ingress keeps reconstruction and compression outside the workspace
+coordinator. These are qualified interim improvements. Changed source sets still
+read complete prefixes and build whole graphs, while chunk staging still
+reconstructs, validates and stores a gzip body within the 8 MiB compatibility
+ceiling. They do not complete the target path above.
+
 The shared read path is authenticated query → one committed selection → indexed
 summary/resource lookup → bounded projection/fact page → response. Python and
 Worker adapters map the same domain results to their public envelopes. Whole
 workspace `DocumentStore` reconstruction is absent from this target path.
 
-## 6. Migration order and removal gates
+## 6. Migration order, current status and removal gates
 
-| Step | Concrete work and owners/modules | Required exit evidence |
-| --- | --- | --- |
-| M1: Freeze operation contracts | Core Pydantic contracts, catalog protocol, Datahub response models and CLI envelope definitions: define project populations, paging, read tokens, availability and revision domains; resolve estimation reproducibility requirement | Caller matrix above reconciled with all include/filter shapes; generated schemas/types agree; no implicit promise of indefinite history |
-| M2: Unify status and catalog | Authority `catalog.ts` / publication metadata, hosted `live.ts`, Python inventory/list adapters, browser API/delivery consumers | Empty/populated workspace and empty registered projects behave correctly; status reads no catalog rows/bodies; project rename, publication, staging, heartbeat and estimator activity advance only the intended revision domain |
-| M3: Add selective canonical resources | Core projection builders and query repository boundary; authority resource/projection indexes; local and hosted adapters | Graph/tree/items and every advertised Core family have explicit coverage, bounded reads and canonical parity. Parent expansion under concurrent publication stays consistent or expires explicitly |
-| M4: Migrate reconstruction callers | Runtime dispatch, `remote.py`, `local_evidence.py`, `remote_estimation.py`, CLI old-sequence option and qualification scripts | Ordinary queries never invoke historical artifact RPCs or build remote `DocumentStore`; estimation get/list avoid workspace hydration; comparisons/evidence matching still work. Unknown external callers get an explicit compatibility/deprecation boundary |
-| M5: Make preparation and staging resource based | Vendor ingestion, canonical repository/outbox, collector transport, authority upload/commit | Small append does not rebuild/serialize/hash the whole graph; unrelated resources retain identities. Validation resumes with bounded work; crash/retry/source replacement/ownership/idempotency behavior preserved |
-| M6: Remove redundant paths and copies | Delete legacy stage/read routes, gzip bridge, duplicate detail bundles, obsolete catalog authority/backfill and unneeded chunk reader exposure | Caller search and end-to-end qualification pass; all retained current resources readable; pending uploads/receipts and required evidence pins survive. Enable reference-safe retention only after rollback and expiry behavior are exercised |
+| Step | Current status | Concrete work and owners/modules | Required exit evidence |
+| --- | --- | --- | --- |
+| M1: Freeze operation contracts | **Open** | Core Pydantic contracts, catalog protocol, Datahub response models and CLI envelope definitions: define project populations, paging, read tokens, availability and revision domains; resolve estimation reproducibility requirement | Caller matrix above reconciled with all include/filter shapes; generated schemas/types agree; no implicit promise of indefinite history |
+| M2: Unify status and catalog | **Partial**: metadata-only catalog status, publication/authority timestamps and nullable unknown health are implemented; project populations and revision policy remain split | Authority `catalog.ts` / publication metadata, hosted `live.ts`, Python inventory/list adapters, browser API/delivery consumers | Empty/populated workspace and empty registered projects behave correctly; status reads no catalog rows/bodies; project rename, publication, staging, heartbeat and estimator activity advance only the intended revision domain |
+| M3: Add selective canonical resources | **Open**: current detail projection is bounded but still artifact-bundled | Core projection builders and query repository boundary; authority resource/projection indexes; local and hosted adapters | Graph/tree/items and every advertised Core family have explicit coverage, bounded reads and canonical parity. Parent expansion under concurrent publication stays consistent or expires explicitly |
+| M4: Migrate reconstruction callers | **Open** | Runtime dispatch, `remote.py`, `local_evidence.py`, `remote_estimation.py`, CLI old-sequence option and qualification scripts | Ordinary queries never invoke historical artifact RPCs or build remote `DocumentStore`; estimation get/list avoid workspace hydration; comparisons/evidence matching still work. Unknown external callers get an explicit compatibility/deprecation boundary |
+| M5: Make preparation and staging resource based | **Partial**: normalized-input reuse and external bounded staging are implemented; full-prefix collection, whole-graph assembly/reconstruction and gzip storage remain | Vendor ingestion, canonical repository/outbox, collector transport, authority upload/commit | Small append does not rebuild/serialize/hash the whole graph; unrelated resources retain identities. Validation resumes with bounded work; crash/retry/source replacement/ownership/idempotency behavior preserved |
+| M6: Remove redundant paths and copies | **Open** | Delete legacy stage/read routes, gzip transport, duplicate detail bundles, obsolete catalog authority/backfill and unneeded chunk reader exposure | Caller search and end-to-end qualification pass; all retained current resources readable; pending uploads/receipts and required evidence pins survive. Enable reference-safe retention only after rollback and expiry behavior are exercised |
 
 M2–M4 can improve read costs before M5 is complete, but must not be declared the
-whole architectural cleanup. A small early extraction that avoids gzip followed
-by immediate decompression is valid within M5; it must still preserve validation
-and cannot be presented as manifest-native staging or removal of the gzip copy.
+whole architectural cleanup. The current extraction has removed gzip followed by
+immediate decompression from chunk staging and preserves shared validation. It is
+still compatibility staging because it reconstructs the whole graph and stores a
+gzip copy; it is not manifest-native validation or completion of M5.
 
 Do not remove an old route solely because the hosted adapter no longer uses it.
 The Python CLI/API runtime, estimation, optional local evidence, nonchunked
@@ -226,15 +237,20 @@ unit tests for this review. Future changes should record:
 - Interrupted local capture, interrupted staging, commit-before-ACK loss, stale
   ownership/source fences and expired read tokens, including rollback/GC pins.
 
-This review traced the current code and contracts without calling the remote
-authority or changing runtime behavior. The full committed metric baseline
-workflow (`uv run python scripts/validate-metrics-baselines.py`) passed all four
-cases: 107 assertions and 49 invariants. This checks the existing metric baseline,
-not the proposed architecture or a deployed migration.
+This update traced the current code, contracts and recorded rollout evidence
+without calling the remote authority or changing runtime behavior. The repository
+records a first private deployment with authenticated browser reads and a new
+publication appearing without a website rebuild; that evidence is dated and was
+not revalidated here. `qualification.md` records the current local connection,
+repository, upload, catalog, live-adapter and control-plane integration results.
+The full committed metric baseline workflow
+(`uv run python scripts/validate-metrics-baselines.py`) passed all four cases: 107
+assertions and 49 invariants. This checks the existing metric baseline, not the
+remaining proposed architecture or current deployed health.
 
-Before implementation, reconcile this proposal with `contracts.md` (arbitrary
-historical selection and retention), `read-path.md` (historical-token vocabulary),
-and `implementation.md` (compatibility/deletion gates). Their earlier mechanisms
-are evidence of prior design, not reasons to retain whole-graph execution. This
-document leaves those existing specifications intact until the replacement
-contracts are adopted.
+Before implementing the remaining M1–M6 work, reconcile this proposal with
+`contracts.md` (arbitrary historical selection and retention), `read-path.md`
+(historical-token vocabulary), and `implementation.md` (compatibility/deletion
+gates). Their earlier mechanisms are evidence of prior design, not reasons to
+retain whole-graph execution. This document leaves those existing specifications
+intact until replacement contracts are adopted.
