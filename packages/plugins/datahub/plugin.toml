@@ -1,6 +1,6 @@
 name = "datahub"
 description = "Project and session data hub with analytics and management."
-entry = "datahub.py"
+entry = "datahub_plugin/cli/main.py"
 
 [requires]
 "project.list" = 2

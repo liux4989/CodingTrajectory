@@ -322,7 +322,7 @@ function TopSessionsChart({ sessions }: { sessions: TopSession[] }) {
             void navigate({
               to: "/sessions/$sessionId",
               params: { sessionId: session.id },
-              search: { view: "context" },
+              search: { tab: "context" },
             });
           }
         },

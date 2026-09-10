@@ -6,12 +6,7 @@ import { LoadingState } from "@/components/loading-state";
 import { StateBlock } from "@/components/state-block";
 import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
 
-/**
- * Canonical "open this session" entry: resolves the session's graph identity
- * (its root session id), then redirects to the matching scoped route. Legacy
- * `?view=` values map onto the two scopes: graph/tree to the graph page,
- * context/timeline to the session page.
- */
+/** Resolve a session's graph identity, then open the available scoped route. */
 export function SessionResolverRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId" });
   const search = useSearch({ from: "/sessions/$sessionId" });
@@ -51,29 +46,11 @@ export function SessionResolverRoute() {
     );
   }
 
-  if (search.view === "timeline" || search.view === "context") {
-    return (
-      <Navigate
-        to="/graphs/$rootId/sessions/$sessionId"
-        params={{ rootId, sessionId }}
-        search={{
-          tab: search.view,
-          kind: search.kind,
-          artifact: search.artifact,
-          vendor: search.vendor,
-          outcome: search.outcome,
-          entry: search.entry,
-        }}
-        replace
-      />
-    );
-  }
-
   return (
     <Navigate
-      to="/graphs/$rootId"
-      params={{ rootId }}
-      search={{ branch: search.view === "tree" ? sessionId : undefined }}
+      to="/graphs/$rootId/sessions/$sessionId"
+      params={{ rootId, sessionId }}
+      search={{ tab: search.tab }}
       replace
     />
   );

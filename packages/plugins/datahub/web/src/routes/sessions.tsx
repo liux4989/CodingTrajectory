@@ -213,7 +213,7 @@ export function SessionsRoute() {
     void router.navigate({
       to: "/sessions/$sessionId",
       params: { sessionId: id },
-      search: { view: remote ? "graph" : "context" },
+      search: { tab: "context" },
     });
 
   return (
@@ -221,7 +221,7 @@ export function SessionsRoute() {
       <PageHeader
         eyebrow="Observe"
         title="Sessions"
-        description={remote ? "Remote Chronicle sessions published during the last seven days." : "Conversation branches and their agent runs."}
+        description={remote ? "Committed workspace sessions in the selected time window." : "Conversation branches and their agent runs."}
         actions={
           windowOptions.length > 1 ? (
             <ToggleGroup

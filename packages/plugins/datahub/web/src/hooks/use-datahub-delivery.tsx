@@ -250,7 +250,7 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
       // Background change detection should remain invisible. Only a snapshot
       // recovery is a user-visible refresh; a new revision updates route data.
       isRefreshing: snapshot.isRefetching,
-      error: errorMessage,
+      error: errorMessage ?? delivery.error,
     }),
     [delivery, errorMessage, snapshot.isLoading, snapshot.isRefetching],
   );

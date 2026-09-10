@@ -11,6 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { StateBlock } from "@/components/state-block";
 import { LoadingState } from "@/components/loading-state";
 import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
 import {
@@ -40,6 +41,9 @@ export function SourceCapabilityGate({
   if (delivery.isLoading && delivery.profile == null) {
     return <LoadingState title="Checking data source" detail="Loading Datahub capabilities." />;
   }
+  if (delivery.profile == null) {
+    return <StateBlock title="Data source unavailable" detail={delivery.error ?? "Datahub capabilities could not be loaded."} />;
+  }
   if (hasCapability(delivery.profile, capability)) return children;
 
   const label = CAPABILITY_LABELS[capability];
@@ -48,15 +52,15 @@ export function SourceCapabilityGate({
     <Card className="mx-auto w-full max-w-2xl">
       <CardHeader>
         <Badge variant="secondary" className="w-fit">
-          Remote snapshot
+          Shared workspace
         </Badge>
         <CardTitle>{label} is available locally</CardTitle>
         <CardDescription>
-          The published snapshot contains sanitized Sessions and Graphs. Open the local Datahub for live sources and full analysis.
+          The shared workspace provides published sessions and graphs. This analysis requires local source evidence.
         </CardDescription>
       </CardHeader>
       <CardContent className="text-body-sm text-muted-foreground">
-        Your remote view will stay open if the local Datahub is not currently running.
+        Your shared view will stay open if the local Datahub is not currently running.
       </CardContent>
       <CardFooter className="flex flex-wrap gap-2">
         <Button asChild>

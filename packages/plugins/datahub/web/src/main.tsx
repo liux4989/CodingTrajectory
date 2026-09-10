@@ -91,16 +91,6 @@ const todayRoute = createRoute({
   component: () => <RouteBoundary><SourceCapabilityGate capability="today"><OverviewRoute /></SourceCapabilityGate></RouteBoundary>,
 });
 
-type SessionResolverSearch = {
-  view: "timeline" | "context" | "tree" | "graph";
-  kind?: "user" | "assistant" | "tool" | "subagent" | "compaction";
-  artifact?: "file" | "command" | "check" | "commit" | "link";
-  vendor?: string;
-  agent?: string;
-  outcome?: "failed" | "succeeded";
-  entry?: string;
-};
-
 type GraphSearch = {
   branch?: string;
 };
@@ -148,48 +138,15 @@ const sessionDetailRoute = createRoute({
   component: () => <RouteBoundary><SourceCapabilityGate capability="session-detail"><SessionDetailRoute /></SourceCapabilityGate></RouteBoundary>,
 });
 
-// Canonical "open this session" entry: resolves the graph identity, then
-// redirects to the graph or session scope. Legacy `?view=` values accepted.
+// Resolve a session's graph identity before opening its current scoped route.
 const sessionResolverRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId",
-  validateSearch: (search: Record<string, unknown>): SessionResolverSearch => {
-    const view = search.view === "timeline" || search.view === "tree" || search.view === "graph"
-      ? search.view
-      : "context";
-    const kind = search.kind === "user" || search.kind === "assistant" || search.kind === "tool" || search.kind === "subagent" || search.kind === "compaction"
-      ? search.kind
-      : undefined;
-    const artifact = search.artifact === "file" || search.artifact === "command" || search.artifact === "check" || search.artifact === "commit" || search.artifact === "link"
-      ? search.artifact
-      : undefined;
-    return {
-      view,
-      kind: view === "timeline" ? kind : undefined,
-      artifact: view === "timeline" ? artifact : undefined,
-      vendor: view === "timeline" && typeof search.vendor === "string" && search.vendor ? search.vendor : undefined,
-      agent: view === "timeline" && typeof search.agent === "string" && search.agent ? search.agent : undefined,
-      outcome: view === "timeline" && (search.outcome === "failed" || search.outcome === "succeeded") ? search.outcome : undefined,
-      entry: view === "timeline" && typeof search.entry === "string" && search.entry ? search.entry : undefined,
-    };
-  },
+  validateSearch: (search: Record<string, unknown>): { tab: "context" | "timeline" } => ({
+    tab: search.tab === "timeline" ? "timeline" : "context",
+  }),
   component: () => <RouteBoundary><SessionResolverRoute /></RouteBoundary>,
 });
-
-const legacySessionRoutes = (["graph", "timeline", "tree", "context-window"] as const).map((legacyView) =>
-  createRoute({
-    getParentRoute: () => rootRoute,
-    path: `/sessions/$sessionId/${legacyView}`,
-    beforeLoad: ({ params }) => {
-      throw redirect({
-        to: "/sessions/$sessionId",
-        params: { sessionId: params.sessionId },
-        search: { view: legacyView === "context-window" ? "context" : legacyView },
-        replace: true,
-      });
-    },
-  }),
-);
 
 type CompareSearch = {
   projectName: string | undefined;
@@ -235,19 +192,6 @@ const compareRoute = createRoute({
   component: () => <RouteBoundary><SourceCapabilityGate capability="compare"><ModelUsageRoute /></SourceCapabilityGate></RouteBoundary>,
 });
 
-const legacyModelUsageRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/model-usage",
-  validateSearch: validateCompareSearch,
-  beforeLoad: ({ search }) => {
-    throw redirect({
-      to: "/compare",
-      search,
-      replace: true,
-    });
-  },
-});
-
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
@@ -256,9 +200,7 @@ const router = createRouter({
     graphRoute,
     sessionDetailRoute,
     sessionResolverRoute,
-    ...legacySessionRoutes,
     compareRoute,
-    legacyModelUsageRoute,
     codeTimeRoute,
   ]),
 });

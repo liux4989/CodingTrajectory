@@ -25,31 +25,22 @@ const ALL_CAPABILITIES = new Set<DatahubCapability>([
   "code-time",
 ]);
 
-const REMOTE_SNAPSHOT_CAPABILITIES = new Set<DatahubCapability>([
+const SHARED_CAPABILITIES = new Set<DatahubCapability>([
   "sessions",
   "graphs",
 ]);
 
 const DEFAULT_LOCAL_ORIGIN = "http://127.0.0.1:8765";
 const DEFAULT_REMOTE_ORIGIN =
-  "https://coding-trajectory-datahub-preview-candidate.liux4989.workers.dev";
-
-function coverageMode(snapshot: DatahubSnapshot): string | null {
-  const coverage = snapshot.bootstrap.coverage;
-  if (!coverage || typeof coverage !== "object") return null;
-  const mode = coverage.mode;
-  return typeof mode === "string" ? mode : null;
-}
+  "https://coding-trajectory-datahub-live.liux4989.workers.dev";
 
 export function sourceProfile(snapshot: DatahubSnapshot): DatahubSourceProfile {
-  const isRemoteSnapshot =
-    snapshot.transport?.source === "remote" && coverageMode(snapshot) === "snapshot";
-  return isRemoteSnapshot
+  return snapshot.transport?.source === "remote"
     ? {
         kind: "remote",
-        label: "Remote",
-        detail: `Published ${snapshot.horizon_days}-day snapshot`,
-        capabilities: REMOTE_SNAPSHOT_CAPABILITIES,
+        label: "Shared",
+        detail: "Live committed workspace data",
+        capabilities: SHARED_CAPABILITIES,
       }
     : {
         kind: "local",
@@ -63,7 +54,7 @@ export function hasCapability(
   profile: DatahubSourceProfile | null,
   capability: DatahubCapability,
 ): boolean {
-  return profile == null || profile.capabilities.has(capability);
+  return profile?.capabilities.has(capability) ?? false;
 }
 
 function configuredOrigin(kind: DatahubSourceKind): string {

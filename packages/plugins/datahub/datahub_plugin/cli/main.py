@@ -10,7 +10,7 @@ def main(argv: list[str] | None = None) -> int:
     if not raw_args:
         print(_root_entry_text())
         return 0
-    if raw_args[0] in {"web", "--web"}:
+    if raw_args[0] == "web":
         return _run_datahub_web(raw_args[1:])
     action, rest = raw_args[0], raw_args[1:]
     if action == "project":
@@ -28,9 +28,6 @@ def _build_root_parser() -> argparse.ArgumentParser:
         prog="ct plugin datahub",
         description=_root_entry_text(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "--web", action="store_true", help="Open the datahub web program."
     )
     sub = parser.add_subparsers(dest="action", metavar="<command>")
     sub.add_parser("web", help="Rich datahub with analytics (browser).")

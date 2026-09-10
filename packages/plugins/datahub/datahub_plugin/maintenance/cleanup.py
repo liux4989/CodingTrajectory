@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-from codex_app_server import CodexAppServerSession
+from coding_trajectory.app_server import CodexAppServerSession
 from coding_trajectory.runtime import PluginApiError, default_plugin_client
 from pydantic import BaseModel, Field
 

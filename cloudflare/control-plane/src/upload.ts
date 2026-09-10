@@ -76,15 +76,7 @@ function nodeReader(state: State, bucket: R2Bucket, agent: string) {
   return async (id: string): Promise<Json> => {
     if (nodes.has(id)) return nodes.get(id)!;
     const row = descriptor(state, agent, id);
-    if (!row) {
-      // Read compatibility for the paused, never-deployed SQLite-body prototype.
-      const old = state.sql.exec<{ node: string }>("SELECT node FROM upload_chunks WHERE digest=? AND agent=?", id, agent).toArray()[0];
-      requireThat(old, "missing_chunk", 409);
-      const value = JSON.parse(old.node);
-      requireThat(bytes(stable(value)) <= MAX_NODE && await digest(stable(value)) === id, "corrupt_chunk", 503);
-      nodes.set(id, value);
-      return value;
-    }
+    requireThat(row, "missing_chunk", 409);
     requireThat(row.validation_version === 1 && row.length <= MAX_NODE && row.pack_bytes <= MAX_BATCH && row.offset >= 0 && row.length > 0 && row.offset + row.length <= row.pack_bytes, "invalid_chunk_descriptor", 503);
     if (!packs.has(row.pack_key)) {
       packBytes += row.pack_bytes;
@@ -180,8 +172,7 @@ export async function uploadRead(state: State, bucket: R2Bucket, method: string,
 }
 
 export function initializeUploads(state: State) {
-  state.sql.exec(`CREATE TABLE IF NOT EXISTS upload_chunks (digest TEXT NOT NULL, agent TEXT NOT NULL, node TEXT NOT NULL, PRIMARY KEY(digest,agent));
-    CREATE TABLE IF NOT EXISTS upload_chunk_objects (digest TEXT NOT NULL, agent TEXT NOT NULL, pack_key TEXT NOT NULL, offset INTEGER NOT NULL, length INTEGER NOT NULL, pack_bytes INTEGER NOT NULL, validation_version INTEGER NOT NULL, PRIMARY KEY(digest,agent));
+  state.sql.exec(`CREATE TABLE IF NOT EXISTS upload_chunk_objects (digest TEXT NOT NULL, agent TEXT NOT NULL, pack_key TEXT NOT NULL, offset INTEGER NOT NULL, length INTEGER NOT NULL, pack_bytes INTEGER NOT NULL, validation_version INTEGER NOT NULL, PRIMARY KEY(digest,agent));
     CREATE TABLE IF NOT EXISTS upload_members (root TEXT NOT NULL, digest TEXT NOT NULL, agent TEXT NOT NULL, PRIMARY KEY(root,digest,agent));
     CREATE TABLE IF NOT EXISTS upload_authority (id INTEGER PRIMARY KEY CHECK(id=1), incarnation TEXT NOT NULL);`);
   state.sql.exec("INSERT OR IGNORE INTO upload_authority VALUES(1,?)", crypto.randomUUID());

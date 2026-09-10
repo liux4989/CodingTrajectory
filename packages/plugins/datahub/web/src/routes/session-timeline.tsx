@@ -94,7 +94,7 @@ export function SessionTimelinePanel({ rootId, sessionId }: { rootId: string; se
                 : "Data materialized from sources on this machine"}
             >
               {payload.transport ? <Cloud aria-hidden="true" /> : <HardDrive aria-hidden="true" />}
-              {payload.transport ? `Remote snapshot · ${payload.transport.snapshot_sequence}` : "Local sources"}
+              {payload.transport ? `Shared revision · ${payload.transport.snapshot_sequence}` : "Local sources"}
             </Badge>
             <span className="text-caption text-muted-foreground">
               <span className="mono text-foreground">rev {payload.revision}</span>

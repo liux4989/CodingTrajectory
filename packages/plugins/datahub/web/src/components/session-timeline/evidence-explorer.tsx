@@ -666,7 +666,7 @@ function RowDetail({ entry }: { entry: SessionTimelineEntry }) {
           <Link
             to="/sessions/$sessionId"
             params={{ sessionId: entry.target_session_id }}
-            search={{ view: "timeline" }}
+            search={{ tab: "timeline" }}
             className="font-medium text-primary hover:underline"
           >
             Open child {shortSessionId(entry.target_session_id)}

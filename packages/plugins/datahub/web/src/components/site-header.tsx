@@ -36,7 +36,7 @@ function SourceSelector() {
         : `${sourceLabel} · ${transportLabel}`;
   const detail = delivery.error
     ? `Delivery unavailable: ${delivery.error}`
-    : `${delivery.transport ? `Remote snapshot ${delivery.transport.snapshot_sequence}` : "Local sources"} · Revision ${delivery.revision ?? "—"} · ${lag == null ? "refresh lag unavailable" : `${Math.round(lag)}s refresh lag`}`;
+    : `${delivery.transport ? `Shared revision ${delivery.transport.snapshot_sequence}` : "Local sources"} · Revision ${delivery.revision ?? "—"} · ${lag == null ? "refresh lag unavailable" : `${Math.round(lag)}s refresh lag`}`;
 
   const selectSource = (kind: DatahubSourceKind) => {
     if (delivery.profile?.kind === kind) return;
@@ -70,8 +70,8 @@ function SourceSelector() {
           <DropdownMenuItem onSelect={() => selectSource("remote")} aria-current={delivery.profile?.kind === "remote" ? "true" : undefined}>
             <Cloud />
             <span className="grid flex-1 gap-0.5">
-              <span className="font-medium">Remote</span>
-              <span className="text-caption text-muted-foreground">Published seven-day snapshot</span>
+              <span className="font-medium">Shared</span>
+              <span className="text-caption text-muted-foreground">Live committed workspace data</span>
             </span>
             {delivery.profile?.kind === "remote" ? <Check /> : null}
           </DropdownMenuItem>

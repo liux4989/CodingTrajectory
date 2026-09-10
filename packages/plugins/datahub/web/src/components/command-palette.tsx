@@ -82,7 +82,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           navigate({
             to: "/sessions/$sessionId",
             params: { sessionId: s.root_session_id },
-            search: { view: remote ? "graph" : "context" },
+            search: { tab: "context" },
           });
         },
       }));

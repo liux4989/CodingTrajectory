@@ -717,7 +717,7 @@ function SessionScatterChart({ data }: { data: ModelUsagePayload }) {
               void navigate({
                 to: "/sessions/$sessionId",
                 params: { sessionId: session.id },
-                search: { view: "context" },
+                search: { tab: "context" },
               });
             }
           },

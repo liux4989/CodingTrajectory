@@ -156,3 +156,23 @@ collection, automatic presence, and sustained multi-host soak remain on the
 deployment by agreement. Storage budgets stop preparation rather than discard pending evidence;
 no destructive retention job is enabled. Local runtime qualification does not prove
 that a deployed browser, remote host, or credential rollout has succeeded.
+
+## Compatibility cleanup
+
+Datahub uses `datahub_plugin/cli/main.py` as its plugin entrypoint; run
+`ct plugin datahub web` to serve it. The `--web` alias and the old Python shim
+modules have been removed. Maintenance code imports the core app-server directly.
+
+The source selector points to live shared Datahub. Shared transport is identified
+from the response metadata and exposes sessions and graphs; evidence-backed
+analysis remains local. Source lookup failure does not grant local capabilities.
+Session links use `/sessions/:sessionId?tab=context|timeline` to resolve graph
+identity, or the scoped `/graphs/:rootId` and
+`/graphs/:rootId/sessions/:sessionId` routes. Old session subroute aliases,
+`?view=` handling, and `/model-usage` redirects are removed; use `/compare`.
+
+Chunk reads require R2 pack descriptors. The unused SQLite-body prototype reader
+and its table creation are removed; existing tables are not dropped. Gzip
+artifacts and the 8 MiB reconstruction limit remain current contracts: chunk
+staging produces gzip for the active historical API. Removing those requires
+replacing that API and migrating retained data, not deleting a fallback.

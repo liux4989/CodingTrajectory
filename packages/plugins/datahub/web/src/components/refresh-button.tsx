@@ -18,7 +18,7 @@ export function RefreshButton() {
     try {
       if (!isRemote) await refreshDatahubData();
       await client.invalidateQueries();
-      toast.success(isRemote ? "Remote snapshot refreshed" : "Datahub data refreshed");
+      toast.success(isRemote ? "Shared data refreshed" : "Datahub data refreshed");
     } catch (error) {
       toast.error(`Refresh failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
