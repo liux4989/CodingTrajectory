@@ -7,8 +7,8 @@ import { AppShell } from "@/components/app-shell";
 import { StateBlock } from "@/components/state-block";
 import { Toaster } from "@/components/ui/sonner";
 import { CommandPalette } from "@/components/command-palette";
+import { SourceCapabilityGate } from "@/components/source-capability-gate";
 import { DatahubDeliveryProvider } from "@/hooks/use-datahub-delivery";
-import { HOSTED_MODE } from "@/hosted/mode";
 import "@/styles.css";
 
 const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
@@ -88,10 +88,7 @@ const sessionsRoute = createRoute({
 const todayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/today",
-  beforeLoad: () => {
-    if (HOSTED_MODE) throw redirect({ to: "/sessions", search: { projectName: undefined }, replace: true });
-  },
-  component: () => <RouteBoundary><OverviewRoute /></RouteBoundary>,
+  component: () => <RouteBoundary><SourceCapabilityGate capability="today"><OverviewRoute /></SourceCapabilityGate></RouteBoundary>,
 });
 
 type SessionResolverSearch = {
@@ -130,9 +127,6 @@ type SessionDetailSearch = {
 const sessionDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/graphs/$rootId/sessions/$sessionId",
-  beforeLoad: ({ params }) => {
-    if (HOSTED_MODE) throw redirect({ to: "/graphs/$rootId", params: { rootId: params.rootId }, search: { branch: params.sessionId }, replace: true });
-  },
   validateSearch: (search: Record<string, unknown>): SessionDetailSearch => {
     const tab = search.tab === "timeline" ? "timeline" : "context";
     const kind = search.kind === "user" || search.kind === "assistant" || search.kind === "tool" || search.kind === "subagent" || search.kind === "compaction"
@@ -151,7 +145,7 @@ const sessionDetailRoute = createRoute({
       turn: tab === "timeline" && typeof search.turn === "string" && search.turn ? search.turn : undefined,
     };
   },
-  component: () => <RouteBoundary><SessionDetailRoute /></RouteBoundary>,
+  component: () => <RouteBoundary><SourceCapabilityGate capability="session-detail"><SessionDetailRoute /></SourceCapabilityGate></RouteBoundary>,
 });
 
 // Canonical "open this session" entry: resolves the graph identity, then
@@ -231,20 +225,14 @@ function validateCompareSearch(search: Record<string, unknown>): CompareSearch {
 const codeTimeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/code-time",
-  beforeLoad: () => {
-    if (HOSTED_MODE) throw redirect({ to: "/sessions", search: { projectName: undefined }, replace: true });
-  },
-  component: () => <RouteBoundary><CodeTimeRoute /></RouteBoundary>,
+  component: () => <RouteBoundary><SourceCapabilityGate capability="code-time"><CodeTimeRoute /></SourceCapabilityGate></RouteBoundary>,
 });
 
 const compareRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/compare",
-  beforeLoad: () => {
-    if (HOSTED_MODE) throw redirect({ to: "/sessions", search: { projectName: undefined }, replace: true });
-  },
   validateSearch: validateCompareSearch,
-  component: () => <RouteBoundary><ModelUsageRoute /></RouteBoundary>,
+  component: () => <RouteBoundary><SourceCapabilityGate capability="compare"><ModelUsageRoute /></SourceCapabilityGate></RouteBoundary>,
 });
 
 const legacyModelUsageRoute = createRoute({

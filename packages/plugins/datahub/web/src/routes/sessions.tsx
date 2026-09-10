@@ -14,7 +14,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { formatCostUsd, formatDuration, formatTokens, shortId } from "@/lib/format";
 import { relativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import { HOSTED_MODE } from "@/hosted/mode";
+import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
 
 const CURSOR_PAGE_SIZE = 50;
 
@@ -82,11 +82,11 @@ function groupByDay(items: SessionItem[]): SessionGroup[] {
   }));
 }
 
-function StatusDot({ item }: { item: SessionItem }) {
+function StatusDot({ item, remote }: { item: SessionItem; remote: boolean }) {
   const failed = (item.failed_tool_calls ?? 0) > 0;
   const living = item.status === "living";
   const label = living
-    ? HOSTED_MODE ? "Published as active" : "Live now"
+    ? remote ? "Published as active" : "Live now"
     : failed
       ? `${item.failed_tool_calls} failed tool call${item.failed_tool_calls === 1 ? "" : "s"}`
       : "Completed";
@@ -96,7 +96,7 @@ function StatusDot({ item }: { item: SessionItem }) {
       aria-label={label}
       className={cn(
         "mt-1.5 size-2 shrink-0 self-start rounded-full",
-        living && (HOSTED_MODE ? "bg-success" : "animate-pulse bg-success"),
+        living && (remote ? "bg-success" : "animate-pulse bg-success"),
         !living && failed && "bg-warning",
         !living && !failed && "bg-surface-emphasis",
       )}
@@ -104,15 +104,15 @@ function StatusDot({ item }: { item: SessionItem }) {
   );
 }
 
-function SessionRow({ item, onOpen }: { item: SessionItem; onOpen: () => void }) {
-  const title = item.title ?? item.preview ?? (HOSTED_MODE ? "Title unavailable remotely" : "Untitled");
+function SessionRow({ item, remote, onOpen }: { item: SessionItem; remote: boolean; onOpen: () => void }) {
+  const title = item.title ?? item.preview ?? (remote ? "Title unavailable remotely" : "Untitled");
   return (
     <button
       type="button"
       onClick={onOpen}
       className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 border-b border-border-subtle px-2 py-2.5 text-left transition-colors last:border-b-0 hover:bg-surface-subtle"
     >
-      <StatusDot item={item} />
+      <StatusDot item={item} remote={remote} />
       <span className="grid min-w-0 gap-1">
         <span
           className={cn(
@@ -164,6 +164,8 @@ export function SessionsRoute() {
   const router = useRouter();
   const navigate = useNavigate({ from: "/sessions" });
   const { projectName } = useSearch({ from: "/sessions" });
+  const { profile } = useDatahubDelivery();
+  const remote = profile?.kind === "remote";
 
   // The runtime materializes a fixed recent horizon; only offer windows the
   // server can actually serve (snapshot is cached by the delivery provider).
@@ -211,7 +213,7 @@ export function SessionsRoute() {
     void router.navigate({
       to: "/sessions/$sessionId",
       params: { sessionId: id },
-      search: { view: HOSTED_MODE ? "graph" : "context" },
+      search: { view: remote ? "graph" : "context" },
     });
 
   return (
@@ -219,7 +221,7 @@ export function SessionsRoute() {
       <PageHeader
         eyebrow="Observe"
         title="Sessions"
-        description={HOSTED_MODE ? "Remote Chronicle sessions published during the last seven days." : "Conversation branches and their agent runs."}
+        description={remote ? "Remote Chronicle sessions published during the last seven days." : "Conversation branches and their agent runs."}
         actions={
           windowOptions.length > 1 ? (
             <ToggleGroup
@@ -258,7 +260,7 @@ export function SessionsRoute() {
           </Badge>
         </div>
       ) : null}
-      <Toolbar value={filter} onChange={setFilter} placeholder={HOSTED_MODE ? "Filter sessions by vendor, project, or id" : "Filter sessions by title, preview, vendor, project, or id"} />
+      <Toolbar value={filter} onChange={setFilter} placeholder={remote ? "Filter sessions by vendor, project, or id" : "Filter sessions by title, preview, vendor, project, or id"} />
       {sessions.isPending ? <SessionListSkeleton /> : null}
       {sessions.isError ? <StateBlock title="Session scan failed" detail={sessions.error.message} onRetry={() => sessions.refetch()} /> : null}
       {sessions.data ? (
@@ -273,7 +275,7 @@ export function SessionsRoute() {
                   </div>
                   <div className="grid border-t border-border-subtle">
                     {group.items.map((item) => (
-                      <SessionRow key={sessionId(item)} item={item} onOpen={() => openSession(sessionId(item))} />
+                      <SessionRow key={sessionId(item)} item={item} remote={remote} onOpen={() => openSession(sessionId(item))} />
                     ))}
                   </div>
                 </section>

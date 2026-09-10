@@ -3,8 +3,9 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Search, CornerDownLeft } from "lucide-react";
 import { fetchProjects, fetchSessions } from "@/api";
+import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
+import { hasCapability, sourceUrl } from "@/lib/datahub-source";
 import { cn } from "@/lib/utils";
-import { HOSTED_MODE } from "@/hosted/mode";
 
 type CommandItem = {
   id: string;
@@ -24,6 +25,12 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const [activeIndex, setActiveIndex] = React.useState(0);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
+  const { profile } = useDatahubDelivery();
+  const remote = profile?.kind === "remote";
+
+  const openLocal = React.useCallback((path: string) => {
+    window.open(sourceUrl("local", path), "_blank", "noopener,noreferrer");
+  }, []);
 
   const sessions = useQuery({
     queryKey: ["sessions", "command-palette", 7],
@@ -42,11 +49,26 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const items = React.useMemo<CommandItem[]>(() => {
     const navItems: CommandItem[] = [
       { id: "nav-sessions", label: "Sessions", group: "Navigate", onSelect: () => navigate({ to: "/sessions", search: { projectName: undefined } }) },
-      ...(HOSTED_MODE ? [] : [
-        { id: "nav-today", label: "Today", group: "Navigate" as const, onSelect: () => navigate({ to: "/today" }) },
-        { id: "nav-compare", label: "Compare", group: "Navigate" as const, onSelect: () => navigate({ to: "/compare", search: { projectName: undefined, modelKey: undefined, view: undefined, grain: undefined, unit: undefined } }) },
-        { id: "nav-code-time", label: "Code Time", group: "Navigate" as const, onSelect: () => navigate({ to: "/code-time" }) },
-      ]),
+      {
+        id: "nav-today",
+        label: remote ? "Today · Local" : "Today",
+        group: "Navigate",
+        onSelect: () => hasCapability(profile, "today") ? navigate({ to: "/today" }) : openLocal("/today"),
+      },
+      {
+        id: "nav-compare",
+        label: remote ? "Compare · Local" : "Compare",
+        group: "Navigate",
+        onSelect: () => hasCapability(profile, "compare")
+          ? navigate({ to: "/compare", search: { projectName: undefined, modelKey: undefined, view: undefined, grain: undefined, unit: undefined } })
+          : openLocal("/compare"),
+      },
+      {
+        id: "nav-code-time",
+        label: remote ? "Code Time · Local" : "Code Time",
+        group: "Navigate",
+        onSelect: () => hasCapability(profile, "code-time") ? navigate({ to: "/code-time" }) : openLocal("/code-time"),
+      },
     ];
 
     const sessionItems: CommandItem[] = (sessions.data?.items ?? [])
@@ -60,7 +82,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           navigate({
             to: "/sessions/$sessionId",
             params: { sessionId: s.root_session_id },
-            search: { view: HOSTED_MODE ? "graph" : "context" },
+            search: { view: remote ? "graph" : "context" },
           });
         },
       }));
@@ -76,7 +98,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       }));
 
     return [...navItems, ...sessionItems, ...projectItems];
-  }, [navigate, sessions.data, projects.data]);
+  }, [navigate, openLocal, profile, projects.data, remote, sessions.data]);
 
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();

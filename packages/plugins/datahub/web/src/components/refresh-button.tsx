@@ -5,18 +5,20 @@ import { toast } from "sonner";
 import { motion } from "motion/react";
 import { refreshDatahubData } from "@/api";
 import { Button } from "@/components/ui/button";
-import { HOSTED_MODE } from "@/hosted/mode";
+import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
 
 export function RefreshButton() {
   const client = useQueryClient();
   const [isRefreshing, setIsRefreshing] = React.useState(false);
+  const { profile } = useDatahubDelivery();
+  const isRemote = profile?.kind === "remote";
 
   async function refresh() {
     setIsRefreshing(true);
     try {
-      if (!HOSTED_MODE) await refreshDatahubData();
+      if (!isRemote) await refreshDatahubData();
       await client.invalidateQueries();
-      toast.success(HOSTED_MODE ? "Remote snapshot refreshed" : "Datahub data refreshed");
+      toast.success(isRemote ? "Remote snapshot refreshed" : "Datahub data refreshed");
     } catch (error) {
       toast.error(`Refresh failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
@@ -29,7 +31,7 @@ export function RefreshButton() {
       variant="outline"
       size="sm"
       onClick={() => void refresh()}
-      disabled={isRefreshing}
+      disabled={isRefreshing || profile == null}
     >
       <motion.span
         animate={isRefreshing ? { rotate: 360 } : { rotate: 0 }}

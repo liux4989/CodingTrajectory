@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchSessionGraph } from "@/api";
 import { LoadingState } from "@/components/loading-state";
 import { StateBlock } from "@/components/state-block";
-import { HOSTED_MODE } from "@/hosted/mode";
+import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
 
 /**
  * Canonical "open this session" entry: resolves the session's graph identity
@@ -15,6 +15,7 @@ import { HOSTED_MODE } from "@/hosted/mode";
 export function SessionResolverRoute() {
   const { sessionId } = useParams({ from: "/sessions/$sessionId" });
   const search = useSearch({ from: "/sessions/$sessionId" });
+  const { profile, isLoading: isLoadingSource } = useDatahubDelivery();
   const query = useQuery({
     queryKey: ["session-graph", sessionId],
     queryFn: () => fetchSessionGraph(sessionId),
@@ -22,7 +23,7 @@ export function SessionResolverRoute() {
     gcTime: 60_000,
   });
 
-  if (query.isPending) {
+  if (query.isPending || (isLoadingSource && profile == null)) {
     return (
       <div className="route-container-wide w-full min-w-0 pb-8">
         <LoadingState title="Opening session" detail="Resolving the session's graph." />
@@ -39,7 +40,7 @@ export function SessionResolverRoute() {
 
   const rootId = query.data.root_session_id || sessionId;
 
-  if (HOSTED_MODE) {
+  if (profile?.kind === "remote") {
     return (
       <Navigate
         to="/graphs/$rootId"

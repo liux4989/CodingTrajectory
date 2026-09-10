@@ -10,7 +10,7 @@ import {
   type DatahubSnapshot,
   type DatahubSourceStatus,
 } from "@/api";
-import { HOSTED_MODE } from "@/hosted/mode";
+import { sourceProfile, type DatahubSourceProfile } from "@/lib/datahub-source";
 
 const CHANGE_POLL_MS = 12_000;
 const MAX_STREAM_RECONNECTS = 3;
@@ -45,6 +45,7 @@ export type DatahubDeliveryState = {
   isLoading: boolean;
   isRefreshing: boolean;
   error: string | null;
+  profile: DatahubSourceProfile | null;
 };
 
 const DatahubDeliveryContext = React.createContext<DatahubDeliveryState | null>(null);
@@ -97,6 +98,7 @@ function statusFromSnapshot(snapshot: DatahubSnapshot | undefined): DatahubDeliv
     isLoading: !snapshot,
     isRefreshing: false,
     error: null,
+    profile: snapshot ? sourceProfile(snapshot) : null,
   };
 }
 
@@ -267,7 +269,7 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
         }
       };
     };
-    if (HOSTED_MODE) startPolling();
+    if (sourceProfile(snapshot.data).kind === "remote") startPolling();
     else connect();
     return () => {
       disposed = true;

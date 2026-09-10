@@ -1,22 +1,30 @@
 import * as React from "react";
-import { CircleAlert, Cloud, HardDrive, LoaderCircle, Moon, Sun } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, Cloud, ExternalLink, HardDrive, LoaderCircle, Moon, Sun } from "lucide-react";
 import { useTheme } from "@/hooks/use-theme";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { RefreshButton } from "@/components/refresh-button";
-import { Badge } from "@/components/ui/badge";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
+import { currentAppPath, sourceUrl, type DatahubSourceKind } from "@/lib/datahub-source";
 
-function DeliveryStatus() {
+function SourceSelector() {
   const delivery = useDatahubDelivery();
   const failed = delivery.sourceStatus?.failed ?? 0;
   const incomplete = delivery.sourceStatus?.incomplete ?? 0;
   const lag = delivery.freshness?.lag_seconds;
   const transportLabel = delivery.mode === "live" ? "Live" : delivery.mode === "reconnecting" ? "Reconnecting" : "Polling";
-  const sourceLabel = delivery.transport ? "Remote" : "Local";
+  const sourceLabel = delivery.profile?.label ?? "Source";
   const label = delivery.error
     ? "Delivery error"
     : delivery.catchingUp
@@ -30,18 +38,48 @@ function DeliveryStatus() {
     ? `Delivery unavailable: ${delivery.error}`
     : `${delivery.transport ? `Remote snapshot ${delivery.transport.snapshot_sequence}` : "Local sources"} · Revision ${delivery.revision ?? "—"} · ${lag == null ? "refresh lag unavailable" : `${Math.round(lag)}s refresh lag`}`;
 
+  const selectSource = (kind: DatahubSourceKind) => {
+    if (delivery.profile?.kind === kind) return;
+    const target = sourceUrl(kind, currentAppPath());
+    if (kind === "local") window.open(target, "_blank", "noopener,noreferrer");
+    else window.location.assign(target);
+  };
+
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Badge variant={delivery.error || failed > 0 ? "destructive" : "outline"} className="hidden gap-1 sm:inline-flex">
-          {delivery.catchingUp || delivery.isRefreshing || delivery.mode === "reconnecting" ? <LoaderCircle className="animate-spin" /> : null}
-          {delivery.error || failed > 0 ? <CircleAlert /> : null}
-          {!delivery.error && failed === 0 ? (delivery.transport ? <Cloud /> : <HardDrive />) : null}
-          {label}
-        </Badge>
-      </TooltipTrigger>
-      <TooltipContent>{detail}</TooltipContent>
-    </Tooltip>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" disabled={delivery.profile == null}>
+          {delivery.catchingUp || delivery.isRefreshing || delivery.mode === "reconnecting" ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : null}
+          {delivery.error || failed > 0 ? <CircleAlert data-icon="inline-start" /> : null}
+          {!delivery.error && failed === 0 ? (delivery.profile?.kind === "remote" ? <Cloud data-icon="inline-start" /> : <HardDrive data-icon="inline-start" />) : null}
+          <span className="hidden sm:inline">{label}</span>
+          <ChevronDown data-icon="inline-end" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel>Data source</DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuItem onSelect={() => selectSource("local")} aria-current={delivery.profile?.kind === "local" ? "true" : undefined}>
+            <HardDrive />
+            <span className="grid flex-1 gap-0.5">
+              <span className="font-medium">Local</span>
+              <span className="text-caption text-muted-foreground">Live sources and full analysis</span>
+            </span>
+            {delivery.profile?.kind === "local" ? <Check /> : delivery.profile?.kind === "remote" ? <ExternalLink /> : null}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => selectSource("remote")} aria-current={delivery.profile?.kind === "remote" ? "true" : undefined}>
+            <Cloud />
+            <span className="grid flex-1 gap-0.5">
+              <span className="font-medium">Remote</span>
+              <span className="text-caption text-muted-foreground">Published seven-day snapshot</span>
+            </span>
+            {delivery.profile?.kind === "remote" ? <Check /> : null}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <p className="px-2 py-1.5 text-caption text-muted-foreground">{detail}</p>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -58,7 +96,7 @@ export function SiteHeader() {
         />
         <Breadcrumbs />
         <div className="ml-auto flex items-center gap-2">
-          <DeliveryStatus />
+          <SourceSelector />
           <RefreshButton />
           <Button
             variant="outline"

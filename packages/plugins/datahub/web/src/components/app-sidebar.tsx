@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link, useMatchRoute } from "@tanstack/react-router";
 import {
   CalendarDays,
+  ExternalLink,
   GitCompareArrows,
   MessageSquare,
   Timer,
@@ -18,13 +19,16 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { HOSTED_MODE } from "@/hosted/mode";
+import { Badge } from "@/components/ui/badge";
+import { useDatahubDelivery } from "@/hooks/use-datahub-delivery";
+import { hasCapability, sourceUrl, type DatahubCapability } from "@/lib/datahub-source";
 
 type NavItem = {
   title: string;
   url: string;
   icon: LucideIcon;
   match: () => boolean;
+  capability: DatahubCapability;
 };
 
 type NavGroup = {
@@ -34,6 +38,7 @@ type NavGroup = {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const matchRoute = useMatchRoute();
+  const { profile } = useDatahubDelivery();
 
   const observe: NavGroup = {
     label: "Observe",
@@ -43,22 +48,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         url: "/sessions",
         icon: MessageSquare,
         match: () => Boolean(matchRoute({ to: "/sessions", fuzzy: true })),
+        capability: "sessions",
       },
-      ...(
-        HOSTED_MODE
-          ? []
-          : [{
-              title: "Today",
-              url: "/today",
-              icon: CalendarDays,
-              match: () => Boolean(matchRoute({ to: "/today" })),
-            }]
-      ),
+      {
+        title: "Today",
+        url: "/today",
+        icon: CalendarDays,
+        match: () => Boolean(matchRoute({ to: "/today" })),
+        capability: "today",
+      },
     ],
   };
   const groups: NavGroup[] = [
     observe,
-    ...(HOSTED_MODE ? [] : [{
+    {
       label: "Analyze",
       items: [
         {
@@ -66,15 +69,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           url: "/compare",
           icon: GitCompareArrows,
           match: () => Boolean(matchRoute({ to: "/compare" })),
+          capability: "compare",
         },
         {
           title: "Code Time",
           url: "/code-time",
           icon: Timer,
           match: () => Boolean(matchRoute({ to: "/code-time" })),
+          capability: "code-time",
         },
       ],
-    }]),
+    },
   ];
 
   return (
@@ -107,17 +112,33 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               <SidebarMenu>
                 {group.items.map((item) => {
                   const active = item.match();
+                  const available = hasCapability(profile, item.capability);
+                  const content = (
+                    <>
+                      <item.icon />
+                      <span>{item.title}</span>
+                      {!available ? (
+                        <Badge variant="secondary" className="ml-auto group-data-[collapsible=icon]:hidden">
+                          Local
+                        </Badge>
+                      ) : null}
+                      {!available ? <ExternalLink className="group-data-[collapsible=icon]:hidden" /> : null}
+                    </>
+                  );
                   return (
                     <SidebarMenuItem key={item.url}>
                       <SidebarMenuButton
                         asChild
                         isActive={active}
-                        tooltip={item.title}
+                        tooltip={available ? item.title : `${item.title} · Open in Local`}
                       >
-                        <Link to={item.url} preload="intent">
-                          <item.icon />
-                          <span>{item.title}</span>
-                        </Link>
+                        {available ? (
+                          <Link to={item.url} preload="intent">{content}</Link>
+                        ) : (
+                          <a href={sourceUrl("local", item.url)} target="_blank" rel="noreferrer">
+                            {content}
+                          </a>
+                        )}
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   );
