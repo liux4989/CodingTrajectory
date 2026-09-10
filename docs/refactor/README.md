@@ -1,9 +1,9 @@
 # Canonical storage, synchronization, and live Datahub refactor
 
-Status: implementation baseline, 2026-09-10. This is the target design, not a
-claim of deployed functionality. The upload agent's uncommitted candidate is
-paused for reconciliation with this specification. Current services remain in
-place until the migration gates pass.
+Status: initial private deployment verified, 2026-09-10. See the
+[implemented workflow and deployment evidence](operations.md) and the
+[later qualification checklist](later-qualification-checklist.md). The full
+target design still includes capabilities beyond this first release.
 
 ## Read in this order
 
@@ -19,7 +19,11 @@ place until the migration gates pass.
    module ownership, compatibility, rollout, and rollback.
 6. [Acceptance and qualification](qualification.md): invariant-driven checks and
    evidence required before each stage is complete.
-7. [Upload candidate checkpoint](candidate-checkpoint.md): existing prototype,
+7. [Connections and authentication](connections.md): common profiles, role scope,
+   headless agents, credential rotation, and explicit query sources.
+8. [Implemented operations](operations.md): connection setup, delivery policy,
+   read selection, migration, and release limitations.
+9. [Upload candidate checkpoint](candidate-checkpoint.md): existing prototype,
    reported checks, and unresolved integration work.
 
 The existing [live-read outline](../datahub-live-read-flow.md) is a summary.
@@ -42,9 +46,9 @@ continue describing the current implementation until each stage lands.
   does not rebuild or deploy the website.
 - No implicit union of local and shared records. A selected source is explicit.
 
-## Current state versus target
+## Baseline before implementation versus target
 
-| Area | Current state | Target |
+| Area | Baseline | Target |
 | --- | --- | --- |
 | Discovery | Source checkpoints and living deltas exist | One reusable discovery path per host |
 | Construction | Affected source prefixes/graphs are rebuilt | Reusable durable canonical resources with qualified adapter-specific incremental parsing |

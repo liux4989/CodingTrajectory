@@ -1,0 +1,17 @@
+{
+  "$schema": "./web/node_modules/wrangler/config-schema.json",
+  "name": "coding-trajectory-datahub-live",
+  "main": "web/worker/live.ts",
+  "compatibility_date": "2026-09-10",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "secrets": {"required": ["CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD", "CT_CORE_URL", "CT_WORKSPACE_ID", "CT_CORE_READ_TOKEN"]},
+  "observability": {"enabled": true, "head_sampling_rate": 1}
+}

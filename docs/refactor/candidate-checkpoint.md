@@ -1,7 +1,7 @@
 # Upload candidate checkpoint
 
-Recorded 2026-09-10 from the paused upload agent's handoff. Candidate code is
-uncommitted and has not been deployed. These details describe the prototype,
+Historical checkpoint recorded 2026-09-10 before implementation resumed. See
+[operations](operations.md) for the integrated workflow. These details describe the prototype,
 not the complete target contract or an independent qualification result.
 
 ## Implemented in the candidate

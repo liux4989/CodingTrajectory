@@ -31,6 +31,12 @@ Three goals:
   API-envelope, canonical-result, and optional CLI-presentation JSON Schemas
   without discovering or ingesting sessions.
 
+## Connection and publication workflow
+
+Use [shared connections and collection](refactor/operations.md) for profile setup,
+manual or automatic upload, credential rotation, and explicit local/shared reads.
+Ordinary queries no longer trigger publication.
+
 ## Output Formats
 
 The dedicated CLI commands expose readable markdown reports for navigation and

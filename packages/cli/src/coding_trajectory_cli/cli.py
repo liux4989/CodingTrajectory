@@ -45,12 +45,14 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct",
-        description="Inspect local coding sessions with remote Chronicles fallback.",
+        description="Inspect coding sessions from an explicit local or shared source.",
         usage="ct <command> [args]",
         epilog=EPILOG,
         formatter_class=GhFormatter,
     )
 
+    parser.add_argument("--profile", dest="credential_profile", help="Shared connection profile.")
+    parser.add_argument("--source", choices=("local", "shared", "auto"), help="Query authority.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for register in REGISTRARS:
         register(subparsers)
@@ -110,7 +112,7 @@ def _record_invocation(
 ) -> None:
     write_invocation_record(
         {
-            "ts": _dt.datetime.now(_dt.timezone.utc),
+            "ts": _dt.datetime.now(_dt.UTC),
             "ct_version": _cli_version(),
             "cwd": str(Path.cwd()),
             "cmd": command,

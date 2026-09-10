@@ -24,6 +24,10 @@ from coding_trajectory.query import DocumentError, DocumentStore
 class RemoteControlPlaneError(DocumentError):
     """A remote control-plane operation failed or violated its contract."""
 
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
 
 def cloudflare_endpoint(url: str) -> str:
     """Require TLS except for an explicit loopback qualification endpoint."""
@@ -71,15 +75,14 @@ class CloudflareRpcClient:
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as exc:
-            detail = exc.response.text[:500]
             raise RemoteControlPlaneError(
-                f"remote control-plane {name} failed "
-                f"({exc.response.status_code}): {detail}"
-            ) from exc
-        except (httpx.HTTPError, json.JSONDecodeError) as exc:
+                f"remote control-plane {name} failed ({exc.response.status_code})",
+                status=exc.response.status_code,
+            ) from None
+        except (httpx.HTTPError, json.JSONDecodeError):
             raise RemoteControlPlaneError(
-                f"remote control-plane {name} failed: {exc}"
-            ) from exc
+                f"remote control-plane {name} transport unavailable"
+            ) from None
         if not isinstance(payload, dict) or not payload.get("ok"):
             raise RemoteControlPlaneError(
                 f"remote control-plane {name} returned an invalid envelope"

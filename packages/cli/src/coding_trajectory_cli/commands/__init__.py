@@ -2,6 +2,7 @@
 
 from coding_trajectory_cli.commands.api import register as register_api
 from coding_trajectory_cli.commands.collector import register as register_collector
+from coding_trajectory_cli.commands.connection import register as register_connection
 from coding_trajectory_cli.commands.doctor import register as register_doctor
 from coding_trajectory_cli.commands.estimator import register as register_estimator
 from coding_trajectory_cli.commands.plugin import dispatch_plugin_argv
@@ -14,6 +15,7 @@ REGISTRARS = [
     register_session,
     register_api,
     register_collector,
+    register_connection,
     register_estimator,
     register_doctor,
     register_plugin,

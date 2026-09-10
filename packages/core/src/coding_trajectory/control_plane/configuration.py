@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -19,23 +18,14 @@ class ApiConfiguration(BaseModel):
 
     @classmethod
     def from_environment(cls) -> ApiConfiguration:
-        names = {
-            "url": "CT_CLOUDFLARE_URL",
-            "access_token": "CT_ACCESS_TOKEN",
-            "workspace_id": "CT_REMOTE_WORKSPACE_ID",
-        }
-        missing = [name for name in names.values() if not os.environ.get(name)]
-        if missing:
-            raise ValueError(
-                "Cloudflare API configuration requires " + ", ".join(missing)
-            )
-        # Avoid Pydantic errors echoing invalid secret inputs.
-        try:
-            return cls.model_validate(
-                {key: os.environ[name] for key, name in names.items()}
-            )
-        except ValueError:
-            raise ValueError("Cloudflare API configuration is invalid") from None
+        from coding_trajectory.control_plane.connections import resolve_credentials
+
+        credentials = resolve_credentials()
+        return cls(
+            url=credentials.profile.cloudflare_url,
+            access_token=credentials.access_token,
+            workspace_id=credentials.profile.workspace_id,
+        )
 
     def runtime_options(
         self, *, local_evidence: bool = False, current_dir: Path | None = None
@@ -51,19 +41,4 @@ class ApiConfiguration(BaseModel):
             local_evidence=local_evidence,
             current_dir=current_dir,
         )
-        agent_id = os.environ.get("CT_COLLECTOR_AGENT_ID")
-        if (
-            local_evidence
-            and agent_id
-            and os.environ.get("CT_AUTO_PUBLISH", "1") != "0"
-        ):
-            from coding_trajectory.control_plane.on_demand import OnDemandPublisher
-
-            options["before_read"] = OnDemandPublisher(
-                factory=factory,
-                access_token=self.access_token.get_secret_value(),
-                agent_id=UUID(agent_id),
-                url=str(self.url),
-                current_dir=current_dir or Path.cwd(),
-            ).prepare
         return options

@@ -12,13 +12,27 @@ from coding_trajectory.contracts import (
     service_contract,
 )
 from coding_trajectory.control_plane import collector_protocol as protocol
+from coding_trajectory.control_plane.catalog_protocol import (
+    PublicationChangesRequest,
+    PublishedCatalogRequest,
+)
 from coding_trajectory.control_plane.chronicle import ChronicleGraphArtifact
+from coding_trajectory.control_plane.upload_chunks import (
+    ChunkBatchRequest,
+    ChunkManifestRequest,
+    ChunkMissingRequest,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
     models = {
+        "ct_published_catalog": PublishedCatalogRequest,
+        "ct_publication_changes": PublicationChangesRequest,
+        "ct_collector_upload_chunks": ChunkBatchRequest,
+        "ct_collector_missing_chunks": ChunkMissingRequest,
+        "ct_collector_stage_chunk_manifest": ChunkManifestRequest,
         "ct_project_register": protocol.ProjectRegistrationRequest,
         "ct_collector_register_source": protocol.SourceRegistrationRequest,
         "ct_collector_recover": protocol.CollectorRecoveryRequest,
@@ -40,6 +54,16 @@ def main():
         models[f"{name}_request"] = service_contract(method).request_model
         models[f"{name}_response"] = service_contract(method).response_model
     schemas = {name: model.model_json_schema() for name, model in models.items()}
+    for method in (
+        "graph.overview",
+        "graph.stats",
+        "graph.usage",
+        "session.tree",
+        "session.items",
+    ):
+        schemas[f"{method.replace('.', '_')}_response"] = service_contract(
+            method
+        ).response_model.model_json_schema()
     destination = ROOT / "cloudflare/control-plane/src/contracts.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(schemas, indent=2, sort_keys=True) + "\n")

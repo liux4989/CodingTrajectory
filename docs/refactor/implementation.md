@@ -20,6 +20,12 @@ R1 and R2 can proceed in parallel behind a frozen capture/repository interface.
 R5 is necessary for the final scale objective; shipping R2 must explicitly state
 that full-prefix reconstruction and legacy whole-graph limits may remain.
 
+## Connection workflow
+
+Implement the [connection lifecycle](connections.md) with R2/R4: one compatible
+profile resolver, role-aware collection, read-only capability checks, credential
+rotation, and explicit query source selection. Preserve pending delivery state.
+
 ## File ownership
 
 - Upload worker: `control_plane/collector.py`, `collector_protocol.py`, upload
@@ -34,9 +40,10 @@ that full-prefix reconstruction and legacy whole-graph limits may remain.
 - Docs baseline: `docs/refactor/`. Update current operational docs only when the
   corresponding behavior is implemented.
 
-The user-authorized upload agent is paused with candidate edits preserved. Its
-candidate includes chunk negotiation/upload, manifest reads, offline preparation,
-and an outbox; reconcile exact behavior with this spec before resuming. In
+The user-authorized upload agent has resumed implementation. The initial
+candidate included chunk negotiation/upload, manifest reads, offline preparation,
+and an outbox. The [operations record](operations.md) describes the integrated
+workflow and remaining scale gates. In
 particular, inspect source ownership, partial-scope omission, publication-only
 watermark, bound reconstruction, parser behavior, and query-side publication.
 Candidate reports are evidence to reproduce, not independent proof of completion.

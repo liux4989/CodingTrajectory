@@ -45,7 +45,13 @@ def _environment_remote_fallback(
         "CT_ACCESS_TOKEN",
         "CT_REMOTE_WORKSPACE_ID",
     )
-    if not all(os.environ.get(name) for name in names):
+    from coding_trajectory.control_plane.connections import profile_path
+
+    if (
+        not profile_path("default").exists()
+        and not os.environ.get("CT_CREDENTIAL_PROFILE")
+        and not all(os.environ.get(name) for name in names)
+    ):
         return None
 
     def build() -> ServiceRuntime:
@@ -211,7 +217,12 @@ class LocalHistoricalRepository:
     """Resolve historical stores from host-local sources without remote I/O."""
 
     def __init__(
-        self, *, global_scope: bool, current_dir: Path, cache: IndexCache
+        self,
+        *,
+        global_scope: bool,
+        current_dir: Path,
+        cache: IndexCache,
+        connection_profile: str | None = None,
     ) -> None:
         self.global_scope = global_scope
         self.current_dir = current_dir
@@ -219,6 +230,16 @@ class LocalHistoricalRepository:
         self._stores: dict[tuple[Any, ...], tuple[DocumentStore, str]] = {}
         self._batch_store: tuple[DocumentStore, str] | None = None
         self._batch_chronicle_store: tuple[DocumentStore, str] | None = None
+        from coding_trajectory.control_plane.canonical_repository import (
+            CanonicalReadRepository,
+            configured_canonical_path,
+        )
+
+        canonical_path = configured_canonical_path(connection_profile)
+        self._canonical = (
+            CanonicalReadRepository(canonical_path) if canonical_path else None
+        )
+        self._canonical_used = False
 
     def pin_snapshot(self) -> int:
         """Local sources are read live and therefore have no snapshot number."""
@@ -241,6 +262,14 @@ class LocalHistoricalRepository:
     def store_for(
         self, method: str, params: dict[str, Any]
     ) -> tuple[DocumentStore, str]:
+        self._canonical_used = False
+        if self._canonical is not None and not _requires_local_evidence(method, params):
+            try:
+                result = self._canonical.store_for(method, params)
+                self._canonical_used = True
+                return result
+            except ResourceNotFoundError:
+                pass
         if self._batch_store is not None and _entrypoint_ids_from_params(params):
             self._require_available(self._batch_store[0])
             if _requires_local_evidence(method, params):
@@ -288,9 +317,13 @@ class LocalHistoricalRepository:
         )
 
     def metadata(self) -> dict[str, Any]:
+        if self._canonical_used and self._canonical is not None:
+            return self._canonical.metadata()
         return {"source": "local", "freshness": "live"}
 
     def close(self) -> None:
+        if self._canonical is not None:
+            self._canonical.close()
         self.cache.save()
 
 
@@ -316,13 +349,29 @@ class PluginApiClient:
 
     def _get_runtime(self) -> ServiceRuntime:
         if self._runtime is None:
-            self._runtime = ServiceRuntime(
-                global_scope=self._global_scope,
-                current_dir=self._current_dir,
-                fallback_factory=_environment_remote_fallback(
-                    current_dir=self._current_dir
-                ),
-            )
+            from coding_trajectory.control_plane.connections import query_source
+
+            source = query_source()
+            if source == "shared":
+                from coding_trajectory.control_plane.configuration import (
+                    ApiConfiguration,
+                )
+
+                self._runtime = ServiceRuntime(
+                    **ApiConfiguration.from_environment().runtime_options(
+                        current_dir=self._current_dir
+                    )
+                )
+            else:
+                self._runtime = ServiceRuntime(
+                    global_scope=self._global_scope,
+                    current_dir=self._current_dir,
+                    fallback_factory=_environment_remote_fallback(
+                        current_dir=self._current_dir
+                    )
+                    if source == "auto"
+                    else None,
+                )
         return self._runtime
 
     def call(self, method: str, params: Mapping[str, Any] | None = None) -> Any:
@@ -383,10 +432,10 @@ class ServiceRuntime:
         global_scope: bool,
         current_dir: Path,
         historical_repository: HistoricalRepository | None = None,
+        connection_profile: str | None = None,
         authority_handlers: Mapping[MethodAuthority, Callable[..., Any]] | None = None,
         transport_metadata: Callable[[], dict[str, Any] | None] | None = None,
         local_evidence: bool = True,
-        before_read: Callable[..., dict[str, Any] | None] | None = None,
         fallback_factory: Callable[[], ServiceRuntime] | None = None,
     ) -> None:
         self.global_scope = global_scope
@@ -398,10 +447,10 @@ class ServiceRuntime:
             global_scope=global_scope,
             current_dir=current_dir,
             cache=self.cache,
+            connection_profile=connection_profile,
         )
         self._transport_metadata = transport_metadata
         self._last_call_metadata: dict[str, Any] | None = None
-        self.before_read = before_read
         self._fallback_factory = fallback_factory
         self._fallback_runtime: ServiceRuntime | None = None
         handlers = dict(authority_handlers or {})
@@ -461,7 +510,6 @@ class ServiceRuntime:
         params = service_contract(method).validate_request(params)
         self._last_call_metadata = None
         try:
-            self._prepare_read(method, params)
             result = self._dispatcher.call(method, params)
         except (LocalSourceUnavailableError, ResourceNotFoundError) as local_error:
             if self._fallback_factory is None:
@@ -545,18 +593,6 @@ class ServiceRuntime:
             cache=self.cache,
         )
 
-    def _prepare_read(self, method: str, params: dict[str, Any]) -> None:
-        if self.before_read is None:
-            return
-        options = self.before_read(method, params, self.historical_repository)
-        if options is not None:
-            self.close()
-            self.historical_repository = options["historical_repository"]
-            self._transport_metadata = options["transport_metadata"]
-            handlers = dict(options["authority_handlers"])
-            handlers[MethodAuthority.HISTORICAL] = self._call_historical
-            self._dispatcher = ApplicationDispatcher(handlers)
-
     def _call_historical(self, method: str, params: dict[str, Any]) -> Any:
         response_for = getattr(self.historical_repository, "response_for", None)
         if response_for is not None:
@@ -604,35 +640,8 @@ class ServiceRuntime:
         return response
 
     def batch(self, requests: list[dict[str, Any]]) -> dict[str, Any]:
-        errors: dict[int, dict[str, Any]] = {}
-        if self.before_read is not None:
-            for index, request in enumerate(requests):
-                try:
-                    method = request.get("method")
-                    if not isinstance(method, str) or not isinstance(
-                        request.get("params") or {}, dict
-                    ):
-                        continue
-                    params = service_contract(method).validate_request(
-                        request.get("params") or {}
-                    )
-                    self._prepare_read(method, params)
-                except (KeyError, ValueError, DocumentError) as exc:
-                    errors[index] = _error_item(
-                        request.get("id"), request.get("method"), str(exc)
-                    )
         self.prepare_batch(requests)
-        before_read = self.before_read
-        self.before_read = None
-        try:
-            response = {
-                "items": [
-                    errors[index] if index in errors else self.execute(request)
-                    for index, request in enumerate(requests)
-                ]
-            }
-        finally:
-            self.before_read = before_read
+        response = {"items": [self.execute(request) for request in requests]}
         metadata = self.transport_metadata()
         if metadata is not None:
             response["meta"] = metadata

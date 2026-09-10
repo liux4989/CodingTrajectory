@@ -52,11 +52,11 @@ budget is segmented by its schema; a caller cannot bypass the limit by selecting
 one very large resource. A completion flush occurs after a complete source fence,
 not on inference from a quiet file.
 
-Manual mode is the default. Proposed CLI lifecycle (names to reconcile with the
-candidate implementation): `prepare`, `status`, `publish`, `service`, `pause`, and
-`resume`. `prepare` performs no network publication; `publish` submits frozen
-selected captures; `service` defaults to preparation unless automatic mode was
-explicitly persisted. Restart retains mode. Installation does not enable a host
+Manual mode is the default. The implemented lifecycle uses `ct collector sync
+--mode prepare|status|publish|serve|pause|resume`, with explicit reconciliation
+modes described in [operations](operations.md). `prepare` performs no network
+publication; `publish` submits frozen captures; `serve` defaults to preparation
+unless automatic mode was explicitly persisted. Restart retains mode. Installation does not enable a host
 scheduler implicitly. Existing `collector run` publishes immediately and must not
 be relabeled as a dry-run or preview.
 

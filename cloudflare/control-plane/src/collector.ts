@@ -54,8 +54,18 @@ export function recovery(state: State, request: Json): Json {
   }
   const living = request.agent_instance_id ? state.get("living_head", request.agent_instance_id) : undefined;
   if (living) requireThat(living.agent_id === request.agent_id, "agent_instance_conflict", 403);
+  const artifacts = (request.artifact_ids ?? []).flatMap((id: string) => {
+    const artifact = state.get("artifact", id);
+    requireThat(!artifact || artifact.agent_id === request.agent_id, "artifact_owner_conflict", 409);
+    requireThat(!artifact || artifact.project_id === request.project_id, "artifact_project_conflict", 409);
+    return artifact ? [{ artifact_id: id, content_sha256: artifact.content_sha256, revision: artifact.revision, published_sequence: artifact.published_sequence, deleted: artifact.deleted }] : [];
+  });
   return { next_publication_sequence: (publisher?.publication_sequence ?? -1) + 1,
-    next_living_sequence: request.agent_instance_id ? (living?.observation_sequence ?? 0) + 1 : null, source };
+    next_living_sequence: request.agent_instance_id ? (living?.observation_sequence ?? 0) + 1 : null, source,
+    ...(request.include_upload_state ? {
+      authority_incarnation: state.sql.exec<{ incarnation: string }>("SELECT incarnation FROM upload_authority WHERE id=1").one().incarnation,
+      authority_sequence: state.head(), artifacts,
+      publication_receipt: request.publication_idempotency_key ? state.get("receipt", stable([request.agent_id, "ct_collector_publish_artifacts", request.publication_idempotency_key]))?.result ?? null : null } : {}) };
 }
 
 export function checkpoint(state: State, request: Json): Json {
@@ -79,6 +89,7 @@ export function checkpoint(state: State, request: Json): Json {
 }
 
 export function publication(state: State, request: Json): Json {
+  requireThat(request.source_vector.length <= 1000 && request.artifacts.length <= 128, "publication_scope_budget", 413);
   requireThat(state.get("project", request.project_id), "project_not_found", 404);
   const vector = new Map<string, Json>(request.source_vector.map((entry: Json) => [entry.source_id, entry]));
   requireThat(vector.size === request.source_vector.length, "duplicate_source_vector");
@@ -101,6 +112,7 @@ export function publication(state: State, request: Json): Json {
       "artifact_must_be_staged");
     const prior = state.get("artifact", artifact.artifact_id);
     requireThat(!prior || prior.project_id === request.project_id, "artifact_project_conflict", 409);
+    requireThat(!prior || prior.agent_id === request.agent_id, "artifact_owner_conflict", 409);
     incoming.set(artifact.artifact_id, { ...staged, ...artifact });
     for (const id of artifact.source_ids) represented.add(id);
     for (const id of staged.session_ids) {
@@ -114,7 +126,19 @@ export function publication(state: State, request: Json): Json {
   const currentSequence = publisher?.publication_sequence ?? -1;
   if (request.publication_sequence <= currentSequence) return receipt("conflict", publisher?.committed_sequence ?? null, { reason: "stale_publication_sequence" });
   requireThat(request.publication_sequence === currentSequence + 1, "publication_sequence_gap", 409);
-  const current = state.all("artifact").filter(row => !row.deleted && row.project_id === request.project_id);
+  // Select only affected project lineages, not every artifact in the workspace.
+  // This also works during the additive catalog migration: records remains the
+  // authoritative history until the indexed projection has finished backfill.
+  const affected = state.sql.exec<{ payload: string }>(`SELECT r.payload FROM records r
+    WHERE r.kind='artifact' AND json_extract(r.payload,'$.project_id')=?
+      AND r.sequence=(SELECT max(v.sequence) FROM records v WHERE v.kind='artifact' AND v.key=r.key)
+      AND NOT coalesce(json_extract(r.payload,'$.deleted'),0)
+      AND (EXISTS (SELECT 1 FROM json_each(r.payload,'$.session_ids') s WHERE s.value IN (SELECT value FROM json_each(?)))
+        OR (json_extract(r.payload,'$.agent_id')=? AND NOT EXISTS (SELECT 1 FROM json_each(r.payload,'$.source_ids') s WHERE s.value NOT IN (SELECT value FROM json_each(?)))))
+    LIMIT 1001`, request.project_id, JSON.stringify([...sessions]), request.agent_id, JSON.stringify([...vector.keys()])).toArray();
+  requireThat(affected.length <= 1000, "publication_scope_budget", 413);
+  const current = affected.map(row => JSON.parse(row.payload));
+  requireThat(!current.some(row => row.agent_id !== request.agent_id && row.session_ids.some((id: string) => sessions.has(id))), "session_owner_conflict", 409);
   const incomplete = current.some(row => row.session_ids.some((id: string) => sessions.has(id)) && row.source_ids.some((id: string) => !vector.has(id)));
   const sequence = state.next();
   state.put("publisher", publisherKey, { publication_sequence: request.publication_sequence, committed_sequence: sequence }, sequence);
@@ -123,6 +147,7 @@ export function publication(state: State, request: Json): Json {
   }
   let superseded = 0;
   let omitted = 0;
+  state.put("publication_watermark", request.project_id, { project_id: request.project_id, published_sequence: sequence }, sequence);
   for (const [id, artifact] of incoming) {
     const prior = state.get("artifact", id);
     if (prior && !prior.deleted) superseded++;
@@ -130,7 +155,7 @@ export function publication(state: State, request: Json): Json {
       revision: (prior?.revision ?? 0) + 1, published_sequence: sequence, deleted: false }, sequence);
   }
   for (const row of current) {
-    if (!incoming.has(row.artifact_id) && row.source_ids.every((id: string) => vector.has(id))) {
+    if ((request.replacement_scope ?? "complete_sources") === "complete_sources" && row.agent_id === request.agent_id && !incoming.has(row.artifact_id) && row.source_ids.every((id: string) => vector.has(id))) {
       state.put("artifact", row.artifact_id, { ...row, deleted: true }, sequence);
       omitted++;
     }
@@ -184,7 +209,7 @@ export function chronicleMetadata(payload: Json): { metadata: Json; resources: s
     session_ids: [...sessionIds], vendors: [...new Set(sessions.map(session => session.vendor))], graph: payload.graph }, resources: [...sessionIds, ...turns.keys(), ...items.keys()] };
 }
 
-function safeChronicle(value: any, field = "") {
+export function safeChronicle(value: any, field = "") {
   if (typeof value === "string") {
     requireThat(value.length <= 512, "unbounded_chronicle_string");
     if (["content", "text_preview"].includes(field)) { requireThat(value.length > 0 && value.length <= 280, "invalid_preview"); return; }

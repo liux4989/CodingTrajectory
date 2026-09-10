@@ -8,14 +8,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const SUPPORTED = ["datahub.snapshot", "datahub.changes", "projects", "sessions", "session.graph", "session.tree", "session.items"] as const;
-const UNSUPPORTED = ["overview", "today", "project.detail", "sessions.timeline", "session.context-window", "session.evidence-timeline", "session.events", "model-usage", "token-efficiency.project", "code-time.report", "code-time.forecasts", "code-time.calibration", "datahub.refresh"] as const;
+export const UNSUPPORTED = ["overview", "today", "project.detail", "sessions.timeline", "session.context-window", "session.evidence-timeline", "session.events", "model-usage", "token-efficiency.project", "code-time.report", "code-time.forecasts", "code-time.calibration", "datahub.refresh"] as const;
 
 class RequestError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
 }
 
-export default {
-  async fetch(request, env): Promise<Response> {
+export async function handle(request: Request, env: Env, queryDispatch = dispatch): Promise<Response> {
     let response: Response;
     try {
       if (!configurationFor(env)) throw new RequestError(503, "unconfigured", "Datahub is not configured.");
@@ -25,7 +24,7 @@ export default {
       if (url.pathname === ENDPOINT) {
         if (request.method !== "POST" || url.search) throw new RequestError(404, "not_found", "Not found.");
         const envelope = await requestEnvelope(request);
-        response = Response.json(await dispatch(envelope, env));
+        response = Response.json(await queryDispatch(envelope, env));
       } else {
         if (url.pathname.startsWith("/api/") || !["GET", "HEAD"].includes(request.method)) {
           throw new RequestError(404, "not_found", "Not found.");
@@ -39,8 +38,9 @@ export default {
         error: { code: fault.code, message: fault.message } }, { status: fault.status });
     }
     return withSecurityHeaders(response);
-  },
-} satisfies ExportedHandler<Env>;
+}
+
+export default { fetch: (request, env) => handle(request, env) } satisfies ExportedHandler<Env>;
 
 async function requestEnvelope(request: Request): Promise<{ protocol: string; id: unknown; method: string; params: Params }> {
   const value = await readJson(request.body, MAX_REQUEST_BYTES, "Request body");

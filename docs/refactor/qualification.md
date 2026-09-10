@@ -1,5 +1,11 @@
 # Acceptance and qualification
 
+The first private deployment is recorded in [operations](operations.md).
+Recovery, large-graph, retention, and sustained multi-host work is explicitly
+deferred to the [later checklist](later-qualification-checklist.md); it does not
+block that first deployment. The full acceptance scenarios below remain the
+target for subsequent capability and scale claims.
+
 All new checks are integration/real-runtime qualification, not new unit tests.
 Use synthetic or committed sanitized fixtures. Reports contain counts, hashes,
 latencies, and bounded failure codes, never raw source bodies or secrets.
@@ -55,6 +61,10 @@ not invent a service guarantee from a small fixture run.
 ```sh
 uv sync --all-packages
 uv run python scripts/validate-local-first-source-selection.py
+uv run python scripts/qualify-connection-workflows.py
+uv run python scripts/qualify-canonical-repository.py
+node scripts/qualify-published-catalog.mjs
+uv run python scripts/qualify-live-datahub.py
 scripts/check-datahub-static.sh
 scripts/check-metrics-quality-gate.sh
 uv run python scripts/validate-metrics-baselines.py
@@ -79,3 +89,55 @@ continuity, or sustained load. Report these separately.
 Docs-only changes require link/consistency validation, not runtime tests. Runtime
 changes require the relevant scenario subset plus mandatory repository gates.
 Once checks pass, repeat only after changes or unresolved failures justify it.
+
+
+## Initial implementation evidence (2026-09-10)
+
+| Qualification | Observed result |
+| --- | --- |
+| Connection workflows | 20 CLI checks; metadata-only preparation/status and local canonical reads work without a token; 4 auth-only requests, zero publication requests |
+| Canonical repository | 15 checks including hard exits before/after commit, replay, idempotent capture, and pinned reads |
+| Incremental upload | 41 checks; 287/295 chunks reused on append; largest observed request 35,650 bytes |
+| Published catalog | 7 SQLite scenarios; 10,001 records across 51 pages; filter and revision cursor isolation |
+| Native live Datahub | 11 checks against loopback workerd, including synthetic Access JWT acceptance, signed-out denial, response-model validation, and a later publication seen by the same adapter |
+| Existing frozen Datahub | 193 workerd calls and 122 asset digest checks pass |
+| Existing control plane | 62 synthetic workerd checks pass |
+| Metrics | Mandatory gate and direct full baseline workflow pass all four committed fixtures; no expected values changed |
+
+Control-plane and Datahub Worker TypeScript checks pass. Changed Python files pass
+Ruff apart from the pre-existing CLI defensive exception warning (`BLE001`),
+confirmed in the committed baseline and left unchanged. Documentation links and
+whitespace checks pass. No new unit tests were added.
+
+These are local qualification results, not production deployment evidence. Remote
+restore, source rotation, and transient-failure injection have incomplete coverage;
+large-graph parsing/validation, garbage collection, and sustained multi-host load
+remain release gates. Preserve the existing paused host schedule.
+
+## Fresh local runtime qualification (2026-09-10)
+
+Reran the suite against runtime source revision
+`88603db90aaebd0f7a557f6d338a8d44c28fafc2`. The authority used fresh temporary
+SQLite/R2 storage, synthetic principals, and loopback workerd. Existing connection
+credentials and production storage were not used. The snapshot check read the
+existing local export (revision `1789016945819`) through its isolated harness.
+
+| Qualification | Fresh result |
+| --- | --- |
+| Connection workflows | 20 checks; 4 authentication requests; zero publication requests |
+| Canonical repository | 15 checks; 2 hard process-exit boundaries |
+| Incremental upload | 41 checks; 287/295 chunks reused; 7 upload requests; largest request 38,756 bytes |
+| Published catalog | 7 scenarios; 10,001 records; 51 pages |
+| Native live Datahub | 11 checks; 9 native read requests; zero read-triggered publication requests |
+| Existing control plane | 62 checks |
+| Existing frozen Datahub | 193 workerd calls; 122 asset digest checks |
+| Local-first source selection | Passed |
+| Datahub static checks and both Worker TypeScript checks | Passed |
+| Mandatory metrics gate and direct baseline workflow | Both passed: 4 fixtures, 107 assertions, 49 invariants each |
+
+Every command exited successfully; no runtime repair or expected metric change
+was required. The request-size measurement supersedes the earlier run's value
+for this run only; it is not a general upper bound. This rerun covers the existing
+harness assertions, not all Q01-Q22 acceptance scenarios. Recovery gaps and
+large-graph, retention, and sustained multi-host gates above remain open. No
+deployment or host schedule activation was performed.

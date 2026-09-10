@@ -1,7 +1,7 @@
 # Shared local and remote Datahub read flow
 
 Status: target design agreed in discussion; the deployed remote Datahub still
-serves a frozen export. The upload candidate is paused for reconciliation.
+serves a frozen export. An initial implementation is documented in [operations](refactor/operations.md).
 The [complete refactor specification](refactor/README.md) governs implementation;
 this document summarizes the consumer boundary so upload and presentation can
 evolve independently.

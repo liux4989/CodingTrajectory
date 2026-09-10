@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import os
+import signal
+import sqlite3
 import sys
+import threading
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -20,6 +24,8 @@ from coding_trajectory.control_plane.collector_protocol import (
     ProjectRegistrationRequest,
 )
 from coding_trajectory.control_plane.publication_lock import publication_lock
+from coding_trajectory.control_plane.upload_service import UploadService
+from coding_trajectory.control_plane.upload_state import default_upload_state_path
 from coding_trajectory.discovery import discover_source_candidates
 
 from coding_trajectory_cli._shared import (
@@ -30,6 +36,7 @@ from coding_trajectory_cli._shared import (
 from coding_trajectory_cli.collector_credentials import (
     CollectorCredentialError,
     configure_profile,
+    load_profile,
     load_profile_credentials,
     profile_summary,
 )
@@ -61,8 +68,13 @@ def _positive_int(value: str) -> int:
 
 
 def _remote_from_args(args: argparse.Namespace) -> CloudflareCollectorRemote:
+    _apply_credential_profile(args, require_token=True)
     url = args.cloudflare_url or os.environ.get("CT_CLOUDFLARE_URL")
-    access_token = args.access_token or os.environ.get("CT_COLLECTOR_ACCESS_TOKEN")
+    access_token = (
+        args.access_token
+        or os.environ.get("CT_COLLECTOR_ACCESS_TOKEN")
+        or os.environ.get("CT_ACCESS_TOKEN")
+    )
     missing = [
         name
         for name, value in (
@@ -73,7 +85,150 @@ def _remote_from_args(args: argparse.Namespace) -> CloudflareCollectorRemote:
     ]
     if missing:
         raise ValueError("collector run requires " + ", ".join(missing))
-    return CloudflareCollectorRemote(url=url, access_token=access_token)
+    return CloudflareCollectorRemote(
+        url=url, access_token=access_token, chunked=getattr(args, "chunked", False)
+    )
+
+
+def _handle_sync(args: argparse.Namespace) -> dict[str, Any]:
+    _apply_credential_profile(args, require_token=False)
+    args.workspace_id = args.workspace_id or (
+        _uuid_arg(os.environ["CT_REMOTE_WORKSPACE_ID"])
+        if os.environ.get("CT_REMOTE_WORKSPACE_ID")
+        else None
+    )
+    args.agent_id = args.agent_id or (
+        _uuid_arg(os.environ["CT_COLLECTOR_AGENT_ID"])
+        if os.environ.get("CT_COLLECTOR_AGENT_ID")
+        else None
+    )
+    _require_identity(args)
+    if not args.project_name or args.session_id:
+        raise ValueError(
+            "sync requires --project-name and uses complete project graphs; --session-id is not supported"
+        )
+    state_path = (
+        Path(args.state_path).expanduser()
+        if args.state_path
+        else default_upload_state_path(
+            workspace_id=args.workspace_id,
+            agent_id=args.agent_id,
+            project_name=args.project_name,
+        )
+    )
+    identity = _identity_from_args(args, state_path, project_id=args.project_id)
+    args.chunked = True
+    stop = threading.Event()
+    errors: list[str] = []
+
+    def upload_loop():
+        # Independent SQLite connection: slow/retrying uploads do not stop local
+        # discovery. Retry delay is bounded, and no secret-bearing error is logged.
+        service = UploadService(state_path, identity)
+        failures = 0
+        try:
+            while not stop.is_set():
+                try:
+                    if service.should_flush():
+                        # Reload profile metadata and token for each delivery
+                        # cycle. Keychain/profile rotation is never hidden behind
+                        # a permanently cached revoked bearer token.
+                        remote = _remote_from_args(args)
+                        try:
+                            result = service.publish(
+                                remote, max_batches=args.batch_count, force=False
+                            )
+                            if result["authority_error"]:
+                                errors.append(result["authority_error"])
+                        finally:
+                            remote.close()
+                    failures = 0
+                except (RuntimeError, ValueError, OSError, sqlite3.Error):
+                    failures = min(failures + 1, 6)
+                    errors.append(
+                        "delivery_unavailable; batches retained; check connection or restart with refreshed environment token"
+                    )
+                stop.wait(min(60, args.poll_seconds * 2**failures))
+        finally:
+            service.close()
+
+    service = UploadService(state_path, identity)
+    try:
+        if args.mode == "status":
+            return service.status()
+        updates = {}
+        if args.automatic is not None:
+            updates["mode"] = "automatic" if args.automatic else "manual"
+        for key in (
+            "batch_seconds",
+            "batch_bytes",
+            "batch_resources",
+            "max_pending_bytes",
+            "max_disk_bytes",
+        ):
+            if getattr(args, key, None) is not None:
+                updates[key] = getattr(args, key)
+        if updates:
+            service.configure(**updates)
+        if args.mode == "pause":
+            return service.configure(paused=True)
+        if args.mode == "resume":
+            return service.resume()
+        if args.mode == "reconcile-local":
+            return service.reconcile_local()
+        if args.mode == "prepare":
+            return service.prepare(
+                current_dir=Path.cwd(),
+                agent_vendor=args.agent_vendor,
+                since_days=args.since_days,
+            )
+        if args.mode in {"publish", "reconcile-remote"}:
+            remote = _remote_from_args(args)
+            try:
+                return (
+                    service.reconcile_remote(remote)
+                    if args.mode == "reconcile-remote"
+                    else service.publish(remote, max_batches=args.batch_count)
+                )
+            finally:
+                remote.close()
+        with service.owner_lock("service"):
+            # Even manual mode checks persisted policy locally. It never resolves
+            # tokens or contacts the authority unless automatic mode is enabled.
+            uploader = threading.Thread(
+                target=upload_loop, name="ct-upload", daemon=True
+            )
+            previous_signal = signal.signal(signal.SIGTERM, lambda *_: stop.set())
+            uploader.start()
+            try:
+                while not stop.is_set():
+                    try:
+                        service.prepare(
+                            current_dir=Path.cwd(),
+                            agent_vendor=args.agent_vendor,
+                            since_days=args.since_days,
+                        )
+                    except (RuntimeError, ValueError, OSError, sqlite3.Error):
+                        errors.append(
+                            "preparation_incomplete; previous checkpoint retained"
+                        )
+                    if errors:
+                        print(
+                            json.dumps({"sync": errors[-1]}),
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        errors.clear()
+                    stop.wait(args.poll_seconds)
+            except KeyboardInterrupt:
+                stop.set()
+            finally:
+                stop.set()
+                uploader.join(timeout=30)
+                signal.signal(signal.SIGTERM, previous_signal)
+            return {**service.status(), "shutdown_pending": uploader.is_alive()}
+    finally:
+        service.close()
 
 
 def _identity_from_args(
@@ -91,18 +246,44 @@ def _identity_from_args(
     )
 
 
-def _apply_credential_profile(args: argparse.Namespace) -> None:
+def _apply_credential_profile(
+    args: argparse.Namespace, *, require_token: bool = True
+) -> None:
     profile_name = getattr(args, "credential_profile", None)
     profile_name = profile_name or os.environ.get("CT_CREDENTIAL_PROFILE")
     if not profile_name:
         return
-    refreshed = load_profile_credentials(profile_name)
-    profile = refreshed.profile
+    profile = load_profile(profile_name)
+    if profile.role != "collector" or profile.agent_id is None:
+        raise CollectorCredentialError(
+            "collector operations require a collector profile with agent identity"
+        )
+    from coding_trajectory.control_plane.remote import cloudflare_endpoint
+
+    for key in ("workspace_id", "agent_id"):
+        value = getattr(args, key, None)
+        if value is not None and str(value) != str(getattr(profile, key)):
+            raise CollectorCredentialError(
+                f"selected profile conflicts with --{key.replace('_', '-')}"
+            )
+    if args.cloudflare_url and cloudflare_endpoint(
+        args.cloudflare_url
+    ) != cloudflare_endpoint(str(profile.cloudflare_url)):
+        raise CollectorCredentialError(
+            "selected profile conflicts with --cloudflare-url"
+        )
+    if not hasattr(args, "_explicit_access_token"):
+        args._explicit_access_token = args.access_token
+    if args._explicit_access_token:
+        raise CollectorCredentialError("selected profile conflicts with --access-token")
     args.workspace_id = args.workspace_id or profile.workspace_id
     args.agent_id = args.agent_id or profile.agent_id
     args.project_id = args.project_id or profile.project_id
     args.cloudflare_url = args.cloudflare_url or str(profile.cloudflare_url)
-    args.access_token = args.access_token or refreshed.access_token
+    args.project_name = args.project_name or profile.project_name
+    args.state_path = args.state_path or profile.state_path
+    if require_token:
+        args.access_token = load_profile_credentials(profile_name).access_token
 
 
 def _require_identity(args: argparse.Namespace) -> None:
@@ -305,17 +486,68 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     run.add_argument("--agent-instance-id", type=_uuid_arg)
     run.add_argument("--state-path", help="Private SQLite delivery state path.")
     run.add_argument("--cloudflare-url", help="Defaults to CT_CLOUDFLARE_URL.")
-    run.add_argument("--access-token", help="Defaults to CT_COLLECTOR_ACCESS_TOKEN.")
+    run.add_argument(
+        "--access-token",
+        help="Defaults to CT_COLLECTOR_ACCESS_TOKEN, then CT_ACCESS_TOKEN.",
+    )
     run.add_argument(
         "--credential-profile",
+        default=argparse.SUPPRESS,
         help="Load a collector profile (defaults to CT_CREDENTIAL_PROFILE) before publishing.",
     )
     run.add_argument("--no-heartbeat", action="store_true")
+    run.add_argument(
+        "--chunked",
+        action="store_true",
+        help="Use additive chunk upload protocol (requires an upgraded authority).",
+    )
     run.set_defaults(
         _plugin_handler=_handle_run,
         _default_output="json",
         global_scope=False,
     )
+
+    sync = commands.add_parser(
+        "sync",
+        parents=[run],
+        add_help=False,
+        help="Prepare offline batches, explicitly publish, or run an opt-in sync service.",
+    )
+    sync.add_argument(
+        "--mode",
+        choices=(
+            "prepare",
+            "publish",
+            "serve",
+            "service",
+            "status",
+            "pause",
+            "resume",
+            "reconcile-local",
+            "reconcile-remote",
+        ),
+        default="prepare",
+    )
+    sync.add_argument(
+        "--automatic",
+        action="store_true",
+        default=None,
+        help="Persist automatic publication; manual is the initial default.",
+    )
+    sync.add_argument(
+        "--manual",
+        dest="automatic",
+        action="store_false",
+        help="Persist preparation-only mode.",
+    )
+    sync.add_argument("--poll-seconds", type=_positive_int, default=10)
+    sync.add_argument("--batch-seconds", type=_positive_int)
+    sync.add_argument("--batch-bytes", type=_positive_int)
+    sync.add_argument("--batch-resources", type=_positive_int)
+    sync.add_argument("--max-pending-bytes", type=_positive_int)
+    sync.add_argument("--max-disk-bytes", type=_positive_int)
+    sync.add_argument("--batch-count", type=_positive_int, default=16)
+    sync.set_defaults(_plugin_handler=_handle_sync, automatic=None)
 
     status = commands.add_parser(
         "status",

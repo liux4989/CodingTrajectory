@@ -51,47 +51,42 @@ def _read_batch_requests(args: argparse.Namespace) -> list[dict[str, Any]]:
 def _runtime(args: argparse.Namespace) -> ServiceRuntime:
     """Build a local-first runtime with a lazy remote Chronicles fallback."""
 
+    from coding_trajectory.control_plane.connections import query_source
+
+    source = query_source(
+        source=getattr(args, "source", None),
+        profile_name=getattr(args, "credential_profile", None),
+    )
     if getattr(args, "snapshot_sequence", None) is not None:
+        if source == "local":
+            raise ValueError("snapshot sequence requires a shared query source")
+        source = "shared"
+    if source == "shared":
         return _remote_runtime(args)
     return ServiceRuntime(
         global_scope=getattr(args, "global_scope", False),
         current_dir=Path.cwd(),
-        fallback_factory=lambda: _remote_runtime(args),
+        connection_profile=getattr(args, "credential_profile", None),
+        fallback_factory=(lambda: _remote_runtime(args)) if source == "auto" else None,
     )
 
 
 def _remote_runtime(args: argparse.Namespace) -> ServiceRuntime:
-    """Resolve remote configuration only after fallback is actually needed."""
+    """Resolve the same connection used by collectors, only when required."""
+    from coding_trajectory.control_plane.connections import resolve_credentials
 
-    workspace_id = getattr(args, "remote_workspace_id", None) or os.environ.get(
-        "CT_REMOTE_WORKSPACE_ID"
+    credentials = resolve_credentials(
+        profile_name=getattr(args, "credential_profile", None),
+        url=getattr(args, "cloudflare_url", None),
+        access_token=getattr(args, "access_token", None),
+        workspace_id=getattr(args, "remote_workspace_id", None),
     )
-    url = getattr(args, "cloudflare_url", None) or os.environ.get("CT_CLOUDFLARE_URL")
-    access_token = getattr(args, "access_token", None) or os.environ.get(
-        "CT_ACCESS_TOKEN"
-    )
-    if os.environ.get("CT_CREDENTIAL_PROFILE") or not any((url, access_token)):
-        from coding_trajectory_cli.collector_credentials import load_profile_credentials
-
-        credentials = load_profile_credentials(
-            os.environ.get("CT_CREDENTIAL_PROFILE", "default")
-        )
-        url = str(credentials.profile.cloudflare_url)
-        access_token = credentials.access_token
-        workspace_id = (
-            getattr(args, "remote_workspace_id", None)
-            or credentials.profile.workspace_id
-        )
-    if not all((url, access_token, workspace_id)):
-        raise ValueError(
-            "API reads require complete Cloudflare URL, access token, and workspace configuration"
-        )
     factory = RemoteRuntimeFactory(
-        url=str(url),
-        workspace_id=UUID(str(workspace_id)),
+        url=str(credentials.profile.cloudflare_url),
+        workspace_id=credentials.profile.workspace_id,
     )
     return factory.build(
-        str(access_token),
+        credentials.access_token,
         snapshot_sequence=getattr(args, "snapshot_sequence", None),
         local_evidence=False,
         current_dir=Path.cwd(),
@@ -123,15 +118,19 @@ def _handle_api_schema(args: argparse.Namespace) -> dict[str, Any]:
 def _handle_api_serve(args: argparse.Namespace) -> None:
     url = _remote_service_config(args)
     serve_http(
-        factory=RemoteRuntimeFactory(
-            url=url, workspace_id=args.remote_workspace_id
-        ),
+        factory=RemoteRuntimeFactory(url=url, workspace_id=args.remote_workspace_id),
         host=args.host,
         port=args.port,
     )
 
 
 def _add_remote_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--profile", dest="credential_profile", default=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--source", choices=("local", "shared", "auto"), default=argparse.SUPPRESS
+    )
     parser.add_argument(
         "--remote-workspace-id",
         type=UUID,

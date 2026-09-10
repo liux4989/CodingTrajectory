@@ -2,9 +2,13 @@ import { bounded, digest, Fault, fields, Json, object, Principal, requireThat, t
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
+  "ct_collector_missing_chunks", "ct_collector_upload_chunks", "ct_collector_stage_chunk_manifest",
+  "ct_catalog_migrate",
   "ct_collector_publish_observation", "ct_collector_stage_artifact_payload", "ct_collector_publish_artifacts",
   "ct_collector_heartbeat", "ct_collector_publish_living_observation"]);
 const READ = new Set(["ct_workspace_snapshot", "ct_historical_snapshot", "ct_historical_artifacts",
+  "ct_publication_watermark", "ct_artifact_chunk_manifest", "ct_artifact_chunks",
+  "ct_published_catalog", "ct_publication_changes",
   "ct_project_sessions_projection", "ct_project_inventory_snapshot", "ct_remote_living",
   "ct_estimate_get", "ct_estimate_list", "ct_estimate_calibration", "ct_estimate_backfill_status"]);
 const ESTIMATE = new Set(["ct_estimate_predict", "ct_estimate_bind", "ct_estimate_compare", "ct_estimate_backfill_start"]);
@@ -35,12 +39,19 @@ export default {
       requestId = message.id ?? null;
       const methodName = text(message.method, 128);
       method = methodName;
-      const role = COLLECT.has(methodName) ? "collect" : READ.has(methodName) ? "read" : ESTIMATE.has(methodName) ? "estimate" : EXECUTE.has(methodName) ? "estimate_worker" : null;
+      const role = methodName === "ct_connection_status" ? "authenticated" : COLLECT.has(methodName) ? "collect" : READ.has(methodName) ? "read" : ESTIMATE.has(methodName) ? "estimate" : EXECUTE.has(methodName) ? "estimate_worker" : null;
       requireThat(role, "not_found", 404);
-      requireThat(principal.roles.includes(role) || principal.roles.includes("owner"), "capability_required", 403);
+      requireThat(role === "authenticated" || principal.roles.includes(role) || principal.roles.includes("owner"), "capability_required", 403);
       const body = object(message.params);
       if (methodName === "ct_estimator_claim" && !body.workspace_id) body.workspace_id = principal.workspace_id;
       requireThat(body.workspace_id === principal.workspace_id, "workspace_denied", 403);
+      if (methodName === "ct_connection_status") {
+        fields(body, ["workspace_id"], ["workspace_id"]);
+        return Response.json({ protocol: PROTOCOL, id: requestId, method: methodName, ok: true,
+          data: { protocol: PROTOCOL, workspace_id: principal.workspace_id, agent_id: principal.agent_id, roles: principal.roles },
+          availability: { state: "complete", missing: [] }, error: null },
+          { headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+      }
       if (COLLECT.has(methodName)) requireThat(body.agent_id === principal.agent_id, "agent_denied", 403);
       if (message.idempotency_key != null) text(message.idempotency_key, 512);
       const envelope: Json = { request: body };

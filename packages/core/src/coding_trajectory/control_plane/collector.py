@@ -95,11 +95,25 @@ class CollectorRemote(Protocol):
 class CollectorRemoteError(RuntimeError):
     """A remote response was unavailable or did not match its contract."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "remote_unavailable",
+        status_code: int | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+
 
 class CloudflareCollectorRemote:
     """Call the committed Cloudflare RPC ingress contract over HTTPS."""
 
-    def __init__(self, *, url: str, access_token: str, timeout: float = 20) -> None:
+    def __init__(
+        self, *, url: str, access_token: str, timeout: float = 20, chunked: bool = False
+    ) -> None:
+        self.chunked = chunked
         self._url = cloudflare_endpoint(url)
         self._access_token = access_token
         self._timeout = timeout
@@ -161,10 +175,18 @@ class CloudflareCollectorRemote:
                 artifact=artifact.payload,
                 content_sha256=artifact.content_sha256,
             )
+        return self.commit_artifact_manifest(
+            request.reference_payload(), idempotency_key=idempotency_key
+        )
+
+    def commit_artifact_manifest(
+        self, request: dict[str, Any], *, idempotency_key: str
+    ) -> ObservationReceipt:
+        """Commit a previously staged frozen manifest without retransferring it."""
         return ObservationReceipt.model_validate(
             self._rpc(
                 "ct_collector_publish_artifacts",
-                request.reference_payload(),
+                request,
                 idempotency_key=idempotency_key,
             )
         )
@@ -182,6 +204,48 @@ class CloudflareCollectorRemote:
         canonical = artifact.canonical_bytes()
         if hashlib.sha256(canonical).hexdigest() != content_sha256:
             raise ValueError("chronicle artifact digest mismatch before staging")
+        if self.chunked:
+            from coding_trajectory.control_plane.upload_chunks import (
+                MAX_GRAPH_BYTES,
+                build_chunks,
+                chunk_batches,
+            )
+
+            if len(canonical) > MAX_GRAPH_BYTES:
+                raise ValueError(
+                    "canonical graph exceeds the supported 8 MiB revision limit"
+                )
+            root, chunks = build_chunks(artifact.wire_payload())
+            identity = {"workspace_id": str(workspace_id), "agent_id": str(agent_id)}
+            for batch in chunk_batches(chunks):
+                missing = set(
+                    self._rpc(
+                        "ct_collector_missing_chunks",
+                        {
+                            **identity,
+                            "digests": [entry["content_sha256"] for entry in batch],
+                        },
+                    )["missing"]
+                )
+                pending = [
+                    entry for entry in batch if entry["content_sha256"] in missing
+                ]
+                if pending:
+                    self._rpc(
+                        "ct_collector_upload_chunks", {**identity, "chunks": pending}
+                    )
+            self._rpc(
+                "ct_collector_stage_chunk_manifest",
+                {
+                    **identity,
+                    "schema_version": artifact.schema_version,
+                    "root_sha256": root,
+                    "content_sha256": content_sha256,
+                    "uncompressed_bytes": len(canonical),
+                    "projections": _project_session_list_variants(artifact),
+                },
+            )
+            return
         compressed = gzip.compress(canonical, compresslevel=3, mtime=0)
         projections = _project_session_list_variants(artifact)
         self._rpc(
@@ -247,12 +311,27 @@ class CloudflareCollectorRemote:
                 },
                 timeout=timeout,
             )
-            response.raise_for_status()
             payload = response.json()
+            if response.is_error:
+                raw_code = (
+                    payload.get("error", {}).get("code")
+                    if isinstance(payload, dict)
+                    else None
+                )
+                code = (
+                    raw_code
+                    if isinstance(raw_code, str)
+                    and len(raw_code) <= 80
+                    and raw_code.replace("_", "").isalnum()
+                    else "remote_unavailable"
+                )
+                raise CollectorRemoteError(
+                    f"collector remote {name} failed ({code})",
+                    code=code,
+                    status_code=response.status_code,
+                )
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
-            raise CollectorRemoteError(
-                f"collector remote {name} failed: {exc}"
-            ) from exc
+            raise CollectorRemoteError(f"collector remote {name} unavailable") from exc
         if not isinstance(payload, dict) or not payload.get("ok"):
             raise CollectorRemoteError(
                 f"collector remote {name} returned an invalid envelope"
@@ -270,6 +349,7 @@ def _project_session_list_variants(
 ) -> dict[str, dict[str, Any]]:
     """Build small exact read projections while the canonical graph is local."""
 
+    from coding_trajectory.control_plane.read_projections import build_read_projections
     from coding_trajectory.query import DocumentStore
     from coding_trajectory.service import IndexCache, dispatch
 
@@ -280,7 +360,7 @@ def _project_session_list_variants(
         "usage": ["usage"],
         "runtime_usage": ["runtime", "usage"],
     }
-    return {
+    projections = {
         name: dispatch(
             "project.sessions",
             {"include": include},
@@ -292,6 +372,8 @@ def _project_session_list_variants(
         )
         for name, include in variants.items()
     }
+    projections["canonical"] = build_read_projections(artifact)
+    return projections
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,6 +430,7 @@ class LocalCollector:
     def __init__(self, *, database_path: Path, identity: CollectorIdentity) -> None:
         self.database_path = database_path.expanduser()
         self.identity = identity
+        self.prepared_sources: list[_CollectedSource] = []
         self._recovered_sources: dict[UUID, RecoveredSource] = {}
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(self.database_path)
@@ -383,6 +466,7 @@ class LocalCollector:
         heartbeat: bool = True,
         target_session_id: UUID | None = None,
         known_artifact_digests: set[str] | None = None,
+        candidate_paths: set[Path] | None = None,
     ) -> CollectorRunResult:
         """Discover, fence, publish checkpoints, and publish local graph artifacts."""
 
@@ -401,6 +485,16 @@ class LocalCollector:
             agent_vendor=agent_vendor,
             since_days=since_days,
         )
+        if candidate_paths is not None:
+            if remote is not None:
+                raise ValueError(
+                    "candidate_paths is reserved for offline canonical preparation"
+                )
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.path.resolve() in candidate_paths
+            ]
         if target_session_id is not None:
             paths = set(
                 locate_session_files(
@@ -556,6 +650,7 @@ class LocalCollector:
             except (CollectorRemoteError, OSError, ValueError, json.JSONDecodeError):
                 failed += 1
                 continue
+        self.prepared_sources = collected
         accepted, rejected = self.flush(remote) if remote is not None else (0, 0)
         artifacts_accepted = 0
         artifacts_rejected = 0
@@ -843,11 +938,11 @@ class LocalCollector:
                 )
                 self._connection.commit()
                 break
-            if receipt.outcome in {"accepted", "duplicate"}:
-                state = "accepted"
-                accepted += 1
+            if receipt.details.get("publication_outcome") == "superseded":
+                state = "superseded"
+                self._set_meta(f"artifact_publication:{self.identity.project_id}:last_digest", "")
             elif (
-                receipt.outcome == "rejected"
+                (receipt.outcome == "rejected" or receipt.details.get("publication_outcome") == "rejected")
                 and receipt.details.get("reason") == "incomplete_graph_scope"
             ):
                 # The server consumed this sequence without changing history.
@@ -855,6 +950,9 @@ class LocalCollector:
                 # publish next time without a permanently poisoned outbox.
                 state = "rejected_scope"
                 rejected += 1
+            elif receipt.outcome in {"accepted", "duplicate"}:
+                state = "accepted"
+                accepted += 1
             elif (
                 receipt.outcome == "conflict"
                 and receipt.details.get("reason") == "stale_publication_sequence"

@@ -50,6 +50,9 @@ class CollectorRecoveryRequest(CollectorModel):
     agent_instance_id: UUID | None = None
     vendor: str | None = None
     native_session_id: str | None = None
+    artifact_ids: list[UUID] | None = Field(default=None, max_length=128)
+    include_upload_state: bool | None = None
+    publication_idempotency_key: str | None = Field(default=None, max_length=512)
 
     @model_validator(mode="after")
     def validate_source(self) -> CollectorRecoveryRequest:
@@ -71,6 +74,10 @@ class CollectorRecoveryResponse(CollectorModel):
     next_publication_sequence: int = Field(ge=0)
     next_living_sequence: int | None = Field(default=None, ge=1)
     source: RecoveredSource | None = None
+    authority_incarnation: UUID | None = None
+    authority_sequence: int | None = Field(default=None, ge=0)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    publication_receipt: dict[str, Any] | None = None
 
 
 class ProjectRegistrationRequest(CollectorModel):
@@ -175,6 +182,7 @@ class ArtifactPublicationRequest(CollectorModel):
     agent_id: UUID
     project_id: UUID
     publication_sequence: int = Field(ge=0)
+    replacement_scope: Literal["upsert", "complete_sources"] | None = None
     source_vector: list[SourceVectorEntry] = Field(min_length=1)
     artifacts: list[ChronicleArtifactPublication] = Field(min_length=1)
 
@@ -236,6 +244,7 @@ class ArtifactManifestRequest(CollectorModel):
     agent_id: UUID
     project_id: UUID
     publication_sequence: int = Field(ge=0)
+    replacement_scope: Literal["upsert", "complete_sources"] | None = None
     source_vector: list[SourceVectorEntry] = Field(min_length=1)
     artifacts: list[ArtifactReference] = Field(min_length=1)
 
