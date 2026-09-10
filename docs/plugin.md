@@ -214,10 +214,11 @@ The datahub session list contains branch-local orchestration runs. It marks
 each row as the lineage root or an ordinary fork and shows the number of agents
 owned by that branch. Session detail exposes three URL-addressable views:
 
-- `/sessions/$sessionId` consumes `/api/sessions/context-window`;
-- `/sessions/$sessionId/tree` consumes `/api/sessions/tree` and shows ordinary
+- `/sessions/$sessionId` calls `session.context-window` through the single
+  `/api/datahub/query` protocol;
+- `/sessions/$sessionId/tree` calls `session.tree` and shows ordinary
   human conversation branches;
-- `/sessions/$sessionId/graph` consumes `/api/sessions/graph` and shows only the
+- `/sessions/$sessionId/graph` calls `session.graph` and shows only the
   selected branch plus its spawned agents.
 
 The retained datahub facts preserve `lineage_root_session_id` so an

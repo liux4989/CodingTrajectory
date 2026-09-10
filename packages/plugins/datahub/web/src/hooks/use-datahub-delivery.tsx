@@ -13,8 +13,6 @@ import {
 import { sourceProfile, type DatahubSourceProfile } from "@/lib/datahub-source";
 
 const CHANGE_POLL_MS = 12_000;
-const MAX_STREAM_RECONNECTS = 3;
-const STREAM_RECONNECT_MS = 1_500;
 const MAX_INCREMENTAL_ENTITIES = 250;
 
 const QUERY_FAMILIES = {
@@ -195,10 +193,7 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
   React.useEffect(() => {
     if (!snapshot.data) return;
     let disposed = false;
-    let source: EventSource | null = null;
-    let reconnectTimer: number | null = null;
     let pollTimer: number | null = null;
-    let reconnects = 0;
     let catchUpWorker: Promise<void> | null = null;
     const controller = new AbortController();
 
@@ -230,52 +225,18 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
       }).finally(() => { catchUpWorker = null; });
       return catchUpWorker;
     };
-    const wake = (revision: number) => {
-      if (!Number.isFinite(revision) || revision <= (appliedRevision.current ?? -1)) return;
-      targetRevision.current = Math.max(targetRevision.current ?? revision, revision);
-      void catchUp();
-    };
     const poll = () => {
       if (!disposed && document.visibilityState === "visible" && appliedRevision.current != null) {
         targetRevision.current = Math.max(targetRevision.current ?? 0, appliedRevision.current + 1);
         void catchUp();
       }
     };
-    const startPolling = () => {
-      source?.close();
-      setDelivery((current) => ({ ...current, mode: "polling" }));
-      poll();
-      pollTimer = window.setInterval(poll, CHANGE_POLL_MS);
-    };
-    const connect = () => {
-      if (disposed) return;
-      setDelivery((current) => ({ ...current, mode: reconnects ? "reconnecting" : current.mode }));
-      source = new EventSource("/api/datahub/events");
-      source.addEventListener("open", () => {
-        reconnects = 0;
-        setDelivery((current) => ({ ...current, mode: "live", error: null }));
-      });
-      source.addEventListener("revision", (event) => {
-        try { wake(Number((JSON.parse((event as MessageEvent<string>).data) as { revision: number }).revision)); } catch { /* malformed wakeups are ignored */ }
-      });
-      source.onerror = () => {
-        source?.close();
-        if (disposed) return;
-        reconnects += 1;
-        if (reconnects > MAX_STREAM_RECONNECTS) startPolling();
-        else {
-          setDelivery((current) => ({ ...current, mode: "reconnecting" }));
-          reconnectTimer = window.setTimeout(connect, STREAM_RECONNECT_MS * reconnects);
-        }
-      };
-    };
-    if (sourceProfile(snapshot.data).kind === "remote") startPolling();
-    else connect();
+    setDelivery((current) => ({ ...current, mode: "polling" }));
+    poll();
+    pollTimer = window.setInterval(poll, CHANGE_POLL_MS);
     return () => {
       disposed = true;
       controller.abort();
-      source?.close();
-      if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
       if (pollTimer != null) window.clearInterval(pollTimer);
     };
   }, [snapshot.data, queryClient]);

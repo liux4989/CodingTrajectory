@@ -39,7 +39,7 @@ def cloudflare_endpoint(url: str) -> str:
         or parsed.path not in {"", "/"}
     ):
         raise ValueError("Cloudflare endpoint must be an HTTPS origin")
-    return url.rstrip("/") + "/rpc/"
+    return url.rstrip("/") + "/v1/core"
 
 
 class CloudflareRpcClient:
@@ -60,8 +60,13 @@ class CloudflareRpcClient:
     def call(self, name: str, request: dict[str, Any]) -> dict[str, Any]:
         try:
             response = self._client.post(
-                self._url + name,
-                json={"request": request},
+                self._url,
+                json={
+                    "protocol": "ct.core.v1",
+                    "id": None,
+                    "method": name,
+                    "params": request,
+                },
             )
             response.raise_for_status()
             payload = response.json()
@@ -75,11 +80,16 @@ class CloudflareRpcClient:
             raise RemoteControlPlaneError(
                 f"remote control-plane {name} failed: {exc}"
             ) from exc
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or not payload.get("ok"):
             raise RemoteControlPlaneError(
-                f"remote control-plane {name} returned a non-object response"
+                f"remote control-plane {name} returned an invalid envelope"
             )
-        return payload
+        result = payload.get("data")
+        if not isinstance(result, dict):
+            raise RemoteControlPlaneError(
+                f"remote control-plane {name} returned non-object data"
+            )
+        return result
 
 
 class CloudflareHistoricalRepository:

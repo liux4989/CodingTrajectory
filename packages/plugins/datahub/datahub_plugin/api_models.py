@@ -848,3 +848,12 @@ def validate_api_response(handler: str, payload: Any) -> None:
     model = API_RESPONSE_BY_HANDLER.get(handler)
     if model is not None:
         model.model_validate(payload)
+
+
+def serialize_api_response(handler: str, payload: Any) -> Any:
+    """Validate a response and retain every declared nullable field as null."""
+
+    model = API_RESPONSE_BY_HANDLER.get(handler)
+    if model is None:
+        return payload
+    return model.model_validate(payload).model_dump(mode="json", exclude_none=False)

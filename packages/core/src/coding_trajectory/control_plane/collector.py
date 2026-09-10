@@ -217,10 +217,11 @@ class CloudflareCollectorRemote:
     def _rpc(
         self, name: str, request: dict[str, Any], *, idempotency_key: str | None = None
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {"request": request}
-        if idempotency_key is not None:
-            body["idempotency_key"] = idempotency_key
-            body["request_sha256"] = _sha256(canonical_json(request).encode())
+        request_sha256 = (
+            _sha256(canonical_json(request).encode())
+            if idempotency_key is not None
+            else None
+        )
         try:
             # Artifact bodies are staged separately; the manifest commits atomically.
             timeout = (
@@ -229,8 +230,21 @@ class CloudflareCollectorRemote:
                 else self._timeout
             )
             response = self._client.post(
-                self._url + name,
-                json=body,
+                self._url,
+                json={
+                    "protocol": "ct.core.v1",
+                    "id": None,
+                    "method": name,
+                    "params": request,
+                    **(
+                        {
+                            "idempotency_key": idempotency_key,
+                            "request_sha256": request_sha256,
+                        }
+                        if idempotency_key is not None
+                        else {}
+                    ),
+                },
                 timeout=timeout,
             )
             response.raise_for_status()
@@ -239,11 +253,16 @@ class CloudflareCollectorRemote:
             raise CollectorRemoteError(
                 f"collector remote {name} failed: {exc}"
             ) from exc
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or not payload.get("ok"):
             raise CollectorRemoteError(
-                f"collector remote {name} returned a non-object response"
+                f"collector remote {name} returned an invalid envelope"
             )
-        return payload
+        result = payload.get("data")
+        if not isinstance(result, dict):
+            raise CollectorRemoteError(
+                f"collector remote {name} returned non-object data"
+            )
+        return result
 
 
 def _project_session_list_variants(

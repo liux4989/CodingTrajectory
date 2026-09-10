@@ -11,15 +11,14 @@ from collections import defaultdict
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import parse_qs, urlparse
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.service import IndexCache, dispatch
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from datahub_plugin.api_models import validate_api_response
-from datahub_plugin.serving.routes import ROUTES
+from datahub_plugin.api_models import serialize_api_response
+from datahub_plugin.serving.routes import METHODS
 
 SNAPSHOT_HORIZON_DAYS = 7
 MAX_CURSOR_OFFSET = 100_000
@@ -28,29 +27,31 @@ SnapshotDecision = Literal["adapter", "metadata_only", "deferred", "omit", "proh
 
 # Every local Datahub route must be classified here.  Keeping deferred and
 # prohibited entries explicit makes route growth fail closed during validation.
-SNAPSHOT_ROUTE_DECISIONS: dict[tuple[str, str], SnapshotDecision] = {
-    ("GET", "/api/datahub/events"): "deferred",
-    ("GET", "/api/datahub/snapshot"): "adapter",
-    ("GET", "/api/datahub/changes"): "adapter",
-    ("GET", "/api/overview"): "deferred",
-    ("GET", "/api/today"): "deferred",
-    ("GET", "/api/projects"): "adapter",
-    ("GET", "/api/projects/detail"): "deferred",
-    ("GET", "/api/sessions"): "adapter",
-    ("GET", "/api/sessions/timeline"): "omit",
-    ("GET", "/api/sessions/context-window"): "prohibited",
-    ("GET", "/api/sessions/graph"): "adapter",
-    ("GET", "/api/sessions/tree"): "adapter",
-    ("GET", "/api/sessions/evidence-timeline"): "prohibited",
-    ("GET", "/api/sessions/events"): "prohibited",
-    ("GET", "/api/sessions/items"): "metadata_only",
-    ("GET", "/api/model-usage"): "deferred",
-    ("GET", "/api/token-efficiency/project"): "deferred",
-    ("GET", "/api/code-time/report"): "deferred",
-    ("GET", "/api/code-time/forecasts"): "deferred",
-    ("GET", "/api/code-time/calibration"): "deferred",
-    ("POST", "/api/refresh"): "prohibited",
+SNAPSHOT_METHOD_DECISIONS: dict[str, SnapshotDecision] = {
+    "datahub.snapshot": "adapter",
+    "datahub.changes": "adapter",
+    "overview": "deferred",
+    "today": "deferred",
+    "projects": "adapter",
+    "project.detail": "deferred",
+    "sessions": "adapter",
+    "sessions.timeline": "omit",
+    "session.context-window": "prohibited",
+    "session.graph": "adapter",
+    "session.tree": "adapter",
+    "session.evidence-timeline": "prohibited",
+    "session.events": "prohibited",
+    "session.items": "metadata_only",
+    "model-usage": "deferred",
+    "token-efficiency.project": "deferred",
+    "code-time.report": "deferred",
+    "code-time.forecasts": "deferred",
+    "code-time.calibration": "deferred",
+    "datahub.refresh": "prohibited",
 }
+
+if set(SNAPSHOT_METHOD_DECISIONS) != {method.name for method in METHODS}:
+    raise RuntimeError("snapshot capability map does not match Datahub methods")
 
 
 class SnapshotRequestError(ValueError):
@@ -126,57 +127,50 @@ class SnapshotService:
         # Preserve the response contract's opaque workspace identity.
         self._workspace_id = uuid5(NAMESPACE_URL, "ct:local-snapshot")
 
-    async def handle_url(
-        self, *, method: str, raw_url: str
+    async def query(
+        self, *, method: str, params: Mapping[str, Any]
     ) -> tuple[dict[str, Any] | list[Any], int]:
-        parsed = urlparse(raw_url)
-        query = _single_value_query(parsed.query)
-        return await self.handle(method=method.upper(), path=parsed.path, query=query)
-
-    async def handle(
-        self, *, method: str, path: str, query: Mapping[str, Any]
-    ) -> tuple[dict[str, Any] | list[Any], int]:
-        decision = SNAPSHOT_ROUTE_DECISIONS.get((method, path))
+        decision = SNAPSHOT_METHOD_DECISIONS.get(method)
         if decision not in {"adapter", "metadata_only"}:
             # Prohibited, deferred, omitted, and unknown routes are deliberately
             # indistinguishable and perform no store access.
             raise SnapshotRequestError(404, "not found")
 
-        if path == "/api/datahub/snapshot":
-            _validate_query(SnapshotQuery, query)
+        if method == "datahub.snapshot":
+            _validate_query(SnapshotQuery, params)
             payload = await self._snapshot()
             handler = "snapshot"
-        elif path == "/api/datahub/changes":
-            params = _validate_query(ChangesQuery, query)
-            payload = await self._changes(params)
+        elif method == "datahub.changes":
+            validated = _validate_query(ChangesQuery, params)
+            payload = await self._changes(validated)
             handler = "changes"
-        elif path == "/api/projects":
-            params = _validate_query(ProjectsQuery, query)
-            payload = await self._projects(params)
+        elif method == "projects":
+            validated = _validate_query(ProjectsQuery, params)
+            payload = await self._projects(validated)
             handler = "projects"
-        elif path == "/api/sessions":
-            params = _validate_query(SessionsQuery, query)
-            payload = await self._sessions(params)
+        elif method == "sessions":
+            validated = _validate_query(SessionsQuery, params)
+            payload = await self._sessions(validated)
             handler = "sessions"
-        elif path == "/api/sessions/graph":
-            params = _validate_query(SessionQuery, query)
-            payload = await self._graph(params)
+        elif method == "session.graph":
+            validated = _validate_query(SessionQuery, params)
+            payload = await self._graph(validated)
             handler = "graph_detail"
-        elif path == "/api/sessions/tree":
-            params = _validate_query(SessionQuery, query)
-            payload = await self._tree(params)
+        elif method == "session.tree":
+            validated = _validate_query(SessionQuery, params)
+            payload = await self._tree(validated)
             handler = "session_tree"
-        elif path == "/api/sessions/items":
-            params = _validate_query(SessionItemsQuery, query)
-            if params.include_content:
+        elif method == "session.items":
+            validated = _validate_query(SessionItemsQuery, params)
+            if validated.include_content:
                 raise SnapshotRequestError(404, "not found")
-            payload = await self._items(params)
+            payload = await self._items(validated)
             handler = "session_item_details"
         else:  # pragma: no cover - registry and dispatch are kept exhaustive
             raise SnapshotRequestError(404, "not found")
 
         try:
-            validate_api_response(handler, payload)
+            payload = serialize_api_response(handler, payload)
         except ValidationError as exc:
             raise RuntimeError("hosted Datahub response contract mismatch") from exc
         return payload, 200
@@ -348,25 +342,17 @@ class SnapshotService:
         return result
 
 
-def assert_snapshot_route_inventory() -> None:
-    """Fail if the local server adds or removes an unreviewed hosted route."""
+def assert_snapshot_method_inventory() -> None:
+    """Fail if the local server adds or removes an unreviewed hosted method."""
 
-    local = {(route.method, route.pattern) for route in ROUTES}
-    classified = set(SNAPSHOT_ROUTE_DECISIONS)
+    local = {method.name for method in METHODS}
+    classified = set(SNAPSHOT_METHOD_DECISIONS)
     if local != classified:
         missing = sorted(local - classified)
         stale = sorted(classified - local)
         raise RuntimeError(
-            f"hosted route classification drift: missing={missing}, stale={stale}"
+            f"hosted method classification drift: missing={missing}, stale={stale}"
         )
-
-
-def _single_value_query(raw_query: str) -> dict[str, str]:
-    parsed = parse_qs(raw_query, keep_blank_values=True, strict_parsing=False)
-    duplicates = sorted(key for key, values in parsed.items() if len(values) != 1)
-    if duplicates:
-        raise SnapshotRequestError(400, "query parameters must not be repeated")
-    return {key: values[0] for key, values in parsed.items()}
 
 
 def _validation_message(exc: ValidationError) -> str:
@@ -459,12 +445,12 @@ def _page(
     return selected, next_cursor
 
 
-assert_snapshot_route_inventory()
+assert_snapshot_method_inventory()
 
 __all__ = [
     "SNAPSHOT_HORIZON_DAYS",
-    "SNAPSHOT_ROUTE_DECISIONS",
+    "SNAPSHOT_METHOD_DECISIONS",
     "SnapshotRequestError",
     "SnapshotService",
-    "assert_snapshot_route_inventory",
+    "assert_snapshot_method_inventory",
 ]

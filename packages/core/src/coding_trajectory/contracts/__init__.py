@@ -8,12 +8,13 @@ delta protocol), ``estimate`` (temporality forecasts), plus ``base``,
 
 from coding_trajectory.contracts.base import ContractModel, RequestModel
 from coding_trajectory.contracts.envelope import (
+    CORE_PROTOCOL,
+    ApiAvailability,
     ApiEnvelopeModel,
     ApiErrorDetail,
     ApiErrorResponse,
     ApiSuccessResponse,
     ApiTransportMetadata,
-    ResultT,
 )
 from coding_trajectory.contracts.estimate import (
     EstimateBackfillJob,
@@ -127,8 +128,10 @@ from coding_trajectory.contracts.session import (
 )
 
 __all__ = [
+    "CORE_PROTOCOL",
     "DEFAULT_SEARCH_KINDS",
     "SERVICE_CONTRACTS",
+    "ApiAvailability",
     "ApiEnvelopeModel",
     "ApiErrorDetail",
     "ApiErrorResponse",
@@ -201,7 +204,6 @@ __all__ = [
     "ProjectionCoverage",
     "ProjectionIdentity",
     "RequestModel",
-    "ResultT",
     "SearchKind",
     "SearchMatch",
     "SearchQuery",

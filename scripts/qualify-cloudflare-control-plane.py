@@ -53,11 +53,16 @@ def check(condition, label):
 
 
 def rpc(method, request, *, role="owner", status=200, key=None):
-    body = {"request": {"workspace_id": WORKSPACE, **request}}
+    body = {
+        "protocol": "ct.core.v1",
+        "id": None,
+        "method": method,
+        "params": {"workspace_id": WORKSPACE, **request},
+    }
     if key:
         body["idempotency_key"] = key
     response = httpx.post(
-        URL + "/rpc/" + method,
+        URL + "/v1/core",
         json=body,
         headers={"Authorization": "Bearer " + TOKENS[role]},
         timeout=30,
@@ -66,7 +71,8 @@ def rpc(method, request, *, role="owner", status=200, key=None):
         response.status_code == status,
         f"{method}: {response.status_code} {response.text[:200]}",
     )
-    return response.json()
+    envelope = response.json()
+    return envelope["data"] if envelope.get("ok") else envelope
 
 
 def main():
@@ -97,8 +103,13 @@ def main():
     rpc("ct_workspace_snapshot", {}, role="other", status=403)
     check(
         httpx.post(
-            URL + "/rpc/ct_workspace_snapshot",
-            json={"request": {"workspace_id": WORKSPACE}},
+            URL + "/v1/core",
+            json={
+                "protocol": "ct.core.v1",
+                "id": None,
+                "method": "ct_workspace_snapshot",
+                "params": {"workspace_id": WORKSPACE},
+            },
         ).status_code
         == 401,
         "missing authentication",

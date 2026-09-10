@@ -11,8 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "packages/plugins/datahub/web"
@@ -31,10 +30,10 @@ def main():
         # The harness exists only in a temporary local directory; deployment
         # always uses snapshot.ts, whose entrypoint verifies Access first.
         (directory / "worker.ts").write_text(
-            f"import worker, {{ api }} from {json.dumps(str(WEB / 'worker/snapshot.ts'))};\n"
+            f"import worker, {{ dispatch }} from {json.dumps(str(WEB / 'worker/snapshot.ts'))};\n"
             "export default { async fetch(request, env) {\n"
             "if (new URL(request.url).pathname.startsWith('/guard/')) return worker.fetch(request,env);\n"
-            "try { return Response.json(await api(new URL(request.url),env)); }\n"
+            "try { return Response.json(await dispatch(await request.json(),env)); }\n"
             "catch(error) { return Response.json({error:true},{status:error.status ?? 503}); }\n"
             "}};\n"
         )
@@ -79,30 +78,55 @@ def main():
             )
             calls = 0
 
-            def get(path, expected=200, **query):
+            def post(method, expected=200, **params):
                 nonlocal calls
-                url = f"http://127.0.0.1:{port}{path}"
-                if query:
-                    url += "?" + urlencode(query)
+                url = f"http://127.0.0.1:{port}/api/datahub/query"
+                request = Request(
+                    url,
+                    data=json.dumps(
+                        {
+                            "protocol": "ct.datahub.v1",
+                            "id": None,
+                            "method": method,
+                            "params": params,
+                        }
+                    ).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
                 try:
-                    response = urlopen(url, timeout=20)
+                    response = urlopen(request, timeout=20)
                 except HTTPError as error:
                     response = error
                 with response:
                     assert response.status == expected, (
-                        path,
+                        method,
                         response.status,
                         expected,
                     )
-                    result = json.load(response)
+                    envelope = json.load(response)
                 calls += 1
-                return result
+                if expected != 200:
+                    return envelope
+                if envelope.get("ok") is False:
+                    return envelope
+                assert envelope["protocol"] == "ct.datahub.v1"
+                assert envelope["error"] is None
+                return envelope["data"]
+
+            def signed_out(path: str):
+                try:
+                    response = urlopen(f"http://127.0.0.1:{port}{path}", timeout=20)
+                except HTTPError as error:
+                    response = error
+                with response:
+                    assert response.status == 403
 
             try:
                 deadline = time.monotonic() + 45
                 while True:
                     try:
-                        snapshot = get("/api/datahub/snapshot")
+                        snapshot = post("datahub.snapshot")
                         break
                     except URLError:
                         if process.poll() is not None or time.monotonic() > deadline:
@@ -110,20 +134,17 @@ def main():
                             raise RuntimeError(log.read()[-3000:]) from None
                         time.sleep(0.2)
                 assert snapshot == json.loads((DATA / "snapshot.json").read_text())
-                get("/guard/", expected=403)
-                get("/guard/_snapshot/snapshot.json", expected=403)
-                get("/api/refresh", expected=404)
-                get("/api/sessions/events", expected=404)
-                get("/api/datahub/snapshot?unexpected=1", expected=400)
-                get("/api/sessions?since_days=7&since_days=1", expected=400)
-                get("/api/sessions", expected=400, since_days=8)
-                get("/api/sessions/graph", expected=400, session_id="../snapshot")
-                get("/api/sessions/items", expected=404, include_content="true")
+                signed_out("/guard/")
+                signed_out("/guard/_snapshot/snapshot.json")
+                assert post("datahub.refresh")["data"] is None
+                assert post("session.events")["data"] is None
+                post("sessions", expected=400, since_days=8)
+                post("session.graph", expected=400, session_id="../snapshot")
                 revision = snapshot["revision"]
-                assert not get("/api/datahub/changes", after_revision=revision)[
+                assert not post("datahub.changes", after_revision=revision)[
                     "reset_required"
                 ]
-                assert get("/api/datahub/changes", after_revision=revision - 1)[
+                assert post("datahub.changes", after_revision=revision - 1)[
                     "reset_required"
                 ]
                 for days in range(1, 8):
@@ -133,14 +154,14 @@ def main():
                         params = {"since_days": days, "limit": 3}
                         if cursor:
                             params["cursor"] = cursor
-                        payload = get("/api/sessions", **params)
+                        payload = post("sessions", **params)
                         rows.extend(payload["items"])
                         cursor = payload["page"]["next_cursor"]
                         if cursor is None:
                             break
                     assert rows == expected
                 projects = json.loads((DATA / "projects.json").read_text())
-                assert get("/api/projects", limit=200)["items"] == projects
+                assert post("projects", limit=200)["items"] == projects
                 for project in projects:
                     rows = json.loads((DATA / "sessions-7.json").read_text())
                     for vendor in project["vendors"]:
@@ -151,8 +172,8 @@ def main():
                             and vendor in row["vendors"]
                         ]
                         assert (
-                            get(
-                                "/api/sessions",
+                            post(
+                                "sessions",
                                 project_name=project["name"],
                                 agent_vendor=vendor,
                                 limit=200,
@@ -161,16 +182,22 @@ def main():
                         )
                 for kind, route in [("trees", "tree"), ("graphs", "graph")]:
                     for file in (DATA / kind).glob("*.json"):
-                        assert get(
-                            f"/api/sessions/{route}", session_id=file.stem
+                        assert post(
+                            f"session.{route}", session_id=file.stem
                         ) == json.loads(file.read_text())
                 sample = []
                 for file in (DATA / "items").glob("*.json"):
                     sample.extend(list(json.loads(file.read_text()).values())[:10])
+                post(
+                    "session.items",
+                    expected=404,
+                    item_ids=[sample[0]["item_id"]],
+                    include_content=True,
+                )
                 assert (
-                    get(
-                        "/api/sessions/items",
-                        item_ids=",".join(row["item_id"] for row in sample),
+                    post(
+                        "session.items",
+                        item_ids=[row["item_id"] for row in sample],
                     )
                     == sample
                 )

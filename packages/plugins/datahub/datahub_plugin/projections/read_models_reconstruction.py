@@ -61,7 +61,7 @@ def reconstruct_projects(
     *,
     agent_vendor: str | None = None,
 ) -> dict[str, Any]:
-    """Return the current ``/api/projects`` shape from persisted project rows."""
+    """Return the current ``projects`` query shape from persisted project rows."""
 
     items = []
     for row in rows:
@@ -83,7 +83,7 @@ def reconstruct_sessions(
     agent_vendor: str | None = None,
     include: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Return the current ``/api/sessions`` shape without hot-row validation."""
+    """Return the current ``sessions`` query shape without hot-row validation."""
 
     requested = set(include)
     items: list[tuple[str, dict[str, Any]]] = []

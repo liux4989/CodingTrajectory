@@ -5,7 +5,6 @@ import gzip
 import json
 import logging
 import mimetypes
-import queue
 import re
 import shutil
 import subprocess
@@ -20,14 +19,19 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 from coding_trajectory import datahub as _core_datahub  # noqa: F401
 
 import datahub_plugin.cli.code_time_cmd as code_time_mod
-from datahub_plugin.api_models import validate_api_response
+from datahub_plugin.api_models import serialize_api_response
 from datahub_plugin.runtime.runtime import DatahubIncrementalRuntime
-from datahub_plugin.serving.routes import ROUTES
+from datahub_plugin.serving.routes import (
+    DATAHUB_ENDPOINT,
+    DATAHUB_PROTOCOL,
+    METHODS,
+    METHODS_BY_NAME,
+)
 
 _FINGERPRINTED_ASSET = re.compile(r"-[A-Za-z0-9_-]{8,}\.[^.]+$")
 _GZIP_CONTENT_TYPES = (
@@ -62,9 +66,6 @@ class DatahubWebConfig:
 class DatahubHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
-
-
-_ROUTES = {(route.method, route.pattern): route for route in ROUTES}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -205,7 +206,7 @@ def _handler_for(
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path.startswith("/api/"):
-                self._handle_api_get(parsed.path, parse_qs(parsed.query))
+                self._json_error(HTTPStatus.METHOD_NOT_ALLOWED, "method not allowed")
                 return
             self._serve_static(parsed.path, include_body=True)
 
@@ -218,66 +219,95 @@ def _handler_for(
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            if not parsed.path.startswith("/api/"):
+            if parsed.path != DATAHUB_ENDPOINT or parsed.query:
                 self._json_error(HTTPStatus.NOT_FOUND, "not found")
                 return
             try:
                 body = self._read_json_body()
-                payload, status = self._handle_api_post(parsed.path, body)
-            except ValueError as exc:
-                self._json_error(HTTPStatus.BAD_REQUEST, str(exc))
+                payload, status = self._handle_query(body)
+            except (TypeError, ValueError) as exc:
+                self._protocol_error(
+                    HTTPStatus.BAD_REQUEST,
+                    body.get("id") if "body" in locals() else None,
+                    body.get("method") if "body" in locals() else None,
+                    "invalid_params",
+                    str(exc),
+                )
                 return
             except RuntimeError as exc:
-                self._json_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+                self._protocol_error(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    body.get("id"),
+                    body.get("method"),
+                    "query_failed",
+                    str(exc),
+                )
                 return
             self._json_response(payload, status=status)
 
         def log_message(self, format: str, *args: Any) -> None:
             print(f"{self.address_string()} - {format % args}", file=sys.stderr)
 
-        def _handle_api_get(self, path: str, query: dict[str, list[str]]) -> None:
-            route = _ROUTES.get(("GET", path))
-            if route is None:
-                self._json_error(HTTPStatus.NOT_FOUND, "not found")
-                return
+        def _handle_query(
+            self, body: dict[str, Any]
+        ) -> tuple[dict[str, Any], HTTPStatus]:
+            if set(body) - {"protocol", "id", "method", "params"}:
+                raise ValueError("request contains unknown fields")
+            if body.get("protocol") != DATAHUB_PROTOCOL:
+                raise ValueError(f"protocol must be {DATAHUB_PROTOCOL}")
+            method_name = body.get("method")
+            if not isinstance(method_name, str) or not method_name:
+                raise ValueError("method is required")
+            params = body.get("params")
+            if not isinstance(params, dict):
+                raise TypeError("params must be an object")
+            if method_name == "datahub.capabilities":
+                return self._protocol_success(
+                    body.get("id"),
+                    method_name,
+                    {
+                        "supported": [method.name for method in METHODS],
+                        "unsupported": [],
+                    },
+                ), HTTPStatus.OK
+            method = METHODS_BY_NAME.get(method_name)
+            if method is None:
+                return self._protocol_unavailable(
+                    body.get("id"), method_name, "unsupported"
+                ), HTTPStatus.OK
+            unknown = set(params) - set(method.params)
+            if unknown:
+                raise ValueError(f"unknown params: {', '.join(sorted(unknown))}")
+            query = _query_values(params)
             started = time.perf_counter()
             try:
-                endpoint = getattr(self, f"_route_{route.handler}")
-                if not route.streaming:
-                    # Preserve the historical GET-wide validation, including the
-                    # effective 200-item ceiling on forecast requests.
+                endpoint = getattr(self, f"_route_{method.handler}")
+                if method.handler == "request_refresh":
+                    payload, status = endpoint(query)
+                else:
                     _bounded_page_size(query)
                     _cursor(query)
-                payload = endpoint(query)
-                if route.streaming:
-                    return
-                validate_api_response(route.handler, payload)
-                self._json_response(payload)
+                    payload = endpoint(query)
+                    status = HTTPStatus.OK
+                payload = serialize_api_response(method.handler, payload)
+                return self._protocol_success(
+                    body.get("id"), method_name, payload
+                ), status
             except DatahubBootstrapPending as exc:
-                self._json_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
-                return
-            except RuntimeError as exc:
-                self._json_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
-                return
-            except ValueError as exc:
-                self._json_error(HTTPStatus.BAD_REQUEST, str(exc))
-                return
+                return self._protocol_unavailable(
+                    body.get("id"), method_name, "not_materialized", str(exc)
+                ), HTTPStatus.SERVICE_UNAVAILABLE
+            except (ValueError, RuntimeError):
+                raise
             except Exception:  # noqa: BLE001 - API boundary preserves JSON errors
                 traceback.print_exc()
-                self._json_error(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
-                    "unexpected Datahub API error",
-                )
-                return
+                raise RuntimeError("unexpected Datahub API error") from None
             finally:
                 _LOGGER.debug(
-                    "datahub route=%s duration_ms=%.3f",
-                    route.handler,
+                    "datahub method=%s duration_ms=%.3f",
+                    method.handler,
                     (time.perf_counter() - started) * 1000,
                 )
-
-        def _route_revision_events(self, query: dict[str, list[str]]) -> None:
-            self._revision_events()
 
         def _route_snapshot(self, query: dict[str, list[str]]) -> dict[str, Any]:
             return (
@@ -440,40 +470,6 @@ def _handler_for(
         ) -> dict[str, Any]:
             return _code_time_calibration_payload(query)
 
-        def _revision_events(self) -> None:
-            if runtime is None:
-                self._json_error(
-                    HTTPStatus.SERVICE_UNAVAILABLE, "incremental runtime unavailable"
-                )
-                return
-            subscriber, _revision = runtime.subscribe_revisions()
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self.end_headers()
-
-            def emit(current: int) -> None:
-                data = json.dumps({"revision": current}, separators=(",", ":"))
-                self.wfile.write(
-                    f"id: {current}\nevent: revision\ndata: {data}\n\n".encode()
-                )
-                self.wfile.flush()
-
-            try:
-                while True:
-                    try:
-                        next_revision = subscriber.get(timeout=25.0)
-                        if next_revision < 0:
-                            return
-                        emit(next_revision)
-                    except queue.Empty:
-                        self.wfile.write(b": keepalive\n\n")
-                        self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            finally:
-                runtime.unsubscribe_revisions(subscriber)
 
         def _window_days(self, query: dict[str, list[str]]) -> int:
             since_days = _bounded_positive_int(query, "since_days", 7)
@@ -494,25 +490,6 @@ def _handler_for(
                     "datahub read model is not available yet; retry shortly"
                 )
             return payload
-
-        def _handle_api_post(
-            self, path: str, body: dict[str, Any]
-        ) -> tuple[dict[str, Any], HTTPStatus]:
-            route = _ROUTES.get(("POST", path))
-            if route is None:
-                raise ValueError("unknown api endpoint")
-            started = time.perf_counter()
-            try:
-                endpoint = getattr(self, f"_route_{route.handler}")
-                payload, status = endpoint(body)
-                validate_api_response(route.handler, payload)
-                return payload, status
-            finally:
-                _LOGGER.debug(
-                    "datahub route=%s duration_ms=%.3f",
-                    route.handler,
-                    (time.perf_counter() - started) * 1000,
-                )
 
         def _route_request_refresh(
             self, body: dict[str, Any]
@@ -573,6 +550,8 @@ def _handler_for(
 
         def _read_json_body(self) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length") or "0")
+            if length > 1_000_000:
+                raise ValueError("request body exceeds 1 MB")
             if length <= 0:
                 return {}
             raw = self.rfile.read(length)
@@ -605,7 +584,74 @@ def _handler_for(
             self.end_headers()
             self.wfile.write(data)
 
+        def _protocol_success(
+            self, request_id: Any, method: str, data: Any
+        ) -> dict[str, Any]:
+            return {
+                "protocol": DATAHUB_PROTOCOL,
+                "id": request_id,
+                "method": method,
+                "ok": True,
+                "data": data,
+                "availability": {"state": "complete", "missing": []},
+                "error": None,
+            }
+
+        def _protocol_unavailable(
+            self,
+            request_id: Any,
+            method: Any,
+            reason: str,
+            message: str | None = None,
+        ) -> dict[str, Any]:
+            return {
+                "protocol": DATAHUB_PROTOCOL,
+                "id": request_id,
+                "method": method,
+                "ok": False,
+                "data": None,
+                "availability": {
+                    "state": "unsupported"
+                    if reason == "unsupported"
+                    else "unavailable",
+                    "missing": [{"field": "$", "reason": reason}],
+                },
+                "error": {
+                    "code": reason,
+                    "message": message or "Datahub method is unavailable",
+                },
+            }
+
+        def _protocol_error(
+            self,
+            status: HTTPStatus,
+            request_id: Any,
+            method: Any,
+            code: str,
+            message: str,
+        ) -> None:
+            self._json_response(
+                self._protocol_unavailable(request_id, method, code, message),
+                status=status,
+            )
+
     return DatahubRequestHandler
+
+
+def _query_values(params: dict[str, Any]) -> dict[str, list[str]]:
+    query: dict[str, list[str]] = {}
+    for key, value in params.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            query[key] = ["true" if value else "false"]
+        elif isinstance(value, list):
+            query[key] = [",".join(str(item) for item in value)]
+        elif isinstance(value, (str, int, float)):
+            query[key] = [str(value)]
+        else:
+            raise TypeError(f"{key} must be a scalar, array, or null")
+    return query
 
 
 def _first(query: dict[str, list[str]], key: str) -> str | None:

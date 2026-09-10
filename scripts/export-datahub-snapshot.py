@@ -82,46 +82,46 @@ async def export(project: Path, assets: Path) -> Manifest:
             path.write_bytes(data)
             files[name] = hashlib.sha256(data).hexdigest()
 
-        async def response(path: str, **query):
-            payload, status = await service.handle(method="GET", path=path, query=query)
+        async def response(method: str, **params):
+            payload, status = await service.query(method=method, params=params)
             assert status == 200
             return payload
 
-        async def collection(path: str, **query):
+        async def collection(method: str, **params):
             rows = []
             while True:
-                payload = await response(path, limit=200, **query)
+                payload = await response(method, limit=200, **params)
                 rows.extend(payload["items"])
                 cursor = payload["page"]["next_cursor"]
                 if cursor is None:
                     return rows
-                query["cursor"] = cursor
+                params["cursor"] = cursor
 
-        write("snapshot.json", await response("/api/datahub/snapshot"))
+        write("snapshot.json", await response("datahub.snapshot"))
         write(
             "changes.json",
-            await response("/api/datahub/changes", after_revision=revision),
+            await response("datahub.changes", after_revision=revision),
         )
-        write("projects.json", await collection("/api/projects"))
+        write("projects.json", await collection("projects"))
         for days in range(1, 8):
             write(
                 f"sessions-{days}.json",
-                await collection("/api/sessions", since_days=days),
+                await collection("sessions", since_days=days),
             )
         for session_id in sorted(store.sessions, key=str):
             write(
                 f"trees/{session_id}.json",
-                await response("/api/sessions/tree", session_id=str(session_id)),
+                await response("session.tree", session_id=str(session_id)),
             )
             write(
                 f"graphs/{session_id}.json",
-                await response("/api/sessions/graph", session_id=str(session_id)),
+                await response("session.graph", session_id=str(session_id)),
             )
         buckets: dict[str, dict[str, Any]] = defaultdict(dict)
         ids = sorted(store.items, key=str)
         for offset in range(0, len(ids), 200):
             details = await response(
-                "/api/sessions/items",
+                "session.items",
                 item_ids=[str(x) for x in ids[offset : offset + 200]],
             )
             for detail in details:

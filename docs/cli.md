@@ -185,7 +185,7 @@ All 25 registered service methods are covered below. The registry in
 | `estimate.*` | Local estimation authority first; missing targeted state may use the remote authority |
 
 `ct api serve --remote-workspace-id "$CT_REMOTE_WORKSPACE_ID"` exposes
-authenticated `POST /v1/call`, `POST /v1/batch`, and `POST /v1/schema` endpoints
+the authenticated `POST /v1/core` endpoint and its `ct.core.v1` envelope
 (default bind: `127.0.0.1:8765`). Requests need a bearer token. Local
 `ct api schema METHOD` remains offline and does not need credentials.
 

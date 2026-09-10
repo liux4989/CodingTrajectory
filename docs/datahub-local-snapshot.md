@@ -35,13 +35,18 @@ project explicitly. `--assets` selects an existing hosted build directory. The
 snapshot files are generated under the ignored `web/dist/_snapshot` directory;
 they must not be committed. Build first: the web build clears the output folder.
 
-## Behavior and validation
+## Query protocol and validation
 
-The seven supported routes are snapshot, changes, projects, sessions, graph,
-tree, and metadata items. Lists retain filtering and revision-pinned pagination.
-After republishing, an old cursor fails with 409 and changes requests tell the
-client to reset. Unsupported routes and content hydration remain unavailable.
-All assets and API responses require Access and use `Cache-Control: no-store`.
+Local and hosted Datahub use one `POST /api/datahub/query` endpoint with the
+`ct.datahub.v1` envelope. The hosted snapshot supports the
+`datahub.snapshot`, `datahub.changes`, `projects`, `sessions`, `session.graph`,
+`session.tree`, and metadata-only `session.items` methods. Optional filters may
+be explicit `null`. Missing or unsupported method data is returned as `null`
+with a structured availability reason; invalid required parameters remain an
+error. Lists retain filtering and revision-pinned pagination. After
+republishing, an old cursor fails with 409 and changes requests tell the client
+to reset. All assets and API responses require Access and use
+`Cache-Control: no-store`.
 
 The exporter verifies canonical Chronicle replay and validates API response
 models. Each exported response has a digest in the manifest and a 20 MiB size

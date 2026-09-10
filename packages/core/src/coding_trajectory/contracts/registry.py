@@ -91,14 +91,14 @@ class ServiceContract:
     def validate_response(self, payload: Any) -> Any:
         return self.response_model.model_validate(payload).model_dump(
             mode="json",
-            exclude_none=True,
+            exclude_none=False,
         )
 
     def validate_cli_response(self, payload: Any) -> Any:
         model = self.cli_response_model or self.response_model
         return model.model_validate(payload).model_dump(
             mode="json",
-            exclude_none=True,
+            exclude_none=False,
         )
 
     def schema(self, *, command: str) -> dict[str, Any]:

@@ -12,6 +12,12 @@ export class Workspace extends DurableObject<Env> {
     this.state = new State(ctx.storage.sql);
   }
 
+  async invoke(method: string, envelopeJson: string, principalJson: string): Promise<string> {
+    const envelope = JSON.parse(envelopeJson);
+    const principal = JSON.parse(principalJson);
+    return JSON.stringify(await this.rpc(method, envelope, principal));
+  }
+
   async rpc(method: string, envelope: Json, principal: Principal): Promise<{ status: number; body: Json }> {
     try {
       const request = envelope.request;

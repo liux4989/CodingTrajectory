@@ -31,7 +31,11 @@ the Python runtime or collector profile.
 
 ## Contracts
 
-The Worker exposes POST `/rpc/ct_*` operations used by the Python repositories.
+The Worker exposes one authenticated `POST /v1/core` endpoint using the
+`ct.core.v1` envelope. Its typed `method` and `params` select the collector,
+historical, living, or estimation operation used by the Python repositories.
+Optional parameters may be explicit `null`; successful responses retain
+declared nullable fields instead of omitting them.
 Requests use a JSON `request` envelope. Collector calls additionally carry an
 idempotency key. Reusing a key with changed content fails; an exact retry returns
 the stored receipt. Ingress schemas are generated from canonical Pydantic models

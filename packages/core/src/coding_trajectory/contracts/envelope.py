@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-ResultT = TypeVar("ResultT")
+CORE_PROTOCOL = "ct.core.v1"
 
 
 class ApiEnvelopeModel(BaseModel):
@@ -23,21 +23,35 @@ class ApiTransportMetadata(ApiEnvelopeModel):
     content_scope: Literal["chronicle"]
 
 
-class ApiSuccessResponse(ApiEnvelopeModel, Generic[ResultT]):
+class ApiAvailability(ApiEnvelopeModel):
+    state: Literal["complete", "partial", "unavailable", "unsupported"]
+    missing: list[dict[str, str]]
+
+
+class ApiSuccessResponse[ResultT](ApiEnvelopeModel):
+    protocol: Literal["ct.core.v1"] = CORE_PROTOCOL
     id: Any
     method: str
     ok: Literal[True]
-    result: ResultT
+    data: ResultT
+    availability: ApiAvailability = Field(
+        default_factory=lambda: ApiAvailability(state="complete", missing=[])
+    )
+    error: None = None
     meta: ApiTransportMetadata | None = None
 
 
 class ApiErrorDetail(ApiEnvelopeModel):
+    code: str
     message: str
 
 
 class ApiErrorResponse(ApiEnvelopeModel):
+    protocol: Literal["ct.core.v1"] = CORE_PROTOCOL
     id: Any
     method: Any
     ok: Literal[False]
+    data: None = None
+    availability: ApiAvailability
     error: ApiErrorDetail
     meta: ApiTransportMetadata | None = None
