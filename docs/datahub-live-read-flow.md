@@ -1,8 +1,9 @@
 # Shared local and remote Datahub read flow
 
-Status: target design agreed in discussion; the deployed remote Datahub still
-serves a frozen export. An initial implementation is documented in [operations](refactor/operations.md).
-The [complete refactor specification](refactor/README.md) governs implementation;
+Status: the shared Datahub uses the live Worker adapter over committed control-plane
+state. Frozen website exports are no longer supported. Deployment and verification
+are documented in [operations](refactor/operations.md). The
+[complete refactor specification](refactor/README.md) governs the remaining work;
 this document summarizes the consumer boundary so upload and presentation can
 evolve independently.
 
@@ -103,8 +104,8 @@ different revisions. Bind caches and cursors to source, workspace, revision,
 method, filters, and projection version. A source switch invalidates incompatible
 cached data.
 
-The initial live adapter should cover the currently shareable session/graph
-views. Other analysis methods become available only after remote contract parity
+The live adapter covers the currently shareable session/graph views. Other
+analysis methods become available only after remote contract parity
 is qualified. Unsupported methods report the established availability envelope,
 rather than invented empty results or local fallback on a remote host.
 
@@ -127,10 +128,9 @@ names are owned by the implementation agent:
 6. Provenance that identifies the owning collector and source epoch without
    exposing host paths, credentials, or raw session bodies.
 
-The delegated implementation has proposed these additive internal read methods:
-`ct_publication_watermark`, `ct_artifact_chunk_manifest`, and
-`ct_artifact_chunks`. Their implementations are still under qualification. The
-Datahub adapter will consume them without exposing a second browser protocol.
+The committed authority exposes indexed publication catalog and change methods
+for the live Datahub adapter. Manifest-native chunk reads remain under
+qualification and do not expose a second browser protocol.
 Legacy gzip artifacts remain a compatibility case; the existing size ceiling
 must not be bypassed by unbounded reconstruction. Chunking alone does not yet
 establish support for sessions beyond that ceiling.
@@ -159,18 +159,18 @@ advancing. Present that as a publication mode and timestamp, not a service error
 
 ## Integration sequence and acceptance
 
-1. Agree the manifest, published watermark, and scoped-read interface with the
-   upload implementation. Preserve existing readers during protocol migration.
-2. Implement a database-backed Datahub adapter under the current query envelope.
-   Keep the snapshot exporter as an optional frozen export.
-3. Qualify local and remote responses from the same sanitized corpus: identity,
+1. Maintain the manifest, published watermark, and scoped-read interface between
+   the upload authority and live reader.
+2. Keep the database-backed Datahub adapter under the current query envelope;
+   do not reintroduce a website-export delivery path.
+3. Qualify local and shared responses from the same sanitized corpus: identity,
    graph relationships, measurements, pagination, and availability must agree.
 4. Verify that partial uploads are invisible, lost acknowledgements create no
    duplicate revisions, source switches isolate caches, and expired cursors reset
    explicitly. Use integration qualification, not new unit tests.
-5. Switch the hosted adapter only after authenticated live reads and multi-host
-   upload/recovery checks pass. Data publication must then become visible without
-   a website rebuild or deployment.
+5. Promote hosted releases only after authenticated live reads and multi-host
+   upload/recovery checks pass. Data publication must remain visible without a
+   website rebuild or software deployment.
 
 The existing five-minute upload LaunchAgent on this Mac was disabled at the
 user's request. Neither read integration nor service installation should silently

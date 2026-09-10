@@ -57,9 +57,11 @@ exact retries and reconcile source/publication watermarks. The local index and
 Datahub read models accelerate reads; they do not replace source evidence.
 
 Cloudflare stores versioned workspace state in a SQLite Durable Object and
-immutable compressed artifacts in private R2. The direct Datahub snapshot uses
-Static Assets and Access independently. See the control-plane design for
-credential scope, transaction boundaries, and deployment instructions.
+immutable compressed artifacts in private R2. The Access-protected Datahub Worker
+serves its web assets and reads live committed workspace data through the control
+plane. Publishing data does not rebuild or redeploy the website. See the
+control-plane design for credential scope, transaction boundaries, and deployment
+instructions.
 
 ## API and plugin boundaries
 
