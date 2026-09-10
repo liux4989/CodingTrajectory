@@ -1,0 +1,104 @@
+name: Core CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-contracts:
+    name: Python and contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+
+      - name: Install locked Python workspace
+        run: uv sync --all-packages --frozen
+
+      - name: Check Python sources
+        run: |
+          uv run python -m compileall -q packages/core/src packages/cli/src
+          scripts/check-datahub-static.sh
+
+      - name: Validate repository contracts
+        run: |
+          uv run python scripts/validate-local-first-source-selection.py
+          uv run python scripts/qualify-canonical-repository.py
+          uv run python scripts/qualify-connection-workflows.py
+
+      - name: Validate metric baselines
+        run: uv run python scripts/validate-metrics-baselines.py
+
+  cloudflare-web:
+    name: Cloudflare and web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: cloudflare/control-plane/package-lock.json
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install locked dependencies
+        run: |
+          uv sync --all-packages --frozen
+          npm --prefix cloudflare/control-plane ci
+          bun --cwd packages/plugins/datahub/web ci
+
+      - name: Check control plane
+        run: npm --prefix cloudflare/control-plane run check
+
+      - name: Check and build Datahub
+        working-directory: packages/plugins/datahub/web
+        run: |
+          bun run check:api
+          bun run types:worker
+          git diff --exit-code -- worker/worker-configuration.d.ts
+          bun run check:worker
+          bun run build:hosted
+
+      - name: Bundle control plane without deploying
+        working-directory: cloudflare/control-plane
+        run: npx wrangler deploy --dry-run --env="" --outdir ../../.artifacts/ci/control-plane
+
+      - name: Bundle Datahub without deploying
+        working-directory: packages/plugins/datahub/web
+        run: bunx wrangler deploy --dry-run --env="" --config ../wrangler.live.jsonc --outdir ../../../../.artifacts/ci/datahub
