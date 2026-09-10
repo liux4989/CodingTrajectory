@@ -7,7 +7,7 @@ const MAX_NODES = 16384;
 const MAX_PACK_READ = 32 * 1024 * 1024;
 const encoder = new TextEncoder();
 const bytes = (value: string) => encoder.encode(value).length;
-type Descriptor = { digest: string; agent: string; pack_key: string; offset: number; length: number; pack_bytes: number; validation_version: number };
+export type Descriptor = { digest: string; agent: string; pack_key: string; offset: number; length: number; pack_bytes: number; validation_version: number };
 
 function normalizedNode(raw: Json): Json {
   requireThat(["json", "object", "array", "concat"].includes(raw.kind), "invalid_chunk_kind");
@@ -69,13 +69,19 @@ export async function missingChunks(state: State, bucket: R2Bucket, request: Jso
   return { missing };
 }
 
-function nodeReader(state: State, bucket: R2Bucket, agent: string) {
+export function nodeReader(bucket: R2Bucket, lookup: (ids: string[]) => Promise<Descriptor[]>) {
+  const descriptors = new Map<string, Descriptor>();
+  async function prefetch(ids: string[]) {
+    const missing = ids.filter(id => !descriptors.has(id));
+    if (missing.length) for (const row of await lookup(missing)) descriptors.set(row.digest, row);
+  }
   const packs = new Map<string, Uint8Array>();
   const nodes = new Map<string, Json>();
   let packBytes = 0;
   return async (id: string): Promise<Json> => {
     if (nodes.has(id)) return nodes.get(id)!;
-    const row = descriptor(state, agent, id);
+    await prefetch([id]);
+    const row = descriptors.get(id);
     requireThat(row, "missing_chunk", 409);
     requireThat(row.validation_version === 1 && row.length <= MAX_NODE && row.pack_bytes <= MAX_BATCH && row.offset >= 0 && row.length > 0 && row.offset + row.length <= row.pack_bytes, "invalid_chunk_descriptor", 503);
     if (!packs.has(row.pack_key)) {
@@ -91,12 +97,12 @@ function nodeReader(state: State, bucket: R2Bucket, agent: string) {
     requireThat(await digest(raw) === id, "corrupt_chunk", 503);
     const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw));
     nodes.set(id, value);
+    if (value.kind !== "json") await prefetch(value.kind === "object" ? Object.values(value.entries) : value.entries);
     return value;
   };
 }
 
-export async function reconstruct(state: State, bucket: R2Bucket, agent: string, root: string): Promise<{ canonical: string; digests: string[] }> {
-  const getNode = nodeReader(state, bucket, agent);
+export async function reconstruct(getNode: (id: string) => Promise<Json>, root: string): Promise<{ canonical: string; digests: string[] }> {
   const visited = new Set<string>();
   const ancestors = new Set<string>();
   let expandedBytes = 0;
@@ -159,7 +165,9 @@ export async function uploadRead(state: State, bucket: R2Bucket, method: string,
     requireThat(typeof id === "string" && DIGEST.test(id), "invalid_chunk_digest");
     requireThat(state.sql.exec("SELECT 1 FROM upload_members WHERE root=? AND digest=? AND agent=?", root, id, row.agent_id).toArray().length, "chunk_not_in_revision", 403);
   }
-  const getNode = nodeReader(state, bucket, row.agent_id);
+  const getNode = nodeReader(bucket, async ids => ids.flatMap(id => {
+    const found = descriptor(state, row.agent_id, id); return found ? [found] : [];
+  }));
   const chunks: Json[] = [];
   let total = 0;
   for (const id of request.digests) {

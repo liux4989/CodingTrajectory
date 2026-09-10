@@ -18,7 +18,7 @@ class PublishedCatalogRequest(BaseModel):
     agent_vendor: str | None = Field(default=None, min_length=1, max_length=64)
     since_days: int | None = Field(default=None, ge=1, le=36500)
     resource_id: UUID | None = None
-    kind: Literal["sessions", "projects", "detail"] = "sessions"
+    kind: Literal["sessions", "projects", "detail", "status"] = "sessions"
 
 
 class PublicationChangesRequest(BaseModel):

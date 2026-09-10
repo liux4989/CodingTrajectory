@@ -14,11 +14,57 @@ because chunk transfer works or because a Worker deploy succeeds.
 | R3 | Indexed published catalog, watermark/change feed, ownership and committed manifests: workspace authority, remote repositories | R2 | Multi-host isolation, scope-safe updates, paging beyond current record ceiling |
 | R4 | Live Datahub adapter and explicit source/capability/freshness handling: Datahub serving contracts, Worker, frontend | R3 | Authenticated local/shared parity, no website rebuild on publication, no read-side upload |
 | R5 | Qualified incremental canonical parsing and manifest-native large-graph reads | R1-R4 | Reduced affected-source work and larger-than-legacy graphs with bounded processing |
-| R6 | Lifecycle commands, opt-in supervisor integration, retention, recovery runbooks and soak | R2-R5 | Crash/outage/restart/GC/load gates and documented operational limits |
+| R6a | Managed host lifecycle, explicit automatic mode, restart/outage recovery and unified status | R2 | Installed-but-disabled supervision; retained outbox and mode after restart; isolated project failures |
+| R6b | Reference-safe retention and sustained multi-host/large-graph qualification | R3, R5, R6a | GC races, restore, outage catch-up and documented operational limits |
 
 R1 and R2 can proceed in parallel behind a frozen capture/repository interface.
 R5 is necessary for the final scale objective; shipping R2 must explicitly state
 that full-prefix reconstruction and legacy whole-graph limits may remain.
+
+## Approved next delivery order (2026-09-10)
+
+Follow [the operating model](operating-model.md):
+
+1. R6a: one managed host service, project registration, explicit enablement,
+   restart recovery and local status. This does not depend on R5.
+2. Bind the live Datahub Worker to Core through a service binding, preserving
+   reader authorization and the external collector HTTPS interface.
+3. Add one reproducible release entrypoint with isolated staging, bounded resumable
+   migration, authenticated verification and recorded versions.
+4. Reduce preparation and validation work: reuse unchanged canonical inputs,
+   keep expensive payload work outside the workspace coordinator, and preserve
+   the explicit compatibility ceiling until manifest-native scale is qualified.
+5. Complete truthful publication/collector health and operational acceptance.
+   R6b remains a separate capability gate for destructive retention and scale.
+
+Each step must leave a usable, qualified result. Keep new commands and behaviors
+marked proposed until their implementation and integration checks are recorded.
+
+### Operating delivery implementation (2026-09-10)
+
+All five steps have local implementations; no host schedule or cloud deployment
+was activated by this delivery.
+
+| Step | Implemented behavior | Local evidence |
+| --- | --- | --- |
+| Managed lifecycle | One host service; explicit publication policy; launchd/systemd templates; retained per-project state; separate preparation/delivery lanes; secret rotation | `qualify-managed-collection.py`: 22 checks, real SQLite/CLI, HTTP outage and hard process restart |
+| Native connection | Datahub `CORE` service binding with scoped reader credential; explicit staging binding | Native workerd service binding; denied writer/wrong workspace; zero public Core calls |
+| Release | One resumable script and manual CI workflow; isolated DO/R2; bounded migration; clean-source/staging proof; worker version and durable canary receipts | `qualify-release-workflow.py`: 18 checks on loopback; Actions/live release still unverified |
+| Reduced processing | Content/parser/dependency-keyed normalized source cache; shared Python projection store/cache; Worker body validation and reconstruction; 128-entry DO index pages and final coverage check | `qualify-preparation-reuse.py`: exact reuse, same-length edit and corrupt-cache recovery; incremental delivery and legacy reads remain qualified |
+| Truthful status | Local heartbeat age, pending age and remedies; metadata-only catalog status; separate publication/authority times; unknown hosted collector health | Native runtime and Pydantic serialization; generated API types and hosted build |
+
+Run `node scripts/qualify-refactor-runtime.mjs --all` for the complete local
+integration flow. The metrics gate and full committed baseline workflow also
+pass without changing expected values. Qualification has no cloud-account access
+and uses no user provider logs.
+
+The source cache avoids repeated normalization of byte-identical source groups,
+but still reads and fences complete prefixes. It is disposable and capped at
+64 MiB; durable repositories and outboxes remain authoritative. Full-graph
+assembly, serialization and the 8 MiB graph ceiling remain. R5 and R6b are not
+complete. Hosted health has no host heartbeat feed: source counts and catch-up
+are null, and the UI says collector health is unknown. Existing publication rows
+without a server commit timestamp retain an unknown publication time.
 
 ## Connection workflow
 

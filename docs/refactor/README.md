@@ -7,6 +7,14 @@ target design still includes capabilities beyond this first release.
 
 ## Read in this order
 
+Start with the [operating model and delivery order](operating-model.md), approved
+2026-09-10. It makes routine collection, recovery, and software releases explicit
+acceptance criteria and prioritizes them ahead of larger-graph support.
+The [managed collector service](managed-collection.md) and
+[reproducible release workflow](releases.md) implement the operational entrypoints.
+The five-step delivery has local integration evidence; activation and deployment
+remain explicit operations. See [implementation status](implementation.md).
+
 1. [Architecture and decisions](architecture.md): responsibilities, authorities,
    deployment topology, and scope.
 2. [Data and protocol contracts](contracts.md): identity, storage, versioning,
@@ -59,6 +67,12 @@ continue describing the current implementation until each stage lands.
 | Read side effects | Optional before-read publisher exists | Read-only query execution; publication is a separate command/service policy |
 
 ## Completion definition
+
+Configure each host once. After explicitly enabling automatic publication, its
+managed collector resumes after restart and temporary network loss without losing
+pending work. One status command identifies the affected project and any required
+action. One reproducible release workflow validates, migrates, and deploys the
+compatible authority and live Datahub; ordinary publication never deploys software.
 
 Two collector hosts can prepare and publish independent sessions, recover from
 interruption without loss or duplicate effects, and see their permitted committed

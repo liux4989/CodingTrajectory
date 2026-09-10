@@ -14,9 +14,16 @@ from coding_trajectory.service import IndexCache, dispatch
 MAX_READ_PROJECTION_BYTES = 128 * 1024
 
 
-def build_read_projections(artifact: ChronicleGraphArtifact) -> dict[str, Any]:
-    store = DocumentStore.from_session_graphs([artifact.to_session_graph()])
-    cache = IndexCache()
+def build_read_projections(
+    artifact: ChronicleGraphArtifact,
+    *,
+    store: DocumentStore | None = None,
+    cache: IndexCache | None = None,
+) -> dict[str, Any]:
+    if store is None:
+        store = DocumentStore.from_session_graphs([artifact.to_session_graph()])
+    if cache is None:
+        cache = IndexCache()
 
     def call(method: str, params: dict[str, Any]):
         result = dispatch(

@@ -36,7 +36,7 @@ export type DatahubDeliveryState = {
   revision: number | null;
   generatedAt: string | null;
   freshness: DatahubFreshness | null;
-  catchingUp: boolean;
+  catchingUp: boolean | null;
   sourceStatus: DatahubSourceStatus | null;
   transport: ApiTransportMetadata | null;
   minimumAvailableRevision: number | null;
@@ -89,7 +89,7 @@ function statusFromSnapshot(snapshot: DatahubSnapshot | undefined): DatahubDeliv
     revision: snapshot?.revision ?? null,
     generatedAt: snapshot?.generated_at ?? null,
     freshness: snapshot?.freshness ?? null,
-    catchingUp: snapshot?.catching_up ?? false,
+    catchingUp: snapshot?.catching_up ?? null,
     sourceStatus: snapshot?.source_status ?? null,
     transport: snapshot?.transport ?? null,
     minimumAvailableRevision: snapshot?.minimum_available_revision ?? null,

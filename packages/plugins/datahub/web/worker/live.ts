@@ -20,10 +20,11 @@ function identifier(value: unknown): string {
 }
 
 async function rpc(env: Env, method: string, params: Row): Promise<Row> {
-  const origin=new URL(env.CT_CORE_URL);
-  if(origin.protocol!=="https:" || origin.username || origin.password || origin.search || origin.hash || !["","/"].includes(origin.pathname)) throw new Error("unconfigured authority");
+  if(!env.CORE) throw new Error("unconfigured authority");
   const workspace=identifier(env.CT_WORKSPACE_ID);
-  const response=await fetch(new URL("/v1/core",origin),{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${env.CT_CORE_READ_TOKEN}`},
+  // The URL names the internal protocol path; the binding selects the Worker.
+  // Preserve scoped reader authorization independently of the private transport.
+  const response=await env.CORE.fetch("https://core.internal/v1/core",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${env.CT_CORE_READ_TOKEN}`},
     body:JSON.stringify({protocol:"ct.core.v1",method,params:{...params,workspace_id:workspace}}),redirect:"manual",signal:AbortSignal.timeout(20000)});
   if(!response.ok || !response.body) {
     console.warn("datahub_authority_http", response.status);
@@ -42,7 +43,9 @@ async function rpc(env: Env, method: string, params: Row): Promise<Row> {
   return result.data;
 }
 function transport(env: Env,revision: number) {return {workspace_id:env.CT_WORKSPACE_ID,snapshot_sequence:revision,source:"remote",freshness:"authoritative",content_scope:"chronicle"};}
-function health() {return {freshness:{last_refresh_at:null,lag_seconds:null},catching_up:false,source_status:{ready:1,ingesting:0,failed:0,incomplete:0}};}
+function health(response: Row) {return {freshness:{last_refresh_at:null,lag_seconds:null,
+  last_publication_at:response.last_publication_at??null,authority_observed_at:response.authority_observed_at??null},
+  catching_up:null,source_status:{ready:null,ingesting:null,failed:null,incomplete:null}};}
 function item(row: Row): Row {
   const runtime=row.runtime??{},usage=row.usage??{};
   return {root_session_id:row.root_session_id,lineage_root_session_id:row.lineage_root_session_id??null,graph_id:row.graph_id??null,
@@ -75,9 +78,9 @@ function result(envelope: Row,data: unknown,error?:string) {
 async function query(method:string,params:Row,env:Env):Promise<unknown> {
   if(method==="datahub.snapshot") {
     exact(params,[]);
-    const response=await rpc(env,"ct_published_catalog",{limit:1});
-    return {revision:response.published_sequence,generated_at:new Date().toISOString(),transport:transport(env,response.published_sequence),...health(),
-      minimum_available_revision:0,bootstrap:{ready:true,scan_started_at:null,scan_finished_at:null,error:null,last_result:null,
+    const response=await rpc(env,"ct_published_catalog",{kind:"status"});
+    return {revision:response.published_sequence,generated_at:new Date().toISOString(),transport:transport(env,response.published_sequence),...health(response),
+      minimum_available_revision:response.minimum_available_revision,bootstrap:{ready:true,scan_started_at:null,scan_finished_at:null,error:null,last_result:null,
         coverage:{mode:"shared",content_scope:"chronicle",horizon_days:36500}},horizon_days:36500};
   }
   if(method==="datahub.changes") {
@@ -89,7 +92,7 @@ async function query(method:string,params:Row,env:Env):Promise<unknown> {
     // requests a fresh snapshot rather than claiming every changed row was sent.
     return {from_revision:after,to_revision:response.published_sequence,reset_required:response.reset_required||!!response.next_cursor,
       upserts:[],deletions:[],invalidations:response.changes.length?["sessions","projects","session-tree","session-graph"]:[],
-      transport:transport(env,response.published_sequence),...health()};
+      transport:transport(env,response.published_sequence),...health(response)};
   }
   if(method==="sessions" || method==="projects") {
     exact(params,method==="sessions"?["limit","cursor","agent_vendor","project_name","since_days","snapshot_sequence"]:["limit","cursor","agent_vendor","snapshot_sequence"]);

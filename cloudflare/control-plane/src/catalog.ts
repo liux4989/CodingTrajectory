@@ -45,6 +45,11 @@ export function migrateCatalog(state: State): Json {
 function head(state: State): number {
   return state.sql.exec<{ revision: number }>("SELECT coalesce(max(sequence),0) revision FROM published_catalog").one().revision;
 }
+function publicationStatus(state: State, sequence: number): Json {
+  const row = state.sql.exec<{ stamp: string | null }>(
+    "SELECT json_extract(payload,'$.published_at') stamp FROM published_catalog WHERE sequence<=? ORDER BY sequence DESC LIMIT 1", sequence).toArray()[0];
+  return { last_publication_at: row?.stamp ?? null, authority_observed_at: new Date().toISOString() };
+}
 function ready(state: State) {
   requireThat(state.sql.exec<{ complete: number }>("SELECT complete FROM catalog_migration WHERE id=1").one().complete, "catalog_migration_required",503);
 }
@@ -74,13 +79,13 @@ export function catalogRead(state: State, method: string, request: Json): Json {
     if (cursor) requireThat(cursor.scope === scope && (request.snapshot_sequence == null || request.snapshot_sequence === sequence),"cursor_scope_mismatch",409);
     const lastSequence = cursor ? integer(cursor.last_sequence,after,sequence) : after;
     const lastId = cursor ? text(cursor.last_id,36) : "";
-    if (after > current) return { workspace_id: request.workspace_id, published_sequence: current, changes: [], next_cursor: null, reset_required: true };
+    if (after > current) return { workspace_id: request.workspace_id, published_sequence: current, ...publicationStatus(state,current), changes: [], next_cursor: null, reset_required: true };
     const rows = state.sql.exec<{ payload: string; sequence: number; artifact_id: string }>(
       "SELECT payload,sequence,artifact_id FROM published_catalog WHERE sequence>? AND sequence<=? AND (sequence>? OR (sequence=? AND artifact_id>?)) ORDER BY sequence,artifact_id LIMIT ?",
       after,sequence,lastSequence,lastSequence,lastId,limit+1).toArray();
     const selected = rows.slice(0,limit);
     const tail = selected.at(-1);
-    return { workspace_id: request.workspace_id, published_sequence: sequence, reset_required: false,
+    return { workspace_id: request.workspace_id, published_sequence: sequence, ...publicationStatus(state,sequence), reset_required: false,
       changes: selected.map(row=> { const body=JSON.parse(row.payload); return {artifact_id:row.artifact_id,revision:row.sequence,deleted:!!body.deleted}; }),
       next_cursor: rows.length>limit && tail ? pack({ scope, sequence,last_sequence:tail.sequence,last_id:tail.artifact_id }) : null };
   }
@@ -90,7 +95,11 @@ export function catalogRead(state: State, method: string, request: Json): Json {
   const sequence = cursor ? integer(cursor.sequence,0,current) : request.snapshot_sequence == null ? current : integer(request.snapshot_sequence,0,current);
   const limit = request.limit == null ? 50 : integer(request.limit,1,200);
   const kind = request.kind ?? "sessions";
-  requireThat(["sessions","projects","detail"].includes(kind),"invalid_catalog_kind");
+  requireThat(["sessions","projects","detail","status"].includes(kind),"invalid_catalog_kind");
+  if (kind === "status") {
+    requireThat(!request.cursor && !request.project_name && !request.agent_vendor && request.since_days == null && !request.resource_id, "invalid_status_scope");
+    return { workspace_id: request.workspace_id, published_sequence: sequence, ...publicationStatus(state,sequence), minimum_available_revision: 0 };
+  }
   if(kind==="detail")requireThat(request.resource_id,"resource_scope_required");
   const scope = stable({ workspace_id: request.workspace_id, kind, project_name: request.project_name ?? null,
     agent_vendor: request.agent_vendor ?? null, since_days: request.since_days ?? null, resource_id: request.resource_id ?? null });

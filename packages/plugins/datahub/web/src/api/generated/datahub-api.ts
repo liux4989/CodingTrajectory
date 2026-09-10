@@ -215,20 +215,22 @@ export type TurnSpans = TurnSpan[];
 export type UsedPercent1 = number | null;
 export type Vendor1 = string;
 export type Warnings = string[];
-export type CatchingUp = boolean;
+export type CatchingUp = boolean | null;
 export type EntityId = string;
 export type EntityType = string;
 export type Revision = number;
 export type Deletions = DatahubDeletion[];
+export type AuthorityObservedAt = string | null;
 export type LagSeconds = number | null;
+export type LastPublicationAt = string | null;
 export type LastRefreshAt = string | null;
 export type FromRevision = number;
 export type Invalidations = string[];
 export type ResetRequired = boolean;
-export type Failed = number;
-export type Incomplete = number;
-export type Ingesting = number;
-export type Ready = number;
+export type Failed = number | null;
+export type Incomplete = number | null;
+export type Ingesting = number | null;
+export type Ready = number | null;
 export type ToRevision = number;
 export type ContentScope = "chronicle";
 export type Freshness = "authoritative";
@@ -249,7 +251,7 @@ export type LastResult = {
 export type Ready1 = boolean;
 export type ScanFinishedAt = string | null;
 export type ScanStartedAt = string | null;
-export type CatchingUp1 = boolean;
+export type CatchingUp1 = boolean | null;
 export type GeneratedAt1 = string;
 export type HorizonDays = number;
 export type MinimumAvailableRevision = number;
@@ -1243,7 +1245,9 @@ export interface DatahubDeletion {
  * via the `definition` "DatahubFreshness".
  */
 export interface DatahubFreshness {
+  authority_observed_at?: AuthorityObservedAt;
   lag_seconds: LagSeconds;
+  last_publication_at?: LastPublicationAt;
   last_refresh_at: LastRefreshAt;
 }
 /**

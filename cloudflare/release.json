@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "staging": {
+    "collector_profile": "release-staging",
+    "reader_profile": "reader-staging",
+    "datahub_url_env": "CT_RELEASE_STAGING_DATAHUB_URL",
+    "access_client_id_env": "CT_RELEASE_STAGING_ACCESS_CLIENT_ID",
+    "access_client_secret_env": "CT_RELEASE_STAGING_ACCESS_CLIENT_SECRET"
+  },
+  "production": {
+    "collector_profile": "release-production",
+    "reader_profile": "reader-production",
+    "datahub_url_env": "CT_RELEASE_PRODUCTION_DATAHUB_URL",
+    "access_client_id_env": "CT_RELEASE_PRODUCTION_ACCESS_CLIENT_ID",
+    "access_client_secret_env": "CT_RELEASE_PRODUCTION_ACCESS_CLIENT_SECRET"
+  }
+}

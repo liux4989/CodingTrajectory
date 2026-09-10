@@ -236,6 +236,16 @@ class UploadState:
             "batches": counts,
             "pending_bytes": pending[0],
             "oldest_pending_at": pending[1],
+            "oldest_pending_age_seconds": (
+                max(
+                    0.0,
+                    (
+                        datetime.now(UTC) - datetime.fromisoformat(pending[1])
+                    ).total_seconds(),
+                )
+                if pending[1]
+                else None
+            ),
             "pending_resources": pending[2],
             "completion_pending": bool(pending[3]),
             "consumed_cursor": self.meta("consumed_cursor"),

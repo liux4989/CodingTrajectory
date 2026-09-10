@@ -2055,8 +2055,15 @@
       "additionalProperties": false,
       "properties": {
         "catching_up": {
-          "title": "Catching Up",
-          "type": "boolean"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Catching Up"
         },
         "deletions": {
           "items": {
@@ -2150,6 +2157,18 @@
     "DatahubFreshness": {
       "additionalProperties": false,
       "properties": {
+        "authority_observed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authority Observed At"
+        },
         "lag_seconds": {
           "anyOf": [
             {
@@ -2160,6 +2179,18 @@
             }
           ],
           "title": "Lag Seconds"
+        },
+        "last_publication_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Publication At"
         },
         "last_refresh_at": {
           "anyOf": [
@@ -2187,8 +2218,15 @@
           "$ref": "#/$defs/BootstrapStatus"
         },
         "catching_up": {
-          "title": "Catching Up",
-          "type": "boolean"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Catching Up"
         },
         "freshness": {
           "$ref": "#/$defs/DatahubFreshness"
@@ -2241,20 +2279,48 @@
       "additionalProperties": false,
       "properties": {
         "failed": {
-          "title": "Failed",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Failed"
         },
         "incomplete": {
-          "title": "Incomplete",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Incomplete"
         },
         "ingesting": {
-          "title": "Ingesting",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ingesting"
         },
         "ready": {
-          "title": "Ready",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ready"
         }
       },
       "required": [

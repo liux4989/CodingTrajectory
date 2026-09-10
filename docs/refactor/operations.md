@@ -1,7 +1,9 @@
 # Implemented collection and query workflow
 
-These commands describe the initial implementation, now deployed to the private
-Cloudflare workspace. Hosted Datahub reads the live shared authority.
+The initial collection and live-read implementation was deployed to the private
+Cloudflare workspace. The managed service, native binding, release workflow and
+health changes below are locally qualified additions; the recorded deployment
+versions predate them.
 Replace uppercase identity placeholders with your workspace's assigned UUIDs.
 
 ## One connection per role
@@ -57,6 +59,10 @@ A query does not publish or require a working cloud connection in explicit local
 
 ## Service policy and recovery
 
+For managed collection across configured projects, use the
+[host service lifecycle](managed-collection.md). The foreground commands below
+remain available for one-project operation and diagnosis.
+
 ```sh
 ct --profile workstation collector sync --mode serve --manual
 ct --profile workstation collector sync --mode serve --automatic
@@ -88,14 +94,19 @@ a profile does not revoke a server token or delete delivery databases.
 
 ## Authority and live Datahub rollout
 
+Use the [reproducible release workflow](releases.md) for new releases. The
+following sequence explains its authority, migration and verification boundaries.
+
 1. Deploy the additive control-plane implementation with its existing principal
    registry and Durable Object/R2 bindings preserved.
 2. For an existing authority, run `ct connection migrate workstation` until
    `complete` is true. Each call performs bounded catalog backfill; new authorities
    initialize an empty ready catalog. No re-publication/reset is required for
    existing metadata. Missing legacy detail projections remain explicitly unavailable.
-3. Deploy `packages/plugins/datahub/wrangler.live.jsonc` with Access secrets and
-   `CT_CORE_URL`, `CT_WORKSPACE_ID`, and a dedicated `CT_CORE_READ_TOKEN`. Every
+3. Deploy `packages/plugins/datahub/wrangler.live.jsonc` with Access secrets,
+   the `CORE` service binding, `CT_WORKSPACE_ID`, and a dedicated
+   `CT_CORE_READ_TOKEN`. The binding selects the authority Worker; no public Core
+   URL is needed by this adapter. Every
    Access-approved reader of this site sees this configured workspace; use a
    separate site/policy when workspace membership differs. Do not use a collector
    credential or expose it to the browser.

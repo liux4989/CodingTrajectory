@@ -1,0 +1,132 @@
+name: Cloudflare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+        default: staging
+        required: true
+      staging_run_id:
+        description: Successful staging run for this exact commit (production only)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: cloudflare-release-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 40
+    env:
+      CT_RELEASE_TARGET: ${{ inputs.environment }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CT_RELEASE_ORIGIN: ${{ vars.CORE_URL }}
+      CT_RELEASE_WORKSPACE: ${{ vars.CT_WORKSPACE_ID }}
+      CT_RELEASE_AGENT: ${{ vars.CT_RELEASE_AGENT_ID }}
+      CT_RELEASE_COLLECTOR_TOKEN: ${{ secrets.CT_RELEASE_COLLECTOR_TOKEN }}
+      CT_RELEASE_READER_TOKEN: ${{ secrets.CT_CORE_READ_TOKEN }}
+      CT_RELEASE_STAGING_DATAHUB_URL: ${{ vars.DATAHUB_URL }}
+      CT_RELEASE_PRODUCTION_DATAHUB_URL: ${{ vars.DATAHUB_URL }}
+      CT_RELEASE_STAGING_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CT_RELEASE_PRODUCTION_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CT_RELEASE_STAGING_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      CT_RELEASE_PRODUCTION_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select ephemeral connection directory
+        run: printf 'CT_CONNECTION_DIR=%s/ct-release-connections\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Validate staging provenance
+        if: inputs.environment == 'production'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+        run: |
+          [[ "$STAGING_RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STAGING_RUN_ID" > "$RUNNER_TEMP/staging-run.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          run = json.loads((Path(os.environ['RUNNER_TEMP']) / 'staging-run.json').read_text())
+          assert run['head_sha'] == os.environ['GITHUB_SHA']
+          assert run['path'] == '.github/workflows/cloudflare-release.yml'
+          assert run['event'] == 'workflow_dispatch' and run['conclusion'] == 'success'
+          PY
+
+      - name: Download verified staging receipt
+        if: inputs.environment == 'production'
+        uses: actions/download-artifact@v7
+        with:
+          name: ct-release-staging
+          path: .artifacts/releases/staging
+          run-id: ${{ inputs.staging_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Install locked dependencies
+        run: |
+          uv sync --all-packages --frozen
+          npm --prefix cloudflare/control-plane ci
+          bun --cwd packages/plugins/datahub/web ci
+
+      - name: Configure ephemeral connection references
+        run: |
+          uv run python - <<'PY'
+          import os
+          from uuid import UUID
+          from coding_trajectory.control_plane.connections import configure_profile
+          target = os.environ['CT_RELEASE_TARGET']
+          for role, prefix, token_env in (
+              ('collector', 'release', 'CT_RELEASE_COLLECTOR_TOKEN'),
+              ('reader', 'reader', 'CT_RELEASE_READER_TOKEN'),
+          ):
+              configure_profile(
+                  profile_name=f'{prefix}-{target}', role=role,
+                  cloudflare_url=os.environ['CT_RELEASE_ORIGIN'],
+                  workspace_id=UUID(os.environ['CT_RELEASE_WORKSPACE']),
+                  agent_id=UUID(os.environ['CT_RELEASE_AGENT']) if role == 'collector' else None,
+                  project_id=None, token=None, token_env=token_env,
+              )
+          PY
+
+      - name: Qualify, release and verify
+        run: |
+          args=(--environment "$CT_RELEASE_TARGET" --action deploy --receipt .artifacts/releases/receipt.json)
+          if [[ "$CT_RELEASE_TARGET" == production ]]; then
+            args+=(--staging-receipt .artifacts/releases/staging/receipt.json)
+          fi
+          uv run python scripts/release-cloudflare.py "${args[@]}"
+
+      - name: Retain bounded release receipt
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ct-release-${{ inputs.environment }}
+          path: .artifacts/releases/receipt.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Remove ephemeral connection references
+        if: always()
+        run: rm -rf -- "$CT_CONNECTION_DIR"

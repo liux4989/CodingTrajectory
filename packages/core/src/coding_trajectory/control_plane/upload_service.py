@@ -242,6 +242,8 @@ class UploadService(UploadState):
                 ):
                     raise UploadStateError("source_inventory_incomplete")
                 if not inventory.changes:
+                    with self.db:
+                        self.set_meta("preparation_error", None)
                     return {
                         **self.status(),
                         "prepared": prepared,
@@ -327,6 +329,8 @@ class UploadService(UploadState):
                 repository.commit(captures=captures, snapshots=snapshots)
                 self.hook("after_canonical_repository_commit")
                 prepared += self._drain_repository(repository)
+                with self.db:
+                    self.set_meta("preparation_error", None)
                 return {
                     **self.status(),
                     "prepared": prepared,

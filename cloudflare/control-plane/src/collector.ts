@@ -145,6 +145,7 @@ export function publication(state: State, request: Json): Json {
   if (stale || incomplete) {
     return receipt("accepted", sequence, incomplete ? { reason: "incomplete_graph_scope", publication_outcome: "rejected", remedy: "include all sources of overlapping published graphs" } : { publication_outcome: "superseded" });
   }
+  const publishedAt = new Date().toISOString();
   let superseded = 0;
   let omitted = 0;
   state.put("publication_watermark", request.project_id, { project_id: request.project_id, published_sequence: sequence }, sequence);
@@ -152,11 +153,11 @@ export function publication(state: State, request: Json): Json {
     const prior = state.get("artifact", id);
     if (prior && !prior.deleted) superseded++;
     state.put("artifact", id, { ...artifact, project_id: request.project_id, agent_id: request.agent_id,
-      revision: (prior?.revision ?? 0) + 1, published_sequence: sequence, deleted: false }, sequence);
+      revision: (prior?.revision ?? 0) + 1, published_sequence: sequence, published_at: publishedAt, deleted: false }, sequence);
   }
   for (const row of current) {
     if ((request.replacement_scope ?? "complete_sources") === "complete_sources" && row.agent_id === request.agent_id && !incoming.has(row.artifact_id) && row.source_ids.every((id: string) => vector.has(id))) {
-      state.put("artifact", row.artifact_id, { ...row, deleted: true }, sequence);
+      state.put("artifact", row.artifact_id, { ...row, deleted: true, published_at: publishedAt }, sequence);
       omitted++;
     }
   }

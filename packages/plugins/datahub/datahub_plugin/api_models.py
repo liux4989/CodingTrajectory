@@ -198,13 +198,15 @@ class SessionPage(StrictResponse):
 class DatahubFreshness(StrictResponse):
     last_refresh_at: str | None
     lag_seconds: float | None
+    last_publication_at: str | None = None
+    authority_observed_at: str | None = None
 
 
 class DatahubSourceStatus(StrictResponse):
-    ready: int
-    ingesting: int
-    failed: int
-    incomplete: int
+    ready: int | None
+    ingesting: int | None
+    failed: int | None
+    incomplete: int | None
 
 
 class BootstrapStatus(StrictResponse):
@@ -221,7 +223,7 @@ class DatahubSnapshot(StrictResponse):
     generated_at: str
     transport: ApiTransportMetadata | None = None
     freshness: DatahubFreshness
-    catching_up: bool
+    catching_up: bool | None
     source_status: DatahubSourceStatus
     minimum_available_revision: int
     bootstrap: BootstrapStatus
@@ -250,7 +252,7 @@ class DatahubChanges(StrictResponse):
     invalidations: list[str]
     transport: ApiTransportMetadata | None = None
     freshness: DatahubFreshness
-    catching_up: bool
+    catching_up: bool | None
     source_status: DatahubSourceStatus
 
 

@@ -1,4 +1,5 @@
 import { bounded, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
+import { stageArtifact } from "./ingress";
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
@@ -14,6 +15,11 @@ const READ = new Set(["ct_workspace_snapshot", "ct_historical_snapshot", "ct_his
 const ESTIMATE = new Set(["ct_estimate_predict", "ct_estimate_bind", "ct_estimate_compare", "ct_estimate_backfill_start"]);
 const EXECUTE = new Set(["ct_estimator_claim", "ct_estimator_complete", "ct_estimator_fail"]);
 const PROTOCOL = "ct.core.v1";
+
+function responseHeaders(env: Env): Record<string, string> {
+  return { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    ...(env.WORKER_VERSION?.id ? { "X-CT-Worker-Version": env.WORKER_VERSION.id } : {}) };
+}
 
 export default {
   async fetch(request, env): Promise<Response> {
@@ -50,16 +56,17 @@ export default {
         return Response.json({ protocol: PROTOCOL, id: requestId, method: methodName, ok: true,
           data: { protocol: PROTOCOL, workspace_id: principal.workspace_id, agent_id: principal.agent_id, roles: principal.roles },
           availability: { state: "complete", missing: [] }, error: null },
-          { headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+          { headers: responseHeaders(env) });
       }
       if (COLLECT.has(methodName)) requireThat(body.agent_id === principal.agent_id, "agent_denied", 403);
       if (message.idempotency_key != null) text(message.idempotency_key, 512);
       const envelope: Json = { request: body };
       if (message.idempotency_key != null) envelope.idempotency_key = message.idempotency_key;
       if (message.request_sha256 != null) envelope.request_sha256 = message.request_sha256;
-      const encodedResult = await env.WORKSPACES.getByName(principal.workspace_id)
-        .invoke(methodName, JSON.stringify(envelope), JSON.stringify(principal));
-      const result = object(JSON.parse(encodedResult));
+      const workspace = env.WORKSPACES.getByName(principal.workspace_id);
+      const result = ["ct_collector_stage_artifact_payload", "ct_collector_stage_chunk_manifest"].includes(methodName)
+        ? { status: 200, body: await stageArtifact(workspace, env.ARTIFACTS, methodName, body) }
+        : object(JSON.parse(await workspace.invoke(methodName, JSON.stringify(envelope), JSON.stringify(principal))));
       const ok = result.status >= 200 && result.status < 300;
       const failureCode = responseErrorCode(result.body);
       const response: Json = ok
@@ -68,12 +75,12 @@ export default {
         : { protocol: PROTOCOL, id: requestId, method: methodName, ok: false, data: null,
             availability: { state: "unavailable", missing: [{ field: "$", reason: failureCode }] },
             error: { code: failureCode } };
-      return Response.json(response, { status: result.status, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+      return Response.json(response, { status: result.status, headers: responseHeaders(env) });
     } catch (error) {
       const code = error instanceof Fault ? error.code : "authority_unavailable";
       return Response.json({ protocol: PROTOCOL, id: requestId, method, ok: false, data: null,
         availability: { state: "unavailable", missing: [{ field: "$", reason: code }] }, error: { code } },
-        { status: error instanceof Fault ? error.status : 503, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+        { status: error instanceof Fault ? error.status : 503, headers: responseHeaders(env) });
     }
   },
 } satisfies ExportedHandler<Env>;

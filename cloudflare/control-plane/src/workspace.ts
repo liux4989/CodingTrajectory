@@ -1,10 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
-import { bounded, decode, digest, encode, Fault, Json, MAX_ARTIFACT, Principal, requireThat, stable, State, validate } from "./shared";
-import { checkpoint, chronicleMetadata, publication, recovery, registerProject, registerSource } from "./collector";
+import { bounded, digest, DIGEST, encode, Fault, Json, MAX_ARTIFACT, Principal, requireThat, stable, State, uuid, validate } from "./shared";
+import { checkpoint, publication, recovery, registerProject, registerSource } from "./collector";
 import { livingRead, livingWrite } from "./living";
 import { estimation } from "./estimation";
-import { initializeUploads, missingChunks, reconstruct, uploadChunks, uploadRead } from "./upload";
-import { initializeCatalog, catalogRead, migrateCatalog, validateReadProjections } from "./catalog";
+import { Descriptor, initializeUploads, missingChunks, uploadChunks, uploadRead } from "./upload";
+import { initializeCatalog, catalogRead, migrateCatalog } from "./catalog";
 
 /** A workspace is the authorization, transaction and revision boundary. */
 export class Workspace extends DurableObject<Env> {
@@ -37,24 +37,8 @@ export class Workspace extends DurableObject<Env> {
         requireThat(request.payload.source_checkpoint?.segments?.every((offset: unknown) => Number.isSafeInteger(offset) && Number(offset) > 0), "invalid_checkpoint_offsets");
         requireThat(await digest(stable(request.payload)) === request.content_sha256 && request.event_id === `checkpoint:${request.content_sha256}`, "checkpoint_digest_mismatch");
       }
-      if (method === "ct_collector_stage_artifact_payload") return { status: 200, body: await this.stage(request) };
       if (method === "ct_collector_upload_chunks") return { status: 200, body: await uploadChunks(this.state, this.env.ARTIFACTS, request) };
       if (method === "ct_collector_missing_chunks") return { status: 200, body: await missingChunks(this.state, this.env.ARTIFACTS, request) };
-      if (method === "ct_collector_stage_chunk_manifest") {
-        const { canonical, digests } = await reconstruct(this.state, this.env.ARTIFACTS, request.agent_id, request.root_sha256);
-        const bytes = new TextEncoder().encode(canonical);
-        requireThat(bytes.length === request.uncompressed_bytes && await digest(bytes) === request.content_sha256, "artifact_digest_mismatch");
-        const compressed = await bounded(new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip")), MAX_ARTIFACT);
-        const result = await this.stage({ ...request, payload_base64: encode(compressed), compressed_bytes: compressed.length });
-        this.ctx.storage.transactionSync(() => {
-          const key = `${request.agent_id}:${request.content_sha256}`;
-          const staged = this.state.get("staged", key)!;
-          requireThat(!staged.chunk_root_sha256 || staged.chunk_root_sha256 === request.root_sha256, "chunk_root_conflict", 409);
-          this.state.put("staged", key, { ...staged, chunk_root_sha256: request.root_sha256 }, this.state.head());
-          for (const id of digests) this.state.sql.exec("INSERT OR IGNORE INTO upload_members VALUES(?,?,?)", request.root_sha256, id, request.agent_id);
-        });
-        return { status: 200, body: { ...result, root_sha256: request.root_sha256 } };
-      }
       if (["ct_publication_watermark", "ct_artifact_chunk_manifest", "ct_artifact_chunks"].includes(method)) return { status: 200, body: await uploadRead(this.state, this.env.ARTIFACTS, method, request) };
       if (["ct_published_catalog", "ct_publication_changes"].includes(method)) return { status: 200, body: catalogRead(this.state, method, request) };
       if (["ct_historical_snapshot", "ct_historical_artifacts", "ct_project_sessions_projection"].includes(method)) {
@@ -100,43 +84,62 @@ export class Workspace extends DurableObject<Env> {
     }
   }
 
-  private async stage(request: Json): Promise<Json> {
-    const compressed = decode(request.payload_base64);
-    requireThat(compressed.length === request.compressed_bytes, "compressed_size_mismatch");
-    const canonical = await bounded(new Blob([compressed as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream("gzip")), MAX_ARTIFACT);
-    requireThat(canonical.length === request.uncompressed_bytes && await digest(canonical) === request.content_sha256, "artifact_digest_mismatch");
-    let payload;
-    try { payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(canonical)); }
-    catch { throw new Fault(400, "invalid_artifact_json"); }
-    const { metadata, resources } = chronicleMetadata(payload);
-    const variants = ["default", "runtime", "usage", "runtime_usage"];
-    requireThat(stable(Object.keys(request.projections).filter(key => key !== "canonical").sort()) === stable([...variants].sort()), "invalid_projection_variants");
-    for (const variant of variants) validate("project_sessions_response", request.projections[variant]);
-    if (request.projections.canonical != null) {
-      validateReadProjections(request.projections.canonical);
-      requireThat(request.projections.canonical.content_sha256 === request.content_sha256 && request.projections.canonical.root_session_id === metadata.artifact_id, "read_projection_identity");
-    }
-    const projectionIdentity = await digest(stable(request.projections));
-    const key = `${request.workspace_id}/${request.content_sha256}.gzip`;
-    // R2 is written before the SQLite manifest. Unreferenced objects are harmless;
-    // readers can only access objects referenced by an authorized committed revision.
-    await this.env.ARTIFACTS.put(key, compressed, { onlyIf: { etagDoesNotMatch: "*" }, httpMetadata: { contentType: "application/gzip" } });
-    return this.ctx.storage.transactionSync(() => {
-      const existingProjections = this.state.get("projections", request.content_sha256);
-      requireThat(!existingProjections || variants.every(variant => stable(existingProjections[variant]) === stable(request.projections[variant])), "projection_conflict", 409);
-      requireThat(!existingProjections?.canonical || !request.projections.canonical || stable(existingProjections.canonical) === stable(request.projections.canonical), "projection_conflict", 409);
-      const stageKey = `${request.agent_id}:${request.content_sha256}`;
-      const prior = this.state.get("staged", stageKey);
-      const upgrade = !existingProjections?.canonical && request.projections.canonical;
-      if (!prior || upgrade) {
-        const sequence = this.state.next();
-        this.state.put("staged", stageKey, { ...prior, ...metadata, key, content_sha256: request.content_sha256,
-          compressed_bytes: compressed.length, uncompressed_bytes: canonical.length, projection_identity: projectionIdentity }, sequence);
-        this.state.put("projections", request.content_sha256, existingProjections?.canonical ? existingProjections : request.projections, sequence);
-        for (const resource of resources) this.state.sql.exec("INSERT OR IGNORE INTO resources VALUES(?,?)", request.content_sha256, resource);
+  // These RPCs are private to the authenticated ingress Worker. They are absent
+  // from the public method allowlist. Full bodies and object-store I/O stay there.
+  async chunkDescriptors(agent: string, ids: string[]): Promise<Descriptor[]> {
+    uuid(agent);
+    requireThat(ids.length <= 128 && ids.every(id => DIGEST.test(id)), "invalid_chunk_selection");
+    return ids.flatMap(id => this.state.sql.exec<Descriptor>(
+      "SELECT * FROM upload_chunk_objects WHERE digest=? AND agent=?", id, agent).toArray());
+  }
+
+  async indexStage(encoded: string): Promise<void> {
+    const request = JSON.parse(encoded);
+    requireThat(DIGEST.test(request.content_sha256) && request.resources.length <= 128 && request.digests.length <= 128, "invalid_stage_page");
+    uuid(request.agent_id);
+    this.ctx.storage.transactionSync(() => {
+      for (const resource of request.resources) this.state.sql.exec("INSERT OR IGNORE INTO resources VALUES(?,?)", request.content_sha256, uuid(resource));
+      for (const id of request.digests) {
+        requireThat(DIGEST.test(id) && DIGEST.test(request.root_sha256), "invalid_stage_page");
+        this.state.sql.exec("INSERT OR IGNORE INTO upload_members VALUES(?,?,?)", request.root_sha256, id, request.agent_id);
       }
-      return { content_sha256: request.content_sha256, encoding: "gzip", uncompressed_bytes: canonical.length, compressed_bytes: compressed.length, projection_version: 1 };
     });
+  }
+
+  async completeStage(encoded: string): Promise<string> {
+    const request = JSON.parse(encoded);
+    try {
+      const body = this.ctx.storage.transactionSync(() => {
+        const count = this.state.sql.exec<{total: number}>("SELECT count(*) total FROM resources WHERE digest=?", request.content_sha256).one().total;
+        requireThat(count === request.resource_count, "stage_index_incomplete", 409);
+        if (request.root_sha256) {
+          const members = this.state.sql.exec<{total: number}>("SELECT count(*) total FROM upload_members WHERE root=? AND agent=?", request.root_sha256, request.agent_id).one().total;
+          requireThat(members === request.chunk_count, "stage_index_incomplete", 409);
+        }
+        const variants = ["default", "runtime", "usage", "runtime_usage"];
+        const existingProjections = this.state.get("projections", request.content_sha256);
+        requireThat(!existingProjections || variants.every(variant => stable(existingProjections[variant]) === stable(request.projections[variant])), "projection_conflict", 409);
+        requireThat(!existingProjections?.canonical || !request.projections.canonical || stable(existingProjections.canonical) === stable(request.projections.canonical), "projection_conflict", 409);
+        const stageKey = `${request.agent_id}:${request.content_sha256}`;
+        const prior = this.state.get("staged", stageKey);
+        requireThat(!prior?.chunk_root_sha256 || !request.root_sha256 || prior.chunk_root_sha256 === request.root_sha256, "chunk_root_conflict", 409);
+        const upgrade = !existingProjections?.canonical && request.projections.canonical;
+        if (!prior || upgrade || (!prior.chunk_root_sha256 && request.root_sha256)) {
+          const sequence = this.state.next();
+          this.state.put("staged", stageKey, { ...prior, ...request.metadata, key: request.key, content_sha256: request.content_sha256,
+            compressed_bytes: request.compressed_bytes, uncompressed_bytes: request.uncompressed_bytes,
+            projection_identity: request.projection_identity, chunk_root_sha256: request.root_sha256 ?? prior?.chunk_root_sha256 }, sequence);
+          this.state.put("projections", request.content_sha256, existingProjections?.canonical ? existingProjections : request.projections, sequence);
+        }
+        return { content_sha256: request.content_sha256, encoding: "gzip", uncompressed_bytes: request.uncompressed_bytes,
+          compressed_bytes: request.compressed_bytes, projection_version: 1,
+          ...(request.root_sha256 ? { root_sha256: request.root_sha256 } : {}) };
+      });
+      return JSON.stringify({ status: 200, body });
+    } catch (error) {
+      return JSON.stringify({ status: error instanceof Fault ? error.status : 503,
+        body: { error: { code: error instanceof Fault ? error.code : "authority_unavailable" } } });
+    }
   }
 
   private async historical(method: string, request: Json): Promise<Json> {

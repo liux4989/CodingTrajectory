@@ -71,12 +71,16 @@ const publicJwk={...await exportJWK(publicKey),kid:'qualification'};
 globalThis.fetch=(input,init)=>{
   const url=new URL(input);
   if(url.origin==='https://example.cloudflareaccess.com')return Promise.resolve(Response.json({keys:[publicJwk]}));
-  if(url.origin!=='https://qualification.invalid')throw new Error('non-fixture network');
-  calls.push(JSON.parse(init.body).method);
-  return actualFetch('http://127.0.0.1:8794'+url.pathname,init);
+  throw new Error('unexpected public network call');
 };
 const {dispatchLive,default:worker}=await import(pathToFileURL(process.argv[2]));
 const env=JSON.parse(process.argv[3]);
+env.CORE={fetch:(input,init)=>{
+  const url=new URL(input);
+  if(url.origin!=='https://core.internal')throw new Error('invalid internal path');
+  calls.push(JSON.parse(init.body).method);
+  return actualFetch('http://127.0.0.1:8794'+url.pathname,init);
+}};
 const root=process.argv[4];
 const envelope={protocol:'ct.datahub.v1',method:'datahub.snapshot',params:{}};
 const deniedRequest=new Request('https://datahub.invalid/api/datahub/query',{method:'POST',body:JSON.stringify(envelope)});
@@ -111,7 +115,6 @@ process.stdout.write(JSON.stringify({results,requests:calls.length}));
                 str(bundle),
                 json.dumps(
                     {
-                        "CT_CORE_URL": "https://qualification.invalid",
                         "CT_WORKSPACE_ID": WORKSPACE,
                         "CT_CORE_READ_TOKEN": READER,
                         "CF_ACCESS_TEAM_DOMAIN": "https://example.cloudflareaccess.com",

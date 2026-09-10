@@ -45,8 +45,9 @@ export async function verifyAccess(request: Request, env: Env): Promise<boolean>
   }
 }
 
-export function withSecurityHeaders(response: Response) {
+export function withSecurityHeaders(response: Response, workerVersion?: string) {
   const headers = new Headers(response.headers);
+  if (workerVersion) headers.set("X-CT-Worker-Version", workerVersion);
   headers.set("Content-Security-Policy", [
     "default-src 'none'",
     "base-uri 'none'",

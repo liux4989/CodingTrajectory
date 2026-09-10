@@ -549,6 +549,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     sync.add_argument("--batch-count", type=_positive_int, default=16)
     sync.set_defaults(_plugin_handler=_handle_sync, automatic=None)
 
+    from coding_trajectory_cli.collector_service import register_service
+
+    register_service(commands)
+
     status = commands.add_parser(
         "status",
         help="Show local outbox count only.",

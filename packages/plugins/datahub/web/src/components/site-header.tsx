@@ -34,9 +34,11 @@ function SourceSelector() {
       : incomplete > 0
         ? `${incomplete} incomplete source${incomplete === 1 ? "" : "s"}`
         : `${sourceLabel} · ${transportLabel}`;
+  const publication = delivery.freshness?.last_publication_at;
+  const sharedDetail = `${publication ? `Last publication ${new Date(publication).toLocaleString()}` : "Publication time unknown"} · Collector health unknown`;
   const detail = delivery.error
     ? `Delivery unavailable: ${delivery.error}`
-    : `${delivery.transport ? `Shared revision ${delivery.transport.snapshot_sequence}` : "Local sources"} · Revision ${delivery.revision ?? "—"} · ${lag == null ? "refresh lag unavailable" : `${Math.round(lag)}s refresh lag`}`;
+    : `${delivery.transport ? `Shared revision ${delivery.transport.snapshot_sequence}` : "Local sources"} · Revision ${delivery.revision ?? "—"} · ${delivery.transport ? sharedDetail : lag == null ? "refresh lag unavailable" : `${Math.round(lag)}s refresh lag`}`;
 
   const selectSource = (kind: DatahubSourceKind) => {
     if (delivery.profile?.kind === kind) return;

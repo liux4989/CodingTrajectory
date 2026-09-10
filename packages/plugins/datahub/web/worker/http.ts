@@ -35,7 +35,7 @@ export async function handle(request: Request, env: Env, queryDispatch: (envelop
         availability: { state: "unavailable", missing: [{ field: "$", reason: fault.code }] },
         error: { code: fault.code, message: fault.message } }, { status: fault.status });
     }
-    return withSecurityHeaders(response);
+    return withSecurityHeaders(response, env.WORKER_VERSION?.id);
 }
 
 type QueryEnvelope = { protocol: string; id: unknown; method: string; params: Params };
