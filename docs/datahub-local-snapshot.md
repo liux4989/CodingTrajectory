@@ -2,7 +2,7 @@
 
 Datahub can be deployed as the web app plus precomputed JSON responses. The
 snapshot Worker uses only its bundled Static Assets and Cloudflare Access.
-There is no Supabase, D1, R2, remote publisher, or Python Worker dependency.
+The snapshot has no database or remote publisher dependency.
 Python runs locally to discover sources, sanitize Chronicle artifacts, replay
 them, and validate the existing Datahub response contracts before upload.
 
@@ -28,8 +28,7 @@ Wrangler uses your existing Cloudflare login. The snapshot config targets the
 private candidate hostname. Its existing Access application must continue to
 cover the entire hostname with the owner-only policy. The Worker requires only
 `CF_ACCESS_TEAM_DOMAIN` and that application's `CF_ACCESS_AUD`, provisioned once
-as Worker secrets. Do not use Supabase credentials or the old Datahub release
-runner for this deployment.
+as Worker secrets.
 
 The exporter defaults to this repository. `--project` can select another local
 project explicitly. `--assets` selects an existing hosted build directory. The
@@ -57,6 +56,5 @@ and remaining browser verification in the task report. A Worker deployment
 versions code and assets together; rollback restores the previous version and
 snapshot together, with no database rollback or data migration.
 
-This direct snapshot approach replaces the proposed D1/R2 migration for the
-current publishing task. The existing Supabase infrastructure is not used or
-modified by the snapshot build or Worker.
+The optional Cloudflare control plane is independent of this snapshot build
+and Worker. No remote database is read during export.

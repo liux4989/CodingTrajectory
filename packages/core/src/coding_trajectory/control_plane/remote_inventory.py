@@ -1,4 +1,4 @@
-"""Supabase-backed, snapshot-pinned portable project inventory."""
+"""Cloudflare-backed, snapshot-pinned portable project inventory."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.control_plane.remote import (
+    CloudflareRpcClient,
     RemoteControlPlaneError,
-    SupabaseRpcClient,
 )
 from coding_trajectory.ingestion.common import format_datetime
 
@@ -41,13 +41,13 @@ class RemoteProjectInventorySnapshot(BaseModel):
     projects: list[RemoteProject]
 
 
-class SupabaseProjectInventoryRepository:
+class CloudflareProjectInventoryRepository:
     """Serve ``project.list`` from one pinned remote workspace sequence."""
 
     def __init__(
         self,
         *,
-        client: SupabaseRpcClient,
+        client: CloudflareRpcClient,
         workspace_id: UUID,
         snapshot_sequence: int | None = None,
     ) -> None:

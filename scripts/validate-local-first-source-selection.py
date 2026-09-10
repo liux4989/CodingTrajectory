@@ -170,12 +170,11 @@ def validate_read_only_remote_fallback(profile_name: str) -> None:
     """Use an existing credential profile for one inventory-only fallback."""
 
     from coding_trajectory.control_plane.http_service import RemoteRuntimeFactory
-    from coding_trajectory_cli.collector_credentials import refresh_profile
+    from coding_trajectory_cli.collector_credentials import load_profile_credentials
 
-    credentials = refresh_profile(profile_name)
+    credentials = load_profile_credentials(profile_name)
     factory = RemoteRuntimeFactory(
-        url=str(credentials.profile.supabase_url),
-        api_key=credentials.profile.supabase_api_key,
+        url=str(credentials.profile.cloudflare_url),
         workspace_id=credentials.profile.workspace_id,
     )
 

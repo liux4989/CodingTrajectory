@@ -77,7 +77,7 @@ Keep the wrapper mode executable and its parent directory private. Set
 `CT_AMP_AUTO_PUBLISH=0` to retain capture without automatic publication. The
 plugin does not call the hosted Datahub Worker: that facade remains read-only.
 Only the local collector builds and validates the bounded Chronicle artifact
-before publishing it through authenticated Supabase RPC. The publication path
+before publishing it through authenticated Cloudflare RPC. The publication path
 replaces user-request content with `[content omitted]` and removes assistant
 text previews even if a local Chronicle projection retains bounded narrative.
 
@@ -157,54 +157,26 @@ is reconstructed from message lengths.
 
 ## Linux orb credentials and retry
 
-A successful local scan proves discovery only. `401 JWT expired` blocks remote
-validation; it does not indicate an Amp ingestion failure. `CT_ACCESS_TOKEN` is
-an API credential; collector runs use `CT_COLLECTOR_ACCESS_TOKEN` and require a
-workspace and a provisioned collector agent. Copying an expired token between
-variables cannot repair authentication.
-
-For repeated runs on a Linux VPS/orb, configure a refreshable profile using an
-injected password environment variable. An administrator must first provision a
-scoped Auth principal and collector agent with the required capabilities on the
-authorized target. Never install a service-role key on the collector. Inject
-`CT_COLLECTOR_PASSWORD` using the host's secret manager; do not put its value in
-shell commands, repository files, or reports.
-
-With the non-secret connection and identity variables populated, configure from
-the project checkout on the orb:
+A successful local scan proves discovery only. Configure a scoped Cloudflare
+token through the host secret manager. The token registry must grant this
+workspace and collector agent the `collect` capability; add `read` if needed.
 
 ```sh
 uv run ct collector credentials configure --profile orb \
-  --supabase-url "$CT_SUPABASE_URL" \
-  --supabase-api-key "$CT_SUPABASE_ANON_KEY" \
+  --cloudflare-url "$CT_CLOUDFLARE_URL" \
   --workspace-id "$CT_REMOTE_WORKSPACE_ID" \
   --agent-id "$CT_COLLECTOR_AGENT_ID" \
-  --email "$CT_COLLECTOR_EMAIL" \
-  --password-env CT_COLLECTOR_PASSWORD
+  --token-env CT_COLLECTOR_ACCESS_TOKEN
 export CT_CREDENTIAL_PROFILE=orb
 uv run ct collector credentials status --profile orb
 uv run ct collector scan --agent-vendor amp --since-days 7
-CT_AUTO_PUBLISH=0 uv run ct api call project.list
-```
-
-Configuration persists only the environment variable name alongside profile
-settings in a private profile file. The password must be injected into each
-process that refreshes the profile. Status reports secret presence only; the API
-read above verifies authentication without triggering on-demand publication.
-An explicit profile obtains a fresh access token even if `CT_ACCESS_TOKEN` is
-still set to an expired value. Authentication alone does not prove collector
-capabilities or that the current Chronicle schema is installed.
-
-After read validation and target authorization, publish from the same project:
-
-```sh
 uv run ct collector run --credential-profile orb \
   --project-name "$CT_PROJECT_NAME" --agent-vendor amp --since-days 7 \
   --state-path "$CT_COLLECTOR_STATE"
 ```
 
-Use a stable private state path for this collector stream. The profile supplies
-workspace/agent identity; without a profile, collector runs also accept
-`CT_REMOTE_WORKSPACE_ID` and `CT_COLLECTOR_AGENT_ID`. Refresh occurs at command
-startup, not continuously during a long-running command. A revoked password or
-missing injected secret fails closed; reprovision through the administrator.
+Profiles persist the environment variable name, never its token value. Inject
+the token into each collector process. Status reports presence; a live API call
+verifies authorization. Use a stable private state path for a collector stream,
+and a fresh state path when changing authorities. A revoked or missing token
+fails closed; replace it through the administrator's secret registry.

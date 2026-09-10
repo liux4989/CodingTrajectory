@@ -56,7 +56,8 @@ The collector uses:
 - `ct_collector_publish_living_observation` for canonical living changes.
 
 The collector principal needs only its scoped authenticated capabilities. A
-service-role credential must never be installed on the collector host.
+Cloudflare account credential must never be installed on the collector host.
+Use a scoped control-plane bearer token; see [the Cloudflare control plane](remote-ct-control-plane-design.md).
 
 Remote collection requires a portable project name and project ID. The
 repository identity and aliases are optional portable identifiers. A host path

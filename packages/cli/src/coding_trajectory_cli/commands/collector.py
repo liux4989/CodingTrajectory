@@ -12,9 +12,9 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from coding_trajectory.control_plane.collector import (
+    CloudflareCollectorRemote,
     CollectorIdentity,
     LocalCollector,
-    SupabaseCollectorRemote,
 )
 from coding_trajectory.control_plane.collector_protocol import (
     ProjectRegistrationRequest,
@@ -30,8 +30,8 @@ from coding_trajectory_cli._shared import (
 from coding_trajectory_cli.collector_credentials import (
     CollectorCredentialError,
     configure_profile,
+    load_profile_credentials,
     profile_summary,
-    refresh_profile,
 )
 
 
@@ -60,22 +60,20 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
-def _remote_from_args(args: argparse.Namespace) -> SupabaseCollectorRemote:
-    url = args.supabase_url or os.environ.get("CT_SUPABASE_URL")
-    api_key = args.supabase_api_key or os.environ.get("CT_SUPABASE_ANON_KEY")
+def _remote_from_args(args: argparse.Namespace) -> CloudflareCollectorRemote:
+    url = args.cloudflare_url or os.environ.get("CT_CLOUDFLARE_URL")
     access_token = args.access_token or os.environ.get("CT_COLLECTOR_ACCESS_TOKEN")
     missing = [
         name
         for name, value in (
-            ("SUPABASE_URL", url),
-            ("SUPABASE_ANON_KEY", api_key),
+            ("CLOUDFLARE_URL", url),
             ("COLLECTOR_ACCESS_TOKEN", access_token),
         )
         if not value
     ]
     if missing:
         raise ValueError("collector run requires " + ", ".join(missing))
-    return SupabaseCollectorRemote(url=url, api_key=api_key, access_token=access_token)
+    return CloudflareCollectorRemote(url=url, access_token=access_token)
 
 
 def _identity_from_args(
@@ -98,13 +96,12 @@ def _apply_credential_profile(args: argparse.Namespace) -> None:
     profile_name = profile_name or os.environ.get("CT_CREDENTIAL_PROFILE")
     if not profile_name:
         return
-    refreshed = refresh_profile(profile_name)
+    refreshed = load_profile_credentials(profile_name)
     profile = refreshed.profile
     args.workspace_id = args.workspace_id or profile.workspace_id
     args.agent_id = args.agent_id or profile.agent_id
     args.project_id = args.project_id or profile.project_id
-    args.supabase_url = args.supabase_url or str(profile.supabase_url)
-    args.supabase_api_key = args.supabase_api_key or profile.supabase_api_key
+    args.cloudflare_url = args.cloudflare_url or str(profile.cloudflare_url)
     args.access_token = args.access_token or refreshed.access_token
 
 
@@ -217,24 +214,22 @@ def _handle_status(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _handle_credentials_configure(args: argparse.Namespace) -> dict[str, Any]:
-    password = (
+    token = (
         None
-        if args.password_env
+        if args.token_env
         else (
             sys.stdin.readline().rstrip("\n")
-            if args.password_stdin
-            else getpass.getpass("Collector Auth password: ")
+            if args.token_stdin
+            else getpass.getpass("Cloudflare collector token: ")
         )
     )
-    if not args.password_env and not password:
-        raise CollectorCredentialError("collector password must not be empty")
+    if not args.token_env and not token:
+        raise CollectorCredentialError("collector token must not be empty")
     configure_profile(
         profile_name=args.profile,
-        supabase_url=args.supabase_url,
-        supabase_api_key=args.supabase_api_key,
-        email=args.email,
-        password=password,
-        password_env=args.password_env,
+        cloudflare_url=args.cloudflare_url,
+        token=token,
+        token_env=args.token_env,
         workspace_id=args.workspace_id,
         agent_id=args.agent_id,
         project_id=args.project_id,
@@ -242,7 +237,7 @@ def _handle_credentials_configure(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "profile": args.profile,
         "configured": True,
-        "password_storage": "environment" if args.password_env else "macOS Keychain",
+        "token_storage": "environment" if args.token_env else "macOS Keychain",
     }
 
 
@@ -309,12 +304,11 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     run.add_argument("--agent-instance-id", type=_uuid_arg)
     run.add_argument("--state-path", help="Private SQLite delivery state path.")
-    run.add_argument("--supabase-url", help="Defaults to CT_SUPABASE_URL.")
-    run.add_argument("--supabase-api-key", help="Defaults to CT_SUPABASE_ANON_KEY.")
+    run.add_argument("--cloudflare-url", help="Defaults to CT_CLOUDFLARE_URL.")
     run.add_argument("--access-token", help="Defaults to CT_COLLECTOR_ACCESS_TOKEN.")
     run.add_argument(
         "--credential-profile",
-        help="Refresh a collector profile (defaults to CT_CREDENTIAL_PROFILE) before publishing.",
+        help="Load a collector profile (defaults to CT_CREDENTIAL_PROFILE) before publishing.",
     )
     run.add_argument("--no-heartbeat", action="store_true")
     run.set_defaults(
@@ -333,7 +327,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     credentials = commands.add_parser(
         "credentials",
-        help="Configure private, refreshable collector credentials.",
+        help="Configure private, scoped collector credentials.",
         formatter_class=GhFormatter,
     )
     credential_commands = credentials.add_subparsers(
@@ -341,25 +335,23 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     configure = credential_commands.add_parser(
         "configure",
-        help="Configure Keychain storage or an injected password environment variable.",
+        help="Configure Keychain storage or an injected token environment variable.",
         formatter_class=GhFormatter,
     )
     configure.add_argument("--profile", default="default")
     configure.add_argument("--workspace-id", required=True, type=_uuid_arg)
     configure.add_argument("--agent-id", required=True, type=_uuid_arg)
     configure.add_argument("--project-id", type=_uuid_arg)
-    configure.add_argument("--supabase-url", required=True)
-    configure.add_argument("--supabase-api-key", required=True)
-    configure.add_argument("--email", required=True)
+    configure.add_argument("--cloudflare-url", required=True)
     secret_source = configure.add_mutually_exclusive_group()
     secret_source.add_argument(
-        "--password-env",
-        help="Read the password from this environment variable at run time; store only its name.",
+        "--token-env",
+        help="Read the token from this environment variable at run time; store only its name.",
     )
     secret_source.add_argument(
-        "--password-stdin",
+        "--token-stdin",
         action="store_true",
-        help="Read the password from standard input.",
+        help="Read the token from standard input.",
     )
     configure.set_defaults(
         _plugin_handler=_handle_credentials_configure, _default_output="json"

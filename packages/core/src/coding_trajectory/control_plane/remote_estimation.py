@@ -1,4 +1,4 @@
-"""Supabase-backed authority and worker for durable remote estimation."""
+"""Cloudflare-backed authority and worker for durable remote estimation."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from coding_trajectory.control_plane.remote import (
+    CloudflareHistoricalRepository,
+    CloudflareRpcClient,
     RemoteControlPlaneError,
-    SupabaseHistoricalRepository,
-    SupabaseRpcClient,
 )
 from coding_trajectory.estimation.calibration import compute_calibration
 from coding_trajectory.estimation.comparison import join_actual
@@ -71,7 +71,7 @@ class RemoteEstimatorExecutor(Protocol):
 class RemoteEstimationRepository:
     """Typed persistence boundary over the estimation RPC contract."""
 
-    def __init__(self, *, client: SupabaseRpcClient, workspace_id: UUID) -> None:
+    def __init__(self, *, client: CloudflareRpcClient, workspace_id: UUID) -> None:
         self._client = client
         self.workspace_id = workspace_id
 
@@ -141,7 +141,7 @@ class RemoteEstimationAuthority:
     """Snapshot-aware application handler for every ``estimate.*`` method.
 
     Planning and calibration deliberately reuse the embedded estimator's pure
-    functions. Only provider execution is deferred to a service-role worker.
+    functions. Only provider execution is deferred to a scoped estimator worker.
     A newly queued prediction returns the contract-shaped ``forecast_pending``
     retryable failure; repeating the same call returns the durable forecast as
     soon as its worker completes it.
@@ -150,7 +150,7 @@ class RemoteEstimationAuthority:
     def __init__(
         self,
         *,
-        client: SupabaseRpcClient,
+        client: CloudflareRpcClient,
         workspace_id: UUID,
         snapshot_sequence: int | None = None,
         estimator_provider: str = "codex-app-server",
@@ -181,7 +181,7 @@ class RemoteEstimationAuthority:
         raise KeyError(f"no remote estimate handler registered for {method}")
 
     def _snapshot(self) -> tuple[DocumentStore, int]:
-        repository = SupabaseHistoricalRepository(
+        repository = CloudflareHistoricalRepository(
             client=self._client,
             workspace_id=self.workspace_id,
             snapshot_sequence=self.snapshot_sequence,
@@ -558,7 +558,7 @@ class RemoteEstimationWorker:
     def __init__(
         self,
         *,
-        client: SupabaseRpcClient,
+        client: CloudflareRpcClient,
         worker_id: str,
         executor: RemoteEstimatorExecutor,
     ) -> None:

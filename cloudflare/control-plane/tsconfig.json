@@ -7,7 +7,9 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
+    "allowJs": true,
+    "resolveJsonModule": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["access.ts", "snapshot.ts", "worker-configuration.d.ts"]
+  "include": ["src/**/*"]
 }

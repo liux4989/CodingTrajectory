@@ -212,6 +212,45 @@ class ArtifactPublicationRequest(CollectorModel):
     def wire_json(self) -> str:
         return canonical_json(self.wire_payload())
 
+    def reference_payload(self) -> dict[str, Any]:
+        """Commit only validated references after staging immutable R2 bodies."""
+
+        payload = self.model_dump(mode="json", exclude_none=True)
+        for artifact in payload["artifacts"]:
+            del artifact["payload"]
+        return payload
+
+
+class ArtifactReference(CollectorModel):
+    artifact_id: UUID
+    schema_version: Literal["ct.chronicle_graph.v2"] = CHRONICLE_GRAPH_SCHEMA_VERSION
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    serialized_bytes: int = Field(ge=1, le=8 * 1024 * 1024)
+    source_ids: list[UUID] = Field(min_length=1)
+    observed_at: datetime
+
+
+class ArtifactManifestRequest(CollectorModel):
+    version: Literal[1] = 1
+    workspace_id: UUID
+    agent_id: UUID
+    project_id: UUID
+    publication_sequence: int = Field(ge=0)
+    source_vector: list[SourceVectorEntry] = Field(min_length=1)
+    artifacts: list[ArtifactReference] = Field(min_length=1)
+
+
+class ArtifactStageRequest(CollectorModel):
+    workspace_id: UUID
+    agent_id: UUID
+    schema_version: Literal["ct.chronicle_graph.v2"] = CHRONICLE_GRAPH_SCHEMA_VERSION
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    encoding: Literal["gzip"]
+    uncompressed_bytes: int = Field(ge=1, le=8 * 1024 * 1024)
+    compressed_bytes: int = Field(ge=1, le=8 * 1024 * 1024)
+    payload_base64: str = Field(min_length=1, max_length=12 * 1024 * 1024)
+    projections: dict[str, dict[str, Any]]
+
 
 class LeaseHeartbeatRequest(CollectorModel):
     version: Literal[1] = 1

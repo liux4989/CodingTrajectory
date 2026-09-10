@@ -1,6 +1,5 @@
-import { configurationFor, verifyAccess, withSecurityHeaders } from "./index";
+import { configurationFor, verifyAccess, withSecurityHeaders } from "./access";
 
-type SnapshotEnv = Pick<Env, "ASSETS" | "CF_ACCESS_TEAM_DOMAIN" | "CF_ACCESS_AUD">;
 type Row = Record<string, unknown>;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -29,11 +28,11 @@ export default {
         { status: error instanceof RequestError ? error.status : 503 });
     }
     // Every response is private, including direct navigation and error responses.
-    return withSecurityHeaders(response, true);
+    return withSecurityHeaders(response);
   },
-} satisfies ExportedHandler<SnapshotEnv>;
+} satisfies ExportedHandler<Env>;
 
-async function read(env: SnapshotEnv, path: string): Promise<unknown> {
+async function read(env: Env, path: string): Promise<unknown> {
   const response = await env.ASSETS.fetch(new Request(`https://snapshot.internal/_snapshot/${path}`));
   if (response.status !== 200 || !response.headers.get("content-type")?.includes("application/json")) {
     throw new RequestError(404, "Not found.");
@@ -108,7 +107,7 @@ function page(rows: Row[], params: URLSearchParams, revision: number) {
   return { items, page: { revision, next_cursor: nextCursor, has_more: nextCursor !== null } };
 }
 
-export async function api(url: URL, env: SnapshotEnv): Promise<unknown> {
+export async function api(url: URL, env: Env): Promise<unknown> {
   switch (url.pathname) {
     case "/api/datahub/snapshot":
       query(url, []);

@@ -1,6 +1,6 @@
 """Route public methods to their durable control-plane authority.
 
-The dispatcher is deliberately unaware of local discovery, HTTP, Supabase, or
+The dispatcher is deliberately unaware of local discovery, HTTP, Cloudflare, or
 cache implementation details. Embedded and remote runtimes provide the same
 four handlers and therefore share request and response validation.
 """

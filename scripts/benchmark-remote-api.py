@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Benchmark authenticated remote reads; retain only aggregate measurements.
 
-Uses CT_SUPABASE_URL, CT_SUPABASE_ANON_KEY, CT_ACCESS_TOKEN and
+Uses CT_CLOUDFLARE_URL, CT_ACCESS_TOKEN and
 CT_REMOTE_WORKSPACE_ID, or an explicitly selected Keychain credential profile.
 Estimation is excluded because even its reads can persist comparisons.
 """
@@ -9,7 +9,6 @@ Estimation is excluded because even its reads can persist comparisons.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import statistics
@@ -19,10 +18,9 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID
 
-from pydantic import BaseModel, Field
-
 from coding_trajectory.contracts import SERVICE_CONTRACTS
 from coding_trajectory.control_plane.http_service import RemoteRuntimeFactory
+from pydantic import BaseModel, Field
 
 
 class Measurement(BaseModel):
@@ -56,23 +54,17 @@ def main() -> int:
     if args.repeat < 1 or args.since_days < 1:
         parser.error("repeat and since-days must be positive")
     if args.profile:
-        from coding_trajectory_cli.collector_credentials import refresh_profile
+        from coding_trajectory_cli.collector_credentials import load_profile_credentials
 
-        credentials = refresh_profile(args.profile)
+        credentials = load_profile_credentials(args.profile)
         profile = credentials.profile
-        url, key = str(profile.supabase_url), profile.supabase_api_key
+        url = str(profile.cloudflare_url)
         token, workspace = credentials.access_token, profile.workspace_id
     else:
-        url = os.environ["CT_SUPABASE_URL"]
-        key = os.environ["CT_SUPABASE_ANON_KEY"]
+        url = os.environ["CT_CLOUDFLARE_URL"]
         token = os.environ["CT_ACCESS_TOKEN"]
         workspace = UUID(os.environ["CT_REMOTE_WORKSPACE_ID"])
-    # Server authentication remains authoritative; reject privileged benchmark use.
-    segment = token.split(".")[1]
-    claims = json.loads(base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4)))
-    if claims.get("role") != "authenticated":
-        raise ValueError("benchmark requires an ordinary authenticated user")
-    factory = RemoteRuntimeFactory(url=url, api_key=key, workspace_id=workspace)
+    factory = RemoteRuntimeFactory(url=url, workspace_id=workspace)
     scoped = {"project_name": args.project, "since_days": args.since_days}
     with factory.build(token) as runtime:
         discovery = runtime.execute({"method": "project.sessions", "params": scoped})
@@ -187,7 +179,7 @@ if __name__ == "__main__":
     with patch("coding_trajectory.service.resolve_store", forbid_local):
         try:
             raise SystemExit(main())
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - redact errors at this public boundary
             # Do not expose server messages, credentials, or resource identifiers.
             print(json.dumps({"status": "failed", "error_type": type(exc).__name__}))
             raise SystemExit(1) from None

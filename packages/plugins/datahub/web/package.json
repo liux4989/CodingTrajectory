@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "build:hosted": "VITE_DATAHUB_MODE=hosted npm run build",
     "check:worker": "tsc -p worker/tsconfig.json",
-    "types:worker": "wrangler types worker/worker-configuration.d.ts --config ../wrangler.gateway.jsonc",
+    "types:worker": "wrangler types worker/worker-configuration.d.ts --config ../wrangler.snapshot.jsonc",
     "generate:api": "uv run python ../../../../scripts/generate-datahub-api-types.py",
     "check:api": "uv run python ../../../../scripts/generate-datahub-api-types.py --check",
     "preview": "vite preview --host 127.0.0.1"

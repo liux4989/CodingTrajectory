@@ -41,8 +41,7 @@ def _environment_remote_fallback(
     """Return a lazy remote builder only for complete embedded configuration."""
 
     names = (
-        "CT_SUPABASE_URL",
-        "CT_SUPABASE_ANON_KEY",
+        "CT_CLOUDFLARE_URL",
         "CT_ACCESS_TOKEN",
         "CT_REMOTE_WORKSPACE_ID",
     )

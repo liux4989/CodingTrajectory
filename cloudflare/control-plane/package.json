@@ -1,0 +1,20 @@
+{
+  "name": "@coding-trajectory/control-plane",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "schemas": "PYTHONPATH=../../packages/core/src uv run python ../../scripts/generate-cloudflare-contracts.py && node scripts/compile-contracts.mjs",
+    "types": "wrangler types src/env.d.ts --include-runtime=false",
+    "check": "npm run schemas && tsc --noEmit",
+    "deploy": "npm run check && wrangler deploy"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260908.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.129.1"
+  }
+}

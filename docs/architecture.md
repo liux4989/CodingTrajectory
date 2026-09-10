@@ -12,7 +12,7 @@ Host-local vendor logs (immutable evidence)
       → local evidence handlers (content, events, search)
       → locally assembled ct.chronicle_graph.v2
           → shared historical handlers
-          → authenticated collector → Supabase artifact revisions
+          → authenticated collector → Cloudflare workspace revisions + R2 artifacts
               → snapshot-pinned DocumentStore → shared historical handlers
 ```
 
@@ -40,7 +40,7 @@ Operational details must not be presented as complete transcript evidence.
 | `packages/cli/src/coding_trajectory_cli/` | CLI commands, schema inspection, API calls, plugin dispatch |
 | `packages/plugins/datahub/datahub_plugin/` | Datahub backend and enrichment |
 | `packages/plugins/datahub/web/` | Datahub React frontend |
-| `supabase/migrations/` | Ordered database migration history |
+| `cloudflare/control-plane/` | Native Worker, SQLite workspace authority, private R2 artifacts |
 | `validation/metrics/` | Committed evidence, audits, pinned pricing, and expected results |
 | `scripts/`, `benchmarks/` | Validation and benchmark tools |
 
@@ -56,10 +56,10 @@ stores delivery sequences, outboxes, and receipts. Its recovery rules preserve
 exact retries and reconcile source/publication watermarks. The local index and
 Datahub read models accelerate reads; they do not replace source evidence.
 
-Supabase holds immutable metadata-only source observations, bounded artifact
-revisions, normalized source vectors, and resource indexes. Historical SQL
-migrations remain ordered and intact even when later migrations retire their
-objects. A deployed database is not changed by repository cleanup.
+Cloudflare stores versioned workspace state in a SQLite Durable Object and
+immutable compressed artifacts in private R2. The direct Datahub snapshot uses
+Static Assets and Access independently. See the control-plane design for
+credential scope, transaction boundaries, and deployment instructions.
 
 ## API and plugin boundaries
 
@@ -89,8 +89,3 @@ uv run python scripts/validate-metrics-baselines.py
 Do not derive new expected metric values from a run alone. Intentional changes
 require reconstruction from committed source evidence and an updated audit.
 See the [metrics quality gate](metrics-validation-quality-gate.md).
-
-The Chronicle schema is deployed to the designated disposable non-production
-project, where a bounded canary verified publication and authenticated reads on
-2026-09-09. Continuous collection, concurrent collectors, and ongoing
-supervision remain outside that verified scope; production is not deployed.

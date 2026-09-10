@@ -1,31 +1,19 @@
-"""Request-scoped hosted Datahub adapters over chronicle CT artifacts.
+"""Build validated Datahub responses from a sanitized local Chronicle store.
 
-The hosted runtime deliberately has no local discovery, filesystem, cache, or
-publication capability.  Every successful route pins the caller's remote
-workspace sequence, loads only the artifacts required for that route, invokes
-the existing Python CT handlers, and validates the final Datahub response.
+Used only while exporting a frozen snapshot. There is no remote transport or
+publication capability; the deployed Worker serves the resulting static files.
 """
 
 from __future__ import annotations
 
 import base64
+from collections import defaultdict
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
-from coding_trajectory.contracts import service_contract
-from coding_trajectory.control_plane.remote import (
-    RemoteControlPlaneError,
-    _historical_snapshot_request,
-    _require_chronicle_historical_scope,
-    _snapshot_artifact_graph,
-)
-from coding_trajectory.control_plane.remote_inventory import (
-    RemoteProjectInventorySnapshot,
-)
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.service import IndexCache, dispatch
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -33,15 +21,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from datahub_plugin.api_models import validate_api_response
 from datahub_plugin.serving.routes import ROUTES
 
-HOSTED_HORIZON_DAYS = 7
-MAX_REMOTE_RESPONSE_BYTES = 32 * 1024 * 1024
+SNAPSHOT_HORIZON_DAYS = 7
 MAX_CURSOR_OFFSET = 100_000
 
-HostedDecision = Literal["adapter", "metadata_only", "deferred", "omit", "prohibited"]
+SnapshotDecision = Literal["adapter", "metadata_only", "deferred", "omit", "prohibited"]
 
 # Every local Datahub route must be classified here.  Keeping deferred and
 # prohibited entries explicit makes route growth fail closed during validation.
-HOSTED_ROUTE_DECISIONS: dict[tuple[str, str], HostedDecision] = {
+SNAPSHOT_ROUTE_DECISIONS: dict[tuple[str, str], SnapshotDecision] = {
     ("GET", "/api/datahub/events"): "deferred",
     ("GET", "/api/datahub/snapshot"): "adapter",
     ("GET", "/api/datahub/changes"): "adapter",
@@ -66,16 +53,12 @@ HOSTED_ROUTE_DECISIONS: dict[tuple[str, str], HostedDecision] = {
 }
 
 
-class HostedRequestError(ValueError):
+class SnapshotRequestError(ValueError):
     """A bounded client-facing hosted request failure."""
 
     def __init__(self, status: int, message: str) -> None:
         super().__init__(message)
         self.status = status
-
-
-class AsyncRpcClient(Protocol):
-    async def call(self, name: str, request: dict[str, Any]) -> dict[str, Any]: ...
 
 
 class _StrictQuery(BaseModel):
@@ -100,7 +83,9 @@ class ProjectsQuery(_PageQuery):
 
 
 class SessionsQuery(_PageQuery):
-    since_days: int = Field(default=HOSTED_HORIZON_DAYS, ge=1, le=HOSTED_HORIZON_DAYS)
+    since_days: int = Field(
+        default=SNAPSHOT_HORIZON_DAYS, ge=1, le=SNAPSHOT_HORIZON_DAYS
+    )
     project_name: str | None = Field(default=None, min_length=1, max_length=256)
     agent_vendor: str | None = Field(default=None, min_length=1, max_length=64)
 
@@ -129,12 +114,17 @@ class _Cursor(BaseModel):
     offset: int = Field(ge=0, le=MAX_CURSOR_OFFSET)
 
 
-class HostedDatahubService:
-    """Serve the hosted capability matrix through one async RPC client."""
+class SnapshotService:
+    """Generate the published route responses from one immutable local store."""
 
-    def __init__(self, *, rpc: AsyncRpcClient, workspace_id: UUID) -> None:
-        self._rpc = rpc
-        self._workspace_id = workspace_id
+    def __init__(
+        self, *, store: DocumentStore, revision: int, captured_at: str
+    ) -> None:
+        self._store = store
+        self._revision = revision
+        self._captured_at = captured_at
+        # Preserve the response contract's opaque workspace identity.
+        self._workspace_id = uuid5(NAMESPACE_URL, "ct:local-snapshot")
 
     async def handle_url(
         self, *, method: str, raw_url: str
@@ -146,11 +136,11 @@ class HostedDatahubService:
     async def handle(
         self, *, method: str, path: str, query: Mapping[str, Any]
     ) -> tuple[dict[str, Any] | list[Any], int]:
-        decision = HOSTED_ROUTE_DECISIONS.get((method, path))
+        decision = SNAPSHOT_ROUTE_DECISIONS.get((method, path))
         if decision not in {"adapter", "metadata_only"}:
             # Prohibited, deferred, omitted, and unknown routes are deliberately
-            # indistinguishable and perform no remote call.
-            raise HostedRequestError(404, "not found")
+            # indistinguishable and perform no store access.
+            raise SnapshotRequestError(404, "not found")
 
         if path == "/api/datahub/snapshot":
             _validate_query(SnapshotQuery, query)
@@ -179,11 +169,11 @@ class HostedDatahubService:
         elif path == "/api/sessions/items":
             params = _validate_query(SessionItemsQuery, query)
             if params.include_content:
-                raise HostedRequestError(404, "not found")
+                raise SnapshotRequestError(404, "not found")
             payload = await self._items(params)
             handler = "session_item_details"
         else:  # pragma: no cover - registry and dispatch are kept exhaustive
-            raise HostedRequestError(404, "not found")
+            raise SnapshotRequestError(404, "not found")
 
         try:
             validate_api_response(handler, payload)
@@ -192,15 +182,7 @@ class HostedDatahubService:
         return payload, 200
 
     async def _pin(self) -> int:
-        raw = await self._rpc.call(
-            "ct_workspace_snapshot", {"workspace_id": str(self._workspace_id)}
-        )
-        if str(raw.get("workspace_id")) != str(self._workspace_id):
-            raise RemoteControlPlaneError("workspace snapshot identity mismatch")
-        sequence = raw.get("snapshot_sequence")
-        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
-            raise RemoteControlPlaneError("workspace snapshot sequence is invalid")
-        return sequence
+        return self._revision
 
     def _transport(self, sequence: int) -> dict[str, Any]:
         return {
@@ -215,9 +197,9 @@ class HostedDatahubService:
         sequence = await self._pin()
         return {
             "revision": sequence,
-            "generated_at": datetime.now(UTC).isoformat(),
+            "generated_at": self._captured_at,
             "transport": self._transport(sequence),
-            "freshness": {"last_refresh_at": None, "lag_seconds": None},
+            "freshness": {"last_refresh_at": self._captured_at, "lag_seconds": None},
             "catching_up": False,
             "source_status": {
                 "ready": 1,
@@ -233,12 +215,12 @@ class HostedDatahubService:
                 "error": None,
                 "last_result": None,
                 "coverage": {
-                    "mode": "hosted",
+                    "mode": "snapshot",
                     "content_scope": "chronicle",
-                    "horizon_days": HOSTED_HORIZON_DAYS,
+                    "horizon_days": SNAPSHOT_HORIZON_DAYS,
                 },
             },
-            "horizon_days": HOSTED_HORIZON_DAYS,
+            "horizon_days": SNAPSHOT_HORIZON_DAYS,
         }
 
     async def _changes(self, params: ChangesQuery) -> dict[str, Any]:
@@ -265,31 +247,27 @@ class HostedDatahubService:
         }
 
     async def _projects(self, params: ProjectsQuery) -> dict[str, Any]:
-        sequence = await self._pin()
-        offset = _cursor_offset(params.cursor, sequence)
-        request: dict[str, Any] = {
-            "workspace_id": str(self._workspace_id),
-            "snapshot_sequence": sequence,
-        }
-        raw = await self._rpc.call("ct_project_inventory_snapshot", request)
-        snapshot = RemoteProjectInventorySnapshot.model_validate(raw)
-        if snapshot.workspace_id != self._workspace_id:
-            raise RemoteControlPlaneError("project inventory workspace mismatch")
-        if snapshot.snapshot_sequence != sequence:
-            raise RemoteControlPlaneError("project inventory snapshot mismatch")
-        items = [
-            {"name": project.display_name, "path": None, "vendors": project.vendors}
-            for project in snapshot.projects
-            if params.agent_vendor is None or params.agent_vendor in project.vendors
+        projects: dict[str, set[str]] = defaultdict(set)
+        for graph in self._store.session_graphs.values():
+            for session in graph.sessions:
+                projects[graph.project_identifier].add(session.vendor.value)
+        rows = [
+            {"name": name, "path": None, "vendors": sorted(vendors)}
+            for name, vendors in sorted(projects.items(), key=lambda x: x[0].casefold())
+            if params.agent_vendor is None or params.agent_vendor in vendors
         ]
-        items.sort(key=lambda item: item["name"].casefold())
-        page, next_cursor = _page(items, offset, params.limit, sequence)
+        rows, cursor = _page(
+            rows,
+            _cursor_offset(params.cursor, self._revision),
+            params.limit,
+            self._revision,
+        )
         return {
-            "items": page,
+            "items": rows,
             "page": {
-                "revision": sequence,
-                "next_cursor": next_cursor,
-                "has_more": next_cursor is not None,
+                "revision": self._revision,
+                "next_cursor": cursor,
+                "has_more": cursor is not None,
             },
         }
 
@@ -323,34 +301,12 @@ class HostedDatahubService:
     async def _project_sessions(
         self, params: dict[str, Any], sequence: int
     ) -> dict[str, Any]:
-        """Prefer the small exact projection, retaining JSONB as rollback."""
-
-        validated = service_contract("project.sessions").validate_request(params)
-        request = {
-            "workspace_id": str(self._workspace_id),
-            "snapshot_sequence": sequence,
-            **validated,
-        }
-        raw = await self._rpc.call("ct_project_sessions_projection", request)
-        if str(raw.get("workspace_id")) != str(self._workspace_id):
-            raise RemoteControlPlaneError("project sessions workspace mismatch")
-        if raw.get("snapshot_sequence") != sequence:
-            raise RemoteControlPlaneError("project sessions snapshot mismatch")
-        if raw.get("complete") is True:
-            result = raw.get("result")
-            if not isinstance(result, dict):
-                raise RemoteControlPlaneError("project sessions projection is invalid")
-            return service_contract("project.sessions").validate_response(result)
-
-        store = await self._store_for("project.sessions", params, sequence)
-        return _dispatch("project.sessions", params, store, sequence)
+        return _dispatch("project.sessions", params, self._store, sequence)
 
     async def _graph(self, params: SessionQuery) -> dict[str, Any]:
         sequence = await self._pin()
         session_id = str(params.session_id)
-        store = await self._store_for(
-            "graph.overview", {"root_session_id": session_id}, sequence
-        )
+        store = self._store
         overview = _dispatch(
             "graph.overview", {"root_session_id": session_id}, store, sequence
         )
@@ -374,7 +330,7 @@ class HostedDatahubService:
         sequence = await self._pin()
         session_id = str(params.session_id)
         method_params = {"session_id": session_id}
-        store = await self._store_for("session.tree", method_params, sequence)
+        store = self._store
         return _dispatch("session.tree", method_params, store, sequence)
 
     async def _items(self, params: SessionItemsQuery) -> list[Any]:
@@ -385,39 +341,18 @@ class HostedDatahubService:
         }
         if params.turn_id is not None:
             method_params["turn_id"] = str(params.turn_id)
-        store = await self._store_for("session.items", method_params, sequence)
+        store = self._store
         result = _dispatch("session.items", method_params, store, sequence)
         if not isinstance(result, list):
-            raise RemoteControlPlaneError("metadata item response is invalid")
+            raise TypeError("metadata item response is invalid")
         return result
 
-    async def _store_for(
-        self, method: str, params: dict[str, Any], sequence: int
-    ) -> DocumentStore:
-        _require_chronicle_historical_scope(method, params)
-        validated = service_contract(method).validate_request(params)
-        request = _historical_snapshot_request(
-            workspace_id=self._workspace_id, method=method, params=validated
-        )
-        request["snapshot_sequence"] = sequence
-        raw = await self._rpc.call("ct_historical_snapshot", request)
-        if str(raw.get("workspace_id")) != str(self._workspace_id):
-            raise RemoteControlPlaneError("historical snapshot workspace mismatch")
-        if raw.get("snapshot_sequence") != sequence:
-            raise RemoteControlPlaneError("historical snapshot sequence mismatch")
-        artifacts = raw.get("artifacts")
-        if not isinstance(artifacts, list):
-            raise RemoteControlPlaneError("historical snapshot has no artifact list")
-        return DocumentStore.from_session_graphs(
-            [_snapshot_artifact_graph(item) for item in artifacts]
-        )
 
-
-def assert_hosted_route_inventory() -> None:
+def assert_snapshot_route_inventory() -> None:
     """Fail if the local server adds or removes an unreviewed hosted route."""
 
     local = {(route.method, route.pattern) for route in ROUTES}
-    classified = set(HOSTED_ROUTE_DECISIONS)
+    classified = set(SNAPSHOT_ROUTE_DECISIONS)
     if local != classified:
         missing = sorted(local - classified)
         stale = sorted(classified - local)
@@ -430,7 +365,7 @@ def _single_value_query(raw_query: str) -> dict[str, str]:
     parsed = parse_qs(raw_query, keep_blank_values=True, strict_parsing=False)
     duplicates = sorted(key for key, values in parsed.items() if len(values) != 1)
     if duplicates:
-        raise HostedRequestError(400, "query parameters must not be repeated")
+        raise SnapshotRequestError(400, "query parameters must not be repeated")
     return {key: values[0] for key, values in parsed.items()}
 
 
@@ -447,7 +382,7 @@ def _validate_query[T: BaseModel](model: type[T], query: Mapping[str, Any]) -> T
     try:
         return model.model_validate(query)
     except ValidationError as exc:
-        raise HostedRequestError(400, _validation_message(exc)) from exc
+        raise SnapshotRequestError(400, _validation_message(exc)) from exc
 
 
 def _dispatch(
@@ -459,20 +394,20 @@ def _dispatch(
         store=store,
         global_scope=True,
         current_dir=Path("/"),
-        discovery_note=f"remote workspace snapshot {sequence}",
+        discovery_note=f"local snapshot {sequence}",
         cache=IndexCache(),
     )
 
 
 def _session_item(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise RemoteControlPlaneError("project session row is invalid")
+        raise TypeError("project session row is invalid")
     runtime = value.get("runtime") or {}
     usage = value.get("usage") or {}
     vendors = [str(item) for item in value.get("vendors") or []]
     root_id = str(value.get("root_session_id") or "")
     if not root_id:
-        raise RemoteControlPlaneError("project session row has no root identity")
+        raise RuntimeError("project session row has no root identity")
     return {
         "root_session_id": root_id,
         "lineage_root_session_id": value.get("lineage_root_session_id"),
@@ -502,9 +437,9 @@ def _cursor_offset(raw: str | None, revision: int) -> int:
         decoded = base64.urlsafe_b64decode(raw + padding)
         cursor = _Cursor.model_validate_json(decoded)
     except (ValueError, ValidationError) as exc:
-        raise HostedRequestError(400, "invalid cursor") from exc
+        raise SnapshotRequestError(400, "invalid cursor") from exc
     if cursor.revision != revision:
-        raise HostedRequestError(409, "cursor snapshot is no longer current")
+        raise SnapshotRequestError(409, "cursor snapshot is no longer current")
     return cursor.offset
 
 
@@ -524,12 +459,12 @@ def _page(
     return selected, next_cursor
 
 
-assert_hosted_route_inventory()
+assert_snapshot_route_inventory()
 
 __all__ = [
-    "HOSTED_HORIZON_DAYS",
-    "HOSTED_ROUTE_DECISIONS",
-    "HostedDatahubService",
-    "HostedRequestError",
-    "assert_hosted_route_inventory",
+    "SNAPSHOT_HORIZON_DAYS",
+    "SNAPSHOT_ROUTE_DECISIONS",
+    "SnapshotRequestError",
+    "SnapshotService",
+    "assert_snapshot_route_inventory",
 ]

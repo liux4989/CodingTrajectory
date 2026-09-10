@@ -1,4 +1,4 @@
-"""Explicit configuration for the single Supabase API authority."""
+"""Explicit configuration for the single Cloudflare API authority."""
 
 from __future__ import annotations
 
@@ -14,22 +14,20 @@ class ApiConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     url: HttpUrl
-    api_key: SecretStr
     access_token: SecretStr
     workspace_id: UUID
 
     @classmethod
     def from_environment(cls) -> ApiConfiguration:
         names = {
-            "url": "CT_SUPABASE_URL",
-            "api_key": "CT_SUPABASE_ANON_KEY",
+            "url": "CT_CLOUDFLARE_URL",
             "access_token": "CT_ACCESS_TOKEN",
             "workspace_id": "CT_REMOTE_WORKSPACE_ID",
         }
         missing = [name for name in names.values() if not os.environ.get(name)]
         if missing:
             raise ValueError(
-                "Supabase API configuration requires " + ", ".join(missing)
+                "Cloudflare API configuration requires " + ", ".join(missing)
             )
         # Avoid Pydantic errors echoing invalid secret inputs.
         try:
@@ -37,7 +35,7 @@ class ApiConfiguration(BaseModel):
                 {key: os.environ[name] for key, name in names.items()}
             )
         except ValueError:
-            raise ValueError("Supabase API configuration is invalid") from None
+            raise ValueError("Cloudflare API configuration is invalid") from None
 
     def runtime_options(
         self, *, local_evidence: bool = False, current_dir: Path | None = None
@@ -46,7 +44,6 @@ class ApiConfiguration(BaseModel):
 
         factory = RemoteRuntimeFactory(
             url=str(self.url),
-            api_key=self.api_key.get_secret_value(),
             workspace_id=self.workspace_id,
         )
         options = factory.runtime_options(
@@ -67,7 +64,6 @@ class ApiConfiguration(BaseModel):
                 access_token=self.access_token.get_secret_value(),
                 agent_id=UUID(agent_id),
                 url=str(self.url),
-                api_key=self.api_key.get_secret_value(),
                 current_dir=current_dir or Path.cwd(),
             ).prepare
         return options

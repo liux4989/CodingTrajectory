@@ -77,9 +77,12 @@ def main(argv: list[str] | None = None) -> int:
         static_dir=_static_dir(args.static_dir),
         since_days=args.since_days,
     )
-    if args.static_dir is None and not args.no_build:
-        if not _rebuild_if_stale(config.static_dir):
-            return 1
+    if (
+        args.static_dir is None
+        and not args.no_build
+        and not _rebuild_if_stale(config.static_dir)
+    ):
+        return 1
     if not config.static_dir.is_dir():
         print(
             "error: datahub web assets were not found; run `bun install && bun run build` "

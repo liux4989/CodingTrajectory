@@ -1,4 +1,4 @@
-"""Private, refreshable credentials for the host-local collector."""
+"""Private, scoped Cloudflare credentials for the host-local collector."""
 
 from __future__ import annotations
 
@@ -7,42 +7,37 @@ import os
 import platform
 import re
 import tempfile
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import keyring
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
-
 _PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
-_KEYCHAIN_SERVICE_PREFIX = "CodingTrajectory collector credentials v1"
+_KEYCHAIN_SERVICE_PREFIX = "CodingTrajectory collector credentials v2"
 
 
 class CollectorCredentialError(RuntimeError):
-    """A private collector profile could not be loaded or refreshed."""
+    """A private collector profile could not be loaded."""
 
 
 class CollectorCredentialProfile(BaseModel):
-    """Profile settings; passwords stay in Keychain or the process environment."""
+    """Profile settings; tokens stay in Keychain or the process environment."""
 
     model_config = ConfigDict(extra="forbid")
 
-    password_env: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    version: int = 1
-    supabase_url: HttpUrl
-    supabase_api_key: str
-    email: str
+    token_env: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    version: Literal[2] = 2
+    cloudflare_url: HttpUrl
     workspace_id: UUID
     agent_id: UUID
     project_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class RefreshedCollectorCredentials:
+class CollectorCredentials:
     profile: CollectorCredentialProfile
     access_token: str
 
@@ -58,85 +53,61 @@ def profile_path(profile_name: str) -> Path:
 def configure_profile(
     *,
     profile_name: str,
-    supabase_url: str,
-    supabase_api_key: str,
-    email: str,
-    password: str | None,
+    cloudflare_url: str,
+    token: str | None,
     workspace_id: UUID,
     agent_id: UUID,
     project_id: UUID | None,
-    password_env: str | None = None,
+    token_env: str | None = None,
 ) -> CollectorCredentialProfile:
-    if password_env is None:
+    if token_env is None:
         _require_macos_keychain()
-    if password_env is None and not password:
-        raise CollectorCredentialError("collector password must not be empty")
+    if token_env is None and not token:
+        raise CollectorCredentialError("collector token must not be empty")
     profile = CollectorCredentialProfile(
-        password_env=password_env,
-        supabase_url=supabase_url,
-        supabase_api_key=supabase_api_key,
-        email=email,
+        token_env=token_env,
+        cloudflare_url=cloudflare_url,
         workspace_id=workspace_id,
         agent_id=agent_id,
         project_id=project_id,
     )
-    if password_env is None:
-        keyring.set_password(_keychain_service(profile_name), "password", password)
+    if token_env is None:
+        keyring.set_password(_keychain_service(profile_name), "token", token)
     _write_profile(profile_name, profile)
     return profile
 
 
-def refresh_profile(profile_name: str) -> RefreshedCollectorCredentials:
+def load_profile_credentials(profile_name: str) -> CollectorCredentials:
     profile = _read_profile(profile_name)
-    password = _profile_password(profile_name, profile)
-    if not password:
+    token = _profile_token(profile_name, profile)
+    if not token:
         raise CollectorCredentialError(
-            "collector password is unavailable in the configured secret backend"
+            "collector token is unavailable in the configured secret backend"
         )
-    payload = json.dumps({"email": profile.email, "password": password}).encode()
-    request = urllib.request.Request(
-        f"{str(profile.supabase_url).rstrip('/')}/auth/v1/token?grant_type=password",
-        data=payload,
-        headers={
-            "apikey": profile.supabase_api_key,
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
-        raise CollectorCredentialError("collector credential refresh failed") from exc
-    access_token = result.get("access_token") if isinstance(result, dict) else None
-    if not isinstance(access_token, str) or access_token.count(".") != 2:
-        raise CollectorCredentialError(
-            "collector credential refresh returned no access token"
-        )
-    return RefreshedCollectorCredentials(profile=profile, access_token=access_token)
+    return CollectorCredentials(profile=profile, access_token=token)
 
 
 def profile_summary(profile_name: str) -> dict[str, Any]:
     profile = _read_profile(profile_name)
-    present = bool(_profile_password(profile_name, profile))
+    present = bool(_profile_token(profile_name, profile))
     return {
         "profile": profile_name,
         "configured": True,
-        "password_storage": "environment" if profile.password_env else "macOS Keychain",
-        "password_present": present,
-        "keychain_password_present": present if not profile.password_env else False,
+        "token_storage": "environment" if profile.token_env else "macOS Keychain",
+        "token_present": present,
+        "keychain_token_present": present if not profile.token_env else False,
         "workspace_configured": True,
         "agent_configured": True,
     }
 
 
-def _profile_password(
+def _profile_token(
     profile_name: str, profile: CollectorCredentialProfile
 ) -> str | None:
-    if profile.password_env:
-        return os.environ.get(profile.password_env)
+    if profile.token_env:
+        return os.environ.get(profile.token_env)
     _require_macos_keychain()
-    return keyring.get_password(_keychain_service(profile_name), "password")
+    return keyring.get_password(_keychain_service(profile_name), "token")
 
 
 def _read_profile(profile_name: str) -> CollectorCredentialProfile:
@@ -151,7 +122,12 @@ def _read_profile(profile_name: str) -> CollectorCredentialProfile:
         raise CollectorCredentialError(
             f"collector profile {profile_name!r} is unreadable"
         ) from exc
-    return CollectorCredentialProfile.model_validate(raw)
+    try:
+        return CollectorCredentialProfile.model_validate(raw)
+    except ValueError:
+        raise CollectorCredentialError(
+            "collector profile is invalid; configure a Cloudflare token profile"
+        ) from None
 
 
 def _write_profile(profile_name: str, profile: CollectorCredentialProfile) -> None:

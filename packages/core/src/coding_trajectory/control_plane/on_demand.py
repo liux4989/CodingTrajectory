@@ -14,10 +14,10 @@ from pydantic import BaseModel, Field
 
 from coding_trajectory.control_plane.chronicle import build_chronicle_graph_artifact
 from coding_trajectory.control_plane.collector import (
+    CloudflareCollectorRemote,
     CollectorIdentity,
     CollectorRemoteError,
     LocalCollector,
-    SupabaseCollectorRemote,
 )
 from coding_trajectory.control_plane.collector_protocol import (
     ProjectRegistrationRequest,
@@ -43,7 +43,6 @@ class OnDemandPublisher:
         access_token: str,
         agent_id: UUID,
         url: str,
-        api_key: str,
         current_dir: Path,
         project_id: UUID | None = None,
     ):
@@ -52,11 +51,11 @@ class OnDemandPublisher:
         self.agent_id = agent_id
         self.current_dir = current_dir.resolve()
         self.project_id = project_id
-        self.remote = SupabaseCollectorRemote(
-            url=url, api_key=api_key, access_token=access_token
+        self.remote = CloudflareCollectorRemote(
+            url=url, access_token=access_token
         )
         key = hashlib.sha256(
-            f"{factory.workspace_id}:{agent_id}:{self.current_dir.name}".encode()
+            f"{url}:{factory.workspace_id}:{agent_id}:{self.current_dir.name}".encode()
         ).hexdigest()
         root = Path(
             os.environ.get(
@@ -133,7 +132,7 @@ class OnDemandPublisher:
                 identity=identity,
             ) as collector:
                 print(
-                    f"ct: synchronizing stored {method} observations with Supabase…",
+                    f"ct: synchronizing stored {method} observations with Cloudflare…",
                     file=sys.stderr,
                     flush=True,
                 )
@@ -274,7 +273,7 @@ class OnDemandPublisher:
                 state.pending_session = target
                 self._save(state)
                 print(
-                    "ct: synchronizing the requested session with Supabase…",
+                    "ct: synchronizing the requested session with Cloudflare…",
                     file=sys.stderr,
                     flush=True,
                 )
@@ -330,7 +329,7 @@ class OnDemandPublisher:
                 return options
         except DocumentError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - redact errors at this public boundary
             raise DocumentError(
                 f"on-demand publication failed ({type(exc).__name__}); retry this query"
             ) from None

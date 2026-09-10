@@ -1,11 +1,14 @@
-"""Supabase-backed historical snapshot repository and RPC transport."""
+"""Cloudflare-backed historical snapshot repository and RPC transport."""
 
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
+import io
 import json
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
@@ -22,15 +25,29 @@ class RemoteControlPlaneError(DocumentError):
     """A remote control-plane operation failed or violated its contract."""
 
 
-class SupabaseRpcClient:
-    """Small PostgREST RPC transport shared by remote CT workers and readers."""
+def cloudflare_endpoint(url: str) -> str:
+    """Require TLS except for an explicit loopback qualification endpoint."""
+    parsed = urlsplit(url)
+    local = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    if (
+        (parsed.scheme != "https" and not (local and parsed.scheme == "http"))
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError("Cloudflare endpoint must be an HTTPS origin")
+    return url.rstrip("/") + "/rpc/"
 
-    def __init__(
-        self, *, url: str, api_key: str, access_token: str, timeout: float = 20
-    ) -> None:
-        self._url = url.rstrip("/") + "/rest/v1/rpc/"
+
+class CloudflareRpcClient:
+    """Small Cloudflare RPC transport shared by remote CT workers and readers."""
+
+    def __init__(self, *, url: str, access_token: str, timeout: float = 20) -> None:
+        self._url = cloudflare_endpoint(url)
         self._headers = {
-            "apikey": api_key,
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
@@ -65,13 +82,13 @@ class SupabaseRpcClient:
         return payload
 
 
-class SupabaseHistoricalRepository:
+class CloudflareHistoricalRepository:
     """Load one immutable workspace snapshot for existing historical handlers."""
 
     def __init__(
         self,
         *,
-        client: SupabaseRpcClient,
+        client: CloudflareRpcClient,
         workspace_id: UUID,
         snapshot_sequence: int | None = None,
     ) -> None:
@@ -237,15 +254,10 @@ def _snapshot_artifact_graph(value: Any) -> SessionGraph:
 
 
 def _decode_artifact(value: Any) -> Any:
-    """Decode a bounded content-addressed artifact, retaining legacy fallback."""
+    """Decode an immutable R2 artifact with bounded decompression and digest checks."""
 
-    if not isinstance(value, dict) or value.get("payload_encoding") != "zstd":
+    if not isinstance(value, dict) or value.get("payload_encoding") != "gzip":
         return value
-    # The Cloudflare Python facade imports this module but serves collection
-    # projections and legacy detail fallback; native Zstandard is intentionally
-    # absent from its Emscripten package set.
-    import zstandard
-
     encoded = value.get("payload_base64")
     expected_digest = value.get("content_sha256")
     expected_bytes = value.get("uncompressed_bytes")
@@ -260,12 +272,10 @@ def _decode_artifact(value: Any) -> Any:
         raise RemoteControlPlaneError("compressed historical artifact is invalid")
     try:
         compressed = base64.b64decode(encoded, validate=True)
-        canonical = zstandard.ZstdDecompressor().decompress(
-            compressed,
-            max_output_size=expected_bytes,
-        )
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as stream:
+            canonical = stream.read(expected_bytes + 1)
         payload = json.loads(canonical)
-    except (ValueError, zstandard.ZstdError, json.JSONDecodeError) as exc:
+    except (ValueError, OSError, EOFError) as exc:
         raise RemoteControlPlaneError(
             "compressed historical artifact could not be decoded"
         ) from exc

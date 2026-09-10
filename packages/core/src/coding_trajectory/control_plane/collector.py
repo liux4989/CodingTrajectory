@@ -9,6 +9,7 @@ only metadata checkpoints and bounded chronicle graphs are queued remotely.
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import json
 import sqlite3
@@ -20,7 +21,6 @@ from typing import Any, Protocol, Self
 from uuid import UUID, uuid4
 
 import httpx
-import zstandard
 
 from coding_trajectory.contracts import LivingChange, LivingSessionsChange
 from coding_trajectory.control_plane.chronicle import (
@@ -46,6 +46,7 @@ from coding_trajectory.control_plane.collector_protocol import (
     SourceRegistrationResponse,
     SourceVectorEntry,
 )
+from coding_trajectory.control_plane.remote import cloudflare_endpoint
 from coding_trajectory.discovery import (
     DiscoveryCandidate,
     discover_source_candidates,
@@ -95,19 +96,15 @@ class CollectorRemoteError(RuntimeError):
     """A remote response was unavailable or did not match its contract."""
 
 
-class SupabaseCollectorRemote:
-    """Call the committed Supabase RPC ingress contract over HTTPS."""
+class CloudflareCollectorRemote:
+    """Call the committed Cloudflare RPC ingress contract over HTTPS."""
 
-    def __init__(
-        self, *, url: str, api_key: str, access_token: str, timeout: float = 20
-    ) -> None:
-        self._url = url.rstrip("/") + "/rest/v1/rpc/"
-        self._api_key = api_key
+    def __init__(self, *, url: str, access_token: str, timeout: float = 20) -> None:
+        self._url = cloudflare_endpoint(url)
         self._access_token = access_token
         self._timeout = timeout
         self._client = httpx.Client(
             headers={
-                "apikey": api_key,
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             },
@@ -167,7 +164,7 @@ class SupabaseCollectorRemote:
         return ObservationReceipt.model_validate(
             self._rpc(
                 "ct_collector_publish_artifacts",
-                request.wire_payload(),
+                request.reference_payload(),
                 idempotency_key=idempotency_key,
             )
         )
@@ -182,11 +179,10 @@ class SupabaseCollectorRemote:
     ) -> None:
         """Idempotently stage one compressed canonical body and read projections."""
 
-        compressor = zstandard.ZstdCompressor(level=3)
         canonical = artifact.canonical_bytes()
         if hashlib.sha256(canonical).hexdigest() != content_sha256:
             raise ValueError("chronicle artifact digest mismatch before staging")
-        compressed = compressor.compress(canonical)
+        compressed = gzip.compress(canonical, compresslevel=3, mtime=0)
         projections = _project_session_list_variants(artifact)
         self._rpc(
             "ct_collector_stage_artifact_payload",
@@ -195,7 +191,7 @@ class SupabaseCollectorRemote:
                 "agent_id": str(agent_id),
                 "schema_version": artifact.schema_version,
                 "content_sha256": content_sha256,
-                "encoding": "zstd",
+                "encoding": "gzip",
                 "uncompressed_bytes": len(canonical),
                 "compressed_bytes": len(compressed),
                 "payload_base64": base64.b64encode(compressed).decode("ascii"),
@@ -226,8 +222,7 @@ class SupabaseCollectorRemote:
             body["idempotency_key"] = idempotency_key
             body["request_sha256"] = _sha256(canonical_json(request).encode())
         try:
-            # The publication RPC has a bounded 60s database budget. Allow
-            # transport overhead so a valid commit can return its receipt.
+            # Artifact bodies are staged separately; the manifest commits atomically.
             timeout = (
                 max(self._timeout, 90)
                 if name == "ct_collector_publish_artifacts"

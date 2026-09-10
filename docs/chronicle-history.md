@@ -28,7 +28,7 @@ events.
 
 ## Retained operational facts
 
-The strict Pydantic and PostgreSQL contracts retain:
+The strict Pydantic and Cloudflare ingress contracts retain:
 
 - graph, session, turn, item, request, and edge identities;
 - topology, ordering, timestamps, lifecycle status, vendor, model, and effort;

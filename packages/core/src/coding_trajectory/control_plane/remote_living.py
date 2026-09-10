@@ -1,4 +1,4 @@
-"""Supabase-backed authority handler for durable living observations."""
+"""Cloudflare-backed authority handler for durable living observations."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.control_plane.remote import (
+    CloudflareRpcClient,
     RemoteControlPlaneError,
-    SupabaseRpcClient,
 )
 
 _LIVING_METHODS = frozenset({"living.events", "living.sessions"})
@@ -34,10 +34,10 @@ class _RemoteLivingResponse(BaseModel):
     results: list[_RemoteLivingResult]
 
 
-class SupabaseLivingAuthority:
+class CloudflareLivingAuthority:
     """Validate and serve living methods from one remote workspace authority.
 
-    ``call_batch`` sends every call in one RPC so PostgreSQL selects one
+    ``call_batch`` sends every call in one RPC so the workspace Durable Object selects one
     workspace sequence and one lease-freshness instant for the whole batch.
     An optional ``snapshot_sequence`` supports an explicitly pinned reader.
     """
@@ -45,7 +45,7 @@ class SupabaseLivingAuthority:
     def __init__(
         self,
         *,
-        client: SupabaseRpcClient,
+        client: CloudflareRpcClient,
         workspace_id: UUID,
         snapshot_sequence: int | None = None,
     ) -> None:
@@ -133,4 +133,4 @@ class SupabaseLivingAuthority:
         }
 
 
-__all__ = ["SupabaseLivingAuthority"]
+__all__ = ["CloudflareLivingAuthority"]

@@ -8,8 +8,8 @@ from uuid import UUID
 
 from coding_trajectory.control_plane.chronicle import build_chronicle_graph_artifact
 from coding_trajectory.control_plane.remote import (
+    CloudflareHistoricalRepository,
     RemoteControlPlaneError,
-    SupabaseHistoricalRepository,
 )
 from coding_trajectory.ingestion.models import Session, SessionGraph
 from coding_trajectory.query import DocumentStore
@@ -31,14 +31,14 @@ def _session_facts(session: Session) -> Any:
 
 
 class LocalEvidenceRepository:
-    """Supabase owns selection and facts; local files supply optional bodies.
+    """Cloudflare owns selection and facts; local files supply optional bodies.
 
     Never discovers files for ordinary reads. Evidence requests first resolve a
     published resource, then hydrate its session and verify all retained facts.
     Unpublished or changed sources fail closed instead of replacing the snapshot.
     """
 
-    def __init__(self, canonical: SupabaseHistoricalRepository, *, current_dir: Path):
+    def __init__(self, canonical: CloudflareHistoricalRepository, *, current_dir: Path):
         self.canonical = canonical
         self.current_dir = current_dir
         self._evidence_scope = False

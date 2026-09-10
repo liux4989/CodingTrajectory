@@ -134,15 +134,13 @@ pinned remote read because a local source cannot represent a remote workspace
 revision. Responses identify `source: local` or `source: remote`; fallback never
 merges records or evidence across the two authorities.
 
-The CLI uses `CT_SUPABASE_URL`, `CT_SUPABASE_ANON_KEY`, `CT_ACCESS_TOKEN`, and
-`CT_REMOTE_WORKSPACE_ID`. Setting `CT_CREDENTIAL_PROFILE` explicitly selects a
-profile and obtains a fresh token when remote fallback is first needed,
-superseding connection and token environment variables (including an expired
-`CT_ACCESS_TOKEN`). Profiles use macOS Keychain or an injected password
-environment variable on headless hosts. Without an explicit profile, absent
-connection credentials select profile `default`; partial environment credentials
-are rejected when remote fallback is needed. Embedded clients enable fallback
-only when all four Supabase environment variables are present.
+The CLI uses `CT_CLOUDFLARE_URL`, `CT_ACCESS_TOKEN`, and
+`CT_REMOTE_WORKSPACE_ID`. `CT_CREDENTIAL_PROFILE` selects a scoped token profile
+stored in macOS Keychain or supplied by an injected token environment variable.
+The selected profile supplies connection and identity settings. Without an
+explicit profile, absent credentials select `default`; partial environment
+credentials fail when remote fallback is needed. Embedded clients enable
+fallback when all three connection variables are present.
 `--remote-workspace-id` on `ct api call/batch` selects the fallback workspace; it
 does not make an unpinned request remote-first.
 
@@ -157,8 +155,8 @@ local fallback condition.
 
 Historical local reads reconstruct the canonical graph from local logs, round
 chronicle methods through `ct.chronicle_graph.v2`, and execute the shared
-handlers. A remote fallback fetches published artifacts through Supabase
-PostgREST RPCs; Python validates identity, digest, and schema before invoking the
+handlers. A remote fallback fetches published artifacts through authenticated Cloudflare
+Worker RPCs; Python validates identity, digest, and schema before invoking the
 same handlers. Local and remote stores remain separate and are cached within the
 owning runtime. A remote fallback runtime pins one snapshot for its lifetime.
 

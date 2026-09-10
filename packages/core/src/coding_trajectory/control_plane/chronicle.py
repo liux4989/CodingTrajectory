@@ -150,7 +150,7 @@ class ChronicleUsage(ChronicleModel):
     uncached_input_tokens: int | None = Field(default=None, ge=0)
     # JSONB normalizes numeric spellings, while Python's float encoder can use
     # exponents. Preserve the exact finite float spelling as a decimal string
-    # so Python and PostgreSQL hash identical canonical bytes.
+    # so local and remote readers hash identical canonical bytes.
     cost_usd: _CostText | None = None
 
 

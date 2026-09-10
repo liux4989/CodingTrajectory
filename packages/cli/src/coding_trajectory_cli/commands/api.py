@@ -66,33 +66,28 @@ def _remote_runtime(args: argparse.Namespace) -> ServiceRuntime:
     workspace_id = getattr(args, "remote_workspace_id", None) or os.environ.get(
         "CT_REMOTE_WORKSPACE_ID"
     )
-    url = getattr(args, "supabase_url", None) or os.environ.get("CT_SUPABASE_URL")
-    api_key = getattr(args, "supabase_api_key", None) or os.environ.get(
-        "CT_SUPABASE_ANON_KEY"
-    )
+    url = getattr(args, "cloudflare_url", None) or os.environ.get("CT_CLOUDFLARE_URL")
     access_token = getattr(args, "access_token", None) or os.environ.get(
         "CT_ACCESS_TOKEN"
     )
-    if os.environ.get("CT_CREDENTIAL_PROFILE") or not any((url, api_key, access_token)):
-        from coding_trajectory_cli.collector_credentials import refresh_profile
+    if os.environ.get("CT_CREDENTIAL_PROFILE") or not any((url, access_token)):
+        from coding_trajectory_cli.collector_credentials import load_profile_credentials
 
-        credentials = refresh_profile(
+        credentials = load_profile_credentials(
             os.environ.get("CT_CREDENTIAL_PROFILE", "default")
         )
-        url = str(credentials.profile.supabase_url)
-        api_key = credentials.profile.supabase_api_key
+        url = str(credentials.profile.cloudflare_url)
         access_token = credentials.access_token
         workspace_id = (
             getattr(args, "remote_workspace_id", None)
             or credentials.profile.workspace_id
         )
-    if not all((url, api_key, access_token, workspace_id)):
+    if not all((url, access_token, workspace_id)):
         raise ValueError(
-            "API reads require complete Supabase URL, API key, access token, and workspace configuration"
+            "API reads require complete Cloudflare URL, access token, and workspace configuration"
         )
     factory = RemoteRuntimeFactory(
         url=str(url),
-        api_key=str(api_key),
         workspace_id=UUID(str(workspace_id)),
     )
     return factory.build(
@@ -103,20 +98,11 @@ def _remote_runtime(args: argparse.Namespace) -> ServiceRuntime:
     )
 
 
-def _remote_service_config(args: argparse.Namespace) -> tuple[str, str]:
-    url = args.supabase_url or os.environ.get("CT_SUPABASE_URL")
-    api_key = args.supabase_api_key or os.environ.get("CT_SUPABASE_ANON_KEY")
-    missing = [
-        name
-        for name, value in (
-            ("CT_SUPABASE_URL", url),
-            ("CT_SUPABASE_ANON_KEY", api_key),
-        )
-        if not value
-    ]
-    if missing:
-        raise ValueError("remote API requires " + ", ".join(missing))
-    return str(url), str(api_key)
+def _remote_service_config(args: argparse.Namespace) -> str:
+    url = args.cloudflare_url or os.environ.get("CT_CLOUDFLARE_URL")
+    if not url:
+        raise ValueError("remote API requires CT_CLOUDFLARE_URL")
+    return str(url)
 
 
 def _handle_api_call(args: argparse.Namespace) -> dict[str, Any]:
@@ -135,10 +121,10 @@ def _handle_api_schema(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _handle_api_serve(args: argparse.Namespace) -> None:
-    url, api_key = _remote_service_config(args)
+    url = _remote_service_config(args)
     serve_http(
         factory=RemoteRuntimeFactory(
-            url=url, api_key=api_key, workspace_id=args.remote_workspace_id
+            url=url, workspace_id=args.remote_workspace_id
         ),
         host=args.host,
         port=args.port,
@@ -156,8 +142,7 @@ def _add_remote_flags(parser: argparse.ArgumentParser) -> None:
         type=_nonnegative_int,
         help="Read directly from this pinned remote workspace sequence.",
     )
-    parser.add_argument("--supabase-url", help="Defaults to CT_SUPABASE_URL.")
-    parser.add_argument("--supabase-api-key", help="Defaults to CT_SUPABASE_ANON_KEY.")
+    parser.add_argument("--cloudflare-url", help="Defaults to CT_CLOUDFLARE_URL.")
     parser.add_argument("--access-token", help="Defaults to CT_ACCESS_TOKEN.")
 
 
@@ -251,8 +236,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         formatter_class=GhFormatter,
     )
     serve.add_argument("--remote-workspace-id", type=UUID, required=True)
-    serve.add_argument("--supabase-url", help="Defaults to CT_SUPABASE_URL.")
-    serve.add_argument("--supabase-api-key", help="Defaults to CT_SUPABASE_ANON_KEY.")
+    serve.add_argument("--cloudflare-url", help="Defaults to CT_CLOUDFLARE_URL.")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
     serve.set_defaults(_plugin_handler=_handle_api_serve, _default_output="json")

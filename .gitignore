@@ -50,3 +50,10 @@ bun.lock
 # Regenerable benchmark reports (including old output locations)
 benchmarks/results/
 /results/
+
+# Cloudflare generated contracts and local runtime state
+cloudflare/**/node_modules/
+cloudflare/**/.wrangler/
+cloudflare/**/.dev.vars*
+cloudflare/control-plane/src/contracts.json
+cloudflare/control-plane/src/validators.js

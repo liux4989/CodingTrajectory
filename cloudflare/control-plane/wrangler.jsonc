@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "coding-trajectory-control-plane",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [{"name": "WORKSPACES", "class_name": "Workspace"}]
+  },
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["Workspace"]}],
+  "r2_buckets": [{"binding": "ARTIFACTS", "bucket_name": "coding-trajectory-artifacts"}],
+  "secrets": {"required": ["CT_PRINCIPALS"]},
+  "observability": {"enabled": true}
+}

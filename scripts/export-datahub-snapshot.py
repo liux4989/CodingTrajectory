@@ -17,18 +17,11 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import NAMESPACE_URL, UUID, uuid5
 
 from coding_trajectory.control_plane.chronicle import build_chronicle_graph_artifact
 from coding_trajectory.discovery import discover_store
 from coding_trajectory.query import DocumentStore
-from datahub_plugin.api_models import validate_api_response
-from datahub_plugin.hosted.service import (
-    HostedDatahubService,
-    ProjectsQuery,
-    _dispatch,
-    _page,
-)
+from datahub_plugin.snapshot import SnapshotService
 from pydantic import BaseModel, ConfigDict, Field
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,54 +43,6 @@ class Manifest(BaseModel):
     files: dict[str, str]
 
 
-class NoRemote:
-    async def call(self, name: str, request: dict[str, Any]) -> dict[str, Any]:
-        raise RuntimeError("snapshot export cannot call remote services")
-
-
-class LocalSnapshotService(HostedDatahubService):
-    def __init__(self, store: DocumentStore, revision: int, workspace_id: UUID):
-        super().__init__(rpc=NoRemote(), workspace_id=workspace_id)
-        self.store = store
-        self.revision = revision
-
-    async def _pin(self) -> int:
-        return self.revision
-
-    async def _store_for(self, method, params, sequence):
-        return self.store
-
-    async def _project_sessions(self, params, sequence):
-        return _dispatch("project.sessions", params, self.store, sequence)
-
-    async def _projects(self, params: ProjectsQuery):
-        projects: dict[str, set[str]] = defaultdict(set)
-        for graph in self.store.session_graphs.values():
-            for session in graph.sessions:
-                projects[graph.project_identifier].add(session.vendor.value)
-        rows = [
-            {"name": name, "path": None, "vendors": sorted(vendors)}
-            for name, vendors in sorted(projects.items(), key=lambda x: x[0].casefold())
-            if params.agent_vendor is None or params.agent_vendor in vendors
-        ]
-        from datahub_plugin.hosted.service import _cursor_offset
-
-        rows, cursor = _page(
-            rows,
-            _cursor_offset(params.cursor, self.revision),
-            params.limit,
-            self.revision,
-        )
-        return {
-            "items": rows,
-            "page": {
-                "revision": self.revision,
-                "next_cursor": cursor,
-                "has_more": cursor is not None,
-            },
-        }
-
-
 async def export(project: Path, assets: Path) -> Manifest:
     if not (assets / "index.html").is_file():
         raise ValueError("build the hosted web app before exporting")
@@ -116,8 +61,8 @@ async def export(project: Path, assets: Path) -> Manifest:
             raise ValueError("Chronicle replay mismatch")
         graphs.append(replay)
     store = DocumentStore.from_session_graphs(graphs)
-    service = LocalSnapshotService(
-        store, revision, uuid5(NAMESPACE_URL, "ct:local-snapshot")
+    service = SnapshotService(
+        store=store, revision=revision, captured_at=captured.isoformat()
     )
     files: dict[str, str] = {}
     # Sibling staging prevents failed exports from leaving a partially published bundle.
@@ -152,12 +97,7 @@ async def export(project: Path, assets: Path) -> Manifest:
                     return rows
                 query["cursor"] = cursor
 
-        snapshot = await response("/api/datahub/snapshot")
-        snapshot["generated_at"] = captured.isoformat()
-        snapshot["freshness"]["last_refresh_at"] = captured.isoformat()
-        snapshot["bootstrap"]["coverage"]["mode"] = "snapshot"
-        validate_api_response("snapshot", snapshot)
-        write("snapshot.json", snapshot)
+        write("snapshot.json", await response("/api/datahub/snapshot"))
         write(
             "changes.json",
             await response("/api/datahub/changes", after_revision=revision),

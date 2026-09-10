@@ -1,4 +1,4 @@
-"""Run the service-role remote estimation worker."""
+"""Run the scoped Cloudflare remote estimation worker."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 import socket
 from typing import Any
 
-from coding_trajectory.control_plane.remote import SupabaseRpcClient
+from coding_trajectory.control_plane.remote import CloudflareRpcClient
 from coding_trajectory.control_plane.remote_estimation import RemoteEstimationWorker
 from coding_trajectory.estimation.codex import CodexAppServerEstimator
 
@@ -22,17 +22,17 @@ def _positive_int(value: str) -> int:
 
 
 def _handle_run(args: argparse.Namespace) -> dict[str, Any]:
-    url = args.supabase_url or os.environ.get("CT_SUPABASE_URL")
-    service_key = args.service_role_key or os.environ.get(
-        "CT_SUPABASE_SERVICE_ROLE_KEY"
+    url = args.cloudflare_url or os.environ.get("CT_CLOUDFLARE_URL")
+    access_token = args.access_token or os.environ.get(
+        "CT_ESTIMATOR_ACCESS_TOKEN"
     )
-    if not url or not service_key:
+    if not url or not access_token:
         raise ValueError(
-            "estimator run requires CT_SUPABASE_URL and CT_SUPABASE_SERVICE_ROLE_KEY"
+            "estimator run requires CT_CLOUDFLARE_URL and CT_ESTIMATOR_ACCESS_TOKEN"
         )
     worker = RemoteEstimationWorker(
-        client=SupabaseRpcClient(
-            url=url, api_key=service_key, access_token=service_key
+        client=CloudflareRpcClient(
+            url=url, access_token=access_token
         ),
         worker_id=args.worker_id,
         executor=CodexAppServerEstimator(timeout_seconds=args.provider_timeout),
@@ -58,8 +58,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     run.add_argument("--lease-seconds", type=_positive_int, default=300)
     run.add_argument("--provider-timeout", type=_positive_int, default=300)
     run.add_argument("--worker-id", default=f"{socket.gethostname()}:{os.getpid()}")
-    run.add_argument("--supabase-url", help="Defaults to CT_SUPABASE_URL.")
+    run.add_argument("--cloudflare-url", help="Defaults to CT_CLOUDFLARE_URL.")
     run.add_argument(
-        "--service-role-key", help="Defaults to CT_SUPABASE_SERVICE_ROLE_KEY."
+        "--scoped Cloudflare-key", help="Defaults to CT_ESTIMATOR_ACCESS_TOKEN."
     )
     run.set_defaults(_plugin_handler=_handle_run, _default_output="json")

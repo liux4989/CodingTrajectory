@@ -13,23 +13,22 @@ from uuid import UUID
 from coding_trajectory.contracts import command_schema
 from coding_trajectory.control_plane.authority import MethodAuthority
 from coding_trajectory.control_plane.remote import (
-    SupabaseHistoricalRepository,
-    SupabaseRpcClient,
+    CloudflareHistoricalRepository,
+    CloudflareRpcClient,
 )
 from coding_trajectory.control_plane.remote_estimation import RemoteEstimationAuthority
 from coding_trajectory.control_plane.remote_inventory import (
-    SupabaseProjectInventoryRepository,
+    CloudflareProjectInventoryRepository,
 )
-from coding_trajectory.control_plane.remote_living import SupabaseLivingAuthority
+from coding_trajectory.control_plane.remote_living import CloudflareLivingAuthority
 from coding_trajectory.runtime import HistoricalRepository, ServiceRuntime
 
 
 class RemoteRuntimeFactory:
     """Build a request-scoped runtime pinned to one remote workspace sequence."""
 
-    def __init__(self, *, url: str, api_key: str, workspace_id: UUID) -> None:
+    def __init__(self, *, url: str, workspace_id: UUID) -> None:
         self._url = url
-        self._api_key = api_key
         self.workspace_id = workspace_id
 
     def build(
@@ -66,8 +65,8 @@ class RemoteRuntimeFactory:
             or snapshot_sequence < 0
         ):
             raise ValueError("snapshot_sequence must be a non-negative integer")
-        client = SupabaseRpcClient(
-            url=self._url, api_key=self._api_key, access_token=access_token
+        client = CloudflareRpcClient(
+            url=self._url, access_token=access_token
         )
         request: dict[str, Any] = {"workspace_id": str(self.workspace_id)}
         if snapshot_sequence is not None:
@@ -76,7 +75,7 @@ class RemoteRuntimeFactory:
         sequence = pinned.get("snapshot_sequence")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
             raise ValueError("remote workspace returned an invalid snapshot sequence")
-        historical: HistoricalRepository = SupabaseHistoricalRepository(
+        historical: HistoricalRepository = CloudflareHistoricalRepository(
             client=client,
             workspace_id=self.workspace_id,
             snapshot_sequence=sequence,
@@ -89,12 +88,12 @@ class RemoteRuntimeFactory:
             historical = LocalEvidenceRepository(
                 historical, current_dir=current_dir or Path.cwd()
             )
-        inventory = SupabaseProjectInventoryRepository(
+        inventory = CloudflareProjectInventoryRepository(
             client=client,
             workspace_id=self.workspace_id,
             snapshot_sequence=sequence,
         )
-        living = SupabaseLivingAuthority(
+        living = CloudflareLivingAuthority(
             client=client,
             workspace_id=self.workspace_id,
             # Living pagination carries its own snapshot in `through`. Only an

@@ -8,7 +8,6 @@ dependencies = [
     "numpy>=1.26",
     "pydantic>=2.12.5",
     "tiktoken>=0.7.0",
-    "zstandard>=0.23.0; sys_platform != 'emscripten'",
 ]
 
 [dependency-groups]
