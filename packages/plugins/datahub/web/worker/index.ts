@@ -38,7 +38,7 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function configurationFor(env: Env) {
+export function configurationFor(env: Pick<Env, "CF_ACCESS_TEAM_DOMAIN" | "CF_ACCESS_AUD">) {
   try {
     const teamDomain = new URL(env.CF_ACCESS_TEAM_DOMAIN);
     if (
@@ -56,7 +56,7 @@ function configurationFor(env: Env) {
   }
 }
 
-async function verifyAccess(request: Request, env: Env): Promise<boolean> {
+export async function verifyAccess(request: Request, env: Pick<Env, "CF_ACCESS_TEAM_DOMAIN" | "CF_ACCESS_AUD">): Promise<boolean> {
   const token = request.headers.get("cf-access-jwt-assertion") ?? "";
   if (!token || token.length > MAX_ACCESS_JWT_BYTES) return false;
   const configuration = configurationFor(env);
@@ -101,7 +101,7 @@ function jsonError(status: number, message: string) {
   return Response.json({ error: { message } }, { status });
 }
 
-function withSecurityHeaders(
+export function withSecurityHeaders(
   response: Response,
   api: boolean,
   pathname = "",
