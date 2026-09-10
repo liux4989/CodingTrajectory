@@ -54,6 +54,7 @@ class ReleaseManifest(BaseModel):
     cloudflare_account_id_env: str
     access_team_domain_env: str
     access_audience_env: str
+    serving_access_audience_env: str = "CF_SERVING_ACCESS_AUD"
     facade_secret_envs: list[str]
 
     @field_validator("supabase_project_ref")
@@ -70,6 +71,9 @@ def _manifest(path: Path) -> ReleaseManifest:
         raise SystemExit("candidate gateway must be isolated from the serving gateway")
     if manifest.serving.facade == manifest.candidate.facade:
         raise SystemExit("candidate facade must be isolated from the serving facade")
+    origin = os.environ.get("CT_SUPABASE_URL")
+    if origin and origin.rstrip("/") != f"https://{manifest.supabase_project_ref}.supabase.co":
+        raise SystemExit("CT_SUPABASE_URL does not match the exact manifest origin")
     return manifest
 
 
@@ -108,6 +112,14 @@ def _record(stage: str, evidence: dict[str, Any]) -> None:
         state = {"stages": {}}
     state["source_commit"] = source_commit
     state["environment"] = "non-production"
+    invalidates = {
+        "build": ("runtime", "candidate_deploy", "candidate_validate", "promote"),
+        "runtime": ("candidate_deploy", "candidate_validate", "promote"),
+        "reader": ("candidate_deploy", "candidate_validate", "promote"),
+        "candidate_deploy": ("candidate_validate", "promote"),
+    }
+    for dependent in invalidates.get(stage, ()):
+        state.setdefault("stages", {}).pop(dependent, None)
     state.setdefault("stages", {})[stage] = {
         "completed_at": int(time.time()),
         **evidence,
@@ -205,6 +217,17 @@ def cmd_runtime(manifest: ReleaseManifest) -> None:
 
 
 def _cloudflare_apps(account_id: str, token: str) -> list[dict[str, Any]]:
+    # Connected account tools can supply an operator inventory when deployment
+    # OAuth lacks Access-management scopes. It must be freshly fetched, not cached.
+    inventory = os.environ.get("DATAHUB_ACCESS_INVENTORY")
+    if inventory:
+        evidence = json.loads(Path(inventory).read_text())
+        age = time.time() - evidence.get("captured_at", 0)
+        if evidence.get("account_id") != account_id or not 0 <= age <= 900:
+            raise SystemExit("Access inventory has the wrong account or is older than 15 minutes")
+        if not isinstance(evidence.get("apps"), list):
+            raise SystemExit("Access inventory is malformed")
+        return evidence["apps"]
     response = httpx.get(
         f"https://api.cloudflare.com/client/v4/accounts/{account_id}/access/apps",
         headers={"Authorization": f"Bearer {token}"},
@@ -250,15 +273,26 @@ def _candidate_access_evidence(
     matching = [
         app
         for app in apps
-        if app.get("domain") == hostname and app.get("type") == "self_hosted"
+        if app.get("type") == "self_hosted"
+        and (
+            app.get("domain") == hostname
+            or any(
+                destination.get("type") == "public"
+                and destination.get("uri") == hostname
+                for destination in app.get("destinations", [])
+            )
+        )
     ]
     policies = [policy for app in matching for policy in app.get("policies") or []]
     serialized = json.dumps(policies).lower()
-    exact_email_allow = any(
-        policy.get("decision") == "allow"
-        and '"email"' in json.dumps(policy.get("include") or []).lower()
-        for policy in policies
-    )
+    allows = [policy for policy in policies if policy.get("decision") == "allow"]
+    exact_email_allow = len(matching) == 1 and bool(allows) and all(
+        policy.get("include") and all(
+            set(rule) == {"email"} and bool(rule["email"].get("email"))
+            for rule in policy["include"]
+        )
+        for policy in allows
+    ) and all(policy.get("decision") in {"allow", "deny"} for policy in policies)
     return {
         "candidate_access_application_ids": [app.get("id") for app in matching],
         "candidate_access_audiences": [app.get("aud") for app in matching],
@@ -291,11 +325,26 @@ def cmd_reconcile(manifest: ReleaseManifest) -> None:
             ("facade", manifest.candidate.facade),
         )
     }
+    settings = httpx.get(
+        f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/"
+        f"{manifest.serving.gateway}/settings",
+        headers={"Authorization": f"Bearer {token}"}, timeout=30,
+    )
+    if settings.status_code != 200 or settings.json().get("success") is not True:
+        raise SystemExit("serving gateway binding reconciliation failed")
+    bindings = settings.json()["result"].get("bindings", [])
+    serving_facades = [
+        binding.get("service") for binding in bindings
+        if binding.get("name") == "DATAHUB_FACADE" and binding.get("type") == "service"
+    ]
+    if len(serving_facades) != 1:
+        raise SystemExit("serving facade binding is ambiguous")
     _record(
         "reconcile",
         {
             "serving_deployments": serving,
             "candidate_deployments": candidate,
+            "serving_facade_binding": serving_facades[0],
             **access_evidence,
         },
     )
@@ -339,8 +388,8 @@ def cmd_reader(manifest: ReleaseManifest) -> None:
         json={"request": {"workspace_id": str(uuid.uuid4())}},
         timeout=30,
     )
-    if foreign.status_code == 200:
-        raise SystemExit("reader unexpectedly read a workspace without membership")
+    if foreign.status_code not in {401, 403}:
+        raise SystemExit("foreign-workspace authorization denial was not proven")
     mutation = httpx.post(
         origin + "/rest/v1/rpc/ct_collector_heartbeat",
         headers=headers,
@@ -391,8 +440,11 @@ def _access_covered(manifest: ReleaseManifest) -> None:
         raise SystemExit("candidate Access policy contains an Everyone selector")
 
 
-def _deploy(config: str, secret_names: list[str]) -> None:
+def _deploy(
+    config: str, secret_names: list[str], *, overrides: dict[str, str] | None = None
+) -> None:
     values = {name: os.environ[name] for name in secret_names}
+    values.update(overrides or {})
     with tempfile.NamedTemporaryFile("w", prefix="ct-secrets-", suffix=".json") as file:
         os.chmod(file.name, 0o600)
         json.dump(values, file)
@@ -412,6 +464,8 @@ def _deploy(config: str, secret_names: list[str]) -> None:
 
 
 def cmd_deploy_candidate(manifest: ReleaseManifest) -> None:
+    if _git("status", "--porcelain"):
+        raise SystemExit("candidate deployment requires an unchanged clean checkout")
     if _require_stage("build").get("dirty"):
         raise SystemExit("candidate deployment requires a clean-checkout build receipt")
     _require_stage("runtime")
@@ -425,7 +479,10 @@ def cmd_deploy_candidate(manifest: ReleaseManifest) -> None:
             *manifest.facade_secret_envs,
         ]
     )
+    cmd_reconcile(manifest)
     _access_covered(manifest)
+    if _require_stage("reconcile")["serving_facade_binding"] == manifest.candidate.facade:
+        raise SystemExit("candidate facade is serving traffic; select a fresh candidate slot")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     with (STATE_DIR / "mutation.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -437,12 +494,14 @@ def cmd_deploy_candidate(manifest: ReleaseManifest) -> None:
     _record("candidate_deploy", {"deployments": _versions(manifest.candidate)})
 
 
-def _candidate_headers() -> dict[str, str]:
-    _required(["DATAHUB_ACCESS_COOKIE"])
-    return {"Cookie": "CF_Authorization=" + os.environ["DATAHUB_ACCESS_COOKIE"]}
+def _candidate_headers(cookie_env: str = "DATAHUB_ACCESS_COOKIE") -> dict[str, str]:
+    _required([cookie_env])
+    return {"Cookie": "CF_Authorization=" + os.environ[cookie_env]}
 
 
-def _validate_routes(base_url: str) -> dict[str, Any]:
+def _validate_routes(
+    base_url: str, *, cookie_env: str = "DATAHUB_ACCESS_COOKIE"
+) -> dict[str, Any]:
     from datahub_plugin.api_models import validate_api_response
 
     signed_out = httpx.get(base_url + "/api/datahub/snapshot", follow_redirects=False)
@@ -456,7 +515,7 @@ def _validate_routes(base_url: str) -> dict[str, Any]:
     if forged.status_code not in {302, 401, 403}:
         raise SystemExit(f"forged assertion denial failed: status {forged.status_code}")
 
-    headers = _candidate_headers()
+    headers = _candidate_headers(cookie_env)
     snapshot, first_request_ms = _timed_json_get(
         base_url, "/api/datahub/snapshot", headers
     )
@@ -541,7 +600,10 @@ def _timed_json_get(
 
 
 def cmd_validate_candidate(manifest: ReleaseManifest) -> None:
-    _require_stage("candidate_deploy")
+    deployed = _require_stage("candidate_deploy")["deployments"]
+    current = _versions(manifest.candidate)
+    if any(_active_version(current[role]) != _active_version(deployed[role]) for role in current):
+        raise SystemExit("candidate versions changed since deployment")
     _record(
         "candidate_validate",
         _validate_routes("https://" + str(manifest.candidate.hostname)),
@@ -549,6 +611,8 @@ def cmd_validate_candidate(manifest: ReleaseManifest) -> None:
 
 
 def cmd_promote(manifest: ReleaseManifest) -> None:
+    if _git("status", "--porcelain"):
+        raise SystemExit("promotion requires an unchanged clean checkout")
     _require_stage("candidate_validate")
     _required(
         [
@@ -556,6 +620,8 @@ def cmd_promote(manifest: ReleaseManifest) -> None:
             manifest.cloudflare_account_id_env,
             manifest.access_team_domain_env,
             manifest.access_audience_env,
+            manifest.serving_access_audience_env,
+            "DATAHUB_SERVING_ACCESS_COOKIE",
         ]
     )
     rollback = _versions(manifest.serving)
@@ -568,9 +634,15 @@ def cmd_promote(manifest: ReleaseManifest) -> None:
         _deploy(
             "wrangler.gateway-promote.jsonc",
             [manifest.access_team_domain_env, manifest.access_audience_env],
+            overrides={
+                manifest.access_audience_env: os.environ[manifest.serving_access_audience_env]
+            },
         )
         try:
-            validation = _validate_routes(str(manifest.serving.url).rstrip("/"))
+            validation = _validate_routes(
+                str(manifest.serving.url).rstrip("/"),
+                cookie_env="DATAHUB_SERVING_ACCESS_COOKIE",
+            )
         except BaseException:
             _run(
                 [

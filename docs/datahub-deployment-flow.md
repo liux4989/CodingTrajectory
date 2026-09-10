@@ -208,12 +208,28 @@ collector mutation denial. Mutating stages are locked, bounded by subprocess
 timeouts, require prior receipts for the same commit, and refuse candidate
 deployment unless the candidate hostname already has a verified Access app.
 
-Candidate validation requires `DATAHUB_ACCESS_COOKIE` from the owner's explicitly
-authorized browser session. It checks signed-out and forged denial, all seven
+Candidate CLI validation can consume an explicitly supplied `DATAHUB_ACCESS_COOKIE`.
+Do not extract browser cookies through automation; when using an authenticated
+browser, perform its requests in that browser and retain sanitized validation
+evidence instead. The CLI checks signed-out and forged denial, all seven
 allowed route schemas, representative Sessions and Graph data, invalid and
 prohibited API routes, JSON-vs-SPA routing, and deep navigation. Promotion records
 the serving rollback pair before changing only the serving gateway binding; it
 does not reset or migrate Supabase and cannot target production.
+
+Candidate and serving Access applications have different audiences and cookies.
+Promotion requires `CF_SERVING_ACCESS_AUD` and `DATAHUB_SERVING_ACCESS_COOKIE`;
+it must not overwrite the serving gateway's audience with the candidate audience.
+Missing serving validation credentials stop the CLI before mutation.
+
+When deployment OAuth lacks Access-read scope, a connected account tool may
+export a fresh local operator inventory to `DATAHUB_ACCESS_INVENTORY`. Its JSON
+contains `account_id`, Unix `captured_at`, and the full `apps` list fetched from
+the Cloudflare API. The runner checks account and 15-minute freshness. This is
+operator-supplied evidence, not an independently signed API receipt; never accept
+an untrusted file or construct policy claims manually. Worker deployment and
+binding inventories are still fetched live. Candidate deployment refuses to
+overwrite a facade currently used by the serving gateway.
 
 The Python runtime gate must pass before choosing deployment dates; persistent
 incompatibility requires an explicit compute-platform decision.
