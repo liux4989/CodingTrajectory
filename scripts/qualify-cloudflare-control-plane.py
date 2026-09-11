@@ -12,10 +12,11 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from coding_trajectory.contracts import service_contract
+from coding_trajectory.control_plane.catalog_protocol import CatalogReadResponse
 from coding_trajectory.control_plane.chronicle import ChronicleGraphArtifact
 from coding_trajectory.control_plane.collector import (
     CloudflareCollectorRemote,
@@ -28,10 +29,12 @@ from coding_trajectory.control_plane.collector_protocol import (
     ProjectRegistrationRequest,
     SourceRegistrationRequest,
 )
+from coding_trajectory.control_plane.http_service import RemoteRuntimeFactory
 from coding_trajectory.control_plane.remote import (
     CloudflareHistoricalRepository,
     CloudflareRpcClient,
 )
+from coding_trajectory.control_plane.remote_estimation import RemoteEstimationAuthority
 
 URL = "http://127.0.0.1:8794"
 TOKENS = {
@@ -224,6 +227,61 @@ def main():
         and projected["result"] == _project_session_list_variants(artifact)["default"],
         "projection parity",
     )
+    catalog_status = rpc("ct_catalog_read_v2", {"kind": "status"}, role="reader")
+    CatalogReadResponse.model_validate(catalog_status)
+    selection = catalog_status["selection"]["token"]
+    for variant, include in (
+        ("default", []),
+        ("runtime", ["runtime"]),
+        ("usage", ["usage"]),
+        ("runtime_usage", ["runtime", "usage"]),
+    ):
+        catalog = rpc(
+            "ct_catalog_read_v2",
+            {
+                "kind": "sessions",
+                "project_name": "Qualification-" + tag,
+                "selection": selection,
+                "include": include,
+            },
+            role="reader",
+        )
+        CatalogReadResponse.model_validate(catalog)
+        expected = _project_session_list_variants(artifact)[variant]
+        actual = service_contract("project.sessions").validate_response(
+            {"items": [row["projection"] for row in catalog["items"]]}
+        )
+        # Catalog names use the pinned registered identity, not host-local names.
+        for item in expected["items"]:
+            item["project"] = "Qualification-" + tag
+        check(actual == expected, f"catalog v2 {variant} canonical parity")
+        check(catalog["coverage"] == "complete", "catalog v2 complete coverage")
+        runtime = RemoteRuntimeFactory(url=URL, workspace_id=UUID(WORKSPACE)).build(
+            TOKENS["reader"], local_evidence=True
+        )
+        try:
+            check(
+                runtime.call(
+                    "project.sessions",
+                    {"project_name": "Qualification-" + tag, "include": include},
+                )
+                == expected,
+                f"runtime catalog {variant} parity with local evidence enabled",
+            )
+            check(
+                "Qualification-" + tag in runtime.call("project.list", {})["items"],
+                "runtime registered inventory",
+            )
+        finally:
+            runtime.close()
+    rpc("ct_catalog_read_v2", {"kind": "status"}, role="other", status=403)
+    rpc("ct_catalog_read_v2", {"kind": "status"}, role="worker", status=403)
+    rpc(
+        "ct_catalog_read_v2",
+        {"kind": "status", "snapshot_sequence": 0},
+        role="reader",
+        status=400,
+    )
     snapshot = rpc("ct_workspace_snapshot", {})["snapshot_sequence"]
     invalid = publication.reference_payload()
     invalid["publication_sequence"] = 1
@@ -397,6 +455,33 @@ def main():
         {"prediction_id": prediction, "comparison": {"exclusion": "synthetic"}},
     )
     check(compared["forecast"]["status"] == "compared", "forecast comparison")
+    # Observe actual HTTP requests: completed evidence reads need no artifacts.
+    evidence_client = CloudflareRpcClient(url=URL, access_token=TOKENS["owner"])
+    evidence_calls = []
+    evidence_client._client.event_hooks["request"].append(
+        lambda request: evidence_calls.append(json.loads(request.content)["method"])
+    )
+    authority = RemoteEstimationAuthority(
+        client=evidence_client, workspace_id=UUID(WORKSPACE)
+    )
+    try:
+        check(
+            authority("estimate.get", {"prediction_id": prediction})["forecast"]
+            == compared["forecast"],
+            "completed evidence retained without reconstruction",
+        )
+        check(
+            evidence_calls == ["ct_workspace_snapshot", "ct_estimate_get"],
+            "completed forecast get uses only metadata fence and record",
+        )
+        evidence_calls.clear()
+        check(authority("estimate.list", {})["items"], "authority forecast listing")
+        check(
+            evidence_calls == ["ct_workspace_snapshot", "ct_estimate_list"],
+            "completed forecast list uses no historical hydration",
+        )
+    finally:
+        evidence_client.close()
     recovery = rpc(
         "ct_collector_recover",
         {

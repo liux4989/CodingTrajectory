@@ -180,13 +180,30 @@ class RemoteEstimationAuthority:
             return self._repository.backfill_status(params["job_id"])
         raise KeyError(f"no remote estimate handler registered for {method}")
 
-    def _snapshot(self) -> tuple[DocumentStore, int]:
+    def _sequence(self) -> int:
+        if self.snapshot_sequence is not None:
+            return self.snapshot_sequence
+        response = self._client.call(
+            "ct_workspace_snapshot", {"workspace_id": str(self.workspace_id)}
+        )
+        sequence = response.get("snapshot_sequence")
+        if str(response.get("workspace_id")) != str(self.workspace_id):
+            raise RemoteControlPlaneError("estimation workspace mismatch")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+            raise RemoteControlPlaneError("invalid estimation workspace fence")
+        return sequence
+
+    def _snapshot(self, *, session_id: str | None = None) -> tuple[DocumentStore, int]:
         repository = CloudflareHistoricalRepository(
             client=self._client,
             workspace_id=self.workspace_id,
             snapshot_sequence=self.snapshot_sequence,
         )
-        store, _ = repository.store_for("project.sessions", {})
+        store, _ = (
+            repository.store_for("session.tree", {"session_id": session_id})
+            if session_id
+            else repository.store_for("project.sessions", {})
+        )
         sequence = repository.snapshot_sequence
         if sequence is None:
             raise RemoteControlPlaneError("historical snapshot has no sequence")
@@ -216,7 +233,7 @@ class RemoteEstimationAuthority:
                     "forecast_not_found", params["prediction_id"]
                 ),
             }
-        _, sequence = self._snapshot()
+        sequence = self._sequence()
         current = self._repository.get(
             params["prediction_id"], snapshot_sequence=sequence
         ).get("forecast")
@@ -298,7 +315,7 @@ class RemoteEstimationAuthority:
             UUID(params["prediction_id"])
         except ValueError:
             return {"forecast": None}
-        _, sequence = self._snapshot()
+        sequence = self._sequence()
         response = self._repository.get(
             params["prediction_id"], snapshot_sequence=sequence
         )
@@ -306,14 +323,14 @@ class RemoteEstimationAuthority:
         return {"forecast": self._refresh_one(forecast) if forecast else None}
 
     def _list(self, params: dict[str, Any]) -> dict[str, Any]:
-        _, sequence = self._snapshot()
+        sequence = self._sequence()
         response = self._repository.list({**params, "snapshot_sequence": sequence})
         return {
             "items": [self._refresh_one(item) for item in response.get("items", [])]
         }
 
     def _calibration(self, params: dict[str, Any]) -> dict[str, Any]:
-        _, sequence = self._snapshot()
+        sequence = self._sequence()
         records = [
             self._refresh_one(item)
             for item in self._repository.calibration_records(
@@ -335,7 +352,9 @@ class RemoteEstimationAuthority:
         if not forecast.get("turn_id") or forecast.get("status") == "compared":
             return forecast
         try:
-            store, sequence = self._snapshot()
+            store, sequence = self._snapshot(
+                session_id=forecast.get("session_id") or forecast.get("root_session_id")
+            )
             comparison = join_actual(
                 store, turn_id=UUID(forecast["turn_id"]), source_paths=[]
             )

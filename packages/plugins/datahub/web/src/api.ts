@@ -47,7 +47,30 @@ export function fetchOverview(params?: { sinceDays?: number }) {
 }
 
 export function fetchToday() { return queryDatahub<TodayPayload>("today"); }
-export function fetchProjects() { return queryDatahub<ProjectsPayload>("projects"); }
+export async function fetchProjects(request: { signal?: AbortSignal } = {}): Promise<ProjectsPayload> {
+  const items: ProjectsPayload["items"] = [];
+  let cursor: string | null = null;
+  let revision: number | undefined;
+  let selection: string | undefined;
+  for (let pageCount = 0; pageCount < 100; pageCount++) {
+    const result: ProjectsPayload = await queryDatahub<ProjectsPayload>("projects", { cursor, limit: 100 }, request.signal);
+    if (revision != null && (result.page.revision !== revision || result.page.selection?.token !== selection)) {
+      throw new DatahubReadError("selection_reset", "Project pagination changed selection.");
+    }
+    revision = result.page.revision;
+    selection = result.page.selection?.token;
+    items.push(...result.items);
+    cursor = result.page.next_cursor;
+    if (!cursor) return { ...result, items };
+  }
+  throw new DatahubReadError("budget_exceeded", "Project list exceeds the compatibility budget.");
+}
+
+export class DatahubReadError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) { super(message); this.code = code; }
+  get resetSelection() { return this.code === "selection_expired" || this.code === "selection_reset"; }
+}
 
 export function fetchSessions(request: CursorRequest & { sinceDays?: number; projectName?: string; agentVendor?: string } = {}) {
   return queryDatahub<SessionPage>("sessions", {
@@ -80,8 +103,11 @@ export function fetchSessionEventDetails(eventIds: string[]) {
 export function fetchDatahubSnapshot(signal?: AbortSignal) {
   return queryDatahub<DatahubSnapshot>("datahub.snapshot", {}, signal);
 }
-export function fetchDatahubChanges(params: { afterRevision: number; signal?: AbortSignal }) {
-  return queryDatahub<DatahubChanges>("datahub.changes", { after_revision: params.afterRevision }, params.signal);
+export function fetchDatahubChanges(params: { afterRevision: number; projectMetadataRevision?: number | null; authorityIncarnation?: string | null; signal?: AbortSignal }) {
+  return queryDatahub<DatahubChanges>("datahub.changes", { after_revision: params.afterRevision,
+    ...(params.projectMetadataRevision != null ? { project_metadata_revision: params.projectMetadataRevision } : {}),
+    ...(params.authorityIncarnation != null ? { authority_incarnation: params.authorityIncarnation } : {}),
+  }, params.signal);
 }
 
 export function fetchModelUsage(params: { sinceDays?: number; projectName?: string | null; modelKey?: string | null; detail?: "sessions" | "turns" | "both"; cursor?: string; revision?: number; limit?: number; signal?: AbortSignal }) {
@@ -132,7 +158,7 @@ async function queryDatahub<T>(method: string, params: QueryParams = {}, signal?
     signal,
   });
   const body = await response.text();
-  let payload: QueryEnvelope<T> | { error?: { message?: string } } | undefined;
+  let payload: QueryEnvelope<T> | { error?: { code?: string; message?: string } } | undefined;
   if (body) {
     try { payload = JSON.parse(body) as QueryEnvelope<T>; }
     catch { if (response.ok) throw new Error("Datahub returned an invalid JSON response."); }
@@ -140,7 +166,7 @@ async function queryDatahub<T>(method: string, params: QueryParams = {}, signal?
   if (!response.ok || !payload || !("ok" in payload) || !payload.ok || payload.data === null) {
     const message = payload && "error" in payload && payload.error?.message
       ? payload.error.message : `Request failed: ${response.status}`;
-    throw new Error(message);
+    throw new DatahubReadError(payload?.error?.code ?? "unavailable", message);
   }
   return payload.data;
 }

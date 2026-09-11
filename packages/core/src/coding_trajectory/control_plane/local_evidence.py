@@ -46,6 +46,14 @@ class LocalEvidenceRepository:
     def pin_snapshot(self) -> int:
         return self.canonical.pin_snapshot()
 
+    def response_for(
+        self, method: str, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        self._evidence_scope = False
+        if requires_local_evidence(method, params):
+            return None
+        return self.canonical.response_for(method, params)
+
     def metadata(self) -> dict[str, Any] | None:
         metadata = self.canonical.metadata()
         if metadata is not None and self._evidence_scope:

@@ -18,6 +18,10 @@ from coding_trajectory.contracts.session import (
     SessionTreeResponse,
     SessionUsageResponse,
 )
+from coding_trajectory.control_plane.catalog_protocol import (
+    CatalogReadResponse,
+    CatalogSelection,
+)
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from datahub_plugin.projections.context_window.models import ContextWindowProjection
@@ -142,6 +146,7 @@ class TodayPayload(OverviewPayload):
 
 
 class ProjectItem(StrictResponse):
+    project_id: str | None = None
     name: str
     path: str | None = None
     vendors: list[str]
@@ -176,6 +181,7 @@ class CursorPageMetadata(StrictResponse):
     revision: int
     next_cursor: str | None
     has_more: bool
+    selection: CatalogSelection | None = None
 
 
 class SessionTimelinePayload(ReadModelSessionTimelinePayload):
@@ -220,6 +226,8 @@ class BootstrapStatus(StrictResponse):
 
 class DatahubSnapshot(StrictResponse):
     revision: int
+    project_metadata_revision: int | None = None
+    authority_incarnation: str | None = None
     generated_at: str
     transport: ApiTransportMetadata | None = None
     freshness: DatahubFreshness
@@ -227,7 +235,7 @@ class DatahubSnapshot(StrictResponse):
     source_status: DatahubSourceStatus
     minimum_available_revision: int
     bootstrap: BootstrapStatus
-    horizon_days: int
+    horizon_days: int | None
 
 
 class DatahubUpsert(StrictResponse):
@@ -246,6 +254,8 @@ class DatahubDeletion(StrictResponse):
 class DatahubChanges(StrictResponse):
     from_revision: int
     to_revision: int
+    project_metadata_revision: int | None = None
+    authority_incarnation: str | None = None
     reset_required: bool
     upserts: list[DatahubUpsert]
     deletions: list[DatahubDeletion]
@@ -818,6 +828,7 @@ API_RESPONSE_MODELS = (
     RefreshPayload,
     DatahubSnapshot,
     DatahubChanges,
+    CatalogReadResponse,
 )
 
 API_RESPONSE_BY_HANDLER: dict[str, type[BaseModel]] = {

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchDatahubChanges,
   fetchDatahubSnapshot,
+  DatahubReadError,
   type ContextWindowPayload,
   type ApiTransportMetadata,
   type DatahubChanges,
@@ -178,6 +179,8 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
   const [delivery, setDelivery] = React.useState<DatahubDeliveryState>(() => statusFromSnapshot(undefined));
   const appliedRevision = React.useRef<number | null>(null);
   const targetRevision = React.useRef<number | null>(null);
+  const projectMetadataRevision = React.useRef<number | null>(null);
+  const authorityIncarnation = React.useRef<string | null>(null);
   // The useQuery result object is not referentially stable; keep it in a ref
   // so effects can depend on the underlying data instead of the container.
   const snapshotRef = React.useRef(snapshot);
@@ -187,8 +190,19 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
     if (!snapshot.data) return;
     appliedRevision.current = snapshot.data.revision;
     targetRevision.current = snapshot.data.revision;
+    projectMetadataRevision.current = snapshot.data.project_metadata_revision ?? null;
+    authorityIncarnation.current = snapshot.data.authority_incarnation ?? null;
     setDelivery(statusFromSnapshot(snapshot.data));
   }, [snapshot.data]);
+
+  React.useEffect(() => queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== "updated" || event.action.type !== "error") return;
+    const error = event.query.state.error;
+    if (error instanceof DatahubReadError && error.resetSelection) {
+      // Drop every page parameter together, never retry a continuation at latest.
+      void queryClient.resetQueries({ queryKey: event.query.queryKey, exact: true });
+    }
+  }), [queryClient]);
 
   React.useEffect(() => {
     if (!snapshot.data) return;
@@ -208,15 +222,20 @@ export function DatahubDeliveryProvider({ children }: { children: React.ReactNod
       catchUpWorker = (async () => {
         while (!disposed && appliedRevision.current != null && targetRevision.current != null && appliedRevision.current < targetRevision.current) {
           const currentRevision = appliedRevision.current;
-          const payload = await fetchDatahubChanges({ afterRevision: currentRevision, signal: controller.signal });
+          const payload = await fetchDatahubChanges({ afterRevision: currentRevision,
+            projectMetadataRevision: projectMetadataRevision.current, authorityIncarnation: authorityIncarnation.current,
+            signal: controller.signal });
           if (payload.reset_required || payload.from_revision !== currentRevision) {
             recover();
             return;
           }
-          if (payload.to_revision <= currentRevision) return;
+          if (payload.to_revision < currentRevision) { recover(); return; }
           applyChanges(queryClient, payload);
+          projectMetadataRevision.current = payload.project_metadata_revision ?? null;
+          authorityIncarnation.current = payload.authority_incarnation ?? null;
           appliedRevision.current = payload.to_revision;
           setDelivery((current) => ({ ...current, revision: payload.to_revision, freshness: payload.freshness, catchingUp: payload.catching_up, sourceStatus: payload.source_status, transport: payload.transport ?? null, isLoading: false, error: null }));
+          if (payload.to_revision === currentRevision) return;
         }
       })().catch((error: unknown) => {
         if (!disposed && !(error instanceof DOMException && error.name === "AbortError")) {

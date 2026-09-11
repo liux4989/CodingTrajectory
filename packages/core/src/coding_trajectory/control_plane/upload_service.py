@@ -69,6 +69,28 @@ def _source_identity(source: dict[str, Any]) -> str:
 
 
 class UploadService(UploadState):
+    def _batch_body(self, row) -> dict[str, Any]:
+        stored = json.loads(row["body"])
+        reference = stored.get("canonical_reference")
+        if reference is None:
+            return stored
+        repository = CanonicalRepository(
+            self.path.with_suffix(".canonical.sqlite3"), self.identity
+        )
+        try:
+            if repository.repository_id != reference["repository_id"]:
+                raise UploadStateError("canonical_reconciliation_required")
+            capture = repository.capture_for_reference(
+                revision=reference["revision"],
+                root_digest=reference["root_sha256"],
+            )
+        finally:
+            repository.close()
+        return {
+            "artifact": _body_free_artifact(capture.artifact).wire_payload(),
+            "sources": [source.model_dump(mode="json") for source in capture.sources],
+        }
+
     def prepare_capture(self, page: UploadCapturePage) -> dict[str, Any]:
         """Persist one canonical page and its cursor atomically, without network."""
         with self.owner_lock("prepare"):
@@ -78,7 +100,41 @@ class UploadService(UploadState):
         current_repository = self.meta("repository_id")
         if current_repository and current_repository != page.repository_id:
             raise UploadStateError("canonical_reconciliation_required")
-        page_digest = _digest(page.model_dump(mode="json"))
+        if page.references:
+            path = self.path.with_suffix(".canonical.sqlite3")
+            if not path.exists():
+                raise UploadStateError("canonical_reference_unavailable")
+            repository = CanonicalRepository(path, self.identity)
+            try:
+                if repository.repository_id != page.repository_id:
+                    raise UploadStateError("canonical_reconciliation_required")
+                for reference, capture in zip(
+                    page.references, page.captures, strict=True
+                ):
+                    offer = repository.db.execute(
+                        "SELECT revision,root_digest FROM canonical_retentions WHERE token=?",
+                        (reference.retention_token,),
+                    ).fetchone()
+                    if offer is None or tuple(offer) != (
+                        reference.revision,
+                        reference.root_sha256,
+                    ):
+                        raise UploadStateError("canonical_reference_unavailable")
+                    if (
+                        repository.capture_for_reference(
+                            revision=reference.revision,
+                            root_digest=reference.root_sha256,
+                        )
+                        != capture
+                    ):
+                        raise UploadStateError("canonical_reference_content_conflict")
+            finally:
+                repository.close()
+        # Empty additive fields must not change the identity of legacy retries.
+        page_payload = page.model_dump(mode="json")
+        if not page.references:
+            page_payload.pop("references")
+        page_digest = _digest(page_payload)
         prior_page = self.db.execute(
             "SELECT digest,ordinal FROM sync_pages WHERE cursor=?", (page.cursor,)
         ).fetchone()
@@ -93,6 +149,7 @@ class UploadService(UploadState):
                 with self.db:
                     self.set_meta("repository_id", page.repository_id)
                     self.set_meta("consumed_cursor", page.cursor)
+            self._confirm_retentions(page)
             return {**self.status(), "prepared": 0}
         bodies = []
         for capture in page.captures:
@@ -116,19 +173,20 @@ class UploadService(UploadState):
                 "INSERT INTO sync_pages(repository_id,cursor,digest) VALUES(?,?,?)",
                 (page.repository_id, page.cursor, page_digest),
             ).lastrowid
-            for body in bodies:
+            retained: list[str] = []
+            for index, body in enumerate(bodies):
                 artifact_id = body["artifact"]["graph"]["root_session_id"]
                 prior = self.db.execute(
                     "SELECT * FROM sync_batches WHERE artifact_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
                     (artifact_id,),
                 ).fetchone()
-                if prior and _digest(json.loads(prior["body"])) == _digest(body):
+                if prior and _digest(self._batch_body(prior)) == _digest(body):
                     self.db.execute(
                         "INSERT INTO sync_page_batches VALUES(?,?)",
                         (ordinal, prior["id"]),
                     )
                     continue
-                prior_body = json.loads(prior["body"]) if prior else None
+                prior_body = self._batch_body(prior) if prior else None
                 fingerprints = resource_fingerprints(body)
                 old = resource_fingerprints(prior_body) if prior_body else {}
                 changed = sum(
@@ -140,18 +198,41 @@ class UploadService(UploadState):
                     - (completed_resources(prior_body) if prior_body else set())
                 )
                 batch_id = str(uuid4())
+                stored_body = (
+                    canonical_json(
+                        {
+                            "canonical_reference": page.references[index].model_dump(
+                                mode="json"
+                            )
+                        }
+                    )
+                    if page.references
+                    else canonical_json(body)
+                )
                 self.db.execute(
                     "INSERT INTO sync_batches(id,artifact_id,cursor,body,state,created_at,phase,changed_resources,completion) VALUES(?,?,?,?, 'prepared',?,'ready',?,?)",
                     (
                         batch_id,
                         artifact_id,
                         page.cursor,
-                        canonical_json(body),
+                        stored_body,
                         datetime.now(UTC).isoformat(),
                         changed,
                         int(completion),
                     ),
                 )
+                if page.references:
+                    reference = page.references[index]
+                    self.db.execute(
+                        "INSERT INTO sync_canonical_retentions VALUES(?,?,?,?)",
+                        (
+                            batch_id,
+                            reference.repository_id,
+                            reference.retention_token,
+                            reference.root_sha256,
+                        ),
+                    )
+                    retained.append(reference.retention_token)
                 self.db.execute(
                     "INSERT INTO sync_page_batches VALUES(?,?)", (ordinal, batch_id)
                 )
@@ -183,7 +264,27 @@ class UploadService(UploadState):
             self.set_meta("preparation_error", None)
             self.advance_acknowledged_cursor()
         self.hook("after_prepare_commit")
+        # The durable offer exists before the outbox transaction. Confirming it
+        # afterwards never creates a window where a referenced DAG is collectible.
+        if retained:
+            self._confirm_retentions(page, tokens=retained)
         return {**self.status(), "prepared": len(bodies)}
+
+    def _confirm_retentions(
+        self, page: UploadCapturePage, *, tokens: list[str] | None = None
+    ):
+        selected = tokens or [
+            reference.retention_token for reference in page.references
+        ]
+        if selected:
+            repository = CanonicalRepository(
+                self.path.with_suffix(".canonical.sqlite3"), self.identity
+            )
+            try:
+                for token in selected:
+                    repository.retain(token)
+            finally:
+                repository.close()
 
     def _redirect_pages(self, original: str, successor: str):
         self.db.execute(
@@ -575,7 +676,7 @@ class UploadService(UploadState):
         self.hook("after_plan_commit")
 
     def _deliver(self, row, remote, project_id: UUID) -> ObservationReceipt:
-        body = json.loads(row["body"])
+        body = self._batch_body(row)
         artifact = ChronicleGraphArtifact.model_validate(body["artifact"])
         plan = (
             json.loads(row["plan"])
@@ -864,11 +965,15 @@ class UploadService(UploadState):
                             row["completion"],
                         ),
                     )
-                    for source in json.loads(row["body"])["sources"]:
+                    for source in self._batch_body(row)["sources"]:
                         self.db.execute(
                             "INSERT INTO sync_batch_sources VALUES(?,?)",
                             (successor, _source_identity(source)),
                         )
+                    self.db.execute(
+                        "UPDATE sync_canonical_retentions SET batch_id=? WHERE batch_id=?",
+                        (successor, row["id"]),
+                    )
                     self._redirect_pages(row["id"], successor)
                     self.db.execute(
                         "UPDATE sync_batches SET state='superseded',error_code='reconciled_to_successor' WHERE id=?",

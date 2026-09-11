@@ -5,6 +5,7 @@ import { livingRead, livingWrite } from "./living";
 import { estimation } from "./estimation";
 import { Descriptor, initializeUploads, missingChunks, uploadChunks, uploadRead } from "./upload";
 import { initializeCatalog, catalogRead, migrateCatalog } from "./catalog";
+import { catalogReadV2, initializeCatalogSelections } from "./catalog-v2";
 
 /** A workspace is the authorization, transaction and revision boundary. */
 export class Workspace extends DurableObject<Env> {
@@ -14,6 +15,7 @@ export class Workspace extends DurableObject<Env> {
     this.state = new State(ctx.storage.sql);
     initializeUploads(this.state);
     initializeCatalog(this.state);
+    initializeCatalogSelections(this.state);
   }
 
   async invoke(method: string, envelopeJson: string, principalJson: string): Promise<string> {
@@ -40,6 +42,7 @@ export class Workspace extends DurableObject<Env> {
       if (method === "ct_collector_upload_chunks") return { status: 200, body: await uploadChunks(this.state, this.env.ARTIFACTS, request) };
       if (method === "ct_collector_missing_chunks") return { status: 200, body: await missingChunks(this.state, this.env.ARTIFACTS, request) };
       if (["ct_publication_watermark", "ct_artifact_chunk_manifest", "ct_artifact_chunks"].includes(method)) return { status: 200, body: await uploadRead(this.state, this.env.ARTIFACTS, method, request) };
+      if (method === "ct_catalog_read_v2") return { status: 200, body: this.ctx.storage.transactionSync(() => catalogReadV2(this.state, request, principal)) };
       if (["ct_published_catalog", "ct_publication_changes"].includes(method)) return { status: 200, body: catalogRead(this.state, method, request) };
       if (["ct_historical_snapshot", "ct_historical_artifacts", "ct_project_sessions_projection"].includes(method)) {
         return { status: 200, body: await this.historical(method, request) };
@@ -106,12 +109,31 @@ export class Workspace extends DurableObject<Env> {
     });
   }
 
+  async indexResourceProjections(encoded: string): Promise<void> {
+    requireThat(new TextEncoder().encode(encoded).length <= 260*1024, "resource_projection_budget", 413);
+    const request = JSON.parse(encoded);
+    requireThat(DIGEST.test(request.identity) && request.rows.length <= 128, "invalid_stage_page");
+    this.ctx.storage.transactionSync(() => {
+      for (const row of request.rows) this.state.sql.exec(
+        "INSERT OR IGNORE INTO resource_projection_pages(identity,kind,resource_id,page_index,page_count,coverage,payload) VALUES(?,?,?,?,?,?,?)", request.identity,
+        row.resource_kind, uuid(row.resource_id), row.page_index, row.page_count, row.coverage, row.payload == null ? null : stable(row.payload));
+    });
+  }
+
   async completeStage(encoded: string): Promise<string> {
     const request = JSON.parse(encoded);
     try {
       const body = this.ctx.storage.transactionSync(() => {
         const count = this.state.sql.exec<{total: number}>("SELECT count(*) total FROM resources WHERE digest=?", request.content_sha256).one().total;
         requireThat(count === request.resource_count, "stage_index_incomplete", 409);
+        if (request.resource_projection_identity) {
+          const total = this.state.sql.exec<{total: number}>(`SELECT
+            (SELECT count(*) FROM resource_projection_pages WHERE identity=?)+
+            (SELECT count(*) FROM resource_projections WHERE identity=? AND NOT EXISTS
+              (SELECT 1 FROM resource_projection_pages WHERE identity=?)) total`, request.resource_projection_identity,
+            request.resource_projection_identity, request.resource_projection_identity).one().total;
+          requireThat(total === request.resource_projection_count, "stage_index_incomplete", 409);
+        }
         if (request.root_sha256) {
           const members = this.state.sql.exec<{total: number}>("SELECT count(*) total FROM upload_members WHERE root=? AND agent=?", request.root_sha256, request.agent_id).one().total;
           requireThat(members === request.chunk_count, "stage_index_incomplete", 409);
@@ -123,11 +145,17 @@ export class Workspace extends DurableObject<Env> {
         const stageKey = `${request.agent_id}:${request.content_sha256}`;
         const prior = this.state.get("staged", stageKey);
         requireThat(!prior?.chunk_root_sha256 || !request.root_sha256 || prior.chunk_root_sha256 === request.root_sha256, "chunk_root_conflict", 409);
-        const upgrade = !existingProjections?.canonical && request.projections.canonical;
+        const previousVersion = prior?.resource_projection_version ?? 1;
+        const resourceUpgrade = request.resource_projection_identity && request.resource_projection_version > previousVersion;
+        const resourceDowngrade = prior?.resource_projection_identity && request.resource_projection_version < previousVersion;
+        requireThat(!prior?.resource_projection_identity || !request.resource_projection_identity || resourceUpgrade || resourceDowngrade || prior.resource_projection_identity === request.resource_projection_identity, "projection_conflict", 409);
+        const upgrade = resourceUpgrade || (!existingProjections?.canonical && request.projections.canonical) || (!prior?.resource_projection_identity && request.resource_projection_identity);
         if (!prior || upgrade || (!prior.chunk_root_sha256 && request.root_sha256)) {
           const sequence = this.state.next();
           this.state.put("staged", stageKey, { ...prior, ...request.metadata, key: request.key, content_sha256: request.content_sha256,
             compressed_bytes: request.compressed_bytes, uncompressed_bytes: request.uncompressed_bytes,
+            resource_projection_identity: resourceDowngrade ? prior.resource_projection_identity : request.resource_projection_identity ?? prior?.resource_projection_identity,
+            resource_projection_version: Math.max(previousVersion, request.resource_projection_version ?? 1),
             projection_identity: request.projection_identity, chunk_root_sha256: request.root_sha256 ?? prior?.chunk_root_sha256 }, sequence);
           this.state.put("projections", request.content_sha256, existingProjections?.canonical ? existingProjections : request.projections, sequence);
         }

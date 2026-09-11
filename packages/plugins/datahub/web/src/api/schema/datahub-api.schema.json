@@ -746,6 +746,366 @@
       "title": "CalibrationUndefinedStatistic",
       "type": "object"
     },
+    "CatalogChange": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "format": "uuid",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "deleted": {
+          "title": "Deleted",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "change",
+          "default": "change",
+          "title": "Kind",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "revision",
+        "deleted"
+      ],
+      "title": "CatalogChange",
+      "type": "object"
+    },
+    "CatalogProject": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "project",
+          "default": "project",
+          "title": "Kind",
+          "type": "string"
+        },
+        "modified_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Modified At"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "project_id": {
+          "format": "uuid",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "vendors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Vendors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "project_id",
+        "name",
+        "modified_at",
+        "vendors"
+      ],
+      "title": "CatalogProject",
+      "type": "object"
+    },
+    "CatalogReadResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_observed_at": {
+          "format": "date-time",
+          "title": "Authority Observed At",
+          "type": "string"
+        },
+        "coverage": {
+          "enum": [
+            "complete",
+            "partial",
+            "unknown"
+          ],
+          "title": "Coverage",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogProject"
+              },
+              {
+                "$ref": "#/$defs/CatalogSession"
+              },
+              {
+                "$ref": "#/$defs/CatalogChange"
+              },
+              {
+                "$ref": "#/$defs/CatalogResource"
+              }
+            ]
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "last_publication_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Publication At"
+        },
+        "minimum_available_revision": {
+          "minimum": 0,
+          "title": "Minimum Available Revision",
+          "type": "integer"
+        },
+        "minimum_project_metadata_revision": {
+          "minimum": 0,
+          "title": "Minimum Project Metadata Revision",
+          "type": "integer"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next Cursor"
+        },
+        "reset_required": {
+          "default": false,
+          "title": "Reset Required",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "ct.catalog.v2",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selection": {
+          "$ref": "#/$defs/CatalogSelection"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "workspace_id",
+        "selection",
+        "last_publication_at",
+        "authority_observed_at",
+        "minimum_available_revision",
+        "minimum_project_metadata_revision",
+        "coverage",
+        "items",
+        "next_cursor"
+      ],
+      "title": "CatalogReadResponse",
+      "type": "object"
+    },
+    "CatalogResource": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "enum": [
+            "complete",
+            "not_found",
+            "projection_unavailable",
+            "budget_exceeded"
+          ],
+          "title": "Coverage",
+          "type": "string"
+        },
+        "kind": {
+          "const": "resource",
+          "default": "resource",
+          "title": "Kind",
+          "type": "string"
+        },
+        "page_count": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Page Count",
+          "type": "integer"
+        },
+        "page_index": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Page Index",
+          "type": "integer"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Payload"
+        },
+        "resource_id": {
+          "format": "uuid",
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "resource_kind": {
+          "enum": [
+            "graph",
+            "tree",
+            "item"
+          ],
+          "title": "Resource Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource_kind",
+        "resource_id",
+        "coverage",
+        "payload"
+      ],
+      "title": "CatalogResource",
+      "type": "object"
+    },
+    "CatalogSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_incarnation": {
+          "format": "uuid",
+          "title": "Authority Incarnation",
+          "type": "string"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "project_metadata_revision": {
+          "minimum": 0,
+          "title": "Project Metadata Revision",
+          "type": "integer"
+        },
+        "publication_revision": {
+          "minimum": 0,
+          "title": "Publication Revision",
+          "type": "integer"
+        },
+        "token": {
+          "title": "Token",
+          "type": "string"
+        },
+        "workspace_sequence": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Sequence"
+        }
+      },
+      "required": [
+        "token",
+        "authority_incarnation",
+        "publication_revision",
+        "project_metadata_revision",
+        "evaluated_at",
+        "expires_at"
+      ],
+      "title": "CatalogSelection",
+      "type": "object"
+    },
+    "CatalogSession": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "format": "uuid",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "coverage": {
+          "enum": [
+            "complete",
+            "projection_unavailable"
+          ],
+          "title": "Coverage",
+          "type": "string"
+        },
+        "kind": {
+          "const": "session",
+          "default": "session",
+          "title": "Kind",
+          "type": "string"
+        },
+        "project_id": {
+          "format": "uuid",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "projection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionGraphSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "minimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "project_id",
+        "revision",
+        "coverage",
+        "projection"
+      ],
+      "title": "CatalogSession",
+      "type": "object"
+    },
     "CodeTimeCalibrationPayload": {
       "additionalProperties": false,
       "properties": {
@@ -2041,6 +2401,17 @@
         "revision": {
           "title": "Revision",
           "type": "integer"
+        },
+        "selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -2054,6 +2425,18 @@
     "DatahubChanges": {
       "additionalProperties": false,
       "properties": {
+        "authority_incarnation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authority Incarnation"
+        },
         "catching_up": {
           "anyOf": [
             {
@@ -2085,6 +2468,18 @@
           },
           "title": "Invalidations",
           "type": "array"
+        },
+        "project_metadata_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Metadata Revision"
         },
         "reset_required": {
           "title": "Reset Required",
@@ -2214,6 +2609,18 @@
     "DatahubSnapshot": {
       "additionalProperties": false,
       "properties": {
+        "authority_incarnation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authority Incarnation"
+        },
         "bootstrap": {
           "$ref": "#/$defs/BootstrapStatus"
         },
@@ -2236,12 +2643,31 @@
           "type": "string"
         },
         "horizon_days": {
-          "title": "Horizon Days",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Horizon Days"
         },
         "minimum_available_revision": {
           "title": "Minimum Available Revision",
           "type": "integer"
+        },
+        "project_metadata_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Metadata Revision"
         },
         "revision": {
           "title": "Revision",
@@ -4829,6 +5255,17 @@
         "revision": {
           "title": "Revision",
           "type": "integer"
+        },
+        "selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -6197,6 +6634,18 @@
           "default": null,
           "title": "Path"
         },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
         "vendors": {
           "items": {
             "type": "string"
@@ -6578,6 +7027,123 @@
         "usage"
       ],
       "title": "SessionGraphPayload",
+      "type": "object"
+    },
+    "SessionGraphSummary": {
+      "additionalProperties": true,
+      "properties": {
+        "graph_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Graph Id"
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preview"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "root_session_id": {
+          "title": "Root Session Id",
+          "type": "string"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime"
+        },
+        "session_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Session Ids",
+          "type": "array"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usage"
+        },
+        "vendors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Vendors",
+          "type": "array"
+        },
+        "warnings": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Warnings"
+        }
+      },
+      "required": [
+        "root_session_id"
+      ],
+      "title": "SessionGraphSummary",
       "type": "object"
     },
     "SessionItem": {
@@ -7933,6 +8499,9 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "CatalogReadResponse": {
+      "$ref": "#/$defs/CatalogReadResponse"
+    },
     "CodeTimeCalibrationPayload": {
       "$ref": "#/$defs/CodeTimeCalibrationPayload"
     },

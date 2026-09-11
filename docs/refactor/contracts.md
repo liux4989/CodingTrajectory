@@ -18,12 +18,34 @@ Existing `ct.core.v1` and `ct.datahub.v1` public envelopes remain authoritative.
 | consumed_cursor | Changes durably captured in the outbox |
 | acknowledged_position | Captures whose publication receipt is durably recorded |
 | publication_revision | Shared historical commit order; unaffected by heartbeats or staging |
+| project_metadata_revision | Project registration/name metadata order; independent of publication |
 | batch_id | Stable frozen publication identity for retries |
 | content_sha256 | Immutable canonical bytes or chunk identity |
 
 A cursor binds source/workspace, method, filters, revision, schema/projection
 version, and pagination position. Source liveness uses its own evaluation time.
 Do not reuse a transport cursor as source-file offset or remote publication order.
+
+The accepted [live API design](live-api-design.md) replaces ordinary arbitrary
+history selection with a 30-minute fixed read selection. `ct_catalog_read_v2`
+selects publication and project-metadata heads atomically and returns a token
+bound to the authenticated workspace/principal and authority incarnation. Its
+server-held cursors additionally bind kind, population, normalized filters,
+include variant and position. Token possession does not bypass authorization.
+Refresh selects latest; expiry/reset never silently resumes at latest.
+
+V2 supports metadata-only status, identity-paged registered/published projects and
+session summary pages with all four include variants. It rejects explicit
+`snapshot_sequence`; legacy RPCs retain their existing semantics during migration.
+The two revision values currently use independent maxima in the existing commit
+sequence space: they are not interchangeable counters. Estimation/workspace
+fences and living evaluation remain separate.
+
+Payload GC is not enabled. Current v2 retained floors are zero because existing
+history is retained; coverage of observed sources remains explicitly unknown.
+Accepted future retention keeps current data, live pins, durable pending work,
+required estimation evidence and seven days of rollback after legacy cutover.
+This policy does not authorize deletion before its qualification gates pass.
 
 ## Logical host schema
 
@@ -55,7 +77,8 @@ an old cursor secret or pretend it has the former source history.
 - Current/versioned leases with separate observed and expiry times.
 
 Indexes must support keyset paging and resource-scoped lookups. Retain validity
-intervals or equivalent immutable version selection for pinned historical reads.
+intervals or equivalent immutable version selection for live bounded selections
+and explicitly retained evidence, not indefinite ordinary reconstruction history.
 
 ## Canonical chunk manifest
 

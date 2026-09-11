@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
@@ -58,8 +59,17 @@ const [authority, datahub] = await Promise.all([
 ]);
 const common = { modules: true, compatibilityDate: "2026-09-10",
   compatibilityFlags: ["nodejs_compat"], outboundService };
+const browser = process.argv.includes("--browser");
+async function assets(request) {
+  if (!browser) return new Response("synthetic asset");
+  const path = new URL(request.url).pathname;
+  const file = /^\/assets\/[\w.-]+$/.test(path) ? path : "/index.html";
+  const type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html";
+  return new Response(await readFile(resolve(root, "packages/plugins/datahub/web/dist", "." + file)),
+    { headers: { "Content-Type": type } });
+}
 const hub = { ...common, script: datahub,
-  serviceBindings: { CORE: "authority", ASSETS: () => new Response("synthetic asset") },
+  serviceBindings: { CORE: "authority", ASSETS: assets },
   bindings: { CT_WORKSPACE_ID: workspace, CT_CORE_READ_TOKEN: tokens.reader,
     CF_ACCESS_TEAM_DOMAIN: team, CF_ACCESS_AUD: "local-qualification",
     WORKER_VERSION: { id: datahubVersion } } };
@@ -130,7 +140,7 @@ try {
   assert(Number.isFinite(Date.parse(first.data.freshness.last_publication_at)));
   assert(Number.isFinite(Date.parse(first.data.freshness.authority_observed_at)));
   const core = await runtime.getWorker("authority");
-  for (const method of ["chunkDescriptors", "indexStage", "completeStage"]) {
+  for (const method of ["chunkDescriptors", "indexStage", "indexResourceProjections", "completeStage"]) {
     const denied = await core.fetch("https://core.internal/v1/core", { method: "POST",
       headers: { Authorization: `Bearer ${tokens.owner}` },
       body: JSON.stringify({ protocol: "ct.core.v1", method, params: { workspace_id: workspace } }) });
@@ -138,6 +148,23 @@ try {
   }
   const sessions = await (await query("sessions")).json();
   assert(sessions.ok && sessions.data.items.length > 0);
+  const invalidCursor = await (await query("sessions", { cursor: "forged" })).json();
+  assert.equal(invalidCursor.ok, false);
+  assert.equal(invalidCursor.error.code, "invalid_cursor");
+  const registration = await core.fetch("https://core.internal/v1/core", { method: "POST",
+    headers: { Authorization: `Bearer ${tokens.owner}` },
+    body: JSON.stringify({ protocol: "ct.core.v1", method: "ct_project_register", params: {
+      workspace_id: workspace, agent_id: agent, display_name: "Metadata-only qualification" } }) });
+  assert.equal(registration.status, 200);
+  const metadataChanges = await (await query("datahub.changes", {
+    after_revision: first.data.revision, project_metadata_revision: first.data.project_metadata_revision,
+    authority_incarnation: first.data.authority_incarnation,
+  })).json();
+  assert(metadataChanges.ok);
+  assert.equal(metadataChanges.data.to_revision, first.data.revision);
+  assert(metadataChanges.data.project_metadata_revision > first.data.project_metadata_revision);
+  assert(metadataChanges.data.invalidations.includes("projects"));
+  assert(metadataChanges.data.invalidations.includes("sessions"));
   const wrongWorkspace = await (await query("datahub.snapshot", {}, rejectedReader)).json();
   assert.equal(wrongWorkspace.ok, false);
   const write = await (await query("ct_collector_publish_artifacts")).json();
@@ -150,7 +177,11 @@ try {
   assert.equal(publicCoreCalls, 0);
   assert.equal(deniedEgress, 0);
   console.log(JSON.stringify({ passed: true, scripts: results,
-    native_binding_checks: 17, public_core_calls: publicCoreCalls, deployed: false }));
+    native_binding_checks: 26, public_core_calls: publicCoreCalls, deployed: false }));
+  if (browser) {
+    console.log("Disposable browser fixture ready on loopback port 8794; use fixture Access headers.");
+    await new Promise(resolve => { process.once("SIGTERM", resolve); process.once("SIGINT", resolve); });
+  }
 } finally {
   await runtime.dispose();
 }

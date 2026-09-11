@@ -1,8 +1,15 @@
 import { handle, UNSUPPORTED } from "./http";
+import type { CatalogReadResponse } from "../src/api/generated/datahub-api";
 
 type Row = Record<string, any>;
 const METHODS = ["datahub.snapshot","datahub.changes","projects","sessions","session.graph","session.tree","session.items"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const READ_ERRORS = new Set(["selection_expired", "selection_reset", "invalid_cursor", "selection_scope_denied",
+  "catalog_resource_budget", "selection_capacity_exceeded", "projection_unavailable", "resource_not_found", "invalid_contract"]);
+class ReadFailure extends Error {
+  constructor(public code: string) { super(code); }
+}
 
 export default { fetch: (request,env) => handle(request,env,dispatchLive) } satisfies ExportedHandler<Env>;
 
@@ -26,7 +33,7 @@ async function rpc(env: Env, method: string, params: Row): Promise<Row> {
   // Preserve scoped reader authorization independently of the private transport.
   const response=await env.CORE.fetch("https://core.internal/v1/core",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${env.CT_CORE_READ_TOKEN}`},
     body:JSON.stringify({protocol:"ct.core.v1",method,params:{...params,workspace_id:workspace}}),redirect:"manual",signal:AbortSignal.timeout(20000)});
-  if(!response.ok || !response.body) {
+  if(!response.body) {
     console.warn("datahub_authority_http", response.status);
     throw new Error("authority unavailable");
   }
@@ -36,11 +43,19 @@ async function rpc(env: Env, method: string, params: Row): Promise<Row> {
       if(bytes>1024*1024) {await reader.cancel();throw new Error("response budget");}encoded+=decoder.decode(chunk.value,{stream:true}); }
   } finally {reader.releaseLock();}
   const result=JSON.parse(encoded+decoder.decode());
+  if (!response.ok && result.protocol === "ct.core.v1" && result.method === method && READ_ERRORS.has(result.error?.code)) {
+    throw new ReadFailure(result.error.code);
+  }
   if(result.protocol!=="ct.core.v1" || result.method!==method || !result.ok || result.data?.workspace_id!==workspace) {
     console.warn("datahub_authority_response_mismatch");
     throw new Error("authority response mismatch");
   }
   return result.data;
+}
+async function catalog(env: Env, params: Row): Promise<CatalogReadResponse> {
+  const response = await rpc(env, "ct_catalog_read_v2", params);
+  if (response.schema_version !== "ct.catalog.v2" || !response.selection) throw new Error("authority response mismatch");
+  return response as CatalogReadResponse;
 }
 function transport(env: Env,revision: number) {return {workspace_id:env.CT_WORKSPACE_ID,snapshot_sequence:revision,source:"remote",freshness:"authoritative",content_scope:"chronicle"};}
 function health(response: Row) {return {freshness:{last_refresh_at:null,lag_seconds:null,
@@ -65,6 +80,7 @@ export async function dispatchLive(envelope: {protocol:string;id?:unknown;method
     else data=await query(method,params,env);
     return result(envelope,data);
   } catch(error) {
+    if (error instanceof ReadFailure) return result(envelope, null, error.code);
     const known=["unknown parameter","invalid integer","invalid identifier","invalid protocol","unconfigured authority","authority unavailable","response budget","authority response mismatch","projection unavailable"];
     const reason=error instanceof Error && known.includes(error.message)?error.message:"runtime_failure";
     console.warn("datahub_live_unavailable",reason);
@@ -73,33 +89,48 @@ export async function dispatchLive(envelope: {protocol:string;id?:unknown;method
 }
 function result(envelope: Row,data: unknown,error?:string) {
   return {protocol:"ct.datahub.v1",id:envelope.id??null,method:envelope.method,ok:!error,data,
-    availability:{state:error??"complete",missing:error?[{field:"$",reason:error}]:[]},error:error?{code:error,message:"Committed shared data is unavailable for this request."}:null};
+    availability:{state:error ? error === "unsupported" ? "unsupported" : "unavailable" : "complete",missing:error?[{field:"$",reason:error}]:[]},error:error?{code:error,message:error === "selection_expired" || error === "selection_reset" ? "This read selection expired. Refresh to select current published data." : "Committed shared data is unavailable for this request."}:null};
 }
 async function query(method:string,params:Row,env:Env):Promise<unknown> {
   if(method==="datahub.snapshot") {
     exact(params,[]);
-    const response=await rpc(env,"ct_published_catalog",{kind:"status"});
-    return {revision:response.published_sequence,generated_at:new Date().toISOString(),transport:transport(env,response.published_sequence),...health(response),
+    const response=await catalog(env,{kind:"status"});
+    const revision=response.selection.publication_revision;
+    return {revision,project_metadata_revision:response.selection.project_metadata_revision,authority_incarnation:response.selection.authority_incarnation,
+      generated_at:new Date().toISOString(),transport:transport(env,revision),...health(response),
       minimum_available_revision:response.minimum_available_revision,bootstrap:{ready:true,scan_started_at:null,scan_finished_at:null,error:null,last_result:null,
-        coverage:{mode:"shared",content_scope:"chronicle",horizon_days:36500}},horizon_days:36500};
+        coverage:{mode:"shared",content_scope:"chronicle",horizon_days:null}},horizon_days:null};
   }
   if(method==="datahub.changes") {
-    exact(params,["after_revision"]);
+    exact(params,["after_revision","project_metadata_revision","authority_incarnation"]);
     if(params.after_revision==null) throw new Error("revision required");
     const after=int(params.after_revision,0);
-    const response=await rpc(env,"ct_publication_changes",{after_revision:after,limit:200});
-    // A bounded invalidation page refreshes affected lists. Overflow explicitly
-    // requests a fresh snapshot rather than claiming every changed row was sent.
-    return {from_revision:after,to_revision:response.published_sequence,reset_required:response.reset_required||!!response.next_cursor,
-      upserts:[],deletions:[],invalidations:response.changes.length?["sessions","projects","session-tree","session-graph"]:[],
-      transport:transport(env,response.published_sequence),...health(response)};
+    let response=await catalog(env,{kind:"changes",after_revision:after,limit:200});
+    let changed=response.items.length > 0;
+    // Consume a fixed interval, capped at 10,000 identities. Never acknowledge an
+    // incomplete interval; overflow requests a reset instead.
+    for (let pages=1; response.next_cursor && pages<50; pages++) {
+      response=await catalog(env,{kind:"changes",after_revision:after,cursor:response.next_cursor,limit:200});
+      changed ||= response.items.length > 0;
+    }
+    const selection=response.selection;
+    const metadataChanged=params.project_metadata_revision != null && params.project_metadata_revision !== selection.project_metadata_revision;
+    return {from_revision:after,to_revision:selection.publication_revision,
+      project_metadata_revision:selection.project_metadata_revision,authority_incarnation:selection.authority_incarnation,
+      reset_required:response.reset_required||!!response.next_cursor||
+        (params.authority_incarnation != null && params.authority_incarnation !== selection.authority_incarnation),
+      upserts:[],deletions:[],invalidations:changed?["sessions","projects","session-tree","session-graph"]:metadataChanged?["sessions","projects"]:[],
+      transport:transport(env,selection.publication_revision),...health(response)};
   }
   if(method==="sessions" || method==="projects") {
-    exact(params,method==="sessions"?["limit","cursor","agent_vendor","project_name","since_days","snapshot_sequence"]:["limit","cursor","agent_vendor","snapshot_sequence"]);
-    const response=await rpc(env,"ct_published_catalog",{...params,kind:method,limit:int(params.limit,50,1,200)});
-    const rows=method==="projects"?response.items.map((row:Row)=>({name:row.name,path:null,vendors:row.vendors})):
-      response.items.map((row:Row)=>{if(!row.projection)throw new Error("projection unavailable");return item(row.projection);});
-    return {items:rows,page:{revision:response.published_sequence,next_cursor:response.next_cursor,has_more:!!response.next_cursor}};
+    exact(params,method==="sessions"?["limit","cursor","selection","agent_vendor","project_name","since_days"]:["limit","cursor","selection","agent_vendor"]);
+    const response=await catalog(env,{...params,kind:method,include:method==="sessions"?["runtime","usage"]:[],limit:int(params.limit,50,1,200)});
+    const rows=response.items.map(row=>{
+      if (row.kind === "project") return {project_id:row.project_id,name:row.name,path:null,vendors:row.vendors};
+      if (row.kind !== "session" || !row.projection) throw new ReadFailure("projection_unavailable");
+      return item(row.projection);
+    });
+    return {items:rows,page:{revision:response.selection.publication_revision,selection:response.selection,next_cursor:response.next_cursor,has_more:!!response.next_cursor}};
   }
   if(method==="session.graph" || method==="session.tree") {
     exact(params,["session_id","snapshot_sequence"]);

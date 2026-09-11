@@ -16,15 +16,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from coding_trajectory.control_plane.catalog_protocol import CatalogReadResponse
+from coding_trajectory.control_plane.chronicle import ChronicleGraphArtifact
 from coding_trajectory.control_plane.collector import (
     CloudflareCollectorRemote,
     CollectorIdentity,
     CollectorRemoteError,
+    _project_session_list_variants,
 )
 from coding_trajectory.control_plane.upload_chunks import build_chunks, chunk_batches
 from coding_trajectory.control_plane.upload_service import UploadService
 from coding_trajectory.control_plane.upload_state import UploadStateError
 from coding_trajectory.ingestion.common import canonical_json
+from coding_trajectory.query import DocumentStore
+from coding_trajectory.service import IndexCache, dispatch
 
 URL = "http://127.0.0.1:8794"
 TOKEN = "local-qualification-owner-token-0000000001"
@@ -166,8 +171,8 @@ def main():
             service.status()["acknowledged_cursor"] is None,
             "offline prepare has no remote acknowledgement",
         )
-        body = json.loads(
-            service.db.execute("SELECT body FROM sync_batches").fetchone()[0]
+        body = service._batch_body(
+            service.db.execute("SELECT * FROM sync_batches").fetchone()
         )
         service.close()
         invoke(root, "prepare")
@@ -287,6 +292,111 @@ def main():
             decoded == canonical_json(body["artifact"]).encode(),
             "legacy gzip is byte-exact canonical replay",
         )
+        store = DocumentStore.from_session_graphs(
+            [ChronicleGraphArtifact.model_validate(body["artifact"]).to_session_graph()]
+        )
+
+        def canonical(method, params):
+            return dispatch(
+                method,
+                params,
+                store=store,
+                global_scope=True,
+                current_dir=Path("/"),
+                discovery_note="qualification",
+                cache=IndexCache(),
+            )
+
+        def resource(kind, ids, **options):
+            response = remote._rpc(
+                "ct_catalog_read_v2",
+                {
+                    **base,
+                    "kind": "resources",
+                    "resource_kind": kind,
+                    "resource_ids": ids,
+                    **options,
+                },
+            )
+            CatalogReadResponse.model_validate(response)
+            return response
+
+        tree = resource("tree", [session])
+        selection = tree["selection"]["token"]
+        check(
+            tree["items"][0]["payload"]
+            == canonical("session.tree", {"session_id": session}),
+            "independent tree canonical parity",
+        )
+        graph = resource("graph", [session], selection=selection)["items"][0]["payload"]
+        for part, include in (
+            ("overview", []),
+            ("stats", ["session_composition"]),
+            ("usage", []),
+        ):
+            params = {"root_session_id": session}
+            if include:
+                params["include"] = include
+            check(
+                graph[part] == canonical("graph." + part, params),
+                "independent graph " + part + " parity",
+            )
+        ids = [str(item) for item in store.items]
+        selected_ids = [ids[-1], ids[0]]
+        items = resource("item", selected_ids, selection=selection, limit=1)
+        expected_items = canonical(
+            "session.items", {"item_ids": selected_ids, "include_content": False}
+        )
+        expected_by_id = {item["item_id"]: item for item in expected_items}
+        check(
+            items["items"][0]["payload"] == expected_by_id[selected_ids[0]],
+            "last metadata item directly readable",
+        )
+        check(
+            resource("item", [str(uuid4())], selection=selection)["items"][0][
+                "coverage"
+            ]
+            == "not_found",
+            "unknown resource distinguished from unavailable",
+        )
+        for invalid_field, invalid_value in (
+            ("turn_id", str(uuid4())),
+            ("content", "synthetic forbidden body"),
+        ):
+            projections = _project_session_list_variants(
+                ChronicleGraphArtifact.model_validate(body["artifact"])
+            )
+            bad_item = next(
+                row
+                for row in projections["resources"]["rows"]
+                if row["resource_kind"] == "item"
+            )
+            bad_item["payload"][invalid_field] = invalid_value
+            rejected(
+                remote,
+                "ct_collector_stage_artifact_payload",
+                {
+                    **base,
+                    "agent_id": str(AGENT),
+                    "schema_version": body["artifact"]["schema_version"],
+                    "content_sha256": historical["artifacts"][0]["content_sha256"],
+                    "encoding": "gzip",
+                    "uncompressed_bytes": len(decoded),
+                    "compressed_bytes": len(
+                        base64.b64decode(historical["artifacts"][0]["payload_base64"])
+                    ),
+                    "payload_base64": historical["artifacts"][0]["payload_base64"],
+                    "projections": projections,
+                },
+                "invalid resource " + invalid_field + " rejected before staging",
+            )
+        check(
+            resource("item", selected_ids[:1], selection=selection)["items"][0][
+                "payload"
+            ]
+            == expected_by_id[selected_ids[0]],
+            "invalid stage cannot replace committed projection",
+        )
         append(root, session, 40, 1)
         invoke(root, "prepare")
         service = UploadService(root / "sync.sqlite3", identity(root))
@@ -304,10 +414,10 @@ def main():
             == tuple(frozen),
             "in-flight identity and payload immutable",
         )
-        next_body = json.loads(
+        next_body = service._batch_body(
             service.db.execute(
-                "SELECT body FROM sync_batches WHERE state='prepared'"
-            ).fetchone()[0]
+                "SELECT * FROM sync_batches WHERE state='prepared'"
+            ).fetchone()
         )
         _, next_chunks = build_chunks(next_body["artifact"])
         reused = set(first_chunks) & set(next_chunks)
@@ -330,6 +440,16 @@ def main():
         check(
             final["revision"] == first_revision + 1,
             "lost acknowledgement retry did not duplicate revision",
+        )
+        continued = resource("item", selected_ids, cursor=items["next_cursor"], limit=1)
+        check(
+            continued["selection"]["token"] == selection
+            and continued["items"][0]["payload"] == expected_by_id[selected_ids[1]],
+            "item continuation preserves selection across publication",
+        )
+        check(
+            resource("tree", [session], selection=selection)["items"] == tree["items"],
+            "parent tree remains frozen after publication",
         )
         old = remote._rpc(
             "ct_artifact_chunk_manifest",

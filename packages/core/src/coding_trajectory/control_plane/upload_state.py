@@ -120,6 +120,9 @@ class UploadState:
           CREATE TABLE IF NOT EXISTS sync_page_batches (
             page INTEGER NOT NULL REFERENCES sync_pages(ordinal), batch_id TEXT NOT NULL,
             PRIMARY KEY(page,batch_id));
+          CREATE TABLE IF NOT EXISTS sync_canonical_retentions (
+            batch_id TEXT PRIMARY KEY, repository_id TEXT NOT NULL,
+            token TEXT NOT NULL, root_digest TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS sync_source_bindings (
             vendor TEXT NOT NULL, native_session_id TEXT NOT NULL, generation TEXT NOT NULL,
             source_id TEXT NOT NULL, source_epoch INTEGER NOT NULL,
@@ -321,3 +324,5 @@ class UploadState:
             ):
                 self.set_meta("acknowledged_cursor", row["cursor"])
         self.hook("after_ack_commit")
+        # Acknowledged bodies still participate in change comparison and replay.
+        # Release their pins only when the corresponding outbox rows are retired.

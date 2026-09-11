@@ -13,8 +13,11 @@ from coding_trajectory.contracts import (
 )
 from coding_trajectory.control_plane import collector_protocol as protocol
 from coding_trajectory.control_plane.catalog_protocol import (
+    CatalogReadRequest,
+    CatalogReadResponse,
     PublicationChangesRequest,
     PublishedCatalogRequest,
+    ResourceProjections,
 )
 from coding_trajectory.control_plane.chronicle import ChronicleGraphArtifact
 from coding_trajectory.control_plane.upload_chunks import (
@@ -28,6 +31,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     models = {
+        "ct_catalog_read_v2": CatalogReadRequest,
+        "catalog_read_v2_response": CatalogReadResponse,
+        "resource_projections": ResourceProjections,
         "ct_published_catalog": PublishedCatalogRequest,
         "ct_publication_changes": PublicationChangesRequest,
         "ct_collector_upload_chunks": ChunkBatchRequest,

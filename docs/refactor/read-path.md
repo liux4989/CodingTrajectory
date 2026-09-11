@@ -21,17 +21,24 @@ cached results and keeps navigation only where capabilities allow it.
 ## Query execution
 
 1. Resolve the authenticated source and its advertised capabilities.
-2. Select a committed read revision and bind it to the request/page cursor.
-3. Use indexed catalog projections for project/session lists and bootstrap data.
+2. Select committed publication and project-metadata revisions in one bounded read selection.
+3. Use metadata-only status for bootstrap and indexed catalog projections for lists.
 4. Fetch only the requested graph/turn/item manifest or projection on navigation.
 5. Validate returned identities, hashes, versions, coverage, and availability.
 6. Poll the cheap published watermark; fetch a bounded change page when it moves.
 7. Invalidate affected resources. If history expired, perform an explicit resnapshot.
 
-A historical revision token is not a frozen deployment. It provides consistent
-pages while new publications continue; refresh selects a new token. Heartbeats
-and estimator activity do not force historical pages to reset. A living request
-also fixes an evaluation instant for lease freshness.
+A read selection is not a frozen deployment or indefinite history promise. It
+expires after 30 minutes and provides consistent pages while new publications
+continue; refresh selects latest. Its method-specific cursor is not a parent/detail
+selection token. Heartbeats and estimator activity do not reset catalog selections.
+Project renames advance a separate metadata revision, visible to new selections
+without republishing sessions. A living request fixes its own evaluation instant.
+
+`ct_catalog_read_v2` implements the additive status/project/session catalog boundary.
+Current hosted and Python consumers still use legacy operations until their
+versioned migration lands. Selective detail resources, bounded canonical reducers
+and browser reset handling remain required before removing graph reconstruction.
 
 ## Native hosted adapter and canonical projections
 

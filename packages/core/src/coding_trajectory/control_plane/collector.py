@@ -114,6 +114,7 @@ class CloudflareCollectorRemote:
         self, *, url: str, access_token: str, timeout: float = 20, chunked: bool = False
     ) -> None:
         self.chunked = chunked
+        self._resource_projections: bool | None = None
         self._url = cloudflare_endpoint(url)
         self._access_token = access_token
         self._timeout = timeout
@@ -201,6 +202,29 @@ class CloudflareCollectorRemote:
     ) -> None:
         """Idempotently stage one compressed canonical body and read projections."""
 
+        if self._resource_projections is None:
+            from coding_trajectory.control_plane.catalog_protocol import (
+                ProjectionCapabilities,
+            )
+
+            try:
+                capabilities = ProjectionCapabilities.model_validate(
+                    self._rpc(
+                        "ct_projection_capabilities",
+                        {"workspace_id": str(workspace_id), "agent_id": str(agent_id)},
+                    )
+                )
+                if capabilities.workspace_id != workspace_id:
+                    raise CollectorRemoteError(
+                        "projection capability workspace mismatch"
+                    )
+                self._resource_projections = (
+                    2 in capabilities.resource_projection_versions
+                )
+            except CollectorRemoteError as error:
+                if error.status_code != 404 or error.code != "not_found":
+                    raise
+                self._resource_projections = False
         canonical = artifact.canonical_bytes()
         if hashlib.sha256(canonical).hexdigest() != content_sha256:
             raise ValueError("chronicle artifact digest mismatch before staging")
@@ -242,12 +266,16 @@ class CloudflareCollectorRemote:
                     "root_sha256": root,
                     "content_sha256": content_sha256,
                     "uncompressed_bytes": len(canonical),
-                    "projections": _project_session_list_variants(artifact),
+                    "projections": _project_session_list_variants(
+                        artifact, include_resources=self._resource_projections
+                    ),
                 },
             )
             return
         compressed = gzip.compress(canonical, compresslevel=3, mtime=0)
-        projections = _project_session_list_variants(artifact)
+        projections = _project_session_list_variants(
+            artifact, include_resources=self._resource_projections
+        )
         self._rpc(
             "ct_collector_stage_artifact_payload",
             {
@@ -346,10 +374,15 @@ class CloudflareCollectorRemote:
 
 def _project_session_list_variants(
     artifact: ChronicleGraphArtifact,
+    *,
+    include_resources: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Build small exact read projections while the canonical graph is local."""
 
-    from coding_trajectory.control_plane.read_projections import build_read_projections
+    from coding_trajectory.control_plane.read_projections import (
+        build_read_projections,
+        build_resource_projections,
+    )
     from coding_trajectory.query import DocumentStore
     from coding_trajectory.service import IndexCache, dispatch
 
@@ -376,6 +409,10 @@ def _project_session_list_variants(
     projections["canonical"] = build_read_projections(
         artifact, store=store, cache=cache
     )
+    if include_resources:
+        projections["resources"] = build_resource_projections(
+            artifact, store=store, cache=cache
+        )
     return projections
 
 

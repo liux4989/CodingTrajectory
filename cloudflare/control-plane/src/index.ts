@@ -3,13 +3,14 @@ import { stageArtifact } from "./ingress";
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
+  "ct_projection_capabilities",
   "ct_collector_missing_chunks", "ct_collector_upload_chunks", "ct_collector_stage_chunk_manifest",
   "ct_catalog_migrate",
   "ct_collector_publish_observation", "ct_collector_stage_artifact_payload", "ct_collector_publish_artifacts",
   "ct_collector_heartbeat", "ct_collector_publish_living_observation"]);
 const READ = new Set(["ct_workspace_snapshot", "ct_historical_snapshot", "ct_historical_artifacts",
   "ct_publication_watermark", "ct_artifact_chunk_manifest", "ct_artifact_chunks",
-  "ct_published_catalog", "ct_publication_changes",
+  "ct_published_catalog", "ct_publication_changes", "ct_catalog_read_v2",
   "ct_project_sessions_projection", "ct_project_inventory_snapshot", "ct_remote_living",
   "ct_estimate_get", "ct_estimate_list", "ct_estimate_calibration", "ct_estimate_backfill_status"]);
 const ESTIMATE = new Set(["ct_estimate_predict", "ct_estimate_bind", "ct_estimate_compare", "ct_estimate_backfill_start"]);
@@ -59,6 +60,12 @@ export default {
           { headers: responseHeaders(env) });
       }
       if (COLLECT.has(methodName)) requireThat(body.agent_id === principal.agent_id, "agent_denied", 403);
+      if (methodName === "ct_projection_capabilities") {
+        fields(body, ["workspace_id", "agent_id"], ["workspace_id", "agent_id"]);
+        return Response.json({ protocol: PROTOCOL, id: requestId, method: methodName, ok: true,
+          data: { workspace_id: principal.workspace_id, resource_projection_versions: [1, 2] },
+          availability: {state: "complete", missing: []}, error: null }, {headers: responseHeaders(env)});
+      }
       if (message.idempotency_key != null) text(message.idempotency_key, 512);
       const envelope: Json = { request: body };
       if (message.idempotency_key != null) envelope.idempotency_key = message.idempotency_key;

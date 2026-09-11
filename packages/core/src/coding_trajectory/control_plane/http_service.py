@@ -17,6 +17,7 @@ from coding_trajectory.control_plane.remote import (
     CloudflareHistoricalRepository,
     CloudflareRpcClient,
 )
+from coding_trajectory.control_plane.remote_catalog import CloudflareCatalogRepository
 from coding_trajectory.control_plane.remote_estimation import RemoteEstimationAuthority
 from coding_trajectory.control_plane.remote_inventory import (
     CloudflareProjectInventoryRepository,
@@ -66,20 +67,32 @@ class RemoteRuntimeFactory:
             or snapshot_sequence < 0
         ):
             raise ValueError("snapshot_sequence must be a non-negative integer")
-        client = CloudflareRpcClient(
-            url=self._url, access_token=access_token
-        )
-        request: dict[str, Any] = {"workspace_id": str(self.workspace_id)}
-        if snapshot_sequence is not None:
-            request["snapshot_sequence"] = snapshot_sequence
-        pinned = client.call("ct_workspace_snapshot", request)
-        sequence = pinned.get("snapshot_sequence")
+        client = CloudflareRpcClient(url=self._url, access_token=access_token)
+        catalog = None
+        if snapshot_sequence is None:
+            catalog = CloudflareCatalogRepository(
+                client=client, workspace_id=self.workspace_id
+            )
+            # Select the catalog heads and the separate compatibility/estimation
+            # fence in one authority transaction, not two racing metadata reads.
+            selected = catalog.page(kind="status").selection
+            sequence = selected.workspace_sequence
+        else:
+            pinned = client.call(
+                "ct_workspace_snapshot",
+                {
+                    "workspace_id": str(self.workspace_id),
+                    "snapshot_sequence": snapshot_sequence,
+                },
+            )
+            sequence = pinned.get("snapshot_sequence")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
             raise ValueError("remote workspace returned an invalid snapshot sequence")
         historical: HistoricalRepository = CloudflareHistoricalRepository(
             client=client,
             workspace_id=self.workspace_id,
             snapshot_sequence=sequence,
+            catalog=catalog,
         )
         if local_evidence:
             from coding_trajectory.control_plane.local_evidence import (
@@ -104,7 +117,7 @@ class RemoteRuntimeFactory:
             snapshot_sequence=snapshot_sequence,
         )
         handlers: dict[MethodAuthority, Callable[..., Any]] = {
-            MethodAuthority.PROJECT_INVENTORY: inventory,
+            MethodAuthority.PROJECT_INVENTORY: catalog.call if catalog else inventory,
             MethodAuthority.LIVING: living,
             MethodAuthority.ESTIMATION: RemoteEstimationAuthority(
                 client=client,
@@ -149,7 +162,9 @@ def build_http_server(
             if token is None:
                 self._write(
                     HTTPStatus.UNAUTHORIZED,
-                    self._error(None, None, "authentication_required", "bearer token required"),
+                    self._error(
+                        None, None, "authentication_required", "bearer token required"
+                    ),
                 )
                 return
             request_id: Any = None
@@ -157,9 +172,17 @@ def build_http_server(
             try:
                 body = self._body()
                 if self.path != "/v1/core":
-                    self._write(HTTPStatus.NOT_FOUND, {"error": {"message": "not found"}})
+                    self._write(
+                        HTTPStatus.NOT_FOUND, {"error": {"message": "not found"}}
+                    )
                     return
-                if set(body) - {"protocol", "id", "method", "params", "snapshot_sequence"}:
+                if set(body) - {
+                    "protocol",
+                    "id",
+                    "method",
+                    "params",
+                    "snapshot_sequence",
+                }:
                     raise ValueError("request contains unknown fields")
                 if body.get("protocol") != CORE_PROTOCOL:
                     raise ValueError(f"protocol must be {CORE_PROTOCOL}")
@@ -174,7 +197,9 @@ def build_http_server(
                 with factory.build(token, snapshot_sequence=snapshot) as runtime:
                     if method == "core.batch":
                         if set(params) != {"requests"}:
-                            raise ValueError("core.batch params must contain only requests")
+                            raise ValueError(
+                                "core.batch params must contain only requests"
+                            )
                         requests = params.get("requests")
                         if not isinstance(requests, list):
                             raise ValueError("requests must be an array")
@@ -186,7 +211,9 @@ def build_http_server(
                             ]
                         }
                     elif method == "core.schema":
-                        if set(params) != {"method"} or not isinstance(params.get("method"), str):
+                        if set(params) != {"method"} or not isinstance(
+                            params.get("method"), str
+                        ):
                             raise ValueError("core.schema params require method")
                         target = params["method"]
                         data = command_schema(target, command=f"ct api call {target}")
@@ -195,10 +222,15 @@ def build_http_server(
                             {"id": request_id, "method": method, "params": params}
                         )
                         if not executed.get("ok"):
-                            message = str(executed.get("error", {}).get("message") or "core method failed")
+                            message = str(
+                                executed.get("error", {}).get("message")
+                                or "core method failed"
+                            )
                             self._write(
                                 HTTPStatus.BAD_REQUEST,
-                                self._error(request_id, method, "method_failed", message),
+                                self._error(
+                                    request_id, method, "method_failed", message
+                                ),
                             )
                             return
                         data = executed.get("result")
@@ -211,7 +243,9 @@ def build_http_server(
             except Exception as exc:  # noqa: BLE001 - HTTP process boundary
                 self._write(
                     HTTPStatus.BAD_GATEWAY,
-                    self._error(request_id, method, "authority_unavailable", str(exc)[:500]),
+                    self._error(
+                        request_id, method, "authority_unavailable", str(exc)[:500]
+                    ),
                 )
                 return
             self._write(

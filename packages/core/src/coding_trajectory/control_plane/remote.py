@@ -7,7 +7,7 @@ import gzip
 import hashlib
 import io
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -19,6 +19,11 @@ from coding_trajectory.control_plane.chronicle import ChronicleGraphArtifact
 from coding_trajectory.ingestion.common import canonical_json, format_datetime
 from coding_trajectory.ingestion.models import SessionGraph
 from coding_trajectory.query import DocumentError, DocumentStore
+
+if TYPE_CHECKING:
+    from coding_trajectory.control_plane.remote_catalog import (
+        CloudflareCatalogRepository,
+    )
 
 
 class RemoteControlPlaneError(DocumentError):
@@ -104,10 +109,12 @@ class CloudflareHistoricalRepository:
         client: CloudflareRpcClient,
         workspace_id: UUID,
         snapshot_sequence: int | None = None,
+        catalog: CloudflareCatalogRepository | None = None,
     ) -> None:
         self._client = client
         self.workspace_id = workspace_id
         self.snapshot_sequence = snapshot_sequence
+        self._catalog = catalog
         self._stores: dict[str, DocumentStore] = {}
 
     def close(self) -> None:
@@ -120,6 +127,8 @@ class CloudflareHistoricalRepository:
 
         if method != "project.sessions":
             return None
+        if self._catalog is not None:
+            return self._catalog.call(method, params)
         validated = service_contract(method).validate_request(params)
         request: dict[str, Any] = {
             "workspace_id": str(self.workspace_id),

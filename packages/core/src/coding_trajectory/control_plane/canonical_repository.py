@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from coding_trajectory.control_plane.chronicle import ChronicleGraphArtifact
+from coding_trajectory.control_plane.upload_chunks import build_chunks
 from coding_trajectory.ingestion.common import canonical_json
 from coding_trajectory.living_sources import LivingSourceSnapshot
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
@@ -27,6 +28,26 @@ if TYPE_CHECKING:
         CanonicalCapture,
         UploadCapturePage,
     )
+
+
+def _decode_block(db: sqlite3.Connection, digest: str) -> Any:
+    row = db.execute(
+        "SELECT body FROM canonical_blocks WHERE digest=?", (digest,)
+    ).fetchone()
+    if row is None or hashlib.sha256(row[0].encode()).hexdigest() != digest:
+        raise ValueError("canonical capture block is unavailable or corrupt")
+    node = json.loads(row[0])
+    if node["kind"] == "json":
+        return json.loads(node["fragment"])
+    entries = node["entries"]
+    if node["kind"] == "object":
+        return {key: _decode_block(db, value) for key, value in entries.items()}
+    values = [_decode_block(db, value) for value in entries]
+    if node["kind"] == "array":
+        return values
+    if node["kind"] == "concat":
+        return [item for group in values for item in group]
+    raise ValueError("invalid canonical capture block")
 
 
 class CanonicalRepository:
@@ -55,12 +76,27 @@ class CanonicalRepository:
             CREATE TABLE IF NOT EXISTS canonical_versions(
                 revision INTEGER PRIMARY KEY AUTOINCREMENT, artifact_id TEXT NOT NULL,
                 digest TEXT NOT NULL, body TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS canonical_blocks(
+                digest TEXT PRIMARY KEY, body TEXT NOT NULL,
+                CHECK(length(CAST(body AS BLOB)) <= 65536));
+            CREATE TABLE IF NOT EXISTS canonical_retentions(
+                token TEXT PRIMARY KEY, revision INTEGER NOT NULL,
+                root_digest TEXT NOT NULL, state TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
             CREATE INDEX IF NOT EXISTS canonical_artifact_revision ON canonical_versions(artifact_id,revision DESC);
             CREATE TABLE IF NOT EXISTS canonical_heads(artifact_id TEXT PRIMARY KEY,revision INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS canonical_members(session_id TEXT PRIMARY KEY,artifact_id TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS canonical_member_versions(session_id TEXT NOT NULL,revision INTEGER NOT NULL,artifact_id TEXT,PRIMARY KEY(session_id,revision));
             INSERT OR IGNORE INTO canonical_member_versions SELECT m.session_id,h.revision,m.artifact_id FROM canonical_members m JOIN canonical_heads h ON h.artifact_id=m.artifact_id;
         """)
+        columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(canonical_versions)")
+        }
+        if "root_digest" not in columns:
+            with self.db:
+                self.db.execute(
+                    "ALTER TABLE canonical_versions ADD COLUMN root_digest TEXT"
+                )
         boundary = canonical_json(
             {
                 "workspace_id": str(identity.workspace_id),
@@ -109,7 +145,8 @@ class CanonicalRepository:
         try:
             for capture in captures:
                 artifact = capture.artifact
-                encoded = canonical_json(capture.model_dump(mode="json"))
+                payload = capture.model_dump(mode="json")
+                encoded = canonical_json(payload)
                 digest = hashlib.sha256(encoded.encode()).hexdigest()
                 artifact_id = str(artifact.graph.root_session_id)
                 prior = self.db.execute(
@@ -118,9 +155,27 @@ class CanonicalRepository:
                 ).fetchone()
                 if prior and prior[0] == digest:
                     continue
+                root_digest, blocks = build_chunks(payload)
+                for block_digest, node in blocks.items():
+                    block_body = canonical_json(node)
+                    existing = self.db.execute(
+                        "SELECT body FROM canonical_blocks WHERE digest=?",
+                        (block_digest,),
+                    ).fetchone()
+                    if existing and existing[0] != block_body:
+                        raise ValueError("canonical block digest conflict")
+                    self.db.execute(
+                        "INSERT OR IGNORE INTO canonical_blocks VALUES(?,?)",
+                        (block_digest, block_body),
+                    )
                 revision = self.db.execute(
-                    "INSERT INTO canonical_versions(artifact_id,digest,body) VALUES(?,?,?)",
-                    (artifact_id, digest, encoded),
+                    "INSERT INTO canonical_versions(artifact_id,digest,body,root_digest) VALUES(?,?,?,?)",
+                    (
+                        artifact_id,
+                        digest,
+                        canonical_json({"root_sha256": root_digest}),
+                        root_digest,
+                    ),
                 ).lastrowid
                 self.db.execute(
                     "INSERT INTO canonical_heads VALUES(?,?) ON CONFLICT(artifact_id) DO UPDATE SET revision=excluded.revision",
@@ -177,7 +232,7 @@ class CanonicalRepository:
     def changes_after(self, cursor: str | None) -> UploadCapturePage | None:
         """One bounded compatibility graph per replayable page; never skip revisions."""
         from coding_trajectory.control_plane.upload_capture import (
-            CanonicalCapture,
+            CaptureReference,
             UploadCapturePage,
         )
 
@@ -197,16 +252,63 @@ class CanonicalRepository:
                     "canonical cursor requires explicit repository reconciliation"
                 )
         row = self.db.execute(
-            "SELECT revision,body FROM canonical_versions WHERE revision>? ORDER BY revision LIMIT 1",
+            "SELECT revision,body,root_digest FROM canonical_versions WHERE revision>? ORDER BY revision LIMIT 1",
             (after,),
         ).fetchone()
         if row is None:
             return None
+        capture = self._decode_capture(row[1], row[2])
+        references = ()
+        if row[2]:
+            token = f"{self.repository_id}:{row[0]}"
+            with self.db:
+                self.db.execute(
+                    "INSERT OR IGNORE INTO canonical_retentions(token,revision,root_digest,state) VALUES(?,?,?,'offered')",
+                    (token, row[0], row[2]),
+                )
+            references = (
+                CaptureReference(
+                    repository_id=self.repository_id,
+                    revision=row[0],
+                    root_sha256=row[2],
+                    retention_token=token,
+                ),
+            )
         return UploadCapturePage(
             repository_id=self.repository_id,
             cursor=f"{self.repository_id}:{row[0]}",
-            captures=(CanonicalCapture.model_validate_json(row[1]),),
+            captures=(capture,),
+            references=references,
         )
+
+    def _decode_capture(self, body: str, root_digest: str | None):
+        from coding_trajectory.control_plane.upload_capture import CanonicalCapture
+
+        if root_digest:
+            return CanonicalCapture.model_validate(_decode_block(self.db, root_digest))
+        return CanonicalCapture.model_validate_json(body)
+
+    def capture_for_reference(self, *, revision: int, root_digest: str):
+        row = self.db.execute(
+            "SELECT body,root_digest FROM canonical_versions WHERE revision=?",
+            (revision,),
+        ).fetchone()
+        if row is None or row[1] != root_digest:
+            raise ValueError("canonical capture reference is unavailable")
+        return self._decode_capture(row[0], row[1])
+
+    def retain(self, token: str):
+        with self.db:
+            changed = self.db.execute(
+                "UPDATE canonical_retentions SET state='retained' WHERE token=? AND state IN ('offered','retained')",
+                (token,),
+            ).rowcount
+        if not changed:
+            raise ValueError("canonical retention offer is unavailable")
+
+    def release(self, token: str):
+        with self.db:
+            self.db.execute("DELETE FROM canonical_retentions WHERE token=?", (token,))
 
     def pin_snapshot(self) -> int:
         return self.db.execute(
@@ -227,14 +329,14 @@ class CanonicalRepository:
                 "session is not present in the canonical repository"
             )
         row = self.db.execute(
-            "SELECT body FROM canonical_versions WHERE artifact_id=? AND revision<=? ORDER BY revision DESC LIMIT 1",
+            "SELECT body,root_digest FROM canonical_versions WHERE artifact_id=? AND revision<=? ORDER BY revision DESC LIMIT 1",
             (owner[0], self.pin_snapshot() if revision is None else revision),
         ).fetchone()
         if row is None:
             raise ResourceNotFoundError(
                 "session is not present at this canonical revision"
             )
-        return ChronicleGraphArtifact.model_validate(json.loads(row[0])["artifact"])
+        return self._decode_capture(row[0], row[1]).artifact
 
     def store_for(
         self, method: str, params: dict[str, Any]
@@ -266,6 +368,14 @@ class CanonicalReadRepository:
         self.revision = self.db.execute(
             "SELECT COALESCE(max(revision),0) FROM canonical_versions"
         ).fetchone()[0]
+        self._root_column = (
+            "v.root_digest"
+            if any(
+                row[1] == "root_digest"
+                for row in self.db.execute("PRAGMA table_info(canonical_versions)")
+            )
+            else "NULL"
+        )
 
     def close(self):
         self.db.close()
@@ -278,12 +388,19 @@ class CanonicalReadRepository:
         if not session_id:
             raise ResourceNotFoundError("canonical read requires a session scope")
         row = self.db.execute(
-            "SELECT v.body FROM canonical_versions v WHERE v.artifact_id=(SELECT artifact_id FROM canonical_member_versions WHERE session_id=? AND revision<=? ORDER BY revision DESC LIMIT 1) AND v.revision<=? ORDER BY v.revision DESC LIMIT 1",
+            f"SELECT v.body,{self._root_column} FROM canonical_versions v WHERE v.artifact_id=(SELECT artifact_id FROM canonical_member_versions WHERE session_id=? AND revision<=? ORDER BY revision DESC LIMIT 1) AND v.revision<=? ORDER BY v.revision DESC LIMIT 1",
             (str(session_id), self.revision, self.revision),
         ).fetchone()
         if row is None:
             raise ResourceNotFoundError("session absent from this canonical revision")
-        artifact = ChronicleGraphArtifact.model_validate(json.loads(row[0])["artifact"])
+        if row[1]:
+            artifact = ChronicleGraphArtifact.model_validate(
+                _decode_block(self.db, row[1])["artifact"]
+            )
+        else:
+            artifact = ChronicleGraphArtifact.model_validate(
+                json.loads(row[0])["artifact"]
+            )
         if not any(
             str(session.session_id) == str(session_id) for session in artifact.sessions
         ):

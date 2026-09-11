@@ -1,10 +1,12 @@
 # Live API remediation design
 
-Status: proposed for review, 2026-09-10. No runtime, deployed contract, retention
-policy or migration has changed. This is the implementation design for the open
+Status: design and policy choices accepted; implementation in progress. No deployed
+contract or payload-retention behavior has changed. This is the design for the open
 findings in [live-api-review.md](live-api-review.md), not a claim that M1–M6 are
 complete. Existing public contracts remain authoritative until versioned changes
-land. Logical operation and model names below are proposed, not available RPCs.
+land. `ct_catalog_read_v2` now implements the additive catalog-selection slice
+locally; browser/Core consumer cutover and selective detail resources remain open.
+Other logical operation and model names below remain implementation targets.
 
 ## 1. Scope and decisions
 
@@ -14,7 +16,7 @@ depend on an incremental parser rewrite. Keep Python's canonical measurements,
 manual/automatic publication policy, host-local raw evidence, ownership fences,
 atomic publication and durable replay.
 
-Recommended contract decisions:
+Accepted contract decisions:
 
 - Ordinary navigation selects latest published data. Continuations and related
   expansions retain a bounded selection; arbitrary reconstruction history is a
@@ -59,8 +61,8 @@ and explicit selection must agree. Keep current 200-row and 512 KiB catalog
 ceilings initially; declare separate node, item-batch and query-work limits in
 the versioned schemas before enabling their operations.
 
-Proposed initial selection lifetime: 30 minutes, fixed rather than sliding.
-Refresh creates a new selection. This is a policy proposal, not a measured UX
+Accepted initial selection lifetime: 30 minutes, fixed rather than sliding.
+Refresh creates a new selection. This is a policy choice, not a measured UX
 requirement; qualification must exercise long browsing and grouped CLI calls.
 Pin creation and GC eligibility checks serialize through the authority. A token
 does not permit selecting an arbitrary older revision. Authority restoration
@@ -233,8 +235,8 @@ and rollback. Keep replay protection independently of payload lifetime. Use
 mark/eligibility, grace and serialized recheck before deletion; unreferenced staging
 cleanup must not race an active validation task or commit.
 
-Propose a seven-day rollback window after the last legacy writer/reader cutover;
-duration requires operational approval before deletion. Legacy history retained
+Use a seven-day rollback window after the last legacy writer/reader cutover;
+actual deletion still requires operational approval. Legacy history retained
 during migration is not a new indefinite-retention promise. Do not enable GC until
 expiry, restore and rollback qualification passes. Once new-only resources cannot
 be decoded by old binaries, rollback retains a compatible reader or disables new
@@ -281,14 +283,13 @@ Inspect each script's target and side effects before execution. Extend
   receipt persistence and GC recheck. Exercise stale owner/source fences, pending
   outbox migration and retained evidence after reconstruction expiry.
 
-For adoption, update `contracts.md` to distinguish bounded selections from explicit
-retained evidence and define the revision tuple; update `read-path.md` to replace
-historical-token vocabulary and the artifact reader role; update `implementation.md`
-with D1–D6 gates and new-only rollback limits. Preserve their recorded implementation
-evidence. This proposal does not silently supersede those specifications.
+`contracts.md` and `read-path.md` now distinguish bounded selections from explicit
+retained evidence and describe the revision tuple. `implementation.md` records
+the additive catalog slice, remaining D1–D6 gates and rollback limits. Their prior
+implementation evidence remains intact; consumer contracts change only when the
+corresponding migration lands.
 
-Review decisions to ratify before D1 is considered frozen: 30-minute selection
-lifetime, separate project-metadata revision, evidence-based estimation retention
-without arbitrary reconstruction replay, and the proposed seven-day rollback
-window. Safe interim default: retain existing data and compatibility paths until
-those policies and their qualification evidence are accepted.
+The 30-minute selection lifetime, separate project-metadata revision,
+evidence-based estimation retention without arbitrary reconstruction replay and
+seven-day rollback window are accepted. Retain existing data and compatibility
+paths until the corresponding implementation and qualification gates pass.

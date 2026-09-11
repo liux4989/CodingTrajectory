@@ -60,8 +60,31 @@ class CanonicalCapture(BaseModel):
         return self
 
 
+class CaptureReference(BaseModel):
+    """A durable lease over one immutable canonical capture DAG."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    repository_id: str = Field(min_length=1, max_length=128)
+    revision: int = Field(ge=1)
+    root_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    retention_token: str = Field(min_length=1, max_length=256)
+
+
 class UploadCapturePage(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     repository_id: str = Field(min_length=1, max_length=128)
     cursor: str = Field(min_length=1, max_length=4096)
     captures: tuple[CanonicalCapture, ...] = Field(min_length=1, max_length=16)
+    # Additive: old producers/outboxes continue to carry inline captures.
+    references: tuple[CaptureReference, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_references(self):
+        if self.references and len(self.references) != len(self.captures):
+            raise ValueError("capture references must correspond to captures")
+        if any(
+            reference.repository_id != self.repository_id
+            for reference in self.references
+        ):
+            raise ValueError("capture reference belongs to another repository")
+        return self

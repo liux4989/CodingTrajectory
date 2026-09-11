@@ -4,6 +4,118 @@ Implement in dependency order. A phase is complete only when its evidence in
 [qualification](qualification.md) passes. Do not mark the entire refactor complete
 because chunk transfer works or because a Worker deploy succeeds.
 
+## Live API remediation in progress
+
+The [accepted remediation design](live-api-design.md) governs the remaining
+M1–M6 work. The additive `ct_catalog_read_v2` slice implements Pydantic-generated
+ingress/response schemas, 30-minute server-held selections and cursors, independent
+publication/project-metadata selection, registered/published project paging,
+all four session include variants and explicit projection coverage. It neither
+changes deployed consumers nor removes legacy RPCs or payloads.
+
+The local D2 consumer cutover now routes ordinary Core project inventory and
+session lists, hosted status/lists/change feeds, and browser project pagination
+through v2. Grouped runtime calls capture the separate workspace/estimation fence
+in the same transaction as catalog selection. Explicit sequence callers remain
+on the labeled compatibility path. Change feeds freeze their upper bound and
+reset rather than acknowledge overflow; metadata-only edits invalidate open lists.
+Core all-items compatibility reads fail above 10,000 rows or 8 MiB rather than
+silently returning a prefix. Projection absence no longer triggers list hydration.
+
+Local evidence: `npm run check` in `cloudflare/control-plane` passes;
+`node scripts/qualify-refactor-runtime.mjs --all` passes, including 86 control-plane
+checks and all four v2 include variants through the runtime with local evidence
+enabled, against the canonical Python producer. Hosted binding checks include
+metadata-only invalidation and typed cursor failures. Chromium verified a project
+rename appears in the open list via polling without a publication or reload.
+The SQLite catalog scenario traverses 10,001 legacy rows and checks v2 concurrent
+publication, metadata rename, empty registrations, scope rejection, expiry and
+incarnation reset. Full metric baselines pass 107 assertions and 49 invariants.
+These checks use disposable local data; no deployment or shared migration ran.
+
+The first D3 storage slice adds `ct_catalog_read_v2(kind=resources)` for independent
+graph, tree and metadata-item projections. Python uses the existing canonical
+handlers. Ingress validates membership, item/turn identity, coverage and payload
+budgets, then stages immutable rows in bounded pages. Publication selects their
+descriptor atomically with the artifact; an unfinished stage is not readable.
+The read resolves exact manifest membership and fetches only the requested row.
+Item batches accept at most 100 IDs and continue within the existing 512 KiB
+response budget, preserving requested order and the original selection.
+
+Initial limits are 128 KiB per independent projection page and 4 MiB/10,000 rows
+per staged projection set. Version 2 trees page at semantic branch boundaries;
+resource cursors retain both resource and page position. Oversized graph/item
+outputs report `budget_exceeded` independently. A branch that cannot fit a page
+or a larger staging set fails explicitly before publication. Preparation still
+builds the local graph, and old bundles/gzip remain for compatibility readers.
+
+The expanded local upload qualification passes 52 checks, including canonical
+graph/tree/item parity, invalid item identity/content rejection and expansion
+across publication. SQLite qualification adds 10,000 sibling rows without changing
+the selected payload transfer (209 serialized SQL-result bytes in this fixture),
+and checks indexed membership query plans. This is not a measurement of all SQLite
+pages visited, historical-version scaling, or production latency.
+
+No hosted detail consumer is switched yet: old committed publications lack the
+new descriptor. D3 still requires bounded backfill, complete coverage qualification
+and consumer cutover with parent-selection propagation. Collectors now negotiate
+resource projection v2 through an authenticated capability endpoint and retain
+legacy staging when the endpoint returns 404 `not_found`; authorization/transport
+failures do not downgrade. V1 retry identities and stored resource rows remain
+readable. Staging may upgrade a v1 descriptor to v2 without changing old published
+selections. Do not republish unchanged sources as a substitute for backfill.
+
+New local canonical revisions store immutable blocks of at most 64 KiB rather
+than repeated inline captures. Referenced outboxes acquire a durable retention
+offer before their transaction and confirm it afterwards. Acknowledged rows keep
+their pins because comparison and replay still need them. Legacy inline revisions
+and outboxes remain readable, including read-only unmigrated databases and stable
+inline retry identities. This is storage deduplication, not incremental parsing:
+preparation still reconstructs, serializes and hashes complete captures. No GC is
+enabled, and offered/retained pins are not yet automatically retired.
+
+Completed forecast get/list calls now acquire only a workspace metadata fence and
+forecast records. Actual-outcome refresh scopes compatibility hydration to the
+forecast's session where available; predict/bind/calibration acquisition is not
+fully migrated. Request tracing qualifies completed get/list without historical
+RPCs. The complete runtime suite passes 90 control-plane, 52 upload, 27 canonical
+repository and 26 native-binding checks, plus the existing lifecycle, connection,
+release and catalog scenarios. Canonical qualification includes two process-crash
+boundaries, corrupt-block rejection and old inline retry identity. The metrics
+gate skips these non-metric-sensitive paths; the separately executed full baseline
+workflow passes 107 assertions and 49 invariants without changing expectations.
+
+The connected Mac runner also qualifies the exact source archive in a disposable
+directory on macOS ARM64 / CPython 3.12.14: canonical repository 27 checks with two
+crash boundaries, preparation reuse 6 checks, and metrics 107 assertions / 49
+invariants pass. The archive checksum and all 445 source files were verified;
+qualification used an isolated home and offline locked dependencies after setup.
+No provider data, existing collection state or host schedule was used or modified.
+This does not qualify deployed credentials or sustained multi-host workloads.
+
+Remaining gates, in order:
+
+1. D1/D2 deployment and scale qualification remain separate release gates;
+   local consumer cutover is implemented. No shared retention collection is enabled.
+2. D3: complete bounded backfill, coverage and reader cutover on
+   the new independent graph/tree/item storage.
+3. D4: every Core parameter shape, estimation acquisition, local evidence and CLI
+   selection migration before removing historical reconstruction.
+4. D5: incremental resource capture/outbox and manifest-native resumable staging.
+5. D6: qualified authoritative catalog convergence, legacy deletion and payload GC
+   after the seven-day rollback window and reference-safe retention checks.
+
+Catalog v2 currently reuses the legacy projection record's requested JSON summary
+variant; SQL still parses that stored record. Physical projection/resource splitting
+and query-plan work bounds remain D3 work. Selection and cursor tables each cap at
+10,000 entries and remove at most 200 expired entries per allocation; capacity
+exhaustion is explicit, never eviction of a live selection. Authority restoration
+must rotate the existing upload-authority incarnation before accepting reads.
+Shared publications still retain legacy payloads for old readers. Local referenced
+revisions/outboxes require a compatible reader: a binary downgrade alone cannot
+decode newly written references. Preserve the upgraded local state and drain with
+the compatible service rather than deleting or replacing it.
+
 ## Work packages
 
 | ID | Deliverable / modules | Depends on | Exit evidence |

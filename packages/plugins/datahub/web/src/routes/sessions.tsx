@@ -174,10 +174,10 @@ export function SessionsRoute() {
     queryFn: ({ signal }) => fetchDatahubSnapshot(signal),
     staleTime: Infinity,
   });
-  const horizon = snapshot.data?.horizon_days ?? 7;
-  const windowOptions = WINDOW_OPTIONS.filter((option) => Number(option.value) <= horizon);
+  const horizon = snapshot.data?.horizon_days;
+  const windowOptions = WINDOW_OPTIONS.filter((option) => horizon == null || Number(option.value) <= horizon);
   React.useEffect(() => {
-    if (Number(windowDays) > horizon) setWindowDays(String(horizon));
+    if (horizon != null && Number(windowDays) > horizon) setWindowDays(String(horizon));
   }, [horizon, windowDays]);
 
   const sessions = useInfiniteQuery({
