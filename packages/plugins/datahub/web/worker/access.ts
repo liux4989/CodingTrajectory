@@ -45,7 +45,7 @@ export async function verifyAccess(request: Request, env: Env): Promise<boolean>
   }
 }
 
-export function withSecurityHeaders(response: Response, workerVersion?: string) {
+export function withSecurityHeaders(response: Response, workerVersion?: string, cacheControl = "no-store") {
   const headers = new Headers(response.headers);
   if (workerVersion) headers.set("X-CT-Worker-Version", workerVersion);
   headers.set("Content-Security-Policy", [
@@ -65,7 +65,7 @@ export function withSecurityHeaders(response: Response, workerVersion?: string) 
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("X-Frame-Options", "DENY");
   headers.set("X-Robots-Tag", "noindex, nofollow");
-  headers.set("Cache-Control", "no-store");
+  headers.set("Cache-Control", cacheControl);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

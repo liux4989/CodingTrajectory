@@ -2,7 +2,7 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
-import { createRootRoute, createRoute, createRouter, redirect, RouterProvider } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect, RouterProvider } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { StateBlock } from "@/components/state-block";
 import { Toaster } from "@/components/ui/sonner";
@@ -11,13 +11,15 @@ import { SourceCapabilityGate } from "@/components/source-capability-gate";
 import { DatahubDeliveryProvider } from "@/hooks/use-datahub-delivery";
 import "@/styles.css";
 
-const OverviewRoute = React.lazy(() => import("@/routes/overview").then((mod) => ({ default: mod.OverviewRoute })));
-const SessionsRoute = React.lazy(() => import("@/routes/sessions").then((mod) => ({ default: mod.SessionsRoute })));
-const SessionResolverRoute = React.lazy(() => import("@/routes/session-resolver").then((mod) => ({ default: mod.SessionResolverRoute })));
-const GraphOverviewRoute = React.lazy(() => import("@/routes/graph-overview").then((mod) => ({ default: mod.GraphOverviewRoute })));
-const SessionDetailRoute = React.lazy(() => import("@/routes/session-detail").then((mod) => ({ default: mod.SessionDetailRoute })));
-const ModelUsageRoute = React.lazy(() => import("@/routes/model-usage").then((mod) => ({ default: mod.ModelUsageRoute })));
-const CodeTimeRoute = React.lazy(() => import("@/routes/code-time").then((mod) => ({ default: mod.CodeTimeRoute })));
+// lazyRouteComponent (unlike React.lazy) lets the router preload the chunk on
+// link hover/focus via defaultPreload: "intent".
+const OverviewRoute = lazyRouteComponent(() => import("@/routes/overview"), "OverviewRoute");
+const SessionsRoute = lazyRouteComponent(() => import("@/routes/sessions"), "SessionsRoute");
+const SessionResolverRoute = lazyRouteComponent(() => import("@/routes/session-resolver"), "SessionResolverRoute");
+const GraphOverviewRoute = lazyRouteComponent(() => import("@/routes/graph-overview"), "GraphOverviewRoute");
+const SessionDetailRoute = lazyRouteComponent(() => import("@/routes/session-detail"), "SessionDetailRoute");
+const ModelUsageRoute = lazyRouteComponent(() => import("@/routes/model-usage"), "ModelUsageRoute");
+const CodeTimeRoute = lazyRouteComponent(() => import("@/routes/code-time"), "CodeTimeRoute");
 
 function RouteBoundary({ children }: { children: React.ReactNode }) {
   return (
@@ -203,6 +205,7 @@ const router = createRouter({
     compareRoute,
     codeTimeRoute,
   ]),
+  defaultPreload: "intent",
 });
 
 declare module "@tanstack/react-router" {
