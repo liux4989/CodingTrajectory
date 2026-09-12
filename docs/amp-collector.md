@@ -32,6 +32,18 @@ result observations contain `status`; and tool observations contain
 those fields available. This detail remains in the private local journal and is
 not a chronicle artifact by itself.
 
+Compatibility checked on 2026-09-12 against the live
+[Plugin API reference](https://ampcode.com/docs/plugin-api) and
+`amp plugins show-docs` from Amp `0.0.1789185638-ga5a85f`
+(released 2026-09-12T04:00:38Z). The current `PluginToolResult` supports strings
+and text/image content-block arrays; live hook output remains `unknown`.
+The adapter recognizes JSON objects, JSON strings, and a single JSON-object
+text block in an array for exit codes and explicit creation evidence. Images
+are never fetched. Multiple text blocks, image-only arrays, and non-object JSON
+do not supply these semantics. The original output is retained locally, and
+the journal schema stays at version 1. This verifies the current contract, not
+the release in which structured results first appeared.
+
 The collector reads `thread.messages({ full: true })`, paging through the whole
 transcript so compaction does not discard earlier messages. It appends only new
 or changed revisions of a thread or message record. Consumers must therefore

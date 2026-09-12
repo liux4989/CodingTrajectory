@@ -140,6 +140,61 @@ def journal(thread: str, *, parent: bool) -> list[dict]:
     return rows
 
 
+def qualify_result_formats(source: Path) -> None:
+    # Current PluginToolResult permits strings or text/image arrays; live hooks
+    # also expose objects. All variants use the same explicit synthetic evidence:
+    # one child ID and exit 23, never expected values derived from parser output.
+    image = {
+        "type": "image",
+        "mimeType": "image/png",
+        "url": "https://invalid.example/private",
+    }
+    formats = {
+        "string": (lambda text: text, True),
+        "object": (json.loads, True),
+        "text-block": (lambda text: [{"type": "text", "text": text}], True),
+        "mixed-image": (lambda text: [image, {"type": "text", "text": text}], True),
+        "ambiguous": (lambda text: [{"type": "text", "text": text}] * 2, False),
+        "image-only": (lambda text: [image], False),
+        "non-object": (lambda text: [{"type": "text", "text": "[]"}], False),
+    }
+    for name, (encode, recognized) in formats.items():
+        rows = journal(PARENT, parent=True)
+        for row in rows:
+            if row.get("event") == "tool.result":
+                row["output"] = encode(row["output"])
+            for block in row.get("message", {}).get("content", []):
+                if block["type"] == "tool_result":
+                    block["output"] = encode(block["output"])
+        session = AmpAdapter().build_canonical_session(source, rows + rows)
+        tools = [
+            i
+            for t in session.turns
+            for i in t.items
+            if getattr(i, "tool_call_id", None)
+        ]
+        assert len(tools) == 2, name
+        shell = next(i for i in tools if i.tool_call_id == "shell1")
+        assert (shell.status == "failed") == recognized, name
+        assert session.extensions.amp.spawn_links == (
+            {CHILD[2:]: "spawn1"} if recognized else {}
+        ), name
+        replay = AmpAdapter().build_canonical_session(
+            source, [r for r in rows if r["type"] != "observation"]
+        )
+        assert not replay.extensions.amp.spawn_links, name
+        graph = assemble_project_session_graphs("amp-example", [session])[0]
+        assert (
+            b"PRIVATE"
+            not in _body_free_artifact(
+                build_chronicle_graph_artifact(graph)
+            ).canonical_bytes()
+        ), name
+    print(
+        "PASS Amp result formats: 7 legacy/structured/ambiguous variants, dedup, live-only edges, body-free publication"
+    )
+
+
 def main() -> None:
     with TemporaryDirectory(prefix="ct-amp-acceptance-") as root:
         directory = Path(root)
@@ -153,6 +208,7 @@ def main() -> None:
                 # Repeated observations and message revisions must not count twice.
                 path.write_text("".join(json.dumps(r) + "\n" for r in rows + rows))
                 paths.append(path)
+            qualify_result_formats(paths[0])
             discovery = discover_store(
                 current_dir=Path("/project/amp-example"), agent_vendor="amp"
             )
