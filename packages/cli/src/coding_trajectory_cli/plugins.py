@@ -161,11 +161,22 @@ def plugin_names() -> list[str]:
 
 
 def run_plugin(name: str, plugin_args: list[str]) -> int:
-    """Execute a plugin entry point from its source directory."""
+    """Execute a plugin entry point from its source directory.
+
+    Plugins are dispatched from source and not installed into the ``ct``
+    tool environment, so the plugin source directory is prepended to
+    ``PYTHONPATH`` to make the plugin package importable.
+    """
     command = PLUGIN_COMMANDS[name]
+    env = os.environ.copy()
+    python_path = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        f"{command.dir}{os.pathsep}{python_path}" if python_path else str(command.dir)
+    )
     completed = subprocess.run(
         [sys.executable, str(command.entry_path), *plugin_args],
         cwd=command.dir,
+        env=env,
         check=False,
     )
     return completed.returncode
