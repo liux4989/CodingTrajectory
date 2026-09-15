@@ -13,27 +13,45 @@ bytes hydrated later are the same bytes that produced the canonical object.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 from uuid import UUID
 
 from coding_trajectory.ingestion.models import Vendor
+
+SourceOccurrenceDisposition = Literal[
+    "parsed", "blank", "invalid_encoding", "invalid_json", "non_object"
+]
 
 
 @dataclass(frozen=True, slots=True)
 class RecordSpan:
     """Byte range + digest of one raw JSONL record in its source file."""
 
+    occurrence_id: UUID
+    ordinal: int
     byte_offset: int
     byte_end: int
     digest: str
 
 
 @dataclass(frozen=True, slots=True)
-class SessionProvenance:
-    """Canonical-id -> source-span mapping for one ingested session."""
+class SourceOccurrence:
+    """Ordered local evidence for one physical line in an immutable source."""
 
-    session_id: UUID
+    occurrence_id: UUID
+    ordinal: int
+    span: RecordSpan
+    disposition: SourceOccurrenceDisposition
+
+
+@dataclass(frozen=True, slots=True)
+class SessionProvenance:
+    """Source occurrences and their canonical links for one ingestion attempt."""
+
+    session_id: UUID | None
     vendor: Vendor
     source_path: str
+    occurrences: tuple[SourceOccurrence, ...] = ()
     events: dict[UUID, RecordSpan] = field(default_factory=dict)
     # Canonical item id -> ordered ids of the events whose spans produced it.
     # Spans are resolved through ``events`` so item locators do not duplicate
@@ -41,4 +59,9 @@ class SessionProvenance:
     items: dict[UUID, tuple[UUID, ...]] = field(default_factory=dict)
 
 
-__all__ = ["RecordSpan", "SessionProvenance"]
+__all__ = [
+    "RecordSpan",
+    "SessionProvenance",
+    "SourceOccurrence",
+    "SourceOccurrenceDisposition",
+]

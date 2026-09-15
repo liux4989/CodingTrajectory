@@ -83,7 +83,7 @@ class DiscoveryResult:
     store: DocumentStore
     sources: list[DiscoverySource]
     # Canonical-id -> source-byte-span mappings, keyed by resolved source
-    # path.  Populated only on the compact (measurements) ingestion path.
+    # path. Includes ordered parse dispositions before canonical filtering.
     provenance: dict[str, SessionProvenance] | None = None
 
 
@@ -158,11 +158,12 @@ def _ingest_sessions(
         adapter = adapter_cls()
         parent_started = cut_inputs.get(path)
         try:
-            session = adapter.ingest_file(
+            unstable_session = adapter.ingest_file(
                 path,
                 parent_started_turn_ids=parent_started,
                 retention=retention,
             )
+            session = unstable_session
             if retention != "measurements":
                 session = stabilize_session(
                     session,
@@ -171,6 +172,8 @@ def _ingest_sessions(
                     retention=retention,
                 )
         except Exception as exc:
+            if adapter.last_provenance is not None:
+                provenance[str(path)] = adapter.last_provenance
             debug.warn(
                 f"failed to ingest {vendor.value} session log: {exc}",
                 code="discovery.ingest_failed",
@@ -179,10 +182,44 @@ def _ingest_sessions(
                 source=str(path),
             )
             continue
+        if retention != "measurements" and adapter.last_provenance is not None:
+            adapter.last_provenance = _remap_stabilized_provenance(
+                adapter.last_provenance,
+                unstable_session,
+                session,
+            )
         ingested.append((vendor, path, session))
         if adapter.last_provenance is not None:
             provenance[str(path)] = adapter.last_provenance
     return _coalesce_session_segments(ingested), provenance
+
+
+def _remap_stabilized_provenance(
+    provenance: SessionProvenance, before: Session, after: Session
+) -> SessionProvenance:
+    """Remap trajectory provenance from temporary to canonical stable IDs."""
+
+    event_ids = {
+        old.event_id: new.event_id
+        for old, new in zip(before.events, after.events, strict=True)
+    }
+    item_ids = {
+        old.item_id: new.item_id
+        for old_turn, new_turn in zip(before.turns, after.turns, strict=True)
+        for old, new in zip(old_turn.items, new_turn.items, strict=True)
+    }
+    return SessionProvenance(
+        session_id=provenance.session_id,
+        vendor=provenance.vendor,
+        source_path=provenance.source_path,
+        occurrences=provenance.occurrences,
+        events={
+            event_ids.get(key, key): value for key, value in provenance.events.items()
+        },
+        items={
+            item_ids.get(key, key): value for key, value in provenance.items.items()
+        },
+    )
 
 
 def _coalesce_session_segments(

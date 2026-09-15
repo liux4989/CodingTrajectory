@@ -255,19 +255,27 @@ def build_session_provenance(
     session_id: UUID,
     vendor: Vendor,
     source: Any,
-    stabilizer: TranscriptStabilizer,
+    records: list[TranscriptRecord],
+    stabilizer: TranscriptStabilizer | None,
     turns: list[Turn],
 ) -> SessionProvenance:
-    """Assemble canonical-id -> source-span provenance for one compact session.
+    """Assemble canonical-id -> source-span provenance for one session.
 
-    Ownership of the stabilizer's span map is transferred to the returned
-    provenance.  Items record the ordered ids of their constituent events, so
+    On the compact path, ownership of the stabilizer's span map is transferred
+    to the returned provenance. Items record constituent event ids, so
     merged agent messages and tool call/result pairs map to every source range
     that produced them without duplicating span objects.
     """
 
-    spans = stabilizer.spans
-    stabilizer.spans = {}
+    if stabilizer is None:
+        spans = {
+            record.record_id: record.origin
+            for record in records
+            if record.origin is not None
+        }
+    else:
+        spans = stabilizer.spans
+        stabilizer.spans = {}
     item_events: dict[UUID, tuple[UUID, ...]] = {}
     for turn in turns:
         for item in turn.items:

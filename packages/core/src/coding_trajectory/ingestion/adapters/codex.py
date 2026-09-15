@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from itertools import chain
 from pathlib import Path
@@ -46,7 +46,7 @@ from coding_trajectory.ingestion.models import (
     TurnStatus,
     Vendor,
 )
-from coding_trajectory.ingestion.provenance import RecordSpan, SessionProvenance
+from coding_trajectory.ingestion.provenance import RecordSpan
 from coding_trajectory.ingestion.retention import CanonicalRetention
 from coding_trajectory.ingestion.transcript import TranscriptRecord
 from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
@@ -121,7 +121,6 @@ class _PendingExecWrapper:
     derived_records: dict[int, TranscriptRecord] = field(default_factory=dict)
     closed: bool = False
     completed_at: datetime | None = None
-
 
 
 def _native_command_text(value: Any) -> str | None:
@@ -730,9 +729,7 @@ class CodexAdapter(BaseAdapter):
         # item id is exactly the response-item call id (for example,
         # ``spawn_agent`` -> ``SubAgentActivity``). Keep the original call as
         # the canonical action and enrich it from that stronger terminal fact.
-        direct_function_calls: dict[str, TranscriptRecord] = field(
-            default_factory=dict
-        )
+        direct_function_calls: dict[str, TranscriptRecord] = field(default_factory=dict)
         native_direct_result_records: dict[str, TranscriptRecord] = field(
             default_factory=dict
         )
@@ -762,23 +759,21 @@ class CodexAdapter(BaseAdapter):
         retention: CanonicalRetention = "trajectory",
     ) -> Session:
         self._reset_ingest_state()
-        self.last_provenance: SessionProvenance | None = None
-        if retention == "measurements":
-            records: Iterable[tuple[dict, RecordSpan | None]] = self._iter_record_spans(
-                path
-            )
-            if parent_started_turn_ids is not None:
-                records = _iter_own_records(records, parent_started_turn_ids)
-        else:
-            records = (
-                (record, None)
-                for record in _cut_inherited_records(
-                    self._load_records(path), parent_started_turn_ids
-                )
-            )
-        state = self._ParseState()
-        transcript = self._build_transcript(records, state)
-        return self._build_session(path, transcript, state, retention=retention)
+        self._reset_source_provenance()
+        records: Iterable[tuple[dict, RecordSpan | None]] = self._iter_record_spans(
+            path
+        )
+        if parent_started_turn_ids is not None:
+            records = _iter_own_records(records, parent_started_turn_ids)
+        try:
+            state = self._ParseState()
+            transcript = self._build_transcript(records, state)
+            session = self._build_session(path, transcript, state, retention=retention)
+        except Exception:
+            self._finish_source_provenance(path)
+            raise
+        self._finish_source_provenance(path, session_id=session.session_id)
+        return session
 
     def build_canonical_session(
         self,
@@ -790,12 +785,10 @@ class CodexAdapter(BaseAdapter):
     ) -> Session:
         """In-memory-record seam: cut inherited fork history, then assemble."""
         self._reset_ingest_state()
-        self.last_provenance: SessionProvenance | None = None
+        self._reset_source_provenance()
         cut = _cut_inherited_records(list(records), parent_started_turn_ids)
         state = self._ParseState()
-        transcript = self._build_transcript(
-            ((record, None) for record in cut), state
-        )
+        transcript = self._build_transcript(((record, None) for record in cut), state)
         return self._build_session(source, transcript, state, retention=retention)
 
     def scan_started_turn_ids(self, source: Path) -> set[str] | None:
@@ -926,7 +919,7 @@ class CodexAdapter(BaseAdapter):
             for turn in session.turns
             if turn.user_request_event_id is not None
         }
-        return session.model_copy(
+        retained = session.model_copy(
             update={
                 "events": [
                     event
@@ -936,6 +929,17 @@ class CodexAdapter(BaseAdapter):
                 ]
             }
         )
+        if self.last_provenance is not None:
+            retained_event_ids = {event.event_id for event in retained.events}
+            self.last_provenance = replace(
+                self.last_provenance,
+                events={
+                    event_id: span
+                    for event_id, span in self.last_provenance.events.items()
+                    if event_id in retained_event_ids
+                },
+            )
+        return retained
 
     def _build_transcript(
         self,
@@ -1104,7 +1108,9 @@ class CodexAdapter(BaseAdapter):
                     },
                 )
             )
-            codex_native_items.handle_static_exec_wrapper_output(payload, ts, state, transcript)
+            codex_native_items.handle_static_exec_wrapper_output(
+                payload, ts, state, transcript
+            )
 
         elif inner_type == "tool_search_call":
             transcript.append(
