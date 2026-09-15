@@ -63,5 +63,9 @@ npx wrangler dev --local --port 8794 --persist-to /tmp/ct-facts-qualification \
 
 From the repository root, run
 `uv run python scripts/qualify-cloudflare-control-plane.py`. The qualifier uses
-synthetic facts only and refuses non-loopback targets. Deployment, production
-writes, and workflow state are separate operator actions.
+synthetic facts only and refuses non-loopback targets. Its principals fixture
+must include the tokens declared in the script, including independent owners
+for synthetic workspaces `00000000-0000-0000-0000-000000000001` and
+`00000000-0000-0000-0000-000000000002`; the cross-workspace cursor probe uses
+both. Deployment, production writes, and workflow state are separate operator
+actions.

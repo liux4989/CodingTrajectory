@@ -1,4 +1,4 @@
-import { DIGEST, Fault, Json, decode, digest, encode, integer, receipt, requireThat, safeChronicle, stable, State, timestamp, uuid, validate } from "./shared";
+import { DIGEST, Fault, Json, UUID, decode, digest, encode, integer, receipt, requireThat, safeChronicle, stable, State, timestamp, uuid, validate } from "./shared";
 
 
 /** Published-fact kinds mirrored from ct.published_facts.v1 (published_facts.py). */
@@ -519,6 +519,7 @@ export async function factRead(state: State, request: Json, cursorSecret: string
   const kinds = request.kinds == null ? null : [...new Set(request.kinds as string[])].sort();
   requireThat(!kinds || (kinds.length <= FACT_KINDS.length && kinds.every(kind => FACT_KINDS.includes(kind))), "invalid_fact_kinds");
   const scopeDigest = await digest(stable({
+    workspace_id: uuid(request.workspace_id),
     sequence,
     graph_id: request.graph_id == null ? null : uuid(request.graph_id),
     session_id: request.session_id == null ? null : uuid(request.session_id),
@@ -534,16 +535,11 @@ export async function factRead(state: State, request: Json, cursorSecret: string
     requireThat(cursor.scope_digest === scopeDigest, "cursor_scope_conflict", 409);
     after = cursor.after;
   }
-  const graphIds = selectGraphs(state, request, sequence);
-  requireThat(graphIds.length <= FACT_PUBLICATION_MAX_GRAPHS, "fact_read_scope_budget", 413);
-  const digests: Record<string, string> = {};
-  const counts: Record<string, number> = {};
-  for (const id of graphIds) {
-    const graph = state.get("graph_publication", id, sequence);
-    requireThat(graph && !graph.deleted, "graph_unavailable", 404);
-    digests[id] = graph.fact_set_digest;
-    counts[id] = graph.fact_count;
-  }
+  const graphs = selectGraphs(state, request, sequence);
+  requireThat(graphs.length <= FACT_PUBLICATION_MAX_GRAPHS, "fact_read_scope_budget", 413);
+  const graphIds = graphs.map(graph => graph.graph_id);
+  const digests = Object.fromEntries(graphs.map(graph => [graph.graph_id, graph.fact_set_digest]));
+  const counts = Object.fromEntries(graphs.map(graph => [graph.graph_id, graph.fact_count]));
   if (!graphIds.length) {
     return { workspace_id: request.workspace_id, snapshot_sequence: sequence,
       rows: [], graph_digests: {}, graph_fact_counts: {}, next_cursor: null };
@@ -587,11 +583,10 @@ export async function factRead(state: State, request: Json, cursorSecret: string
       : null };
 }
 
-function selectGraphs(state: State, request: Json, sequence: number): string[] {
-  if (request.graph_id) {
-    const graph = state.get("graph_publication", uuid(request.graph_id), sequence);
-    return graph && !graph.deleted ? [request.graph_id] : [];
-  }
+type SelectedGraph = { graph_id: string; fact_set_digest: string; fact_count: number };
+
+function selectGraphs(state: State, request: Json, sequence: number): SelectedGraph[] {
+  let graphId = request.graph_id ? uuid(request.graph_id) : null;
   if (request.session_id) {
     const sessionId = uuid(request.session_id);
     const rows = state.sql.exec<{ graph_id: string }>(
@@ -599,17 +594,53 @@ function selectGraphs(state: State, request: Json, sequence: number): string[] {
        AND valid_from_sequence <= ? AND (valid_to_sequence IS NULL OR valid_to_sequence >= ?) LIMIT 2`,
       sessionId, sequence, sequence).toArray();
     requireThat(rows.length <= 1, "session_graph_conflict", 409);
-    return rows.map(row => row.graph_id);
+    if (!rows.length) return [];
+    graphId = rows[0].graph_id;
   }
-  const projects = new Map(state.all("project", sequence).map(project => [project.project_id, project]));
-  const since = request.modified_since ? Date.parse(timestamp(request.modified_since)) : null;
-  return state.all("graph_publication", sequence)
-    .filter(row => !row.deleted
-      && (!request.project_name || projects.get(row.project_id)?.display_name === request.project_name)
-      && (!request.agent_vendor || row.vendors.includes(request.agent_vendor))
-      && (since == null || Date.parse(row.observed_at) >= since))
-    .map(row => row.graph_id)
-    .sort();
+  const bindings: unknown[] = [sequence];
+  let filters = "";
+  if (graphId) { filters += " AND graph.key=?"; bindings.push(graphId); }
+  else {
+    if (request.project_name) {
+      filters += ` AND EXISTS (
+        SELECT 1 FROM records project
+        WHERE project.kind='project'
+          AND project.key=json_extract(graph.payload,'$.project_id')
+          AND project.sequence=(
+            SELECT MAX(prior.sequence) FROM records prior
+            WHERE prior.kind='project' AND prior.key=project.key AND prior.sequence<=?
+          )
+          AND json_extract(project.payload,'$.display_name')=?
+      )`;
+      bindings.push(sequence, request.project_name);
+    }
+    if (request.agent_vendor) {
+      filters += " AND EXISTS (SELECT 1 FROM json_each(graph.payload,'$.vendors') vendor WHERE vendor.value=?)";
+      bindings.push(request.agent_vendor);
+    }
+    if (request.modified_since) {
+      filters += " AND julianday(json_extract(graph.payload,'$.observed_at'))>=julianday(?)";
+      bindings.push(new Date(timestamp(request.modified_since)).toISOString());
+    }
+  }
+  const rows = state.sql.exec<SelectedGraph>(
+    `SELECT graph.key AS graph_id,
+       json_extract(graph.payload,'$.fact_set_digest') AS fact_set_digest,
+       json_extract(graph.payload,'$.fact_count') AS fact_count
+     FROM records graph
+     WHERE graph.kind='graph_publication'
+       AND graph.sequence=(
+         SELECT MAX(prior.sequence) FROM records prior
+         WHERE prior.kind='graph_publication' AND prior.key=graph.key AND prior.sequence<=?
+       )
+       AND json_extract(graph.payload,'$.deleted')=0${filters}
+     ORDER BY graph.key LIMIT ${FACT_PUBLICATION_MAX_GRAPHS + 1}`,
+    ...bindings as any[]).toArray();
+  for (const row of rows) {
+    requireThat(UUID.test(row.graph_id) && DIGEST.test(row.fact_set_digest)
+      && Number.isSafeInteger(row.fact_count) && row.fact_count > 0, "invalid_graph_publication");
+  }
+  return rows;
 }
 
 /** Guard: payloads never carry floats; decimal strings spell exact values. */

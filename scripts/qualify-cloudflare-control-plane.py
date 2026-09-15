@@ -78,9 +78,12 @@ TOKENS = {
     "reader": "local-qualification-reader-token-000000001",
     "worker": "local-qualification-worker-token-000000001",
     "other": "local-qualification-other-token-0000000001",
+    "owner_b": "local-qualification-second-owner-token-000001",
 }
 WORKSPACE = "00000000-0000-0000-0000-000000000001"
 AGENT = "00000000-0000-0000-0000-000000000003"
+SECOND_WORKSPACE = "00000000-0000-0000-0000-000000000002"
+SECOND_AGENT = "00000000-0000-0000-0000-000000000004"
 checks = 0
 
 
@@ -98,12 +101,13 @@ def rpc(
     role: str = "owner",
     status: int = 200,
     key: str | None = None,
+    workspace_id: str = WORKSPACE,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "protocol": "ct.core.v1",
         "id": None,
         "method": method,
-        "params": {"workspace_id": WORKSPACE, **request},
+        "params": {**request, "workspace_id": workspace_id},
     }
     if key is not None:
         body["idempotency_key"] = key
@@ -435,6 +439,8 @@ def stage_fact_set(
     remote: CloudflareCollectorRemote,
     *,
     fact_set: PublishedFactSet,
+    workspace_id: str = WORKSPACE,
+    agent_id: str = AGENT,
 ) -> None:
     rows = list(fact_set.rows)
     batch_count = max(1, (len(rows) + 511) // 512)
@@ -443,8 +449,8 @@ def stage_fact_set(
         stage(
             remote,
             StageFactRowsRequest(
-                workspace_id=WORKSPACE,
-                agent_id=AGENT,
+                workspace_id=workspace_id,
+                agent_id=agent_id,
                 graph_id=fact_set.graph_id,
                 fact_set_digest=fact_set.fact_set_digest,
                 batch_index=batch_index,
@@ -876,6 +882,109 @@ def main() -> None:
         second_page["snapshot_sequence"] == first_page["snapshot_sequence"],
         "fact cursor remains pinned",
     )
+    remote_b = CloudflareCollectorRemote(url=URL, access_token=TOKENS["owner_b"])
+    try:
+        project_b = remote_b.register_project(
+            ProjectRegistrationRequest(
+                workspace_id=SECOND_WORKSPACE,
+                agent_id=SECOND_AGENT,
+                display_name=project_name,
+            )
+        )
+        source_b = remote_b.register_source(
+            SourceRegistrationRequest(
+                workspace_id=SECOND_WORKSPACE,
+                agent_id=SECOND_AGENT,
+                project_id=project_b.project_id,
+                vendor="amp",
+                native_session_id=tag,
+            ),
+            idempotency_key="source:" + tag,
+        )
+        remote_b.heartbeat(
+            LeaseHeartbeatRequest(
+                workspace_id=SECOND_WORKSPACE,
+                agent_id=SECOND_AGENT,
+                agent_instance_id=uuid4(),
+                observation_sequence=1,
+                observed_at=captured,
+            )
+        )
+        remote_b.publish_observation(
+            ObservationRequest(
+                workspace_id=SECOND_WORKSPACE,
+                agent_id=SECOND_AGENT,
+                source_id=source_b.source_id,
+                source_epoch=source_b.source_epoch,
+                source_sequence=0,
+                event_id="checkpoint:" + checkpoint_digest_0,
+                parser_version="qualification.v1",
+                content_sha256=checkpoint_digest_0,
+                observed_at=captured,
+                payload=checkpoint_payload_0,
+            ),
+            idempotency_key="checkpoint:" + checkpoint_digest_0,
+        )
+        stage_fact_set(
+            remote_b,
+            fact_set=first_a,
+            workspace_id=SECOND_WORKSPACE,
+            agent_id=SECOND_AGENT,
+        )
+        publication_b = remote_b.publish_facts(
+            FactPublicationRequest(
+                workspace_id=SECOND_WORKSPACE,
+                agent_id=SECOND_AGENT,
+                project_id=project_b.project_id,
+                publication_sequence=0,
+                source_vector=[
+                    SourceVectorEntry(
+                        source_id=source_b.source_id,
+                        source_epoch=source_b.source_epoch,
+                        source_sequence=0,
+                        content_sha256=checkpoint_digest_0,
+                    )
+                ],
+                graphs=[
+                    manifest(
+                        first_a, source_id=source_b.source_id, observed_at=captured
+                    )
+                ],
+            ),
+            idempotency_key="publication:" + tag + ":workspace-b",
+        )
+        check(
+            publication_b.committed_sequence == first_page["snapshot_sequence"],
+            "cross-workspace cursor probe aligns pinned authority sequences",
+        )
+        rpc(
+            "ct_fact_read",
+            {
+                "graph_id": str(first_a.graph_id),
+                "limit": 1,
+                "cursor": first_page["next_cursor"],
+                "snapshot_sequence": first_page["snapshot_sequence"],
+            },
+            role="owner_b",
+            workspace_id=SECOND_WORKSPACE,
+            status=409,
+        )
+        workspace_b_first = rpc(
+            "ct_fact_read",
+            {
+                "graph_id": str(first_a.graph_id),
+                "limit": 1,
+                "snapshot_sequence": first_page["snapshot_sequence"],
+            },
+            role="owner_b",
+            workspace_id=SECOND_WORKSPACE,
+        )
+        check(
+            workspace_b_first["rows"][0]["fact_id"] == first_page["rows"][0]["fact_id"],
+            "rejected cross-workspace cursor does not skip workspace rows",
+        )
+    finally:
+        remote_b.close()
     cursor_payload, cursor_signature = first_page["next_cursor"].split(".")
     decoded_cursor = json.loads(base64.b64decode(cursor_payload))
     decoded_cursor["after"] = ["zzzz", "zzzz", "zzzz"]
@@ -1628,6 +1737,202 @@ def main() -> None:
     check(
         len(boundary_tuples) == boundary_rows,
         "byte-bounded cursor pages preserve unique continuation tuples",
+    )
+
+    selector_project_name = "Selector-boundary-" + tag
+    selector_project = remote.register_project(
+        ProjectRegistrationRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            display_name=selector_project_name,
+            aliases=[f"large-alias-{index}-" + "x" * 480 for index in range(64)],
+        )
+    )
+    selector_sources = []
+    selector_vector = []
+    for index in range(64):
+        selector_source = remote.register_source(
+            SourceRegistrationRequest(
+                workspace_id=WORKSPACE,
+                agent_id=AGENT,
+                project_id=selector_project.project_id,
+                vendor=f"synthetic-vendor-{index}",
+                native_session_id=f"{tag}:selector:{index}",
+            ),
+            idempotency_key=f"selector-source:{tag}:{index}",
+        )
+        selector_checkpoint_payload = {
+            "kind": "ct.source_checkpoint.v1",
+            "source_checkpoint": {"segments": [index + 1]},
+            "chronicle_digest": hashlib.sha256(
+                f"{tag}:selector:{index}".encode()
+            ).hexdigest(),
+        }
+        selector_checkpoint_digest = hashlib.sha256(
+            canonical_json(selector_checkpoint_payload).encode()
+        ).hexdigest()
+        remote.publish_observation(
+            ObservationRequest(
+                workspace_id=WORKSPACE,
+                agent_id=AGENT,
+                source_id=selector_source.source_id,
+                source_epoch=selector_source.source_epoch,
+                source_sequence=0,
+                event_id="checkpoint:" + selector_checkpoint_digest,
+                parser_version="qualification.v1",
+                content_sha256=selector_checkpoint_digest,
+                observed_at=captured,
+                payload=selector_checkpoint_payload,
+            ),
+            idempotency_key=f"selector-checkpoint:{tag}:{index}",
+        )
+        selector_sources.append(selector_source.source_id)
+        selector_vector.append(
+            SourceVectorEntry(
+                source_id=selector_source.source_id,
+                source_epoch=selector_source.source_epoch,
+                source_sequence=0,
+                content_sha256=selector_checkpoint_digest,
+            )
+        )
+    selector_sets = [
+        derive_published_fact_set(
+            synthetic_artifact(
+                seed=f"{tag}:selector-graph:{index}",
+                project=selector_project_name,
+                include_unknown=False,
+            )
+        )
+        for index in range(512)
+    ]
+    for fact_set in selector_sets:
+        stage_fact_set(remote, fact_set=fact_set)
+    selector_receipt = remote.publish_facts(
+        FactPublicationRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            project_id=selector_project.project_id,
+            publication_sequence=0,
+            replacement_scope="upsert",
+            source_vector=selector_vector,
+            graphs=[
+                manifest(
+                    fact_set,
+                    source_id=selector_sources[0],
+                    observed_at=captured,
+                ).model_copy(update={"source_ids": selector_sources})
+                for fact_set in selector_sets
+            ],
+        ),
+        idempotency_key="selector-publication:" + tag,
+    )
+    selector_page = rpc(
+        "ct_fact_read",
+        {
+            "project_name": selector_project_name,
+            "snapshot_sequence": selector_receipt.committed_sequence,
+            "limit": 1,
+        },
+        role="reader",
+    )
+    check(
+        len(selector_page["graph_digests"]) == 512,
+        "fact selector accepts exactly 512 graph metadata rows",
+    )
+    overflow_source = remote.register_source(
+        SourceRegistrationRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            project_id=selector_project.project_id,
+            vendor="synthetic-overflow-vendor",
+            native_session_id=f"{tag}:selector:overflow",
+        ),
+        idempotency_key="selector-source-overflow:" + tag,
+    )
+    overflow_checkpoint_payload = {
+        "kind": "ct.source_checkpoint.v1",
+        "source_checkpoint": {"segments": [513]},
+        "chronicle_digest": hashlib.sha256(
+            f"{tag}:selector:overflow".encode()
+        ).hexdigest(),
+    }
+    overflow_checkpoint_digest = hashlib.sha256(
+        canonical_json(overflow_checkpoint_payload).encode()
+    ).hexdigest()
+    remote.publish_observation(
+        ObservationRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            source_id=overflow_source.source_id,
+            source_epoch=overflow_source.source_epoch,
+            source_sequence=0,
+            event_id="checkpoint:" + overflow_checkpoint_digest,
+            parser_version="qualification.v1",
+            content_sha256=overflow_checkpoint_digest,
+            observed_at=captured,
+            payload=overflow_checkpoint_payload,
+        ),
+        idempotency_key="selector-checkpoint-overflow:" + tag,
+    )
+    overflow_set = derive_published_fact_set(
+        synthetic_artifact(
+            seed=f"{tag}:selector-graph:overflow",
+            project=selector_project_name,
+            include_unknown=False,
+        )
+    )
+    stage_fact_set(remote, fact_set=overflow_set)
+    remote.publish_facts(
+        FactPublicationRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            project_id=selector_project.project_id,
+            publication_sequence=1,
+            replacement_scope="upsert",
+            source_vector=[
+                SourceVectorEntry(
+                    source_id=overflow_source.source_id,
+                    source_epoch=overflow_source.source_epoch,
+                    source_sequence=0,
+                    content_sha256=overflow_checkpoint_digest,
+                )
+            ],
+            graphs=[
+                manifest(
+                    overflow_set,
+                    source_id=overflow_source.source_id,
+                    observed_at=captured,
+                )
+            ],
+        ),
+        idempotency_key="selector-publication-overflow:" + tag,
+    )
+    for index in range(32):
+        remote.register_project(
+            ProjectRegistrationRequest(
+                workspace_id=WORKSPACE,
+                agent_id=AGENT,
+                display_name=f"Selector-clutter-{tag}-{index}",
+                aliases=[f"clutter-{alias}-" + "y" * 480 for alias in range(64)],
+            )
+        )
+    rpc(
+        "ct_fact_read",
+        {"project_name": selector_project_name, "limit": 1},
+        role="reader",
+        status=413,
+    )
+    selector_source = (
+        Path(__file__).parents[1] / "cloudflare" / "control-plane" / "src" / "facts.ts"
+    ).read_text()
+    selector_body = selector_source.split("function selectGraphs", 1)[1].split(
+        "/** Guard:", 1
+    )[0]
+    check(
+        "state.all(" not in selector_body
+        and "SELECT graph.key AS graph_id" in selector_body
+        and "LIMIT ${FACT_PUBLICATION_MAX_GRAPHS + 1}" in selector_body,
+        "fact selector projects at most 513 scalar rows without payload materialization",
     )
     remote.close()
     print(
