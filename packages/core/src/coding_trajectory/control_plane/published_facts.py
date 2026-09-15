@@ -278,6 +278,19 @@ def _validate_fact_relationships(graph_id: UUID, rows: list[FactRowBase]) -> Non
     turns = by_kind["turn"]
     items = by_kind["item"]
     events = by_kind["event"]
+    if graph_id not in sessions:
+        raise ValueError("graph root session is not retained")
+
+    def validate_sequences(
+        grouped: dict[UUID, list[FactRowBase]], *, label: str
+    ) -> None:
+        for grouped_rows in grouped.values():
+            sequences = [row.payload.sequence for row in grouped_rows]
+            if len(sequences) != len(set(sequences)) or any(
+                row.order_index != row.payload.sequence for row in grouped_rows
+            ):
+                raise ValueError(f"{label} ordering is invalid")
+
     for row in sessions.values():
         if row.fact_id != row.payload.session_id or row.parent_id != graph_id:
             raise ValueError("session fact identity mismatch")
@@ -297,19 +310,40 @@ def _validate_fact_relationships(graph_id: UUID, rows: list[FactRowBase]) -> Non
     for row in turns.values():
         if row.fact_id != row.payload.turn_id or row.parent_id not in sessions:
             raise ValueError("turn fact identity mismatch")
+    turns_by_session: dict[UUID, list[FactRowBase]] = {}
+    for row in turns.values():
+        turns_by_session.setdefault(row.parent_id, []).append(row)
+    validate_sequences(turns_by_session, label="turn")
 
     for row in items.values():
         if row.fact_id != row.payload.item_id or row.parent_id not in turns:
             raise ValueError("item fact identity mismatch")
-        if row.payload.projection_parent_item_id is not None:
-            parent = items.get(row.payload.projection_parent_item_id)
-            if parent is None or parent.parent_id != row.parent_id:
+        projection_parent_id = row.payload.projection_parent_item_id
+        if projection_parent_id is None:
+            if row.payload.nested_index is not None:
+                raise ValueError("item nested index has no projection parent")
+        else:
+            parent = items.get(projection_parent_id)
+            if (
+                parent is None
+                or parent.fact_id == row.fact_id
+                or parent.parent_id != row.parent_id
+            ):
                 raise ValueError("item projection parent ownership mismatch")
+            if parent.payload.measurements.projection_only:
+                raise ValueError("item projection parent is not canonical")
+            if not row.payload.measurements.projection_only:
+                raise ValueError("item projection child owns canonical content")
         for event_id in row.payload.event_ids:
             event = events.get(event_id)
             if event is None or event.payload.item_id != row.fact_id:
                 raise ValueError("item event reference mismatch")
+    items_by_turn: dict[UUID, list[FactRowBase]] = {}
+    for row in items.values():
+        items_by_turn.setdefault(row.parent_id, []).append(row)
+    validate_sequences(items_by_turn, label="item")
 
+    events_by_session: dict[UUID, list[FactRowBase]] = {}
     for row in events.values():
         event = row.payload
         if row.fact_id != event.event_id:
@@ -320,6 +354,8 @@ def _validate_fact_relationships(graph_id: UUID, rows: list[FactRowBase]) -> Non
                 raise ValueError("event turn ownership mismatch")
         elif row.parent_id not in sessions:
             raise ValueError("session event ownership mismatch")
+        session_id = turns[event.turn_id].parent_id if event.turn_id else row.parent_id
+        events_by_session.setdefault(session_id, []).append(row)
         if event.item_id is not None:
             item = items.get(event.item_id)
             if (
@@ -328,6 +364,7 @@ def _validate_fact_relationships(graph_id: UUID, rows: list[FactRowBase]) -> Non
                 or item.parent_id != event.turn_id
             ):
                 raise ValueError("event item ownership mismatch")
+    validate_sequences(events_by_session, label="event")
 
     for row in by_kind["request"].values():
         if row.fact_id != row.payload.request_id or row.parent_id not in turns:
@@ -350,6 +387,7 @@ def _validate_fact_relationships(graph_id: UUID, rows: list[FactRowBase]) -> Non
             if event is None or event.payload.item_id != row.fact_id:
                 raise ValueError("output evidence event reference mismatch")
 
+    edge_identities: set[tuple[str, UUID, UUID, UUID | None, UUID | None]] = set()
     for row in by_kind["edge"].values():
         edge = row.payload
         if (
@@ -367,6 +405,16 @@ def _validate_fact_relationships(graph_id: UUID, rows: list[FactRowBase]) -> Non
             item = items.get(edge.origin.item_id)
             if item is None or item.parent_id != edge.origin.turn_id:
                 raise ValueError("edge item ownership mismatch")
+        identity = (
+            edge.kind,
+            edge.source_session_id,
+            edge.target_session_id,
+            edge.origin.turn_id,
+            edge.origin.item_id,
+        )
+        if identity in edge_identities:
+            raise ValueError("fact set contains duplicate edges")
+        edge_identities.add(identity)
         referenced_events = [
             *edge.evidence_event_ids,
             *([edge.origin.event_id] if edge.origin.event_id is not None else []),
@@ -374,7 +422,11 @@ def _validate_fact_relationships(graph_id: UUID, rows: list[FactRowBase]) -> Non
         for event_id in referenced_events:
             event = events.get(event_id)
             expected_parent = edge.origin.turn_id or edge.source_session_id
-            if event is None or event.parent_id != expected_parent:
+            if (
+                event is None
+                or event.parent_id != expected_parent
+                or event.payload.item_id != edge.origin.item_id
+            ):
                 raise ValueError("edge event ownership mismatch")
 
     summary = graph_row.payload.summary

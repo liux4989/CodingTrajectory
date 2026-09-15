@@ -79,8 +79,8 @@ discovery is specified in
 `session.summary.v1` and `session.search.v1` without changing the existing v2
 methods.
 
-The service registry currently exposes 25 method-scoped contracts: 16 project,
-session, and graph methods; two living protocols; and seven estimation methods.
+The service registry currently exposes 18 method-scoped contracts: 16 project,
+session, and graph methods plus two living protocols.
 Requests are strict: unknown fields are rejected. The new summary/search
 methods require an exact canonical session ID; historical v2 session/graph
 analysis accepts a session, root-session, or turn entry point.
@@ -171,18 +171,17 @@ has matching logs. A missing local evidence record may attempt fallback, but the
 remote boundary still rejects content-bearing methods rather than returning a
 partial result.
 
-All 25 registered service methods are covered below. The registry in
+All 18 registered service methods are covered below. The registry in
 `packages/core/src/coding_trajectory/contracts/registry.py` is authoritative.
 
 | Methods | Local-first behavior |
 | --- | --- |
 | `project.list`, `project.sessions` | Local inventory/history; unavailable discovery may use remote inventory, while a valid empty collection remains local |
-| `session.overview`, `session.summary`, `session.tree`, `graph.overview` | Local graph; a missing targeted record may use the remote chronicle artifact; narrative remains local-only |
+| `session.overview`, `session.summary`, `session.tree`, `graph.overview` | Local graph; a missing targeted record may use remote Chronicle facts; narrative remains local-only |
 | `session.stats`, `graph.stats`, `session.usage`, `graph.usage`, `session.model_usage`, `session.request_usage`, `session.tool_usage` | Local measurements first; missing targeted records may use remote measurements |
 | `session.items` | Local items first; remote fallback is metadata-only and rejects `include_content=true` |
 | `session.events`, `session.search` | Local-only evidence; remote fallback preserves the explicit rejection |
 | `living.events`, `living.sessions` | Local living stores first; unavailable local discovery may use remote living state |
-| `estimate.*` | Local estimation authority first; missing targeted state may use the remote authority |
 
 `ct api serve --remote-workspace-id "$CT_REMOTE_WORKSPACE_ID"` exposes
 the authenticated `POST /v1/core` endpoint and its `ct.core.v1` envelope
@@ -199,7 +198,7 @@ remains explicit.
 
 ```text
 local targeted read -> resource missing -> initialize Chronicles fallback
-  -> pin remote snapshot -> load targeted published artifact -> shared handler
+  -> pin remote snapshot -> load targeted published facts -> shared handler
 ```
 
 A fallback runtime is shared across one API batch and retains its pinned remote
@@ -228,14 +227,13 @@ ordinary authenticated user, pins a snapshot, and disables local log resolution.
 It selects the first graph in the bounded project collection, or accepts an
 explicit `--session-id` within that scope. Project inventory and living-session
 inventory are workspace-wide; living events are scoped to the selected session.
-Estimation methods are recorded as skipped because of side effects or required
-job identifiers. Local-only rejection checks are separate from successful reads.
+Local-only rejection checks are separate from successful reads.
 
 The aggregate-only report is written to `.artifacts/benchmarks/remote-api.json`.
 For each query it measures one fresh runtime (including snapshot lookup) and
 repeated calls on the same runtime. Both include response validation and JSON
 serialization; neither includes CLI startup or the HTTP facade. Reused historical
-calls can avoid downloading the artifact. These samples measure latency for one
+calls can avoid downloading unchanged fact pages. These samples measure latency for one
 graph, not concurrency, throughput, or a population percentile. The older
 `scripts/benchmark-query.py` measures local store/projection costs only.
 

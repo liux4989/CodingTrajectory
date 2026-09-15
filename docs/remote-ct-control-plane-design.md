@@ -15,6 +15,9 @@ payload, chunk/pack/manifest reconstruction, duplicate catalog/projection family
 or remote reconstruction cache.
 
 `CT_PRINCIPALS` maps bearer-token SHA-256 digests to workspace/agent/role claims.
+`CT_CURSOR_KEY` is a separate server-held HMAC key of at least 32 bytes for fact
+read cursors. Rotating it invalidates outstanding cursors, whose callers must
+restart from a pinned snapshot. Neither secret is returned or logged.
 The Worker validates the authenticated workspace and collector identity; callers
 cannot select another workspace or agent. Tokens and provider credentials never
 enter fact rows.
@@ -29,7 +32,8 @@ ownership, cardinality, source fences, and size limits before commit.
 
 Historical reads select graph sets by stable graph/session identity or bounded
 project filters, pin one workspace sequence, and return deterministic SQL pages.
-Cursors bind that sequence and the normalized selector/kinds scope. Cloudflare
+HMAC-authenticated cursors bind their continuation tuple, sequence, and normalized
+selector/kinds scope. Cloudflare
 does not calculate summaries or metrics; Python reconstructs `PublishedFactSet`
 values and runs the same historical handlers used locally.
 
@@ -53,7 +57,8 @@ cd cloudflare/control-plane
 npm ci
 npm run check
 npx wrangler dev --local --port 8794 --persist-to /tmp/ct-facts-qualification \
-  --var "CT_PRINCIPALS:$(cat /tmp/ct-principals.json)"
+  --var "CT_PRINCIPALS:$(cat /tmp/ct-principals.json)" \
+  --var "CT_CURSOR_KEY:local-qualification-cursor-key-00000001"
 ```
 
 From the repository root, run

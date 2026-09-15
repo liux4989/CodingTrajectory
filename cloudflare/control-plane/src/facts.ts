@@ -79,6 +79,7 @@ export async function factSetDigest(graphId: string, rows: Json[]): Promise<stri
 export async function verifyStageRows(request: Json): Promise<void> {
   validate("ct_collector_stage_fact_rows", request);
   requireThat(request.rows.length <= FACT_ROW_BATCH_MAX, "fact_batch_too_large", 413);
+  request.rows = request.rows.map((row: Json) => deepStrip(row));
   const graphId = uuid(request.graph_id);
   for (const row of request.rows) {
     requireThat(row.graph_id === graphId, "fact_row_graph_mismatch");
@@ -91,7 +92,7 @@ export async function verifyStageRows(request: Json): Promise<void> {
 /** Synchronous staging write, always inside the workspace transaction. */
 export function writeStagedRows(state: State, request: Json): Json {
   const graphId = uuid(request.graph_id);
-  const encoded = stable(request.rows);
+  const encoded = stable(deepStrip(request.rows));
   requireThat(new TextEncoder().encode(encoded).length <= MAX_STAGED_BATCH_BYTES, "fact_batch_too_large", 413);
   const existing = state.sql.exec<{ fact_set_digest: string; batch_count: number }>(
     "SELECT DISTINCT fact_set_digest, batch_count FROM staged_fact_rows WHERE agent_id=? AND graph_id=?",
@@ -126,6 +127,16 @@ export function missingFactRows(state: State, request: Json): Json {
 
 interface StagedGraph { rows: Json[]; vendors: string[]; sessionIds: string[] }
 
+function factSetView(publication: Json, rows: Json[]): Json {
+  return deepStrip({
+    schema_version: FACT_SET_SCHEMA,
+    graph_id: publication.graph_id,
+    fact_set_digest: publication.fact_set_digest,
+    kind_counts: publication.kind_counts,
+    rows,
+  });
+}
+
 async function stagedGraph(state: State, agentId: string, publication: Json): Promise<StagedGraph> {
   const graphId = publication.graph_id;
   const batches = state.sql.exec<{ batch_index: number; batch_count: number; rows_json: string }>(
@@ -138,7 +149,6 @@ async function stagedGraph(state: State, agentId: string, publication: Json): Pr
     "fact_rows_incomplete", 409);
   const rows = batches.flatMap(batch => JSON.parse(batch.rows_json) as Json[]);
   requireThat(rows.length === publication.fact_count, "fact_count_mismatch");
-  requireThat(new TextEncoder().encode(stable(rows)).length <= MAX_FACT_SET_BYTES, "fact_set_too_large", 413);
 
   // Full integrity validation: uniqueness, canonical order, row hashes,
   // cardinality bounds, parent/reference integrity, kind counts, and digest.
@@ -170,6 +180,8 @@ async function stagedGraph(state: State, agentId: string, publication: Json): Pr
   }
   validateFactRelationships(graphId, rows);
   requireThat(await factSetDigest(graphId, rows) === publication.fact_set_digest, "fact_set_digest_mismatch");
+  requireThat(new TextEncoder().encode(stable(factSetView(publication, rows))).length <= MAX_FACT_SET_BYTES,
+    "fact_set_too_large", 413);
   const sessionIds = rows.filter(row => row.kind === "session").map(row => row.fact_id);
   const vendors = [...new Set(rows.filter(row => row.kind === "session").map(row => String(row.payload.vendor)))].sort();
   requireThat(vendors.every(vendor => typeof vendor === "string" && vendor.length <= 512), "invalid_fact_row");
@@ -186,6 +198,14 @@ function validateFactRelationships(graphId: string, rows: Json[]) {
   const graph = graphRows[0];
   requireThat(graph.fact_id === graphId && graph.parent_id == null
     && graph.payload.summary.root_session_id === graphId, "graph_fact_identity_mismatch");
+  requireThat(byKind.session.has(graphId), "graph_root_session_missing");
+  const validateSequences = (grouped: Map<string, Json[]>, label: string) => {
+    for (const groupedRows of grouped.values()) {
+      const sequences = groupedRows.map(row => row.payload.sequence);
+      requireThat(new Set(sequences).size === sequences.length
+        && groupedRows.every(row => row.order_index === row.payload.sequence), `${label}_ordering_invalid`);
+    }
+  };
 
   for (const row of byKind.session.values()) {
     requireThat(row.fact_id === row.payload.session_id && row.parent_id === graphId, "session_fact_identity_mismatch");
@@ -198,11 +218,26 @@ function validateFactRelationships(graphId: string, rows: Json[]) {
   for (const row of byKind.turn.values()) {
     requireThat(row.fact_id === row.payload.turn_id && byKind.session.has(row.parent_id), "turn_fact_identity_mismatch");
   }
+  const turnsBySession = new Map<string, Json[]>();
+  for (const row of byKind.turn.values()) {
+    const grouped = turnsBySession.get(row.parent_id) ?? [];
+    grouped.push(row);
+    turnsBySession.set(row.parent_id, grouped);
+  }
+  validateSequences(turnsBySession, "turn");
   for (const row of byKind.item.values()) {
     requireThat(row.fact_id === row.payload.item_id && byKind.turn.has(row.parent_id), "item_fact_identity_mismatch");
-    if (row.payload.projection_parent_item_id != null) {
-      requireThat(byKind.item.get(row.payload.projection_parent_item_id)?.parent_id === row.parent_id,
+    const projectionParentId = row.payload.projection_parent_item_id;
+    if (projectionParentId == null) {
+      requireThat(row.payload.nested_index == null, "item_nested_index_without_parent");
+    } else {
+      const parent = byKind.item.get(projectionParentId);
+      requireThat(parent && parent.fact_id !== row.fact_id && parent.parent_id === row.parent_id,
         "item_projection_parent_mismatch");
+      requireThat(parent.payload.measurements.projection_only !== true,
+        "item_projection_parent_not_canonical");
+      requireThat(row.payload.measurements.projection_only === true,
+        "item_projection_child_owns_canonical_content");
     }
     for (const eventId of row.payload.event_ids) {
       requireThat(byKind.event.get(eventId)?.payload.item_id === row.fact_id, "item_event_reference_mismatch");
@@ -210,18 +245,31 @@ function validateFactRelationships(graphId: string, rows: Json[]) {
     const detail = row.payload.measurements?.tool_summary?.detail;
     if (detail?.kind === "command") requireThat(PUBLISHED_COMMANDS.has(detail.target), "unsafe_command_detail");
   }
+  const itemsByTurn = new Map<string, Json[]>();
+  for (const row of byKind.item.values()) {
+    const grouped = itemsByTurn.get(row.parent_id) ?? [];
+    grouped.push(row);
+    itemsByTurn.set(row.parent_id, grouped);
+  }
+  validateSequences(itemsByTurn, "item");
+  const eventsBySession = new Map<string, Json[]>();
   for (const row of byKind.event.values()) {
     const event = row.payload;
     requireThat(row.fact_id === event.event_id, "event_fact_identity_mismatch");
     if (event.turn_id != null) requireThat(byKind.turn.has(event.turn_id) && row.parent_id === event.turn_id,
       "event_turn_ownership_mismatch");
     else requireThat(byKind.session.has(row.parent_id), "session_event_ownership_mismatch");
+    const sessionId = event.turn_id != null ? byKind.turn.get(event.turn_id)!.parent_id : row.parent_id;
+    const grouped = eventsBySession.get(sessionId) ?? [];
+    grouped.push(row);
+    eventsBySession.set(sessionId, grouped);
     if (event.item_id != null) {
       const item = byKind.item.get(event.item_id);
       requireThat(item && item.parent_id === event.turn_id && item.payload.event_ids.includes(event.event_id),
         "event_item_ownership_mismatch");
     }
   }
+  validateSequences(eventsBySession, "event");
   for (const row of byKind.request.values()) {
     requireThat(row.fact_id === row.payload.request_id && byKind.turn.has(row.parent_id), "request_fact_identity_mismatch");
   }
@@ -231,6 +279,7 @@ function validateFactRelationships(graphId: string, rows: Json[]) {
       requireThat(byKind.event.get(eventId)?.payload.item_id === row.fact_id, "output_evidence_event_mismatch");
     }
   }
+  const edgeIdentities = new Set<string>();
   for (const row of byKind.edge.values()) {
     const edge = row.payload;
     requireThat(row.parent_id === graphId && byKind.session.has(edge.source_session_id)
@@ -240,8 +289,14 @@ function validateFactRelationships(graphId: string, rows: Json[]) {
       "edge_turn_ownership_mismatch");
     if (edge.origin.item_id != null) requireThat(byKind.item.get(edge.origin.item_id)?.parent_id === edge.origin.turn_id,
       "edge_item_ownership_mismatch");
+    const identity = stable([edge.kind, edge.source_session_id, edge.target_session_id,
+      edge.origin.turn_id ?? null, edge.origin.item_id ?? null]);
+    requireThat(!edgeIdentities.has(identity), "duplicate_edge_identity");
+    edgeIdentities.add(identity);
     for (const eventId of [...(edge.evidence_event_ids ?? []), ...(edge.origin.event_id ? [edge.origin.event_id] : [])]) {
-      requireThat(byKind.event.get(eventId)?.parent_id === (edge.origin.turn_id ?? edge.source_session_id),
+      const event = byKind.event.get(eventId);
+      requireThat(event?.parent_id === (edge.origin.turn_id ?? edge.source_session_id)
+        && event?.payload.item_id === (edge.origin.item_id ?? null),
         "edge_event_ownership_mismatch");
     }
   }
@@ -268,12 +323,15 @@ export async function preparePublication(state: State, request: Json): Promise<P
   requireThat(vector.size === request.source_vector.length, "duplicate_source_vector");
   let publicationBytes = 0;
   for (const publication of request.graphs) {
-    const staged = state.sql.exec<{ encoded_bytes: number }>(
-      `SELECT coalesce(sum(length(CAST(rows_json AS BLOB))),0) AS encoded_bytes
+    const staged = state.sql.exec<{ encoded_bytes: number; nonempty_batches: number }>(
+      `SELECT coalesce(sum(length(CAST(rows_json AS BLOB))),0) AS encoded_bytes,
+         coalesce(sum(CASE WHEN row_count > 0 THEN 1 ELSE 0 END),0) AS nonempty_batches
        FROM staged_fact_rows WHERE agent_id=? AND graph_id=? AND fact_set_digest=?`,
       request.agent_id, publication.graph_id, publication.fact_set_digest).one();
     requireThat(staged.encoded_bytes > 0, "fact_rows_must_be_staged");
-    publicationBytes += staged.encoded_bytes;
+    const wrapperBytes = new TextEncoder().encode(stable(factSetView(publication, []))).length;
+    const combinedRowsBytes = staged.encoded_bytes - staged.nonempty_batches + 1;
+    publicationBytes += wrapperBytes - 2 + combinedRowsBytes;
     requireThat(publicationBytes <= FACT_PUBLICATION_MAX_BYTES, "publication_byte_budget", 413);
   }
   const graphs = new Map<string, StagedGraph & { publication: Json }>();
@@ -407,15 +465,41 @@ function closeFactRows(state: State, graphId: string, sequence: number): number 
   return state.sql.exec<{ count: number }>("SELECT changes() AS count").one().count;
 }
 
-function factCursor(sequence: number, scopeDigest: string, after: [string, string, string]): string {
-  return encode(new TextEncoder().encode(stable({ version: 2, kind: "fact_page", sequence, scope_digest: scopeDigest, after })));
+async function cursorKey(secret: string): Promise<CryptoKey> {
+  requireThat(typeof secret === "string" && new TextEncoder().encode(secret).length >= 32,
+    "cursor_authentication_unavailable", 503);
+  return crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 }
 
-function parseFactCursor(value: unknown): { sequence: number; scope_digest: string; after: [string, string, string] } {
+async function factCursor(
+  sequence: number,
+  scopeDigest: string,
+  after: [string, string, string],
+  secret: string,
+): Promise<string> {
+  const payload = new TextEncoder().encode(stable({
+    version: 3, kind: "fact_page", sequence, scope_digest: scopeDigest, after,
+  }));
+  const signature = await crypto.subtle.sign("HMAC", await cursorKey(secret), payload);
+  return `${encode(payload)}.${encode(new Uint8Array(signature))}`;
+}
+
+async function parseFactCursor(
+  value: unknown,
+  secret: string,
+): Promise<{ sequence: number; scope_digest: string; after: [string, string, string] }> {
   requireThat(typeof value === "string" && value.length <= 4096, "invalid_cursor");
   try {
-    const parsed = JSON.parse(new TextDecoder().decode(decode(value)));
-    requireThat(parsed && parsed.version === 2 && parsed.kind === "fact_page"
+    const parts = value.split(".");
+    requireThat(parts.length === 2 && parts.every(part => part.length > 0), "invalid_cursor");
+    const payload = new Uint8Array(decode(parts[0]));
+    const signature = new Uint8Array(decode(parts[1]));
+    requireThat(signature.length === 32
+      && await crypto.subtle.verify(
+        "HMAC", await cursorKey(secret), signature.buffer, payload.buffer), "invalid_cursor");
+    const parsed = JSON.parse(new TextDecoder().decode(payload));
+    requireThat(parsed && parsed.version === 3 && parsed.kind === "fact_page"
       && Number.isSafeInteger(parsed.sequence) && parsed.sequence >= 0
       && typeof parsed.scope_digest === "string" && DIGEST.test(parsed.scope_digest)
       && Array.isArray(parsed.after) && parsed.after.length === 3
@@ -428,8 +512,9 @@ function parseFactCursor(value: unknown): { sequence: number; scope_digest: stri
 }
 
 /** Read one page of fact rows pinned to one workspace publication sequence. */
-export async function factRead(state: State, request: Json): Promise<Json> {
+export async function factRead(state: State, request: Json, cursorSecret: string): Promise<Json> {
   validate("ct_fact_read", request);
+  await cursorKey(cursorSecret);
   const sequence = state.pin(request.snapshot_sequence);
   const kinds = request.kinds == null ? null : [...new Set(request.kinds as string[])].sort();
   requireThat(!kinds || (kinds.length <= FACT_KINDS.length && kinds.every(kind => FACT_KINDS.includes(kind))), "invalid_fact_kinds");
@@ -444,7 +529,7 @@ export async function factRead(state: State, request: Json): Promise<Json> {
   }));
   let after: [string, string, string] | null = null;
   if (request.cursor) {
-    const cursor = parseFactCursor(request.cursor);
+    const cursor = await parseFactCursor(request.cursor, cursorSecret);
     requireThat(cursor.sequence === sequence, "snapshot_conflict", 409);
     requireThat(cursor.scope_digest === scopeDigest, "cursor_scope_conflict", 409);
     after = cursor.after;
@@ -497,7 +582,9 @@ export async function factRead(state: State, request: Json): Promise<Json> {
     ...moreBindings as any[]).toArray().length > 0;
   return { workspace_id: request.workspace_id, snapshot_sequence: sequence, rows,
     graph_digests: digests, graph_fact_counts: counts,
-    next_cursor: hasMore ? factCursor(sequence, scopeDigest, [last.graph_id, last.kind, last.fact_id]) : null };
+    next_cursor: hasMore
+      ? await factCursor(sequence, scopeDigest, [last.graph_id, last.kind, last.fact_id], cursorSecret)
+      : null };
 }
 
 function selectGraphs(state: State, request: Json, sequence: number): string[] {

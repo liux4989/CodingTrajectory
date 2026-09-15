@@ -118,8 +118,8 @@ Durable Object SQLite.
   collector, living, and checkpoint state.
 - Exact enforcement limits are 512 KiB per canonical row, 8 MiB per graph,
   16 MiB of staged rows per atomic publication, and 1 MiB/2,048 rows per read
-  page. Read cursors bind the pinned snapshot and normalized selector/kinds
-  scope. These aggregate limits bound Worker materialization under its 128 MiB
+  page. Server-authenticated read cursors bind the continuation tuple, pinned
+  snapshot, and normalized selector/kinds scope. These aggregate limits bound Worker materialization under its 128 MiB
   isolate memory limit.
 - Local provider logs can republish/rebuild the remote authority at any time:
   rerunning the collector re-derives identical fact sets (deterministic IDs
@@ -179,8 +179,8 @@ transferred or changed during qualification.
 ## Scale evidence
 
 `scripts/benchmark-fact-publication.py` publishes synthetic facts to local
-workerd, including a near-16-MiB publication whose largest row is near the
-512-KiB boundary. It records stage/publish/read timing, largest row, maximum
+workerd, including an exact 8-MiB graph and near-16-MiB publication whose largest
+row is near the 512-KiB boundary. It records stage/publish/read timing, largest row, maximum
 encoded page, and page count. These local single-run measurements are
 engineering evidence, not a production latency SLO. Machine-readable output is
 written to the ignored

@@ -3,6 +3,7 @@
 interface __BaseEnv_Env {
 	WORKER_VERSION: WorkerVersionMetadata;
 	CT_PRINCIPALS: string;
+	CT_CURSOR_KEY: string;
 	WORKSPACES: DurableObjectNamespace<import("./index").Workspace>;
 }
 declare namespace Cloudflare {
@@ -13,6 +14,7 @@ declare namespace Cloudflare {
 	interface StagingEnv {
 		WORKER_VERSION: WorkerVersionMetadata;
 		CT_PRINCIPALS: string;
+		CT_CURSOR_KEY: string;
 		WORKSPACES: DurableObjectNamespace<import("./index").Workspace>;
 	}
 	interface Env extends __BaseEnv_Env {}
@@ -22,5 +24,5 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "CT_PRINCIPALS">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "CT_PRINCIPALS" | "CT_CURSOR_KEY">> {}
 }

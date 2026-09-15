@@ -21,7 +21,10 @@ from coding_trajectory.control_plane.collector_protocol import (
     SourceRegistrationRequest,
     SourceVectorEntry,
 )
-from coding_trajectory.control_plane.fact_protocol import FactPublicationRequest
+from coding_trajectory.control_plane.fact_protocol import (
+    FactPublicationRequest,
+    StageFactRowsRequest,
+)
 from coding_trajectory.control_plane.remote import CloudflareRpcClient
 from coding_trajectory.ingestion.common import canonical_json
 
@@ -36,6 +39,7 @@ def benchmark_scale(
     graph_count: int,
     qualification: dict[str, Any],
     boundary_rows: bool = False,
+    graph_boundary: bool = False,
 ) -> dict[str, Any]:
     tag = uuid4().hex
     observed_at = datetime.now(UTC).replace(microsecond=0)
@@ -59,20 +63,30 @@ def benchmark_scale(
             ),
             idempotency_key="benchmark-source:" + tag,
         )
-        fact_sets = [
-            (
-                qualification["large_fact_set"](
-                    seed=f"{tag}:{index}", project=project_name
+        fact_sets = (
+            [
+                qualification["exact_graph_fact_set"](
+                    seed=f"{tag}:graph-boundary",
+                    project=project_name,
+                    target_bytes=8 * 1024 * 1024,
                 )
-                if boundary_rows
-                else qualification["derive_published_fact_set"](
-                    qualification["synthetic_artifact"](
+            ]
+            if graph_boundary
+            else [
+                (
+                    qualification["large_fact_set"](
                         seed=f"{tag}:{index}", project=project_name
                     )
+                    if boundary_rows
+                    else qualification["derive_published_fact_set"](
+                        qualification["synthetic_artifact"](
+                            seed=f"{tag}:{index}", project=project_name
+                        )
+                    )
                 )
-            )
-            for index in range(graph_count)
-        ]
+                for index in range(graph_count)
+            ]
+        )
         encoded_bytes = sum(
             len(fact_set.model_dump_json(exclude_none=True).encode())
             for fact_set in fact_sets
@@ -105,7 +119,37 @@ def benchmark_scale(
 
         started = time.perf_counter()
         for fact_set in fact_sets:
-            qualification["stage_fact_set"](remote, fact_set=fact_set)
+            if not graph_boundary:
+                qualification["stage_fact_set"](remote, fact_set=fact_set)
+                continue
+            chunks: list[list[Any]] = []
+            chunk: list[Any] = []
+            for row in fact_set.rows:
+                candidate = [*chunk, row]
+                encoded = canonical_json(
+                    [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in candidate
+                    ]
+                ).encode()
+                if chunk and len(encoded) > 2 * 1024 * 1024:
+                    chunks.append(chunk)
+                    chunk = [row]
+                else:
+                    chunk = candidate
+            chunks.append(chunk)
+            for index, rows in enumerate(chunks):
+                remote.stage_fact_rows(
+                    StageFactRowsRequest(
+                        workspace_id=WORKSPACE,
+                        agent_id=AGENT,
+                        graph_id=fact_set.graph_id,
+                        fact_set_digest=fact_set.fact_set_digest,
+                        batch_index=index,
+                        batch_count=len(chunks),
+                        rows=rows,
+                    )
+                )
         stage_ms = round((time.perf_counter() - started) * 1000, 3)
 
         publication = FactPublicationRequest(
@@ -175,6 +219,7 @@ def benchmark_scale(
             "graphs": graph_count,
             "rows": expected_rows,
             "boundary_sized_rows": boundary_rows,
+            "graph_boundary": graph_boundary,
             "encoded_fact_set_bytes": encoded_bytes,
             "largest_row_bytes": max(
                 len(
@@ -234,6 +279,14 @@ def main() -> None:
                 graph_count=args.boundary_graphs,
                 qualification=qualification,
                 boundary_rows=True,
+            )
+        ]
+        + [
+            benchmark_scale(
+                url=args.url,
+                graph_count=1,
+                qualification=qualification,
+                graph_boundary=True,
             )
         ],
     }
