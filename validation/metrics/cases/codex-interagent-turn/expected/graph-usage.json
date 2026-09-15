@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "method": "graph.usage",
+  "assertions": [
+    {"path": "$.scope", "expected": "session_graph", "source_refs": ["source/parent.jsonl:1", "source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.total_usage.uncached_prompt_tokens", "expected": 500, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.total_usage.cached_prompt_tokens", "expected": 4000, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.total_usage.completion_tokens", "expected": 230, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.total_usage.reasoning_tokens", "expected": 23, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.total_usage.processed_tokens", "expected": 4753, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.sessions[0].total_usage.processed_tokens", "expected": 1110, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.sessions[1].total_usage.processed_tokens", "expected": 3643, "source_refs": ["source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.models[0].model_active_seconds", "expected": 198.167, "source_refs": ["source/parent.jsonl:2", "source/parent.jsonl:6", "source/fork.jsonl:5", "source/fork.jsonl:7-8", "source/fork.jsonl:10-11", "source/fork.jsonl:13-14", "source/fork.jsonl:16"], "audit_ref": "audit.md#model-throughput"},
+    {"path": "$.estimated_cost.value_usd", "expected": 0.01209, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15", "../../../pricing/pinned-model-prices.json"], "audit_ref": "audit.md#usage-arithmetic"}
+  ]
+}

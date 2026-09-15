@@ -7,6 +7,7 @@ status = "active"
 provider = "codex_cli"
 entrypoint_id = "019f17b8-d311-77f0-a163-e20701d5a150"
 source_files = ["cases/codex-fork-runtime/source/parent.jsonl", "cases/codex-fork-runtime/source/fork.jsonl"]
+structure_file = "cases/codex-fork-runtime/expected/structure.json"
 expected_files = ["cases/codex-fork-runtime/expected/session-overview.json", "cases/codex-fork-runtime/expected/session-stats.json", "cases/codex-fork-runtime/expected/session-usage.json", "cases/codex-fork-runtime/expected/session-model-usage.json"]
 coverage = ["provider:codex_cli", "graph:single-session", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration", "relationship:fork"]
 
@@ -16,6 +17,7 @@ status = "active"
 provider = "claude_code"
 entrypoint_id = "49852109-2333-42d2-8abb-bd55d812ee2d"
 source_files = ["cases/claude-stream-cache/source/session.jsonl"]
+structure_file = "cases/claude-stream-cache/expected/structure.json"
 expected_files = ["cases/claude-stream-cache/expected/session-overview.json", "cases/claude-stream-cache/expected/session-stats.json", "cases/claude-stream-cache/expected/session-usage.json", "cases/claude-stream-cache/expected/session-model-usage.json"]
 coverage = ["provider:claude_code", "graph:single-session", "tokens:uncached-input", "tokens:cached-input", "stream:response-dedup", "tool:success"]
 
@@ -25,6 +27,7 @@ status = "active"
 provider = "pi"
 entrypoint_id = "019f1862-7c7e-7b61-b0f2-be002e4d5922"
 source_files = ["cases/pi-reported-cost/source/session.jsonl"]
+structure_file = "cases/pi-reported-cost/expected/structure.json"
 expected_files = ["cases/pi-reported-cost/expected/session-overview.json", "cases/pi-reported-cost/expected/session-stats.json", "cases/pi-reported-cost/expected/session-usage.json", "cases/pi-reported-cost/expected/session-model-usage.json"]
 coverage = ["provider:pi", "graph:single-session", "tokens:cached-input", "cost:provider-reported", "tool:success", "activity:run-command-group", "model:single"]
 
@@ -34,5 +37,6 @@ status = "active"
 provider = "codex_cli"
 entrypoint_id = "019f17c0-0000-7000-8000-000000000001"
 source_files = ["cases/codex-interagent-turn/source/parent.jsonl", "cases/codex-interagent-turn/source/fork.jsonl"]
-expected_files = ["cases/codex-interagent-turn/expected/session-overview.json", "cases/codex-interagent-turn/expected/session-stats.json", "cases/codex-interagent-turn/expected/session-usage.json", "cases/codex-interagent-turn/expected/session-model-usage.json"]
+structure_file = "cases/codex-interagent-turn/expected/structure.json"
+expected_files = ["cases/codex-interagent-turn/expected/session-overview.json", "cases/codex-interagent-turn/expected/session-stats.json", "cases/codex-interagent-turn/expected/session-usage.json", "cases/codex-interagent-turn/expected/session-model-usage.json", "cases/codex-interagent-turn/expected/graph-stats.json", "cases/codex-interagent-turn/expected/graph-usage.json"]
 coverage = ["provider:codex_cli", "graph:multi-session", "relationship:fork", "turn:inter-agent-triggered", "turn:orphan-marker-skip", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration"]

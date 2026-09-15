@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "assertions": [
+    {"surface": "canonical.graph", "path": "$.root_session_id", "expected": "49852109-2333-42d2-8abb-bd55d812ee2d", "source_refs": ["source/session.jsonl:1"], "audit_ref": "audit.md#lifecycle"},
+    {"surface": "canonical.graph", "path": "$.session_count", "expected": 1, "source_refs": ["source/session.jsonl:1-5"], "audit_ref": "audit.md#lifecycle"},
+    {"surface": "canonical.graph", "path": "$.sessions[0].turn_count", "expected": 1, "source_refs": ["source/session.jsonl:1-5"], "audit_ref": "audit.md#lifecycle"},
+    {"surface": "canonical.graph", "path": "$.sessions[0].turn_statuses", "expected": ["completed"], "source_refs": ["source/session.jsonl:5"], "audit_ref": "audit.md#lifecycle"},
+    {"surface": "canonical.graph", "path": "$.sessions[0].item_count", "expected": 4, "source_refs": ["source/session.jsonl:2-5"], "audit_ref": "audit.md#lifecycle"},
+    {"surface": "canonical.graph", "path": "$.sessions[0].tools[0].tool_call_id", "expected": "call_3aa94800c91e4888b8266c57", "source_refs": ["source/session.jsonl:3-4"], "audit_ref": "audit.md#lifecycle"},
+    {"surface": "canonical.graph", "path": "$.sessions[0].tools[0].status", "expected": "completed", "source_refs": ["source/session.jsonl:4"], "audit_ref": "audit.md#lifecycle"},
+    {"surface": "session.tree", "path": "$.branches[0].session_id", "expected": "49852109-2333-42d2-8abb-bd55d812ee2d", "source_refs": ["source/session.jsonl:1"], "audit_ref": "audit.md#lifecycle"},
+    {"surface": "graph.overview", "path": "$.graph.orchestration.kind", "expected": "single_session", "source_refs": ["source/session.jsonl:1-5"], "audit_ref": "audit.md#lifecycle"}
+  ]
+}

@@ -22,15 +22,15 @@ With the lifecycle bracketing the fork reconstructs **2 turns** and **4 items** 
 
 ## Graph and runtime
 
-`source/fork.jsonl:1` names the parent through `forked_from_id` `…000001`, so the graph has one main session and one `forked_from` subagent.
+`source/fork.jsonl:1` names the parent through both `forked_from_id` and `source.subagent.thread_spawn.parent_thread_id`, so the graph has one main session and one `spawned_subagent` child.
 
 - Parent turn (`parent.jsonl:2` -> `parent.jsonl:6`): spans `08:51:06.978Z` to `08:52:55.745Z` = 108.767 s, rounded to 109 s.
 - Fork turn 1 (`fork.jsonl:5` -> `fork.jsonl:10`): spans `10:19:16.799Z` to `10:20:16.799Z` = 60.000 s, rounded to 60 s.
 - Fork turn 2 (`fork.jsonl:11` -> `fork.jsonl:16`): spans `10:20:17.000Z` to `10:20:47.000Z` = 30.000 s, rounded to 30 s.
 
-Graph execution_seconds = 109 + 60 + 30 = **199**. The fork contributes 2 of the 3 graph turns and 2 of the 2 tool calls (`fork.jsonl:7`, `fork.jsonl:13`).
+The three source turn durations total **199 agent-seconds**, but `graph.*.runtime.execution_seconds` is intentionally the root session's **109-second** elapsed execution measure: summing potentially overlapping subagent intervals would not represent user-observed latency. The structural graph count is three turns. The fork contributes two canonically linked tool calls (`fork.jsonl:7-8`, `fork.jsonl:13-14`); this structural linkage is asserted independently of higher-level semantic activity classification.
 
-Time-to-first-token is averaged across the three completed-turn observations with a non-null ttft: parent 3,392 ms (`parent.jsonl:6`), fork turn 1 2,000 ms (`fork.jsonl:10`), fork turn 2 1,500 ms (`fork.jsonl:16`). The orphan terminal at `fork.jsonl:4` carries no `time_to_first_token_ms`, so it is excluded. Average = round((3392 + 2000 + 1500) / 3) = round(2297.33) = **2297**.
+Likewise, graph runtime latency reports the root's 3,392 ms time-to-first-token (`parent.jsonl:6`) rather than averaging subagent latency. The child observations remain present in their per-session evidence.
 
 ## Session scope
 
@@ -66,4 +66,4 @@ The parent turn has `108.767` active seconds (`parent.jsonl:2,6`) and no tool in
 
 ## Cross-check
 
-The expected artifacts assert the fork's 2-turn / 4-item reconstruction (the regression guard: 0 before the fix), the `forked_from` graph relation, the 3-turn / 199-second / 2297-ms-ttft graph runtime, the usage buckets, and the pinned cost. Presentation-only text and generated item identifiers are intentionally omitted.
+The expected artifacts assert the child's 2-turn / 4-item reconstruction (the regression guard: 0 before the fix), its derived `spawned_subagent` relationship, graph/session membership, three graph turns, independently summed usage buckets and model-active time, and pinned cost. Root-session elapsed runtime remains distinct from summed agent-seconds. Presentation-only text and generated item identifiers are intentionally omitted.
