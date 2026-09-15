@@ -19,43 +19,23 @@ from coding_trajectory_cli.commands.session import (
 
 
 def _graph_entry_params(args: argparse.Namespace) -> dict[str, Any]:
-    params: dict[str, Any] = {"session_id": args.session_id}
-    if getattr(args, "num_turns", None) is not None:
-        params["num_turns"] = args.num_turns
-    if getattr(args, "drop_turns", None) is not None:
-        params["drop_turns"] = args.drop_turns
+    params: dict[str, Any] = {"root_session_id": args.session_id}
+    if getattr(args, "limit", None) is not None:
+        params["limit"] = args.limit
+    if getattr(args, "before_turn_id", None):
+        params["before_turn_id"] = args.before_turn_id
     return params
-
-
-def _include_flag(params: dict[str, Any], enabled: bool, value: str) -> dict[str, Any]:
-    if enabled:
-        params["include"] = [value]
-    return params
-
-
-def _graph_overview_params(args: argparse.Namespace) -> dict[str, Any]:
-    return _include_flag(_graph_entry_params(args), args.narrative, "narrative")
-
-
-def _graph_stats_params(args: argparse.Namespace) -> dict[str, Any]:
-    return _include_flag(
-        _graph_entry_params(args),
-        args.session_composition,
-        "session_composition",
-    )
 
 
 def _graph_usage_params(args: argparse.Namespace) -> dict[str, Any]:
     params = _graph_entry_params(args)
     if args.turn_id:
         params["turn_id"] = args.turn_id
-    return _include_flag(params, args.flat_turns, "flat_turns")
+    return params
 
 
 def _render_graph_overview_text(payload: dict[str, Any]) -> str:
-    body = _render_session_overview_text(payload).replace(
-        "# Session `", "# Graph `", 1
-    )
+    body = _render_session_overview_text(payload).replace("# Session `", "# Graph `", 1)
     orchestration = (payload.get("graph") or {}).get("orchestration") or {}
     if orchestration:
         kind = orchestration.get("kind") or "-"
@@ -105,15 +85,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     add_session_source(graph_overview)
     add_turn_window_flags(graph_overview, view_name="projection")
-    graph_overview.add_argument(
-        "--narrative",
-        action="store_true",
-        help="Include turn requests and assistant-response narrative.",
-    )
     add_output_flags(graph_overview)
     graph_overview.set_defaults(
         _method="graph.overview",
-        _params=_graph_overview_params,
+        _params=_graph_entry_params,
         _default_output="markdown",
         _renderer=_render_graph_overview_text,
     )
@@ -125,15 +100,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         formatter_class=GhFormatter,
     )
     add_session_source(graph_stats)
-    graph_stats.add_argument(
-        "--session-composition",
-        action="store_true",
-        help="Include per-session context and usage composition.",
-    )
     add_output_flags(graph_stats)
     graph_stats.set_defaults(
         _method="graph.stats",
-        _params=_graph_stats_params,
+        _params=_graph_entry_params,
         _default_output="markdown",
         _renderer=_render_session_stats_text,
     )
@@ -151,11 +121,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         metavar="TURN_ID",
         default=None,
         help="Limit usage analysis to one turn.",
-    )
-    graph_usage.add_argument(
-        "--flat-turns",
-        action="store_true",
-        help="Include the graph-wide flat turn list.",
     )
     add_output_flags(graph_usage)
     graph_usage.set_defaults(

@@ -5,11 +5,10 @@ The private operational-history contract is [Chronicle history](chronicle-histor
 
 | Document | Role |
 | --- | --- |
-| [Canonical storage and live Datahub refactor](refactor/README.md) | Target contracts, synchronization, migration sequence, and acceptance gates |
+| [CodingTrajectory Loop](loop-design.md) | Local Analytics, evidence references, and future Monitor/Improve boundaries |
 | [Chronicle history](chronicle-history.md) | Private operational schema, privacy boundary, replay, and publication bounds |
 | [Remote control plane](remote-ct-control-plane-design.md) | Historical, inventory, living, and estimation authorities |
 | [Collector handoff](local-collector-handoff.md) | Local collection, delivery recovery, and deployment gates |
-| [Live shared Datahub](refactor/operations.md) | Live authority deployment behind Cloudflare Access |
 | [CLI](cli.md) and [session API](session-api-redesign.md) | Public usage and progressive evidence retrieval |
 | [Plugins](plugin.md) | Executable plugin boundary |
 | [Amp collector](amp-collector.md) | Host-local raw capture |

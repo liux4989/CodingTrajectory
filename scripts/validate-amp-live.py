@@ -16,11 +16,7 @@ from coding_trajectory.control_plane.chronicle import (
     build_chronicle_graph_artifact,
     chronicle_session_graph,
 )
-from coding_trajectory.control_plane.collector import _body_free_artifact
-from coding_trajectory.datahub import (
-    hydrate_retained_session,
-    rebuild_affected_session_graphs_with_measurements,
-)
+from coding_trajectory.control_plane.published_facts import derive_published_fact_set
 from coding_trajectory.discovery import discover_store, stabilize_session
 from coding_trajectory.ingestion.adapters.amp import AmpAdapter
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
@@ -188,24 +184,19 @@ def main() -> None:
             assert b"PRIVATE task" in encoded
             assert b"PRIVATE final" in encoded
             assert b"PRIVATE output" not in encoded
-            publication = _body_free_artifact(artifact)
-            assert b"PRIVATE" not in publication.canonical_bytes()
+            publication = derive_published_fact_set(artifact)
+            publication_bytes = publication.model_dump_json(exclude_none=True).encode()
+            assert b"PRIVATE output" not in publication_bytes
+            assert publication.kind_counts["graph"] == 1
+            assert publication.kind_counts["session"] == 2
             assert all(
-                turn.user_request is None
-                or turn.user_request.content == "[content omitted]"
-                for session in publication.sessions
-                for turn in session.turns
+                "body" not in row.model_dump(mode="json", exclude_none=True)["payload"]
+                for row in publication.rows
             )
-            assert all(
-                item.measurements.text_preview is None
-                for session in publication.sessions
-                for turn in session.turns
-                for item in turn.items
-            )
+            assert publication.to_session_graph().edges == graph.edges
             replay = artifact.to_session_graph()
             assert replay.sessions[0].vendor == Vendor.AMP and len(replay.edges) == 1
-            # Compact ingestion preserves IDs/topology; content measurements are
-            # attached separately by datahub, as for the existing adapters.
+            # Compact ingestion preserves IDs/topology independently of content.
             compact = [
                 AmpAdapter().ingest_file(p, retention="measurements") for p in paths
             ]
@@ -261,15 +252,6 @@ def main() -> None:
             assert (
                 rebuilt.status == "complete" and len(rebuilt.selected_source_paths) == 2
             )
-            measured = rebuild_affected_session_graphs_with_measurements(
-                sources=snapshots
-            )
-            assert measured.status == "complete" and len(measured.graphs) == 1
-            hydrated = hydrate_retained_session(paths[0], vendor=Vendor.AMP)
-            assert hydrated.session_id == parent.session_id
-            assert [i.item_id for t in hydrated.turns for i in t.items] == [
-                i.item_id for t in parent.turns for i in t.items
-            ]
             methods = [
                 "session.overview",
                 "session.summary",
@@ -286,11 +268,15 @@ def main() -> None:
                 "project.sessions",
             ]
             for method in methods:
+                if method == "project.sessions":
+                    params = {"agent_vendor": "amp"}
+                elif method.startswith("graph."):
+                    params = {"root_session_id": str(graph.root_session_id)}
+                else:
+                    params = {"session_id": str(parent.session_id)}
                 result = dispatch(
                     method,
-                    {"agent_vendor": "amp", "include": ["usage", "runtime"]}
-                    if method == "project.sessions"
-                    else {"session_id": str(parent.session_id)},
+                    params,
                     store=DocumentStore.from_session_graphs(
                         [chronicle_session_graph(graph)]
                     ),
@@ -307,7 +293,7 @@ def main() -> None:
                 "PASS Amp live: discovery, dedup, observed timing, failed tools, spawn provenance,"
             )
             print(
-                "  compact identity parity, full replay parity, local narrative, body-free publication, child-seeded rebuild, 13 shared APIs"
+                "  compact identity parity, full replay parity, local narrative, bounded fact publication, child-seeded rebuild, 13 shared APIs"
             )
         finally:
             if old is None:

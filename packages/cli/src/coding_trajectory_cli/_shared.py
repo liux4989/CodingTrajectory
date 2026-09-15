@@ -124,19 +124,18 @@ def add_agent_vendor_flag(parser: argparse.ArgumentParser) -> None:
 def add_turn_window_flags(parser: argparse.ArgumentParser, *, view_name: str) -> None:
     parser.add_argument(
         "--turns",
-        dest="num_turns",
+        dest="limit",
         type=positive_int,
         default=None,
         metavar="N",
         help=f"Limit each session {view_name} to its last N visible turns.",
     )
     parser.add_argument(
-        "--drop-turns",
-        dest="drop_turns",
-        type=positive_int,
+        "--before-turn",
+        dest="before_turn_id",
         default=None,
-        metavar="K",
-        help="Drop the last K visible turns, matching thread/rollback semantics.",
+        metavar="TURN_ID",
+        help="Page to the visible turns immediately before this turn.",
     )
 
 
@@ -445,14 +444,12 @@ def compact_usage_turn(turn: Any) -> Any:
             "usage": compact_usage(turn.get("usage")),
             "cost": evidence_value(turn.get("estimated_cost")),
             "pricing": evidence_to_pricing(turn.get("estimated_cost")),
-            "cache_break_waste_usd": turn.get("cache_break_waste_usd"),
             "cache_break_re_read_tokens": turn.get("cache_break_re_read_tokens"),
             "cache_boundary_loss_tokens": turn.get("cache_boundary_loss_tokens"),
             "cache_first_call_cached_tokens": turn.get(
                 "cache_first_call_cached_tokens"
             ),
             "cache_intra_turn_loss_tokens": turn.get("cache_intra_turn_loss_tokens"),
-            "cache_intra_turn_waste_usd": turn.get("cache_intra_turn_waste_usd"),
             "provider": turn.get("provider"),
             "model": turn.get("model"),
         }
@@ -824,10 +821,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                     {
                         # ``count`` defaults to 0 (never None) so the block is
                         # always emitted — even for sessions that never changed
-                        # effort. The key's presence is a capability marker: the
-                        # datahub throws when it is absent (stale/incomplete ct
-                        # install) instead of silently falling back to the
-                        # cache-break heuristic.
+                        # effort. The key's presence is a capability marker.
                         "count": effort_changes.get("count") or 0,
                         "events": [
                             drop_none(
@@ -881,8 +875,15 @@ def compact_payload(method: str, payload: Any) -> Any:
                         {
                             "id": item.get("event_id"),
                             "session": item.get("session_id"),
+                            "turn": item.get("turn_id"),
+                            "item": item.get("item_id"),
                             "timestamp": item.get("timestamp"),
                             "type": item.get("type"),
+                            "status": item.get("status"),
+                            "source_sequence": item.get("source_sequence"),
+                            "source_order_key": item.get("source_order_key"),
+                            "provenance": item.get("provenance"),
+                            "coverage": item.get("coverage"),
                             "tool_call": item.get("tool_call"),
                             "llm": item.get("llm"),
                             "usage": item.get("usage"),
@@ -890,29 +891,44 @@ def compact_payload(method: str, payload: Any) -> Any:
                             "payload": item.get("payload"),
                         }
                     )
-                    for item in payload.get("matches") or []
+                    for item in payload.get("events") or []
                     if isinstance(item, dict)
                 ],
+                "next_cursor": payload.get("next_cursor"),
             }
         )
 
-    if method == "session.items" and isinstance(payload, list):
-        return [
-            drop_none(
-                {
-                    "id": item.get("item_id"),
-                    "session": item.get("session_id"),
-                    "turn": item.get("turn_id"),
-                    "kind": item.get("kind"),
-                    "type": item.get("type"),
-                    "operations": item.get("operations"),
-                    "shape": item.get("shape"),
-                    "events": item.get("event_ids"),
-                }
-            )
-            for item in payload
-            if isinstance(item, dict)
-        ]
+    if method == "session.items" and isinstance(payload, dict):
+        return drop_none(
+            {
+                "id": payload.get("root_session_id"),
+                "items": [
+                    drop_none(
+                        {
+                            "id": item.get("item_id"),
+                            "session": item.get("session_id"),
+                            "turn": item.get("turn_id"),
+                            "kind": item.get("kind"),
+                            "operation": item.get("operation"),
+                            "status": item.get("status"),
+                            "source_sequence": item.get("source_sequence"),
+                            "source_order_key": item.get("source_order_key"),
+                            "started_at": item.get("started_at"),
+                            "completed_at": item.get("completed_at"),
+                            "provenance": item.get("provenance"),
+                            "coverage": item.get("coverage"),
+                            "type": item.get("type"),
+                            "operations": item.get("operations"),
+                            "shape": item.get("shape"),
+                            "events": item.get("event_ids"),
+                        }
+                    )
+                    for item in payload.get("items") or []
+                    if isinstance(item, dict)
+                ],
+                "next_cursor": payload.get("next_cursor"),
+            }
+        )
 
     return payload
 

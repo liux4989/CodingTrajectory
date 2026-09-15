@@ -1,0 +1,18 @@
+name = "loop"
+description = "CodingTrajectory Loop — explore local sessions, investigate evidence, and monitor configured strategies."
+entry = "loop_plugin/main.py"
+
+[requires]
+"project.list" = 3
+"project.sessions" = 3
+"session.summary" = 2
+"session.overview" = 3
+"session.items" = 4
+"session.events" = 4
+"session.usage" = 3
+"session.request_usage" = 3
+"living.sessions" = 2
+
+[[tools]]
+name = "web"
+summary = "Serve local Analytics, saved investigations, and the Monitor runtime."

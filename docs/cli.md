@@ -33,7 +33,7 @@ Three goals:
 
 ## Connection and publication workflow
 
-Use [shared connections and collection](refactor/operations.md) for profile setup,
+Use [shared connections](refactor/connections.md) and [collector handoff](local-collector-handoff.md) for profile setup,
 manual or automatic upload, credential rotation, and explicit local/shared reads.
 Ordinary queries no longer trigger publication.
 

@@ -29,7 +29,7 @@ from one total multiplied by one rate.
 
 ## Display labels
 
-CLI markdown output and the datahub dashboard render the glossary fields
+CLI markdown output renders the glossary fields
 under one concise label set (see `ct session usage`). Payload field names stay
 unchanged; only the human labels are fixed:
 
@@ -54,10 +54,8 @@ input 235.1k (+13.2m cached)  output 39.9k (+15.0k reasoning)  processed 13.5m
 
 Audit lines (for example the billed-token line in `ct session stats`) append
 the derived totals `reported` and `prompt+completion` when present. The
-per-category allocation columns (`ct session stats`, datahub context-window
-report) render the same buckets as a slash tuple in label order:
-`input/cached/cache write/output/reasoning`. The dashboard uses the title-case
-forms (`Input`, `Cached`, `Cache write`, `Output`, `Reasoning`, `Processed`).
+per-category allocation columns (`ct session stats`) render the same buckets
+as a slash tuple in label order: `input/cached/cache write/output/reasoning`.
 
 ## Request pricing
 

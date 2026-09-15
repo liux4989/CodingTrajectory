@@ -38,8 +38,8 @@ Operational details must not be presented as complete transcript evidence.
 | `packages/core/src/coding_trajectory/control_plane/` | Authority routing, strict sharing contracts, collector, remote repositories, HTTP service |
 | `packages/core/src/coding_trajectory/estimation/` | Forecast ledger, prediction, calibration, and backfill |
 | `packages/cli/src/coding_trajectory_cli/` | CLI commands, schema inspection, API calls, plugin dispatch |
-| `packages/plugins/datahub/datahub_plugin/` | Datahub backend and enrichment |
-| `packages/plugins/datahub/web/` | Datahub React frontend |
+| `packages/plugins/loop/loop_plugin/` | Local Core delivery and reference-only investigation persistence |
+| `packages/plugins/loop/web/` | Loop React Analytics frontend |
 | `cloudflare/control-plane/` | Native Worker, SQLite workspace authority, private R2 artifacts |
 | `validation/metrics/` | Committed evidence, audits, pinned pricing, and expected results |
 | `scripts/`, `benchmarks/` | Validation and benchmark tools |
@@ -54,14 +54,14 @@ is the detailed authority map. Discover the current methods with `ct api schema`
 Raw logs remain evidence authority on their originating host. Collector SQLite
 stores delivery sequences, outboxes, and receipts. Its recovery rules preserve
 exact retries and reconcile source/publication watermarks. The local index and
-Datahub read models accelerate reads; they do not replace source evidence.
+Core read models accelerate reads; they do not replace source evidence.
 
 Cloudflare stores versioned workspace state in a SQLite Durable Object and
-immutable compressed artifacts in private R2. The Access-protected Datahub Worker
-serves its web assets and reads live committed workspace data through the control
-plane. Publishing data does not rebuild or redeploy the website. See the
-control-plane design for credential scope, transaction boundaries, and deployment
-instructions.
+immutable compressed artifacts in private R2. Loop does not consume this hosted
+delivery path in its first local slice. Its browser composes frozen Core methods
+through a local-only runtime; only investigation references are saved. See the
+[Loop design](loop-design.md) for local usage and evidence boundaries. Hosted
+product delivery and publication are deferred.
 
 ## API and plugin boundaries
 
@@ -72,8 +72,8 @@ agent runs have distinct scopes; graph totals never imply one shared context
 window across agents.
 
 Plugins are source-dispatched executables discovered through `plugin.toml`.
-They consume CLI JSON contracts rather than importing core implementation.
-Datahub owns pricing enrichment and presentation; canonical fields remain
+They consume public Core methods through the runtime or CLI, not internal projections.
+Loop owns investigation state and presentation; canonical fields remain
 agent-agnostic facts. See [plugin design](plugin.md).
 
 ## Development and validation
@@ -83,7 +83,7 @@ Use `uv sync` for the Python workspace. The core dependencies are declared in
 
 ```sh
 uv run ruff check .
-scripts/check-datahub-static.sh
+uv run python scripts/check-loop.py
 scripts/check-metrics-quality-gate.sh
 uv run python scripts/validate-metrics-baselines.py
 ```

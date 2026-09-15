@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from coding_trajectory.analysis.activity_flow import build_overview_flows
+from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.request_lineage import (
     effective_user_request,
     extract_user_request,
@@ -26,7 +27,11 @@ from coding_trajectory.ingestion.indexes import (
 )
 from coding_trajectory.ingestion.models import (
     COMPACTION_KINDS as _COMPACTION_KINDS,
+)
+from coding_trajectory.ingestion.models import (
     COMPACTION_MECHANISMS as _COMPACTION_MECHANISMS,
+)
+from coding_trajectory.ingestion.models import (
     AgentMessageItem,
     Session,
     SessionGraph,
@@ -37,12 +42,14 @@ from coding_trajectory.ingestion.models import (
 # Compaction observation kinds and mechanism labels are single-sourced in
 # ``ingestion.models`` (they describe RuntimeObservation kinds).
 
+_NARRATIVE_TEXT_LIMIT = 280
+
 
 def build_session_graph_overview(
     session_graph: SessionGraph,
     *,
-    num_turns: int | None = None,
-    drop_turns: int | None = None,
+    limit: int | None = None,
+    before_turn_id: str | None = None,
     index: SessionGraphIndex | None = None,
 ) -> dict[str, Any]:
     index = index or build_session_graph_index(session_graph)
@@ -56,8 +63,8 @@ def build_session_graph_overview(
             session,
             index=index,
             member_session_lookup=member_session_lookup,
-            num_turns=num_turns,
-            drop_turns=drop_turns,
+            limit=limit,
+            before_turn_id=before_turn_id,
         )
         if node is not None:
             ordered.append(node)
@@ -78,7 +85,7 @@ def session_graph_has_visible_overview_content(session_graph: SessionGraph) -> b
                 session,
                 index=index,
                 member_session_lookup=member_session_lookup,
-            )
+            )[0]
         )
         for session in ordered_sessions(index)
     )
@@ -87,8 +94,8 @@ def session_graph_has_visible_overview_content(session_graph: SessionGraph) -> b
 def build_session_graph_narrative(
     session_graph: SessionGraph,
     *,
-    num_turns: int | None = None,
-    drop_turns: int | None = None,
+    limit: int | None = None,
+    before_turn_id: str | None = None,
     index: SessionGraphIndex | None = None,
 ) -> dict[str, Any]:
     if index is None:
@@ -98,8 +105,8 @@ def build_session_graph_narrative(
         _session_narrative_node(
             session,
             index=index,
-            num_turns=num_turns,
-            drop_turns=drop_turns,
+            limit=limit,
+            before_turn_id=before_turn_id,
         )
         for session in ordered_sessions(index)
     ]
@@ -113,14 +120,33 @@ def build_session_graph_narrative(
 def _apply_turn_window(
     turns: list[dict[str, Any]],
     *,
-    num_turns: int | None = None,
-    drop_turns: int | None = None,
-) -> list[dict[str, Any]]:
-    if drop_turns is not None:
-        turns = turns[:-drop_turns]
-    if num_turns is not None:
-        turns = turns[-num_turns:]
-    return turns
+    limit: int | None = None,
+    before_turn_id: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Select the deterministic ``limit``-sized window ending before a turn.
+
+    Returns the window plus its paging state: ``total`` visible turns before
+    any cursor cut, and ``next_before_turn_id`` — the oldest retained turn,
+    when older turns remain — for fetching the immediately older page.
+    """
+    total = len(turns)
+    if before_turn_id is not None:
+        positions = [
+            index
+            for index, turn in enumerate(turns)
+            if str(turn.get("turn_id")) == before_turn_id
+        ]
+        if not positions:
+            raise ValueError(f"before_turn_id not found in session: {before_turn_id}")
+        turns = turns[: positions[0]]
+    available = len(turns)
+    if limit is not None:
+        turns = turns[-limit:]
+    trimmed = 0 < len(turns) < available
+    return turns, {
+        "total": total,
+        "next_before_turn_id": (str(turns[0].get("turn_id")) if trimmed else None),
+    }
 
 
 def _session_connection(
@@ -157,8 +183,8 @@ def _session_narrative_node(
     session: Session,
     *,
     index: SessionGraphIndex,
-    num_turns: int | None = None,
-    drop_turns: int | None = None,
+    limit: int | None = None,
+    before_turn_id: str | None = None,
 ) -> dict[str, Any]:
     turns = [
         turn_node
@@ -166,7 +192,9 @@ def _session_narrative_node(
         if (turn_node := _turn_narrative_node(turn, session=session, index=index))
         is not None
     ]
-    turns = _apply_turn_window(turns, num_turns=num_turns, drop_turns=drop_turns)
+    turns, turn_window = _apply_turn_window(
+        turns, limit=limit, before_turn_id=before_turn_id
+    )
 
     return prune_nones(
         {
@@ -178,8 +206,18 @@ def _session_narrative_node(
             "agent_name": session.agent_name,
             "cwd": session.cwd,
             "turns": turns,
+            "turn_window": turn_window,
         }
     )
+
+
+def _bounded_item_text(item: AgentMessageItem) -> str:
+    """Return the retained bounded text for one agent message, never a body."""
+
+    text = item.text
+    if not text and item.measurements is not None:
+        text = item.measurements.text_preview or ""
+    return truncate_text_preview(text, max_len=_NARRATIVE_TEXT_LIMIT)
 
 
 def _turn_narrative_node(
@@ -196,8 +234,10 @@ def _turn_narrative_node(
     item_ids: list[str] = []
     for item in turn.items:
         item_ids.append(str(item.item_id))
-        if isinstance(item, AgentMessageItem) and item.text:
-            assistant_responses.append(item.text)
+        if isinstance(item, AgentMessageItem):
+            text = _bounded_item_text(item)
+            if text:
+                assistant_responses.append(text)
 
     return prune_nones(
         {
@@ -223,15 +263,15 @@ def _session_nav_node(
     *,
     index: SessionGraphIndex,
     member_session_lookup: dict[str, list[MemberSessionCandidate]],
-    num_turns: int | None = None,
-    drop_turns: int | None = None,
+    limit: int | None = None,
+    before_turn_id: str | None = None,
 ) -> dict[str, Any] | None:
-    turns = build_session_overview_turns(
+    turns, turn_window = build_session_overview_turns(
         session,
         index=index,
         member_session_lookup=member_session_lookup,
-        num_turns=num_turns,
-        drop_turns=drop_turns,
+        limit=limit,
+        before_turn_id=before_turn_id,
     )
     if not turns:
         return None
@@ -253,6 +293,7 @@ def _session_nav_node(
             if compaction_activities
             else None,
             "turns": turns,
+            "turn_window": turn_window,
         }
     )
 
@@ -400,9 +441,9 @@ def build_session_overview_turns(
     *,
     index: SessionGraphIndex,
     member_session_lookup: dict[str, list[MemberSessionCandidate]],
-    num_turns: int | None = None,
-    drop_turns: int | None = None,
-) -> list[dict[str, Any]]:
+    limit: int | None = None,
+    before_turn_id: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     turns: list[dict[str, Any]] = []
     pending_teammate: dict[str, Any] | None = None
 
@@ -438,7 +479,7 @@ def build_session_overview_turns(
 
     if pending_teammate is not None:
         turns.append(pending_teammate)
-    return _apply_turn_window(turns, num_turns=num_turns, drop_turns=drop_turns)
+    return _apply_turn_window(turns, limit=limit, before_turn_id=before_turn_id)
 
 
 def _turn_nav_node(

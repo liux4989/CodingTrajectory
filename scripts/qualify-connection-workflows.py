@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import runpy
 import subprocess
 import sys
 import tempfile
@@ -156,85 +155,9 @@ def main():
                 "--default-source",
                 "local",
             )
-            journals = Path(temporary) / "journals"
-            journals.mkdir()
-            offline = {"CT_FIXTURE_TOKEN": "", "CT_AMP_LOG_DIR": str(journals)}
-            run(
-                "--profile",
-                "collector",
-                "collector",
-                "sync",
-                "--mode",
-                "status",
-                overrides=offline,
-            )
-            run(
-                "--profile",
-                "collector",
-                "collector",
-                "sync",
-                "--mode",
-                "prepare",
-                "--agent-vendor",
-                "amp",
-                overrides=offline,
-            )
-            run(
-                "--profile",
-                "reader",
-                "collector",
-                "sync",
-                "--mode",
-                "status",
-                success=False,
-                overrides=offline,
-            )
-            from uuid import UUID
-
-            from coding_trajectory.control_plane.canonical_repository import (
-                CanonicalRepository,
-            )
-            from coding_trajectory.control_plane.collector import CollectorIdentity
-
-            fixture = runpy.run_path(
-                str(Path(__file__).with_name("qualify-canonical-repository.py"))
-            )
-            identity = CollectorIdentity(
-                workspace_id=UUID(WORKSPACE),
-                agent_id=UUID(AGENT),
-                agent_instance_id=UUID(AGENT),
-                project_name="Synthetic",
-            )
-            repository = CanonicalRepository(
-                state.with_suffix(".canonical.sqlite3"), identity
-            )
-            repository.commit(captures=[fixture["capture"]()], snapshots={})
-            repository.close()
-            local = run(
-                "--profile",
-                "collector",
-                "--source",
-                "local",
-                "api",
-                "call",
-                "session.tree",
-                "--params",
-                json.dumps({"session_id": str(fixture["SESSION"])}),
-                overrides=offline,
-            )
-            assert json.loads(local.stdout)["ok"]
-            prepared = run(
-                "--profile",
-                "collector",
-                "collector",
-                "sync",
-                "--mode",
-                "prepare",
-                "--agent-vendor",
-                "amp",
-                overrides=offline,
-            )
-            assert json.loads(prepared.stdout)["pending_bytes"] > 0
+            # The managed `collector sync` service and CanonicalRepository
+            # capture boundary were deleted by the fact-refactor clean break;
+            # fact staging/publication is qualified separately against workerd.
             assert len(requests) == before + 1  # only the legacy capability check
             run("connection", "forget", "reader")
             run("connection", "status", "reader", success=False)

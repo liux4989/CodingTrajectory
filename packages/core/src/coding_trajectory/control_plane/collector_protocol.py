@@ -13,10 +13,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from coding_trajectory.control_plane.chronicle import (
-    CHRONICLE_GRAPH_SCHEMA_VERSION,
-    MAX_CHRONICLE_PUBLICATION_BYTES,
-    ChronicleGraphArtifact,
+from coding_trajectory.control_plane.published_facts import (
+    FACT_SET_SCHEMA_VERSION,
+    MAX_FACT_ROWS_PER_GRAPH,
 )
 from coding_trajectory.ingestion.common import canonical_json
 
@@ -50,8 +49,7 @@ class CollectorRecoveryRequest(CollectorModel):
     agent_instance_id: UUID | None = None
     vendor: str | None = None
     native_session_id: str | None = None
-    artifact_ids: list[UUID] | None = Field(default=None, max_length=128)
-    include_upload_state: bool | None = None
+    graph_ids: list[UUID] | None = Field(default=None, max_length=128)
     publication_idempotency_key: str | None = Field(default=None, max_length=512)
 
     @model_validator(mode="after")
@@ -70,13 +68,24 @@ class RecoveredSource(CollectorModel):
     content_sha256: str | None = None
 
 
+class RecoveredGraph(CollectorModel):
+    """One published graph fact set visible to collector recovery."""
+
+    graph_id: UUID
+    schema_version: Literal["ct.published_facts.v1"] = FACT_SET_SCHEMA_VERSION
+    fact_set_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fact_count: int = Field(ge=1, le=MAX_FACT_ROWS_PER_GRAPH)
+    published_sequence: int = Field(ge=0)
+    observed_at: datetime
+
+
 class CollectorRecoveryResponse(CollectorModel):
     next_publication_sequence: int = Field(ge=0)
     next_living_sequence: int | None = Field(default=None, ge=1)
     source: RecoveredSource | None = None
     authority_incarnation: UUID | None = None
     authority_sequence: int | None = Field(default=None, ge=0)
-    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    graphs: list[RecoveredGraph] = Field(default_factory=list)
     publication_receipt: dict[str, Any] | None = None
 
 
@@ -150,115 +159,6 @@ class SourceVectorEntry(CollectorModel):
     source_epoch: int = Field(ge=1)
     source_sequence: int = Field(ge=0)
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-
-
-class ChronicleArtifactPublication(CollectorModel):
-    artifact_id: UUID
-    schema_version: Literal["ct.chronicle_graph.v2"] = CHRONICLE_GRAPH_SCHEMA_VERSION
-    payload: ChronicleGraphArtifact
-    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    serialized_bytes: int = Field(ge=1)
-    source_ids: list[UUID] = Field(min_length=1)
-    observed_at: datetime
-
-    @model_validator(mode="after")
-    def validate_artifact(self) -> ChronicleArtifactPublication:
-        if self.artifact_id != self.payload.graph.root_session_id:
-            raise ValueError("artifact_id must match the chronicle graph root")
-        if self.content_sha256 != self.payload.digest():
-            raise ValueError("chronicle artifact digest mismatch")
-        if self.serialized_bytes != len(self.payload.canonical_bytes()):
-            raise ValueError("chronicle artifact byte count mismatch")
-        if len(set(self.source_ids)) != len(self.source_ids):
-            raise ValueError("chronicle artifact source_ids must be unique")
-        return self
-
-
-class ArtifactPublicationRequest(CollectorModel):
-    """One complete set of collected graphs in an agent/project publication."""
-
-    version: Literal[1] = 1
-    workspace_id: UUID
-    agent_id: UUID
-    project_id: UUID
-    publication_sequence: int = Field(ge=0)
-    replacement_scope: Literal["upsert", "complete_sources"] | None = None
-    source_vector: list[SourceVectorEntry] = Field(min_length=1)
-    artifacts: list[ChronicleArtifactPublication] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_publication(self) -> ArtifactPublicationRequest:
-        source_ids = [entry.source_id for entry in self.source_vector]
-        if len(set(source_ids)) != len(source_ids):
-            raise ValueError("publication source_vector must contain unique sources")
-        known = set(source_ids)
-        artifact_ids = [artifact.artifact_id for artifact in self.artifacts]
-        if len(set(artifact_ids)) != len(artifact_ids):
-            raise ValueError("publication artifact_id values must be unique")
-        if any(not set(artifact.source_ids) <= known for artifact in self.artifacts):
-            raise ValueError("artifact source_ids must be present in source_vector")
-        represented = {
-            source_id
-            for artifact in self.artifacts
-            for source_id in artifact.source_ids
-        }
-        if represented != known:
-            raise ValueError("every source_vector entry must belong to an artifact")
-        encoded = canonical_json(self.wire_payload()).encode()
-        if len(encoded) > MAX_CHRONICLE_PUBLICATION_BYTES:
-            raise ValueError("chronicle project publication exceeds 16 MiB")
-        return self
-
-    def wire_payload(self) -> dict[str, Any]:
-        """Return the exact compact request persisted and sent by collectors."""
-
-        payload = self.model_dump(mode="json", exclude_none=True)
-        for encoded, artifact in zip(payload["artifacts"], self.artifacts, strict=True):
-            encoded["payload"] = artifact.payload.wire_payload()
-        return payload
-
-    def wire_json(self) -> str:
-        return canonical_json(self.wire_payload())
-
-    def reference_payload(self) -> dict[str, Any]:
-        """Commit only validated references after staging immutable R2 bodies."""
-
-        payload = self.model_dump(mode="json", exclude_none=True)
-        for artifact in payload["artifacts"]:
-            del artifact["payload"]
-        return payload
-
-
-class ArtifactReference(CollectorModel):
-    artifact_id: UUID
-    schema_version: Literal["ct.chronicle_graph.v2"] = CHRONICLE_GRAPH_SCHEMA_VERSION
-    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    serialized_bytes: int = Field(ge=1, le=8 * 1024 * 1024)
-    source_ids: list[UUID] = Field(min_length=1)
-    observed_at: datetime
-
-
-class ArtifactManifestRequest(CollectorModel):
-    version: Literal[1] = 1
-    workspace_id: UUID
-    agent_id: UUID
-    project_id: UUID
-    publication_sequence: int = Field(ge=0)
-    replacement_scope: Literal["upsert", "complete_sources"] | None = None
-    source_vector: list[SourceVectorEntry] = Field(min_length=1)
-    artifacts: list[ArtifactReference] = Field(min_length=1)
-
-
-class ArtifactStageRequest(CollectorModel):
-    workspace_id: UUID
-    agent_id: UUID
-    schema_version: Literal["ct.chronicle_graph.v2"] = CHRONICLE_GRAPH_SCHEMA_VERSION
-    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    encoding: Literal["gzip"]
-    uncompressed_bytes: int = Field(ge=1, le=8 * 1024 * 1024)
-    compressed_bytes: int = Field(ge=1, le=8 * 1024 * 1024)
-    payload_base64: str = Field(min_length=1, max_length=12 * 1024 * 1024)
-    projections: dict[str, dict[str, Any]]
 
 
 class LeaseHeartbeatRequest(CollectorModel):

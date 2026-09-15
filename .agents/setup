@@ -41,8 +41,8 @@ fi
 step "Sync locked Python workspace"
 time uv sync --all-packages --locked
 
-web_root="$repo_root/packages/plugins/datahub/web"
-step "Sync locked Datahub web dependencies"
+web_root="$repo_root/packages/plugins/loop/web"
+step "Sync locked Loop web dependencies"
 time bun install --cwd "$web_root" --frozen-lockfile --concurrent-scripts 2
 
 step "Verify"

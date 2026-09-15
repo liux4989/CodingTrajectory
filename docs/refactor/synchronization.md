@@ -54,7 +54,7 @@ not on inference from a quiet file.
 
 Manual mode is the default. The implemented lifecycle uses `ct collector sync
 --mode prepare|status|publish|serve|pause|resume`, with explicit reconciliation
-modes described in [operations](operations.md). `prepare` performs no network
+modes described in [collector handoff](../local-collector-handoff.md). `prepare` performs no network
 publication; `publish` submits frozen captures; `serve` defaults to preparation
 unless automatic mode was explicitly persisted. Restart retains mode. Installation does not enable a host
 scheduler implicitly. Existing `collector run` publishes immediately and must not

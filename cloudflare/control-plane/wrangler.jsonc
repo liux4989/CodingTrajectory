@@ -10,7 +10,6 @@
     "bindings": [{"name": "WORKSPACES", "class_name": "Workspace"}]
   },
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["Workspace"]}],
-  "r2_buckets": [{"binding": "ARTIFACTS", "bucket_name": "coding-trajectory-artifacts"}],
   "secrets": {"required": ["CT_PRINCIPALS"]},
   "version_metadata": {"binding": "WORKER_VERSION"},
   "observability": {"enabled": true},
@@ -18,7 +17,6 @@
     "staging": {
       "name": "coding-trajectory-control-plane-staging",
       "durable_objects": {"bindings": [{"name": "WORKSPACES", "class_name": "Workspace"}]},
-      "r2_buckets": [{"binding": "ARTIFACTS", "bucket_name": "coding-trajectory-artifacts-staging"}],
       "secrets": {"required": ["CT_PRINCIPALS"]},
       "version_metadata": {"binding": "WORKER_VERSION"}
     }

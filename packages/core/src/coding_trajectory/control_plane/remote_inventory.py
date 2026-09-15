@@ -108,5 +108,5 @@ class CloudflareProjectInventoryRepository:
             "snapshot_sequence": self.snapshot_sequence,
             "source": "remote",
             "freshness": "authoritative",
-            "content_scope": "chronicle",
+            "content_scope": "facts",
         }

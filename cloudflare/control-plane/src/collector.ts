@@ -1,4 +1,6 @@
-import { DIGEST, fields, integer, Json, object, receipt, requireThat, stable, State, text, timestamp, uuid, validate } from "./shared";
+import { DIGEST, Json, receipt, requireThat, stable, State, text, uuid } from "./shared";
+import { recoveredGraphs } from "./facts";
+
 
 export function registerProject(state: State, request: Json): Json {
   const name = text(request.display_name).trim();
@@ -54,18 +56,11 @@ export function recovery(state: State, request: Json): Json {
   }
   const living = request.agent_instance_id ? state.get("living_head", request.agent_instance_id) : undefined;
   if (living) requireThat(living.agent_id === request.agent_id, "agent_instance_conflict", 403);
-  const artifacts = (request.artifact_ids ?? []).flatMap((id: string) => {
-    const artifact = state.get("artifact", id);
-    requireThat(!artifact || artifact.agent_id === request.agent_id, "artifact_owner_conflict", 409);
-    requireThat(!artifact || artifact.project_id === request.project_id, "artifact_project_conflict", 409);
-    return artifact ? [{ artifact_id: id, content_sha256: artifact.content_sha256, revision: artifact.revision, published_sequence: artifact.published_sequence, deleted: artifact.deleted }] : [];
-  });
+  const graphs = recoveredGraphs(state, request);
   return { next_publication_sequence: (publisher?.publication_sequence ?? -1) + 1,
     next_living_sequence: request.agent_instance_id ? (living?.observation_sequence ?? 0) + 1 : null, source,
-    ...(request.include_upload_state ? {
-      authority_incarnation: state.sql.exec<{ incarnation: string }>("SELECT incarnation FROM upload_authority WHERE id=1").one().incarnation,
-      authority_sequence: state.head(), artifacts,
-      publication_receipt: request.publication_idempotency_key ? state.get("receipt", stable([request.agent_id, "ct_collector_publish_artifacts", request.publication_idempotency_key]))?.result ?? null : null } : {}) };
+    authority_sequence: state.head(), graphs,
+    publication_receipt: request.publication_idempotency_key ? state.get("receipt", stable([request.agent_id, "ct_collector_publish_facts", request.publication_idempotency_key]))?.result ?? null : null };
 }
 
 export function checkpoint(state: State, request: Json): Json {
@@ -86,139 +81,4 @@ export function checkpoint(state: State, request: Json): Json {
   while (state.get("checkpoint", `${source.source_id}:${source.source_epoch}:${contiguous + 1}`)) contiguous++;
   state.put("source", source.source_id, { ...source, committed_source_sequence: contiguous }, sequence);
   return receipt("accepted", sequence);
-}
-
-export function publication(state: State, request: Json): Json {
-  requireThat(request.source_vector.length <= 1000 && request.artifacts.length <= 128, "publication_scope_budget", 413);
-  requireThat(state.get("project", request.project_id), "project_not_found", 404);
-  const vector = new Map<string, Json>(request.source_vector.map((entry: Json) => [entry.source_id, entry]));
-  requireThat(vector.size === request.source_vector.length, "duplicate_source_vector");
-  let stale = false;
-  for (const entry of vector.values()) {
-    const source = state.get("source", entry.source_id);
-    const checkpoint = state.get("checkpoint", `${entry.source_id}:${entry.source_epoch}:${entry.source_sequence}`);
-    requireThat(source && source.agent_id === request.agent_id && source.project_id === request.project_id && checkpoint?.content_sha256 === entry.content_sha256,
-      "source_vector_requires_accepted_project_checkpoints");
-    if (source.source_epoch !== entry.source_epoch || source.committed_source_sequence !== entry.source_sequence) stale = true;
-  }
-  const incoming = new Map<string, Json>();
-  const represented = new Set<string>();
-  const sessions = new Set<string>();
-  for (const artifact of request.artifacts) {
-    requireThat(!incoming.has(artifact.artifact_id), "duplicate_artifact");
-    requireThat(new Set(artifact.source_ids).size === artifact.source_ids.length && artifact.source_ids.every((id: string) => vector.has(id)), "invalid_artifact_sources");
-    const staged = state.get("staged", `${request.agent_id}:${artifact.content_sha256}`);
-    requireThat(staged && staged.artifact_id === artifact.artifact_id && staged.uncompressed_bytes === artifact.serialized_bytes && staged.schema_version === artifact.schema_version,
-      "artifact_must_be_staged");
-    const prior = state.get("artifact", artifact.artifact_id);
-    requireThat(!prior || prior.project_id === request.project_id, "artifact_project_conflict", 409);
-    requireThat(!prior || prior.agent_id === request.agent_id, "artifact_owner_conflict", 409);
-    incoming.set(artifact.artifact_id, { ...staged, ...artifact });
-    for (const id of artifact.source_ids) represented.add(id);
-    for (const id of staged.session_ids) {
-      requireThat(!sessions.has(id), "overlapping_incoming_graphs");
-      sessions.add(id);
-    }
-  }
-  requireThat(represented.size === vector.size, "unrepresented_source");
-  const publisherKey = `${request.agent_id}:${request.project_id}`;
-  const publisher = state.get("publisher", publisherKey);
-  const currentSequence = publisher?.publication_sequence ?? -1;
-  if (request.publication_sequence <= currentSequence) return receipt("conflict", publisher?.committed_sequence ?? null, { reason: "stale_publication_sequence" });
-  requireThat(request.publication_sequence === currentSequence + 1, "publication_sequence_gap", 409);
-  // Select only affected project lineages, not every artifact in the workspace.
-  // This also works during the additive catalog migration: records remains the
-  // authoritative history until the indexed projection has finished backfill.
-  const affected = state.sql.exec<{ payload: string }>(`SELECT r.payload FROM records r
-    WHERE r.kind='artifact' AND json_extract(r.payload,'$.project_id')=?
-      AND r.sequence=(SELECT max(v.sequence) FROM records v WHERE v.kind='artifact' AND v.key=r.key)
-      AND NOT coalesce(json_extract(r.payload,'$.deleted'),0)
-      AND (EXISTS (SELECT 1 FROM json_each(r.payload,'$.session_ids') s WHERE s.value IN (SELECT value FROM json_each(?)))
-        OR (json_extract(r.payload,'$.agent_id')=? AND NOT EXISTS (SELECT 1 FROM json_each(r.payload,'$.source_ids') s WHERE s.value NOT IN (SELECT value FROM json_each(?)))))
-    LIMIT 1001`, request.project_id, JSON.stringify([...sessions]), request.agent_id, JSON.stringify([...vector.keys()])).toArray();
-  requireThat(affected.length <= 1000, "publication_scope_budget", 413);
-  const current = affected.map(row => JSON.parse(row.payload));
-  requireThat(!current.some(row => row.agent_id !== request.agent_id && row.session_ids.some((id: string) => sessions.has(id))), "session_owner_conflict", 409);
-  const incomplete = current.some(row => row.session_ids.some((id: string) => sessions.has(id)) && row.source_ids.some((id: string) => !vector.has(id)));
-  const sequence = state.next();
-  state.put("publisher", publisherKey, { publication_sequence: request.publication_sequence, committed_sequence: sequence }, sequence);
-  if (stale || incomplete) {
-    return receipt("accepted", sequence, incomplete ? { reason: "incomplete_graph_scope", publication_outcome: "rejected", remedy: "include all sources of overlapping published graphs" } : { publication_outcome: "superseded" });
-  }
-  const publishedAt = new Date().toISOString();
-  let superseded = 0;
-  let omitted = 0;
-  state.put("publication_watermark", request.project_id, { project_id: request.project_id, published_sequence: sequence }, sequence);
-  for (const [id, artifact] of incoming) {
-    const prior = state.get("artifact", id);
-    if (prior && !prior.deleted) superseded++;
-    state.put("artifact", id, { ...artifact, project_id: request.project_id, agent_id: request.agent_id,
-      revision: (prior?.revision ?? 0) + 1, published_sequence: sequence, published_at: publishedAt, deleted: false }, sequence);
-  }
-  for (const row of current) {
-    if ((request.replacement_scope ?? "complete_sources") === "complete_sources" && row.agent_id === request.agent_id && !incoming.has(row.artifact_id) && row.source_ids.every((id: string) => vector.has(id))) {
-      state.put("artifact", row.artifact_id, { ...row, deleted: true, published_at: publishedAt }, sequence);
-      omitted++;
-    }
-  }
-  return receipt("accepted", sequence, { publication_outcome: "published", artifacts_published: incoming.size, revisions_published: incoming.size,
-    superseded_revisions: superseded, omitted_artifacts: omitted });
-}
-
-export function chronicleMetadata(payload: Json): { metadata: Json; resources: string[] } {
-  validate("chronicle", payload);
-  const sessions: Json[] = payload.sessions;
-  const sessionIds = new Set<string>(sessions.map(session => session.session_id));
-  requireThat(sessions.length > 0 && sessionIds.size === sessions.length && sessionIds.has(payload.graph.root_session_id) && payload.graph.session_count === sessions.length, "invalid_graph_sessions");
-  const turns = new Map<string, string>();
-  const items = new Map<string, string>();
-  const owner = (origin: Json, session: string) => {
-    requireThat(!origin.turn_id || turns.get(origin.turn_id) === session, "invalid_origin_turn");
-    requireThat(!origin.item_id || (origin.turn_id && items.get(origin.item_id) === `${session}:${origin.turn_id}`), "invalid_origin_item");
-  };
-  for (const session of sessions) {
-    let priorTurn = -1;
-    for (const turn of session.turns ?? []) {
-      requireThat(!turns.has(turn.turn_id) && turn.sequence > priorTurn, "invalid_turn_order");
-      turns.set(turn.turn_id, session.session_id);
-      priorTurn = turn.sequence;
-      const turnItems = new Map<string, Json>((turn.items ?? []).map((item: Json) => [item.item_id, item]));
-      let priorItem = -1;
-      for (const item of turn.items ?? []) {
-        requireThat(!items.has(item.item_id) && item.sequence > priorItem, "invalid_item_order");
-        items.set(item.item_id, `${session.session_id}:${turn.turn_id}`);
-        priorItem = item.sequence;
-        if (item.projection_parent_item_id) {
-          const parent = turnItems.get(item.projection_parent_item_id);
-          requireThat(parent && parent.item_id !== item.item_id && !parent.measurements?.projection_only && item.measurements?.projection_only, "invalid_projection_parent");
-        } else requireThat(item.nested_index == null, "projection_parent_required");
-      }
-    }
-    for (const origin of session.topology?.spawn_origins ?? []) owner(origin, session.session_id);
-  }
-  requireThat(turns.size === payload.graph.turn_count && items.size === payload.graph.item_count, "invalid_graph_counts");
-  const edges = new Set<string>();
-  for (const edge of payload.edges ?? []) {
-    requireThat(sessionIds.has(edge.source_session_id) && sessionIds.has(edge.target_session_id) && edge.origin.session_id === edge.source_session_id, "invalid_edge");
-    owner(edge.origin, edge.source_session_id);
-    const identity = stable([edge.kind, edge.source_session_id, edge.target_session_id, edge.origin.turn_id ?? null, edge.origin.item_id ?? null]);
-    requireThat(!edges.has(identity), "duplicate_edge");
-    edges.add(identity);
-  }
-  safeChronicle(payload);
-  return { metadata: { artifact_id: payload.graph.root_session_id, schema_version: payload.schema_version,
-    session_ids: [...sessionIds], vendors: [...new Set(sessions.map(session => session.vendor))], graph: payload.graph }, resources: [...sessionIds, ...turns.keys(), ...items.keys()] };
-}
-
-export function safeChronicle(value: any, field = "") {
-  if (typeof value === "string") {
-    requireThat(value.length <= 512, "unbounded_chronicle_string");
-    if (["content", "text_preview"].includes(field)) { requireThat(value.length > 0 && value.length <= 280, "invalid_preview"); return; }
-    requireThat(!/^\s*data:/i.test(value) && !/(?:\/Users\/|\/home\/|[A-Za-z]:\\|~\/)/.test(value) && !(value.length >= 128 && /^[A-Za-z0-9+/]+={0,2}$/.test(value)), "private_chronicle_content");
-  } else if (Array.isArray(value)) for (const child of value) safeChronicle(child, field);
-  else if (value && typeof value === "object") for (const [key, child] of Object.entries(value)) {
-    const empty = child == null || child === "" || (Array.isArray(child) && child.length === 0) || (typeof child === "object" && Object.keys(child as object).length === 0);
-    requireThat(empty || !/(data_uri|blob|media)/.test(key.toLowerCase().replace(/-/g, "_")), "embedded_chronicle_content");
-    safeChronicle(child, key);
-  }
 }

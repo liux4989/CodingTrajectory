@@ -5,7 +5,7 @@ action; the existing Mac schedule has not been activated by this implementation.
 
 ## Register and install once
 
-Configure a collector connection as described in [operations](operations.md), then
+Configure a collector connection as described in [connections](connections.md), then
 register its project and generate the supervisor template:
 
 ```sh

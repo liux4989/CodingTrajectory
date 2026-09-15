@@ -31,6 +31,7 @@ events.
 The strict Pydantic and Cloudflare ingress contracts retain:
 
 - graph, session, turn, item, request, and edge identities;
+- canonical item-to-event references, without event bodies;
 - topology, ordering, timestamps, lifecycle status, vendor, model, and effort;
 - request usage, runtime observations, and numeric content measurements;
 - normalized tool summary, outcome, optimization profile, exit code, and
@@ -88,6 +89,16 @@ One canonical graph artifact is limited to 8 MiB and one atomic project
 publication to 16 MiB. A bound failure stops publication; it does not fall back
 to a weaker schema. Canonical JSON and SHA-256 make retries and replay
 deterministic.
+
+Each item may retain at most 64 canonical event IDs. This matches Chronicle's
+existing 64-entry evidence-reference convention and leaves more than twice the
+headroom over the observed maximum of 29 IDs across 259 available canonical
+items (the local Amp corpus plus committed Codex, Claude, and Pi metric
+fixtures). Overflow rejects artifact construction rather than truncating
+evidence. The field is required on the wire, including an explicit empty list,
+so a missing reference set cannot be mistaken for complete hierarchy coverage.
+These IDs preserve hierarchy and drill-down identity only; Chronicle still
+stores no general event arrays or event bodies.
 
 ```text
 ct_source_observations

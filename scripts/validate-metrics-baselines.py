@@ -286,9 +286,10 @@ def canonical_graph_structure(graph: SessionGraph) -> dict[str, Any]:
 
 
 def project_surface(store: DocumentStore, case: BaselineCase, method: str) -> Any:
+    scope_key = "root_session_id" if method.startswith("graph.") else "session_id"
     payload = dispatch(
         method,
-        {"session_id": case.entrypoint_id},
+        {scope_key: case.entrypoint_id},
         store=store,
         global_scope=True,
         current_dir=REPO_ROOT,

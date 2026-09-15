@@ -75,7 +75,7 @@ exec /path/to/uv run ct collector run \
 Keep the wrapper mode executable and its parent directory private. Set
 `CT_AMP_PUBLISH_COMMAND` to an alternate absolute executable path, or set
 `CT_AMP_AUTO_PUBLISH=0` to retain capture without automatic publication. The
-plugin does not call the hosted Datahub Worker: that facade remains read-only.
+capture plugin does not call the Loop product service.
 Only the local collector builds and validates the bounded Chronicle artifact
 before publishing it through authenticated Cloudflare RPC. The publication path
 replaces user-request content with `[content omitted]` and removes assistant

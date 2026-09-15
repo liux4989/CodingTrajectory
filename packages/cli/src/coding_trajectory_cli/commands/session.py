@@ -32,11 +32,9 @@ EVENT TYPES
   usage                    Provider request-usage observation
   vendor.raw               A vendor-specific raw event
 
-FILTER SYNTAX
-  key=value     Exact match on a payload field
-  key=*         Field must exist
-  key=!         Field must be absent/null
-  Dot-paths supported: result.error=*
+Events are minimal normalized envelopes: type, status, timestamps, and
+item/turn references. Raw payloads are never retained or returned; output
+evidence is referenced through the owning item.
 """
 
 CONTEXT_CATEGORY_WIDTH = 48
@@ -45,10 +43,10 @@ CONTEXT_USAGE_WIDTH = 34
 
 def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {"session_id": args.session_id}
-    if args.num_turns is not None:
-        params["num_turns"] = args.num_turns
-    if args.drop_turns is not None:
-        params["drop_turns"] = args.drop_turns
+    if getattr(args, "limit", None) is not None:
+        params["limit"] = args.limit
+    if getattr(args, "before_turn_id", None):
+        params["before_turn_id"] = args.before_turn_id
     return params
 
 
@@ -71,6 +69,7 @@ def _session_search_params(args: argparse.Namespace) -> dict[str, Any]:
         "limit": args.limit,
         **({"turn_id": args.turn_id} if args.turn_id else {}),
         **({"kinds": args.kinds} if args.kinds else {}),
+        **({"cursor": args.cursor} if getattr(args, "cursor", None) else {}),
     }
 
 
@@ -82,27 +81,20 @@ def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _session_request_usage_params(args: argparse.Namespace) -> dict[str, Any]:
-    params = _session_usage_params(args)
-    include = [
-        value
-        for enabled, value in (
-            (args.include_context, "context"),
-            (args.include_causality, "causality"),
-        )
-        if enabled
-    ]
-    if include:
-        params["include"] = include
-    return params
+    return _session_usage_params(args)
 
 
 def _session_events_params(args: argparse.Namespace) -> dict[str, Any]:
     return {
-        **({"session_id": args.session_id} if args.session_id else {}),
+        "session_id": args.session_id,
         **({"event_ids": args.event_ids} if args.event_ids else {}),
+        **({"item_id": args.item_id} if args.item_id else {}),
         **({"turn_id": args.turn_id} if args.turn_id else {}),
-        **({"type": args.event_type} if args.event_type else {}),
-        **({"filters": args.filters} if args.filters is not None else {}),
+        **({"types": args.event_types} if args.event_types else {}),
+        **({"status": args.status} if args.status else {}),
+        **({"tool_name": args.tool_name} if args.tool_name else {}),
+        "limit": args.limit,
+        **({"cursor": args.cursor} if args.cursor else {}),
     }
 
 
@@ -112,7 +104,8 @@ def _session_items_params(args: argparse.Namespace) -> dict[str, Any]:
         **({"item_ids": args.resource_ids} if args.resource_ids else {}),
         **({"turn_id": args.turn_id} if args.turn_id else {}),
         **({"types": args.item_types} if args.item_types else {}),
-        **({"include_content": True} if args.include_content else {}),
+        "limit": args.limit,
+        **({"cursor": args.cursor} if args.cursor else {}),
     }
 
 
@@ -170,9 +163,7 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
                 f"Subagent activity: {one_line(activity['task'], limit=72)}{annotation}"
             )
         if tool == "AgentCollab" and activity.get("task"):
-            return (
-                f"Agent collaboration: {one_line(activity['task'], limit=72)}{annotation}"
-            )
+            return f"Agent collaboration: {one_line(activity['task'], limit=72)}{annotation}"
         for key in ("cmd", "path", "query", "url", "items", "task", "session"):
             if activity.get(key):
                 return (
@@ -626,9 +617,11 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         f"Model: {model_name} ({format_tokens(context_tokens)} context)",
         "",
         "```",
-        f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
-        f"{'Billed In/Cache/Write/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
-        f"{'Share':>8}",
+        (
+            f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
+            f"{'Billed In/Cache/Write/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
+            f"{'Share':>8}"
+        ),
     ]
 
     for category in context_window.get("categories") or []:
@@ -730,9 +723,11 @@ def _render_session_stats_sections(
                 f"Model: {model_name} ({format_tokens(context_tokens)} context)",
                 "",
                 "```",
-                f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
-                f"{'Billed In/Cache/Write/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
-                f"{'Share':>8}",
+                (
+                    f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
+                    f"{'Billed In/Cache/Write/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
+                    f"{'Share':>8}"
+                ),
             ]
         )
         for category in context_window.get("categories") or []:
@@ -789,7 +784,7 @@ def _render_session_usage_text(
     if len(session_sections) > 1:
         return _render_session_usage_sections(payload, args, session_sections)
 
-    total_cost = payload.get("estimated_cost") or {}
+    total_cost = payload.get("reported_cost") or {}
     models = payload.get("models") or []
     lines = ["# Session Usage", "", "```", _usage_total_label("Total", models)]
     request_count = sum(
@@ -823,7 +818,7 @@ def _render_session_usage_text(
         lines.extend(["", "Turns"])
     for turn in rendered_turns:
         lines.append(f"  turn {turn.get('turn_id') or '-'}")
-        turn_cost = turn.get("estimated_cost") or {}
+        turn_cost = turn.get("reported_cost") or {}
         lines.append(
             _render_token_cost_summary(
                 turn.get("usage") or {}, turn_cost, indent="    "
@@ -857,7 +852,7 @@ def _render_session_usage_sections(
     args: argparse.Namespace | None,
     session_sections: list[dict[str, Any]],
 ) -> str:
-    total_cost = payload.get("estimated_cost") or {}
+    total_cost = payload.get("reported_cost") or {}
     models = payload.get("models") or []
     lines = [
         "# Session Usage",
@@ -896,7 +891,7 @@ def _render_session_usage_sections(
                 "```",
             ]
         )
-        section_cost = section.get("estimated_cost") or {}
+        section_cost = section.get("reported_cost") or {}
         section_models = section.get("models") or []
         lines.append(_usage_total_label("Total", section_models))
         section_requests = sum(
@@ -926,7 +921,7 @@ def _render_session_usage_sections(
             lines.extend(["", "Turns"])
         for turn in rendered_turns:
             lines.append(f"  turn {turn.get('turn_id') or '-'}")
-            turn_cost = turn.get("estimated_cost") or {}
+            turn_cost = turn.get("reported_cost") or {}
             lines.append(
                 _render_token_cost_summary(
                     turn.get("usage") or {}, turn_cost, indent="    "
@@ -957,7 +952,7 @@ def _append_model_usage(lines: list[str], models: Any, *, indent: str) -> None:
         lines.append(
             _render_token_cost_summary(
                 row.get("usage") or {},
-                row.get("estimated_cost") or {},
+                row.get("reported_cost") or {},
                 indent=f"{indent}    ",
             )
         )
@@ -1195,7 +1190,11 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         type=positive_int,
         default=20,
         metavar="N",
-        help="Maximum matches to return (default: 20; API maximum: 50).",
+        help="Maximum matches to return (default: 20; API maximum: 100).",
+    )
+    session_search.add_argument(
+        "--cursor",
+        help="Continue after the cursor returned by a previous search page.",
     )
     add_output_flags(session_search)
     session_search.set_defaults(
@@ -1263,16 +1262,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         default=None,
         help="Limit request usage to one turn.",
     )
-    session_request_usage.add_argument(
-        "--include-context",
-        action="store_true",
-        help="Include request context-window diagnostics.",
-    )
-    session_request_usage.add_argument(
-        "--include-causality",
-        action="store_true",
-        help="Include tool-result-to-next-request causal links.",
-    )
     add_json_output_flag(session_request_usage)
     session_request_usage.set_defaults(
         _method="session.request_usage",
@@ -1287,7 +1276,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         epilog=EVENT_SCAN_EPILOG,
         formatter_class=GhFormatter,
     )
-    add_session_source(session_events, required=False)
+    add_session_source(session_events)
     add_json_output_flag(session_events)
     session_events.add_argument(
         "--event-id",
@@ -1298,6 +1287,13 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Resolve an event within SESSION_ID or --turn scope. Repeatable.",
     )
     session_events.add_argument(
+        "--item",
+        dest="item_id",
+        metavar="ITEM_ID",
+        default=None,
+        help="Limit the event query to one owning item.",
+    )
+    session_events.add_argument(
         "--turn",
         dest="turn_id",
         metavar="TURN_ID",
@@ -1306,18 +1302,35 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     session_events.add_argument(
         "--type",
-        dest="event_type",
-        required=False,
+        dest="event_types",
+        action="append",
         metavar="TYPE",
-        help="Event type to match.",
+        default=None,
+        help="Event type to match. Repeatable.",
     )
     session_events.add_argument(
-        "--filter",
-        dest="filters",
-        action="append",
-        metavar="KEY=VALUE",
+        "--status",
+        dest="status",
         default=None,
-        help="Filter on event payload fields. Repeatable.",
+        metavar="STATUS",
+        help="Normalized event status token to match.",
+    )
+    session_events.add_argument(
+        "--tool-name",
+        dest="tool_name",
+        default=None,
+        metavar="TOOL_NAME",
+        help="Limit the event query to events of items using this tool.",
+    )
+    session_events.add_argument(
+        "--limit",
+        type=positive_int,
+        default=100,
+        help="Maximum canonical events to return (API maximum: 100).",
+    )
+    session_events.add_argument(
+        "--cursor",
+        help="Continue after the source-order key returned by a previous page.",
     )
     session_events.set_defaults(
         _method="session.events",
@@ -1341,18 +1354,22 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Limit the item query to one turn.",
     )
     session_items.add_argument(
-        "--include-content",
-        action="store_true",
-        default=False,
-        help="Return full item content instead of truncation references.",
-    )
-    session_items.add_argument(
         "--type",
         dest="item_types",
         action="append",
         metavar="ITEM_TYPE",
         default=None,
         help="Limit results to an item type. Repeatable.",
+    )
+    session_items.add_argument(
+        "--limit",
+        type=positive_int,
+        default=100,
+        help="Maximum canonical items to return (API maximum: 100).",
+    )
+    session_items.add_argument(
+        "--cursor",
+        help="Continue after the source-order key returned by a previous page.",
     )
     add_json_output_flag(session_items)
     session_items.set_defaults(

@@ -18,12 +18,20 @@ from coding_trajectory.control_plane import (
     ApplicationDispatcher,
     MethodAuthority,
 )
+from coding_trajectory.control_plane.fact_repository import (
+    LocalPublishedFactRepository,
+    document_store_from_fact_sets,
+    entrypoint_ids,
+    entrypoint_ids_from_params,
+    fact_store_key,
+    published_fact_set_for_store,
+    requires_graph_scope,
+)
 from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
 from coding_trajectory.service import (
     IndexCache,
     dispatch,
     project_list_metadata,
-    resolve_store,
 )
 
 
@@ -58,105 +66,11 @@ def _environment_remote_fallback(
         from coding_trajectory.control_plane.configuration import ApiConfiguration
 
         options = ApiConfiguration.from_environment().runtime_options(
-            local_evidence=False, current_dir=current_dir
+            current_dir=current_dir
         )
         return ServiceRuntime(**options)
 
     return build
-
-
-def _discovery_params(params: dict[str, Any]) -> dict[str, Any]:
-    scope = params.get("scope")
-    if not isinstance(scope, dict):
-        return params
-    result = dict(params)
-    for key in ("session_id", "root_session_id", "turn_id"):
-        value = scope.get(key)
-        if value and key not in result:
-            result[key] = value
-    return result
-
-
-def _entrypoint_ids_from_params(params: dict[str, Any]) -> list[str]:
-    params = _discovery_params(params)
-    ids = [
-        value
-        for key in ("session_id", "root_session_id", "turn_id")
-        if isinstance((value := params.get(key)), str) and value
-    ]
-    session_ids = params.get("session_ids")
-    if isinstance(session_ids, list):
-        ids.extend(value for value in session_ids if isinstance(value, str) and value)
-    return ids
-
-
-def _entrypoint_ids(requests: list[dict[str, Any]]) -> list[str]:
-    ids: list[str] = []
-    for request in requests:
-        if request.get("method") in {
-            "living.events",
-            "living.sessions",
-            "project.list",
-        }:
-            continue
-        params = request.get("params") or {}
-        if isinstance(params, dict):
-            ids.extend(_entrypoint_ids_from_params(params))
-    return list(dict.fromkeys(ids))
-
-
-def _store_key(
-    params: dict[str, Any], *, global_scope: bool, include_descendants: bool
-) -> tuple[Any, ...]:
-    params = _discovery_params(params)
-    discovery_params = {
-        key: params.get(key)
-        for key in (
-            "project_name",
-            "since_days",
-            "modified_since",
-            "agent_vendor",
-            "session_id",
-            "root_session_id",
-            "turn_id",
-            "session_ids",
-        )
-        if key in params
-    }
-    return (
-        "discovery",
-        global_scope,
-        include_descendants,
-        json.dumps(discovery_params, sort_keys=True, default=str),
-    )
-
-
-def _requires_session_component(method: str) -> bool:
-    return method.startswith("graph.") or method == "session.tree"
-
-
-def _requires_local_evidence(method: str, params: dict[str, Any]) -> bool:
-    return (
-        method in {"session.events", "session.search"}
-        or method == "session.items"
-        and bool(params.get("include_content"))
-        or method == "graph.overview"
-        and "narrative" in params.get("include", [])
-    )
-
-
-def _chronicle_store(store: DocumentStore) -> DocumentStore:
-    from coding_trajectory.control_plane.chronicle import chronicle_session_graph
-
-    return DocumentStore.from_session_graphs(
-        [
-            chronicle_session_graph(graph)
-            for graph in sorted(
-                store.session_graphs.values(),
-                key=lambda graph: str(graph.root_session_id),
-            )
-        ]
-    )
 
 
 def _local_sources_available(*, current_dir: Path, global_scope: bool) -> bool:
@@ -213,8 +127,8 @@ class HistoricalRepository(Protocol):
     def metadata(self) -> dict[str, Any] | None: ...
 
 
-class LocalHistoricalRepository:
-    """Resolve historical stores from host-local sources without remote I/O."""
+class LocalHistoricalRepository(LocalPublishedFactRepository):
+    """Resolve historical stores from host-local published fact sets."""
 
     def __init__(
         self,
@@ -224,85 +138,55 @@ class LocalHistoricalRepository:
         cache: IndexCache,
         connection_profile: str | None = None,
     ) -> None:
-        self.global_scope = global_scope
-        self.current_dir = current_dir
-        self.cache = cache
-        self._stores: dict[tuple[Any, ...], tuple[DocumentStore, str]] = {}
-        self._batch_store: tuple[DocumentStore, str] | None = None
-        self._batch_chronicle_store: tuple[DocumentStore, str] | None = None
-        from coding_trajectory.control_plane.canonical_repository import (
-            CanonicalReadRepository,
-            configured_canonical_path,
+        super().__init__(
+            global_scope=global_scope,
+            current_dir=current_dir,
+            cache=cache,
         )
-
-        canonical_path = configured_canonical_path(connection_profile)
-        self._canonical = (
-            CanonicalReadRepository(canonical_path) if canonical_path else None
-        )
-        self._canonical_used = False
-
-    def pin_snapshot(self) -> int:
-        """Local sources are read live and therefore have no snapshot number."""
-
-        return 0
+        self.connection_profile = connection_profile
+        self._batch_key: tuple[Any, ...] | None = None
 
     def prepare_batch(self, requests: list[dict[str, Any]]) -> None:
-        ids = _entrypoint_ids(requests)
+        ids = entrypoint_ids(requests)
         if not ids:
             return
-        self._batch_chronicle_store = None
-        self._batch_store = resolve_store(
+        store, _note = self._resolve_store(
+            "session.tree",
             {"session_ids": ids},
-            global_scope=self.global_scope,
-            current_dir=self.current_dir,
-            cache=self.cache,
+            ("batch",),
         )
-        self._require_available(self._batch_store[0])
+        self._require_available(store)
+        key = (
+            "facts",
+            self.global_scope,
+            True,
+            json.dumps({"session_ids": ids}, sort_keys=True),
+        )
+        self._fact_sets.setdefault(key, published_fact_set_for_store(store))
+        self._stores[key] = (
+            document_store_from_fact_sets(self._fact_sets[key]),
+            _note,
+        )
+        self._batch_key = key
 
     def store_for(
         self, method: str, params: dict[str, Any]
     ) -> tuple[DocumentStore, str]:
-        self._canonical_used = False
-        if self._canonical is not None and not _requires_local_evidence(method, params):
-            try:
-                result = self._canonical.store_for(method, params)
-                self._canonical_used = True
-                return result
-            except ResourceNotFoundError:
-                pass
-        if self._batch_store is not None and _entrypoint_ids_from_params(params):
-            self._require_available(self._batch_store[0])
-            if _requires_local_evidence(method, params):
-                return self._batch_store
-            if self._batch_chronicle_store is None:
-                store, note = self._batch_store
-                self._batch_chronicle_store = (_chronicle_store(store), note)
-            return self._batch_chronicle_store
-
-        include_descendants = _requires_session_component(method)
-        key = (
-            "local_evidence"
-            if _requires_local_evidence(method, params)
-            else "chronicle",
-            *_store_key(
-                params,
-                global_scope=self.global_scope,
-                include_descendants=include_descendants,
-            ),
+        if self._batch_key is not None and entrypoint_ids_from_params(params):
+            store, note = self._stores[self._batch_key]
+            self._require_available(store)
+            return store, note
+        key = fact_store_key(
+            params,
+            global_scope=self.global_scope,
+            include_descendants=requires_graph_scope(method),
         )
         if key not in self._stores:
-            store, note = resolve_store(
-                _discovery_params(params),
-                global_scope=self.global_scope,
-                current_dir=self.current_dir,
-                cache=self.cache,
-                include_descendants=include_descendants,
-            )
+            store, note = self._resolve_store(method, params, key)
             self._require_available(store)
+            self._fact_sets.setdefault(key, published_fact_set_for_store(store))
             self._stores[key] = (
-                store
-                if _requires_local_evidence(method, params)
-                else _chronicle_store(store),
+                document_store_from_fact_sets(self._fact_sets[key]),
                 note,
             )
         return self._stores[key]
@@ -317,13 +201,9 @@ class LocalHistoricalRepository:
         )
 
     def metadata(self) -> dict[str, Any]:
-        if self._canonical_used and self._canonical is not None:
-            return self._canonical.metadata()
-        return {"source": "local", "freshness": "live"}
+        return {"source": "local", "freshness": "live", "content_scope": "facts"}
 
     def close(self) -> None:
-        if self._canonical is not None:
-            self._canonical.close()
         self.cache.save()
 
 
@@ -435,7 +315,6 @@ class ServiceRuntime:
         connection_profile: str | None = None,
         authority_handlers: Mapping[MethodAuthority, Callable[..., Any]] | None = None,
         transport_metadata: Callable[[], dict[str, Any] | None] | None = None,
-        local_evidence: bool = True,
         fallback_factory: Callable[[], ServiceRuntime] | None = None,
     ) -> None:
         self.global_scope = global_scope
@@ -462,9 +341,6 @@ class ServiceRuntime:
                 ),
                 MethodAuthority.LIVING: handlers.get(
                     MethodAuthority.LIVING, self._call_living
-                ),
-                MethodAuthority.ESTIMATION: handlers.get(
-                    MethodAuthority.ESTIMATION, self._call_estimation
                 ),
             }
         )
@@ -581,17 +457,6 @@ class ServiceRuntime:
             raise LocalSourceUnavailableError(
                 "no supported coding-agent source is available on this host"
             )
-
-    def _call_estimation(self, method: str, params: dict[str, Any]) -> Any:
-        from coding_trajectory.estimation import serve_estimate
-
-        return serve_estimate(
-            method,
-            params,
-            global_scope=self.global_scope,
-            current_dir=self.current_dir,
-            cache=self.cache,
-        )
 
     def _call_historical(self, method: str, params: dict[str, Any]) -> Any:
         response_for = getattr(self.historical_repository, "response_for", None)

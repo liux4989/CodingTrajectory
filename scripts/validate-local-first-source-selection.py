@@ -39,7 +39,10 @@ class StubRemoteRuntime:
 
     def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         assert method == self.method
-        assert params == self.params
+        # Contract validation may inject bounded-pagination defaults (for
+        # example ``limit``); require every explicitly expected parameter.
+        for key, value in self.params.items():
+            assert params.get(key) == value, (key, params)
         self.calls += 1
         return self.result
 

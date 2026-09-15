@@ -61,48 +61,41 @@ def _graph_orchestration_summary(session_graph: SessionGraph) -> dict[str, Any]:
 def build_graph_overview(
     session_graph: SessionGraph,
     *,
-    num_turns: int | None = None,
-    drop_turns: int | None = None,
-    include_narrative: bool = True,
+    limit: int | None = None,
+    before_turn_id: str | None = None,
 ) -> dict[str, Any]:
     """Return the complete tree, including spawned-agent sessions.
 
-    The narrative projection carries turn requests, assistant responses, and
-    item references. It can be omitted while retaining graph topology and
-    session metadata. Defaults preserve the legacy response shape.
+    The narrative projection carries bounded turn requests, bounded assistant
+    response previews, and item references — never raw bodies. Turn windows are
+    deterministic: ``limit`` selects the most recent visible turns per session
+    and ``before_turn_id`` pages to immediately older windows.
     """
     index = build_session_graph_index(session_graph)
-    narrative = (
-        build_session_graph_narrative(
-            session_graph,
-            num_turns=num_turns,
-            drop_turns=drop_turns,
-            index=index,
-        )
-        if include_narrative
-        else {"sessions": []}
+    narrative = build_session_graph_narrative(
+        session_graph,
+        limit=limit,
+        before_turn_id=before_turn_id,
+        index=index,
     )
     sessions = []
+    trimmed = False
     narrative_by_id = {
         str(session.get("session_id")): session for session in narrative["sessions"]
     }
     for session in session_graph.sessions:
         node = dict(narrative_by_id.get(str(session.session_id), {}))
-        if not include_narrative:
-            node.update(
-                prune_nones(
-                    {
-                        "vendor": session.vendor.value,
-                        "model": session.model,
-                        "reasoning_effort": session.reasoning_effort,
-                        "status": session.status,
-                        "latest_turn_status": session.latest_turn_status,
-                        "agent_name": session.agent_name,
-                        "title": session_title(session),
-                        "cwd": session.cwd,
-                    }
-                )
+        node.update(
+            prune_nones(
+                {
+                    "vendor": session.vendor.value,
+                    "title": session_title(session),
+                }
             )
+        )
+        window = node.get("turn_window")
+        if isinstance(window, dict) and window.get("next_before_turn_id"):
+            trimmed = True
         codex = session.extensions.codex if session.extensions else None
         node.update(
             prune_nones(
@@ -143,4 +136,10 @@ def build_graph_overview(
         ),
         "sessions": sessions,
         "edges": [edge.model_dump(mode="json") for edge in session_graph.edges],
+        "coverage": {
+            "retention": "preview",
+            "measurement": "complete",
+            "searchable": None,
+            "trimmed": trimmed,
+        },
     }

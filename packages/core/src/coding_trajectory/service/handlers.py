@@ -1,9 +1,16 @@
-"""Method handlers and dispatch for the session-api.json contract."""
+"""Method handlers and dispatch for the historical and living service methods.
+
+Every standard historical method has one bounded ``facts`` behavior: handlers
+read the retained published-facts representation (structural identity,
+topology, measurements, event envelopes, and processed output evidence) and
+never raw bodies, whether the store came from local logs or remote SQL rows.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -11,23 +18,26 @@ from uuid import UUID
 
 from coding_trajectory import debug
 from coding_trajectory.contracts import service_contract
-from coding_trajectory.ingestion.models import Session, SessionGraph
+from coding_trajectory.ingestion.models import SessionGraph
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 from coding_trajectory.service.serializers import (
-    _optional_positive_int,
     _parse_user_id,
     _public_output_for_session_graph,
-    serialize_event_detail,
     serialize_session_graph_detail,
 )
 from coding_trajectory.service.store import (
     IndexCache,
     _resolve_session_graph,
-    _session_graph_entrypoint_id,
     project_list_metadata,
     resolve_collection,
-    resolve_resource,
 )
+
+#: Deterministic always-on caps for bounded metrics child collections. When a
+#: collection exceeds its cap it is trimmed from the front (oldest first) and
+#: the response records a warning; aggregate totals are never affected.
+MAX_REQUEST_USAGE_REQUESTS = 4096
+MAX_TOOL_USAGE_ITEM_COSTS = 1024
+MAX_GRAPH_USAGE_TURNS = 4096
 
 
 @dataclass(frozen=True)
@@ -70,62 +80,14 @@ def dispatch(
     return contract.validate_response(result)
 
 
-def _graph_handler(
-    build: Callable[[dict[str, Any], SessionGraph], Any],
-) -> ServiceHandler:
-    """Resolve the graph and wrap the graph-level build result.
-
-    Every ``graph.*`` projection follows the same preamble: resolve the graph
-    from the entry-point id, build the projection, and pass it through the
-    public output seam. Entry-point caching is centralized in :func:`dispatch`.
-    """
-
-    @wraps(build)
-    def wrapper(params: dict[str, Any], context: ServiceContext) -> Any:
-        session_graph = _resolve_session_graph(
-            context.store, _session_graph_entrypoint_id(params)
-        )
-        from coding_trajectory.analysis.orchestration_runs import (
-            orchestration_run_for_entrypoint,
-        )
-
-        entrypoint = _session_graph_entrypoint_id(params)
-        session_graph = orchestration_run_for_entrypoint(
-            session_graph,
-            _parse_user_id(entrypoint) if entrypoint else None,
-        )
-        return _public_output_for_session_graph(
-            session_graph, build(params, session_graph)
-        )
-
-    return wrapper
-
-
-def _select_session_graph(
-    session_graph: SessionGraph, entrypoint_id: str | None
-) -> SessionGraph:
+def _select_session_graph(session_graph: SessionGraph, session_id: str) -> SessionGraph:
     """Select one canonical session from a graph for ``session.*`` methods."""
     from coding_trajectory.ingestion.indexes import build_session_graph_index
 
     index = build_session_graph_index(session_graph)
-    selected: Session | None = None
-    if entrypoint_id:
-        resource_id = _parse_user_id(entrypoint_id)
-        selected = index.sessions_by_id.get(resource_id)
-        if selected is None:
-            turn = index.turns_by_id.get(resource_id)
-            if turn is not None:
-                selected = index.sessions_by_id.get(turn.session_id)
+    selected = index.sessions_by_id.get(_parse_user_id(session_id))
     if selected is None:
-        selected = index.sessions_by_id.get(session_graph.root_session_id)
-    if selected is None:
-        selected = min(
-            session_graph.sessions,
-            key=lambda item: (item.started_at, str(item.session_id)),
-            default=None,
-        )
-    if selected is None:
-        raise ValueError("session_graph has no sessions")
+        raise ResourceNotFoundError(f"session not found in graph: {session_id}")
     return SessionGraph(
         root_session_id=selected.session_id,
         project_identifier=session_graph.project_identifier,
@@ -134,36 +96,38 @@ def _select_session_graph(
     )
 
 
-def _single_session_handler(
+def _graph_handler(
     build: Callable[[dict[str, Any], SessionGraph], Any],
 ) -> ServiceHandler:
-    """Resolve one thread while retaining the source graph for cache lookup."""
+    """Resolve the graph from its required ``root_session_id`` entry point."""
 
     @wraps(build)
     def wrapper(params: dict[str, Any], context: ServiceContext) -> Any:
-        session_graph = _resolve_session_graph(
-            context.store, _session_graph_entrypoint_id(params)
+        root_session_id = params["root_session_id"]
+        session_graph = _resolve_session_graph(context.store, root_session_id)
+        from coding_trajectory.analysis.orchestration_runs import (
+            orchestration_run_for_entrypoint,
         )
-        selected_graph = _select_session_graph(
-            session_graph, _session_graph_entrypoint_id(params)
+
+        session_graph = orchestration_run_for_entrypoint(
+            session_graph, _parse_user_id(root_session_id)
         )
         return _public_output_for_session_graph(
-            selected_graph, build(params, selected_graph)
+            session_graph, build(params, session_graph)
         )
 
     return wrapper
 
 
-def _canonical_session_handler(
+def _session_handler(
     build: Callable[[dict[str, Any], SessionGraph], Any],
 ) -> ServiceHandler:
-    """Resolve an exact canonical session ID for strict retrieval methods."""
+    """Resolve one session via its required ``session_id`` entry point."""
 
     @wraps(build)
     def wrapper(params: dict[str, Any], context: ServiceContext) -> Any:
         session_id = params["session_id"]
-        session = context.store.get_session(_parse_user_id(session_id))
-        session_graph = context.store.get_session_graph_for_session(session.session_id)
+        session_graph = _resolve_session_graph(context.store, session_id)
         selected_graph = _select_session_graph(session_graph, session_id)
         return _public_output_for_session_graph(
             selected_graph, build(params, selected_graph)
@@ -175,9 +139,12 @@ def _canonical_session_handler(
 def _handle_project_sessions(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
+    """Collapsed inventory cards: runtime and usage are always computed."""
+    from coding_trajectory.analysis.orchestration_runs import orchestration_runs
     from coding_trajectory.analysis.session_graph_views import (
         session_graph_has_visible_overview_content,
     )
+    from coding_trajectory.metrics import build_session_graph_usage
 
     session_graphs = resolve_collection(
         context.store,
@@ -187,33 +154,35 @@ def _handle_project_sessions(
         project_name=params.get("project_name"),
         agent_vendor=params.get("agent_vendor"),
     )
-    include = set(params.get("include") or [])
     items: list[dict[str, Any]] = []
-    from coding_trajectory.analysis.orchestration_runs import orchestration_runs
-
     for lineage_graph in session_graphs:
         for graph in orchestration_runs(lineage_graph):
             if not session_graph_has_visible_overview_content(graph):
                 continue
+            usage = build_session_graph_usage(graph)
             item = {
                 **serialize_session_graph_detail(graph),
                 "project": graph.project_identifier,
                 "lineage_root_session_id": str(lineage_graph.root_session_id),
+                "modified": _graph_modified(graph),
+                "usage": usage.get("total_usage") or {},
+                "runtime": usage.get("runtime") or {},
+                "warnings": usage.get("warnings") or [],
             }
-            if "usage" in include:
-                from coding_trajectory.metrics import build_session_graph_usage
-
-                usage = build_session_graph_usage(graph)
-                item["usage"] = usage.get("total_usage") or {}
-                item["warnings"] = usage.get("warnings") or []
-                if "runtime" in include:
-                    item["runtime"] = usage.get("runtime") or {}
-            elif "runtime" in include:
-                from coding_trajectory.metrics import build_session_graph_runtime
-
-                item["runtime"] = build_session_graph_runtime(graph)
             items.append(_public_output_for_session_graph(graph, item))
     return {"items": items}
+
+
+def _graph_modified(session_graph: SessionGraph) -> datetime | None:
+    return max(
+        (
+            timestamp
+            for session in session_graph.sessions
+            for timestamp in (session.ended_at, session.started_at)
+            if timestamp is not None
+        ),
+        default=None,
+    )
 
 
 def _handle_project_list(
@@ -248,27 +217,29 @@ def _handle_living_events(
     )
 
 
-@_single_session_handler
+@_session_handler
 def _handle_session_overview(
     params: dict[str, Any], session_graph: SessionGraph
 ) -> Any:
-    from coding_trajectory.analysis.projections import build_session_graph_overview
+    from coding_trajectory.analysis.session_graph_views import (
+        build_session_graph_overview,
+    )
 
     return build_session_graph_overview(
         session_graph,
-        num_turns=_optional_positive_int(params, "num_turns"),
-        drop_turns=_optional_positive_int(params, "drop_turns"),
+        limit=params["limit"],
+        before_turn_id=params.get("before_turn_id"),
     )
 
 
-@_canonical_session_handler
+@_session_handler
 def _handle_session_summary(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.analysis.session_retrieval import build_session_summary
 
     return build_session_summary(session_graph, turn_id=params.get("turn_id"))
 
 
-@_canonical_session_handler
+@_session_handler
 def _handle_session_search(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.analysis.session_retrieval import search_session
 
@@ -279,6 +250,7 @@ def _handle_session_search(params: dict[str, Any], session_graph: SessionGraph) 
         kinds=params["kinds"],
         limit=params["limit"],
         turn_id=params.get("turn_id"),
+        cursor=params.get("cursor"),
     )
 
 
@@ -288,68 +260,73 @@ def _handle_session_tree(params: dict[str, Any], context: ServiceContext) -> Any
         orchestration_run_for_entrypoint,
     )
 
-    entrypoint = _session_graph_entrypoint_id(params)
-    session_graph = _resolve_session_graph(context.store, entrypoint)
+    session_id = params["session_id"]
+    session_graph = _resolve_session_graph(context.store, session_id)
     tree = build_conversation_tree(session_graph)
-    run = orchestration_run_for_entrypoint(
-        session_graph,
-        _parse_user_id(entrypoint) if entrypoint else None,
-    )
+    run = orchestration_run_for_entrypoint(session_graph, _parse_user_id(session_id))
     tree["selected_branch_id"] = str(run.root_session_id)
     return tree
 
 
-@_single_session_handler
+@_session_handler
 def _handle_session_stats(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     return _build_stats_response(session_graph)
 
 
-@_single_session_handler
+@_session_handler
 def _handle_session_usage(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.metrics import build_session_graph_usage
 
-    return build_session_graph_usage(session_graph, turn_id=params.get("turn_id"))
+    return _native_metric_costs(
+        _cap_turns(
+            build_session_graph_usage(session_graph, turn_id=params.get("turn_id"))
+        )
+    )
 
 
-@_single_session_handler
+@_session_handler
 def _handle_session_model_usage(
     params: dict[str, Any], session_graph: SessionGraph
 ) -> Any:
     from coding_trajectory.metrics import build_session_graph_model_usage
 
-    return build_session_graph_model_usage(
-        session_graph,
-        turn_id=params.get("turn_id"),
+    return _native_metric_costs(
+        build_session_graph_model_usage(
+            session_graph,
+            turn_id=params.get("turn_id"),
+        )
     )
 
 
-@_single_session_handler
+@_session_handler
 def _handle_session_request_usage(
     params: dict[str, Any], session_graph: SessionGraph
 ) -> Any:
     from coding_trajectory.metrics import build_session_graph_request_usage
 
-    include = set(params.get("include") or [])
-    return build_session_graph_request_usage(
-        session_graph,
-        turn_id=params.get("turn_id"),
-        include_causality="causality" in include,
-        include_context_diagnostics="context" in include,
+    return _native_metric_costs(
+        _cap_requests(
+            build_session_graph_request_usage(
+                session_graph,
+                turn_id=params.get("turn_id"),
+            )
+        )
     )
 
 
-@_single_session_handler
+@_session_handler
 def _handle_session_tool_usage(
     params: dict[str, Any], session_graph: SessionGraph
 ) -> Any:
     from coding_trajectory.metrics import build_session_graph_tool_usage
 
-    include = set(params.get("include") or [])
-    return build_session_graph_tool_usage(
-        session_graph,
-        turn_id=params.get("turn_id"),
-        include_item_real_token_costs="item_costs" in include,
-        include_advanced_causality="causality" in include,
+    return _native_metric_costs(
+        _cap_item_costs(
+            build_session_graph_tool_usage(
+                session_graph,
+                turn_id=params.get("turn_id"),
+            )
+        )
     )
 
 
@@ -359,32 +336,24 @@ def _handle_graph_overview(params: dict[str, Any], session_graph: SessionGraph) 
 
     return build_graph_overview(
         session_graph,
-        num_turns=_optional_positive_int(params, "num_turns"),
-        drop_turns=_optional_positive_int(params, "drop_turns"),
-        include_narrative="narrative" in set(params.get("include") or []),
+        limit=params["limit"],
+        before_turn_id=params.get("before_turn_id"),
     )
 
 
 @_graph_handler
 def _handle_graph_stats(params: dict[str, Any], session_graph: SessionGraph) -> Any:
-    return _build_stats_response(
-        session_graph,
-        include_session_composition=(
-            "session_composition" in set(params.get("include") or [])
-        ),
-    )
+    return _build_stats_response(session_graph)
 
 
-def _build_stats_response(
-    session_graph: SessionGraph,
-    *,
-    include_session_composition: bool = True,
-) -> dict[str, Any]:
+def _build_stats_response(session_graph: SessionGraph) -> dict[str, Any]:
     from coding_trajectory.metrics import build_session_graph_stats
 
-    return build_session_graph_stats(
-        session_graph,
-        include_session_composition=include_session_composition,
+    return _native_metric_costs(
+        build_session_graph_stats(
+            session_graph,
+            include_session_composition=True,
+        )
     )
 
 
@@ -392,176 +361,260 @@ def _build_stats_response(
 def _handle_graph_usage(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.metrics import build_session_graph_usage
 
-    include = set(params.get("include") or [])
-    return build_session_graph_usage(
-        session_graph,
-        turn_id=params.get("turn_id"),
-        include_graph_turns="flat_turns" in include,
+    return _native_metric_costs(
+        _cap_turns(build_session_graph_usage(session_graph, include_graph_turns=True))
     )
+
+
+def _cap_collection(
+    payload: dict[str, Any], key: str, cap: int, label: str
+) -> dict[str, Any]:
+    values = payload.get(key)
+    if isinstance(values, list) and len(values) > cap:
+        payload[key] = values[-cap:]
+        payload.setdefault("warnings", []).append(
+            f"{label} exceeded the {cap}-entry bound and was trimmed to the "
+            f"most recent entries; aggregate totals are unaffected."
+        )
+    return payload
+
+
+def _cap_turns(payload: dict[str, Any]) -> dict[str, Any]:
+    return _cap_collection(payload, "turns", MAX_GRAPH_USAGE_TURNS, "turn list")
+
+
+def _cap_requests(payload: dict[str, Any]) -> dict[str, Any]:
+    return _cap_collection(
+        payload, "requests", MAX_REQUEST_USAGE_REQUESTS, "request ledger"
+    )
+
+
+def _cap_item_costs(payload: dict[str, Any]) -> dict[str, Any]:
+    return _cap_collection(
+        payload,
+        "item_real_token_costs",
+        MAX_TOOL_USAGE_ITEM_COSTS,
+        "item cost ledger",
+    )
+
+
+def _native_metric_costs(value: Any) -> Any:
+    """Preserve metric evidence produced by the separate pricing authority."""
+
+    return value
 
 
 def _handle_session_events(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
-    from coding_trajectory.analysis.projections import build_event_scan
-    from coding_trajectory.ingestion.indexes import (
-        SessionGraphIndex,
-        build_session_graph_index,
-        item_for_event,
-    )
+    """Return minimal normalized event envelopes with typed filters only.
 
-    event_ids = params.get("event_ids")
+    Events never carry raw payloads. Output content is referenced through
+    ``item_id``/``output_evidence_id`` and lives once on the owning item's
+    processed output evidence. Usage observations resolve to native numeric
+    measurements retained on the session's request facts.
+    """
+    from coding_trajectory.ingestion.indexes import build_session_graph_index
+
+    session_graph = _resolve_session_graph(context.store, params["session_id"])
+    session_graph = _select_session_graph(session_graph, params["session_id"])
     selected_turn_id = params.get("turn_id")
-    if event_ids:
-        matches: list[dict[str, Any]] = []
-        root_session_id: str | None = None
-        indexes_by_graph_id: dict[UUID, SessionGraphIndex] = {}
-        for eid in event_ids:
-            try:
-                event = resolve_resource(context.store, "event", eid)
-                session_graph = context.store.get_session_graph_for_session(
-                    event.session_id
-                )
-                selected_graph = _select_session_graph(
-                    session_graph,
-                    params.get("session_id")
-                    or params.get("root_session_id")
-                    or selected_turn_id
-                    or str(event.session_id),
-                )
-                allowed_event_ids = _event_ids_for_turn(
-                    selected_graph,
-                    selected_turn_id,
-                )
-                if (
-                    allowed_event_ids is not None
-                    and event.event_id not in allowed_event_ids
-                ):
-                    continue
-                if root_session_id is None:
-                    root_session_id = str(selected_graph.root_session_id)
-                index = indexes_by_graph_id.get(selected_graph.root_session_id)
-                if index is None:
-                    index = build_session_graph_index(selected_graph)
-                    indexes_by_graph_id[selected_graph.root_session_id] = index
-                related_item = item_for_event(index, event.event_id)
-                detail = _public_output_for_session_graph(
-                    selected_graph,
-                    serialize_event_detail(event, related_item=related_item),
-                )
-                matches.append(detail)
-            except (ResourceNotFoundError, ValueError) as exc:
-                debug.warn(
-                    f"skipping unresolved event id {eid!r}: {exc}",
-                    code="session.events.event_id_unresolved",
-                    event_id=eid,
-                )
-                continue
-        return {
-            "root_session_id": root_session_id,
-            "type": params.get("type"),
-            "matches": matches,
-        }
-
-    entrypoint_id = _session_graph_entrypoint_id(params)
-    session_graph = _resolve_session_graph(context.store, entrypoint_id)
-    session_graph = _select_session_graph(session_graph, entrypoint_id)
+    index = build_session_graph_index(session_graph)
     allowed_event_ids = _event_ids_for_turn(session_graph, selected_turn_id)
-
-    event_type = params.get("type")
-    if not event_type:
-        all_events: list[dict[str, Any]] = []
-        for session in session_graph.sessions:
-            for event in session.events:
-                if (
-                    allowed_event_ids is not None
-                    and event.event_id not in allowed_event_ids
-                ):
-                    continue
-                detail = serialize_event_detail(event)
-                all_events.append(
-                    _public_output_for_session_graph(session_graph, detail)
-                )
-        limit = params.get("limit")
-        if limit:
-            all_events = all_events[:limit]
-        return {
-            "root_session_id": str(session_graph.root_session_id),
-            "type": None,
-            "matches": all_events,
-        }
-
-    result = build_event_scan(
-        session_graph,
-        event_type=event_type,
-        filters=params.get("filters") or [],
-        event_ids=allowed_event_ids,
+    requested_ids = (
+        {_parse_user_id(value) for value in params["event_ids"]}
+        if params.get("event_ids")
+        else None
     )
-    limit = params.get("limit")
-    if limit:
-        result["matches"] = result["matches"][:limit]
-    return _public_output_for_session_graph(session_graph, result)
+    item_filter = _parse_user_id(params["item_id"]) if params.get("item_id") else None
+    types_filter = _event_types_filter(params.get("types"))
+    status_filter = params.get("status")
+    tool_name_filter = params.get("tool_name")
+
+    usage_by_event: dict[Any, Any] = {}
+    for session in session_graph.sessions:
+        for observation in session.context_usage:
+            usage_by_event[observation.source_event_id] = observation
+
+    rows: list[dict[str, Any]] = []
+    for session in session_graph.sessions:
+        for source_sequence, event in enumerate(session.events):
+            if (
+                allowed_event_ids is not None
+                and event.event_id not in allowed_event_ids
+            ):
+                continue
+            if requested_ids is not None and event.event_id not in requested_ids:
+                continue
+            record = _event_record(
+                event,
+                session_graph=session_graph,
+                index=index,
+                source_sequence=source_sequence,
+                usage_by_event=usage_by_event,
+            )
+            if types_filter is not None:
+                if "usage" in types_filter:
+                    if event.type.value not in types_filter and record["usage"] is None:
+                        continue
+                elif event.type.value not in types_filter:
+                    continue
+            if status_filter is not None and record["status"] != status_filter:
+                continue
+            if item_filter is not None:
+                related = record["item_id"]
+                if related is None or _parse_user_id(related) != item_filter:
+                    continue
+            if tool_name_filter is not None:
+                if record["item_id"] is None:
+                    continue
+                item = index.items_by_id.get(_parse_user_id(record["item_id"]))
+                if item is None or _item_tool_name(item) != tool_name_filter:
+                    continue
+            rows.append(record)
+
+    page, next_cursor = _canonical_page(
+        rows,
+        kind="event",
+        cursor=params.get("cursor"),
+        limit=params["limit"],
+    )
+    missing = (
+        sorted(
+            str(value) for value in requested_ids - {row["event_id"] for row in rows}
+        )
+        if requested_ids
+        else []
+    )
+    for event_id in missing:
+        debug.warn(
+            f"skipping unresolved event id {event_id!r}",
+            code="session.events.event_id_unresolved",
+            event_id=event_id,
+        )
+    return _public_output_for_session_graph(
+        session_graph,
+        {
+            "root_session_id": str(session_graph.root_session_id),
+            "events": page,
+            "next_cursor": next_cursor,
+            "coverage": {
+                "retention": "not_retained",
+                "measurement": "complete",
+                "searchable": None,
+                "trimmed": next_cursor is not None,
+            },
+        },
+    )
+
+
+def _event_types_filter(types: list[str] | None) -> set[str] | None:
+    if not types:
+        return None
+    from coding_trajectory.ingestion.models import EventType
+
+    valid = {event.value for event in EventType} | {"usage"}
+    unknown = sorted(set(types) - valid)
+    if unknown:
+        raise ValueError(
+            f"unknown event types {unknown!r}. Valid types: usage, "
+            f"{', '.join(sorted(valid - {'usage'}))}"
+        )
+    return set(types)
+
+
+def _event_record(
+    event: Any,
+    *,
+    session_graph: SessionGraph,
+    index: Any,
+    source_sequence: int,
+    usage_by_event: dict[Any, Any],
+) -> dict[str, Any]:
+    from coding_trajectory.ingestion.indexes import item_for_event
+
+    related_item = item_for_event(index, event.event_id)
+    related_turn = _turn_for_event(session_graph, event.event_id, related_item)
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    status = payload.get("status")
+    if not isinstance(status, str) or not status:
+        status = _event_lifecycle_status(event.type)
+    evidence = _item_output_evidence(related_item) if related_item is not None else None
+    observation = usage_by_event.get(event.event_id)
+    return {
+        "event_id": str(event.event_id),
+        "session_id": str(event.session_id),
+        "turn_id": str(related_turn.turn_id) if related_turn else None,
+        "item_id": str(related_item.item_id) if related_item else None,
+        "timestamp": event.timestamp,
+        "type": event.type.value,
+        "status": status,
+        "source_sequence": source_sequence,
+        "source_order_key": _event_source_order_key(
+            index.sessions_by_id[event.session_id].started_at,
+            event.session_id,
+            source_sequence,
+            event.timestamp,
+            event.event_id,
+        ),
+        "provenance": {
+            "source": "published_facts",
+            "method": "published_event_envelope.v1",
+            "confidence": "high",
+        },
+        "coverage": {
+            "retention": "not_retained",
+            "measurement": "complete" if observation is not None else "none",
+            "searchable": "none",
+            "hierarchy": "complete" if related_turn else "partial",
+            "lifecycle": "complete" if status else "partial",
+        },
+        "output_evidence_id": (
+            str(related_item.item_id) if evidence is not None else None
+        ),
+        "usage": _event_usage(observation) if observation is not None else None,
+    }
+
+
+def _event_usage(observation: Any) -> dict[str, Any]:
+    usage = dict(observation.usage or {})
+    cost = usage.pop("cost_usd", None)
+    return {
+        "model": observation.model,
+        "provider": observation.provider,
+        "source": observation.source,
+        "context_window_tokens": observation.context_window_tokens,
+        "used_input_tokens": observation.used_input_tokens,
+        "input_tokens": usage.get("input_tokens", 0),
+        "cached_input_tokens": usage.get("cached_input_tokens", 0),
+        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "reasoning_output_tokens": usage.get("reasoning_output_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+        "uncached_input_tokens": usage.get("uncached_input_tokens"),
+        "cost_usd": cost,
+    }
 
 
 def _handle_session_items(
     params: dict[str, Any], context: ServiceContext
-) -> list[dict[str, Any]]:
-    from coding_trajectory.analysis.projections import build_item_details
-    from coding_trajectory.ingestion.indexes import (
-        SessionGraphIndex,
-        build_session_graph_index,
-    )
-    from coding_trajectory.ingestion.models import PlanItem
+) -> dict[str, Any]:
+    """Return bounded metadata, measurements, and processed output evidence."""
 
-    item_ids = params.get("item_ids")
+    session_graph = _resolve_session_graph(context.store, params["session_id"])
+    session_graph = _select_session_graph(session_graph, params["session_id"])
     selected_turn_id = params.get("turn_id")
-    include_content = bool(params.get("include_content"))
-    if item_ids:
-        result: list[dict[str, Any]] = []
-        indexes_by_graph_id: dict[UUID, SessionGraphIndex] = {}
-        for item_id in item_ids:
-            try:
-                item = resolve_resource(context.store, "item", item_id)
-                session_graph = context.store.get_session_graph_for_session(
-                    item.session_id
-                )
-                if selected_turn_id is not None and str(item.turn_id) != str(
-                    selected_turn_id
-                ):
-                    continue
-                index = None
-                if isinstance(item, PlanItem):
-                    index = indexes_by_graph_id.get(session_graph.root_session_id)
-                    if index is None:
-                        index = build_session_graph_index(session_graph)
-                        indexes_by_graph_id[session_graph.root_session_id] = index
-                result.append(
-                    _public_output_for_session_graph(
-                        session_graph,
-                        build_item_details(
-                            item,
-                            session_graph=session_graph,
-                            include_content=include_content,
-                            index=index,
-                        ),
-                    )
-                )
-            except (ResourceNotFoundError, ValueError) as exc:
-                debug.warn(
-                    f"skipping unresolved item id {item_id!r}: {exc}",
-                    code="session.items.item_id_unresolved",
-                    item_id=item_id,
-                )
-                continue
-        return result
-
-    entrypoint_id = params.get("session_id") or params.get("root_session_id")
-    session_graph = _resolve_session_graph(context.store, entrypoint_id)
-    session_graph = _select_session_graph(session_graph, entrypoint_id)
-
     types_filter = set(params["types"]) if params.get("types") else None
-    projection_index: SessionGraphIndex | None = None
-    result = []
+    requested_ids = (
+        {_parse_user_id(value) for value in params["item_ids"]}
+        if params.get("item_ids")
+        else None
+    )
+    from coding_trajectory.ingestion.indexes import build_session_graph_index
+
+    index = build_session_graph_index(session_graph)
+    rows: list[dict[str, Any]] = []
+    seen: set[UUID] = set()
     for session in session_graph.sessions:
         for turn in session.turns:
             if selected_turn_id is not None and str(turn.turn_id) != str(
@@ -569,22 +622,344 @@ def _handle_session_items(
             ):
                 continue
             for item in turn.items:
+                if requested_ids is not None and item.item_id not in requested_ids:
+                    continue
                 if types_filter and item.kind not in types_filter:
                     continue
-                if isinstance(item, PlanItem) and projection_index is None:
-                    projection_index = build_session_graph_index(session_graph)
-                result.append(
-                    _public_output_for_session_graph(
-                        session_graph,
-                        build_item_details(
-                            item,
-                            session_graph=session_graph,
-                            include_content=include_content,
-                            index=projection_index,
-                        ),
+                seen.add(item.item_id)
+                rows.append(
+                    _canonical_item_record(
+                        item, session_graph=session_graph, index=index
                     )
                 )
-    return result
+    if requested_ids:
+        for item_id in sorted(str(value) for value in requested_ids - seen):
+            debug.warn(
+                f"skipping unresolved item id {item_id!r}",
+                code="session.items.item_id_unresolved",
+                item_id=item_id,
+            )
+    page, next_cursor = _canonical_page(
+        rows,
+        kind="item",
+        cursor=params.get("cursor"),
+        limit=params["limit"],
+    )
+    trimmed = next_cursor is not None
+    return _public_output_for_session_graph(
+        session_graph,
+        {
+            "root_session_id": str(session_graph.root_session_id),
+            "items": page,
+            "next_cursor": next_cursor,
+            "coverage": {
+                "retention": _items_retention(rows),
+                "measurement": "complete",
+                "searchable": _items_searchable(rows),
+                "trimmed": trimmed,
+            },
+        },
+    )
+
+
+def _items_retention(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "not_applicable"
+    values = {row["coverage"]["retention"] for row in rows}
+    if values == {"not_applicable"}:
+        return "not_applicable"
+    if "preview" in values or "complete" in values:
+        return "preview"
+    return "not_retained"
+
+
+def _items_searchable(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "none"
+    order = {"complete": 3, "preview": 2, "facts_only": 1, "none": 0}
+    return min((row["coverage"]["searchable"] for row in rows), key=lambda v: order[v])
+
+
+def _canonical_item_record(
+    item: Any,
+    *,
+    session_graph: SessionGraph,
+    index: Any,
+) -> dict[str, Any]:
+    from coding_trajectory.analysis.item_details import _classify_item
+
+    source_session = index.sessions_by_id[item.session_id]
+    source_turn = index.turns_by_id[item.turn_id]
+    source_order_key = _item_source_order_key(
+        item,
+        session_started_at=source_session.started_at,
+        turn_sequence=source_turn.sequence,
+    )
+    concept = _classify_item(item)
+    operations = _item_operations(item, concept=concept)
+    evidence = _item_output_evidence(item)
+    measurements = item.measurements
+    preview = _item_preview(item, evidence)
+    return {
+        "item_id": str(item.item_id),
+        "session_id": str(item.session_id),
+        "turn_id": str(item.turn_id),
+        "event_ids": [str(event_id) for event_id in item.event_ids],
+        "source_sequence": item.sequence,
+        "source_order_key": source_order_key,
+        "started_at": item.started_at,
+        "completed_at": item.completed_at,
+        "kind": item.kind,
+        "operation": operations[0] if operations else None,
+        "status": _normalized_value(item.status),
+        "provenance": {
+            "source": "published_facts",
+            "method": "published_item_record.v1",
+            "confidence": "high",
+        },
+        "coverage": _item_coverage(item, evidence),
+        "type": str(concept),
+        "operations": operations or None,
+        "preview": preview,
+        "detail": _item_detail(item, concept=concept, index=index),
+        "measurements": (
+            {
+                "input_chars": measurements.input_chars,
+                "input_tokens": measurements.input_tokens,
+                "output_chars": measurements.output_chars,
+                "output_tokens": measurements.output_tokens,
+                "text_chars": measurements.text_chars,
+                "text_tokens": measurements.text_tokens,
+            }
+            if measurements is not None
+            else None
+        ),
+        "output_evidence": evidence,
+    }
+
+
+def _item_operations(item: Any, *, concept: Any) -> list[str] | None:
+    from coding_trajectory.analysis.concepts import ItemKind
+    from coding_trajectory.ingestion.models import (
+        AgentMessageItem,
+        CommandExecutionItem,
+        FileChangeItem,
+        PlanItem,
+        ReasoningItem,
+    )
+
+    if isinstance(item, AgentMessageItem):
+        return ["text_reply"]
+    if isinstance(item, ReasoningItem):
+        return ["reason"]
+    if isinstance(item, FileChangeItem):
+        return [item.operation or (item.tool_name or "edit")]
+    if isinstance(item, CommandExecutionItem):
+        return ["execute"]
+    if isinstance(item, PlanItem):
+        if concept == ItemKind.PLAN_SUBAGENT:
+            return ["spawn", "collect_result"]
+        if concept == ItemKind.SESSION_HANDOFF:
+            return ["handoff"]
+        return ["update"]
+    return [item.tool_name] if getattr(item, "tool_name", None) else None
+
+
+def _item_tool_name(item: Any) -> str | None:
+    name = getattr(item, "tool_name", None)
+    if name:
+        return str(name)
+    measurements = getattr(item, "measurements", None)
+    summary = getattr(measurements, "tool_summary", None) if measurements else None
+    if isinstance(summary, dict) and summary.get("name"):
+        return str(summary["name"])
+    return None
+
+
+def _item_output_evidence(item: Any) -> dict[str, Any] | None:
+    vendor_data = getattr(item, "vendor_data", None) or {}
+    value = vendor_data.get("chronicle_output_evidence")
+    return value if isinstance(value, dict) else None
+
+
+def _item_preview(item: Any, evidence: dict[str, Any] | None) -> str | None:
+    measurements = getattr(item, "measurements", None)
+    preview = getattr(measurements, "text_preview", None) if measurements else None
+    if isinstance(preview, str) and preview:
+        return preview
+    if evidence is not None:
+        value = evidence.get("preview")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _item_coverage(item: Any, evidence: dict[str, Any] | None) -> dict[str, Any]:
+    from coding_trajectory.ingestion.models import AgentMessageItem, ReasoningItem
+
+    measurements = getattr(item, "measurements", None)
+    lifecycle = (
+        "complete"
+        if getattr(item, "completed_at", None) is not None
+        and getattr(item, "status", None)
+        else "partial"
+    )
+    if evidence is not None:
+        return {
+            "retention": evidence["retention"],
+            "measurement": (
+                "complete" if evidence.get("output_chars") is not None else "partial"
+            ),
+            "searchable": evidence["searchable"],
+            "hierarchy": "complete",
+            "lifecycle": lifecycle,
+        }
+    if isinstance(item, (AgentMessageItem, ReasoningItem)):
+        preview = getattr(measurements, "text_preview", None) if measurements else None
+        if measurements is None:
+            retention = "complete"
+            searchable = "complete"
+        elif isinstance(preview, str) and preview:
+            text_chars = getattr(measurements, "text_chars", 0)
+            retention = "preview"
+            searchable = "complete" if text_chars <= 280 else "preview"
+        else:
+            retention = "not_retained"
+            searchable = "none"
+        return {
+            "retention": retention,
+            "measurement": "complete" if measurements is not None else "none",
+            "searchable": searchable,
+            "hierarchy": "complete",
+            "lifecycle": lifecycle,
+        }
+    return {
+        "retention": "not_applicable",
+        "measurement": "complete" if measurements is not None else "none",
+        "searchable": "facts_only",
+        "hierarchy": "complete",
+        "lifecycle": lifecycle,
+    }
+
+
+def _item_detail(item: Any, *, concept: Any, index: Any) -> dict[str, Any] | None:
+    from coding_trajectory.ingestion.indexes import target_session_id_for_item
+    from coding_trajectory.ingestion.models import (
+        CommandExecutionItem,
+        FileChangeItem,
+        PlanItem,
+        ToolCallItem,
+    )
+
+    semantics = item.vendor_data.get("chronicle_semantics") or {}
+    tool_name = _item_tool_name(item)
+    detail: dict[str, Any] = {"tool_name": tool_name, "concept": str(concept)}
+    measurements = getattr(item, "measurements", None)
+    summary = getattr(measurements, "tool_summary", None) if measurements else None
+    summary_detail = summary.get("detail") if isinstance(summary, dict) else None
+    if isinstance(summary_detail, dict):
+        detail["target_kind"] = summary_detail.get("kind")
+        detail["target"] = summary_detail.get("target")
+    if isinstance(item, FileChangeItem):
+        detail["path"] = item.path
+        detail["operation"] = item.operation or item.tool_name or "edit"
+    if isinstance(item, CommandExecutionItem):
+        detail["exit_code"] = item.exit_code
+    verification_kind = semantics.get("verification_kind")
+    if isinstance(verification_kind, str):
+        detail["verification_kind"] = verification_kind
+    resolution_key = semantics.get("resolution_key")
+    if isinstance(resolution_key, str):
+        detail["resolution_key"] = resolution_key
+    if isinstance(item, (PlanItem, ToolCallItem)):
+        for edge_type in ("spawned_subagent", "handoff_to"):
+            target = target_session_id_for_item(index, item, edge_type=edge_type)
+            if target is not None:
+                detail["target_session_id"] = str(target)
+                break
+    return {key: value for key, value in detail.items() if value is not None} or None
+
+
+def _canonical_page(
+    rows: list[dict[str, Any]],
+    *,
+    kind: str,
+    cursor: str | None,
+    limit: int,
+) -> tuple[list[dict[str, Any]], str | None]:
+    prefix = f"{kind}:"
+    if cursor is not None and not cursor.startswith(prefix):
+        raise ValueError(f"invalid {kind} cursor")
+    ordered = sorted(rows, key=lambda row: row["source_order_key"])
+    if cursor is not None:
+        ordered = [row for row in ordered if row["source_order_key"] > cursor]
+    page = ordered[:limit]
+    next_cursor = page[-1]["source_order_key"] if len(ordered) > len(page) else None
+    return page, next_cursor
+
+
+def _item_source_order_key(
+    item: Any,
+    *,
+    session_started_at: datetime,
+    turn_sequence: int,
+) -> str:
+    return (
+        f"item:{_time_key(session_started_at)}:{item.session_id}:"
+        f"{turn_sequence:012d}:{item.turn_id}:{item.sequence:012d}:"
+        f"{_time_key(item.started_at)}:{item.item_id}"
+    )
+
+
+def _event_source_order_key(
+    session_started_at: datetime,
+    session_id: UUID,
+    source_sequence: int,
+    timestamp: datetime,
+    event_id: UUID,
+) -> str:
+    return (
+        f"event:{_time_key(session_started_at)}:{session_id}:"
+        f"{source_sequence:012d}:{_time_key(timestamp)}:{event_id}"
+    )
+
+
+def _time_key(value: datetime) -> str:
+    normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return normalized.astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def _normalized_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(getattr(value, "value", value)).lower()
+
+
+def _event_lifecycle_status(value: Any) -> str | None:
+    from coding_trajectory.ingestion.models import EventType
+
+    return {
+        EventType.TOOL_CALL_REQUESTED: "requested",
+        EventType.TOOL_CALL_SUCCEEDED: "completed",
+        EventType.TOOL_CALL_FAILED: "failed",
+    }.get(value)
+
+
+def _turn_for_event(
+    session_graph: SessionGraph,
+    event_id: UUID,
+    related_item: Any,
+) -> Any:
+    if related_item is not None:
+        for session in session_graph.sessions:
+            for turn in session.turns:
+                if turn.turn_id == related_item.turn_id:
+                    return turn
+    for session in session_graph.sessions:
+        for turn in session.turns:
+            if event_id == turn.user_request_event_id or event_id in turn.event_ids:
+                return turn
+    return None
 
 
 def _event_ids_for_turn(
@@ -610,29 +985,6 @@ def _event_ids_for_turn(
     raise ResourceNotFoundError(f"turn not found in selected session: {turn_id}")
 
 
-def _estimate_handler(method: str) -> ServiceHandler:
-    """Dispatch adapter for ``estimate.*`` methods.
-
-    Production traffic is short-circuited in :meth:`ServiceRuntime.call` (the
-    ledger-only methods never build a store). This handler keeps
-    ``dispatch(method, ...)`` consistent with that path, the same pattern as
-    ``project.list``.
-    """
-
-    def handler(params: dict[str, Any], context: ServiceContext) -> Any:
-        from coding_trajectory.estimation import serve_estimate
-
-        return serve_estimate(
-            method,
-            params,
-            global_scope=context.global_scope,
-            current_dir=context.current_dir,
-            cache=context.cache,
-        )
-
-    return handler
-
-
 SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "project.list": _handle_project_list,
     "project.sessions": _handle_project_sessions,
@@ -651,11 +1003,4 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "session.tool_usage": _handle_session_tool_usage,
     "session.events": _handle_session_events,
     "session.items": _handle_session_items,
-    "estimate.predict": _estimate_handler("estimate.predict"),
-    "estimate.bind": _estimate_handler("estimate.bind"),
-    "estimate.get": _estimate_handler("estimate.get"),
-    "estimate.list": _estimate_handler("estimate.list"),
-    "estimate.calibration": _estimate_handler("estimate.calibration"),
-    "estimate.backfill.start": _estimate_handler("estimate.backfill.start"),
-    "estimate.backfill.status": _estimate_handler("estimate.backfill.status"),
 }

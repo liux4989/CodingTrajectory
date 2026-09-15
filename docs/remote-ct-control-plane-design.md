@@ -2,9 +2,9 @@
 
 Local vendor logs remain the source of evidence. The optional remote authority
 stores bounded Chronicle graphs, portable projects, collector checkpoints,
-living observations, and estimator jobs. The shared Datahub reads committed
-published revisions from this authority; frozen website exports are not a
-supported delivery path.
+living observations, and estimator jobs. Core clients may read committed
+published revisions from this authority. Loop's first slice uses local sources
+only; hosted product delivery is deferred.
 
 ## Storage and authorization
 
@@ -91,5 +91,5 @@ publication are separate from deployment success.
 
 The retired database migrations and platform-specific release scaffolding have
 been removed from the repository. Existing external databases are not deleted
-by code cleanup. They are not consulted by the Cloudflare clients or live
-Datahub reader.
+by code cleanup. They are not consulted by the Cloudflare clients. The retired
+product's deployment workflow has been removed; Loop has no hosted release target.

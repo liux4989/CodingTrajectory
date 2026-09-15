@@ -88,7 +88,6 @@ def _remote_runtime(args: argparse.Namespace) -> ServiceRuntime:
     return factory.build(
         credentials.access_token,
         snapshot_sequence=getattr(args, "snapshot_sequence", None),
-        local_evidence=False,
         current_dir=Path.cwd(),
     )
 
