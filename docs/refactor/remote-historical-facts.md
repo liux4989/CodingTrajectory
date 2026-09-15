@@ -153,6 +153,25 @@ Durable Object SQLite.
   `ct_estimate_*`, `ct_estimator_*`, `estimate`/`estimate_worker` roles) and
   the R2 `ARTIFACTS` binding. Public Core keeps 18 methods; no `estimate.*`.
 
+## Source qualification
+
+An independent local replay of the private OSO source pair against reviewed
+ingestion commit `1f3e86cab69c931a2580fa0ec6de00f71ad99ba4` passed with unchanged
+source/evidence hashes. Both trajectory and measurement projections matched
+independently derived processed totals: 6,706,498 child tokens and 17,453,805
+graph tokens, excluding the prior 240,402 inherited-token inflation. The replay
+also observed 2 sessions, 3 completed graph turns, a spawned edge with verified
+parent turn/item/event origin, all 476 parent and 319 child occurrences with
+independently checked digests, and a 24-segment parent union delivered to 11
+children.
+
+One copied, untagged metadata occurrence after the child's owned start remains
+in the filtered stream. Its occurrence is preserved and it has no canonical
+event, accounting, or structural effect. This receipt closes the real-OSO gap
+only for that exact source pair and ingestion commit; it does not prove
+universally complete ownership classification. No raw source evidence was
+transferred or changed during qualification.
+
 ## Scale evidence
 
 `scripts/benchmark-fact-publication.py` publishes synthetic facts to
