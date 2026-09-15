@@ -6,7 +6,7 @@ The public Core protocol is frozen by
 [`validation/core-protocol.json`](../validation/core-protocol.json). The
 snapshot records the complete 18-method registry, each method version and exact
 request/result JSON Schema, the `ct.core.v1` success and error envelopes, and
-the complete `ct.chronicle_graph.v2` schema. CLI convenience projections and
+the complete `ct.chronicle_graph.v3` schema. CLI convenience projections and
 consumer-owned plugin protocols are not Core protocol authority.
 
 Run the review gate with:

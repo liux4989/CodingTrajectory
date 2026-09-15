@@ -139,6 +139,46 @@ _HOST_PATH_TOKEN = re.compile(
     r"/workspace/|/workspaces/|/mnt/|/srv/|/opt/|[A-Za-z]:[\\/])"
     r"[^\s'\"]+"
 )
+_PUBLISHED_COMMANDS = frozenset(
+    {
+        "bash",
+        "bun",
+        "cargo",
+        "cat",
+        "cmake",
+        "cp",
+        "curl",
+        "deno",
+        "docker",
+        "find",
+        "gh",
+        "git",
+        "go",
+        "grep",
+        "kubectl",
+        "ls",
+        "make",
+        "mkdir",
+        "mv",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "python",
+        "python3",
+        "rg",
+        "rm",
+        "ruff",
+        "sed",
+        "sh",
+        "terraform",
+        "uv",
+        "wget",
+        "wrangler",
+        "yarn",
+        "zsh",
+    }
+)
 
 
 class ChronicleModel(BaseModel):
@@ -224,6 +264,16 @@ class ChronicleToolDetail(ChronicleModel):
     target: _Preview
     scope: _Preview | None = None
     safety: Literal["sanitized"] = "sanitized"
+
+    @model_validator(mode="after")
+    def validate_command_signature(self) -> ChronicleToolDetail:
+        if self.kind == "command" and self.target not in _PUBLISHED_COMMANDS | {
+            "command"
+        }:
+            raise ValueError(
+                "command detail must be an allowlisted executable signature"
+            )
+        return self
 
 
 class ChronicleItemMeasurements(ChronicleModel):
@@ -1786,7 +1836,7 @@ def _tool_detail(
     else:
         kind = _DETAIL_KIND_BY_CONCEPT.get(concept, "tool")
     target = (
-        _safe_command_target(description, cwd=cwd)
+        _safe_command_target(description)
         if kind == "command"
         else _safe_detail_target(description, cwd=cwd)
     )
@@ -1795,39 +1845,19 @@ def _tool_detail(
     return ChronicleToolDetail(kind=kind, target=target)
 
 
-def _safe_command_target(value: str, *, cwd: str | None) -> str | None:
+def _safe_command_target(value: str) -> str:
+    """Return only an allowlisted executable name, never command arguments."""
+
     try:
         tokens = shlex.split(value)
     except ValueError:
         tokens = value.split()
-    redact_next = False
-    sensitive = re.compile(
-        r"(?:password|passwd|token|secret|api[-_]?key|authorization|cookie)",
-        re.IGNORECASE,
-    )
-    retained: list[str] = []
-    for token in tokens[:16]:
+    for token in tokens:
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
             continue
-        if redact_next:
-            redact_next = False
-            retained.append("[redacted]")
-            continue
-        key = token.split("=", 1)[0]
-        if sensitive.search(key):
-            if "=" in token:
-                safe_key = _safe_detail_target(key, cwd=cwd)
-                retained.append(f"{safe_key}=[redacted]" if safe_key else "[redacted]")
-            else:
-                safe_token = _safe_detail_target(token, cwd=cwd)
-                if safe_token:
-                    retained.append(safe_token)
-                redact_next = True
-            continue
-        safe_token = _safe_detail_target(token, cwd=cwd)
-        if safe_token:
-            retained.append(safe_token)
-    return _bounded_preview(shlex.join(retained)) if retained else None
+        executable = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        return executable if executable in _PUBLISHED_COMMANDS else "command"
+    return "command"
 
 
 def _safe_detail_target(value: str, *, cwd: str | None) -> str | None:

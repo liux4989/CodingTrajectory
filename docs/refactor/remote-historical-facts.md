@@ -52,7 +52,7 @@ Durable Object SQLite.
    (`ct_collector_publish_facts`, one `transactionSync`).
 4. The store keeps queryable, versioned fact rows —
    graph/session/turn/item/event/edge/request/model/runtime/measurement/
-   output-evidence/source/publication/checkpoint — with stable IDs,
+   output-evidence — with stable IDs,
    parent/order indexes, `valid_from_sequence`/`valid_to_sequence`, row hashes,
    and atomic replacement/tombstones. Unchanged rows are reused
    (content-addressed by row hash).
@@ -113,10 +113,14 @@ Durable Object SQLite.
 ## Remote authority and durability
 
 - Durable Object SQLite is the new remote authority. Tables:
-  `fact_rows` (content-addressed by `row_hash`), `fact_validity`
-  (`graph_id`,`fact_id`,`valid_from_sequence`,`valid_to_sequence`,`row_hash`),
-  `graph_publication`, `publications`, plus retained
-  collector/living/checkpoint state.
+  `fact_rows` (`graph_id`,`kind`,`fact_id`,`valid_from_sequence`,
+  `valid_to_sequence`,`row_hash`,`payload`), plus versioned graph publication,
+  collector, living, and checkpoint state.
+- Exact enforcement limits are 512 KiB per canonical row, 8 MiB per graph,
+  16 MiB of staged rows per atomic publication, and 1 MiB/2,048 rows per read
+  page. Read cursors bind the pinned snapshot and normalized selector/kinds
+  scope. These aggregate limits bound Worker materialization under its 128 MiB
+  isolate memory limit.
 - Local provider logs can republish/rebuild the remote authority at any time:
   rerunning the collector re-derives identical fact sets (deterministic IDs
   and hashes) and replays publication sequences. There is no migration and no
@@ -174,19 +178,14 @@ transferred or changed during qualification.
 
 ## Scale evidence
 
-`scripts/benchmark-fact-publication.py` publishes synthetic facts to
-`wrangler dev --local`, then reads the pinned publication through paged
-`ct_fact_read` calls. A 2026-09-15 Apple Silicon development run recorded:
-
-| Graphs | Rows | Encoded fact sets | Stage | Publish | Pinned read |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 25 | 300 | 185,050 bytes | 60.314 ms | 17.654 ms | 5.001 ms (1 page) |
-| 250 | 3,000 | 1,850,750 bytes | 446.723 ms | 127.514 ms | 87.878 ms (2 pages) |
-
-These local single-run measurements establish bounded publication behavior at
-10× scale; they are engineering evidence, not a production latency SLO. The
-machine-readable run output is written to the ignored
+`scripts/benchmark-fact-publication.py` publishes synthetic facts to local
+workerd, including a near-16-MiB publication whose largest row is near the
+512-KiB boundary. It records stage/publish/read timing, largest row, maximum
+encoded page, and page count. These local single-run measurements are
+engineering evidence, not a production latency SLO. Machine-readable output is
+written to the ignored
 `.artifacts/fact-publication-benchmark.json`. The companion
 `scripts/qualify-cloudflare-control-plane.py` validates integrity failures,
-version reuse/closure, tombstones, snapshots, cursors, historical parity,
-bounded evidence, body denial, authentication, and living separation.
+version reuse/closure, staging replacement, tombstones, snapshot/scope-bound
+cursors, historical parity, secret/body denial, aggregate byte rejection,
+byte-bounded reads, authentication, and living separation.

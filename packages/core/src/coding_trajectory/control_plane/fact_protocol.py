@@ -23,15 +23,18 @@ from coding_trajectory.control_plane.collector_protocol import (
 from coding_trajectory.control_plane.published_facts import (
     DERIVED_FACT_KINDS,
     FACT_SET_SCHEMA_VERSION,
+    MAX_FACT_READ_PAGE_BYTES,
     MAX_FACT_ROWS_PER_GRAPH,
     FactRow,
     compute_fact_set_digest,
     compute_row_hash,
 )
+from coding_trajectory.ingestion.common import canonical_json
 
 FACT_ROW_BATCH_MAX = 512
 FACT_READ_PAGE_MAX = 2048
 FACT_PUBLICATION_MAX_GRAPHS = 512
+FACT_PUBLICATION_MAX_BYTES = 16 * 1024 * 1024
 
 FactKind = Literal[
     "graph",
@@ -177,9 +180,9 @@ class FactReadRequest(FactModelBase):
 
     The server resolves the matching graph set first (by ``graph_id``,
     ``session_id``, ``project_name``, ``agent_vendor``, and ``modified_since``),
-    then streams complete rows for those graphs in deterministic
-    ``(graph_id, kind, fact_id)`` order. A graph is always delivered whole; a
-    filter never splits a graph's fact set.
+    then streams rows in deterministic ``(graph_id, kind, fact_id)`` order.
+    Cursors preserve a pinned selector while row and encoded-byte limits bound
+    each page.
     """
 
     version: Literal[1] = 1
@@ -218,10 +221,23 @@ class FactReadResponse(FactModelBase):
         for digest in self.graph_digests.values():
             if not digest or len(digest) != 64:
                 raise ValueError("fact read returned an invalid graph digest")
+        if (
+            len(
+                canonical_json(
+                    [
+                        row.model_dump(mode="json", exclude_none=True)
+                        for row in self.rows
+                    ]
+                ).encode()
+            )
+            > MAX_FACT_READ_PAGE_BYTES
+        ):
+            raise ValueError("fact read page exceeds the 1 MiB row budget")
         return self
 
 
 __all__ = [
+    "FACT_PUBLICATION_MAX_BYTES",
     "FACT_PUBLICATION_MAX_GRAPHS",
     "FACT_READ_PAGE_MAX",
     "FACT_ROW_BATCH_MAX",

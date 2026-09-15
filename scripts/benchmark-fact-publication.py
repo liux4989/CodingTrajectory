@@ -35,6 +35,7 @@ def benchmark_scale(
     url: str,
     graph_count: int,
     qualification: dict[str, Any],
+    boundary_rows: bool = False,
 ) -> dict[str, Any]:
     tag = uuid4().hex
     observed_at = datetime.now(UTC).replace(microsecond=0)
@@ -59,9 +60,15 @@ def benchmark_scale(
             idempotency_key="benchmark-source:" + tag,
         )
         fact_sets = [
-            qualification["derive_published_fact_set"](
-                qualification["synthetic_artifact"](
+            (
+                qualification["large_fact_set"](
                     seed=f"{tag}:{index}", project=project_name
+                )
+                if boundary_rows
+                else qualification["derive_published_fact_set"](
+                    qualification["synthetic_artifact"](
+                        seed=f"{tag}:{index}", project=project_name
+                    )
                 )
             )
             for index in range(graph_count)
@@ -135,6 +142,7 @@ def benchmark_scale(
             cursor = None
             pages = 0
             read_rows = 0
+            max_read_page_bytes = 0
             while True:
                 page = client.call(
                     "ct_fact_read",
@@ -148,6 +156,10 @@ def benchmark_scale(
                 )
                 pages += 1
                 read_rows += len(page["rows"])
+                max_read_page_bytes = max(
+                    max_read_page_bytes,
+                    len(canonical_json(page["rows"]).encode()),
+                )
                 cursor = page.get("next_cursor")
                 if not cursor:
                     break
@@ -162,11 +174,22 @@ def benchmark_scale(
         return {
             "graphs": graph_count,
             "rows": expected_rows,
+            "boundary_sized_rows": boundary_rows,
             "encoded_fact_set_bytes": encoded_bytes,
+            "largest_row_bytes": max(
+                len(
+                    canonical_json(
+                        row.model_dump(mode="json", exclude_none=True)
+                    ).encode()
+                )
+                for fact_set in fact_sets
+                for row in fact_set.rows
+            ),
             "stage_ms": stage_ms,
             "publish_ms": publish_ms,
             "read_ms": read_ms,
             "read_pages": pages,
+            "max_read_page_bytes": max_read_page_bytes,
             "rows_inserted": receipt.details["rows_inserted"],
         }
     finally:
@@ -180,12 +203,15 @@ def main() -> None:
     )
     parser.add_argument("--small-graphs", type=int, default=25)
     parser.add_argument("--large-graphs", type=int, default=250)
+    parser.add_argument("--boundary-graphs", type=int, default=32)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if urlparse(args.url).hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise SystemExit("benchmark refuses a non-loopback URL")
     if not 1 <= args.small_graphs < args.large_graphs <= 512:
         raise SystemExit("require 1 <= small-graphs < large-graphs <= 512")
+    if not 1 <= args.boundary_graphs <= 512:
+        raise SystemExit("require 1 <= boundary-graphs <= 512")
 
     qualification = runpy.run_path(
         str(Path(__file__).with_name("qualify-cloudflare-control-plane.py"))
@@ -201,6 +227,14 @@ def main() -> None:
                 qualification=qualification,
             )
             for count in (args.small_graphs, args.large_graphs)
+        ]
+        + [
+            benchmark_scale(
+                url=args.url,
+                graph_count=args.boundary_graphs,
+                qualification=qualification,
+                boundary_rows=True,
+            )
         ],
     }
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"

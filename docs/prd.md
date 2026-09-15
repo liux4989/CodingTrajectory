@@ -75,8 +75,8 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 ## Chronicle data layer
 
 - The full host-local canonical graph is the richest source. The private,
-  bounded `ct.chronicle_graph.v2` artifact is its portable historical projection
-  for remote collection and replay.
+  bounded `ct.chronicle_graph.v3` model deterministically produces
+  `ct.published_facts.v1` for local and remote standard historical reads.
 - Chronicle is a public Core query boundary, not only a persistence format.
   Consumers may read its bounded canonical resources directly instead of going
   through a Core-owned display projection. Local and remote adapters implement
@@ -84,7 +84,7 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 - Chronicle stores only canonical dependencies needed to reproduce supported
   remote queries: identities, topology, ordering, timestamps, lifecycle facts,
   measurements, bounded operational details, bounded previews, and provenance.
-- The Chronicle artifact never embeds pre-rendered overview, summary, search, or
+- Published facts never embed pre-rendered overview, summary, search, or
   metric responses. A transport may separately materialize a versioned display
   projection keyed by its canonical dependency hash, but that projection is a
   replaceable cache rather than canonical history. Display evolution must not
@@ -195,18 +195,17 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 
 # Chronicle history
 
-- The originating host constructs one strict `ct.chronicle_graph.v2` artifact.
+- The originating host constructs one strict `ct.chronicle_graph.v3` value and
+  derives a bounded, validated `PublishedFactSet`.
 - Host-local service APIs read local sources first and use the published
-  Chronicles authority only when local discovery is unavailable or a targeted
-  record is missing. Both sources run through the same handlers and chronicle
-  artifact contract.
+  facts authority only when remote selection is explicit. Both sources run
+  through the same `FactRepository` and historical handlers.
 - Source observations contain checkpoint metadata only. Raw logs, transcript
   bodies, and general event arrays are never historical upload payloads.
-- Content is disabled in chronicle artifacts. Explicit local evidence calls read
-  the full local graph without requiring publication; remote content requests
-  are denied.
-- Remote history stores validated artifacts directly; there is no remote
-  canonical reconstruction worker or compact-session compatibility path.
+- Standard methods expose bounded facts only; raw transcript/tool bodies and
+  arbitrary event payloads are excluded locally and remotely.
+- Remote history stores versioned fact rows in Durable Object SQLite. It has no
+  whole-document, chunk, compact-session, or reconstruction-cache authority.
 - The [chronicle history contract](chronicle-history.md) defines bounds and
   bounded operational and narrative coverage. The [control plane](remote-ct-control-plane-design.md)
   defines inventory and living authority separately from historical artifacts.

@@ -159,20 +159,14 @@ Add `--snapshot-sequence N` to bypass local selection and pin a published
 workspace sequence. An unpinned request resolves a remote snapshot only after a
 local fallback condition.
 
-Historical local reads reconstruct the canonical graph from local logs, round
-chronicle methods through `ct.chronicle_graph.v2`, and execute the shared
-handlers. A remote fallback fetches published artifacts through authenticated Cloudflare
-Worker RPCs; Python validates identity, digest, and schema before invoking the
-same handlers. Local and remote stores remain separate and are cached within the
-owning runtime. A remote fallback runtime pins one snapshot for its lifetime.
+Historical local reads reconstruct canonical graphs from local logs, derive
+bounded `PublishedFactSet` values, and execute shared handlers. Remote reads
+fetch snapshot-pinned fact pages through authenticated Worker RPCs; Python
+validates identities, references, hashes, digest, and schema before invoking the
+same handlers. Standard methods have one bounded response shape regardless of
+source. Raw transcript/tool bodies and arbitrary event payloads are not exposed.
 
-Content is excluded from the chronicle artifact. Explicit `session.search`,
-`session.events`, `session.items` with `include_content=true`, and
-`graph.overview` with `include:["narrative"]` request local evidence from the
-full canonical local graph. These requests do not require publication and their
-bodies are never sent to Chronicles.
-
-The HTTP runtime rejects all four content requests, even if the server machine
+The HTTP runtime rejects raw-content requests, even if the server machine
 has matching logs. A missing local evidence record may attempt fallback, but the
 remote boundary still rejects content-bearing methods rather than returning a
 partial result.

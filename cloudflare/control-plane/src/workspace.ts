@@ -26,7 +26,7 @@ export class Workspace extends DurableObject<Env> {
       // Compute identity before schema defaults normalize the request.
       const identity = await digest(stable(request));
       validate(method, request);
-      if (method === "ct_fact_read") return { status: 200, body: factRead(this.state, request) };
+      if (method === "ct_fact_read") return { status: 200, body: await factRead(this.state, request) };
       if (method === "ct_collector_missing_fact_rows") return { status: 200, body: missingFactRows(this.state, request) };
       if (method === "ct_collector_stage_fact_rows") {
         await verifyStageRows(request);

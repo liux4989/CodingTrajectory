@@ -59,6 +59,8 @@ _CostText = Annotated[
 
 FACT_SET_SCHEMA_VERSION = "ct.published_facts.v1"
 MAX_FACT_SET_BYTES = 8 * 1024 * 1024
+MAX_FACT_ROW_BYTES = 512 * 1024
+MAX_FACT_READ_PAGE_BYTES = 1024 * 1024
 MAX_FACT_ROWS_PER_GRAPH = 131_072
 MAX_FACT_SESSIONS = 512
 MAX_FACT_TURNS = 32_768
@@ -256,6 +258,134 @@ def compute_fact_set_digest(graph_id: UUID, rows: list[FactRowBase]) -> str:
     return hashlib.sha256(canonical_json(basis).encode()).hexdigest()
 
 
+def _validate_fact_relationships(graph_id: UUID, rows: list[FactRowBase]) -> None:
+    by_kind = {
+        kind: {row.fact_id: row for row in rows if row.kind == kind}
+        for kind in DERIVED_FACT_KINDS
+    }
+    graph_rows = list(by_kind["graph"].values())
+    if len(graph_rows) != 1:
+        raise ValueError("fact set requires exactly one graph row")
+    graph_row = graph_rows[0]
+    if (
+        graph_row.fact_id != graph_id
+        or graph_row.parent_id is not None
+        or graph_row.payload.summary.root_session_id != graph_id
+    ):
+        raise ValueError("graph fact identity mismatch")
+
+    sessions = by_kind["session"]
+    turns = by_kind["turn"]
+    items = by_kind["item"]
+    events = by_kind["event"]
+    for row in sessions.values():
+        if row.fact_id != row.payload.session_id or row.parent_id != graph_id:
+            raise ValueError("session fact identity mismatch")
+        parent_session_id = row.payload.parent_session_id
+        if parent_session_id is not None and parent_session_id not in sessions:
+            raise ValueError("session parent reference is not retained")
+        for origin in row.payload.topology.spawn_origins:
+            if origin.turn_id is not None:
+                turn = turns.get(origin.turn_id)
+                if turn is None or turn.parent_id != row.fact_id:
+                    raise ValueError("session spawn turn ownership mismatch")
+            if origin.item_id is not None:
+                item = items.get(origin.item_id)
+                if item is None or item.parent_id != origin.turn_id:
+                    raise ValueError("session spawn item ownership mismatch")
+
+    for row in turns.values():
+        if row.fact_id != row.payload.turn_id or row.parent_id not in sessions:
+            raise ValueError("turn fact identity mismatch")
+
+    for row in items.values():
+        if row.fact_id != row.payload.item_id or row.parent_id not in turns:
+            raise ValueError("item fact identity mismatch")
+        if row.payload.projection_parent_item_id is not None:
+            parent = items.get(row.payload.projection_parent_item_id)
+            if parent is None or parent.parent_id != row.parent_id:
+                raise ValueError("item projection parent ownership mismatch")
+        for event_id in row.payload.event_ids:
+            event = events.get(event_id)
+            if event is None or event.payload.item_id != row.fact_id:
+                raise ValueError("item event reference mismatch")
+
+    for row in events.values():
+        event = row.payload
+        if row.fact_id != event.event_id:
+            raise ValueError("event fact identity mismatch")
+        if event.turn_id is not None:
+            turn = turns.get(event.turn_id)
+            if turn is None or row.parent_id != event.turn_id:
+                raise ValueError("event turn ownership mismatch")
+        elif row.parent_id not in sessions:
+            raise ValueError("session event ownership mismatch")
+        if event.item_id is not None:
+            item = items.get(event.item_id)
+            if (
+                item is None
+                or event.event_id not in item.payload.event_ids
+                or item.parent_id != event.turn_id
+            ):
+                raise ValueError("event item ownership mismatch")
+
+    for row in by_kind["request"].values():
+        if row.fact_id != row.payload.request_id or row.parent_id not in turns:
+            raise ValueError("request fact identity mismatch")
+
+    for row in [*by_kind["runtime"].values(), *by_kind["measurement"].values()]:
+        if row.parent_id not in sessions:
+            raise ValueError(f"{row.kind} session ownership mismatch")
+
+    for row in by_kind["model"].values():
+        if row.parent_id != graph_id:
+            raise ValueError("model graph ownership mismatch")
+
+    for row in by_kind["output_evidence"].values():
+        item = items.get(row.fact_id)
+        if item is None or row.parent_id != row.fact_id:
+            raise ValueError("output evidence item identity mismatch")
+        for event_id in row.payload.source_event_ids:
+            event = events.get(event_id)
+            if event is None or event.payload.item_id != row.fact_id:
+                raise ValueError("output evidence event reference mismatch")
+
+    for row in by_kind["edge"].values():
+        edge = row.payload
+        if (
+            row.parent_id != graph_id
+            or edge.source_session_id not in sessions
+            or edge.target_session_id not in sessions
+            or edge.origin.session_id != edge.source_session_id
+        ):
+            raise ValueError("edge session ownership mismatch")
+        if edge.origin.turn_id is not None:
+            turn = turns.get(edge.origin.turn_id)
+            if turn is None or turn.parent_id != edge.source_session_id:
+                raise ValueError("edge turn ownership mismatch")
+        if edge.origin.item_id is not None:
+            item = items.get(edge.origin.item_id)
+            if item is None or item.parent_id != edge.origin.turn_id:
+                raise ValueError("edge item ownership mismatch")
+        referenced_events = [
+            *edge.evidence_event_ids,
+            *([edge.origin.event_id] if edge.origin.event_id is not None else []),
+        ]
+        for event_id in referenced_events:
+            event = events.get(event_id)
+            expected_parent = edge.origin.turn_id or edge.source_session_id
+            if event is None or event.parent_id != expected_parent:
+                raise ValueError("edge event ownership mismatch")
+
+    summary = graph_row.payload.summary
+    if (
+        summary.session_count != len(sessions)
+        or summary.turn_count != len(turns)
+        or summary.item_count != len(items)
+    ):
+        raise ValueError("graph summary fact counts mismatch")
+
+
 def _row(
     cls: type[FactRowBase],
     *,
@@ -300,6 +430,11 @@ class PublishedFactSet(FactModel):
                 raise ValueError("fact row graph mismatch")
             if compute_row_hash(row.hashable_view()) != row.row_hash:
                 raise ValueError("fact row hash mismatch")
+            encoded_row = canonical_json(
+                row.model_dump(mode="json", exclude_none=True)
+            ).encode()
+            if len(encoded_row) > MAX_FACT_ROW_BYTES:
+                raise ValueError("fact row exceeds the 512 KiB bound")
         ordered = sorted(self.rows, key=lambda row: (row.kind, str(row.fact_id)))
         if [(row.kind, str(row.fact_id)) for row in self.rows] != [
             (row.kind, str(row.fact_id)) for row in ordered
@@ -338,6 +473,7 @@ class PublishedFactSet(FactModel):
                 raise ValueError(f"fact row kind {row.kind} must not have a parent")
             if not any((kind, row.parent_id) in present for kind in expected):
                 raise ValueError(f"fact row {row.kind} parent is not retained")
+        _validate_fact_relationships(self.graph_id, list(self.rows))
         if compute_fact_set_digest(self.graph_id, list(self.rows)) != (
             self.fact_set_digest
         ):
@@ -688,6 +824,8 @@ __all__ = [
     "DERIVED_FACT_KINDS",
     "FACT_KIND_LIMITS",
     "FACT_SET_SCHEMA_VERSION",
+    "MAX_FACT_READ_PAGE_BYTES",
+    "MAX_FACT_ROW_BYTES",
     "FactRow",
     "FactRowBase",
     "GraphFactPayload",

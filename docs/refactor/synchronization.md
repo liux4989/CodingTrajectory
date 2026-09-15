@@ -1,105 +1,54 @@
-# Synchronization, batching, and recovery
+# Fact synchronization and recovery
 
-## Service loop
+## Publication sequence
 
-```mermaid
-flowchart LR
-  Discover[Detect source changes] --> Canonical[Commit canonical revision]
-  Canonical --> Capture[Persist capture and consumed cursor]
-  Capture --> Policy{Publication policy}
-  Policy -->|manual trigger or automatic flush| Frozen[Freeze batch]
-  Frozen --> Upload[Negotiate and upload missing nodes]
-  Upload --> Commit[Commit complete shared revision]
-  Commit --> Ack[Persist receipt and acknowledged position]
+```text
+fence source occurrences
+  → reconstruct canonical graphs and exact measurements
+  → derive bounded PublishedFactSet values
+  → publish metadata-only source checkpoints
+  → stage immutable fact-row batches
+  → atomically commit graph manifests and fact revisions
+  → retain the publication receipt locally
 ```
 
-Local ingestion and preparation continue without network access. They share
-source inventory/cache facilities with local APIs. A slow network does not hold
-canonical database transactions or block page reads. When storage budgets are
-exhausted, stop advancing the consumed cursor and report backpressure; never drop
-unsent records and claim to be caught up.
+The collector does not upload raw records, source occurrence inventories, or
+tool bodies. A source checkpoint contains offsets/digests only. Each graph
+manifest names a deterministic fact-set digest, counts, source IDs, and observed
+time. Fact rows are staged separately and become visible only after the complete
+source vector and every staged row pass validation in one workspace transaction.
 
-## Durable states
+## Bounds and paging
 
-`prepared -> ready -> uploading -> awaiting_commit -> acknowledged`.
-Transient failures enter `retry_wait` with the previous durable phase retained.
-Authorization/schema/ownership conflicts enter `blocked` with a bounded error code
-and operator remedy. Superseded unattempted captures may be compacted only when
-all required history and tombstone effects remain represented.
+- one canonical fact row: 512 KiB encoded;
+- one graph's fact set: 8 MiB encoded;
+- one atomic publication: 16 MiB of staged encoded rows and 512 graphs;
+- one fact read page: 2,048 rows and 1 MiB encoded, whichever is reached first.
 
-A batch freezes identity, content, source vector, and dependency hashes before its
-first network attempt. It stays immutable thereafter. Later observations enter a
-new batch. Per-source order is preserved; independent sessions can progress when
-one lineage is blocked. Global sequence gaps must not silently discard work.
+These limits leave substantial headroom inside the Worker's 128 MiB isolate
+limit while bounding parsed publication plans and read responses. Oversize work
+fails before commit. Read cursors bind the pinned workspace sequence and the
+normalized graph/session/project/vendor/time/kind selector, so they cannot be
+reused across scopes.
 
-Store both consumed and acknowledged progress. The source/living delta journal
-can be replayed after a crash. A captured page is marked consumed only in the
-same outbox transaction that retains its payload/references. Remote ACKs are
-recorded only after durable publication, not after chunk transfer.
+## Retry and replacement
 
-## Coalescing and flush policy
+Staging is replaceable until publication. A new digest atomically supersedes old
+batches for that agent/graph and may declare a different batch count. Batches for
+the same digest must agree on count. Publication sequences and idempotency keys
+make exact retries duplicate-safe; a changed request under an existing key is a
+conflict.
 
-Coalesce replaceable canonical state only before batch freeze. Preserve distinct
-items, required event ordering, corrections, tombstones, and graph dependencies.
-A session summary can be replaced by its newest state; an append-only evidence
-sequence cannot be collapsed into a counter if replay requires its entries.
+Source epochs fence stale collectors. A publication must contain the accepted
+checkpoint for every represented source and the complete source set for an
+overlapping graph. A valid replacement closes prior row revisions, reuses
+unchanged row hashes, inserts changed rows, and tombstones omitted graphs only
+within the declared complete-source scope.
 
-Proposed configurable starting budgets, to be qualified rather than treated as
-platform guarantees: automatic flush after 60 seconds, 256 KiB encoded request
-budget, or 200 changed resources; explicit trigger and turn/session completion
-also flush. Initial imports use the same limits. A resource larger than a chunk
-budget is segmented by its schema; a caller cannot bypass the limit by selecting
-one very large resource. A completion flush occurs after a complete source fence,
-not on inference from a quiet file.
+After a lost response, recover source and publication watermarks before assigning
+new sequences, then retry the retained request. At-least-once attempts plus
+idempotent commits provide duplicate-safe effects; network delivery is not
+claimed to be exactly once.
 
-Manual mode is the default. The implemented lifecycle uses `ct collector sync
---mode prepare|status|publish|serve|pause|resume`, with explicit reconciliation
-modes described in [collector handoff](../local-collector-handoff.md). `prepare` performs no network
-publication; `publish` submits frozen captures; `serve` defaults to preparation
-unless automatic mode was explicitly persisted. Restart retains mode. Installation does not enable a host
-scheduler implicitly. Existing `collector run` publishes immediately and must not
-be relabeled as a dry-run or preview.
-
-## Crash/failure matrix
-
-| Boundary | Recovery |
-| --- | --- |
-| Before canonical commit | Replay the same complete source prefix |
-| After canonical commit, before capture | Replay the canonical change journal |
-| During capture transaction | Both payload and cursor roll back, or both persist |
-| After capture, before any upload | Drain the saved batch |
-| After some nodes uploaded | Negotiate hashes; send missing nodes only |
-| After all nodes, before commit | Retry the same manifest/batch |
-| After remote commit, before local ACK | Recover/retry identity and receive the existing receipt |
-| Source rotation/truncation | New source epoch and fenced reconstruction; no offset guessing |
-| Expired/reset local cursor | Bounded snapshot/hash reconciliation; preserve still-pending batches |
-| Collector restart/duplicate process | Durable owner locking and lease fencing prevent two writers sharing one sequence |
-| Network outage | Exponential backoff with jitter and visible backlog |
-| Revoked token/schema conflict | Block the affected stream; retain work and expose remedy |
-| Remote state rollback | Detect server incarnation/revision mismatch and reconcile; old ACKs alone are insufficient |
-
-At-least-once attempts plus idempotent commits give duplicate-safe effects. Do not
-claim exactly-once network delivery. No Queue is required initially; if introduced,
-its consumers must retain the same deduplication contract because Cloudflare
-[Queues can redeliver messages](https://developers.cloudflare.com/queues/reference/delivery-guarantees/).
-
-## Liveness and operational reporting
-
-Keep observed session state, collector connectivity, and publication freshness
-separate. Heartbeat expiry means current liveness is unknown. Recovery must not
-replay an old terminal observation as fresh merely because it was uploaded now.
-Use source observation time, server receipt time, and bounded lease expiry for
-their distinct purposes. Manual publication does not silently send heartbeats;
-an independent automatic presence policy requires explicit configuration.
-
-Report pending count/bytes, oldest pending age, last consumed and acknowledged
-positions, last successful publish time, batch attempts, blocked reason codes,
-and chunk reuse/transfer totals. Remote views show host-reported backlog only
-while that report is fresh; an offline host's current backlog is unknown.
-
-Retention is reference-based: retain everything needed by pending captures,
-active cursors, visible revisions, and rollback windows. Stage abandonment and
-old revision cleanup use mark/recheck/delete with a grace period and a recorded
-minimum readable revision. No broad R2 lifecycle deletion of referenced chunks.
-Actual retention/disk limits are configuration; destructive cleanup remains
-inactive until its rollback/reference-race qualification passes.
+Living heartbeats and changes remain separate from historical facts. Their
+freshness never changes a pinned historical snapshot.

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Qualify the local Cloudflare fact authority with synthetic Chronicle facts.
 
-Start ``wrangler dev --local`` on port 8794 with the synthetic principals
-documented in ``cloudflare/control-plane/README.md``. This script refuses a
-non-loopback target and never reads provider logs or user data.
+Start ``wrangler dev --local`` on port 8794 with ``CT_PRINCIPALS`` containing
+the synthetic token digests declared below. This script refuses a non-loopback
+target and never reads provider logs or user data.
 """
 
 from __future__ import annotations
@@ -19,17 +19,22 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4, uuid5
 
 import httpx
+from coding_trajectory.analysis.tool_summary_shared import RUN_COMMAND
 from coding_trajectory.contracts import SERVICE_CONTRACTS, service_contract
 from coding_trajectory.control_plane.chronicle import (
+    ChronicleContextSourceMeasurement,
     ChronicleEvent,
     ChronicleGraphArtifact,
     ChronicleGraphSummary,
     ChronicleItem,
     ChronicleItemMeasurements,
     ChronicleSession,
+    ChronicleSessionMeasurements,
     ChronicleToolOutputEvidence,
+    ChronicleToolSummary,
     ChronicleTurn,
     ChronicleUserRequest,
+    _tool_detail,
 )
 from coding_trajectory.control_plane.collector import CloudflareCollectorRemote
 from coding_trajectory.control_plane.collector_protocol import (
@@ -41,6 +46,7 @@ from coding_trajectory.control_plane.collector_protocol import (
     SourceVectorEntry,
 )
 from coding_trajectory.control_plane.fact_protocol import (
+    FACT_PUBLICATION_MAX_BYTES,
     FactGraphPublication,
     FactPublicationRequest,
     StageFactRowsRequest,
@@ -50,6 +56,8 @@ from coding_trajectory.control_plane.fact_repository import (
     document_store_from_fact_sets,
 )
 from coding_trajectory.control_plane.published_facts import (
+    MAX_FACT_READ_PAGE_BYTES,
+    MAX_FACT_ROW_BYTES,
     PublishedFactSet,
     compute_row_hash,
     derive_published_fact_set,
@@ -58,6 +66,7 @@ from coding_trajectory.control_plane.remote import CloudflareRpcClient
 from coding_trajectory.ingestion.common import canonical_json
 from coding_trajectory.service.handlers import dispatch
 from coding_trajectory.service.store import IndexCache
+from pydantic import ValidationError
 
 URL = os.environ.get("CT_QUALIFY_URL", "http://127.0.0.1:8794")
 TOKENS = {
@@ -114,6 +123,8 @@ def synthetic_artifact(
     project: str,
     include_unknown: bool = True,
     revised: bool = False,
+    command_description: str | None = None,
+    large_measurement: bool = False,
 ) -> ChronicleGraphArtifact:
     root = uuid5(UUID(WORKSPACE), seed + ":session")
     turn_id = uuid5(root, "turn")
@@ -137,6 +148,18 @@ def synthetic_artifact(
             output_chars=14,
             output_tokens=4,
             output_original_tokens=4,
+            tool_summary=(
+                ChronicleToolSummary(
+                    name="shell_command",
+                    detail=_tool_detail(
+                        RUN_COMMAND,
+                        command_description,
+                        cwd=None,
+                    ),
+                )
+                if command_description is not None
+                else None
+            ),
         ),
         output_evidence=ChronicleToolOutputEvidence(
             processor="ct.output_evidence.command.v1",
@@ -251,6 +274,22 @@ def synthetic_artifact(
         ended_at=started + timedelta(seconds=5),
         status="not_living",
         title="Synthetic revised session" if revised else "Synthetic session",
+        measurements=(
+            ChronicleSessionMeasurements(
+                context_sources=[
+                    ChronicleContextSourceMeasurement(
+                        timestamp=started,
+                        key=f"large-{index}",
+                        label=("large row evidence " * 28)[:480],
+                        chars=1,
+                        tokens=1,
+                    )
+                    for index in range(850)
+                ]
+            )
+            if large_measurement
+            else ChronicleSessionMeasurements()
+        ),
         events=events,
         turns=[turn],
     )
@@ -267,6 +306,21 @@ def synthetic_artifact(
         ),
         sessions=[session],
     )
+
+
+def large_fact_set(*, seed: str, project: str) -> PublishedFactSet:
+    fact_set = derive_published_fact_set(
+        synthetic_artifact(seed=seed, project=project, large_measurement=True)
+    )
+    largest = max(
+        len(canonical_json(row.model_dump(mode="json", exclude_none=True)).encode())
+        for row in fact_set.rows
+    )
+    check(
+        MAX_FACT_ROW_BYTES * 9 // 10 <= largest <= MAX_FACT_ROW_BYTES,
+        "large synthetic row is near the row boundary",
+    )
+    return fact_set
 
 
 def stage(remote: CloudflareCollectorRemote, request: StageFactRowsRequest) -> None:
@@ -339,6 +393,8 @@ def raw_stage(
     *,
     digest: str,
     status: int,
+    batch_index: int = 0,
+    batch_count: int = 1,
 ) -> None:
     rpc(
         "ct_collector_stage_fact_rows",
@@ -346,12 +402,37 @@ def raw_stage(
             "agent_id": AGENT,
             "graph_id": rows[0]["graph_id"],
             "fact_set_digest": digest,
-            "batch_index": 0,
-            "batch_count": 1,
+            "batch_index": batch_index,
+            "batch_count": batch_count,
             "rows": rows,
         },
         status=status,
     )
+
+
+def raw_fact_set(
+    rows: list[dict[str, Any]], *, digest: str, kind_counts: dict[str, int]
+) -> dict[str, Any]:
+    return {
+        "schema_version": "ct.published_facts.v1",
+        "graph_id": rows[0]["graph_id"],
+        "fact_set_digest": digest,
+        "kind_counts": kind_counts,
+        "rows": rows,
+    }
+
+
+def check_client_rejects(
+    rows: list[dict[str, Any]], *, digest: str, kind_counts: dict[str, int], label: str
+) -> None:
+    try:
+        PublishedFactSet.model_validate(
+            raw_fact_set(rows, digest=digest, kind_counts=kind_counts)
+        )
+    except ValidationError:
+        check(True, label)
+    else:
+        raise AssertionError(label)
 
 
 def historical_params(method: str, *, project: str, root: str) -> dict[str, Any]:
@@ -463,11 +544,33 @@ def main() -> None:
     check(remote.heartbeat(heartbeat) == lease, "heartbeat is idempotent")
 
     project_name = "Qualification-" + tag
+    bearer_secret = "synthetic-bearer-secret-value"
+    positional_secret = "synthetic-positional-secret"
     first_a = derive_published_fact_set(
-        synthetic_artifact(seed=tag + ":a", project=project_name),
+        synthetic_artifact(
+            seed=tag + ":a",
+            project=project_name,
+            command_description=(
+                f"curl -H 'Authorization: Bearer {bearer_secret}' https://example.test"
+            ),
+        ),
     )
     first_b = derive_published_fact_set(
-        synthetic_artifact(seed=tag + ":b", project=project_name),
+        synthetic_artifact(
+            seed=tag + ":b",
+            project=project_name,
+            command_description=f"python deploy.py {positional_secret}",
+        ),
+    )
+    bounded_sets = canonical_json(
+        [
+            fact_set.model_dump(mode="json", exclude_none=True)
+            for fact_set in (first_a, first_b)
+        ]
+    )
+    check(
+        bearer_secret not in bounded_sets and positional_secret not in bounded_sets,
+        "command arguments never enter PublishedFactSet",
     )
     checkpoint_payload_0 = {
         "kind": "ct.source_checkpoint.v1",
@@ -543,6 +646,37 @@ def main() -> None:
         second_page["snapshot_sequence"] == first_page["snapshot_sequence"],
         "fact cursor remains pinned",
     )
+    rpc(
+        "ct_fact_read",
+        {
+            "graph_id": str(first_a.graph_id),
+            "kinds": ["session"],
+            "limit": 1,
+            "cursor": first_page["next_cursor"],
+            "snapshot_sequence": first_page["snapshot_sequence"],
+        },
+        role="reader",
+        status=409,
+    )
+    published_commands = canonical_json(
+        [
+            *rpc(
+                "ct_fact_read",
+                {"graph_id": str(first_a.graph_id), "limit": 512},
+                role="reader",
+            )["rows"],
+            *rpc(
+                "ct_fact_read",
+                {"graph_id": str(first_b.graph_id), "limit": 512},
+                role="reader",
+            )["rows"],
+        ]
+    )
+    check(
+        bearer_secret not in published_commands
+        and positional_secret not in published_commands,
+        "command arguments never enter SQL facts",
+    )
     qualify_parity([first_a, first_b], snapshot=pinned_sequence, project=project_name)
 
     bad_hash = raw_rows(first_a)
@@ -556,6 +690,33 @@ def main() -> None:
     body_row[0]["payload"]["body"] = "forbidden raw body"
     body_digest = recalculate(body_row)
     raw_stage(body_row, digest=body_digest, status=400)
+
+    staged_once = raw_rows(first_a)
+    raw_stage(staged_once, digest=first_a.fact_set_digest, status=200)
+    staged_replacement = raw_rows(first_a)
+    graph_payload = next(row for row in staged_replacement if row["kind"] == "graph")
+    graph_payload["payload"]["summary"]["status"] = "replacement staged"
+    replacement_digest = recalculate(staged_replacement)
+    split = len(staged_replacement) // 2
+    raw_stage(
+        staged_replacement[:split],
+        digest=replacement_digest,
+        status=200,
+        batch_count=2,
+    )
+    replacement_missing = rpc(
+        "ct_collector_missing_fact_rows",
+        {
+            "agent_id": AGENT,
+            "graph_id": str(first_a.graph_id),
+            "fact_set_digest": replacement_digest,
+            "batch_count": 2,
+        },
+    )
+    check(
+        replacement_missing["missing_batches"] == [1],
+        "new digest can replace staging with a different batch count",
+    )
 
     bad_parent = raw_rows(first_a)
     child = next(row for row in bad_parent if row["parent_id"] is not None)
@@ -589,11 +750,57 @@ def main() -> None:
     invalid_parent["project_id"] = str(project.project_id)
     invalid_parent["graphs"] = invalid_parent.pop("fact_sets")
     invalid_parent.pop("captured_at")
+    check_client_rejects(
+        bad_parent,
+        digest=parent_digest,
+        kind_counts=first_a.kind_counts,
+        label="client rejects recomputed dangling parent",
+    )
     rpc("ct_collector_publish_facts", invalid_parent, status=400)
     check(
         rpc("ct_workspace_snapshot", {})["snapshot_sequence"] == pinned_sequence,
         "invalid parent publication rolls back",
     )
+
+    adversarial_rows: list[tuple[str, list[dict[str, Any]]]] = []
+    unsafe_command = raw_rows(first_a)
+    unsafe_item = next(
+        row
+        for row in unsafe_command
+        if row["kind"] == "item"
+        and row["payload"]["measurements"].get("tool_summary") is not None
+    )
+    unsafe_item["payload"]["measurements"]["tool_summary"]["detail"]["target"] = (
+        f"python deploy.py {positional_secret}"
+    )
+    adversarial_rows.append(("unsafe command detail", unsafe_command))
+
+    mismatched_identity = raw_rows(first_a)
+    session_row = next(row for row in mismatched_identity if row["kind"] == "session")
+    session_row["payload"]["session_id"] = str(uuid4())
+    adversarial_rows.append(("payload identity mismatch", mismatched_identity))
+
+    dangling_reference = raw_rows(first_a)
+    item_row = next(row for row in dangling_reference if row["kind"] == "item")
+    item_row["payload"]["event_ids"][0] = str(uuid4())
+    adversarial_rows.append(("dangling payload reference", dangling_reference))
+
+    for label, rows in adversarial_rows:
+        adversarial_digest = recalculate(rows)
+        check_client_rejects(
+            rows,
+            digest=adversarial_digest,
+            kind_counts=first_a.kind_counts,
+            label=f"client rejects recomputed {label}",
+        )
+        raw_stage(rows, digest=adversarial_digest, status=200)
+        invalid = deepcopy(invalid_parent)
+        invalid["graphs"][0]["fact_set_digest"] = adversarial_digest
+        rpc("ct_collector_publish_facts", invalid, status=400)
+        check(
+            rpc("ct_workspace_snapshot", {})["snapshot_sequence"] == pinned_sequence,
+            f"server rejects recomputed {label} before commit",
+        )
 
     valid_rows = raw_rows(first_a)
     raw_stage(
@@ -772,6 +979,133 @@ def main() -> None:
         all(row["kind"] != "living" for row in fact_after_living["rows"]),
         "living observations never enter historical facts",
     )
+
+    boundary_tag = uuid4().hex
+    boundary_project_name = "Fact-boundary-" + boundary_tag
+    boundary_project = remote.register_project(
+        ProjectRegistrationRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            display_name=boundary_project_name,
+        )
+    )
+    boundary_source = remote.register_source(
+        SourceRegistrationRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            project_id=boundary_project.project_id,
+            vendor="amp",
+            native_session_id=boundary_tag,
+        ),
+        idempotency_key="boundary-source:" + boundary_tag,
+    )
+    boundary_sets = [
+        large_fact_set(seed=f"{boundary_tag}:{index}", project=boundary_project_name)
+        for index in range(35)
+    ]
+    staged_sizes = [
+        len(canonical_json(raw_rows(fact_set)).encode()) for fact_set in boundary_sets
+    ]
+    check(
+        sum(staged_sizes[:32]) <= FACT_PUBLICATION_MAX_BYTES < sum(staged_sizes),
+        "large fact sets straddle the aggregate publication boundary",
+    )
+    boundary_checkpoint = {
+        "kind": "ct.source_checkpoint.v1",
+        "source_checkpoint": {"segments": [sum(staged_sizes)]},
+        "chronicle_digest": hashlib.sha256(
+            "".join(fact_set.fact_set_digest for fact_set in boundary_sets).encode()
+        ).hexdigest(),
+    }
+    boundary_checkpoint_digest = hashlib.sha256(
+        canonical_json(boundary_checkpoint).encode()
+    ).hexdigest()
+    remote.publish_observation(
+        ObservationRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            source_id=boundary_source.source_id,
+            source_epoch=boundary_source.source_epoch,
+            source_sequence=0,
+            event_id="checkpoint:" + boundary_checkpoint_digest,
+            parser_version="fact-boundary.v1",
+            content_sha256=boundary_checkpoint_digest,
+            observed_at=captured,
+            payload=boundary_checkpoint,
+        ),
+        idempotency_key="boundary-checkpoint:" + boundary_checkpoint_digest,
+    )
+    for fact_set in boundary_sets:
+        stage_fact_set(remote, fact_set=fact_set)
+    boundary_vector = [
+        SourceVectorEntry(
+            source_id=boundary_source.source_id,
+            source_epoch=boundary_source.source_epoch,
+            source_sequence=0,
+            content_sha256=boundary_checkpoint_digest,
+        )
+    ]
+    oversized_publication = FactPublicationRequest(
+        workspace_id=WORKSPACE,
+        agent_id=AGENT,
+        project_id=boundary_project.project_id,
+        publication_sequence=0,
+        source_vector=boundary_vector,
+        graphs=[
+            manifest(
+                fact_set,
+                source_id=boundary_source.source_id,
+                observed_at=captured,
+            )
+            for fact_set in boundary_sets
+        ],
+    )
+    rpc(
+        "ct_collector_publish_facts",
+        oversized_publication.wire_payload(),
+        status=413,
+        key="boundary-rejected:" + boundary_tag,
+    )
+    bounded_publication = oversized_publication.model_copy(
+        update={"graphs": oversized_publication.graphs[:32]}
+    )
+    boundary_receipt = remote.publish_facts(
+        bounded_publication,
+        idempotency_key="boundary-published:" + boundary_tag,
+    )
+    check(
+        boundary_receipt.details["graphs_published"] == 32,
+        "publication below the aggregate byte cap commits",
+    )
+    boundary_cursor = None
+    boundary_pages = 0
+    boundary_rows = 0
+    while True:
+        boundary_page = rpc(
+            "ct_fact_read",
+            {
+                "project_name": boundary_project_name,
+                "snapshot_sequence": boundary_receipt.committed_sequence,
+                "limit": 2048,
+                **({"cursor": boundary_cursor} if boundary_cursor else {}),
+            },
+            role="reader",
+        )
+        check(
+            len(canonical_json(boundary_page["rows"]).encode())
+            <= MAX_FACT_READ_PAGE_BYTES,
+            "fact read page stays within its encoded byte budget",
+        )
+        boundary_pages += 1
+        boundary_rows += len(boundary_page["rows"])
+        boundary_cursor = boundary_page["next_cursor"]
+        if boundary_cursor is None:
+            break
+    check(boundary_pages > 1, "large fact rows require byte-bounded cursor pages")
+    check(
+        boundary_rows == sum(len(fact_set.rows) for fact_set in boundary_sets[:32]),
+        "byte-bounded cursor pages return every committed fact row",
+    )
     remote.close()
     print(
         json.dumps(
@@ -784,6 +1118,9 @@ def main() -> None:
                 "rows_inserted": details["rows_inserted"],
                 "rows_closed": details["rows_closed"],
                 "graphs_tombstoned": details["omitted_graphs"],
+                "boundary_publication_bytes": sum(staged_sizes[:32]),
+                "oversized_publication_bytes": sum(staged_sizes),
+                "boundary_read_pages": boundary_pages,
             },
             indent=2,
             sort_keys=True,
