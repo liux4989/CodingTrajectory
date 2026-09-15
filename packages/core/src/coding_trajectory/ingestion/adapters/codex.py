@@ -7,9 +7,8 @@ import json
 import logging
 import re
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
-from itertools import chain
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -462,24 +461,34 @@ def _iter_own_records(
     parent_started_turn_ids: set[str],
 ) -> Iterator[tuple[dict, RecordSpan | None]]:
     """Keep child-owned records even when copied parent turns are interleaved."""
-    iterator = iter(records)
-    head: list[tuple[dict, RecordSpan | None]] = []
-    forked_from: str | None = None
-    for pair in iterator:
-        record = pair[0]
-        head.append(pair)
-        if record.get("type") == "session_meta":
-            payload = record.get("payload")
-            forked_from = _record_parent_id(payload if isinstance(payload, dict) else {})
-        else:
-            break
-    if forked_from is None:
-        yield from head
-        yield from iterator
+    materialized = list(records)
+    if _session_forked_from_id(record for record, _span in materialized) is None:
+        yield from materialized
         return
 
+    started: list[str] = []
+    completed: set[str] = set()
+    for record, _span in materialized:
+        payload = record.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        turn_id = payload.get("turn_id")
+        if not isinstance(turn_id, str):
+            continue
+        if payload.get("type") == "task_started":
+            started.append(turn_id)
+        elif payload.get("type") == "task_complete":
+            completed.add(turn_id)
+    owned_turn_ids = {
+        turn_id
+        for turn_id in started
+        if turn_id not in parent_started_turn_ids and turn_id in completed
+    }
+    if started and started[-1] not in parent_started_turn_ids:
+        # The final lifecycle may be a legitimate in-progress child turn.
+        owned_turn_ids.add(started[-1])
+
     keep_active_window = False
-    for record, span in chain(head, iterator):
+    for record, span in materialized:
         if record.get("type") in {"session_meta", "compacted"}:
             yield record, span
             continue
@@ -487,13 +496,12 @@ def _iter_own_records(
         payload = payload if isinstance(payload, dict) else {}
         explicit_turn_id = _nested_turn_id(payload)
         if payload.get("type") == "task_started":
-            keep_active_window = (
-                explicit_turn_id is not None
-                and explicit_turn_id not in parent_started_turn_ids
-            )
+            keep_active_window = explicit_turn_id in owned_turn_ids
         if explicit_turn_id in parent_started_turn_ids:
             continue
-        if keep_active_window:
+        if explicit_turn_id in owned_turn_ids or (
+            explicit_turn_id is None and keep_active_window
+        ):
             yield record, span
 
 
@@ -930,16 +938,6 @@ class CodexAdapter(BaseAdapter):
                 ]
             }
         )
-        if self.last_provenance is not None:
-            retained_event_ids = {event.event_id for event in retained.events}
-            self.last_provenance = replace(
-                self.last_provenance,
-                events={
-                    event_id: span
-                    for event_id, span in self.last_provenance.events.items()
-                    if event_id in retained_event_ids
-                },
-            )
         return retained
 
     def _build_transcript(

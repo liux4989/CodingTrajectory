@@ -217,7 +217,8 @@ def _remap_stabilized_provenance(
             event_ids.get(key, key): value for key, value in provenance.events.items()
         },
         items={
-            item_ids.get(key, key): value for key, value in provenance.items.items()
+            item_ids.get(key, key): tuple(event_ids.get(event_id, event_id) for event_id in value)
+            for key, value in provenance.items.items()
         },
     )
 
