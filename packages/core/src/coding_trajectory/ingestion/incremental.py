@@ -1164,13 +1164,13 @@ def _codex_parent_turn_ids(
         header = headers[path]
         if header.vendor != Vendor.CODEX_CLI or header.session_id not in referenced:
             continue
-        started[header.session_id] = {
+        started.setdefault(header.session_id, set()).update(
             turn_id
             for record in records
             if isinstance((payload := record.get("payload")), dict)
             and payload.get("type") == "task_started"
             and isinstance((turn_id := payload.get("turn_id")), str)
-        }
+        )
     return started
 
 

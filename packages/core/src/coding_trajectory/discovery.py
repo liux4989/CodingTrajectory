@@ -419,7 +419,9 @@ def scan_parent_turn_ids(
             continue
         started = adapter.scan_started_turn_ids(path)
         if started is not None:
-            started_turn_ids_by_session[header.session_id] = started
+            started_turn_ids_by_session.setdefault(header.session_id, set()).update(
+                started
+            )
 
     result: dict[Path, set[str] | None] = {}
     for _vendor, _adapter_cls, path in candidates:
@@ -1424,8 +1426,6 @@ def stabilize_session(
                 **(
                     {
                         "usage": compact_usage_mapping(observation.usage),
-                        "cumulative_usage": None,
-                        "categories": [],
                     }
                     if retention == "measurements"
                     else {}

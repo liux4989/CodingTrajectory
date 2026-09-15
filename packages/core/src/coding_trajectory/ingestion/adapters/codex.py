@@ -438,65 +438,78 @@ def _session_forked_from_id(records: Iterable[dict]) -> str | None:
     for record in records:
         if record.get("type") != "session_meta":
             continue
-        ffid = (
-            record.get("payload", {}).get("forked_from_id")
-            if isinstance(record.get("payload"), dict)
-            else None
-        )
-        return _extract_uuid_text(ffid)
+        payload = record.get("payload")
+        return _record_parent_id(payload if isinstance(payload, dict) else {})
     return None
 
 
-def _iter_own_records(
-    records: Iterable[tuple[dict, RecordSpan]],
-    parent_started_turn_ids: set[str],
-) -> Iterator[tuple[dict, RecordSpan]]:
-    """Stream ``_cut_inherited_records`` semantics without materializing records.
+def _record_parent_id(meta: dict) -> str | None:
+    direct = _extract_uuid_text(meta.get("forked_from_id"))
+    if direct is not None:
+        return direct
+    source = meta.get("source")
+    subagent = source.get("subagent") if isinstance(source, dict) else None
+    spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+    return (
+        _extract_uuid_text(spawn.get("parent_thread_id"))
+        if isinstance(spawn, dict)
+        else None
+    )
 
-    Keeps the leading ``session_meta`` prefix, drops the inherited segment a
-    forked rollout re-materializes, and passes through everything from the
-    first foreign ``task_started`` on.  Non-forks pass through unchanged.
-    """
+
+def _iter_own_records(
+    records: Iterable[tuple[dict, RecordSpan | None]],
+    parent_started_turn_ids: set[str],
+) -> Iterator[tuple[dict, RecordSpan | None]]:
+    """Keep child-owned records even when copied parent turns are interleaved."""
     iterator = iter(records)
-    head: list[tuple[dict, RecordSpan]] = []
-    leading = 0
-    prefix_open = True
-    meta_seen = False
+    head: list[tuple[dict, RecordSpan | None]] = []
     forked_from: str | None = None
     for pair in iterator:
         record = pair[0]
         head.append(pair)
         if record.get("type") == "session_meta":
-            if not meta_seen:
-                meta_seen = True
-                payload = record.get("payload")
-                ffid = (
-                    payload.get("forked_from_id") if isinstance(payload, dict) else None
-                )
-                forked_from = _extract_uuid_text(ffid)
+            payload = record.get("payload")
+            forked_from = _record_parent_id(payload if isinstance(payload, dict) else {})
         else:
-            prefix_open = False
-        if prefix_open:
-            leading += 1
-        if meta_seen and not prefix_open:
             break
-    if not meta_seen or forked_from is None:
+    if forked_from is None:
         yield from head
         yield from iterator
         return
-    yield from head[:leading]
-    for record, _span in chain(head[leading:], iterator):
-        payload = record.get("payload") or {}
-        if payload.get("type") != "task_started":
+
+    keep_active_window = False
+    for record, span in chain(head, iterator):
+        if record.get("type") in {"session_meta", "compacted"}:
+            yield record, span
             continue
-        turn_id = payload.get("turn_id")
-        if isinstance(turn_id, str) and turn_id not in parent_started_turn_ids:
-            yield record, _span
-            break
-    else:
-        # Fork has no own turns (inherited only): keep just its session_meta.
-        return
-    yield from iterator
+        payload = record.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        explicit_turn_id = _nested_turn_id(payload)
+        if payload.get("type") == "task_started":
+            keep_active_window = (
+                explicit_turn_id is not None
+                and explicit_turn_id not in parent_started_turn_ids
+            )
+        if explicit_turn_id in parent_started_turn_ids:
+            continue
+        if keep_active_window:
+            yield record, span
+
+
+def _nested_turn_id(value: object) -> str | None:
+    """Find explicit provider ownership on a record before using active-window state."""
+
+    if not isinstance(value, dict):
+        return None
+    turn_id = value.get("turn_id")
+    if isinstance(turn_id, str):
+        return turn_id
+    for nested in value.values():
+        found = _nested_turn_id(nested)
+        if found is not None:
+            return found
+    return None
 
 
 def _cut_inherited_records(
@@ -521,25 +534,13 @@ def _cut_inherited_records(
         return records
     if _session_forked_from_id(records) is None:
         return records
-    leading = 0
-    for record in records:
-        if record.get("type") == "session_meta":
-            leading += 1
-            continue
-        break
-    first_foreign = None
-    for index in range(leading, len(records)):
-        payload = records[index].get("payload") or {}
-        if payload.get("type") != "task_started":
-            continue
-        turn_id = payload.get("turn_id")
-        if isinstance(turn_id, str) and turn_id not in parent_started_turn_ids:
-            first_foreign = index
-            break
-    if first_foreign is None:
-        # Fork has no own turns (inherited only): keep just its session_meta.
-        return records[:leading]
-    return records[:leading] + records[first_foreign:]
+    return [
+        record
+        for record, _span in _iter_own_records(
+            ((record, None) for record in records),
+            parent_started_turn_ids,
+        )
+    ]
 
 
 def _derive_session_status(turns: list) -> SessionStatus:
