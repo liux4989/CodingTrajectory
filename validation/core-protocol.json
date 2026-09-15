@@ -739,6 +739,17 @@
               "default": null,
               "title": "Context Window Tokens"
             },
+            "cumulative_usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ChronicleUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "model": {
               "anyOf": [
                 {

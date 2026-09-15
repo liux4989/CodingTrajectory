@@ -216,6 +216,7 @@ class ChronicleRequestUsage(ChronicleModel):
     context_window_tokens: int | None = Field(default=None, ge=0)
     used_input_tokens: int = Field(default=0, ge=0)
     usage: ChronicleUsage = Field(default_factory=ChronicleUsage)
+    cumulative_usage: ChronicleUsage | None = None
     categories: list[ChronicleUsageCategory] = Field(
         default_factory=list, max_length=32
     )
@@ -1041,7 +1042,6 @@ def _build_user_request(
 
 
 def _build_request_usage(observation: ContextUsageObservation) -> ChronicleRequestUsage:
-    usage = observation.usage
     return ChronicleRequestUsage(
         request_id=observation.source_event_id,
         timestamp=observation.timestamp,
@@ -1050,25 +1050,11 @@ def _build_request_usage(observation: ContextUsageObservation) -> ChronicleReque
         provider=observation.provider,
         context_window_tokens=observation.context_window_tokens,
         used_input_tokens=observation.used_input_tokens,
-        usage=ChronicleUsage(
-            input_tokens=_usage_int(usage, "input_tokens", "inputTokens"),
-            cached_input_tokens=_usage_int(
-                usage, "cached_input_tokens", "cachedInputTokens"
-            ),
-            cache_creation_input_tokens=_usage_int(
-                usage,
-                "cache_creation_input_tokens",
-                "cacheCreationInputTokens",
-            ),
-            output_tokens=_usage_int(usage, "output_tokens", "outputTokens"),
-            reasoning_output_tokens=_usage_int(
-                usage, "reasoning_output_tokens", "reasoningOutputTokens"
-            ),
-            total_tokens=_usage_int(usage, "total_tokens", "totalTokens"),
-            uncached_input_tokens=_usage_optional_int(
-                usage, "uncached_input_tokens", "uncachedInputTokens"
-            ),
-            cost_usd=_cost_text(_usage_optional_float(usage, "cost_usd", "costUsd")),
+        usage=_build_chronicle_usage(observation.usage),
+        cumulative_usage=(
+            _build_chronicle_usage(observation.cumulative_usage)
+            if observation.cumulative_usage is not None
+            else None
         ),
         categories=[
             ChronicleUsageCategory(
@@ -1080,6 +1066,29 @@ def _build_request_usage(observation: ContextUsageObservation) -> ChronicleReque
             )
             for category in observation.categories
         ],
+    )
+
+
+def _build_chronicle_usage(usage: dict[str, Any]) -> ChronicleUsage:
+    return ChronicleUsage(
+        input_tokens=_usage_int(usage, "input_tokens", "inputTokens"),
+        cached_input_tokens=_usage_int(
+            usage, "cached_input_tokens", "cachedInputTokens"
+        ),
+        cache_creation_input_tokens=_usage_int(
+            usage,
+            "cache_creation_input_tokens",
+            "cacheCreationInputTokens",
+        ),
+        output_tokens=_usage_int(usage, "output_tokens", "outputTokens"),
+        reasoning_output_tokens=_usage_int(
+            usage, "reasoning_output_tokens", "reasoningOutputTokens"
+        ),
+        total_tokens=_usage_int(usage, "total_tokens", "totalTokens"),
+        uncached_input_tokens=_usage_optional_int(
+            usage, "uncached_input_tokens", "uncachedInputTokens"
+        ),
+        cost_usd=_cost_text(_usage_optional_float(usage, "cost_usd", "costUsd")),
     )
 
 
@@ -1537,9 +1546,6 @@ def _to_session(value: ChronicleSession) -> Session:
                     )
                 )
         for request in turn.requests:
-            usage = request.usage.model_dump(mode="json", exclude_none=True)
-            if request.usage.cost_usd is not None:
-                usage["cost_usd"] = float(request.usage.cost_usd)
             context_usage.append(
                 ContextUsageObservation(
                     source_event_id=request.request_id,
@@ -1549,7 +1555,12 @@ def _to_session(value: ChronicleSession) -> Session:
                     provider=request.provider,
                     context_window_tokens=request.context_window_tokens,
                     used_input_tokens=request.used_input_tokens,
-                    usage=usage,
+                    usage=_to_usage_dict(request.usage),
+                    cumulative_usage=(
+                        _to_usage_dict(request.cumulative_usage)
+                        if request.cumulative_usage is not None
+                        else None
+                    ),
                     categories=[
                         ContextCategoryObservation(**category.model_dump(mode="python"))
                         for category in request.categories
@@ -1604,6 +1615,13 @@ def _to_session(value: ChronicleSession) -> Session:
         extensions=_to_extensions(value),
         status=value.status,
     )
+
+
+def _to_usage_dict(usage: ChronicleUsage) -> dict[str, Any]:
+    result = usage.model_dump(mode="json", exclude_none=True)
+    if usage.cost_usd is not None:
+        result["cost_usd"] = float(usage.cost_usd)
+    return result
 
 
 def _to_item(value: ChronicleItem, session_id: UUID, turn_id: UUID) -> Item:
