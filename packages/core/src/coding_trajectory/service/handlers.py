@@ -143,7 +143,7 @@ def _fact_graphs(
         normalize_project_key(project_name) if project_name is not None else None
     )
     for graph_id in facts.graph_ids:
-        graph_payload = facts.payload("graph", graph_id)
+        graph_payload = facts.payload(graph_id, "graph", graph_id)
         assert isinstance(graph_payload, GraphFactPayload)
         project = graph_payload.summary.project
         normalized_project = normalize_project_key(project) if project else None

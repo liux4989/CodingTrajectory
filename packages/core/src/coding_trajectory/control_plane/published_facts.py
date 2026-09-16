@@ -548,10 +548,10 @@ class FactIndex:
 
     _canonical_rows: tuple[FactRowBase, ...]
     _rows_by_kind: dict[str, tuple[FactRowBase, ...]]
-    _rows_by_id: dict[UUID, tuple[FactRowBase, ...]]
-    _rows_by_parent: dict[UUID, tuple[FactRowBase, ...]]
+    _rows_by_id: dict[tuple[UUID, UUID], tuple[FactRowBase, ...]]
+    _rows_by_parent: dict[tuple[UUID, UUID], tuple[FactRowBase, ...]]
     _rows_by_graph: dict[UUID, tuple[FactRowBase, ...]]
-    _graph_by_entrypoint: dict[UUID, UUID]
+    _entrypoint_kinds: dict[tuple[UUID, UUID], frozenset[str]]
 
     @classmethod
     def from_fact_sets(cls, fact_sets: list[PublishedFactSet]) -> FactIndex:
@@ -564,29 +564,29 @@ class FactIndex:
             for row in fact_set.rows
         )
         by_kind: dict[str, list[FactRowBase]] = {}
-        by_id: dict[UUID, list[FactRowBase]] = {}
-        by_parent: dict[UUID, list[FactRowBase]] = {}
+        by_id: dict[tuple[UUID, UUID], list[FactRowBase]] = {}
+        by_parent: dict[tuple[UUID, UUID], list[FactRowBase]] = {}
         by_graph: dict[UUID, list[FactRowBase]] = {}
-        entrypoints: dict[UUID, UUID] = {}
+        entrypoints: dict[tuple[UUID, UUID], set[str]] = {}
         for row in rows:
             by_kind.setdefault(row.kind, []).append(row)
-            by_id.setdefault(row.fact_id, []).append(row)
+            by_id.setdefault((row.graph_id, row.fact_id), []).append(row)
             if row.parent_id is not None:
-                by_parent.setdefault(row.parent_id, []).append(row)
+                by_parent.setdefault((row.graph_id, row.parent_id), []).append(row)
             by_graph.setdefault(row.graph_id, []).append(row)
             if row.kind in {"graph", "session", "turn"}:
-                entrypoints[row.fact_id] = row.graph_id
+                entrypoints.setdefault((row.graph_id, row.fact_id), set()).add(row.kind)
         return cls(
             _canonical_rows=rows,
             _rows_by_kind={kind: tuple(values) for kind, values in by_kind.items()},
-            _rows_by_id={fact_id: tuple(values) for fact_id, values in by_id.items()},
-            _rows_by_parent={
-                parent_id: tuple(values) for parent_id, values in by_parent.items()
-            },
+            _rows_by_id={key: tuple(values) for key, values in by_id.items()},
+            _rows_by_parent={key: tuple(values) for key, values in by_parent.items()},
             _rows_by_graph={
                 graph_id: tuple(values) for graph_id, values in by_graph.items()
             },
-            _graph_by_entrypoint=entrypoints,
+            _entrypoint_kinds={
+                key: frozenset(kinds) for key, kinds in entrypoints.items()
+            },
         )
 
     @property
@@ -600,32 +600,45 @@ class FactIndex:
     def rows_of_kind(self, kind: str) -> tuple[FactRowBase, ...]:
         return self._rows_by_kind.get(kind, ())
 
-    def rows_for_id(self, fact_id: UUID) -> tuple[FactRowBase, ...]:
-        return self._rows_by_id.get(fact_id, ())
+    def rows_for_id(self, graph_id: UUID, fact_id: UUID) -> tuple[FactRowBase, ...]:
+        return self._rows_by_id.get((graph_id, fact_id), ())
 
-    def rows_for_parent(self, parent_id: UUID) -> tuple[FactRowBase, ...]:
-        return self._rows_by_parent.get(parent_id, ())
+    def rows_for_parent(
+        self, graph_id: UUID, parent_id: UUID
+    ) -> tuple[FactRowBase, ...]:
+        return self._rows_by_parent.get((graph_id, parent_id), ())
 
     def rows_for_graph(self, graph_id: UUID) -> tuple[FactRowBase, ...]:
         return self._rows_by_graph.get(graph_id, ())
 
-    def row(self, kind: str, fact_id: UUID) -> FactRowBase | None:
+    def row(self, graph_id: UUID, kind: str, fact_id: UUID) -> FactRowBase | None:
         return next(
-            (row for row in self.rows_for_id(fact_id) if row.kind == kind), None
+            (row for row in self.rows_for_id(graph_id, fact_id) if row.kind == kind),
+            None,
         )
 
-    def payload(self, kind: str, fact_id: UUID) -> Any | None:
-        row = self.row(kind, fact_id)
+    def payload(self, graph_id: UUID, kind: str, fact_id: UUID) -> Any | None:
+        row = self.row(graph_id, kind, fact_id)
         return row.payload if row is not None else None
 
     def graph_id_for_entrypoint(self, entrypoint_id: UUID) -> UUID | None:
-        return self._graph_by_entrypoint.get(entrypoint_id)
+        if "graph" in self._entrypoint_kinds.get(
+            (entrypoint_id, entrypoint_id), frozenset()
+        ):
+            return entrypoint_id
+        for kind in ("session", "turn"):
+            for graph_id in reversed(self.graph_ids):
+                if kind in self._entrypoint_kinds.get(
+                    (graph_id, entrypoint_id), frozenset()
+                ):
+                    return graph_id
+        return None
 
 
 def session_graph_from_fact_index(facts: FactIndex, graph_id: UUID) -> SessionGraph:
     """Materialize one selected canonical graph for existing semantic handlers."""
 
-    graph_row = facts.row("graph", graph_id)
+    graph_row = facts.row(graph_id, "graph", graph_id)
     if graph_row is None:
         raise ValueError("fact index requires exactly one selected graph row")
     evidence_by_item = {
@@ -635,7 +648,7 @@ def session_graph_from_fact_index(facts: FactIndex, graph_id: UUID) -> SessionGr
     }
 
     sessions: list[ChronicleSession] = []
-    for session_row in facts.rows_for_parent(graph_id):
+    for session_row in facts.rows_for_parent(graph_id, graph_id):
         if session_row.kind != "session":
             continue
         session_payload = session_row.payload
@@ -643,21 +656,27 @@ def session_graph_from_fact_index(facts: FactIndex, graph_id: UUID) -> SessionGr
         sid = session_payload.session_id
         turns: list[ChronicleTurn] = []
         events = [
-            row.payload for row in facts.rows_for_parent(sid) if row.kind == "event"
+            row.payload
+            for row in facts.rows_for_parent(graph_id, sid)
+            if row.kind == "event"
         ]
         runtime = [
             row.payload
             for row in sorted(
-                facts.rows_for_parent(sid),
+                facts.rows_for_parent(graph_id, sid),
                 key=lambda row: (row.order_index or 0, str(row.fact_id)),
             )
             if row.kind == "runtime"
         ]
         measurement_row = next(
-            (row for row in facts.rows_for_parent(sid) if row.kind == "measurement"),
+            (
+                row
+                for row in facts.rows_for_parent(graph_id, sid)
+                if row.kind == "measurement"
+            ),
             None,
         )
-        for turn_row in facts.rows_for_parent(sid):
+        for turn_row in facts.rows_for_parent(graph_id, sid):
             if turn_row.kind != "turn":
                 continue
             turn_payload = turn_row.payload
@@ -667,20 +686,20 @@ def session_graph_from_fact_index(facts: FactIndex, graph_id: UUID) -> SessionGr
                     **item_row.payload.model_dump(mode="python"),
                     output_evidence=evidence_by_item.get(item_row.fact_id),
                 )
-                for item_row in facts.rows_for_parent(turn_row.fact_id)
+                for item_row in facts.rows_for_parent(graph_id, turn_row.fact_id)
                 if item_row.kind == "item"
             ]
             requests = [
                 row.payload
                 for row in sorted(
-                    facts.rows_for_parent(turn_row.fact_id),
+                    facts.rows_for_parent(graph_id, turn_row.fact_id),
                     key=lambda row: (row.order_index or 0, str(row.fact_id)),
                 )
                 if row.kind == "request"
             ]
             events.extend(
                 row.payload
-                for row in facts.rows_for_parent(turn_row.fact_id)
+                for row in facts.rows_for_parent(graph_id, turn_row.fact_id)
                 if row.kind == "event"
             )
             turns.append(
@@ -722,7 +741,7 @@ def session_graph_from_fact_index(facts: FactIndex, graph_id: UUID) -> SessionGr
         ),
         edges=[
             _to_edge(row.payload)
-            for row in facts.rows_for_parent(graph_id)
+            for row in facts.rows_for_parent(graph_id, graph_id)
             if row.kind == "edge"
         ],
         sessions=canonical_sessions,

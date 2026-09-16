@@ -18,9 +18,14 @@ from coding_trajectory.control_plane.published_facts import (
     PublishedFactSet,
     session_graph_from_fact_index,
 )
+from coding_trajectory.ingestion.models import (
+    SessionEdge,
+    SessionGraph,
+    SessionGraphSummary,
+)
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.service.handlers import dispatch
-from coding_trajectory.service.store import IndexCache
+from coding_trajectory.service.store import IndexCache, _resolve_session_graph
 
 ROOT = Path(__file__).resolve().parents[1]
 METHODS = (
@@ -97,10 +102,205 @@ def _dispatch(method: str, params: dict[str, Any], store: Any) -> Any:
     )
 
 
+def _collision_fixture(
+    fixture: dict[str, Any],
+) -> tuple[list[PublishedFactSet], list[SessionGraph], UUID, UUID]:
+    first_facts = fixture["synthetic_fact_set"](
+        seed="collision-first", project="collision-project"
+    )
+    parent_facts = fixture["synthetic_fact_set"](
+        seed="collision-parent", project="collision-project"
+    )
+    child_facts = fixture["synthetic_fact_set"](
+        seed="collision-child", project="collision-project"
+    )
+    colliding_facts = fixture["synthetic_fact_set"](
+        seed="collision-colliding-child", project="collision-project"
+    )
+    turn_collision_facts = fixture["synthetic_fact_set"](
+        seed="collision-turn-entrypoint", project="collision-project"
+    )
+    source_index = FactIndex.from_fact_sets(
+        [
+            first_facts,
+            parent_facts,
+            child_facts,
+            colliding_facts,
+            turn_collision_facts,
+        ]
+    )
+    first = session_graph_from_fact_index(source_index, first_facts.graph_id)
+    parent = session_graph_from_fact_index(source_index, parent_facts.graph_id)
+    child = session_graph_from_fact_index(source_index, child_facts.graph_id)
+    colliding = session_graph_from_fact_index(source_index, colliding_facts.graph_id)
+    turn_collision = session_graph_from_fact_index(
+        source_index, turn_collision_facts.graph_id
+    )
+
+    shared_session_id = first.root_session_id
+    shared_turn_id = first.sessions[0].turns[0].turn_id
+    child_session = colliding.sessions[0]
+    colliding_turns = [
+        turn.model_copy(
+            update={
+                "turn_id": shared_turn_id,
+                "session_id": shared_session_id,
+                "items": [
+                    item.model_copy(
+                        update={
+                            "session_id": shared_session_id,
+                            "turn_id": shared_turn_id,
+                        }
+                    )
+                    for item in turn.items
+                ],
+            }
+        )
+        for turn in child_session.turns
+    ]
+    colliding_events = [
+        event.model_copy(update={"session_id": shared_session_id})
+        for event in child_session.events
+    ]
+    colliding_child = child_session.model_copy(
+        update={
+            "session_id": shared_session_id,
+            "parent_session_id": parent.root_session_id,
+            "events": colliding_events,
+            "turns": colliding_turns,
+        }
+    )
+    parent_session = parent.sessions[0]
+    normal_child = child.sessions[0].model_copy(
+        update={"parent_session_id": parent.root_session_id}
+    )
+    origin_turn = parent_session.turns[0]
+    origin_item = origin_turn.items[0]
+    second = SessionGraph(
+        root_session_id=parent.root_session_id,
+        project_identifier="collision-project",
+        summary=SessionGraphSummary(
+            root_session_id=parent.root_session_id,
+            started_at=parent.summary.started_at,
+            ended_at=child.summary.ended_at,
+            session_count=3,
+            turn_count=3,
+            vendors=sorted(
+                {
+                    parent_session.vendor,
+                    normal_child.vendor,
+                    colliding_child.vendor,
+                },
+                key=lambda vendor: vendor.value,
+            ),
+        ),
+        sessions=[parent_session, normal_child, colliding_child],
+        edges=[
+            SessionEdge(
+                type="spawned_subagent",
+                source_session_id=parent.root_session_id,
+                target_session_id=normal_child.session_id,
+                source_turn_id=origin_turn.turn_id,
+                source_item_id=origin_item.item_id,
+                source_event_id=origin_item.event_ids[0],
+                evidence_event_ids=[origin_item.event_ids[0]],
+                provenance="observed",
+                confidence="high",
+            ),
+            SessionEdge(
+                type="spawned_subagent",
+                source_session_id=parent.root_session_id,
+                target_session_id=shared_session_id,
+                source_turn_id=origin_turn.turn_id,
+                source_item_id=origin_item.item_id,
+                source_event_id=origin_item.event_ids[0],
+                evidence_event_ids=[origin_item.event_ids[0]],
+                provenance="observed",
+                confidence="high",
+            ),
+        ],
+    )
+    second_facts = fixture["build_published_fact_set"](second)
+    isolated_second = session_graph_from_fact_index(
+        FactIndex.from_fact_sets([second_facts]), second_facts.graph_id
+    )
+    turn_collision_session = turn_collision.sessions[0]
+    turn_collision_turns = [
+        turn.model_copy(
+            update={
+                "turn_id": normal_child.session_id,
+                "items": [
+                    item.model_copy(update={"turn_id": normal_child.session_id})
+                    for item in turn.items
+                ],
+            }
+        )
+        for turn in turn_collision_session.turns
+    ]
+    turn_collision_graph = turn_collision.model_copy(
+        update={
+            "sessions": [
+                turn_collision_session.model_copy(
+                    update={"turns": turn_collision_turns}
+                )
+            ]
+        }
+    )
+    third_facts = fixture["build_published_fact_set"](turn_collision_graph)
+    isolated_third = session_graph_from_fact_index(
+        FactIndex.from_fact_sets([third_facts]), third_facts.graph_id
+    )
+    return (
+        [first_facts, second_facts, third_facts],
+        [first, isolated_second, isolated_third],
+        shared_turn_id,
+        normal_child.session_id,
+    )
+
+
+def _qualify_collisions(fixture: dict[str, Any]) -> None:
+    fact_sets, source_graphs, shared_turn_id, child_session_id = _collision_fixture(
+        fixture
+    )
+    indexed = FactIndex.from_fact_sets(fact_sets)
+    ordered_graphs = sorted(source_graphs, key=lambda graph: str(graph.root_session_id))
+    baseline = DocumentStore.from_session_graphs(ordered_graphs)
+
+    for source_graph in source_graphs:
+        materialized = session_graph_from_fact_index(
+            indexed, source_graph.root_session_id
+        )
+        assert materialized == source_graph
+        assert all(
+            row.graph_id == source_graph.root_session_id
+            for row in indexed.rows_for_parent(
+                source_graph.root_session_id, source_graph.root_session_id
+            )
+        )
+
+    first_root = source_graphs[0].root_session_id
+    second_root = source_graphs[1].root_session_id
+    assert indexed.graph_id_for_entrypoint(first_root) == first_root
+    assert indexed.graph_id_for_entrypoint(second_root) == second_root
+    assert indexed.graph_id_for_entrypoint(child_session_id) == second_root
+    assert _resolve_session_graph(
+        baseline, str(child_session_id)
+    ).root_session_id == indexed.graph_id_for_entrypoint(child_session_id)
+    assert indexed.graph_id_for_entrypoint(shared_turn_id) == (
+        _resolve_session_graph(baseline, str(shared_turn_id)).root_session_id
+    )
+    for entrypoint in (first_root, second_root, child_session_id):
+        params = {"session_id": str(entrypoint)}
+        assert _dispatch("session.stats", params, indexed) == _dispatch(
+            "session.stats", params, baseline
+        )
+
+
 def main() -> None:
     fixture = runpy.run_path(
         str(ROOT / "scripts" / "qualify-cloudflare-control-plane.py")
     )
+    _qualify_collisions(fixture)
     project = "fact-index-asymmetric"
     primary = fixture["synthetic_edge_fact_set"](seed="index-primary", project=project)
     secondary = fixture["synthetic_fact_set"](
@@ -115,10 +315,10 @@ def main() -> None:
             for row in indexed.rows_for_graph(fact_set.graph_id)
         )
         for row in fact_set.rows:
-            assert row in indexed.rows_for_id(row.fact_id)
+            assert row in indexed.rows_for_id(row.graph_id, row.fact_id)
             if row.parent_id is not None:
-                assert row in indexed.rows_for_parent(row.parent_id)
-            assert indexed.payload(row.kind, row.fact_id) == row.payload
+                assert row in indexed.rows_for_parent(row.graph_id, row.parent_id)
+            assert indexed.payload(row.graph_id, row.kind, row.fact_id) == row.payload
 
     canonical = DocumentStore.from_session_graphs(
         [
