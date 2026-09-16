@@ -1,7 +1,19 @@
 # Managed collector service
 
-Implemented locally on 2026-09-10. Host schedule enablement is an explicit operator
-action; the existing Mac schedule has not been activated by this implementation.
+Status: **superseded**. The managed collector service described here —
+`ct collector service ...`, its supervisor templates, and
+`scripts/qualify-managed-collection.py` — was removed on 2026-09-16 by the
+published-fact cutover (see
+[Published fact sets refactor](remote-historical-facts.md), "Deleted without
+compatibility"). The commands and qualification script below no longer exist on
+`main`; this document is retained as the design and qualification record of that
+removed slice, not as executable guidance. Manual collection through
+`ct collector run` and the [connections](connections.md) lifecycle remain
+current.
+
+Historical record follows. Implemented locally on 2026-09-10. Host schedule
+enablement is an explicit operator action; the existing Mac schedule has not been
+activated by this implementation.
 
 ## Register and install once
 

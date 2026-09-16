@@ -1,9 +1,13 @@
 # Greenfield remote historical-support refactor: Published Fact Sets
 
-Status: implemented in this branch. This document is the authoritative design
+Status: implemented and merged (2026-09-16). This document is the design
 record for the clean-break replacement of the artifact/chunk/projection remote
 historical stack with typed, bounded, versioned **publication facts** stored in
-Durable Object SQLite.
+Durable Object SQLite. Where later intentional changes superseded details —
+including the method versions listed under "Contract versioning" — the frozen
+[`validation/core-protocol.json`](../../validation/core-protocol.json) snapshot
+and current source are authoritative (see
+[Core protocol freeze](../core-protocol.md)).
 
 ## Decision record (owner-approved, no compatibility)
 
@@ -95,6 +99,17 @@ Durable Object SQLite.
   vendor_data, blobs/media, secrets, host-absolute paths.
 
 ## Contract versioning (no aliases)
+
+Note (2026-09-16 cleanup): the version list below is the design-time record and
+does not match the landed registry. As merged, the frozen snapshot carries
+`project.list` v3, `project.sessions` v3, `session.tree` v3,
+`session.overview` v3, `session.summary` v2, `session.search` v2,
+`graph.overview` v3, `session.stats`/`graph.stats` v3,
+`session.usage`/`graph.usage` v3, `session.model_usage` v3,
+`session.request_usage` v3, `session.tool_usage` v3, `session.events` v4,
+`session.items` v4, `living.events` v1, and `living.sessions` v2. There is no
+`project.overview` method in the Core registry; that name appeared only in the
+retired Datahub plugin.
 
 - `ct.published_facts.v1` carries bounded event envelopes
   (`coverage.events=True`) and per-item `output_evidence`.

@@ -65,8 +65,12 @@ under the existing source fences.
 
 Active-graph update deltas were not available from a static read-only snapshot.
 That gap, plus publications up to 71,239,324 bytes (well above the 16 MiB atomic
-publication bound), is decisive against lowering graph/publication limits or
-removing multi-batch staging. Staging and all hard limits remain unchanged.
+publication bound in force at the time), is decisive against lowering
+graph/publication limits or removing multi-batch staging. This change left
+staging and all hard limits unchanged; the limits were raised later the same day
+by [Bounded large fact publications](bounded-large-fact-publications.md) (16 MiB
+per graph, 96 MiB per publication), merged into `main` but not
+production-qualified or deployed.
 
 ## Synthetic performance evidence
 

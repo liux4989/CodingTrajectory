@@ -1,6 +1,7 @@
 # Bounded Large Fact Publications
 
-- **Status:** Implemented locally; deployment qualification deferred
+- **Status:** Implemented and merged into `main`; not production-qualified or
+  deployed
 - **Wire impact:** Staging batch count ceiling only; fact rows and
   `ct.published_facts.v1` are unchanged
 

@@ -6,8 +6,10 @@ Unified canonical models and CLI tooling for coding-agent session graphs.
 
 Loop is the local-first Analytics product: explore local sessions, open an
 investigation, and resolve stable item/event references back to canonical evidence.
-It saves reading positions, never copied transcripts. Monitor, Improve, and
-hosted delivery are deferred. See [Loop design and local usage](docs/loop-design.md).
+It saves reading positions, never copied transcripts. The deterministic Monitor
+foundation (turn-token-budget watches, dry-run, and finding triage) is included;
+broader Monitor automation, Improve, and hosted delivery are deferred. See
+[Loop design and local usage](docs/loop-design.md).
 
 ```bash
 uv sync --all-packages --locked
