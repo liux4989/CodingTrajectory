@@ -1,10 +1,15 @@
 # Targeted reset: temporary owner recovery
 
-Status: locally qualified proposal; no production credential issued, no secrets
-changed, no deployment, no reset. The owner approved preparing an access-recovery
-plan after the existing Keychain credential authenticated without the owner role.
-Deploying this new source requires explicit acceptance of the revised source
-scope: it is not the previously approved exact reset commit.
+Status: **reset completed**, after the owner explicitly chose no compatibility
+support for this preproduction environment. The approved recovery source
+`e9096632d3d6782e770bbf02d7a0e34f56ba3195` performed one successful targeted reset.
+Snapshot zero and empty inventory were verified after reset and after gate removal.
+Clean source `2917baea8b980b40c733e155377ab498f5fa9bd9` is now deployed as
+`df81dc0b-6906-4a18-b9c2-bb87e39d4a4a`. Temporary reset/recovery code, active
+bindings and the local recovery credential were removed. CT_PRINCIPALS was
+preserved without role mapping or compatibility support. Legacy credentials
+remain incompatible; no compatible credential remains for a post-cleanup snapshot
+read. See the [execution record](targeted-reset-execution-2026-09-16.md).
 
 ## Immutable target and source boundaries
 
@@ -109,8 +114,11 @@ under the old exact-SHA authorization.
    `ct.core.v1` / `ct_connection_status` request with `id: null` and only the target
    `workspace_id`. Require HTTP 200, `ok: true`, exact workspace equality, `owner`
    role and the expected `X-CT-Worker-Version`. Report only those sanitized checks.
-   Recheck the original Keychain credential to ensure its existing access still
-   works; never replace it. Stop if any authentication check fails.
+   The first run also required legacy credential continuity and rolled back when
+   it failed. The owner's subsequent preproduction/no-compatibility decision
+   accepts legacy rejection. Preserve the original credential and registry without
+   mapping legacy roles. Recovery-owner authentication must still pass every
+   target and version check before enabling reset.
 5. Enable `CT_RESET_WORKSPACE_ID` only for the pinned workspace using the same
    reviewed recovery source. Verify the resulting version and bindings before
    invoking. Keep the credential within its validity window.
@@ -152,9 +160,12 @@ under the old exact-SHA authorization.
    absent from the bundle and record its new version; no new merge is needed.
 10. Delete only the temporary `CT_RESET_RECOVERY` secret, verify its absence, and
     remove the reset-only Keychain item. Never delete `CT_CURSOR_KEY` or existing
-    credentials. Verify the original reader still authenticates, the target
-    snapshot remains zero and inventory empty, and the reset method is not found
-    (404) with a valid existing credential. The recovery token must be rejected.
+    credentials. Under the owner's subsequent no-compatibility decision, verify
+    rejection of the recovery token and the expected incompatibility response for
+    the legacy token. Prove reset-code removal using the exact clean source,
+    inspected bundle and deployed version. The last authenticated snapshot read
+    occurs before clean-code deployment; disclose that no compatible credential
+    remains for a fresh read. Do not replace CT_PRINCIPALS to obtain that read.
 
 If a failure occurs after recovery activation, first disable the reset gate, then
 revoke recovery by removing `CT_RESET_RECOVERY`, preserving all existing secrets.
@@ -187,7 +198,9 @@ qualification starts actual local Workers with isolated synthetic storage.
   gate present (404), and preserved reader status, snapshot zero and empty
   inventory. This does not claim a production migration or deployed teardown.
 
-Production reset, gate teardown and final clean-code deployment remain pending.
+Reset and clean-code deployment completed under the revised preproduction
+decision. The initial attempt and rollback are recorded separately from the
+successful second attempt.
 Real-data upload and larger publication-limit qualification remain separate jobs.
 
 Wrangler secret preservation and version-upload behavior follow the
