@@ -95,6 +95,7 @@ WORKSPACE = "00000000-0000-0000-0000-000000000001"
 AGENT = "00000000-0000-0000-0000-000000000003"
 SECOND_WORKSPACE = "00000000-0000-0000-0000-000000000002"
 SECOND_AGENT = "00000000-0000-0000-0000-000000000004"
+MAX_RPC_BODY_BYTES = 3 * 1024 * 1024
 checks = 0
 
 
@@ -170,6 +171,126 @@ def rpc(
     )
     envelope = response.json()
     return envelope["data"] if envelope.get("ok") else envelope
+
+
+def padded_rpc_body(method: str, request: dict[str, Any], size: int) -> bytes:
+    encoded = json.dumps(
+        {
+            "protocol": "ct.core.v1",
+            "id": None,
+            "method": method,
+            "params": {**request, "workspace_id": WORKSPACE},
+        },
+        separators=(",", ":"),
+    ).encode()
+    if len(encoded) > size:
+        raise AssertionError("qualification RPC fixture exceeds its target")
+    return encoded + b" " * (size - len(encoded))
+
+
+def post_bounded_body(body: bytes, *, chunked: bool) -> httpx.Response:
+    content: bytes | Any
+    if chunked:
+        content = (
+            body[offset : offset + 65_536] for offset in range(0, len(body), 65_536)
+        )
+    else:
+        content = body
+    response = httpx.post(
+        URL + "/v1/core",
+        content=content,
+        headers={
+            "Authorization": "Bearer " + TOKENS["owner"],
+            "Content-Type": "application/json",
+        },
+        timeout=30,
+    )
+    check(
+        ("transfer-encoding" in response.request.headers) == chunked
+        and ("content-length" in response.request.headers) != chunked,
+        "qualification exercised the requested HTTP body framing",
+    )
+    return response
+
+
+def qualify_ingress_body_limit(snapshot_sequence: int, tag: str) -> None:
+    """Exercise the global stream bound before decode, parse, or DO dispatch."""
+
+    shared_source = (
+        Path(__file__).parents[1] / "cloudflare" / "control-plane" / "src" / "shared.ts"
+    ).read_text()
+    ingress_source = (
+        Path(__file__).parents[1] / "cloudflare" / "control-plane" / "src" / "index.ts"
+    ).read_text()
+    bounded_call = ingress_source.index("await bounded(request.body)")
+    check(
+        "MAX_BODY = 3 * 1024 * 1024" in shared_source
+        and "MAX_FACT_STAGE_BODY" not in shared_source
+        and "MAX_FACT_STAGE_BODY" not in ingress_source,
+        "one global 3 MiB body bound owns every RPC ingress",
+    )
+    check(
+        shared_source.index("if (length > limit)")
+        < shared_source.index("const result = new Uint8Array(length)")
+        and bounded_call
+        < ingress_source.index("new TextDecoder().decode(bodyBytes)", bounded_call)
+        and bounded_call < ingress_source.index("JSON.parse", bounded_call),
+        "stream overflow aborts before concatenation, decode, and JSON parsing",
+    )
+
+    snapshot_body = padded_rpc_body("ct_workspace_snapshot", {}, MAX_RPC_BODY_BYTES)
+    for chunked in (False, True):
+        response = post_bounded_body(snapshot_body, chunked=chunked)
+        check(response.status_code == 200, "exact 3 MiB RPC body is accepted")
+        check(
+            response.json()["data"]["snapshot_sequence"] == snapshot_sequence,
+            "exact-bound read leaves the snapshot unchanged",
+        )
+
+    for framing in ("content-length", "chunked"):
+        fact_set = synthetic_fact_set(
+            seed=f"{tag}:ingress:{framing}",
+            project="Ingress-" + tag,
+            include_unknown=False,
+        )
+        batches = _fact_row_batches(fact_set)
+        request = StageFactRowsRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            graph_id=fact_set.graph_id,
+            fact_set_digest=fact_set.fact_set_digest,
+            batch_index=0,
+            batch_count=len(batches),
+            rows=batches[0],
+        )
+        oversized = padded_rpc_body(
+            "ct_collector_stage_fact_rows",
+            request.model_dump(mode="json"),
+            MAX_RPC_BODY_BYTES + 1,
+        )
+        response = post_bounded_body(oversized, chunked=framing == "chunked")
+        check(response.status_code == 413, "3 MiB + 1 RPC body is rejected")
+        check(
+            response.json()["error"]["code"] == "body_too_large",
+            "stream overflow reports the ingress bound",
+        )
+        missing = rpc(
+            "ct_collector_missing_fact_rows",
+            {
+                "agent_id": AGENT,
+                "graph_id": str(fact_set.graph_id),
+                "fact_set_digest": fact_set.fact_set_digest,
+                "batch_count": len(batches),
+            },
+        )
+        check(
+            missing["missing_batches"] == list(range(len(batches))),
+            "oversized stage request never reaches Durable Object dispatch",
+        )
+        check(
+            rpc("ct_workspace_snapshot", {})["snapshot_sequence"] == snapshot_sequence,
+            "oversized stage request leaves the snapshot unchanged",
+        )
 
 
 def synthetic_fact_set(
@@ -884,6 +1005,8 @@ def main() -> None:
         bearer_secret not in bounded_sets and positional_secret not in bounded_sets,
         "command arguments never enter PublishedFactSet",
     )
+    ingress_snapshot = rpc("ct_workspace_snapshot", {})["snapshot_sequence"]
+    qualify_ingress_body_limit(ingress_snapshot, tag)
     checkpoint_payload_0 = {
         "kind": "ct.source_checkpoint.v1",
         "source_checkpoint": {"segments": [100]},

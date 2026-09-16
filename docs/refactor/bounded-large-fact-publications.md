@@ -24,9 +24,22 @@ SQLite growth, and publication distributions showing sustained pressure above
 ## Memory and atomicity
 
 Staging still uses one retryable protocol. A request contains at most 512 rows
-and 2 MiB of canonical row JSON. The Worker verifies row hashes, privacy, and
-number spelling before writing both the original batch and normalized staged SQL
-rows. A changed batch invalidates its graph validation attestation.
+and 2 MiB of canonical row JSON. Every RPC body is streaming-limited to 3 MiB
+before byte concatenation, UTF-8 decoding, JSON parsing, or Durable Object
+dispatch; this leaves envelope headroom for the largest fact batch. The Worker
+then verifies row hashes, privacy, and number spelling before writing both the
+original batch and normalized staged SQL rows. A changed batch invalidates its
+graph validation attestation.
+
+No current request producer needs a larger ingress allowance. Publication sends
+at most 512 compact graph manifests and 1,000 source-vector entries; it never
+sends fact rows. Recovery is bounded to 128 graph IDs, remote living reads to
+100 validated calls, and fact reads to small selectors and signed cursors.
+Project, source, checkpoint, heartbeat, and living writes must fit the existing
+1 MiB durable-record limit. Whole-artifact upload RPCs no longer exist. Revisit
+the 3 MiB ingress bound only if a new serialized request contract is introduced
+with independently bounded content above 2 MiB; publication storage growth by
+itself is not evidence for raising request memory.
 
 Publication validates one graph at a time with SQL relationship checks. JS
 materializes neither graph payload rows nor a publication aggregate. The only
@@ -45,7 +58,7 @@ Read pages remain signed, snapshot-pinned, and bounded at 2,048 rows/1 MiB.
 Local Wrangler qualification committed an exact 96 MiB synthetic publication
 and read it through 107 bounded pages. Process RSS is not used as isolate-heap
 evidence because local `workerd` includes SQLite and runtime state. The memory
-proof is structural: a bounded staging request, a compact per-graph digest
+proof is structural: a globally bounded request, a compact per-graph digest
 manifest, scalar affected-graph projection, and no publication-wide payload
 array. Deployment qualification must still confirm isolate telemetry and CPU
 time under the production runtime.

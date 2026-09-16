@@ -1,4 +1,4 @@
-import { bounded, digest, Fault, fields, Json, MAX_FACT_STAGE_BODY, object, Principal, requireThat, text, uuid } from "./shared";
+import { bounded, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
@@ -40,9 +40,6 @@ export default {
       requestId = message.id ?? null;
       const methodName = text(message.method, 128);
       method = methodName;
-      if (methodName === "ct_collector_stage_fact_rows") {
-        requireThat(bodyBytes.length <= MAX_FACT_STAGE_BODY, "body_too_large", 413);
-      }
       const role = methodName === "ct_connection_status" ? "authenticated" : COLLECT.has(methodName) ? "collect" : READ.has(methodName) ? "read" : null;
       requireThat(role, "not_found", 404);
       requireThat(role === "authenticated" || principal.roles.includes(role) || principal.roles.includes("owner"), "capability_required", 403);
