@@ -1,4 +1,5 @@
 import { bounded, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
+import { recoveryAllows, resetRecoveryPrincipal } from "./reset-recovery";
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
@@ -23,7 +24,10 @@ export default {
       let registry;
       try { registry = object(JSON.parse(env.CT_PRINCIPALS)); }
       catch { throw new Fault(503, "authentication_unavailable"); }
-      const raw = registry[await digest(token)];
+      const tokenDigest = await digest(token);
+      const existing = registry[tokenDigest];
+      const recovered = existing ? null : resetRecoveryPrincipal(env.CT_RESET_RECOVERY, tokenDigest);
+      const raw = existing ?? recovered;
       requireThat(raw, "authentication_required", 401);
       const principal: Principal = { workspace_id: uuid(raw.workspace_id), agent_id: uuid(raw.agent_id), roles: raw.roles };
       requireThat(Array.isArray(principal.roles) && principal.roles.every(role => ["read", "collect", "owner"].includes(role)), "invalid_principal", 503);
@@ -37,6 +41,7 @@ export default {
       requestId = message.id ?? null;
       const methodName = text(message.method, 128);
       method = methodName;
+      if (recovered) requireThat(recoveryAllows(methodName), "capability_required", 403);
       const role = methodName === "ct_connection_status" ? "authenticated" : methodName === RESET ? "owner" : COLLECT.has(methodName) ? "collect" : READ.has(methodName) ? "read" : null;
       requireThat(role, "not_found", 404);
       requireThat(role === "authenticated" || principal.roles.includes(role) || principal.roles.includes("owner"), "capability_required", 403);

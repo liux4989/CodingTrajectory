@@ -5,6 +5,7 @@ interface __BaseEnv_Env {
 	CT_PRINCIPALS: string;
 	CT_CURSOR_KEY: string;
 	CT_RESET_WORKSPACE_ID?: string;
+	CT_RESET_RECOVERY?: string;
 	WORKSPACES: DurableObjectNamespace<import("./index").Workspace>;
 }
 declare namespace Cloudflare {
@@ -17,6 +18,7 @@ declare namespace Cloudflare {
 		CT_PRINCIPALS: string;
 		CT_CURSOR_KEY: string;
 		CT_RESET_WORKSPACE_ID?: string;
+		CT_RESET_RECOVERY?: string;
 		WORKSPACES: DurableObjectNamespace<import("./index").Workspace>;
 	}
 	interface Env extends __BaseEnv_Env {}
