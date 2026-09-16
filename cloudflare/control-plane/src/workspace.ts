@@ -12,7 +12,7 @@ export class Workspace extends DurableObject<Env> {
     super(ctx, env);
     this.state = new State(ctx.storage.sql);
     this.cursorSecret = env.CT_CURSOR_KEY;
-    initializeFacts(this.state);
+    this.ctx.storage.transactionSync(() => initializeFacts(this.state));
   }
 
   async invoke(method: string, envelopeJson: string, principalJson: string): Promise<string> {
@@ -37,11 +37,28 @@ export class Workspace extends DurableObject<Env> {
         return { status: 200, body: this.ctx.storage.transactionSync(() => writeStagedRows(this.state, request)) };
       }
       if (method === "ct_collector_publish_facts") {
+        const key = envelope.idempotency_key
+          ? stable([principal.agent_id, method, envelope.idempotency_key])
+          : null;
+        const prior = key ? this.state.get("receipt", key) : undefined;
+        if (prior) {
+          requireThat(prior.identity === identity, "idempotency_conflict", 409);
+          return { status: 200, body: prior.result };
+        }
         // Hash verification is async (crypto.subtle); fencing and the atomic
-        // commit run inside the workspace transaction, which also re-verifies
-        // that the staged rows validated above are still the staged set.
+        // commit and receipt write run inside one workspace transaction.
         const plan = await preparePublication(this.state, request);
-        return { status: 200, body: this.ctx.storage.transactionSync(() => commitPublication(this.state, request, plan)) };
+        const body = this.ctx.storage.transactionSync(() => {
+          const concurrent = key ? this.state.get("receipt", key) : undefined;
+          if (concurrent) {
+            requireThat(concurrent.identity === identity, "idempotency_conflict", 409);
+            return concurrent.result;
+          }
+          const result = commitPublication(this.state, request, plan);
+          if (key) this.state.put("receipt", key, { identity, result }, this.state.head());
+          return result;
+        });
+        return { status: 200, body };
       }
       if (method === "ct_collector_publish_observation") {
         requireThat(request.payload.source_checkpoint?.segments?.every((offset: unknown) => Number.isSafeInteger(offset) && Number(offset) > 0), "invalid_checkpoint_offsets");

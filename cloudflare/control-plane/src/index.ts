@@ -29,7 +29,11 @@ export default {
       const url = new URL(request.url);
       requireThat(request.method === "POST" && url.search === "" && url.pathname === "/v1/core", "not_found", 404);
       let message;
-      try { message = object(JSON.parse(new TextDecoder().decode(await bounded(request.body)))); }
+      let bodyBytes: Uint8Array;
+      try {
+        bodyBytes = await bounded(request.body);
+        message = object(JSON.parse(new TextDecoder().decode(bodyBytes)));
+      }
       catch (error) { if (error instanceof Fault) throw error; throw new Fault(400, "invalid_json"); }
       fields(message, ["protocol", "id", "method", "params", "idempotency_key", "request_sha256"], ["protocol", "method", "params"]);
       requireThat(message.protocol === PROTOCOL, "invalid_protocol");

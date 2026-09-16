@@ -7,7 +7,7 @@ claiming broader recovery, scale, retention, or freshness guarantees.
 - [ ] Complete remote restore, source rotation/truncation, parser upgrade, and
   transient-failure injection coverage (Q02, Q05-Q09, Q18-Q19).
 - [ ] Qualify large graphs, early insertion, and long active turns; replace the
-  8 MiB compatibility ceiling and full-prefix parsing before promising larger or
+  16 MiB compatibility ceiling and full-prefix parsing before promising larger or
   append-only processing (Q03-Q04).
 - [ ] Implement and qualify reference-safe garbage collection, staging retention,
   cursor expiration, and resnapshot behavior before enabling cleanup (Q13, Q20).

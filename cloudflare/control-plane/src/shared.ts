@@ -4,8 +4,8 @@ export type Json = Record<string, any>;
 export type Principal = { workspace_id: string; agent_id: string; roles: string[] };
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const DIGEST = /^[0-9a-f]{64}$/;
-export const MAX_BODY = 16 * 1024 * 1024;
-export const MAX_ARTIFACT = 8 * 1024 * 1024;
+// The largest request is a 2 MiB canonical fact batch plus its RPC envelope.
+export const MAX_BODY = 3 * 1024 * 1024;
 
 export class Fault extends Error {
   constructor(public status: number, public code: string) { super(code); }

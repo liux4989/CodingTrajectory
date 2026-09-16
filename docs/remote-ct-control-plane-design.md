@@ -41,9 +41,9 @@ Published command evidence contains only an allowlisted executable signature,
 never arguments. Standard APIs contain no raw transcript, prompt, reasoning,
 tool input/output, arbitrary event body, secret, or host-absolute path.
 
-The exact limits are 512 KiB per row, 8 MiB per graph, 16 MiB per publication,
-and 1 MiB/2,048 rows per read page. The aggregate caps prevent a valid collector
-from forcing isolate-scale buffering despite each graph being individually valid.
+The exact limits are 512 KiB per row, 16 MiB per graph, 96 MiB per publication,
+and 1 MiB/2,048 rows per read page. Normalized SQL staging keeps Worker
+materialization graph-bounded independently of the publication aggregate.
 
 Living methods remain separately versioned. Forecasting and calibration remain
 local/Core authorities; no estimator route or job store exists in this Worker.

@@ -25,6 +25,7 @@ from coding_trajectory.control_plane.published_facts import (
     FACT_SET_SCHEMA_VERSION,
     MAX_FACT_READ_PAGE_BYTES,
     MAX_FACT_ROWS_PER_GRAPH,
+    MAX_FACT_SET_BYTES,
     FactRow,
     compute_fact_set_digest,
     compute_row_hash,
@@ -32,9 +33,17 @@ from coding_trajectory.control_plane.published_facts import (
 from coding_trajectory.ingestion.common import canonical_json
 
 FACT_ROW_BATCH_MAX = 512
+FACT_STAGE_BATCH_MAX_BYTES = 2 * 1024 * 1024
+FACT_STAGE_BATCH_MAX = (
+    MAX_FACT_ROWS_PER_GRAPH // FACT_ROW_BATCH_MAX
+    + MAX_FACT_SET_BYTES // FACT_STAGE_BATCH_MAX_BYTES
+    + 1
+)
 FACT_READ_PAGE_MAX = 2048
 FACT_PUBLICATION_MAX_GRAPHS = 512
-FACT_PUBLICATION_MAX_BYTES = 16 * 1024 * 1024
+# 96 MiB covers the measured 71,239,324-byte publication with 41% headroom.
+# Worker memory is bounded independently by SQL-backed graph-at-a-time commit.
+FACT_PUBLICATION_MAX_BYTES = 96 * 1024 * 1024
 
 FactKind = Literal[
     "graph",
@@ -67,7 +76,7 @@ class StageFactRowsRequest(FactModelBase):
     graph_id: UUID
     fact_set_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     batch_index: int = Field(ge=0)
-    batch_count: int = Field(ge=1, le=MAX_FACT_ROWS_PER_GRAPH // FACT_ROW_BATCH_MAX + 1)
+    batch_count: int = Field(ge=1, le=FACT_STAGE_BATCH_MAX)
     rows: list[FactRow] = Field(min_length=1, max_length=FACT_ROW_BATCH_MAX)
 
     @model_validator(mode="after")
@@ -98,7 +107,7 @@ class MissingFactRowsRequest(FactModelBase):
     agent_id: UUID
     graph_id: UUID
     fact_set_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    batch_count: int = Field(ge=1, le=MAX_FACT_ROWS_PER_GRAPH // FACT_ROW_BATCH_MAX + 1)
+    batch_count: int = Field(ge=1, le=FACT_STAGE_BATCH_MAX)
 
 
 class MissingFactRowsResponse(FactModelBase):
@@ -241,6 +250,8 @@ __all__ = [
     "FACT_PUBLICATION_MAX_GRAPHS",
     "FACT_READ_PAGE_MAX",
     "FACT_ROW_BATCH_MAX",
+    "FACT_STAGE_BATCH_MAX",
+    "FACT_STAGE_BATCH_MAX_BYTES",
     "FactGraphPublication",
     "FactPublicationRequest",
     "FactReadRequest",

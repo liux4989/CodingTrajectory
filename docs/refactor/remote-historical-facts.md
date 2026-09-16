@@ -114,11 +114,11 @@ Durable Object SQLite.
   `fact_rows` (`graph_id`,`kind`,`fact_id`,`valid_from_sequence`,
   `valid_to_sequence`,`row_hash`,`payload`), plus versioned graph publication,
   collector, living, and checkpoint state.
-- Exact enforcement limits are 512 KiB per canonical row, 8 MiB per graph,
-  16 MiB of staged rows per atomic publication, and 1 MiB/2,048 rows per read
+- Exact enforcement limits are 512 KiB per canonical row, 16 MiB per graph,
+  96 MiB of staged rows per atomic publication, and 1 MiB/2,048 rows per read
   page. Server-authenticated read cursors bind the continuation tuple, pinned
-  snapshot, and normalized selector/kinds scope. These aggregate limits bound Worker materialization under its 128 MiB
-  isolate memory limit.
+  snapshot, and normalized selector/kinds scope. Normalized SQL staging bounds
+  Worker materialization independently of the publication aggregate.
 - Local provider logs can republish/rebuild the remote authority at any time:
   rerunning the collector re-derives identical fact sets (deterministic IDs
   and hashes) and replays publication sequences. There is no migration and no
