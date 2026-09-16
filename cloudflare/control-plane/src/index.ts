@@ -5,6 +5,7 @@ const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", 
   "ct_collector_publish_observation", "ct_collector_missing_fact_rows", "ct_collector_stage_fact_rows",
   "ct_collector_publish_facts", "ct_collector_heartbeat", "ct_collector_publish_living_observation"]);
 const READ = new Set(["ct_workspace_snapshot", "ct_fact_read", "ct_project_inventory_snapshot", "ct_remote_living"]);
+const RESET = "ct_workspace_reset";
 const PROTOCOL = "ct.core.v1";
 
 function responseHeaders(env: Env): Record<string, string> {
@@ -36,11 +37,18 @@ export default {
       requestId = message.id ?? null;
       const methodName = text(message.method, 128);
       method = methodName;
-      const role = methodName === "ct_connection_status" ? "authenticated" : COLLECT.has(methodName) ? "collect" : READ.has(methodName) ? "read" : null;
+      const role = methodName === "ct_connection_status" ? "authenticated" : methodName === RESET ? "owner" : COLLECT.has(methodName) ? "collect" : READ.has(methodName) ? "read" : null;
       requireThat(role, "not_found", 404);
       requireThat(role === "authenticated" || principal.roles.includes(role) || principal.roles.includes("owner"), "capability_required", 403);
       const body = object(message.params);
       requireThat(body.workspace_id === principal.workspace_id, "workspace_denied", 403);
+      if (methodName === RESET) {
+        requireThat(env.CT_RESET_WORKSPACE_ID, "workspace_reset_unavailable", 503);
+        const resetWorkspaceId = uuid(env.CT_RESET_WORKSPACE_ID);
+        fields(body, ["workspace_id", "confirmation"], ["workspace_id", "confirmation"]);
+        requireThat(body.workspace_id === resetWorkspaceId, "workspace_reset_target_denied", 403);
+        requireThat(body.confirmation === `reset:${resetWorkspaceId}`, "workspace_reset_confirmation_required", 403);
+      }
       if (methodName === "ct_connection_status") {
         fields(body, ["workspace_id"], ["workspace_id"]);
         return Response.json({ protocol: PROTOCOL, id: requestId, method: methodName, ok: true,

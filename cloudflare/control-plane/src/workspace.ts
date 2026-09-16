@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { digest, Fault, Json, Principal, requireThat, stable, State, validate } from "./shared";
+import { digest, Fault, Json, Principal, requireThat, stable, State, uuid, validate } from "./shared";
 import { checkpoint, recovery, registerProject, registerSource } from "./collector";
 import { commitPublication, factRead, initializeFacts, missingFactRows, preparePublication, verifyStageRows, writeStagedRows } from "./facts";
 import { livingRead, livingWrite } from "./living";
@@ -8,10 +8,14 @@ import { livingRead, livingWrite } from "./living";
 export class Workspace extends DurableObject<Env> {
   private state: State;
   private cursorSecret: string;
+  private resetWorkspaceId: string | null;
+  private resetObjectId: string | null;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.state = new State(ctx.storage.sql);
     this.cursorSecret = env.CT_CURSOR_KEY;
+    this.resetWorkspaceId = env.CT_RESET_WORKSPACE_ID ? uuid(env.CT_RESET_WORKSPACE_ID) : null;
+    this.resetObjectId = this.resetWorkspaceId ? env.WORKSPACES.idFromName(this.resetWorkspaceId).toString() : null;
     initializeFacts(this.state);
   }
 
@@ -25,6 +29,16 @@ export class Workspace extends DurableObject<Env> {
     try {
       const request = envelope.request;
       requireThat(request.workspace_id === principal.workspace_id, "workspace_denied", 403);
+      if (method === "ct_workspace_reset") {
+        requireThat(principal.roles.includes("owner"), "capability_required", 403);
+        requireThat(this.resetWorkspaceId && request.workspace_id === this.resetWorkspaceId, "workspace_reset_target_denied", 403);
+        requireThat(this.resetObjectId && this.ctx.id.toString() === this.resetObjectId, "workspace_reset_target_denied", 403);
+        requireThat(request.confirmation === `reset:${this.resetWorkspaceId}`, "workspace_reset_confirmation_required", 403);
+        await this.ctx.storage.deleteAll();
+        this.state = new State(this.ctx.storage.sql);
+        initializeFacts(this.state);
+        return { status: 200, body: { workspace_id: request.workspace_id, reset: true } };
+      }
       // Compute identity before schema defaults normalize the request.
       const identity = await digest(stable(request));
       validate(method, request);
