@@ -117,15 +117,6 @@ class CodexParseState:
     # be statically parsed. Its wrapper result can still be failed even
     # though it gives no nested-tool outcome.
     exec_wrapper_call_ids: set[str] = field(default_factory=set)
-    # Direct function calls sometimes receive a terminal ThreadItem whose
-    # item id is exactly the response-item call id (for example,
-    # ``spawn_agent`` -> ``SubAgentActivity``). Keep the original call as
-    # the canonical action and enrich it from that stronger terminal fact.
-    direct_function_calls: dict[str, TranscriptRecord] = field(default_factory=dict)
-    native_direct_result_records: dict[str, TranscriptRecord] = field(
-        default_factory=dict
-    )
-    native_direct_output_authoritative: set[str] = field(default_factory=set)
     # Native CommandExecution ids already emitted from item_started. A
     # later item_completed updates the same canonical item rather than
     # creating a second command activity.
