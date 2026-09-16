@@ -21,15 +21,18 @@ source vector and every staged row pass validation in one workspace transaction.
 ## Bounds and paging
 
 - one canonical fact row: 512 KiB encoded;
-- one graph's fact set: 8 MiB encoded;
-- one atomic publication: 16 MiB of staged encoded rows and 512 graphs;
+- one graph's fact set: 16 MiB encoded;
+- one atomic publication: 96 MiB of staged encoded rows and 512 graphs;
 - one fact read page: 2,048 rows and 1 MiB encoded, whichever is reached first.
 
-These limits leave substantial headroom inside the Worker's 128 MiB isolate
-limit while bounding parsed publication plans and read responses. Oversize work
-fails before commit. Read cursors bind the pinned workspace sequence and the
-normalized graph/session/project/vendor/time/kind selector, so they cannot be
-reused across scopes.
+Worker memory is bounded independently of the aggregate limit: batches are at
+most 2 MiB, graph relationships are validated in normalized staged SQL, and
+only one compact graph digest manifest is materialized in JS. The atomic commit
+uses SQL rows and scalar graph metadata rather than a publication payload array.
+Oversize work fails before visibility changes. Read cursors bind the pinned
+workspace sequence and normalized graph/session/project/vendor/time/kind
+selector, so they cannot be reused across scopes. Bound rationale and revisit
+signals are recorded in [Bounded large fact publications](bounded-large-fact-publications.md).
 
 ## Retry and replacement
 

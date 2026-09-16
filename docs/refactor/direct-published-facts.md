@@ -151,7 +151,7 @@ fact-native owner:
 | Spawn and edge origin ownership | Relationship validator |
 | Duplicate edge identities | Relationship validator |
 | Embedded-body rejection | Fact payload policy validator |
-| 8 MiB graph bound | Canonical serialized `PublishedFactSet` bound |
+| 16 MiB graph bound | Canonical serialized `PublishedFactSet` bound |
 | Sparse zero/default removal | Canonical fact-row serializer |
 | Source-to-bounded conversion | `fact_projection.py` |
 | Facts-to-canonical conversion | `session_graph_from_fact_set` |
@@ -169,7 +169,7 @@ The implementation migration is explicit:
 | Spawn origin turn/item ownership | Session topology origins checked against retained owned turn/item rows |
 | Edge endpoints, origin ownership, event evidence, duplicate identity | Edge relationship validator over retained session/turn/item/event rows |
 | Embedded body/path/base64 rejection | Complete sparse fact-set policy validation after row semantics |
-| 8 MiB graph, 512 KiB row, 16 MiB publication | Fact-set validator, row validator, and collector/Worker publication validators respectively |
+| 16 MiB graph, 512 KiB row, 96 MiB publication | Fact-set validator, row validator, and collector/Worker publication validators respectively |
 | Sparse defaults and deterministic digest | Fact-row `exclude_none` canonical JSON, row hashes, canonical row order, and set digest |
 
 Client and Cloudflare validators continue to enforce matching relationship,

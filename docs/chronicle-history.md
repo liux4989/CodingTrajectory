@@ -41,9 +41,9 @@ is outside the retained graph; it is an explicit external topology reference.
 Published edges, and every turn/item/event origin they carry, require retained
 owned rows.
 
-One row is limited to 512 KiB, one graph to 8 MiB, and one atomic publication to
-16 MiB. Reads are deterministic pages bounded by both 2,048 rows and 1 MiB. A
-bound failure rejects the operation rather than trimming silently.
+One row is limited to 512 KiB, one graph to 16 MiB, and one atomic publication
+to 96 MiB/512 graphs. Reads are deterministic pages bounded by both 2,048 rows
+and 1 MiB. A bound failure rejects the operation rather than trimming silently.
 
 Historical methods have one response shape. Graph methods require
 `root_session_id`; session methods require `session_id`; `turn_id` is subordinate.

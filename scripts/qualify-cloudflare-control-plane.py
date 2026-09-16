@@ -23,7 +23,10 @@ from uuid import UUID, uuid4, uuid5
 import httpx
 from coding_trajectory.analysis.tool_summary_shared import RUN_COMMAND
 from coding_trajectory.contracts import SERVICE_CONTRACTS, service_contract
-from coding_trajectory.control_plane.collector import CloudflareCollectorRemote
+from coding_trajectory.control_plane.collector import (
+    CloudflareCollectorRemote,
+    _fact_row_batches,
+)
 from coding_trajectory.control_plane.collector_protocol import (
     LeaseHeartbeatRequest,
     LivingObservationRequest,
@@ -53,6 +56,7 @@ from coding_trajectory.control_plane.fact_projection import (
 )
 from coding_trajectory.control_plane.fact_protocol import (
     FACT_PUBLICATION_MAX_BYTES,
+    FACT_PUBLICATION_MAX_GRAPHS,
     FactGraphPublication,
     FactPublicationRequest,
     StageFactRowsRequest,
@@ -61,6 +65,7 @@ from coding_trajectory.control_plane.fact_repository import CloudflareFactReposi
 from coding_trajectory.control_plane.published_facts import (
     MAX_FACT_READ_PAGE_BYTES,
     MAX_FACT_ROW_BYTES,
+    MAX_FACT_SET_BYTES,
     FactIndex,
     PublishedFactSet,
     compute_row_hash,
@@ -478,22 +483,21 @@ def stage_fact_set(
     workspace_id: str = WORKSPACE,
     agent_id: str = AGENT,
 ) -> None:
-    rows = list(fact_set.rows)
-    batch_count = max(1, (len(rows) + 511) // 512)
-    for batch_index in range(batch_count):
-        chunk = rows[batch_index * 512 : (batch_index + 1) * 512]
-        stage(
-            remote,
+    batches = _fact_row_batches(fact_set)
+    receipt = None
+    for batch_index, chunk in enumerate(batches):
+        receipt = remote.stage_fact_rows(
             StageFactRowsRequest(
                 workspace_id=workspace_id,
                 agent_id=agent_id,
                 graph_id=fact_set.graph_id,
                 fact_set_digest=fact_set.fact_set_digest,
                 batch_index=batch_index,
-                batch_count=batch_count,
+                batch_count=len(batches),
                 rows=chunk,
-            ),
+            )
         )
+    check(receipt is not None and not receipt.missing_batches, "staged all fact rows")
 
 
 def manifest(
@@ -543,16 +547,17 @@ def exact_graph_fact_set(
     template = sized_row_fact_set(
         seed=seed + ":template",
         project=project,
-        target_row_bytes=450_000,
+        target_row_bytes=390_000,
     )
     template_context = deepcopy(
         next(row for row in raw_rows(template) if row["kind"] == "measurement")[
             "payload"
         ]["context_sources"]
     )
+    source_count = max(2, (target_bytes + 399_999) // 400_000)
     source_sets = [
         synthetic_fact_set(seed=f"{seed}:{index}", project=project)
-        for index in range(19)
+        for index in range(source_count)
     ]
     adjustable_id = str(
         next(row for row in source_sets[-1].rows if row.kind == "measurement").fact_id
@@ -572,15 +577,15 @@ def exact_graph_fact_set(
                 and row.get("parent_id") == prior_graph_id
             ):
                 row["parent_id"] = graph_id
-            if row["kind"] == "measurement" and index < 18:
+            if row["kind"] == "measurement" and index < source_count - 1:
                 row["payload"]["context_sources"] = deepcopy(template_context)
             combined.append(row)
     graph = next(row for row in combined if row["kind"] == "graph")
     graph["payload"]["summary"].update(
         {
-            "session_count": 19,
-            "turn_count": 19,
-            "item_count": 38,
+            "session_count": source_count,
+            "turn_count": source_count,
+            "item_count": source_count * 2,
         }
     )
     combined.sort(key=lambda row: (row["kind"], row["fact_id"]))
@@ -1195,6 +1200,24 @@ def main() -> None:
         rpc("ct_workspace_snapshot", {})["snapshot_sequence"] == pinned_sequence,
         "invalid parent publication rolls back",
     )
+    valid_before_late_failure = synthetic_fact_set(
+        seed=tag + ":valid-before-late-failure", project=project_name
+    )
+    stage_fact_set(remote, fact_set=valid_before_late_failure)
+    late_invalid_publication = deepcopy(invalid_parent)
+    late_invalid_publication["graphs"].insert(
+        0,
+        manifest(
+            valid_before_late_failure,
+            source_id=source.source_id,
+            observed_at=captured,
+        ).model_dump(mode="json"),
+    )
+    rpc("ct_collector_publish_facts", late_invalid_publication, status=400)
+    check(
+        rpc("ct_workspace_snapshot", {})["snapshot_sequence"] == pinned_sequence,
+        "malformed late graph prevents visibility of an earlier valid graph",
+    )
 
     adversarial_rows: list[tuple[str, list[dict[str, Any]]]] = []
     unsafe_command = raw_rows(first_a)
@@ -1579,7 +1602,7 @@ def main() -> None:
     )
     boundary_sets = [
         large_fact_set(seed=f"{boundary_tag}:{index}", project=boundary_project_name)
-        for index in range(35)
+        for index in range(160)
     ]
     staged_sizes = [
         len(
@@ -1588,8 +1611,8 @@ def main() -> None:
         for fact_set in boundary_sets
     ]
     check(
-        sum(staged_sizes[:32]) <= FACT_PUBLICATION_MAX_BYTES < sum(staged_sizes),
-        "large fact sets straddle the aggregate publication boundary",
+        71_239_324 < sum(staged_sizes) < FACT_PUBLICATION_MAX_BYTES,
+        "synthetic publication covers the measured maximum below the new bound",
     )
     boundary_checkpoint = {
         "kind": "ct.source_checkpoint.v1",
@@ -1616,10 +1639,47 @@ def main() -> None:
         ),
         idempotency_key="boundary-checkpoint:" + boundary_checkpoint_digest,
     )
+    old_plus_one_graph = exact_graph_fact_set(
+        seed=boundary_tag + ":old-plus-one-graph",
+        project=boundary_project_name,
+        target_bytes=8 * 1024 * 1024 + 1,
+    )
+    raw_stage_fact_set(
+        raw_rows(old_plus_one_graph), digest=old_plus_one_graph.fact_set_digest
+    )
+    boundary_vector = [
+        SourceVectorEntry(
+            source_id=boundary_source.source_id,
+            source_epoch=boundary_source.source_epoch,
+            source_sequence=0,
+            content_sha256=boundary_checkpoint_digest,
+        )
+    ]
+    old_plus_one_receipt = remote.publish_facts(
+        FactPublicationRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            project_id=boundary_project.project_id,
+            publication_sequence=0,
+            source_vector=boundary_vector,
+            graphs=[
+                manifest(
+                    old_plus_one_graph,
+                    source_id=boundary_source.source_id,
+                    observed_at=captured,
+                )
+            ],
+        ),
+        idempotency_key="old-plus-one-graph:" + boundary_tag,
+    )
+    check(
+        old_plus_one_receipt.details["graphs_published"] == 1,
+        "legitimate-shaped graph one byte above the old 8 MiB bound commits",
+    )
     exact_graph = exact_graph_fact_set(
         seed=boundary_tag + ":exact-graph",
         project=boundary_project_name,
-        target_bytes=8 * 1024 * 1024,
+        target_bytes=MAX_FACT_SET_BYTES,
     )
     oversized_graph_rows = raw_rows(exact_graph)
     adjustable_graph_row = [
@@ -1631,22 +1691,14 @@ def main() -> None:
         oversized_graph_rows,
         digest=oversized_graph_digest,
         kind_counts=exact_graph.kind_counts,
-        label="client rejects a canonical graph one byte above 8 MiB",
+        label="client rejects a canonical graph one byte above 16 MiB",
     )
     raw_stage_fact_set(oversized_graph_rows, digest=oversized_graph_digest)
-    boundary_vector = [
-        SourceVectorEntry(
-            source_id=boundary_source.source_id,
-            source_epoch=boundary_source.source_epoch,
-            source_sequence=0,
-            content_sha256=boundary_checkpoint_digest,
-        )
-    ]
     oversized_graph_publication = FactPublicationRequest(
         workspace_id=WORKSPACE,
         agent_id=AGENT,
         project_id=boundary_project.project_id,
-        publication_sequence=0,
+        publication_sequence=1,
         source_vector=boundary_vector,
         graphs=[
             manifest(
@@ -1675,7 +1727,7 @@ def main() -> None:
             workspace_id=WORKSPACE,
             agent_id=AGENT,
             project_id=boundary_project.project_id,
-            publication_sequence=0,
+            publication_sequence=1,
             source_vector=boundary_vector,
             graphs=[
                 manifest(
@@ -1689,7 +1741,7 @@ def main() -> None:
     )
     check(
         exact_graph_receipt.details["graphs_published"] == 1,
-        "graph at the exact 8 MiB canonical boundary commits",
+        "graph at the exact 16 MiB canonical boundary commits",
     )
     for fact_set in boundary_sets:
         stage_fact_set(remote, fact_set=fact_set)
@@ -1697,7 +1749,7 @@ def main() -> None:
         workspace_id=WORKSPACE,
         agent_id=AGENT,
         project_id=boundary_project.project_id,
-        publication_sequence=1,
+        publication_sequence=2,
         source_vector=boundary_vector,
         graphs=[
             manifest(
@@ -1708,22 +1760,94 @@ def main() -> None:
             for fact_set in boundary_sets
         ],
     )
-    rpc(
-        "ct_collector_publish_facts",
-        oversized_publication.wire_payload(),
-        status=413,
-        key="boundary-rejected:" + boundary_tag,
-    )
-    bounded_publication = oversized_publication.model_copy(
-        update={"graphs": oversized_publication.graphs[:32]}
-    )
-    boundary_receipt = remote.publish_facts(
-        bounded_publication,
-        idempotency_key="boundary-published:" + boundary_tag,
+    measured_receipt = remote.publish_facts(
+        oversized_publication,
+        idempotency_key="measured-publication:" + boundary_tag,
     )
     check(
-        boundary_receipt.details["graphs_published"] == 32,
-        "publication below the aggregate byte cap commits",
+        measured_receipt.details["graphs_published"] == len(boundary_sets),
+        "publication above the old 16 MiB and measured 71 MB maximum commits",
+    )
+
+    exact_aggregate_sets: list[PublishedFactSet] = []
+    exact_aggregate_bytes = 0
+    index = 0
+    while (
+        FACT_PUBLICATION_MAX_BYTES - exact_aggregate_bytes > MAX_FACT_SET_BYTES - 1024
+    ):
+        fact_set = large_fact_set(
+            seed=f"{boundary_tag}:aggregate:{index}", project=boundary_project_name
+        )
+        exact_aggregate_sets.append(fact_set)
+        exact_aggregate_bytes += len(
+            canonical_json(fact_set.model_dump(mode="json", exclude_none=True)).encode()
+        )
+        index += 1
+    aggregate_tail = exact_graph_fact_set(
+        seed=boundary_tag + ":aggregate-tail",
+        project=boundary_project_name,
+        target_bytes=FACT_PUBLICATION_MAX_BYTES - exact_aggregate_bytes,
+    )
+    exact_aggregate_sets.append(aggregate_tail)
+    check(
+        len(exact_aggregate_sets) <= FACT_PUBLICATION_MAX_GRAPHS,
+        "exact aggregate fixture stays within the graph cardinality bound",
+    )
+    check(
+        sum(
+            len(
+                canonical_json(
+                    fact_set.model_dump(mode="json", exclude_none=True)
+                ).encode()
+            )
+            for fact_set in exact_aggregate_sets
+        )
+        == FACT_PUBLICATION_MAX_BYTES,
+        "synthetic publication reaches the exact aggregate byte bound",
+    )
+    for fact_set in exact_aggregate_sets:
+        stage_fact_set(remote, fact_set=fact_set)
+    exact_aggregate_publication = FactPublicationRequest(
+        workspace_id=WORKSPACE,
+        agent_id=AGENT,
+        project_id=boundary_project.project_id,
+        publication_sequence=3,
+        source_vector=boundary_vector,
+        graphs=[
+            manifest(
+                fact_set, source_id=boundary_source.source_id, observed_at=captured
+            )
+            for fact_set in exact_aggregate_sets
+        ],
+    )
+    oversized_tail_rows = raw_rows(aggregate_tail)
+    next(row for row in oversized_tail_rows if row["kind"] == "measurement")["payload"][
+        "context_sources"
+    ][-1]["label"] += "x"
+    oversized_tail_digest = recalculate(oversized_tail_rows)
+    raw_stage_fact_set(oversized_tail_rows, digest=oversized_tail_digest)
+    oversized_aggregate = exact_aggregate_publication.wire_payload()
+    oversized_aggregate["graphs"][-1]["fact_set_digest"] = oversized_tail_digest
+    aggregate_boundary_snapshot = rpc("ct_workspace_snapshot", {})["snapshot_sequence"]
+    rpc(
+        "ct_collector_publish_facts",
+        oversized_aggregate,
+        status=413,
+        key="aggregate-boundary-rejected:" + boundary_tag,
+    )
+    check(
+        rpc("ct_workspace_snapshot", {})["snapshot_sequence"]
+        == aggregate_boundary_snapshot,
+        "aggregate byte bound plus one leaves the snapshot unchanged",
+    )
+    stage_fact_set(remote, fact_set=aggregate_tail)
+    boundary_receipt = remote.publish_facts(
+        exact_aggregate_publication,
+        idempotency_key="aggregate-boundary-published:" + boundary_tag,
+    )
+    check(
+        boundary_receipt.details["graphs_published"] == len(exact_aggregate_sets),
+        "publication at the exact aggregate byte bound commits",
     )
     boundary_cursor = None
     boundary_pages = 0
@@ -1759,7 +1883,7 @@ def main() -> None:
             break
     check(boundary_pages > 1, "large fact rows require byte-bounded cursor pages")
     check(
-        boundary_rows == sum(len(fact_set.rows) for fact_set in boundary_sets[:32]),
+        boundary_rows == sum(len(fact_set.rows) for fact_set in exact_aggregate_sets),
         "byte-bounded cursor pages return every committed fact row",
     )
     check(
@@ -1958,6 +2082,16 @@ def main() -> None:
         and "LIMIT ${FACT_PUBLICATION_MAX_GRAPHS + 1}" in selector_body,
         "fact selector projects at most 513 scalar rows without payload materialization",
     )
+    publication_body = selector_source.split("async function validateStagedGraph", 1)[
+        1
+    ].split("async function cursorKey", 1)[0]
+    check(
+        "JSON.parse(batch.rows_json)" not in publication_body
+        and "staged_fact_items" in publication_body
+        and "INSERT INTO fact_rows" in publication_body
+        and 'state.all("graph_publication")' not in publication_body,
+        "publication validation and commit never materialize graph or aggregate payload rows in JS",
+    )
     remote.close()
     print(
         json.dumps(
@@ -1970,8 +2104,8 @@ def main() -> None:
                 "rows_inserted": details["rows_inserted"],
                 "rows_closed": details["rows_closed"],
                 "graphs_tombstoned": details["omitted_graphs"],
-                "boundary_publication_bytes": sum(staged_sizes[:32]),
-                "oversized_publication_bytes": sum(staged_sizes),
+                "boundary_publication_bytes": FACT_PUBLICATION_MAX_BYTES,
+                "measured_workload_publication_bytes": sum(staged_sizes),
                 "exact_graph_bytes": len(
                     canonical_json(
                         exact_graph.model_dump(mode="json", exclude_none=True)

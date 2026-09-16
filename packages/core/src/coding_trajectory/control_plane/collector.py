@@ -40,6 +40,7 @@ from coding_trajectory.control_plane.collector_protocol import (
 from coding_trajectory.control_plane.fact_projection import build_published_fact_set
 from coding_trajectory.control_plane.fact_protocol import (
     FACT_ROW_BATCH_MAX,
+    FACT_STAGE_BATCH_MAX_BYTES,
     FactGraphPublication,
     FactPublicationRequest,
     MissingFactRowsRequest,
@@ -1559,11 +1560,27 @@ def _expand_scoped_graph_candidates(
 def _fact_row_batches(fact_set: PublishedFactSet) -> list[list[Any]]:
     """Split one validated fact set (never empty) into staging batches."""
 
-    rows = list(fact_set.rows)
-    return [
-        rows[offset : offset + FACT_ROW_BATCH_MAX]
-        for offset in range(0, len(rows), FACT_ROW_BATCH_MAX)
-    ]
+    batches: list[list[Any]] = []
+    batch: list[Any] = []
+    batch_bytes = 2
+    for row in fact_set.rows:
+        row_bytes = len(
+            canonical_json(row.model_dump(mode="json", exclude_none=True)).encode()
+        )
+        candidate_bytes = batch_bytes + row_bytes + (1 if batch else 0)
+        if batch and (
+            len(batch) >= FACT_ROW_BATCH_MAX
+            or candidate_bytes > FACT_STAGE_BATCH_MAX_BYTES
+        ):
+            batches.append(batch)
+            batch = [row]
+            batch_bytes = row_bytes + 2
+        else:
+            batch.append(row)
+            batch_bytes = candidate_bytes
+    if batch:
+        batches.append(batch)
+    return batches
 
 
 def _complete_prefix(source: Path, size: int) -> tuple[int, bytes]:

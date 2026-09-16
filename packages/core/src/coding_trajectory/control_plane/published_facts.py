@@ -57,7 +57,9 @@ _CostText = Annotated[
 ]
 
 FACT_SET_SCHEMA_VERSION = "ct.published_facts.v1"
-MAX_FACT_SET_BYTES = 8 * 1024 * 1024
+# The measured legitimate maximum is 10,602,862 bytes. 16 MiB provides 58%
+# headroom while keeping graph-at-a-time validation bounded.
+MAX_FACT_SET_BYTES = 16 * 1024 * 1024
 MAX_FACT_ROW_BYTES = 512 * 1024
 MAX_FACT_READ_PAGE_BYTES = 1024 * 1024
 MAX_FACT_ROWS_PER_GRAPH = 131_072
@@ -537,7 +539,7 @@ class PublishedFactSet(FactModel):
             raise ValueError("fact set digest mismatch")
         encoded = canonical_json(self.model_dump(mode="json", exclude_none=True))
         if len(encoded.encode()) > MAX_FACT_SET_BYTES:
-            raise ValueError("fact set exceeds the 8 MiB bound")
+            raise ValueError("fact set exceeds the 16 MiB bound")
         _reject_embedded_content(self.model_dump(mode="json", exclude_none=True))
         return self
 
