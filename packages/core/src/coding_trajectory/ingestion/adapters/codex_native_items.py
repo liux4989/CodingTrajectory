@@ -1,7 +1,9 @@
 """Native Codex terminal items and legacy exec-wrapper reconstruction.
 
 Each handler takes the adapter's ``_ParseState`` explicitly and mutates it in
-place. Shared helpers and ``_PendingExecWrapper`` remain in ``codex.py``.
+place. The parse state, ``_PendingExecWrapper``, and the shared evidence rules
+live in ``codex_state``; this module keeps the wrapper-matching rules and the
+native-item projections that consume them.
 """
 
 from __future__ import annotations
@@ -11,8 +13,11 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Any
 
-from coding_trajectory.ingestion.adapters.codex import (
-    CodexAdapter,
+from coding_trajectory.ingestion.adapters.codex_exec_parser import (
+    StaticExecInvocation,
+)
+from coding_trajectory.ingestion.adapters.codex_state import (
+    CodexParseState,
     _as_non_empty_str,
     _codex_command_activity_source,
     _command_match_key,
@@ -22,9 +27,6 @@ from coding_trajectory.ingestion.adapters.codex import (
     _PendingExecWrapper,
     _tool_result_status,
     _tool_status,
-)
-from coding_trajectory.ingestion.adapters.codex_exec_parser import (
-    StaticExecInvocation,
 )
 from coding_trajectory.ingestion.common import parse_timestamp
 from coding_trajectory.ingestion.models import ToolStatus, Vendor
@@ -37,7 +39,7 @@ _BACKGROUND_WAIT_TOOL_PREFIX = "codex_background_terminal_wait:"
 _BACKGROUND_INTERACTION_TOOL_NAME = "codex_background_terminal_interaction"
 
 # Moved signatures keep their original ``_ParseState`` spelling.
-_ParseState = CodexAdapter._ParseState
+_ParseState = CodexParseState
 
 
 def activity_data(

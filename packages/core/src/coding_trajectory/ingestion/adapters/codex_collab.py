@@ -5,20 +5,20 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from coding_trajectory.ingestion.adapters.codex import (
-    CodexAdapter,
-    _as_non_empty_str,
-    _tool_status,
-)
 from coding_trajectory.ingestion.adapters.codex_native_items import (
     native_item_timing,
     record_native_activity,
+)
+from coding_trajectory.ingestion.adapters.codex_state import (
+    CodexParseState,
+    _as_non_empty_str,
+    _tool_status,
 )
 from coding_trajectory.ingestion.models import ToolStatus
 from coding_trajectory.ingestion.transcript import TranscriptRecord
 
 # Moved signatures keep their original ``_ParseState`` spelling.
-_ParseState = CodexAdapter._ParseState
+_ParseState = CodexParseState
 
 _CODEX_STATIC_COLLAB_NATIVE_TOOLS: dict[str, frozenset[str]] = {
     "followup_task": frozenset({"resume_agent", "send_input"}),
