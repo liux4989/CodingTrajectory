@@ -33,6 +33,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "packages" / "core" / "src"))
 
 from coding_trajectory.analysis.activity_flow import build_flows, build_overview_flows  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.analysis.session_graph_views import build_session_graph_overview  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.control_plane.fact_repository import (  # noqa: E402 - repository-local imports after sys.path setup
+    document_store_from_fact_sets,
+    published_fact_set_for_store,
+)
 from coding_trajectory.ingestion.models import (  # noqa: E402 - repository-local imports after sys.path setup
     AgentMessageItem,
     CommandExecutionItem,
@@ -633,7 +638,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
                     "kind": "command",
                     "source": "agent",
                     "outcome": "succeeded",
-                    "fidelity": "native",
+                    "fidelity": "observed_native",
                 }
             },
         }
@@ -646,14 +651,13 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
                     "kind": "command",
                     "source": "agent",
                     "outcome": "succeeded",
-                    "fidelity": "native",
+                    "fidelity": "observed_native",
                 }
             },
         }
     )
     flattened_successful_commands = build_overview_flows(
-        [first_successful_command, second_successful_command],
-        flatten_commands=True,
+        [first_successful_command, second_successful_command]
     )
     semantic_read_activity = build_overview_flows(
         [
@@ -663,7 +667,6 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
                 }
             )
         ],
-        flatten_commands=True,
     )[0]
     background_wait_item = CommandExecutionItem(
         session_id=fixture.root_session_id,
@@ -767,7 +770,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
         ),
         "shell_behavior_survives_command_transport": (
             semantic_read_activity.get("tool") == "ReadFile"
-            and semantic_read_activity.get("path") == "docs/example.md"
+            and semantic_read_activity.get("path") == "read"
             and "cmd" not in semantic_read_activity
         ),
         "control_only_waits_stay_detail_only": (
@@ -1050,6 +1053,151 @@ def _percentile(values: list[float], percentile: float) -> float:
     return ordered[index]
 
 
+def evaluate_command_activity() -> dict[str, Any]:
+    """Qualify provider-asymmetric command projection without provider data."""
+
+    started = datetime(2026, 1, 2, tzinfo=UTC)
+
+    def graph_for(vendor: Vendor, *, observed: bool) -> SessionGraph:
+        offset = {
+            Vendor.PI: 700,
+            Vendor.CODEX_CLI: 710,
+            Vendor.CLAUDE_CODE: 720,
+        }[vendor]
+        session_id = _uuid(offset)
+        turn_id = _uuid(offset + 1)
+        activity = (
+            {
+                "activity": {
+                    "kind": "command",
+                    "source": "agent",
+                    "outcome": "succeeded",
+                    "fidelity": "observed_native",
+                }
+            }
+            if observed
+            else {}
+        )
+        items = [
+            CommandExecutionItem(
+                item_id=_uuid(offset + 2),
+                session_id=session_id,
+                turn_id=turn_id,
+                sequence=0,
+                started_at=started,
+                completed_at=started,
+                status=ToolStatus.COMPLETED.value,
+                command="rg qualification-marker .",
+                vendor_data=activity,
+            ),
+            CommandExecutionItem(
+                item_id=_uuid(offset + 3),
+                session_id=session_id,
+                turn_id=turn_id,
+                sequence=1,
+                started_at=started,
+                completed_at=started,
+                status=ToolStatus.COMPLETED.value,
+                command="find . -type f",
+                vendor_data=activity,
+            ),
+        ]
+        turn = Turn(
+            turn_id=turn_id,
+            session_id=session_id,
+            sequence=0,
+            started_at=started,
+            ended_at=started,
+            items=items,
+        )
+        session = Session(
+            session_id=session_id,
+            vendor=vendor,
+            started_at=started,
+            ended_at=started,
+            turns=[turn],
+        )
+        return SessionGraph(root_session_id=session_id, sessions=[session])
+
+    pi_graph = graph_for(Vendor.PI, observed=False)
+    codex_graph = graph_for(Vendor.CODEX_CLI, observed=True)
+    claude_graph = graph_for(Vendor.CLAUDE_CODE, observed=False)
+    pi_items = pi_graph.sessions[0].turns[0].items
+    codex_items = codex_graph.sessions[0].turns[0].items
+    claude_items = claude_graph.sessions[0].turns[0].items
+    pi_activity = build_overview_flows(pi_items)
+    codex_activity = build_overview_flows(codex_items)
+    claude_activity = build_overview_flows(claude_items)
+
+    failed_items = [
+        item.model_copy(
+            update={
+                "item_id": _uuid(730 + index),
+                "sequence": index,
+                "status": ToolStatus.FAILED.value,
+                "vendor_data": {
+                    "activity": {
+                        "kind": "command",
+                        "source": "agent",
+                        "outcome": "failed",
+                    }
+                },
+            }
+        )
+        for index, item in enumerate(pi_items)
+    ]
+    failed_activity = build_overview_flows(failed_items)
+
+    direct_store = DocumentStore.from_session_graphs([pi_graph])
+    roundtrip_store = document_store_from_fact_sets(
+        published_fact_set_for_store(direct_store)
+    )
+    roundtrip_graph = next(iter(roundtrip_store.session_graphs.values()))
+    codex_store = DocumentStore.from_session_graphs([codex_graph])
+    codex_roundtrip_store = document_store_from_fact_sets(
+        published_fact_set_for_store(codex_store)
+    )
+    codex_roundtrip_graph = next(iter(codex_roundtrip_store.session_graphs.values()))
+    direct_overview = build_session_graph_overview(pi_graph)
+    roundtrip_overview = build_session_graph_overview(roundtrip_graph)
+    summary_params = {"session_id": str(pi_graph.root_session_id)}
+    direct_summary = _dispatch(direct_store, "session.summary", summary_params)
+    roundtrip_summary = _dispatch(roundtrip_store, "session.summary", summary_params)
+    direct_recent = direct_summary["recent_activity"]
+    roundtrip_recent = roundtrip_summary["recent_activity"]
+
+    expected_counts = {"ListFiles": 1, "SearchText": 1}
+    pi_shape = [
+        {k: v for k, v in item.items() if k != "item_ids"} for item in pi_activity
+    ]
+    claude_shape = [
+        {k: v for k, v in item.items() if k != "item_ids"} for item in claude_activity
+    ]
+    checks = {
+        "pi_no_fidelity_groups": len(pi_activity) == 1
+        and pi_activity[0].get("count") == 2
+        and pi_activity[0].get("concept_counts") == expected_counts,
+        "claude_no_fidelity_groups": claude_shape == pi_shape,
+        "codex_observed_fidelity_stays_exact": len(codex_activity) == 2
+        and all("count" not in item for item in codex_activity),
+        "failures_stay_exact": len(failed_activity) == 2
+        and all(item.get("outcome") == "failed" for item in failed_activity),
+        "projections_omit_command_details": "qualification-marker"
+        not in _canonical_json([pi_activity, codex_activity, failed_activity]),
+        "overview_fact_roundtrip_parity": direct_overview == roundtrip_overview,
+        "observed_fact_roundtrip_parity": build_session_graph_overview(codex_graph)
+        == build_session_graph_overview(codex_roundtrip_graph),
+        "summary_fact_roundtrip_parity": direct_recent == roundtrip_recent,
+        "summary_renderer_uses_concept_counts": len(direct_recent) == 1
+        and direct_recent[0].get("label") == "Ran 2 commands (1 list, 1 search)",
+    }
+    return {
+        "checks": checks,
+        "passed": sum(checks.values()),
+        "total": len(checks),
+    }
+
+
 def evaluate_performance(
     fixture: SyntheticFixture, store: DocumentStore, *, repeat: int
 ) -> dict[str, Any]:
@@ -1095,12 +1243,14 @@ def evaluate(*, repeat: int) -> dict[str, Any]:
     fixture = build_synthetic_fixture()
     store = DocumentStore.from_session_graphs([fixture.graph])
     summary = evaluate_summary(fixture, store)
+    command_activity = evaluate_command_activity()
     search = evaluate_search(fixture, store)
     performance = evaluate_performance(fixture, store, repeat=repeat)
     current = search["aggregate"]["current_structural_lexical"]
     lexical = search["aggregate"]["lexical_snippet_baseline"]
     gates = {
         "summary_behavior": summary["score"] == 1.0,
+        "command_activity": command_activity["passed"] == command_activity["total"],
         "search_invariants": search["invariants_passed"] == search["invariants_total"],
         "search_recall_at_10": current["recall_at_10"] >= 0.9,
         "search_mrr": current["mrr"] >= 0.85,
@@ -1134,6 +1284,7 @@ def evaluate(*, repeat: int) -> dict[str, Any]:
             "search_cases": len(fixture.search_cases),
         },
         "summary": summary,
+        "command_activity": command_activity,
         "search": search,
         "performance": performance,
         "gates": gates,
@@ -1189,9 +1340,19 @@ def main() -> int:
         action="store_true",
         help="Evaluate without writing the JSON report.",
     )
+    parser.add_argument(
+        "--command-activity-only",
+        action="store_true",
+        help="Run only the focused synthetic command-activity qualification.",
+    )
     args = parser.parse_args()
     if args.repeat < 1:
         parser.error("--repeat must be a positive integer")
+
+    if args.command_activity_only:
+        result = evaluate_command_activity()
+        print(f"Command activity qualification: {result['passed']}/{result['total']}")
+        return 0 if result["passed"] == result["total"] else 1
 
     report = evaluate(repeat=args.repeat)
     _print_report(report)
