@@ -32,13 +32,21 @@ from pydantic import BaseModel, Field
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "packages" / "core" / "src"))
 
-from coding_trajectory.analysis.activity_flow import build_flows, build_overview_flows  # noqa: E402 - repository-local imports after sys.path setup
-from coding_trajectory.analysis.session_graph_views import build_session_graph_overview  # noqa: E402 - repository-local imports after sys.path setup
-from coding_trajectory.control_plane.fact_repository import (  # noqa: E402 - repository-local imports after sys.path setup
-    document_store_from_fact_sets,
+from coding_trajectory.analysis.activity_flow import (
+    build_flows,
+    build_overview_flows,
+)
+from coding_trajectory.analysis.session_graph_views import (
+    build_session_graph_overview,
+)
+from coding_trajectory.control_plane.fact_repository import (
     published_fact_set_for_store,
 )
-from coding_trajectory.ingestion.models import (  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.control_plane.published_facts import (
+    FactIndex,
+    session_graph_from_fact_index,
+)
+from coding_trajectory.ingestion.models import (
     AgentMessageItem,
     CommandExecutionItem,
     Event,
@@ -53,8 +61,13 @@ from coding_trajectory.ingestion.models import (  # noqa: E402 - repository-loca
     Turn,
     Vendor,
 )
-from coding_trajectory.query import DocumentStore  # noqa: E402 - repository-local imports after sys.path setup
-from coding_trajectory.service import IndexCache, dispatch  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.query import (
+    DocumentStore,
+)
+from coding_trajectory.service import (
+    IndexCache,
+    dispatch,
+)
 
 BENCHMARK_NAME = "session-retrieval-synthetic"
 SCHEMA_VERSION = 1
@@ -740,8 +753,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
             and internal_derived_activity.get("activity_outcome") == "unknown"
             and "outcome" not in public_derived_activity
             and all(
-                entry.get("status") != "unknown"
-                for entry in summary["recent_activity"]
+                entry.get("status") != "unknown" for entry in summary["recent_activity"]
             )
             and all(
                 entry.get("status") in {"succeeded", "failed"}
@@ -775,8 +787,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
         ),
         "control_only_waits_stay_detail_only": (
             len(internal_wait_activity) == 1
-            and internal_wait_activity[0].get("type")
-            == "background_terminal_wait"
+            and internal_wait_activity[0].get("type") == "background_terminal_wait"
             and public_wait_activity == []
             and all(
                 entry.get("kind") != "background_terminal_wait"
@@ -1149,20 +1160,24 @@ def evaluate_command_activity() -> dict[str, Any]:
     failed_activity = build_overview_flows(failed_items)
 
     direct_store = DocumentStore.from_session_graphs([pi_graph])
-    roundtrip_store = document_store_from_fact_sets(
+    roundtrip_facts = FactIndex.from_fact_sets(
         published_fact_set_for_store(direct_store)
     )
-    roundtrip_graph = next(iter(roundtrip_store.session_graphs.values()))
+    roundtrip_graph = session_graph_from_fact_index(
+        roundtrip_facts, pi_graph.root_session_id
+    )
     codex_store = DocumentStore.from_session_graphs([codex_graph])
-    codex_roundtrip_store = document_store_from_fact_sets(
+    codex_roundtrip_facts = FactIndex.from_fact_sets(
         published_fact_set_for_store(codex_store)
     )
-    codex_roundtrip_graph = next(iter(codex_roundtrip_store.session_graphs.values()))
+    codex_roundtrip_graph = session_graph_from_fact_index(
+        codex_roundtrip_facts, codex_graph.root_session_id
+    )
     direct_overview = build_session_graph_overview(pi_graph)
     roundtrip_overview = build_session_graph_overview(roundtrip_graph)
     summary_params = {"session_id": str(pi_graph.root_session_id)}
     direct_summary = _dispatch(direct_store, "session.summary", summary_params)
-    roundtrip_summary = _dispatch(roundtrip_store, "session.summary", summary_params)
+    roundtrip_summary = _dispatch(roundtrip_facts, "session.summary", summary_params)
     direct_recent = direct_summary["recent_activity"]
     roundtrip_recent = roundtrip_summary["recent_activity"]
 

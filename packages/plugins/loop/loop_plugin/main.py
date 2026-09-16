@@ -287,7 +287,6 @@ class Handler(BaseHTTPRequestHandler):
                     ServiceRuntime(
                         global_scope=True,
                         current_dir=Path.cwd(),
-                        connection_profile="local",
                     ) as core,
                 ):
                     self.reply(200, core.execute(query.model_dump()))

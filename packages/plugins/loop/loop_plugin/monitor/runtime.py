@@ -75,7 +75,6 @@ class CoreFacade:
         self._runtime = ServiceRuntime(
             global_scope=True,
             current_dir=Path.cwd(),
-            connection_profile="local",
         )
 
     def __enter__(self) -> Self:

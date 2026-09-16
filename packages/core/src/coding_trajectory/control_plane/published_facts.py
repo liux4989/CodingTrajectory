@@ -15,6 +15,7 @@ non-integer numbers are normalized to decimal strings at derivation.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
@@ -540,119 +541,192 @@ class PublishedFactSet(FactModel):
         _reject_embedded_content(self.model_dump(mode="json", exclude_none=True))
         return self
 
-    def _session_graph(self) -> SessionGraph:
-        """Reconstruct the canonical graph directly from validated fact rows."""
 
+@dataclass(slots=True)
+class FactIndex:
+    """Non-semantic read indexes over validated published fact rows."""
+
+    _canonical_rows: tuple[FactRowBase, ...]
+    _rows_by_kind: dict[str, tuple[FactRowBase, ...]]
+    _rows_by_id: dict[UUID, tuple[FactRowBase, ...]]
+    _rows_by_parent: dict[UUID, tuple[FactRowBase, ...]]
+    _rows_by_graph: dict[UUID, tuple[FactRowBase, ...]]
+    _graph_by_entrypoint: dict[UUID, UUID]
+
+    @classmethod
+    def from_fact_sets(cls, fact_sets: list[PublishedFactSet]) -> FactIndex:
+        graph_ids = [fact_set.graph_id for fact_set in fact_sets]
+        if len(graph_ids) != len(set(graph_ids)):
+            raise ValueError("fact index contains duplicate graphs")
+        rows = tuple(
+            row
+            for fact_set in sorted(fact_sets, key=lambda value: str(value.graph_id))
+            for row in fact_set.rows
+        )
         by_kind: dict[str, list[FactRowBase]] = {}
-        for row in self.rows:
+        by_id: dict[UUID, list[FactRowBase]] = {}
+        by_parent: dict[UUID, list[FactRowBase]] = {}
+        by_graph: dict[UUID, list[FactRowBase]] = {}
+        entrypoints: dict[UUID, UUID] = {}
+        for row in rows:
             by_kind.setdefault(row.kind, []).append(row)
-        graph_rows = by_kind.get("graph") or []
-        if len(graph_rows) != 1:
-            raise ValueError("fact set requires exactly one graph row")
-
-        turn_rows = by_kind.get("turn", [])
-        session_by_turn = {row.fact_id: row.parent_id for row in turn_rows}
-        evidence_by_item = {
-            row.fact_id: row.payload for row in by_kind.get("output_evidence", [])
-        }
-
-        sessions: list[ChronicleSession] = []
-        for session_row in by_kind.get("session", []):
-            session_payload = session_row.payload
-            assert isinstance(session_payload, SessionFactPayload)
-            sid = session_payload.session_id
-            turns: list[ChronicleTurn] = []
-            for turn_row in turn_rows:
-                if turn_row.parent_id != sid:
-                    continue
-                turn_payload = turn_row.payload
-                assert isinstance(turn_payload, TurnFactPayload)
-                items = [
-                    ChronicleItem(
-                        **item_row.payload.model_dump(mode="python"),
-                        output_evidence=evidence_by_item.get(item_row.fact_id),
-                    )
-                    for item_row in by_kind.get("item", [])
-                    if item_row.parent_id == turn_row.fact_id
-                ]
-                requests = [
-                    row.payload
-                    for row in sorted(
-                        by_kind.get("request", []),
-                        key=lambda row: (row.order_index or 0, str(row.fact_id)),
-                    )
-                    if row.parent_id == turn_row.fact_id
-                ]
-                turns.append(
-                    ChronicleTurn(
-                        **turn_payload.model_dump(mode="python"),
-                        requests=requests,
-                        items=sorted(items, key=lambda item: item.sequence),
-                    )
-                )
-            runtime = [
-                row.payload
-                for row in sorted(
-                    by_kind.get("runtime", []),
-                    key=lambda row: (row.order_index or 0, str(row.fact_id)),
-                )
-                if row.parent_id == sid
-            ]
-            events = [
-                row.payload
-                for row in sorted(
-                    by_kind.get("event", []),
-                    key=lambda row: (row.order_index or 0, str(row.fact_id)),
-                )
-                if (
-                    row.parent_id in session_by_turn
-                    and session_by_turn[row.parent_id] == sid
-                )
-                or row.parent_id == sid
-            ]
-            measurement_row = next(
-                (row for row in by_kind.get("measurement", []) if row.parent_id == sid),
-                None,
-            )
-            sessions.append(
-                ChronicleSession(
-                    **session_payload.model_dump(mode="python"),
-                    runtime=runtime,
-                    measurements=(
-                        measurement_row.payload
-                        if measurement_row is not None
-                        else ChronicleSessionMeasurements()
-                    ),
-                    events=sorted(events, key=lambda event: event.sequence),
-                    turns=sorted(turns, key=lambda turn: turn.sequence),
-                )
-            )
-        graph_payload = graph_rows[0].payload
-        assert isinstance(graph_payload, GraphFactPayload)
-        canonical_sessions = [_to_session(session) for session in sessions]
-        return SessionGraph(
-            root_session_id=graph_payload.summary.root_session_id,
-            project_identifier=graph_payload.summary.project,
-            summary=SessionGraphSummary(
-                root_session_id=graph_payload.summary.root_session_id,
-                started_at=graph_payload.summary.started_at,
-                ended_at=graph_payload.summary.ended_at,
-                session_count=graph_payload.summary.session_count,
-                turn_count=graph_payload.summary.turn_count,
-                vendors=sorted(
-                    {session.vendor for session in canonical_sessions},
-                    key=lambda vendor: vendor.value,
-                ),
-            ),
-            edges=[_to_edge(row.payload) for row in by_kind.get("edge", [])],
-            sessions=canonical_sessions,
+            by_id.setdefault(row.fact_id, []).append(row)
+            if row.parent_id is not None:
+                by_parent.setdefault(row.parent_id, []).append(row)
+            by_graph.setdefault(row.graph_id, []).append(row)
+            if row.kind in {"graph", "session", "turn"}:
+                entrypoints[row.fact_id] = row.graph_id
+        return cls(
+            _canonical_rows=rows,
+            _rows_by_kind={kind: tuple(values) for kind, values in by_kind.items()},
+            _rows_by_id={fact_id: tuple(values) for fact_id, values in by_id.items()},
+            _rows_by_parent={
+                parent_id: tuple(values) for parent_id, values in by_parent.items()
+            },
+            _rows_by_graph={
+                graph_id: tuple(values) for graph_id, values in by_graph.items()
+            },
+            _graph_by_entrypoint=entrypoints,
         )
 
+    @property
+    def canonical_rows(self) -> tuple[FactRowBase, ...]:
+        return self._canonical_rows
 
-def session_graph_from_fact_set(facts: PublishedFactSet) -> SessionGraph:
-    """Reconstruct one canonical graph from validated publication facts."""
+    @property
+    def graph_ids(self) -> tuple[UUID, ...]:
+        return tuple(self._rows_by_graph)
 
-    return facts._session_graph()
+    def rows_of_kind(self, kind: str) -> tuple[FactRowBase, ...]:
+        return self._rows_by_kind.get(kind, ())
+
+    def rows_for_id(self, fact_id: UUID) -> tuple[FactRowBase, ...]:
+        return self._rows_by_id.get(fact_id, ())
+
+    def rows_for_parent(self, parent_id: UUID) -> tuple[FactRowBase, ...]:
+        return self._rows_by_parent.get(parent_id, ())
+
+    def rows_for_graph(self, graph_id: UUID) -> tuple[FactRowBase, ...]:
+        return self._rows_by_graph.get(graph_id, ())
+
+    def row(self, kind: str, fact_id: UUID) -> FactRowBase | None:
+        return next(
+            (row for row in self.rows_for_id(fact_id) if row.kind == kind), None
+        )
+
+    def payload(self, kind: str, fact_id: UUID) -> Any | None:
+        row = self.row(kind, fact_id)
+        return row.payload if row is not None else None
+
+    def graph_id_for_entrypoint(self, entrypoint_id: UUID) -> UUID | None:
+        return self._graph_by_entrypoint.get(entrypoint_id)
+
+
+def session_graph_from_fact_index(facts: FactIndex, graph_id: UUID) -> SessionGraph:
+    """Materialize one selected canonical graph for existing semantic handlers."""
+
+    graph_row = facts.row("graph", graph_id)
+    if graph_row is None:
+        raise ValueError("fact index requires exactly one selected graph row")
+    evidence_by_item = {
+        row.fact_id: row.payload
+        for row in facts.rows_for_graph(graph_id)
+        if row.kind == "output_evidence"
+    }
+
+    sessions: list[ChronicleSession] = []
+    for session_row in facts.rows_for_parent(graph_id):
+        if session_row.kind != "session":
+            continue
+        session_payload = session_row.payload
+        assert isinstance(session_payload, SessionFactPayload)
+        sid = session_payload.session_id
+        turns: list[ChronicleTurn] = []
+        events = [
+            row.payload for row in facts.rows_for_parent(sid) if row.kind == "event"
+        ]
+        runtime = [
+            row.payload
+            for row in sorted(
+                facts.rows_for_parent(sid),
+                key=lambda row: (row.order_index or 0, str(row.fact_id)),
+            )
+            if row.kind == "runtime"
+        ]
+        measurement_row = next(
+            (row for row in facts.rows_for_parent(sid) if row.kind == "measurement"),
+            None,
+        )
+        for turn_row in facts.rows_for_parent(sid):
+            if turn_row.kind != "turn":
+                continue
+            turn_payload = turn_row.payload
+            assert isinstance(turn_payload, TurnFactPayload)
+            items = [
+                ChronicleItem(
+                    **item_row.payload.model_dump(mode="python"),
+                    output_evidence=evidence_by_item.get(item_row.fact_id),
+                )
+                for item_row in facts.rows_for_parent(turn_row.fact_id)
+                if item_row.kind == "item"
+            ]
+            requests = [
+                row.payload
+                for row in sorted(
+                    facts.rows_for_parent(turn_row.fact_id),
+                    key=lambda row: (row.order_index or 0, str(row.fact_id)),
+                )
+                if row.kind == "request"
+            ]
+            events.extend(
+                row.payload
+                for row in facts.rows_for_parent(turn_row.fact_id)
+                if row.kind == "event"
+            )
+            turns.append(
+                ChronicleTurn(
+                    **turn_payload.model_dump(mode="python"),
+                    requests=requests,
+                    items=sorted(items, key=lambda item: item.sequence),
+                )
+            )
+        sessions.append(
+            ChronicleSession(
+                **session_payload.model_dump(mode="python"),
+                runtime=runtime,
+                measurements=(
+                    measurement_row.payload
+                    if measurement_row is not None
+                    else ChronicleSessionMeasurements()
+                ),
+                events=sorted(events, key=lambda event: event.sequence),
+                turns=sorted(turns, key=lambda turn: turn.sequence),
+            )
+        )
+    graph_payload = graph_row.payload
+    assert isinstance(graph_payload, GraphFactPayload)
+    canonical_sessions = [_to_session(session) for session in sessions]
+    return SessionGraph(
+        root_session_id=graph_payload.summary.root_session_id,
+        project_identifier=graph_payload.summary.project,
+        summary=SessionGraphSummary(
+            root_session_id=graph_payload.summary.root_session_id,
+            started_at=graph_payload.summary.started_at,
+            ended_at=graph_payload.summary.ended_at,
+            session_count=graph_payload.summary.session_count,
+            turn_count=graph_payload.summary.turn_count,
+            vendors=sorted(
+                {session.vendor for session in canonical_sessions},
+                key=lambda vendor: vendor.value,
+            ),
+        ),
+        edges=[
+            _to_edge(row.payload)
+            for row in facts.rows_for_parent(graph_id)
+            if row.kind == "edge"
+        ],
+        sessions=canonical_sessions,
+    )
 
 
 def _assemble_published_fact_set(
@@ -897,6 +971,7 @@ __all__ = [
     "FACT_SET_SCHEMA_VERSION",
     "MAX_FACT_READ_PAGE_BYTES",
     "MAX_FACT_ROW_BYTES",
+    "FactIndex",
     "FactRow",
     "FactRowBase",
     "GraphFactPayload",
@@ -906,5 +981,5 @@ __all__ = [
     "TurnFactPayload",
     "compute_fact_set_digest",
     "compute_row_hash",
-    "session_graph_from_fact_set",
+    "session_graph_from_fact_index",
 ]

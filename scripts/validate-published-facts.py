@@ -20,7 +20,8 @@ from coding_trajectory.control_plane.fact_projection import build_published_fact
 from coding_trajectory.control_plane.fact_protocol import FACT_PUBLICATION_MAX_BYTES
 from coding_trajectory.control_plane.published_facts import (
     MAX_FACT_SET_BYTES,
-    session_graph_from_fact_set,
+    FactIndex,
+    session_graph_from_fact_index,
 )
 from coding_trajectory.discovery import discover_store
 from coding_trajectory.ingestion.indexes import build_session_graph_index
@@ -300,7 +301,9 @@ def _validate_vendor(
         for graph in graphs:
             fact_set = build_published_fact_set(graph)
             encoded = fact_set.model_dump_json(exclude_none=True).encode()
-            replay_graph = session_graph_from_fact_set(fact_set)
+            replay_graph = session_graph_from_fact_index(
+                FactIndex.from_fact_sets([fact_set]), fact_set.graph_id
+            )
             replay_fact_set = build_published_fact_set(replay_graph)
             if encoded != replay_fact_set.model_dump_json(exclude_none=True).encode():
                 raise ValueError("fact replay changed canonical bytes")

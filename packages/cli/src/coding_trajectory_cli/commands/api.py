@@ -66,7 +66,6 @@ def _runtime(args: argparse.Namespace) -> ServiceRuntime:
     return ServiceRuntime(
         global_scope=getattr(args, "global_scope", False),
         current_dir=Path.cwd(),
-        connection_profile=getattr(args, "credential_profile", None),
         fallback_factory=(lambda: _remote_runtime(args)) if source == "auto" else None,
     )
 

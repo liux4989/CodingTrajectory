@@ -11,9 +11,9 @@ immutable provider JSONL
   → occurrence-aware ingestion and canonical reconstruction
   → DocumentStore / SessionGraph with exact measurements
   → direct privacy projection → bounded PublishedFactSet
-      ├─→ local FactRepository ─┐
+      ├─→ local FactRepository ───────────────────────────┐
       └─→ collector → Durable Object SQLite → remote FactRepository
-                                └──────────────→ shared historical handlers
+                                └──────────────→ FactIndex → shared handlers
 ```
 
 Ingestion owns source occurrence identity, provenance, reconstruction, and exact
@@ -38,8 +38,8 @@ does not host estimation jobs or semantics.
 | --- | --- |
 | `ingestion/`, `discovery.py` | Source occurrences, canonical reconstruction, exact accounting |
 | `control_plane/fact_projection.py` | One-way privacy and evidence projection |
-| `control_plane/published_facts.py` | Published fact identities, semantics, bounds, and direct reconstruction |
-| `control_plane/fact_repository.py` | Shared local/remote historical store boundary |
+| `control_plane/published_facts.py` | Published fact identities, semantics, bounds, index, and selected-graph materialization |
+| `control_plane/fact_repository.py` | Shared local/remote indexed historical boundary |
 | `control_plane/collector.py` | Checkpoint and fact-set staging/publication |
 | `cloudflare/control-plane/src/facts.ts` | Fact validation, atomic revisions, selection, cursors |
 | `contracts/`, `service/` | Stable public contracts and shared semantics |

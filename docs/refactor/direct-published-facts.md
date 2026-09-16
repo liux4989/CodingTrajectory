@@ -248,8 +248,8 @@ Required focused evidence:
    rows.
 5. Adversarial relationship, ordering, body, secret, and size mutations fail at
    the fact boundary before publication.
-6. Collector incremental reuse, source fences, cache invalidation, graph
-   assembly, and publication digests remain deterministic.
+6. Collector source fences, deterministic reparsing, graph assembly, and
+   publication digests remain deterministic.
 7. Repository-wide search finds no aggregate symbols, schema version, artifact
    cache value, or compatibility alias.
 
@@ -259,13 +259,11 @@ change reopens client/server schema, digest, bound, and remote qualification.
 
 ## Follow-up boundary
 
-This cutover does not claim reconstructed `SessionGraph`/`DocumentStore` is the
-smallest final query target. It removes the duplicate local fact-set cache, so a
-local repository retains only its handler-ready reconstructed store, but keeps
-the specialized local availability/batch subclass. The immediate next phase is
-a non-semantic typed `FactIndex` plus final repository consolidation. Any later
-normalization-cache, staging, or hard-limit simplification requires privacy-safe
-size and cache-hit measurements; none are assumed here.
+The follow-up is implemented in [Indexed Historical Facts](fact-index-read-view.md).
+Repositories now retain only a non-semantic typed `FactIndex`; the specialized
+local availability/batch subclass and whole-store reconstruction are gone.
+Selected graphs are materialized transiently only for the existing shared
+semantic handlers that still consume canonical models.
 
 ## Risks and safeguards
 
@@ -273,8 +271,8 @@ size and cache-hit measurements; none are assumed here.
   adversarial mutations before removing the aggregate validator.
 - **Digest drift:** compare canonical row bytes and fact-set digest before and
   after direct projection; do not update expected digests from new output alone.
-- **Sensitive local cache expansion:** keep the cache owner-only, bounded, and
-  disposable, or remove persistence entirely.
+- **Sensitive local cache expansion:** persistent normalized-session caching was
+  removed after measured owner-local runs showed no reuse.
 - **Accidental semantic derivation in publication:** projection helpers accept
   canonical models only and never provider records.
 - **Another replacement aggregate:** reject any new graph-shaped DTO between

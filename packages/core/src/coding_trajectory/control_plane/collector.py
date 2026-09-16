@@ -341,7 +341,6 @@ class LocalCollector:
         self.database_path = database_path.expanduser()
         self.identity = identity
         self.prepared_sources: list[_CollectedSource] = []
-        self.normalization_cache_hits = 0
         self._recovered_sources: dict[UUID, RecoveredSource] = {}
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(self.database_path)
@@ -501,7 +500,7 @@ class LocalCollector:
             # Parent/fork dependencies may be needed for normalization, but only
             # the selected canonical graph is allowed into the upload queue.
             normalized = {
-                key: self._normalized_cached(group, parent_turn_ids)
+                key: _normalized_segments(group, parent_turn_ids)
                 for key, group in grouped.items()
             }
             graphs = assemble_project_session_graphs(
@@ -1062,65 +1061,6 @@ class LocalCollector:
 
         return self._heartbeat(remote)
 
-    def _normalized_cached(
-        self,
-        segments: list[_FencedCandidate],
-        parent_turn_ids: dict[UUID, set[str]],
-    ) -> Session:
-        """Reuse exact normalized inputs; full-prefix fencing remains authoritative."""
-        ordered = sorted(segments, key=lambda segment: str(segment.segment_id))
-        identity = _sha256(
-            canonical_json(
-                {
-                    "parser": _SNAPSHOT_STATE_VERSION,
-                    "segments": [
-                        {
-                            "vendor": segment.candidate.vendor.value,
-                            "path": str(segment.candidate.path),
-                            "segment": str(segment.segment_id),
-                            "file": segment.file_identity,
-                            "offset": segment.complete_offset,
-                            "prefix": segment.prefix_sha256,
-                            "parents": sorted(
-                                parent_turn_ids[segment.header.parent_session_id]
-                            )
-                            if segment.header.parent_session_id in parent_turn_ids
-                            else None,
-                        }
-                        for segment in ordered
-                    ],
-                }
-            ).encode()
-        )
-        cached = self._connection.execute(
-            "SELECT body FROM normalization_cache WHERE identity=?", (identity,)
-        ).fetchone()
-        if cached:
-            try:
-                result = Session.model_validate_json(cached[0])
-                self.normalization_cache_hits += 1
-                return result
-            except ValueError:
-                self._connection.execute(
-                    "DELETE FROM normalization_cache WHERE identity=?", (identity,)
-                )
-        session = _normalized_segments(ordered, parent_turn_ids)
-        body = canonical_json(
-            session.model_dump(mode="json", exclude_none=True)
-        ).encode()
-        # Disposable acceleration only: bounded independently of durable outboxes.
-        if len(body) <= 8 * 1024 * 1024:
-            retained = self._connection.execute(
-                "SELECT coalesce(sum(length(body)),0) FROM normalization_cache"
-            ).fetchone()[0]
-            if retained + len(body) > 64 * 1024 * 1024:
-                self._connection.execute("DELETE FROM normalization_cache")
-            self._connection.execute(
-                "INSERT OR REPLACE INTO normalization_cache VALUES(?,?)",
-                (identity, body),
-            )
-        return session
-
     def _collect_segments(
         self,
         segments: list[_FencedCandidate],
@@ -1133,7 +1073,7 @@ class LocalCollector:
         first = segments[0]
         vendor = first.candidate.vendor.value
         native_session_id = str(first.header.session_id)
-        session = session or self._normalized_cached(segments, parent_turn_ids)
+        session = session or _normalized_segments(segments, parent_turn_ids)
         observed_at = max(segment.modified_at for segment in segments)
         state = self._logical_source_state(vendor, native_session_id)
         if remote is not None and (
@@ -1498,7 +1438,7 @@ class LocalCollector:
         self._connection.executescript(
             """
             create table if not exists collector_meta (key text primary key, value text not null);
-            create table if not exists normalization_cache (identity text primary key, body blob not null);
+            drop table if exists normalization_cache;
             create table if not exists registered_sources (
               path text primary key, vendor text not null, native_session_id text not null,
               source_id text, source_epoch integer not null, file_identity text not null,

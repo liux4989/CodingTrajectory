@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import atexit
-import json
 import os
 import threading
 from collections.abc import Callable, Mapping
@@ -20,14 +19,8 @@ from coding_trajectory.control_plane import (
 )
 from coding_trajectory.control_plane.fact_repository import (
     LocalPublishedFactRepository,
-    document_store_from_fact_sets,
-    entrypoint_ids,
-    entrypoint_ids_from_params,
-    fact_store_key,
-    published_fact_set_for_store,
-    requires_graph_scope,
 )
-from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
+from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import (
     IndexCache,
     dispatch,
@@ -127,82 +120,16 @@ class HistoricalRepository(Protocol):
     def metadata(self) -> dict[str, Any] | None: ...
 
 
-class LocalHistoricalRepository(LocalPublishedFactRepository):
-    """Resolve historical stores from host-local published fact sets."""
-
-    def __init__(
-        self,
-        *,
-        global_scope: bool,
-        current_dir: Path,
-        cache: IndexCache,
-        connection_profile: str | None = None,
-    ) -> None:
-        super().__init__(
-            global_scope=global_scope,
-            current_dir=current_dir,
-            cache=cache,
-        )
-        self.connection_profile = connection_profile
-        self._batch_key: tuple[Any, ...] | None = None
-
-    def prepare_batch(self, requests: list[dict[str, Any]]) -> None:
-        ids = entrypoint_ids(requests)
-        if not ids:
-            return
-        store, _note = self._resolve_store(
-            "session.tree",
-            {"session_ids": ids},
-            ("batch",),
-        )
-        self._require_available(store)
-        key = (
-            "facts",
-            self.global_scope,
-            True,
-            json.dumps({"session_ids": ids}, sort_keys=True),
-        )
-        self._stores[key] = (
-            document_store_from_fact_sets(published_fact_set_for_store(store)),
-            _note,
-        )
-        self._batch_key = key
-
-    def store_for(
-        self, method: str, params: dict[str, Any]
-    ) -> tuple[DocumentStore, str]:
-        if self._batch_key is not None and entrypoint_ids_from_params(params):
-            store, note = self._stores[self._batch_key]
-            self._require_available(store)
-            return store, note
-        key = fact_store_key(
-            params,
-            global_scope=self.global_scope,
-            include_descendants=requires_graph_scope(method),
-        )
-        if key not in self._stores:
-            store, note = self._resolve_store(method, params, key)
-            self._require_available(store)
-            self._stores[key] = (
-                document_store_from_fact_sets(published_fact_set_for_store(store)),
-                note,
-            )
-        return self._stores[key]
-
-    def _require_available(self, store: DocumentStore) -> None:
-        if store.session_graphs or _local_sources_available(
-            current_dir=self.current_dir, global_scope=self.global_scope
-        ):
-            return
-        raise LocalSourceUnavailableError(
-            "no supported coding-agent source is available on this host"
-        )
-
-    def metadata(self) -> dict[str, Any]:
-        return {"source": "local", "freshness": "live", "content_scope": "facts"}
-
-    def close(self) -> None:
-        self.cache.save()
+def _require_local_source(
+    has_graphs: bool, *, current_dir: Path, global_scope: bool
+) -> None:
+    if has_graphs or _local_sources_available(
+        current_dir=current_dir, global_scope=global_scope
+    ):
+        return
+    raise LocalSourceUnavailableError(
+        "no supported coding-agent source is available on this host"
+    )
 
 
 class PluginApiError(RuntimeError):
@@ -310,7 +237,6 @@ class ServiceRuntime:
         global_scope: bool,
         current_dir: Path,
         historical_repository: HistoricalRepository | None = None,
-        connection_profile: str | None = None,
         authority_handlers: Mapping[MethodAuthority, Callable[..., Any]] | None = None,
         transport_metadata: Callable[[], dict[str, Any] | None] | None = None,
         fallback_factory: Callable[[], ServiceRuntime] | None = None,
@@ -320,11 +246,18 @@ class ServiceRuntime:
         self.cache = (
             IndexCache.load() if historical_repository is None else IndexCache()
         )
-        self.historical_repository = historical_repository or LocalHistoricalRepository(
-            global_scope=global_scope,
-            current_dir=current_dir,
-            cache=self.cache,
-            connection_profile=connection_profile,
+        self.historical_repository = (
+            historical_repository
+            or LocalPublishedFactRepository(
+                global_scope=global_scope,
+                current_dir=current_dir,
+                cache=self.cache,
+                require_available=lambda has_graphs: _require_local_source(
+                    has_graphs,
+                    current_dir=current_dir,
+                    global_scope=global_scope,
+                ),
+            )
         )
         self._transport_metadata = transport_metadata
         self._last_call_metadata: dict[str, Any] | None = None

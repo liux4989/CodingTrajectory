@@ -615,7 +615,7 @@ poll, not a live push guarantee: evaluations appear when someone asks for them.
 Monitor's Core coupling is isolated to five frozen methods — `project.list`,
 `project.sessions`, `session.usage`, `session.request_usage`, and
 `living.sessions`, all at contract version 2 — called through one local
-ServiceRuntime facade per run (`connection_profile="local"`, no remote fallback).
+ServiceRuntime facade per run (local repository, no remote fallback).
 Monitor reads token measurements; it does not reimplement Core's metric
 formulas, and no Loop route mutates canonical records.
 

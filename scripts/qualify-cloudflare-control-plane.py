@@ -57,16 +57,14 @@ from coding_trajectory.control_plane.fact_protocol import (
     FactPublicationRequest,
     StageFactRowsRequest,
 )
-from coding_trajectory.control_plane.fact_repository import (
-    CloudflareFactRepository,
-    document_store_from_fact_sets,
-)
+from coding_trajectory.control_plane.fact_repository import CloudflareFactRepository
 from coding_trajectory.control_plane.published_facts import (
     MAX_FACT_READ_PAGE_BYTES,
     MAX_FACT_ROW_BYTES,
+    FactIndex,
     PublishedFactSet,
     compute_row_hash,
-    session_graph_from_fact_set,
+    session_graph_from_fact_index,
 )
 from coding_trajectory.control_plane.remote import CloudflareRpcClient
 from coding_trajectory.ingestion.common import canonical_json
@@ -376,12 +374,11 @@ def large_fact_set(*, seed: str, project: str) -> PublishedFactSet:
 
 
 def synthetic_edge_fact_set(*, seed: str, project: str) -> PublishedFactSet:
-    parent = session_graph_from_fact_set(
-        synthetic_fact_set(seed=seed + ":parent", project=project)
-    )
-    child = session_graph_from_fact_set(
-        synthetic_fact_set(seed=seed + ":child", project=project)
-    )
+    parent_facts = synthetic_fact_set(seed=seed + ":parent", project=project)
+    child_facts = synthetic_fact_set(seed=seed + ":child", project=project)
+    facts = FactIndex.from_fact_sets([parent_facts, child_facts])
+    parent = session_graph_from_fact_index(facts, parent_facts.graph_id)
+    child = session_graph_from_fact_index(facts, child_facts.graph_id)
     parent_session = parent.sessions[0]
     child_session = child.sessions[0].model_copy(
         update={"parent_session_id": parent_session.session_id}
@@ -728,7 +725,7 @@ def qualify_parity(
     fact_sets: list[PublishedFactSet], *, snapshot: int, project: str
 ) -> None:
     root = str(fact_sets[0].graph_id)
-    local_store = document_store_from_fact_sets(fact_sets)
+    local_store = FactIndex.from_fact_sets(fact_sets)
     repository = CloudflareFactRepository(
         client=CloudflareRpcClient(url=URL, access_token=TOKENS["reader"]),
         workspace_id=UUID(WORKSPACE),
