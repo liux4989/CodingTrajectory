@@ -162,9 +162,8 @@ class LocalHistoricalRepository(LocalPublishedFactRepository):
             True,
             json.dumps({"session_ids": ids}, sort_keys=True),
         )
-        self._fact_sets.setdefault(key, published_fact_set_for_store(store))
         self._stores[key] = (
-            document_store_from_fact_sets(self._fact_sets[key]),
+            document_store_from_fact_sets(published_fact_set_for_store(store)),
             _note,
         )
         self._batch_key = key
@@ -184,9 +183,8 @@ class LocalHistoricalRepository(LocalPublishedFactRepository):
         if key not in self._stores:
             store, note = self._resolve_store(method, params, key)
             self._require_available(store)
-            self._fact_sets.setdefault(key, published_fact_set_for_store(store))
             self._stores[key] = (
-                document_store_from_fact_sets(self._fact_sets[key]),
+                document_store_from_fact_sets(published_fact_set_for_store(store)),
                 note,
             )
         return self._stores[key]

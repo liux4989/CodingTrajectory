@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the frozen public Core and Chronicle protocol schemas."""
+"""Check the frozen public Core and published-fact protocol schemas."""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ from coding_trajectory.contracts.envelope import (
     ApiSuccessResponse,
 )
 from coding_trajectory.contracts.registry import ServiceContract
-from coding_trajectory.control_plane.chronicle import (
-    CHRONICLE_GRAPH_SCHEMA_VERSION,
-    ChronicleGraphArtifact,
+from coding_trajectory.control_plane.published_facts import (
+    FACT_SET_SCHEMA_VERSION,
+    PublishedFactSet,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,9 +44,9 @@ def build_snapshot() -> dict[str, Any]:
             "success": ApiSuccessResponse[Any].model_json_schema(),
             "error": ApiErrorResponse.model_json_schema(),
         },
-        "chronicle": {
-            "schema_version": CHRONICLE_GRAPH_SCHEMA_VERSION,
-            "schema": ChronicleGraphArtifact.model_json_schema(),
+        "published_facts": {
+            "schema_version": FACT_SET_SCHEMA_VERSION,
+            "schema": PublishedFactSet.model_json_schema(),
         },
     }
 
@@ -85,7 +85,7 @@ def main() -> int:
     if expected == current:
         print(
             "Core protocol freeze: PASS "
-            f"({len(SERVICE_CONTRACTS)} methods, {CHRONICLE_GRAPH_SCHEMA_VERSION})"
+            f"({len(SERVICE_CONTRACTS)} methods, {FACT_SET_SCHEMA_VERSION})"
         )
         return 0
     print("Core protocol freeze: FAIL\n")

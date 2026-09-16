@@ -1,6 +1,6 @@
 """Versioned contracts shared by the local collector and remote ingress.
 
-These models describe checkpoint metadata and bounded chronicle artifacts, not
+These models describe checkpoint metadata and bounded published facts, not
 vendor JSONL records. The source files stay on the host that collected them.
 """
 

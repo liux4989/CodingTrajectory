@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import UUID
 
 from coding_trajectory.control_plane.collector import CollectorIdentity, LocalCollector
+from coding_trajectory.ingestion.common import canonical_json
 
 
 def main():
@@ -67,7 +68,9 @@ def main():
                 )
                 assert result.failed == 0 and len(collector.prepared_sources) == 2
                 digests = {
-                    str(row.artifact.graph.root_session_id): row.artifact.digest()
+                    str(row.session.session_id): canonical_json(
+                        row.session.model_dump(mode="json", exclude_none=True)
+                    )
                     for row in collector.prepared_sources
                 }
                 return collector.normalization_cache_hits, digests

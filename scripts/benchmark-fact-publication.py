@@ -78,10 +78,8 @@ def benchmark_scale(
                         seed=f"{tag}:{index}", project=project_name
                     )
                     if boundary_rows
-                    else qualification["derive_published_fact_set"](
-                        qualification["synthetic_artifact"](
-                            seed=f"{tag}:{index}", project=project_name
-                        )
+                    else qualification["synthetic_fact_set"](
+                        seed=f"{tag}:{index}", project=project_name
                     )
                 )
                 for index in range(graph_count)

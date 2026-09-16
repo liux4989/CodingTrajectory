@@ -74,8 +74,8 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 
 ## Chronicle data layer
 
-- The full host-local canonical graph is the richest source. The private,
-  bounded `ct.chronicle_graph.v3` model deterministically produces
+- The full host-local canonical graph is the richest source. A direct,
+  privacy-sensitive projection deterministically produces
   `ct.published_facts.v1` for local and remote standard historical reads.
 - Chronicle is a public Core query boundary, not only a persistence format.
   Consumers may read its bounded canonical resources directly instead of going
@@ -195,8 +195,8 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 
 # Chronicle history
 
-- The originating host constructs one strict `ct.chronicle_graph.v3` value and
-  derives a bounded, validated `PublishedFactSet`.
+- The originating host derives one bounded, validated `PublishedFactSet`
+  directly from each canonical `SessionGraph`.
 - Host-local service APIs read local sources first and use the published
   facts authority only when remote selection is explicit. Both sources run
   through the same `FactRepository` and historical handlers.

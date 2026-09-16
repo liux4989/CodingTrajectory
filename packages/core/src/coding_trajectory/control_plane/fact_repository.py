@@ -1,7 +1,7 @@
 """One internal ``FactRepository`` contract for historical fact authorities.
 
-Local execution derives an in-memory ``PublishedFactSet`` from host-local
-provider logs through the Chronicle; remote execution fetches selected SQL fact
+Local execution derives an in-memory ``PublishedFactSet`` from canonical
+session graphs; remote execution fetches selected SQL fact
 pages from the Cloudflare authority. Both reconstruct the identical bounded
 representation before the shared Python historical handlers run, so summary,
 overview, search, metrics, and display semantics are owned exactly once.
@@ -16,7 +16,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from coding_trajectory.contracts import service_contract
-from coding_trajectory.control_plane.chronicle import build_chronicle_graph_artifact
+from coding_trajectory.control_plane.fact_projection import build_published_fact_set
 from coding_trajectory.control_plane.fact_protocol import (
     FACT_READ_PAGE_MAX,
     FactReadResponse,
@@ -25,7 +25,7 @@ from coding_trajectory.control_plane.published_facts import (
     FactRow,
     PublishedFactSet,
     compute_fact_set_digest,
-    derive_published_fact_set,
+    session_graph_from_fact_set,
 )
 from coding_trajectory.control_plane.remote import (
     CloudflareRpcClient,
@@ -51,7 +51,7 @@ def published_fact_set_for_store(store: DocumentStore) -> list[PublishedFactSet]
     """Derive every graph's fact set from one canonical local store."""
 
     return [
-        derive_published_fact_set(build_chronicle_graph_artifact(graph))
+        build_published_fact_set(graph)
         for graph in sorted(
             store.session_graphs.values(), key=lambda graph: str(graph.root_session_id)
         )
@@ -61,7 +61,7 @@ def published_fact_set_for_store(store: DocumentStore) -> list[PublishedFactSet]
 def document_store_from_fact_sets(fact_sets: list[PublishedFactSet]) -> DocumentStore:
     """Rebuild the handler store from validated fact sets."""
 
-    graphs = [fact_set.to_session_graph() for fact_set in fact_sets]
+    graphs = [session_graph_from_fact_set(fact_set) for fact_set in fact_sets]
     store = DocumentStore.from_session_graphs(graphs)
     return store
 
@@ -81,7 +81,6 @@ class LocalPublishedFactRepository:
         self.current_dir = current_dir
         self.cache = cache
         self._resolve = resolve
-        self._fact_sets: dict[tuple[Any, ...], list[PublishedFactSet]] = {}
         self._stores: dict[tuple[Any, ...], tuple[DocumentStore, str]] = {}
 
     def pin_snapshot(self) -> int:
@@ -104,10 +103,10 @@ class LocalPublishedFactRepository:
         )
         if key not in self._stores:
             store, note = self._resolve_store(method, params, key)
-            fact_sets = self._fact_sets.setdefault(
-                key, published_fact_set_for_store(store)
+            self._stores[key] = (
+                document_store_from_fact_sets(published_fact_set_for_store(store)),
+                note,
             )
-            self._stores[key] = (document_store_from_fact_sets(fact_sets), note)
         return self._stores[key]
 
     def _resolve_store(

@@ -1,16 +1,14 @@
-"""Typed bounded publication facts derived from one Chronicle graph artifact.
+"""Typed bounded publication facts and direct canonical reconstruction.
 
 The ``PublishedFactSet`` is the single bounded representation consumed by both
-standard local and remote historical APIs. Derivation is a mechanical flatten
-of the private Chronicle artifact (``ct.chronicle_graph.v3``); reconstruction
-inverts it exactly, so a fact set and its Chronicle artifact are
-interchangeable. Facts never contain raw tool input/output, command
+standard local and remote historical APIs. Facts never contain raw tool
+input/output, command
 stdout/stderr, patch or file bodies, full prompts/transcripts/reasoning, raw
 event payloads, vendor_data blobs, media, secrets, or host-absolute paths.
 
-Row hashes and the fact-set digest use the same canonical JSON spelling as the
-Chronicle digest, which the Cloudflare authority recomputes with its
-sorted-key ``stable()`` encoder. Fact payloads therefore contain no floats:
+Row hashes and the fact-set digest use canonical JSON spelling that the
+Cloudflare authority recomputes with its sorted-key ``stable()`` encoder. Fact
+payloads therefore contain no floats:
 non-integer numbers are normalized to decimal strings at derivation.
 """
 
@@ -24,11 +22,10 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from coding_trajectory.control_plane.chronicle import (
+from coding_trajectory.control_plane.fact_projection import (
     ChronicleCoverage,
     ChronicleEdge,
     ChronicleEvent,
-    ChronicleGraphArtifact,
     ChronicleGraphSummary,
     ChronicleItem,
     ChronicleItemMeasurements,
@@ -44,10 +41,11 @@ from coding_trajectory.control_plane.chronicle import (
     ChronicleUsage,
     ChronicleUserRequest,
     _reject_embedded_content,
+    _to_edge,
+    _to_session,
 )
 from coding_trajectory.ingestion.common import canonical_json
-from coding_trajectory.ingestion.models import Vendor
-from coding_trajectory.query import DocumentStore
+from coding_trajectory.ingestion.models import SessionGraph, SessionGraphSummary, Vendor
 
 _CostText = Annotated[
     str,
@@ -382,6 +380,10 @@ def _validate_fact_relationships(graph_id: UUID, rows: list[FactRowBase]) -> Non
         item = items.get(row.fact_id)
         if item is None or row.parent_id != row.fact_id:
             raise ValueError("output evidence item identity mismatch")
+        if not set(row.payload.source_event_ids) <= set(item.payload.event_ids):
+            raise ValueError(
+                "output evidence references an event the item does not own"
+            )
         for event_id in row.payload.source_event_ids:
             event = events.get(event_id)
             if event is None or event.payload.item_id != row.fact_id:
@@ -518,11 +520,13 @@ class PublishedFactSet(FactModel):
             "model": {"graph"},
         }
         for row in self.rows:
-            if row.parent_id is None:
-                continue
             expected = parents.get(row.kind)
             if expected is None:
-                raise ValueError(f"fact row kind {row.kind} must not have a parent")
+                if row.parent_id is not None:
+                    raise ValueError(f"fact row kind {row.kind} must not have a parent")
+                continue
+            if row.parent_id is None:
+                raise ValueError(f"fact row {row.kind} requires a retained parent")
             if not any((kind, row.parent_id) in present for kind in expected):
                 raise ValueError(f"fact row {row.kind} parent is not retained")
         _validate_fact_relationships(self.graph_id, list(self.rows))
@@ -536,8 +540,8 @@ class PublishedFactSet(FactModel):
         _reject_embedded_content(self.model_dump(mode="json", exclude_none=True))
         return self
 
-    def to_artifact(self) -> ChronicleGraphArtifact:
-        """Rebuild the exact Chronicle artifact the fact set was derived from."""
+    def _session_graph(self) -> SessionGraph:
+        """Reconstruct the canonical graph directly from validated fact rows."""
 
         by_kind: dict[str, list[FactRowBase]] = {}
         for row in self.rows:
@@ -625,27 +629,42 @@ class PublishedFactSet(FactModel):
             )
         graph_payload = graph_rows[0].payload
         assert isinstance(graph_payload, GraphFactPayload)
-        return ChronicleGraphArtifact(
-            graph=graph_payload.summary,
-            sessions=sessions,
-            edges=[row.payload for row in by_kind.get("edge", [])],
-            coverage=graph_payload.coverage,
+        canonical_sessions = [_to_session(session) for session in sessions]
+        return SessionGraph(
+            root_session_id=graph_payload.summary.root_session_id,
+            project_identifier=graph_payload.summary.project,
+            summary=SessionGraphSummary(
+                root_session_id=graph_payload.summary.root_session_id,
+                started_at=graph_payload.summary.started_at,
+                ended_at=graph_payload.summary.ended_at,
+                session_count=graph_payload.summary.session_count,
+                turn_count=graph_payload.summary.turn_count,
+                vendors=sorted(
+                    {session.vendor for session in canonical_sessions},
+                    key=lambda vendor: vendor.value,
+                ),
+            ),
+            edges=[_to_edge(row.payload) for row in by_kind.get("edge", [])],
+            sessions=canonical_sessions,
         )
 
-    def to_session_graph(self):
-        return self.to_artifact().to_session_graph()
 
-    def to_document_store(self):
+def session_graph_from_fact_set(facts: PublishedFactSet) -> SessionGraph:
+    """Reconstruct one canonical graph from validated publication facts."""
 
-        return DocumentStore.from_session_graphs([self.to_session_graph()])
+    return facts._session_graph()
 
 
-def derive_published_fact_set(
-    artifact: ChronicleGraphArtifact,
+def _assemble_published_fact_set(
+    *,
+    summary: ChronicleGraphSummary,
+    sessions: list[ChronicleSession],
+    edges: list[ChronicleEdge],
+    coverage: ChronicleCoverage,
 ) -> PublishedFactSet:
-    """Flatten one Chronicle artifact into its typed bounded fact set."""
+    """Assemble already-projected payloads into the typed fact contract."""
 
-    graph_id = artifact.graph.root_session_id
+    graph_id = summary.root_session_id
     rows: list[FactRowBase] = [
         _row(
             GraphFactRow,
@@ -654,13 +673,13 @@ def derive_published_fact_set(
             parent_id=None,
             order_index=None,
             payload=GraphFactPayload(
-                summary=artifact.graph,
-                coverage=artifact.coverage,
+                summary=summary,
+                coverage=coverage,
             ),
         )
     ]
 
-    for session in artifact.sessions:
+    for session in sessions:
         sid = session.session_id
         rows.append(
             _row(
@@ -775,7 +794,7 @@ def derive_published_fact_set(
                         )
                     )
 
-    for position, edge in enumerate(artifact.edges):
+    for position, edge in enumerate(edges):
         rows.append(
             _row(
                 EdgeFactRow,
@@ -799,7 +818,7 @@ def derive_published_fact_set(
             )
         )
 
-    rows.extend(_model_fact_rows(artifact, graph_id=graph_id))
+    rows.extend(_model_fact_rows(sessions, graph_id=graph_id))
     rows.sort(key=lambda row: (row.kind, str(row.fact_id)))
     counts: dict[str, int] = {}
     for row in rows:
@@ -813,12 +832,12 @@ def derive_published_fact_set(
 
 
 def _model_fact_rows(
-    artifact: ChronicleGraphArtifact, *, graph_id: UUID
+    sessions: list[ChronicleSession], *, graph_id: UUID
 ) -> list[FactRowBase]:
     """Roll up one queryable model fact per (model, provider set) per graph."""
 
     grouped: dict[str, dict[str, Any]] = {}
-    for session in artifact.sessions:
+    for session in sessions:
         for turn in session.turns:
             for request in turn.requests:
                 key = request.model or ""
@@ -887,5 +906,5 @@ __all__ = [
     "TurnFactPayload",
     "compute_fact_set_digest",
     "compute_row_hash",
-    "derive_published_fact_set",
+    "session_graph_from_fact_set",
 ]

@@ -1,2092 +1,4 @@
 {
-  "chronicle": {
-    "schema": {
-      "$defs": {
-        "ChronicleContextSourceMeasurement": {
-          "additionalProperties": false,
-          "properties": {
-            "chars": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Chars",
-              "type": "integer"
-            },
-            "key": {
-              "maxLength": 512,
-              "title": "Key",
-              "type": "string"
-            },
-            "label": {
-              "maxLength": 512,
-              "title": "Label",
-              "type": "string"
-            },
-            "reported_tokens": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Reported Tokens"
-            },
-            "timestamp": {
-              "format": "date-time",
-              "title": "Timestamp",
-              "type": "string"
-            },
-            "tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Tokens",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "timestamp",
-            "key",
-            "label"
-          ],
-          "title": "ChronicleContextSourceMeasurement",
-          "type": "object"
-        },
-        "ChronicleCoverage": {
-          "additionalProperties": false,
-          "properties": {
-            "content": {
-              "const": false,
-              "default": false,
-              "title": "Content",
-              "type": "boolean"
-            },
-            "events": {
-              "const": true,
-              "default": true,
-              "title": "Events",
-              "type": "boolean"
-            },
-            "measurements": {
-              "const": true,
-              "default": true,
-              "title": "Measurements",
-              "type": "boolean"
-            },
-            "operational_details": {
-              "const": true,
-              "default": true,
-              "title": "Operational Details",
-              "type": "boolean"
-            },
-            "output_evidence": {
-              "const": true,
-              "default": true,
-              "title": "Output Evidence",
-              "type": "boolean"
-            },
-            "topology": {
-              "const": true,
-              "default": true,
-              "title": "Topology",
-              "type": "boolean"
-            },
-            "usage": {
-              "const": true,
-              "default": true,
-              "title": "Usage",
-              "type": "boolean"
-            }
-          },
-          "title": "ChronicleCoverage",
-          "type": "object"
-        },
-        "ChronicleEdge": {
-          "additionalProperties": false,
-          "properties": {
-            "confidence": {
-              "default": "medium",
-              "enum": [
-                "high",
-                "medium",
-                "low"
-              ],
-              "title": "Confidence",
-              "type": "string"
-            },
-            "evidence_event_ids": {
-              "items": {
-                "format": "uuid",
-                "type": "string"
-              },
-              "maxItems": 64,
-              "title": "Evidence Event Ids",
-              "type": "array"
-            },
-            "kind": {
-              "enum": [
-                "spawned_subagent",
-                "sidechain_of",
-                "forked_from",
-                "handoff_to",
-                "resumed_from",
-                "teammate_of"
-              ],
-              "title": "Kind",
-              "type": "string"
-            },
-            "origin": {
-              "$ref": "#/$defs/ChronicleEdgeOrigin"
-            },
-            "provenance": {
-              "default": "derived",
-              "enum": [
-                "observed",
-                "derived"
-              ],
-              "title": "Provenance",
-              "type": "string"
-            },
-            "source_session_id": {
-              "format": "uuid",
-              "title": "Source Session Id",
-              "type": "string"
-            },
-            "target_session_id": {
-              "format": "uuid",
-              "title": "Target Session Id",
-              "type": "string"
-            },
-            "tool_name": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Tool Name"
-            }
-          },
-          "required": [
-            "source_session_id",
-            "target_session_id",
-            "kind",
-            "origin"
-          ],
-          "title": "ChronicleEdge",
-          "type": "object"
-        },
-        "ChronicleEdgeOrigin": {
-          "additionalProperties": false,
-          "properties": {
-            "event_id": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Event Id"
-            },
-            "item_id": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Item Id"
-            },
-            "session_id": {
-              "format": "uuid",
-              "title": "Session Id",
-              "type": "string"
-            },
-            "turn_id": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Turn Id"
-            }
-          },
-          "required": [
-            "session_id"
-          ],
-          "title": "ChronicleEdgeOrigin",
-          "type": "object"
-        },
-        "ChronicleEvent": {
-          "additionalProperties": false,
-          "description": "Minimal normalized event envelope; never a raw payload.\n\nReferences the owning item's output evidence through ``item_id`` instead of\ncarrying any body. ``sequence`` is the deterministic source order within\nthe session.",
-          "properties": {
-            "event_id": {
-              "format": "uuid",
-              "title": "Event Id",
-              "type": "string"
-            },
-            "item_id": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Item Id"
-            },
-            "sequence": {
-              "minimum": 0,
-              "title": "Sequence",
-              "type": "integer"
-            },
-            "status": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Status"
-            },
-            "timestamp": {
-              "format": "date-time",
-              "title": "Timestamp",
-              "type": "string"
-            },
-            "turn_id": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Turn Id"
-            },
-            "type": {
-              "maxLength": 512,
-              "title": "Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "event_id",
-            "timestamp",
-            "type",
-            "sequence"
-          ],
-          "title": "ChronicleEvent",
-          "type": "object"
-        },
-        "ChronicleEventTextMeasurement": {
-          "additionalProperties": false,
-          "properties": {
-            "chars": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Chars",
-              "type": "integer"
-            },
-            "timestamp": {
-              "format": "date-time",
-              "title": "Timestamp",
-              "type": "string"
-            },
-            "tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Tokens",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "timestamp"
-          ],
-          "title": "ChronicleEventTextMeasurement",
-          "type": "object"
-        },
-        "ChronicleGraphSummary": {
-          "additionalProperties": false,
-          "properties": {
-            "ended_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Ended At"
-            },
-            "item_count": {
-              "minimum": 0,
-              "title": "Item Count",
-              "type": "integer"
-            },
-            "project": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Project"
-            },
-            "root_session_id": {
-              "format": "uuid",
-              "title": "Root Session Id",
-              "type": "string"
-            },
-            "session_count": {
-              "minimum": 0,
-              "title": "Session Count",
-              "type": "integer"
-            },
-            "started_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Started At"
-            },
-            "status": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Status"
-            },
-            "turn_count": {
-              "minimum": 0,
-              "title": "Turn Count",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "root_session_id",
-            "session_count",
-            "turn_count",
-            "item_count"
-          ],
-          "title": "ChronicleGraphSummary",
-          "type": "object"
-        },
-        "ChronicleItem": {
-          "additionalProperties": false,
-          "properties": {
-            "completed_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Completed At"
-            },
-            "event_ids": {
-              "items": {
-                "format": "uuid",
-                "type": "string"
-              },
-              "maxItems": 64,
-              "title": "Event Ids",
-              "type": "array"
-            },
-            "exit_code": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Exit Code"
-            },
-            "item_id": {
-              "format": "uuid",
-              "title": "Item Id",
-              "type": "string"
-            },
-            "kind": {
-              "enum": [
-                "agent_message",
-                "tool_call",
-                "command_execution",
-                "file_change",
-                "reasoning",
-                "plan"
-              ],
-              "title": "Kind",
-              "type": "string"
-            },
-            "measurements": {
-              "$ref": "#/$defs/ChronicleItemMeasurements"
-            },
-            "nested_index": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Nested Index"
-            },
-            "operation": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Operation"
-            },
-            "output_evidence": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ChronicleToolOutputEvidence"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "path": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Path"
-            },
-            "projection_parent_item_id": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Projection Parent Item Id"
-            },
-            "semantic": {
-              "$ref": "#/$defs/ChronicleItemSemantic"
-            },
-            "sequence": {
-              "minimum": 0,
-              "title": "Sequence",
-              "type": "integer"
-            },
-            "started_at": {
-              "format": "date-time",
-              "title": "Started At",
-              "type": "string"
-            },
-            "status": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Status"
-            },
-            "tool_name": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Tool Name"
-            }
-          },
-          "required": [
-            "item_id",
-            "event_ids",
-            "sequence",
-            "kind",
-            "started_at"
-          ],
-          "title": "ChronicleItem",
-          "type": "object"
-        },
-        "ChronicleItemMeasurements": {
-          "additionalProperties": false,
-          "properties": {
-            "input_chars": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Input Chars",
-              "type": "integer"
-            },
-            "input_tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Input Tokens",
-              "type": "integer"
-            },
-            "output_chars": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Output Chars",
-              "type": "integer"
-            },
-            "output_original_tokens": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Output Original Tokens"
-            },
-            "output_tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Output Tokens",
-              "type": "integer"
-            },
-            "output_truncated": {
-              "default": false,
-              "title": "Output Truncated",
-              "type": "boolean"
-            },
-            "projection_only": {
-              "default": false,
-              "title": "Projection Only",
-              "type": "boolean"
-            },
-            "text_chars": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Text Chars",
-              "type": "integer"
-            },
-            "text_preview": {
-              "anyOf": [
-                {
-                  "maxLength": 280,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text Preview"
-            },
-            "text_tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Text Tokens",
-              "type": "integer"
-            },
-            "tool_summary": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ChronicleToolSummary"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            }
-          },
-          "title": "ChronicleItemMeasurements",
-          "type": "object"
-        },
-        "ChronicleItemSemantic": {
-          "additionalProperties": false,
-          "properties": {
-            "resolution_key": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Resolution Key"
-            },
-            "verification_kind": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Verification Kind"
-            }
-          },
-          "title": "ChronicleItemSemantic",
-          "type": "object"
-        },
-        "ChronicleRequestUsage": {
-          "additionalProperties": false,
-          "properties": {
-            "categories": {
-              "items": {
-                "$ref": "#/$defs/ChronicleUsageCategory"
-              },
-              "maxItems": 32,
-              "title": "Categories",
-              "type": "array"
-            },
-            "context_window_tokens": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Context Window Tokens"
-            },
-            "cumulative_usage": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ChronicleUsage"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "model": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Model"
-            },
-            "provider": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Provider"
-            },
-            "request_id": {
-              "format": "uuid",
-              "title": "Request Id",
-              "type": "string"
-            },
-            "source": {
-              "maxLength": 512,
-              "title": "Source",
-              "type": "string"
-            },
-            "timestamp": {
-              "format": "date-time",
-              "title": "Timestamp",
-              "type": "string"
-            },
-            "usage": {
-              "$ref": "#/$defs/ChronicleUsage"
-            },
-            "used_input_tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Used Input Tokens",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "request_id",
-            "timestamp",
-            "source"
-          ],
-          "title": "ChronicleRequestUsage",
-          "type": "object"
-        },
-        "ChronicleRuntimeObservation": {
-          "additionalProperties": false,
-          "properties": {
-            "comp_hash": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Comp Hash"
-            },
-            "cumulative_dropped_tokens": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Cumulative Dropped Tokens"
-            },
-            "duration_ms": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Duration Ms"
-            },
-            "effort_from": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Effort From"
-            },
-            "effort_to": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Effort To"
-            },
-            "kind": {
-              "maxLength": 512,
-              "title": "Kind",
-              "type": "string"
-            },
-            "num_turns": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Num Turns"
-            },
-            "post_tokens": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Post Tokens"
-            },
-            "pre_tokens": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Pre Tokens"
-            },
-            "runtime_config_hashes": {
-              "anyOf": [
-                {
-                  "additionalProperties": {
-                    "maxLength": 512,
-                    "type": "string"
-                  },
-                  "maxProperties": 32,
-                  "propertyNames": {
-                    "maxLength": 512
-                  },
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Runtime Config Hashes"
-            },
-            "time_to_first_token_ms": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Time To First Token Ms"
-            },
-            "timestamp": {
-              "format": "date-time",
-              "title": "Timestamp",
-              "type": "string"
-            }
-          },
-          "required": [
-            "timestamp",
-            "kind"
-          ],
-          "title": "ChronicleRuntimeObservation",
-          "type": "object"
-        },
-        "ChronicleSession": {
-          "additionalProperties": false,
-          "properties": {
-            "agent_name": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Agent Name"
-            },
-            "ended_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Ended At"
-            },
-            "events": {
-              "items": {
-                "$ref": "#/$defs/ChronicleEvent"
-              },
-              "maxItems": 16384,
-              "title": "Events",
-              "type": "array"
-            },
-            "measurements": {
-              "$ref": "#/$defs/ChronicleSessionMeasurements"
-            },
-            "model": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Model"
-            },
-            "parent_session_id": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Parent Session Id"
-            },
-            "preview": {
-              "anyOf": [
-                {
-                  "maxLength": 280,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Preview"
-            },
-            "reasoning_effort": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Reasoning Effort"
-            },
-            "runtime": {
-              "items": {
-                "$ref": "#/$defs/ChronicleRuntimeObservation"
-              },
-              "title": "Runtime",
-              "type": "array"
-            },
-            "session_id": {
-              "format": "uuid",
-              "title": "Session Id",
-              "type": "string"
-            },
-            "started_at": {
-              "format": "date-time",
-              "title": "Started At",
-              "type": "string"
-            },
-            "status": {
-              "maxLength": 512,
-              "title": "Status",
-              "type": "string"
-            },
-            "title": {
-              "anyOf": [
-                {
-                  "maxLength": 280,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Title"
-            },
-            "topology": {
-              "$ref": "#/$defs/ChronicleSessionTopology"
-            },
-            "turns": {
-              "items": {
-                "$ref": "#/$defs/ChronicleTurn"
-              },
-              "title": "Turns",
-              "type": "array"
-            },
-            "vendor": {
-              "$ref": "#/$defs/Vendor"
-            }
-          },
-          "required": [
-            "session_id",
-            "vendor",
-            "started_at",
-            "status"
-          ],
-          "title": "ChronicleSession",
-          "type": "object"
-        },
-        "ChronicleSessionMeasurements": {
-          "additionalProperties": false,
-          "properties": {
-            "context_sources": {
-              "items": {
-                "$ref": "#/$defs/ChronicleContextSourceMeasurement"
-              },
-              "title": "Context Sources",
-              "type": "array"
-            },
-            "llm_response_count": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Llm Response Count",
-              "type": "integer"
-            },
-            "llm_response_text_sizes": {
-              "items": {
-                "$ref": "#/$defs/ChronicleEventTextMeasurement"
-              },
-              "title": "Llm Response Text Sizes",
-              "type": "array"
-            }
-          },
-          "title": "ChronicleSessionMeasurements",
-          "type": "object"
-        },
-        "ChronicleSessionTopology": {
-          "additionalProperties": false,
-          "properties": {
-            "forked": {
-              "default": false,
-              "title": "Forked",
-              "type": "boolean"
-            },
-            "multi_agent_mode": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Multi Agent Mode"
-            },
-            "multi_agent_version": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Multi Agent Version"
-            },
-            "sidechain": {
-              "default": false,
-              "title": "Sidechain",
-              "type": "boolean"
-            },
-            "spawn_depth": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Spawn Depth"
-            },
-            "spawn_origins": {
-              "items": {
-                "$ref": "#/$defs/ChronicleSpawnOrigin"
-              },
-              "title": "Spawn Origins",
-              "type": "array"
-            },
-            "spawned": {
-              "default": false,
-              "title": "Spawned",
-              "type": "boolean"
-            }
-          },
-          "title": "ChronicleSessionTopology",
-          "type": "object"
-        },
-        "ChronicleSpawnOrigin": {
-          "additionalProperties": false,
-          "properties": {
-            "item_id": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Item Id"
-            },
-            "target_session_id": {
-              "format": "uuid",
-              "title": "Target Session Id",
-              "type": "string"
-            },
-            "tool_name": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Tool Name"
-            },
-            "turn_id": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Turn Id"
-            }
-          },
-          "required": [
-            "target_session_id"
-          ],
-          "title": "ChronicleSpawnOrigin",
-          "type": "object"
-        },
-        "ChronicleTeamMember": {
-          "additionalProperties": false,
-          "properties": {
-            "agent_type": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Agent Type"
-            },
-            "member_id": {
-              "maxLength": 512,
-              "title": "Member Id",
-              "type": "string"
-            },
-            "session_id": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Session Id"
-            }
-          },
-          "required": [
-            "member_id"
-          ],
-          "title": "ChronicleTeamMember",
-          "type": "object"
-        },
-        "ChronicleTeamState": {
-          "additionalProperties": false,
-          "properties": {
-            "members": {
-              "items": {
-                "$ref": "#/$defs/ChronicleTeamMember"
-              },
-              "title": "Members",
-              "type": "array"
-            },
-            "tasks": {
-              "items": {
-                "$ref": "#/$defs/ChronicleTeamTask"
-              },
-              "title": "Tasks",
-              "type": "array"
-            }
-          },
-          "title": "ChronicleTeamState",
-          "type": "object"
-        },
-        "ChronicleTeamTask": {
-          "additionalProperties": false,
-          "properties": {
-            "blocked_by": {
-              "items": {
-                "maxLength": 512,
-                "type": "string"
-              },
-              "maxItems": 64,
-              "title": "Blocked By",
-              "type": "array"
-            },
-            "member_id": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Member Id"
-            },
-            "status": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Status"
-            },
-            "task_id": {
-              "maxLength": 512,
-              "title": "Task Id",
-              "type": "string"
-            }
-          },
-          "required": [
-            "task_id"
-          ],
-          "title": "ChronicleTeamTask",
-          "type": "object"
-        },
-        "ChronicleToolDetail": {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "enum": [
-                "file",
-                "search",
-                "command",
-                "web",
-                "coordination",
-                "tool"
-              ],
-              "title": "Kind",
-              "type": "string"
-            },
-            "safety": {
-              "const": "sanitized",
-              "default": "sanitized",
-              "title": "Safety",
-              "type": "string"
-            },
-            "scope": {
-              "anyOf": [
-                {
-                  "maxLength": 280,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Scope"
-            },
-            "target": {
-              "maxLength": 280,
-              "minLength": 1,
-              "title": "Target",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "target"
-          ],
-          "title": "ChronicleToolDetail",
-          "type": "object"
-        },
-        "ChronicleToolOutputEvidence": {
-          "additionalProperties": false,
-          "description": "Deterministic, bounded evidence describing one item's tool output.\n\nOwned once by the canonical item and referenced from event envelopes.\nRaw output never enters this model: only lifecycle, exact measurements with\ntokenizer provenance, truncation state, allowlisted structured facts, and\n(for declared allowlisted processors) a bounded redacted preview.",
-          "properties": {
-            "duration_ms": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Duration Ms"
-            },
-            "exit_code": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Exit Code"
-            },
-            "facts": {
-              "anyOf": [
-                {
-                  "additionalProperties": {
-                    "anyOf": [
-                      {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "maxLength": 512,
-                        "type": "string"
-                      }
-                    ]
-                  },
-                  "maxProperties": 8,
-                  "propertyNames": {
-                    "maxLength": 512
-                  },
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Facts"
-            },
-            "lifecycle": {
-              "enum": [
-                "completed",
-                "failed",
-                "interrupted",
-                "unknown"
-              ],
-              "title": "Lifecycle",
-              "type": "string"
-            },
-            "original_tokens": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Original Tokens"
-            },
-            "outcome": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Outcome"
-            },
-            "output_chars": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Output Chars",
-              "type": "integer"
-            },
-            "output_tokens": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Output Tokens"
-            },
-            "preview": {
-              "anyOf": [
-                {
-                  "maxLength": 280,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Preview"
-            },
-            "processor": {
-              "maxLength": 512,
-              "title": "Processor",
-              "type": "string"
-            },
-            "processor_version": {
-              "default": 1,
-              "minimum": 1,
-              "title": "Processor Version",
-              "type": "integer"
-            },
-            "provider": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Provider"
-            },
-            "retention": {
-              "enum": [
-                "not_applicable",
-                "not_retained",
-                "preview",
-                "complete"
-              ],
-              "title": "Retention",
-              "type": "string"
-            },
-            "searchable": {
-              "enum": [
-                "complete",
-                "preview",
-                "facts_only",
-                "none"
-              ],
-              "title": "Searchable",
-              "type": "string"
-            },
-            "source_event_ids": {
-              "items": {
-                "format": "uuid",
-                "type": "string"
-              },
-              "maxItems": 64,
-              "title": "Source Event Ids",
-              "type": "array"
-            },
-            "token_method": {
-              "enum": [
-                "provider_reported",
-                "tokenizer_estimate",
-                "not_measured"
-              ],
-              "title": "Token Method",
-              "type": "string"
-            },
-            "tokenizer": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Tokenizer"
-            },
-            "truncated": {
-              "default": false,
-              "title": "Truncated",
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "processor",
-            "lifecycle",
-            "token_method",
-            "retention",
-            "searchable"
-          ],
-          "title": "ChronicleToolOutputEvidence",
-          "type": "object"
-        },
-        "ChronicleToolSummary": {
-          "additionalProperties": false,
-          "properties": {
-            "activity_fidelity": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Activity Fidelity"
-            },
-            "activity_hidden": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Activity Hidden"
-            },
-            "activity_kind": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Activity Kind"
-            },
-            "activity_outcome": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Activity Outcome"
-            },
-            "activity_source": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Activity Source"
-            },
-            "activity_wrapper_status": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Activity Wrapper Status"
-            },
-            "detail": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ChronicleToolDetail"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "name": {
-              "maxLength": 512,
-              "title": "Name",
-              "type": "string"
-            },
-            "optimization_profile": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Optimization Profile"
-            },
-            "status": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Status"
-            }
-          },
-          "required": [
-            "name"
-          ],
-          "title": "ChronicleToolSummary",
-          "type": "object"
-        },
-        "ChronicleTurn": {
-          "additionalProperties": false,
-          "properties": {
-            "completed_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Completed At"
-            },
-            "items": {
-              "items": {
-                "$ref": "#/$defs/ChronicleItem"
-              },
-              "title": "Items",
-              "type": "array"
-            },
-            "requests": {
-              "items": {
-                "$ref": "#/$defs/ChronicleRequestUsage"
-              },
-              "title": "Requests",
-              "type": "array"
-            },
-            "sequence": {
-              "minimum": 0,
-              "title": "Sequence",
-              "type": "integer"
-            },
-            "started_at": {
-              "format": "date-time",
-              "title": "Started At",
-              "type": "string"
-            },
-            "status": {
-              "maxLength": 512,
-              "title": "Status",
-              "type": "string"
-            },
-            "team_state": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ChronicleTeamState"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "turn_id": {
-              "format": "uuid",
-              "title": "Turn Id",
-              "type": "string"
-            },
-            "user_request": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ChronicleUserRequest"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            }
-          },
-          "required": [
-            "turn_id",
-            "sequence",
-            "started_at",
-            "status"
-          ],
-          "title": "ChronicleTurn",
-          "type": "object"
-        },
-        "ChronicleUsage": {
-          "additionalProperties": false,
-          "properties": {
-            "cache_creation_input_tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Cache Creation Input Tokens",
-              "type": "integer"
-            },
-            "cached_input_tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Cached Input Tokens",
-              "type": "integer"
-            },
-            "cost_usd": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Cost Usd"
-            },
-            "input_tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Input Tokens",
-              "type": "integer"
-            },
-            "output_tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Output Tokens",
-              "type": "integer"
-            },
-            "reasoning_output_tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Reasoning Output Tokens",
-              "type": "integer"
-            },
-            "total_tokens": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Total Tokens",
-              "type": "integer"
-            },
-            "uncached_input_tokens": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Uncached Input Tokens"
-            }
-          },
-          "title": "ChronicleUsage",
-          "type": "object"
-        },
-        "ChronicleUsageCategory": {
-          "additionalProperties": false,
-          "properties": {
-            "confidence": {
-              "maxLength": 512,
-              "title": "Confidence",
-              "type": "string"
-            },
-            "key": {
-              "maxLength": 512,
-              "title": "Key",
-              "type": "string"
-            },
-            "label": {
-              "maxLength": 512,
-              "title": "Label",
-              "type": "string"
-            },
-            "source": {
-              "anyOf": [
-                {
-                  "maxLength": 512,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Source"
-            },
-            "tokens": {
-              "minimum": 0,
-              "title": "Tokens",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "key",
-            "label",
-            "tokens",
-            "confidence"
-          ],
-          "title": "ChronicleUsageCategory",
-          "type": "object"
-        },
-        "ChronicleUserRequest": {
-          "additionalProperties": false,
-          "properties": {
-            "chars": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Chars"
-            },
-            "content": {
-              "maxLength": 280,
-              "minLength": 1,
-              "title": "Content",
-              "type": "string"
-            },
-            "request_id": {
-              "format": "uuid",
-              "title": "Request Id",
-              "type": "string"
-            },
-            "source": {
-              "default": "human_user",
-              "maxLength": 512,
-              "title": "Source",
-              "type": "string"
-            },
-            "tokens": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Tokens"
-            },
-            "type": {
-              "default": "message",
-              "enum": [
-                "message",
-                "command"
-              ],
-              "title": "Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "request_id",
-            "content"
-          ],
-          "title": "ChronicleUserRequest",
-          "type": "object"
-        },
-        "Vendor": {
-          "enum": [
-            "codex_cli",
-            "claude_code",
-            "pi",
-            "amp"
-          ],
-          "title": "Vendor",
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "properties": {
-        "coverage": {
-          "$ref": "#/$defs/ChronicleCoverage"
-        },
-        "edges": {
-          "items": {
-            "$ref": "#/$defs/ChronicleEdge"
-          },
-          "title": "Edges",
-          "type": "array"
-        },
-        "graph": {
-          "$ref": "#/$defs/ChronicleGraphSummary"
-        },
-        "schema_version": {
-          "const": "ct.chronicle_graph.v3",
-          "default": "ct.chronicle_graph.v3",
-          "title": "Schema Version",
-          "type": "string"
-        },
-        "sessions": {
-          "items": {
-            "$ref": "#/$defs/ChronicleSession"
-          },
-          "title": "Sessions",
-          "type": "array"
-        }
-      },
-      "required": [
-        "graph",
-        "sessions"
-      ],
-      "title": "ChronicleGraphArtifact",
-      "type": "object"
-    },
-    "schema_version": "ct.chronicle_graph.v3"
-  },
   "core_envelope": {
     "error": {
       "$defs": {
@@ -7787,6 +5699,2852 @@
         "type": "object"
       }
     }
+  },
+  "published_facts": {
+    "schema": {
+      "$defs": {
+        "ChronicleContextSourceMeasurement": {
+          "additionalProperties": false,
+          "properties": {
+            "chars": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Chars",
+              "type": "integer"
+            },
+            "key": {
+              "maxLength": 512,
+              "title": "Key",
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 512,
+              "title": "Label",
+              "type": "string"
+            },
+            "reported_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reported Tokens"
+            },
+            "timestamp": {
+              "format": "date-time",
+              "title": "Timestamp",
+              "type": "string"
+            },
+            "tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "timestamp",
+            "key",
+            "label"
+          ],
+          "title": "ChronicleContextSourceMeasurement",
+          "type": "object"
+        },
+        "ChronicleCoverage": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "const": false,
+              "default": false,
+              "title": "Content",
+              "type": "boolean"
+            },
+            "events": {
+              "const": true,
+              "default": true,
+              "title": "Events",
+              "type": "boolean"
+            },
+            "measurements": {
+              "const": true,
+              "default": true,
+              "title": "Measurements",
+              "type": "boolean"
+            },
+            "operational_details": {
+              "const": true,
+              "default": true,
+              "title": "Operational Details",
+              "type": "boolean"
+            },
+            "output_evidence": {
+              "const": true,
+              "default": true,
+              "title": "Output Evidence",
+              "type": "boolean"
+            },
+            "topology": {
+              "const": true,
+              "default": true,
+              "title": "Topology",
+              "type": "boolean"
+            },
+            "usage": {
+              "const": true,
+              "default": true,
+              "title": "Usage",
+              "type": "boolean"
+            }
+          },
+          "title": "ChronicleCoverage",
+          "type": "object"
+        },
+        "ChronicleEdge": {
+          "additionalProperties": false,
+          "properties": {
+            "confidence": {
+              "default": "medium",
+              "enum": [
+                "high",
+                "medium",
+                "low"
+              ],
+              "title": "Confidence",
+              "type": "string"
+            },
+            "evidence_event_ids": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "maxItems": 64,
+              "title": "Evidence Event Ids",
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "spawned_subagent",
+                "sidechain_of",
+                "forked_from",
+                "handoff_to",
+                "resumed_from",
+                "teammate_of"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "origin": {
+              "$ref": "#/$defs/ChronicleEdgeOrigin"
+            },
+            "provenance": {
+              "default": "derived",
+              "enum": [
+                "observed",
+                "derived"
+              ],
+              "title": "Provenance",
+              "type": "string"
+            },
+            "source_session_id": {
+              "format": "uuid",
+              "title": "Source Session Id",
+              "type": "string"
+            },
+            "target_session_id": {
+              "format": "uuid",
+              "title": "Target Session Id",
+              "type": "string"
+            },
+            "tool_name": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tool Name"
+            }
+          },
+          "required": [
+            "source_session_id",
+            "target_session_id",
+            "kind",
+            "origin"
+          ],
+          "title": "ChronicleEdge",
+          "type": "object"
+        },
+        "ChronicleEdgeOrigin": {
+          "additionalProperties": false,
+          "properties": {
+            "event_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Id"
+            },
+            "item_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Item Id"
+            },
+            "session_id": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            },
+            "turn_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Turn Id"
+            }
+          },
+          "required": [
+            "session_id"
+          ],
+          "title": "ChronicleEdgeOrigin",
+          "type": "object"
+        },
+        "ChronicleEvent": {
+          "additionalProperties": false,
+          "description": "Minimal normalized event envelope; never a raw payload.\n\nReferences the owning item's output evidence through ``item_id`` instead of\ncarrying any body. ``sequence`` is the deterministic source order within\nthe session.",
+          "properties": {
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "item_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Item Id"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Status"
+            },
+            "timestamp": {
+              "format": "date-time",
+              "title": "Timestamp",
+              "type": "string"
+            },
+            "turn_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Turn Id"
+            },
+            "type": {
+              "maxLength": 512,
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "timestamp",
+            "type",
+            "sequence"
+          ],
+          "title": "ChronicleEvent",
+          "type": "object"
+        },
+        "ChronicleEventTextMeasurement": {
+          "additionalProperties": false,
+          "properties": {
+            "chars": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Chars",
+              "type": "integer"
+            },
+            "timestamp": {
+              "format": "date-time",
+              "title": "Timestamp",
+              "type": "string"
+            },
+            "tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "timestamp"
+          ],
+          "title": "ChronicleEventTextMeasurement",
+          "type": "object"
+        },
+        "ChronicleGraphSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "ended_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ended At"
+            },
+            "item_count": {
+              "minimum": 0,
+              "title": "Item Count",
+              "type": "integer"
+            },
+            "project": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project"
+            },
+            "root_session_id": {
+              "format": "uuid",
+              "title": "Root Session Id",
+              "type": "string"
+            },
+            "session_count": {
+              "minimum": 0,
+              "title": "Session Count",
+              "type": "integer"
+            },
+            "started_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Started At"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Status"
+            },
+            "turn_count": {
+              "minimum": 0,
+              "title": "Turn Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "root_session_id",
+            "session_count",
+            "turn_count",
+            "item_count"
+          ],
+          "title": "ChronicleGraphSummary",
+          "type": "object"
+        },
+        "ChronicleItemMeasurements": {
+          "additionalProperties": false,
+          "properties": {
+            "input_chars": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Input Chars",
+              "type": "integer"
+            },
+            "input_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_chars": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Output Chars",
+              "type": "integer"
+            },
+            "output_original_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Original Tokens"
+            },
+            "output_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Output Tokens",
+              "type": "integer"
+            },
+            "output_truncated": {
+              "default": false,
+              "title": "Output Truncated",
+              "type": "boolean"
+            },
+            "projection_only": {
+              "default": false,
+              "title": "Projection Only",
+              "type": "boolean"
+            },
+            "text_chars": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Text Chars",
+              "type": "integer"
+            },
+            "text_preview": {
+              "anyOf": [
+                {
+                  "maxLength": 280,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Preview"
+            },
+            "text_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Text Tokens",
+              "type": "integer"
+            },
+            "tool_summary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ChronicleToolSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "ChronicleItemMeasurements",
+          "type": "object"
+        },
+        "ChronicleItemSemantic": {
+          "additionalProperties": false,
+          "properties": {
+            "resolution_key": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resolution Key"
+            },
+            "verification_kind": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verification Kind"
+            }
+          },
+          "title": "ChronicleItemSemantic",
+          "type": "object"
+        },
+        "ChronicleRequestUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "categories": {
+              "items": {
+                "$ref": "#/$defs/ChronicleUsageCategory"
+              },
+              "maxItems": 32,
+              "title": "Categories",
+              "type": "array"
+            },
+            "context_window_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Context Window Tokens"
+            },
+            "cumulative_usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ChronicleUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "provider": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider"
+            },
+            "request_id": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            },
+            "source": {
+              "maxLength": 512,
+              "title": "Source",
+              "type": "string"
+            },
+            "timestamp": {
+              "format": "date-time",
+              "title": "Timestamp",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/$defs/ChronicleUsage"
+            },
+            "used_input_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Used Input Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "request_id",
+            "timestamp",
+            "source"
+          ],
+          "title": "ChronicleRequestUsage",
+          "type": "object"
+        },
+        "ChronicleRuntimeObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "comp_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Comp Hash"
+            },
+            "cumulative_dropped_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cumulative Dropped Tokens"
+            },
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Ms"
+            },
+            "effort_from": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effort From"
+            },
+            "effort_to": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effort To"
+            },
+            "kind": {
+              "maxLength": 512,
+              "title": "Kind",
+              "type": "string"
+            },
+            "num_turns": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Num Turns"
+            },
+            "post_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Post Tokens"
+            },
+            "pre_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pre Tokens"
+            },
+            "runtime_config_hashes": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "maxLength": 512,
+                    "type": "string"
+                  },
+                  "maxProperties": 32,
+                  "propertyNames": {
+                    "maxLength": 512
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Runtime Config Hashes"
+            },
+            "time_to_first_token_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Time To First Token Ms"
+            },
+            "timestamp": {
+              "format": "date-time",
+              "title": "Timestamp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "timestamp",
+            "kind"
+          ],
+          "title": "ChronicleRuntimeObservation",
+          "type": "object"
+        },
+        "ChronicleSessionMeasurements": {
+          "additionalProperties": false,
+          "properties": {
+            "context_sources": {
+              "items": {
+                "$ref": "#/$defs/ChronicleContextSourceMeasurement"
+              },
+              "title": "Context Sources",
+              "type": "array"
+            },
+            "llm_response_count": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Llm Response Count",
+              "type": "integer"
+            },
+            "llm_response_text_sizes": {
+              "items": {
+                "$ref": "#/$defs/ChronicleEventTextMeasurement"
+              },
+              "title": "Llm Response Text Sizes",
+              "type": "array"
+            }
+          },
+          "title": "ChronicleSessionMeasurements",
+          "type": "object"
+        },
+        "ChronicleSessionTopology": {
+          "additionalProperties": false,
+          "properties": {
+            "forked": {
+              "default": false,
+              "title": "Forked",
+              "type": "boolean"
+            },
+            "multi_agent_mode": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Multi Agent Mode"
+            },
+            "multi_agent_version": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Multi Agent Version"
+            },
+            "sidechain": {
+              "default": false,
+              "title": "Sidechain",
+              "type": "boolean"
+            },
+            "spawn_depth": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Spawn Depth"
+            },
+            "spawn_origins": {
+              "items": {
+                "$ref": "#/$defs/ChronicleSpawnOrigin"
+              },
+              "title": "Spawn Origins",
+              "type": "array"
+            },
+            "spawned": {
+              "default": false,
+              "title": "Spawned",
+              "type": "boolean"
+            }
+          },
+          "title": "ChronicleSessionTopology",
+          "type": "object"
+        },
+        "ChronicleSpawnOrigin": {
+          "additionalProperties": false,
+          "properties": {
+            "item_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Item Id"
+            },
+            "target_session_id": {
+              "format": "uuid",
+              "title": "Target Session Id",
+              "type": "string"
+            },
+            "tool_name": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tool Name"
+            },
+            "turn_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Turn Id"
+            }
+          },
+          "required": [
+            "target_session_id"
+          ],
+          "title": "ChronicleSpawnOrigin",
+          "type": "object"
+        },
+        "ChronicleTeamMember": {
+          "additionalProperties": false,
+          "properties": {
+            "agent_type": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Agent Type"
+            },
+            "member_id": {
+              "maxLength": 512,
+              "title": "Member Id",
+              "type": "string"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            }
+          },
+          "required": [
+            "member_id"
+          ],
+          "title": "ChronicleTeamMember",
+          "type": "object"
+        },
+        "ChronicleTeamState": {
+          "additionalProperties": false,
+          "properties": {
+            "members": {
+              "items": {
+                "$ref": "#/$defs/ChronicleTeamMember"
+              },
+              "title": "Members",
+              "type": "array"
+            },
+            "tasks": {
+              "items": {
+                "$ref": "#/$defs/ChronicleTeamTask"
+              },
+              "title": "Tasks",
+              "type": "array"
+            }
+          },
+          "title": "ChronicleTeamState",
+          "type": "object"
+        },
+        "ChronicleTeamTask": {
+          "additionalProperties": false,
+          "properties": {
+            "blocked_by": {
+              "items": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "maxItems": 64,
+              "title": "Blocked By",
+              "type": "array"
+            },
+            "member_id": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Member Id"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Status"
+            },
+            "task_id": {
+              "maxLength": 512,
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id"
+          ],
+          "title": "ChronicleTeamTask",
+          "type": "object"
+        },
+        "ChronicleToolDetail": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "file",
+                "search",
+                "command",
+                "web",
+                "coordination",
+                "tool"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "safety": {
+              "const": "sanitized",
+              "default": "sanitized",
+              "title": "Safety",
+              "type": "string"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "maxLength": 280,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope"
+            },
+            "target": {
+              "maxLength": 280,
+              "minLength": 1,
+              "title": "Target",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "title": "ChronicleToolDetail",
+          "type": "object"
+        },
+        "ChronicleToolOutputEvidence": {
+          "additionalProperties": false,
+          "description": "Deterministic, bounded evidence describing one item's tool output.\n\nOwned once by the canonical item and referenced from event envelopes.\nRaw output never enters this model: only lifecycle, exact measurements with\ntokenizer provenance, truncation state, allowlisted structured facts, and\n(for declared allowlisted processors) a bounded redacted preview.",
+          "properties": {
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Ms"
+            },
+            "exit_code": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Exit Code"
+            },
+            "facts": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "maxLength": 512,
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "maxProperties": 8,
+                  "propertyNames": {
+                    "maxLength": 512
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Facts"
+            },
+            "lifecycle": {
+              "enum": [
+                "completed",
+                "failed",
+                "interrupted",
+                "unknown"
+              ],
+              "title": "Lifecycle",
+              "type": "string"
+            },
+            "original_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Original Tokens"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
+            },
+            "output_chars": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Output Chars",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "preview": {
+              "anyOf": [
+                {
+                  "maxLength": 280,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Preview"
+            },
+            "processor": {
+              "maxLength": 512,
+              "title": "Processor",
+              "type": "string"
+            },
+            "processor_version": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Processor Version",
+              "type": "integer"
+            },
+            "provider": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider"
+            },
+            "retention": {
+              "enum": [
+                "not_applicable",
+                "not_retained",
+                "preview",
+                "complete"
+              ],
+              "title": "Retention",
+              "type": "string"
+            },
+            "searchable": {
+              "enum": [
+                "complete",
+                "preview",
+                "facts_only",
+                "none"
+              ],
+              "title": "Searchable",
+              "type": "string"
+            },
+            "source_event_ids": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "maxItems": 64,
+              "title": "Source Event Ids",
+              "type": "array"
+            },
+            "token_method": {
+              "enum": [
+                "provider_reported",
+                "tokenizer_estimate",
+                "not_measured"
+              ],
+              "title": "Token Method",
+              "type": "string"
+            },
+            "tokenizer": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tokenizer"
+            },
+            "truncated": {
+              "default": false,
+              "title": "Truncated",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "processor",
+            "lifecycle",
+            "token_method",
+            "retention",
+            "searchable"
+          ],
+          "title": "ChronicleToolOutputEvidence",
+          "type": "object"
+        },
+        "ChronicleToolSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "activity_fidelity": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Fidelity"
+            },
+            "activity_hidden": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Hidden"
+            },
+            "activity_kind": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Kind"
+            },
+            "activity_outcome": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Outcome"
+            },
+            "activity_source": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Source"
+            },
+            "activity_wrapper_status": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activity Wrapper Status"
+            },
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ChronicleToolDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "name": {
+              "maxLength": 512,
+              "title": "Name",
+              "type": "string"
+            },
+            "optimization_profile": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Optimization Profile"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Status"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "ChronicleToolSummary",
+          "type": "object"
+        },
+        "ChronicleUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cache_creation_input_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cache Creation Input Tokens",
+              "type": "integer"
+            },
+            "cached_input_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cached Input Tokens",
+              "type": "integer"
+            },
+            "cost_usd": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cost Usd"
+            },
+            "input_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Output Tokens",
+              "type": "integer"
+            },
+            "reasoning_output_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Reasoning Output Tokens",
+              "type": "integer"
+            },
+            "total_tokens": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Total Tokens",
+              "type": "integer"
+            },
+            "uncached_input_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Uncached Input Tokens"
+            }
+          },
+          "title": "ChronicleUsage",
+          "type": "object"
+        },
+        "ChronicleUsageCategory": {
+          "additionalProperties": false,
+          "properties": {
+            "confidence": {
+              "maxLength": 512,
+              "title": "Confidence",
+              "type": "string"
+            },
+            "key": {
+              "maxLength": 512,
+              "title": "Key",
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 512,
+              "title": "Label",
+              "type": "string"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source"
+            },
+            "tokens": {
+              "minimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "key",
+            "label",
+            "tokens",
+            "confidence"
+          ],
+          "title": "ChronicleUsageCategory",
+          "type": "object"
+        },
+        "ChronicleUserRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "chars": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Chars"
+            },
+            "content": {
+              "maxLength": 280,
+              "minLength": 1,
+              "title": "Content",
+              "type": "string"
+            },
+            "request_id": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            },
+            "source": {
+              "default": "human_user",
+              "maxLength": 512,
+              "title": "Source",
+              "type": "string"
+            },
+            "tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tokens"
+            },
+            "type": {
+              "default": "message",
+              "enum": [
+                "message",
+                "command"
+              ],
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "content"
+          ],
+          "title": "ChronicleUserRequest",
+          "type": "object"
+        },
+        "EdgeFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "edge",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/ChronicleEdge"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "EdgeFactRow",
+          "type": "object"
+        },
+        "EventFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "event",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/ChronicleEvent"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "EventFactRow",
+          "type": "object"
+        },
+        "GraphFactPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "coverage": {
+              "$ref": "#/$defs/ChronicleCoverage"
+            },
+            "summary": {
+              "$ref": "#/$defs/ChronicleGraphSummary"
+            }
+          },
+          "required": [
+            "summary",
+            "coverage"
+          ],
+          "title": "GraphFactPayload",
+          "type": "object"
+        },
+        "GraphFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "graph",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/GraphFactPayload"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "GraphFactRow",
+          "type": "object"
+        },
+        "ItemFactPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "event_ids": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "maxItems": 64,
+              "title": "Event Ids",
+              "type": "array"
+            },
+            "exit_code": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Exit Code"
+            },
+            "item_id": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "agent_message",
+                "tool_call",
+                "command_execution",
+                "file_change",
+                "reasoning",
+                "plan"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "measurements": {
+              "$ref": "#/$defs/ChronicleItemMeasurements"
+            },
+            "nested_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Nested Index"
+            },
+            "operation": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Operation"
+            },
+            "path": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Path"
+            },
+            "projection_parent_item_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Projection Parent Item Id"
+            },
+            "semantic": {
+              "$ref": "#/$defs/ChronicleItemSemantic"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Status"
+            },
+            "tool_name": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tool Name"
+            }
+          },
+          "required": [
+            "item_id",
+            "event_ids",
+            "sequence",
+            "kind",
+            "started_at"
+          ],
+          "title": "ItemFactPayload",
+          "type": "object"
+        },
+        "ItemFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "item",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/ItemFactPayload"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "ItemFactRow",
+          "type": "object"
+        },
+        "MeasurementFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "measurement",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/ChronicleSessionMeasurements"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "MeasurementFactRow",
+          "type": "object"
+        },
+        "ModelFactPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "providers": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 16,
+              "title": "Providers",
+              "type": "array"
+            },
+            "request_count": {
+              "minimum": 0,
+              "title": "Request Count",
+              "type": "integer"
+            },
+            "usage": {
+              "$ref": "#/$defs/ChronicleUsage"
+            }
+          },
+          "required": [
+            "request_count",
+            "usage"
+          ],
+          "title": "ModelFactPayload",
+          "type": "object"
+        },
+        "ModelFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "model",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/ModelFactPayload"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "ModelFactRow",
+          "type": "object"
+        },
+        "OutputEvidenceFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "output_evidence",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/ChronicleToolOutputEvidence"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "OutputEvidenceFactRow",
+          "type": "object"
+        },
+        "RequestFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "request",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/ChronicleRequestUsage"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "RequestFactRow",
+          "type": "object"
+        },
+        "RuntimeFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "runtime",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/ChronicleRuntimeObservation"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "RuntimeFactRow",
+          "type": "object"
+        },
+        "SessionFactPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "agent_name": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Agent Name"
+            },
+            "ended_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ended At"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "parent_session_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Session Id"
+            },
+            "preview": {
+              "anyOf": [
+                {
+                  "maxLength": 280,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Preview"
+            },
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Effort"
+            },
+            "session_id": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            },
+            "status": {
+              "maxLength": 512,
+              "title": "Status",
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "maxLength": 280,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Title"
+            },
+            "topology": {
+              "$ref": "#/$defs/ChronicleSessionTopology"
+            },
+            "vendor": {
+              "$ref": "#/$defs/Vendor"
+            }
+          },
+          "required": [
+            "session_id",
+            "vendor",
+            "started_at",
+            "status"
+          ],
+          "title": "SessionFactPayload",
+          "type": "object"
+        },
+        "SessionFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "session",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/SessionFactPayload"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "SessionFactRow",
+          "type": "object"
+        },
+        "TurnFactPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "sequence": {
+              "minimum": 0,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            },
+            "status": {
+              "maxLength": 512,
+              "title": "Status",
+              "type": "string"
+            },
+            "team_state": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ChronicleTeamState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "turn_id": {
+              "format": "uuid",
+              "title": "Turn Id",
+              "type": "string"
+            },
+            "user_request": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ChronicleUserRequest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "turn_id",
+            "sequence",
+            "started_at",
+            "status"
+          ],
+          "title": "TurnFactPayload",
+          "type": "object"
+        },
+        "TurnFactRow": {
+          "additionalProperties": false,
+          "properties": {
+            "fact_id": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            },
+            "graph_id": {
+              "format": "uuid",
+              "title": "Graph Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "turn",
+              "title": "Kind",
+              "type": "string"
+            },
+            "order_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Index"
+            },
+            "parent_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Id"
+            },
+            "payload": {
+              "$ref": "#/$defs/TurnFactPayload"
+            },
+            "row_hash": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Row Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_id",
+            "fact_id",
+            "row_hash",
+            "kind",
+            "payload"
+          ],
+          "title": "TurnFactRow",
+          "type": "object"
+        },
+        "Vendor": {
+          "enum": [
+            "codex_cli",
+            "claude_code",
+            "pi",
+            "amp"
+          ],
+          "title": "Vendor",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "One graph's complete, deterministic, bounded publication facts.",
+      "properties": {
+        "fact_set_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Fact Set Digest",
+          "type": "string"
+        },
+        "graph_id": {
+          "format": "uuid",
+          "title": "Graph Id",
+          "type": "string"
+        },
+        "kind_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Kind Counts",
+          "type": "object"
+        },
+        "rows": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "edge": "#/$defs/EdgeFactRow",
+                "event": "#/$defs/EventFactRow",
+                "graph": "#/$defs/GraphFactRow",
+                "item": "#/$defs/ItemFactRow",
+                "measurement": "#/$defs/MeasurementFactRow",
+                "model": "#/$defs/ModelFactRow",
+                "output_evidence": "#/$defs/OutputEvidenceFactRow",
+                "request": "#/$defs/RequestFactRow",
+                "runtime": "#/$defs/RuntimeFactRow",
+                "session": "#/$defs/SessionFactRow",
+                "turn": "#/$defs/TurnFactRow"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/GraphFactRow"
+              },
+              {
+                "$ref": "#/$defs/SessionFactRow"
+              },
+              {
+                "$ref": "#/$defs/TurnFactRow"
+              },
+              {
+                "$ref": "#/$defs/ItemFactRow"
+              },
+              {
+                "$ref": "#/$defs/EventFactRow"
+              },
+              {
+                "$ref": "#/$defs/EdgeFactRow"
+              },
+              {
+                "$ref": "#/$defs/RequestFactRow"
+              },
+              {
+                "$ref": "#/$defs/ModelFactRow"
+              },
+              {
+                "$ref": "#/$defs/RuntimeFactRow"
+              },
+              {
+                "$ref": "#/$defs/MeasurementFactRow"
+              },
+              {
+                "$ref": "#/$defs/OutputEvidenceFactRow"
+              }
+            ]
+          },
+          "maxItems": 131072,
+          "title": "Rows",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "ct.published_facts.v1",
+          "default": "ct.published_facts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "graph_id",
+        "fact_set_digest",
+        "kind_counts",
+        "rows"
+      ],
+      "title": "PublishedFactSet",
+      "type": "object"
+    },
+    "schema_version": "ct.published_facts.v1"
   },
   "registry_schema_version": 2,
   "snapshot_version": 1

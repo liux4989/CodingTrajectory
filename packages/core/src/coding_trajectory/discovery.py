@@ -10,7 +10,7 @@ import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from coding_trajectory import debug
@@ -134,6 +134,38 @@ def _selected_vendor_configs(
     return [config for config in configs if config[0].value == agent_vendor]
 
 
+def normalize_session_segments(
+    segments: list[
+        tuple[DiscoveryCandidate, Path, list[dict[str, Any]], set[str] | None]
+    ],
+) -> Session:
+    """Build one canonical session from exactly fenced source records."""
+
+    canonical_segments: list[tuple[Path, Session]] = []
+    for candidate, source, records, parent_started_turn_ids in segments:
+        session = candidate.adapter_cls().build_canonical_session(
+            source,
+            records,
+            parent_started_turn_ids=parent_started_turn_ids,
+        )
+        canonical_segments.append(
+            (
+                source,
+                stabilize_session(
+                    session,
+                    vendor=candidate.vendor,
+                    source=source,
+                ),
+            )
+        )
+    canonical_segments.sort(key=lambda entry: (entry[1].started_at, str(entry[0])))
+    return (
+        canonical_segments[0][1]
+        if len(canonical_segments) == 1
+        else merge_session_segments(canonical_segments)
+    )
+
+
 def _ingest_sessions(
     candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
     *,
@@ -217,7 +249,9 @@ def _remap_stabilized_provenance(
             event_ids.get(key, key): value for key, value in provenance.events.items()
         },
         items={
-            item_ids.get(key, key): tuple(event_ids.get(event_id, event_id) for event_id in value)
+            item_ids.get(key, key): tuple(
+                event_ids.get(event_id, event_id) for event_id in value
+            )
             for key, value in provenance.items.items()
         },
     )

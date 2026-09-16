@@ -1,16 +1,19 @@
 # Chronicle historical facts contract
 
-`ct.chronicle_graph.v3` is a private, bounded in-memory representation derived
-from one canonical `SessionGraph`. It feeds `ct.published_facts.v1`; it is not a
-stored remote document or a raw-sharing format.
+`ct.published_facts.v1` is the sole bounded historical publication contract. It
+is derived directly from one canonical `SessionGraph`; it is not a raw-sharing
+format or a second canonical graph model.
 
 ## Stable publication seam
 
 `published_fact_set_for_store(DocumentStore)` iterates canonical graphs and calls
-`build_chronicle_graph_artifact(SessionGraph)`, then
-`derive_published_fact_set(ChronicleGraphArtifact)`. Publication never parses raw
+`build_published_fact_set(SessionGraph)`. Publication never parses raw
 source records or repairs deduplication/accounting. Missing canonical coverage is
 reported as unavailable rather than replaced with zero.
+
+`session_graph_from_fact_set(PublishedFactSet)` performs the direct inverse for
+shared handlers. It validates identities, ownership, ordering, references,
+hashes, cardinality, privacy policy, and encoded bounds before reconstruction.
 
 Published facts retain bounded identity, topology, ordering, lifecycle,
 measurement, request/model/runtime, normalized event-envelope, and tool-evidence
@@ -46,10 +49,10 @@ before dispatch.
 
 ## Qualification scope
 
-The private OSO replay receipt applies only to ingestion commit
+The historical OSO replay receipt applies only to ingestion commit
 `1f3e86cab69c931a2580fa0ec6de00f71ad99ba4` and its exact source pair. It found
 6,706,498 processed child tokens and 17,453,805 graph tokens, excluding 240,402
 inherited tokens, while preserving 476 parent and 319 child occurrences and a
 24-segment parent union delivered to 11 children. One copied untagged metadata
 occurrence remained preserved but non-projecting. This is not proof of universally
-complete ownership classification or a replay against later Chronicle heads.
+complete ownership classification or a replay against later publication heads.

@@ -1,9 +1,9 @@
 """Host-local vendor-log collector for the remote CT control plane.
 
 The collector is deliberately a delivery client: its SQLite database holds
-paths, offsets, and unacknowledged checkpoint/artifact requests, but is never a
+paths, offsets, and unacknowledged checkpoint/publication requests, but is never a
 query authority. Vendor JSONL is parsed locally through the existing adapters;
-only metadata checkpoints and bounded chronicle graphs are queued remotely.
+only metadata checkpoints and bounded published facts are queued remotely.
 """
 
 from __future__ import annotations
@@ -21,11 +21,6 @@ from uuid import UUID, uuid4
 import httpx
 
 from coding_trajectory.contracts import LivingChange, LivingSessionsChange
-from coding_trajectory.control_plane.chronicle import (
-    ChronicleGraphArtifact,
-    build_chronicle_graph_artifact,
-    build_chronicle_segments,
-)
 from coding_trajectory.control_plane.collector_protocol import (
     CollectorRecoveryRequest,
     CollectorRecoveryResponse,
@@ -42,6 +37,7 @@ from coding_trajectory.control_plane.collector_protocol import (
     SourceRegistrationResponse,
     SourceVectorEntry,
 )
+from coding_trajectory.control_plane.fact_projection import build_published_fact_set
 from coding_trajectory.control_plane.fact_protocol import (
     FACT_ROW_BATCH_MAX,
     FactGraphPublication,
@@ -51,22 +47,20 @@ from coding_trajectory.control_plane.fact_protocol import (
     StageFactRowsRequest,
     StageFactRowsResponse,
 )
-from coding_trajectory.control_plane.published_facts import (
-    PublishedFactSet,
-    derive_published_fact_set,
-)
+from coding_trajectory.control_plane.published_facts import PublishedFactSet
 from coding_trajectory.control_plane.remote import cloudflare_endpoint
 from coding_trajectory.discovery import (
     DiscoveryCandidate,
     discover_source_candidates,
     locate_session_files,
+    normalize_session_segments,
 )
 from coding_trajectory.ingestion.adapters.base import SessionHeader
 from coding_trajectory.ingestion.common import canonical_json, last_complete_line_offset
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.ingestion.models import Session
 
-_PARSER_VERSION = "ct-local-collector-v10"
+_PARSER_VERSION = "ct-local-collector-v11"
 _SOURCE_SCHEMA_VERSION = "ct.source_checkpoint.v1"
 _SNAPSHOT_STATE_VERSION = f"{_SOURCE_SCHEMA_VERSION}:{_PARSER_VERSION}"
 
@@ -331,7 +325,7 @@ class _FencedCandidate:
 
 @dataclass(frozen=True, slots=True)
 class _CollectedSource:
-    artifact: ChronicleGraphArtifact
+    session: Session
     source_id: UUID | None
     source_epoch: int
     source_sequence: int | None
@@ -385,7 +379,7 @@ class LocalCollector:
         known_fact_digests: set[str] | None = None,
         candidate_paths: set[Path] | None = None,
     ) -> CollectorRunResult:
-        """Discover, fence, publish checkpoints, and publish local graph artifacts."""
+        """Discover, fence, publish checkpoints, and publish local graph facts."""
 
         if remote is not None and global_scope:
             raise ValueError(
@@ -488,7 +482,7 @@ class LocalCollector:
             grouped.setdefault(
                 (source.candidate.vendor.value, source.header.session_id), []
             ).append(source)
-        normalized: dict[tuple[str, UUID], ChronicleGraphArtifact] = {}
+        normalized: dict[tuple[str, UUID], Session] = {}
         target_fact_digest: str | None = None
         if target_session_id is not None:
             if failed:
@@ -512,10 +506,7 @@ class LocalCollector:
             }
             graphs = assemble_project_session_graphs(
                 self.identity.project_name or current_dir.name,
-                [
-                    artifact.to_session_graph().sessions[0]
-                    for artifact in normalized.values()
-                ],
+                list(normalized.values()),
             )
             selected = next(
                 (
@@ -536,9 +527,7 @@ class LocalCollector:
             grouped = {
                 key: group for key, group in grouped.items() if key[1] in selected_ids
             }
-            target_fact_digest = derive_published_fact_set(
-                build_chronicle_graph_artifact(selected)
-            ).fact_set_digest
+            target_fact_digest = build_published_fact_set(selected).fact_set_digest
             if (
                 not self.pending_count()
                 and not self._fact_publication_blocked()
@@ -561,7 +550,7 @@ class LocalCollector:
                     group,
                     parent_turn_ids=parent_turn_ids,
                     remote=remote,
-                    artifact=normalized.get(key),
+                    session=normalized.get(key),
                 )
                 queued += source.queued
                 collected.append(source)
@@ -722,12 +711,7 @@ class LocalCollector:
             raise ValueError("fact publication requires a project_id")
         session_sources: dict[UUID, tuple[Session, list[_CollectedSource]]] = {}
         for source in sources:
-            graph = source.artifact.to_session_graph()
-            if len(graph.sessions) != 1:
-                raise ValueError(
-                    "one collected source must contain exactly one session"
-                )
-            session = graph.sessions[0]
+            session = source.session
             existing = session_sources.get(session.session_id)
             if existing is not None:
                 if existing[0] != session:
@@ -763,8 +747,7 @@ class LocalCollector:
                 for session in graph.sessions
                 for source in session_sources[session.session_id][1]
             ]
-            # Chronicle v3 is already bounded; the fact set is the publication.
-            fact_set = derive_published_fact_set(build_chronicle_graph_artifact(graph))
+            fact_set = build_published_fact_set(graph)
             fact_sets.append(fact_set)
             publications.append(
                 FactGraphPublication(
@@ -1083,7 +1066,7 @@ class LocalCollector:
         self,
         segments: list[_FencedCandidate],
         parent_turn_ids: dict[UUID, set[str]],
-    ) -> ChronicleGraphArtifact:
+    ) -> Session:
         """Reuse exact normalized inputs; full-prefix fencing remains authoritative."""
         ordered = sorted(segments, key=lambda segment: str(segment.segment_id))
         identity = _sha256(
@@ -1114,15 +1097,17 @@ class LocalCollector:
         ).fetchone()
         if cached:
             try:
-                result = ChronicleGraphArtifact.model_validate_json(cached[0])
+                result = Session.model_validate_json(cached[0])
                 self.normalization_cache_hits += 1
                 return result
             except ValueError:
                 self._connection.execute(
                     "DELETE FROM normalization_cache WHERE identity=?", (identity,)
                 )
-        artifact = _normalized_segments(ordered, parent_turn_ids)
-        body = artifact.canonical_bytes()
+        session = _normalized_segments(ordered, parent_turn_ids)
+        body = canonical_json(
+            session.model_dump(mode="json", exclude_none=True)
+        ).encode()
         # Disposable acceleration only: bounded independently of durable outboxes.
         if len(body) <= 8 * 1024 * 1024:
             retained = self._connection.execute(
@@ -1134,7 +1119,7 @@ class LocalCollector:
                 "INSERT OR REPLACE INTO normalization_cache VALUES(?,?)",
                 (identity, body),
             )
-        return artifact
+        return session
 
     def _collect_segments(
         self,
@@ -1142,13 +1127,13 @@ class LocalCollector:
         *,
         parent_turn_ids: dict[UUID, set[str]],
         remote: CollectorRemote | None,
-        artifact: ChronicleGraphArtifact | None = None,
+        session: Session | None = None,
     ) -> _CollectedSource:
         segments = sorted(segments, key=lambda segment: str(segment.segment_id))
         first = segments[0]
         vendor = first.candidate.vendor.value
         native_session_id = str(first.header.session_id)
-        artifact = artifact or self._normalized_cached(segments, parent_turn_ids)
+        session = session or self._normalized_cached(segments, parent_turn_ids)
         observed_at = max(segment.modified_at for segment in segments)
         state = self._logical_source_state(vendor, native_session_id)
         if remote is not None and (
@@ -1242,7 +1227,7 @@ class LocalCollector:
         if source_id is None:
             self._connection.commit()
             return _CollectedSource(
-                artifact=artifact,
+                session=session,
                 source_id=None,
                 source_epoch=local_epoch,
                 source_sequence=None,
@@ -1256,7 +1241,11 @@ class LocalCollector:
             "source_checkpoint": {
                 "segments": [segment.complete_offset for segment in segments]
             },
-            "chronicle_digest": artifact.digest(),
+            "session_digest": _sha256(
+                canonical_json(
+                    session.model_dump(mode="json", exclude_none=True)
+                ).encode()
+            ),
         }
         content_sha256 = _sha256(canonical_json(payload).encode())
         if (
@@ -1266,7 +1255,7 @@ class LocalCollector:
         ):
             self._connection.commit()
             return _CollectedSource(
-                artifact=artifact,
+                session=session,
                 source_id=source_id,
                 source_epoch=local_epoch,
                 source_sequence=max(int(state["next_source_sequence"]) - 1, 0),
@@ -1323,7 +1312,7 @@ class LocalCollector:
         )
         self._connection.commit()
         return _CollectedSource(
-            artifact=artifact,
+            session=session,
             source_id=source_id,
             source_epoch=local_epoch,
             source_sequence=sequence,
@@ -1669,12 +1658,12 @@ def _parent_started_turn_ids(
 def _normalized_segments(
     segments: list[_FencedCandidate],
     parent_turn_ids: dict[UUID, set[str]],
-) -> ChronicleGraphArtifact:
+) -> Session:
     ordered = sorted(segments, key=lambda segment: str(segment.segment_id))
-    # The source path participates only in deterministic canonical IDs and is
-    # never serialized into the chronicle artifact. Using the same identity
+    # The source path participates only in deterministic canonical IDs. Using
+    # the same identity
     # input as local discovery keeps local and remote turn/item IDs identical.
-    artifact = build_chronicle_segments(
+    session = normalize_session_segments(
         [
             (
                 segment.candidate,
@@ -1689,7 +1678,7 @@ def _normalized_segments(
             for segment in ordered
         ]
     )
-    return artifact
+    return session
 
 
 def _source_key(
