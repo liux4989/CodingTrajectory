@@ -51,6 +51,18 @@ class AmpRecord(BaseModel):
 
 
 def _object(value: Any) -> dict[str, Any]:
+    # PluginToolResult also permits text/image block arrays. Interpret only one
+    # text block: concatenating several can manufacture ambiguous JSON evidence.
+    # Keep the original output in the transcript; never dereference images.
+    if isinstance(value, list):
+        texts = [
+            block.get("text")
+            for block in value
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        if len(texts) != 1 or not isinstance(texts[0], str):
+            return {}
+        value = texts[0]
     if isinstance(value, str):
         try:
             value = json.loads(value)
