@@ -12,6 +12,8 @@ governed by the [authority boundaries RFC](authority-boundaries.md).
 | [Direct published facts](refactor/direct-published-facts.md) | Aggregate-free publication implementation and qualification |
 | [Indexed historical facts](refactor/fact-index-read-view.md) | Bounded read index, measured cache decision, and staging evidence |
 | [Remote control plane](remote-ct-control-plane-design.md) | Historical, inventory, and living authorities |
+| [Credential registry proposal](refactor/credential-registry-proposal.md) | Reader-first bootstrap, scoped issuance, rotation and registry authority |
+| [Upload qualification plan](refactor/upload-qualification-plan.md) | Exact-commit synthetic, capacity and separately authorized canary gates |
 | [Collector handoff](local-collector-handoff.md) | Local collection, delivery recovery, and deployment gates |
 | [CLI](cli.md) and [session API](session-api-redesign.md) | Public usage and progressive evidence retrieval |
 | [Plugins](plugin.md) | Executable plugin boundary |
