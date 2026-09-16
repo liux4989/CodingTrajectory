@@ -2,9 +2,6 @@
 - uv for python
 - pydantic 
 
-# Collaboration reporting
-- At meaningful decisions, blockers, verification, and completion, use `$cody-proactive` once to send a concise Behavior Report; reporting must not block task execution.
-
 # Atomic rule
 - After completing a task that changes files, the agent MUST create a git commit with a descriptive message summarizing the changes.
 - Do not create empty or analysis-only commits just to satisfy the atomic rule.
