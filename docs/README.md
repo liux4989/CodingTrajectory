@@ -38,17 +38,19 @@ details, the frozen Core snapshot and current source are authoritative.
 | [Managed collection](refactor/managed-collection.md) | Superseded: the `ct collector service` supervisor was removed by the fact cutover; retained as qualification evidence |
 | [Deferred qualification checklist](refactor/later-qualification-checklist.md) | Items deferred from the initial private deployment; partially superseded |
 
-## Proposals — design only, not operational authorization
+## Internal collection and read rollout
 
 | Document | Role |
 | --- | --- |
-| [Credential registry proposal](refactor/credential-registry-proposal.md) | Reader-first bootstrap, scoped issuance, rotation and registry authority |
-| [Upload qualification plan](refactor/upload-qualification-plan.md) | Exact-commit synthetic, capacity and separately authorized canary gates |
+| [Internal credentials](refactor/credential-registry-proposal.md) | Two capabilities, secure custody and one coordinated credential cutover |
+| [Three-job rollout](refactor/upload-qualification-plan.md) | Align credentials/build, prove a small deployed flow, then upload a bounded export; scale work deferred |
 
 ## Historical operational evidence
 
 | Document | Role |
 | --- | --- |
+| [Production reader and registry recovery](credential-recovery-2026-09-17.md) | Fresh baseline identity, snapshot zero and empty inventory; historical registry recovery and remaining authority gap |
+| [Legacy Datahub retirement](datahub-retirement-2026-09-17.md) | Deleted both old Workers and their dedicated Access applications; Chronicle preserved |
 | [Completed targeted reset](targeted-reset-execution-2026-09-16.md) | Deployment evidence and credential blockers; not an executable reset procedure |
 | [Targeted reset recovery plan](targeted-reset-recovery.md) | The executed recovery plan, retained as audit trail for the reset |
 
@@ -60,9 +62,10 @@ and its qualification script — is historical only and is not part of `main`.
 
 The publication bounds in these documents describe `main`: the larger graph and
 publication limits are merged there but not production-qualified or deployed.
-The [upload qualification plan](refactor/upload-qualification-plan.md) pins the
-deployed clean baseline and the larger candidate as separate lanes; the
-deployment identity is as recorded in the 2026-09-16 execution evidence, not a
-fresh live check.
+The [internal rollout](refactor/upload-qualification-plan.md) distinguishes the
+deployed clean baseline from the exact candidate still to select for the pilot.
+Deployment identity and positive reader access were freshly checked in the
+[2026-09-17 recovery record](credential-recovery-2026-09-17.md) and after Datahub
+retirement. The bounded upload remains pending; maximum-capacity work is deferred.
 [Benchmark guidance](../benchmarks/README.md) separates reproducible inputs from
 regenerable reports.

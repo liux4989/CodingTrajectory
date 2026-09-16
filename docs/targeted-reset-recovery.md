@@ -8,8 +8,10 @@ Clean source `2917baea8b980b40c733e155377ab498f5fa9bd9` is now deployed as
 `df81dc0b-6906-4a18-b9c2-bb87e39d4a4a`. Temporary reset/recovery code, active
 bindings and the local recovery credential were removed. CT_PRINCIPALS was
 preserved without role mapping or compatibility support. Legacy credentials
-remain incompatible; no compatible credential remains for a post-cleanup snapshot
-read. See the [execution record](targeted-reset-execution-2026-09-16.md).
+used by the reset task remain incompatible. A separate existing reader was
+[recovered and verified on 2026-09-17](credential-recovery-2026-09-17.md), including
+snapshot zero and empty inventory on the final clean version. See also the
+[reset execution record](targeted-reset-execution-2026-09-16.md).
 
 ## Immutable target and source boundaries
 

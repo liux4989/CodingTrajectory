@@ -49,10 +49,11 @@ component. Reuse is a fresh dependency decision, not an obligation to preserve
 behavior. Copying old projections, API envelopes, navigation, stores, or page
 assemblies into the new plugin is prohibited.
 
-The existing hosted plugin remains an old release until the replacement is
-ready. Deleting or migrating deployed remote state is a separate operational
-action and requires explicit approval; source removal alone does not authorize
-that external change.
+The owner separately approved retirement of the old Cloudflare deployment on
+2026-09-17. Both legacy Datahub Workers and their dedicated Access applications
+were [deleted](datahub-retirement-2026-09-17.md); the Chronicle control plane was
+preserved. Loop currently runs locally. This retirement does not deploy hosted
+Loop; a future remote deployment is a separate operation from source replacement.
 
 # Product structure
 

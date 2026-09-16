@@ -1,5 +1,10 @@
 # Targeted workspace reset execution — 2026-09-16
 
+Later evidence: the [2026-09-17 reader recovery](credential-recovery-2026-09-17.md)
+found a compatible reader in a separate Keychain service and verified snapshot
+zero and empty inventory on the final clean version. The credential-discovery
+limit below describes the reset task, not the current reader-access status.
+
 ## Final outcome: reset completed
 
 The owner chose no compatibility support for this preproduction environment.

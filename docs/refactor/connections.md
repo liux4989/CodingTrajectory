@@ -3,6 +3,11 @@
 Status: implementation contract. A connection profile is shared by collector and
 query commands on every host. It is not itself an authorization grant.
 
+The internal pilot uses the [two-capability credential design](credential-registry-proposal.md)
+and [three-job rollout](upload-qualification-plan.md). The full lifecycle matrix
+below describes the implementation contract, not a prerequisite to repeat every
+rotation and failure scenario before the first bounded internal upload.
+
 ## Configure once
 
 `ct connection configure NAME` stores an endpoint, workspace, optional collector

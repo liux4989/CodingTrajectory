@@ -3,6 +3,12 @@
 The collector publishes canonical historical facts derived on an authorized
 host. It does not own source interpretation or historical semantics.
 
+For the early internal deployment, follow the
+[three-job rollout](refactor/upload-qualification-plan.md): align credentials and
+build, prove a small deployed publication/read/retry flow, then upload a bounded
+real export. Maximum-capacity work is deferred until the workload needs it; the
+publication and privacy guarantees below still apply.
+
 ## Input and output
 
 Production ingestion first preserves source occurrences and reconstructs the
