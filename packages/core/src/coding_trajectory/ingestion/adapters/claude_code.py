@@ -23,6 +23,17 @@ from coding_trajectory.ingestion.adapters._shared import (
     scan_header_records,
 )
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
+from coding_trajectory.ingestion.adapters.claude_context import (
+    _claude_context_usage,
+    _first_api_prompt_text,
+    _starting_context_sources,
+)
+from coding_trajectory.ingestion.adapters.claude_identity import (
+    _ClaudeRecordScan,
+    _record_title,
+    _subagent_input,
+    _subagent_input_from_scan,
+)
 from coding_trajectory.ingestion.assembly import AssemblyHooks, assemble_session
 from coding_trajectory.ingestion.common import (
     compact_dict,
@@ -30,9 +41,6 @@ from coding_trajectory.ingestion.common import (
     parse_timestamp,
 )
 from coding_trajectory.ingestion.models import (
-    ContextSourceObservation,
-    ContextUsageObservation,
-    Event,
     RuntimeObservation,
     Session,
     ToolStatus,
@@ -43,7 +51,6 @@ from coding_trajectory.ingestion.provenance import RecordSpan
 from coding_trajectory.ingestion.retention import CanonicalRetention
 from coding_trajectory.ingestion.transcript import TranscriptRecord
 from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
-    ClaudeSubagentInput,
     canonical_session_ids,
 )
 from coding_trajectory.ingestion.vendor_mechanisms.claude_subagent import (
@@ -56,7 +63,6 @@ from coding_trajectory.ingestion.vendor_mechanisms.claude_team import (
     high_value_teammate_request,
 )
 from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
-    context_usage_observation,
     normalize_claude_usage,
 )
 
@@ -66,10 +72,6 @@ _TEAMMATE_MESSAGE_RE = re.compile(
     r"<teammate-message(?P<attrs>[^>]*)>(?P<body>.*?)</teammate-message>", re.DOTALL
 )
 _TEAMMATE_ATTR_RE = re.compile(r'(\w+)="(.*?)"')
-# Claude Code logs an ``/effort`` switch as a ``<local-command-stdout>Set effort
-# level to <LEVEL> ...`` user record. The level word (``max``, ``ultracode``,
-# ``high`` ...) is the resolved effort in effect from that turn onward.
-_CLAUDE_EFFORT_STDOUT_RE = re.compile(r"Set effort level to (\w+)")
 
 _CLAUDE_TOOL_TAXONOMY = ToolTaxonomy(
     command_names=frozenset({"Bash", "bash"}),
@@ -129,99 +131,6 @@ def _compact_meta(record: TranscriptRecord, key: str) -> Any:
     return metadata.get(key)
 
 
-def _estimate_prompt_tokens(text: str | None) -> int:
-    """Rough char->token estimate mirroring ``visible_text_size`` for non-empty text.
-
-    Inlined here (rather than importing ``analysis.content_size``) to keep
-    ingestion from depending on the analysis layer.
-    """
-    if not text:
-        return 0
-    return max(1, (len(text) + 3) // 4)
-
-
-def _first_api_prompt_text(
-    *,
-    turns: list[Turn],
-    events: list[Event],
-    context_usage: list[ContextUsageObservation],
-) -> str | None:
-    """Return the user prompt text of the first turn that produced a usage observation.
-
-    The first API call's full input is the stable system-prompt + tools prefix
-    plus that call's user message, so isolating the prefix requires subtracting
-    the prompt that was actually sent. Local commands (e.g. ``/model``) emit
-    user-prompt events but never reach the API, so the prompt is resolved
-    through the turn that owns the first usage observation rather than by
-    timestamp order alone.
-    """
-    usage_event_ids = {
-        observation.source_event_id
-        for observation in context_usage
-        if observation.source_event_id is not None
-    }
-    if not usage_event_ids:
-        return None
-    event_by_id = {event.event_id: event for event in events}
-    for turn in sorted(turns, key=lambda item: item.sequence):
-        if not any(event_id in usage_event_ids for event_id in turn.event_ids):
-            continue
-        if turn.user_request_event_id is None:
-            return None
-        event = event_by_id.get(turn.user_request_event_id)
-        if event is None:
-            return None
-        text = event.payload.get("text")
-        return text if isinstance(text, str) else None
-    return None
-
-
-def _starting_context_sources(
-    *,
-    started_at: datetime,
-    context_usage: list[ContextUsageObservation],
-    first_prompt_text: str | None = None,
-) -> list[ContextSourceObservation]:
-    """Synthesize a starting-context source from the first API call's input.
-
-    Claude Code JSONL never records the system prompt, tool definitions,
-    AGENTS.md, skills, or MCP text — they are injected client-side at request
-    time, so the observed context composition cannot measure them from visible
-    content. The first assistant turn's full input (``used_input_tokens``) is
-    the stable system-prompt + tools prefix plus that turn's user message, so
-    subtract the visible-text estimate of the first prompt to isolate the
-    prefix. ``used_input_tokens`` is robust to a partially-warm cache: when
-    only part of the system prompt was already cached, ``cache_read`` +
-    ``cache_creation`` undercounts the prefix, but the full request total never
-    does. The cached-prefix sum is used only as a fallback when the used-input
-    total is unavailable.
-    """
-    prompt_tokens = _estimate_prompt_tokens(first_prompt_text)
-    for observation in context_usage:
-        usage = observation.usage or {}
-        used_input = max(observation.used_input_tokens, 0)
-        cached = _as_int_or_none(usage.get("cached_input_tokens")) or 0
-        cache_creation = _as_int_or_none(usage.get("cache_creation_input_tokens")) or 0
-        estimate = (
-            max(used_input - prompt_tokens, 0)
-            if used_input > 0
-            else cached + cache_creation
-        )
-        if estimate <= 0:
-            continue
-        return [
-            ContextSourceObservation(
-                timestamp=started_at,
-                key="base_system",
-                label="System prompt & tools",
-                text="",
-                source="claude_first_input_estimate",
-                reported_tokens=estimate,
-            )
-        ]
-    return []
-
-
 _TEAM_TOOL_NAMES: frozenset[str] = frozenset({"Agent", "TaskCreate", "TaskUpdate"})
 
 
@@ -254,201 +163,6 @@ def _team_tool_calls_from_transcript(
             if entry is not None and output is not None:
                 entry["output"] = output
     return calls
-
-
-def _claude_context_usage(
-    transcript: list[TranscriptRecord],
-) -> list[ContextUsageObservation]:
-    """Build usage observations, deduplicated by provider response id.
-
-    A Claude Code ``uuid`` identifies one local stream event, whereas
-    ``message.id`` identifies the provider response.  One response is recorded
-    as several stream events (thinking, text, tool-use, final state), each
-    repeating the same final usage block.  Preserve every event in the
-    transcript, but retain usage once per provider response so billed
-    accounting does not charge the same request repeatedly.
-    """
-    usage_records_by_response_id: dict[str, TranscriptRecord] = {}
-    usage_records_without_response_id: list[TranscriptRecord] = []
-    for record in transcript:
-        vendor_data = record.data.get("vendor_data", {})
-        if not isinstance(vendor_data, dict):
-            continue
-        response_id = vendor_data.get("provider_response_id")
-        if isinstance(response_id, str) and response_id:
-            # The final stream event is the most complete observation and
-            # remains associated with the turn that owns the response.
-            usage_records_by_response_id[response_id] = record
-        else:
-            usage_records_without_response_id.append(record)
-
-    return [
-        observation
-        for record in [
-            *usage_records_by_response_id.values(),
-            *usage_records_without_response_id,
-        ]
-        if (
-            observation := context_usage_observation(
-                timestamp=record.timestamp,
-                source="claude_usage_block",
-                normalized=record.data.get("vendor_data", {}),
-                source_event_id=record.record_id,
-                # Claude Code emits Anthropic-schema usage (input_tokens is
-                # uncached) regardless of the underlying routed model, so the
-                # net-input convention applies to every observation.
-                provider="anthropic",
-                category_source="claude_usage_block",
-            )
-        )
-        is not None
-    ]
-
-
-def _record_title(record: dict[str, object]) -> str | None:
-    for key in ("title", "sessionTitle", "conversationTitle", "threadName", "aiTitle"):
-        title = _as_non_empty_str(record.get(key))
-        if title:
-            return title
-    return None
-
-
-def _read_subagent_meta(source: Path) -> dict[str, object]:
-    meta_path = source.with_name(f"{source.stem}.meta.json")
-    try:
-        with meta_path.open(encoding="utf-8") as fh:
-            loaded = json.load(fh)
-    except OSError:
-        return {}
-    except json.JSONDecodeError:
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
-
-
-def _subagent_input(
-    source: Path, records: list[dict], raw_session_id: UUID
-) -> ClaudeSubagentInput:
-    scan = _ClaudeRecordScan()
-    for record in records:
-        scan.observe_meta(record)
-    return _subagent_input_from_scan(source, scan, raw_session_id)
-
-
-def _subagent_input_from_scan(
-    source: Path, scan: "_ClaudeRecordScan", raw_session_id: UUID
-) -> ClaudeSubagentInput:
-    first = scan.first_session_record or {}
-    title = scan.title
-    is_subagent_file = source.parent.name == "subagents"
-    parent_session_id: UUID | None = None
-    if is_subagent_file:
-        try:
-            parent_session_id = UUID(source.parent.parent.name)
-        except ValueError:
-            parent_session_id = None
-    meta = _read_subagent_meta(source) if is_subagent_file else {}
-
-    permission_mode = scan.permission_mode
-    if permission_mode is None:
-        permission_mode = _as_non_empty_str(first.get("permissionMode"))
-
-    return ClaudeSubagentInput(
-        source_path=str(source.resolve()),
-        is_subagent_file=is_subagent_file,
-        parent_session_id=parent_session_id,
-        raw_session_id=raw_session_id,
-        team_name=first.get("teamName"),
-        is_sidechain=first.get("isSidechain"),
-        permission_mode=permission_mode,
-        mode=scan.mode,
-        last_prompt=scan.last_prompt,
-        parent_uuid=first.get("parentUuid"),
-        request_id=first.get("uuid"),
-        agent_name=first.get("agentId") or first.get("agentName") or first.get("slug"),
-        agent_role=meta.get("agentType")
-        if isinstance(meta.get("agentType"), str)
-        else None,
-        description=meta.get("description")
-        if isinstance(meta.get("description"), str)
-        else None,
-        title=title or _as_non_empty_str(meta.get("title")),
-        tool_use_id=_as_non_empty_str(meta.get("toolUseId")),
-        spawn_depth=_as_int_or_none(meta.get("spawnDepth")),
-    )
-
-
-class _ClaudeRecordScan:
-    """Single-pass collector for record facts used outside the transcript.
-
-    Replaces repeated full-list scans of record facts so ingestion can
-    stream records instead of materializing them.
-    """
-
-    def __init__(self) -> None:
-        self.first_session_record: dict | None = None
-        self.raw_session_id: UUID | None = None
-        self.title: str | None = None
-        self.mode: str | None = None
-        self.permission_mode: str | None = None
-        self.last_prompt: str | None = None
-        self._effort_prev: str | None = None
-        self.effort_observations: list[RuntimeObservation] = []
-
-    def observe_meta(self, record: dict) -> None:
-        """Capture session-id/title/mode scalars (no effort scan)."""
-        sid_str = record.get("sessionId")
-        if self.first_session_record is None and sid_str:
-            self.first_session_record = record
-        if self.raw_session_id is None and sid_str:
-            try:
-                self.raw_session_id = UUID(str(sid_str))
-            except (ValueError, AttributeError, TypeError):
-                pass
-        if self.title is None:
-            title = _record_title(record)
-            if title:
-                self.title = title
-        raw_type = record.get("type")
-        if raw_type == "mode":
-            self.mode = _as_non_empty_str(record.get("mode")) or self.mode
-        elif raw_type == "permission-mode":
-            self.permission_mode = (
-                _as_non_empty_str(record.get("permissionMode")) or self.permission_mode
-            )
-        elif raw_type == "last-prompt":
-            self.last_prompt = (
-                _as_non_empty_str(record.get("lastPrompt")) or self.last_prompt
-            )
-
-    def observe(self, record: dict) -> None:
-        """Capture all scan facts, including effort change-points."""
-        self.observe_meta(record)
-        if record.get("type") != "user":
-            return
-        message = record.get("message")
-        if not isinstance(message, dict):
-            return
-        text = _extract_text(message.get("content"))
-        if not text:
-            return
-        match = _CLAUDE_EFFORT_STDOUT_RE.search(text)
-        if match is None:
-            return
-        level = match.group(1)
-        if self._effort_prev is not None and level == self._effort_prev:
-            return
-        ts = parse_timestamp(record.get("timestamp"))
-        if ts is None:
-            return
-        self.effort_observations.append(
-            RuntimeObservation(
-                timestamp=ts,
-                kind="effort_changed",
-                effort_from=self._effort_prev,
-                effort_to=level,
-            )
-        )
-        self._effort_prev = level
 
 
 _extract_text = content_block_texts
