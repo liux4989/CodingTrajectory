@@ -9,6 +9,11 @@ request/result JSON Schema, the `ct.core.v1` success and error envelopes, and
 the complete `ct.published_facts.v1` schema. CLI convenience projections and
 consumer-owned plugin protocols are not Core protocol authority.
 
+To keep the reviewed artifact small, schemas share the snapshot's top-level
+`$defs`, omit redundant nested `title` annotations, use JSON Schema's compact
+nullable `type` arrays where possible, and are serialized without indentation.
+These storage normalizations do not relax the frozen validation constraints.
+
 Run the review gate with:
 
 ```bash
