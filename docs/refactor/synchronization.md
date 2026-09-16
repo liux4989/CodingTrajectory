@@ -39,8 +39,9 @@ signals are recorded in [Bounded large fact publications](bounded-large-fact-pub
 Staging is replaceable until publication. A new digest atomically supersedes old
 batches for that agent/graph and may declare a different batch count. Batches for
 the same digest must agree on count. Publication sequences and idempotency keys
-make exact retries duplicate-safe; a changed request under an existing key is a
-conflict.
+make exact retries duplicate-safe: visibility and the receipt share one SQLite
+transaction, so a lost response retries without restaging, including after a
+process restart. A changed request under an existing key is a conflict.
 
 Source epochs fence stale collectors. A publication must contain the accepted
 checkpoint for every represented source and the complete source set for an

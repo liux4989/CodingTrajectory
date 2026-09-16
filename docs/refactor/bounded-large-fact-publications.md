@@ -30,8 +30,12 @@ rows. A changed batch invalidates its graph validation attestation.
 
 Publication validates one graph at a time with SQL relationship checks. JS
 materializes neither graph payload rows nor a publication aggregate. The only
-graph-sized JS value is the sorted `(kind, fact_id, row_hash)` digest manifest;
-at the 131,072-row cardinality ceiling it is below 16 MiB of UTF-8. The final
+graph-sized JS value is the canonical digest basis containing sorted
+`(kind, fact_id, row_hash)` entries. The existing 131,072-row v1 cardinality
+limit remains unchanged. The 16 MiB graph-byte limit is checked before SQL
+constructs one digest-basis string, which is independently capped at 16 MiB;
+the Worker therefore does not also hold a separate manifest and copied digest
+string before WebCrypto's one-shot encoding. The final
 synchronous transaction rechecks every attestation generation, enforces the
 96 MiB sum, applies staged rows with set-based SQL, writes graph metadata one
 graph at a time, closes replacements/tombstones, and advances one visibility
@@ -51,5 +55,13 @@ time under the production runtime.
 Canonical row bytes, row hashes, graph digests, public historical semantics,
 replacement/tombstones, source fencing, publication sequencing, and
 `ct.published_facts.v1` do not change. Existing invisible staged batches are
-discarded once when normalized staging is introduced; collectors recover them
-through the existing missing-batch retry flow.
+discarded once by an explicit transactionally versioned migration when
+normalized staging is introduced; collectors also treat any batch missing its
+normalized rows as absent and restage it through the existing retry flow.
+
+Publication idempotency receipts are checked before staging validation and are
+written in the same SQLite transaction as row visibility. An exact retry,
+including after process restart, returns the original receipt without staging;
+reuse of the key with a different request is a conflict. Process RSS remains
+unsuitable as isolate-heap evidence. Production isolate telemetry and CPU time
+remain mandatory deployment gates.

@@ -5,6 +5,8 @@ export type Principal = { workspace_id: string; agent_id: string; roles: string[
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const DIGEST = /^[0-9a-f]{64}$/;
 export const MAX_BODY = 16 * 1024 * 1024;
+// A 2 MiB canonical rows array plus JSON envelope/transport whitespace.
+export const MAX_FACT_STAGE_BODY = 3 * 1024 * 1024;
 export const MAX_ARTIFACT = 8 * 1024 * 1024;
 
 export class Fault extends Error {

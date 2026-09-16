@@ -1,4 +1,4 @@
-import { bounded, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
+import { bounded, digest, Fault, fields, Json, MAX_FACT_STAGE_BODY, object, Principal, requireThat, text, uuid } from "./shared";
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
@@ -29,13 +29,20 @@ export default {
       const url = new URL(request.url);
       requireThat(request.method === "POST" && url.search === "" && url.pathname === "/v1/core", "not_found", 404);
       let message;
-      try { message = object(JSON.parse(new TextDecoder().decode(await bounded(request.body)))); }
+      let bodyBytes: Uint8Array;
+      try {
+        bodyBytes = await bounded(request.body);
+        message = object(JSON.parse(new TextDecoder().decode(bodyBytes)));
+      }
       catch (error) { if (error instanceof Fault) throw error; throw new Fault(400, "invalid_json"); }
       fields(message, ["protocol", "id", "method", "params", "idempotency_key", "request_sha256"], ["protocol", "method", "params"]);
       requireThat(message.protocol === PROTOCOL, "invalid_protocol");
       requestId = message.id ?? null;
       const methodName = text(message.method, 128);
       method = methodName;
+      if (methodName === "ct_collector_stage_fact_rows") {
+        requireThat(bodyBytes.length <= MAX_FACT_STAGE_BODY, "body_too_large", 413);
+      }
       const role = methodName === "ct_connection_status" ? "authenticated" : COLLECT.has(methodName) ? "collect" : READ.has(methodName) ? "read" : null;
       requireThat(role, "not_found", 404);
       requireThat(role === "authenticated" || principal.roles.includes(role) || principal.roles.includes("owner"), "capability_required", 403);

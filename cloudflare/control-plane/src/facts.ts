@@ -10,7 +10,9 @@ export const FACT_KIND_LIMITS: Record<string, number> = {
 const FACT_ROW_BATCH_MAX = 512;
 const FACT_READ_PAGE_MAX = 2048;
 const FACT_PUBLICATION_MAX_GRAPHS = 512;
+const MAX_FACT_ROWS_PER_GRAPH = 131_072;
 const MAX_FACT_SET_BYTES = 16 * 1024 * 1024;
+const MAX_FACT_DIGEST_BASIS_BYTES = 16 * 1024 * 1024;
 const MAX_FACT_ROW_BYTES = 512 * 1024;
 const FACT_READ_PAGE_MAX_BYTES = 1024 * 1024;
 const FACT_PUBLICATION_MAX_BYTES = 96 * 1024 * 1024;
@@ -23,9 +25,6 @@ const PUBLISHED_COMMANDS = new Set([
   "wrangler", "yarn", "zsh",
 ]);
 export function initializeFacts(state: State) {
-  const normalizedStagingExists = state.sql.exec<{ present: number }>(
-    "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='staged_fact_items'",
-  ).toArray().length > 0;
   state.sql.exec(`CREATE TABLE IF NOT EXISTS staged_fact_rows (
     agent_id TEXT NOT NULL, graph_id TEXT NOT NULL, fact_set_digest TEXT NOT NULL,
     batch_index INTEGER NOT NULL, batch_count INTEGER NOT NULL,
@@ -40,6 +39,8 @@ export function initializeFacts(state: State) {
       ON fact_rows(graph_id, kind, fact_id) WHERE valid_to_sequence IS NULL;
     CREATE INDEX IF NOT EXISTS fact_rows_session
       ON fact_rows(fact_id) WHERE kind = 'session';
+    CREATE TABLE IF NOT EXISTS fact_schema (
+      id INTEGER PRIMARY KEY CHECK (id=1), version INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS staged_fact_items (
       agent_id TEXT NOT NULL, graph_id TEXT NOT NULL, fact_set_digest TEXT NOT NULL,
       batch_index INTEGER NOT NULL, kind TEXT NOT NULL, fact_id TEXT NOT NULL,
@@ -55,10 +56,18 @@ export function initializeFacts(state: State) {
       generation INTEGER NOT NULL, fact_count INTEGER NOT NULL, batch_count INTEGER NOT NULL,
       encoded_bytes INTEGER NOT NULL, manifest TEXT NOT NULL,
       PRIMARY KEY (agent_id, graph_id, fact_set_digest));`);
-  if (!normalizedStagingExists) {
+  const version = state.sql.exec<{ version: number }>(
+    "SELECT version FROM fact_schema WHERE id=1").toArray()[0]?.version ?? 0;
+  if (version < 1) {
     // Staging is retryable and invisible. Discard pre-upgrade batches so their
-    // normalized rows are restaged under the bounded SQL validation path.
-    state.sql.exec("DELETE FROM staged_fact_rows");
+    // normalized rows are restaged. The enclosing storage transaction makes
+    // table creation, cleanup, and the version marker one crash-safe migration.
+    state.sql.exec(`DELETE FROM staged_fact_rows;
+      DELETE FROM staged_fact_items;
+      DELETE FROM staged_fact_generations;
+      DELETE FROM validated_fact_graphs;
+      INSERT INTO fact_schema VALUES(1,1)
+        ON CONFLICT(id) DO UPDATE SET version=excluded.version;`);
   }
 }
 
@@ -154,7 +163,11 @@ export function missingFactRows(state: State, request: Json): Json {
   validate("ct_collector_missing_fact_rows", request);
   const graphId = uuid(request.graph_id);
   const staged = new Set(state.sql.exec<{ batch_index: number }>(
-    "SELECT batch_index FROM staged_fact_rows WHERE agent_id=? AND graph_id=? AND fact_set_digest=?",
+    `SELECT batch.batch_index FROM staged_fact_rows batch
+     WHERE batch.agent_id=? AND batch.graph_id=? AND batch.fact_set_digest=?
+       AND batch.row_count=(SELECT count(*) FROM staged_fact_items item
+         WHERE item.agent_id=batch.agent_id AND item.graph_id=batch.graph_id
+         AND item.fact_set_digest=batch.fact_set_digest AND item.batch_index=batch.batch_index)`,
     request.agent_id, graphId, request.fact_set_digest).toArray().map(row => row.batch_index));
   const missing: number[] = [];
   for (let index = 0; index < request.batch_count; index++) if (!staged.has(index)) missing.push(index);
@@ -205,10 +218,15 @@ async function validateStagedGraph(state: State, agentId: string, publication: J
     "fact_rows_incomplete", 409);
   const factCount = batches.reduce((total, batch) => total + batch.row_count, 0);
   requireThat(factCount === publication.fact_count, "fact_count_mismatch");
+  requireThat(factCount <= MAX_FACT_ROWS_PER_GRAPH, "fact_row_cardinality_exceeded", 413);
   const normalizedCount = state.sql.exec<{ count: number }>(
     "SELECT count(*) AS count FROM staged_fact_items WHERE agent_id=? AND graph_id=? AND fact_set_digest=?",
     ...scope).one().count;
   requireThat(normalizedCount === factCount, "fact_rows_incomplete", 409);
+  const combinedRowsBytes = batches.reduce((total, batch) => total + batch.encoded_bytes, 0)
+    - batches.filter(batch => batch.row_count > 0).length + 1;
+  const encodedBytes = new TextEncoder().encode(stable(factSetView(publication, []))).length - 2 + combinedRowsBytes;
+  requireThat(encodedBytes <= MAX_FACT_SET_BYTES, "fact_set_too_large", 413);
 
   requireNoRows(state,
     `SELECT 1 FROM staged_fact_items WHERE agent_id=? AND graph_id=? AND fact_set_digest=?
@@ -397,16 +415,15 @@ async function validateStagedGraph(state: State, agentId: string, publication: J
   requireThat(summary.sessions === (counts.session ?? 0) && summary.turns === (counts.turn ?? 0)
     && summary.items === (counts.item ?? 0), "graph_summary_count_mismatch");
 
-  const rowsManifest = state.sql.exec<{ value: string }>(
-    `SELECT '['||coalesce(group_concat(entry,','),'')||']' AS value FROM (
-       SELECT json_array(kind,fact_id,row_hash) AS entry FROM staged_fact_items
-       WHERE ${where} ORDER BY kind,fact_id)`, ...scope).one().value;
-  const digestBasis = `{"graph_id":${JSON.stringify(graphId)},"rows":${rowsManifest},"schema_version":${JSON.stringify(FACT_SET_SCHEMA)}}`;
-  requireThat(await digest(digestBasis) === publication.fact_set_digest, "fact_set_digest_mismatch");
-  const combinedRowsBytes = batches.reduce((total, batch) => total + batch.encoded_bytes, 0)
-    - batches.filter(batch => batch.row_count > 0).length + 1;
-  const encodedBytes = new TextEncoder().encode(stable(factSetView(publication, []))).length - 2 + combinedRowsBytes;
-  requireThat(encodedBytes <= MAX_FACT_SET_BYTES, "fact_set_too_large", 413);
+  const digestBasis = state.sql.exec<{ value: string; bytes: number }>(
+    `SELECT value,length(CAST(value AS BLOB)) AS bytes FROM (
+       SELECT '{"graph_id":'||json_quote(?)||',"rows":['||coalesce(group_concat(entry,','),'')||
+         '],"schema_version":'||json_quote(?)||'}' AS value FROM (
+         SELECT json_array(kind,fact_id,row_hash) AS entry FROM staged_fact_items
+         WHERE ${where} ORDER BY kind,fact_id))`, graphId, FACT_SET_SCHEMA, ...scope).one();
+  requireThat(digestBasis.bytes <= MAX_FACT_DIGEST_BASIS_BYTES,
+    "fact_digest_basis_too_large", 413);
+  requireThat(await digest(digestBasis.value) === publication.fact_set_digest, "fact_set_digest_mismatch");
   const generation = state.sql.exec<{ generation: number }>(
     "SELECT generation FROM staged_fact_generations WHERE agent_id=? AND graph_id=?", agentId, graphId).one().generation;
   requireThat(generation === initialGeneration, "fact_staging_changed", 409);

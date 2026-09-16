@@ -28,6 +28,7 @@ from coding_trajectory.control_plane.collector import (
     _fact_row_batches,
 )
 from coding_trajectory.control_plane.collector_protocol import (
+    CollectorRecoveryRequest,
     LeaseHeartbeatRequest,
     LivingObservationRequest,
     ObservationRequest,
@@ -102,6 +103,42 @@ def check(condition: object, label: str) -> None:
     if not condition:
         raise AssertionError(label)
     checks += 1
+
+
+def verify_restart_receipt(path: Path) -> None:
+    """Verify one synthetic committed publication after local Worker restart."""
+
+    state = json.loads(path.read_text())
+    remote = CloudflareCollectorRemote(url=URL, access_token=TOKENS["owner"])
+    try:
+        request = FactPublicationRequest.model_validate(state["request"])
+        receipt = remote.publish_facts(request, idempotency_key=state["key"])
+        check(
+            receipt.model_dump(mode="json") == state["receipt"],
+            "process restart preserves publication retry receipt",
+        )
+        recovery = remote.recover(
+            CollectorRecoveryRequest(
+                workspace_id=WORKSPACE,
+                agent_id=AGENT,
+                project_id=request.project_id,
+                publication_idempotency_key=state["key"],
+            )
+        )
+        check(
+            recovery.publication_receipt == state["receipt"],
+            "process restart recovery finds publication receipt",
+        )
+        conflicting = request.model_copy(update={"replacement_scope": "upsert"})
+        rpc(
+            "ct_collector_publish_facts",
+            conflicting.wire_payload(),
+            status=409,
+            key=state["key"],
+        )
+    finally:
+        remote.close()
+    print(json.dumps({"status": "ok", "checks": checks, "restart_recovery": True}))
 
 
 def rpc(
@@ -770,6 +807,10 @@ def main() -> None:
     parsed = urlparse(URL)
     if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise SystemExit("qualification refuses a non-loopback CT_QUALIFY_URL")
+    restart_verify = os.environ.get("CT_QUALIFY_RESTART_VERIFY")
+    if restart_verify:
+        verify_restart_receipt(Path(restart_verify))
+        return
     tag = uuid4().hex
     captured = datetime.now(UTC).replace(microsecond=0)
     remote = CloudflareCollectorRemote(url=URL, access_token=TOKENS["owner"])
@@ -868,28 +909,67 @@ def main() -> None:
     )
     for fact_set in (first_a, first_b):
         stage_fact_set(remote, fact_set=fact_set)
+    publication_0_request = FactPublicationRequest(
+        workspace_id=WORKSPACE,
+        agent_id=AGENT,
+        project_id=project.project_id,
+        publication_sequence=0,
+        source_vector=[
+            SourceVectorEntry(
+                source_id=source.source_id,
+                source_epoch=source.source_epoch,
+                source_sequence=0,
+                content_sha256=checkpoint_digest_0,
+            )
+        ],
+        graphs=[
+            manifest(first_a, source_id=source.source_id, observed_at=captured),
+            manifest(first_b, source_id=source.source_id, observed_at=captured),
+        ],
+    )
+    publication_0_key = "publication:" + tag + ":0"
     publication_0 = remote.publish_facts(
-        FactPublicationRequest(
+        publication_0_request, idempotency_key=publication_0_key
+    )
+    check(publication_0.details["graphs_published"] == 2, "initial fact publication")
+    check(
+        remote.publish_facts(publication_0_request, idempotency_key=publication_0_key)
+        == publication_0,
+        "lost publication response retries immediately without restaging",
+    )
+    conflicting_publication = publication_0_request.model_copy(
+        update={"replacement_scope": "upsert"}
+    )
+    rpc(
+        "ct_collector_publish_facts",
+        conflicting_publication.wire_payload(),
+        status=409,
+        key=publication_0_key,
+    )
+    recovered_publication = remote.recover(
+        CollectorRecoveryRequest(
             workspace_id=WORKSPACE,
             agent_id=AGENT,
             project_id=project.project_id,
-            publication_sequence=0,
-            source_vector=[
-                SourceVectorEntry(
-                    source_id=source.source_id,
-                    source_epoch=source.source_epoch,
-                    source_sequence=0,
-                    content_sha256=checkpoint_digest_0,
-                )
-            ],
-            graphs=[
-                manifest(first_a, source_id=source.source_id, observed_at=captured),
-                manifest(first_b, source_id=source.source_id, observed_at=captured),
-            ],
-        ),
-        idempotency_key="publication:" + tag + ":0",
+            publication_idempotency_key=publication_0_key,
+        )
     )
-    check(publication_0.details["graphs_published"] == 2, "initial fact publication")
+    check(
+        recovered_publication.publication_receipt
+        == publication_0.model_dump(mode="json"),
+        "collector recovery returns the atomically committed publication receipt",
+    )
+    restart_state = os.environ.get("CT_QUALIFY_RESTART_STATE")
+    if restart_state:
+        Path(restart_state).write_text(
+            json.dumps(
+                {
+                    "request": publication_0_request.wire_payload(),
+                    "key": publication_0_key,
+                    "receipt": publication_0.model_dump(mode="json"),
+                }
+            )
+        )
     pinned_sequence = publication_0.committed_sequence
     assert pinned_sequence is not None
 
