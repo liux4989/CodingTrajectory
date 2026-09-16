@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from coding_trajectory.control_plane.published_facts import FactIndex
 from coding_trajectory.discovery import (
     DiscoverySource,
     discover_project_metadata,
@@ -142,6 +143,13 @@ class IndexCache:
         for root_session_id in store.session_graphs:
             root = str(root_session_id)
             self.entrypoint_to_root[root] = root
+
+    def index_facts(self, facts: FactIndex) -> None:
+        """Record graph, session, and turn ownership from publication facts."""
+        for row in facts.canonical_rows:
+            if row.kind not in {"graph", "session", "turn"}:
+                continue
+            self.entrypoint_to_root[str(row.fact_id)] = str(row.graph_id)
 
     def index_discovery(
         self,

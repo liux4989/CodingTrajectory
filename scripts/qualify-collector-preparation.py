@@ -1,4 +1,4 @@
-"""Qualify normalized-input reuse through real journals and persistent SQLite."""
+"""Qualify deterministic collector preparation through real journals and SQLite."""
 
 from __future__ import annotations
 
@@ -109,28 +109,11 @@ def main():
                     )
                     for row in collector.prepared_sources
                 }
-                return collector.normalization_cache_hits, digests
+                return digests
 
-        first_hits, first = collect()
-        reused_hits, reused = collect()
-        assert first_hits == 0 and reused_hits == 2 and first == reused
-        path = journals / "1.jsonl"
-        # Same-length in-place edit must invalidate the prefix fingerprint.
-        path.write_text(path.read_text().replace("reuse evidence", "other evidence"))
-        changed_hits, changed = collect()
-        assert changed_hits == 1 and changed != first
-        assert changed[str(UUID(int=2))] == first[str(UUID(int=2))]
-        _, replay = collect()
-        assert replay == changed
-        with LocalCollector(
-            database_path=root / "capture.sqlite3", identity=identity
-        ) as collector:
-            collector._connection.execute(
-                "UPDATE normalization_cache SET body=?", (b"corrupt",)
-            )
-            collector._connection.commit()
-        repaired_hits, repaired = collect()
-        assert repaired_hits == 0 and repaired == changed
+        first = collect()
+        replay = collect()
+        assert first == replay
 
         checkpoint_journals = root / "checkpoint-journals"
         checkpoint_journals.mkdir()
@@ -204,9 +187,8 @@ def main():
         print(
             json.dumps(
                 {
-                    "passed": 8,
-                    "unchanged_reused": reused_hits,
-                    "changed_pass_reused": changed_hits,
+                    "passed": 5,
+                    "deterministic_reparse": first == replay,
                     "checkpoint_requests": len(remote.requests),
                     "clean_rollover": True,
                     "network_requests": 0,

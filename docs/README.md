@@ -10,6 +10,7 @@ governed by the [authority boundaries RFC](authority-boundaries.md).
 | [Chronicle history](chronicle-history.md) | Private operational schema, privacy boundary, replay, and publication bounds |
 | [Authority boundaries](authority-boundaries.md) | Accepted evidence, canonical, publication, and query ownership |
 | [Direct published facts](refactor/direct-published-facts.md) | Aggregate-free publication implementation and qualification |
+| [Indexed historical facts](refactor/fact-index-read-view.md) | Bounded read index, measured cache decision, and staging evidence |
 | [Remote control plane](remote-ct-control-plane-design.md) | Historical, inventory, and living authorities |
 | [Collector handoff](local-collector-handoff.md) | Local collection, delivery recovery, and deployment gates |
 | [CLI](cli.md) and [session API](session-api-redesign.md) | Public usage and progressive evidence retrieval |

@@ -18,6 +18,13 @@ from uuid import UUID
 
 from coding_trajectory import debug
 from coding_trajectory.contracts import service_contract
+from coding_trajectory.control_plane.published_facts import (
+    FactIndex,
+    GraphFactPayload,
+    SessionFactPayload,
+    session_graph_from_fact_index,
+)
+from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import SessionGraph
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 from coding_trajectory.service.serializers import (
@@ -42,7 +49,7 @@ MAX_GRAPH_USAGE_TURNS = 4096
 
 @dataclass(frozen=True)
 class ServiceContext:
-    store: DocumentStore
+    store: DocumentStore | FactIndex
     global_scope: bool
     current_dir: Path
     discovery_note: str
@@ -56,7 +63,7 @@ def dispatch(
     method: str,
     params: dict[str, Any],
     *,
-    store: DocumentStore,
+    store: DocumentStore | FactIndex,
     global_scope: bool,
     current_dir: Path,
     discovery_note: str,
@@ -71,7 +78,10 @@ def dispatch(
         discovery_note=discovery_note,
         cache=cache,
     )
-    context.cache.index_store(context.store)
+    if isinstance(context.store, FactIndex):
+        context.cache.index_facts(context.store)
+    else:
+        context.cache.index_store(context.store)
     try:
         handler = SERVICE_HANDLERS[method]
     except KeyError as exc:
@@ -96,6 +106,67 @@ def _select_session_graph(session_graph: SessionGraph, session_id: str) -> Sessi
     )
 
 
+def _resolve_historical_graph(
+    store: DocumentStore | FactIndex, raw_id: str | None
+) -> SessionGraph:
+    if isinstance(store, DocumentStore):
+        return _resolve_session_graph(store, raw_id)
+    if raw_id is None:
+        if len(store.graph_ids) == 1:
+            return session_graph_from_fact_index(store, store.graph_ids[0])
+        if not store.graph_ids:
+            raise ValueError("no session_graphs found in store")
+        raise ValueError(
+            "session_id is required when the store contains multiple session_graphs"
+        )
+    graph_id = store.graph_id_for_entrypoint(_parse_user_id(raw_id))
+    if graph_id is None:
+        raise ResourceNotFoundError(f"resource not found: {raw_id}")
+    return session_graph_from_fact_index(store, graph_id)
+
+
+def _fact_graphs(
+    facts: FactIndex,
+    *,
+    global_scope: bool,
+    current_dir: Path,
+    project_name: str | None,
+    agent_vendor: str | None,
+) -> list[SessionGraph]:
+    selected: list[tuple[str, UUID]] = []
+    current_project = (
+        normalize_project_key(current_dir.name)
+        if not global_scope and project_name is None
+        else None
+    )
+    requested_project = (
+        normalize_project_key(project_name) if project_name is not None else None
+    )
+    for graph_id in facts.graph_ids:
+        graph_payload = facts.payload(graph_id, "graph", graph_id)
+        assert isinstance(graph_payload, GraphFactPayload)
+        project = graph_payload.summary.project
+        normalized_project = normalize_project_key(project) if project else None
+        if current_project is not None and normalized_project != current_project:
+            continue
+        if requested_project is not None and normalized_project != requested_project:
+            continue
+        if agent_vendor is not None and not any(
+            isinstance(row.payload, SessionFactPayload)
+            and row.payload.vendor.value == agent_vendor
+            for row in facts.rows_for_graph(graph_id)
+            if row.kind == "session"
+        ):
+            continue
+        selected.append((project or "", graph_id))
+    return [
+        session_graph_from_fact_index(facts, graph_id)
+        for _project, graph_id in sorted(
+            selected, key=lambda value: (value[0], str(value[1]))
+        )
+    ]
+
+
 def _graph_handler(
     build: Callable[[dict[str, Any], SessionGraph], Any],
 ) -> ServiceHandler:
@@ -104,7 +175,7 @@ def _graph_handler(
     @wraps(build)
     def wrapper(params: dict[str, Any], context: ServiceContext) -> Any:
         root_session_id = params["root_session_id"]
-        session_graph = _resolve_session_graph(context.store, root_session_id)
+        session_graph = _resolve_historical_graph(context.store, root_session_id)
         from coding_trajectory.analysis.orchestration_runs import (
             orchestration_run_for_entrypoint,
         )
@@ -127,7 +198,7 @@ def _session_handler(
     @wraps(build)
     def wrapper(params: dict[str, Any], context: ServiceContext) -> Any:
         session_id = params["session_id"]
-        session_graph = _resolve_session_graph(context.store, session_id)
+        session_graph = _resolve_historical_graph(context.store, session_id)
         selected_graph = _select_session_graph(session_graph, session_id)
         return _public_output_for_session_graph(
             selected_graph, build(params, selected_graph)
@@ -146,14 +217,23 @@ def _handle_project_sessions(
     )
     from coding_trajectory.metrics import build_session_graph_usage
 
-    session_graphs = resolve_collection(
-        context.store,
-        "session_graph",
-        global_scope=context.global_scope,
-        current_dir=context.current_dir,
-        project_name=params.get("project_name"),
-        agent_vendor=params.get("agent_vendor"),
-    )
+    if isinstance(context.store, FactIndex):
+        session_graphs = _fact_graphs(
+            context.store,
+            global_scope=context.global_scope,
+            current_dir=context.current_dir,
+            project_name=params.get("project_name"),
+            agent_vendor=params.get("agent_vendor"),
+        )
+    else:
+        session_graphs = resolve_collection(
+            context.store,
+            "session_graph",
+            global_scope=context.global_scope,
+            current_dir=context.current_dir,
+            project_name=params.get("project_name"),
+            agent_vendor=params.get("agent_vendor"),
+        )
     items: list[dict[str, Any]] = []
     for lineage_graph in session_graphs:
         for graph in orchestration_runs(lineage_graph):
@@ -208,6 +288,8 @@ def _handle_living_events(
 ) -> dict[str, Any]:
     from coding_trajectory.living_events import query_living_events
 
+    if not isinstance(context.store, DocumentStore):
+        raise TypeError("living.events requires a canonical document store")
     return query_living_events(
         params,
         document_store=context.store,
@@ -261,7 +343,7 @@ def _handle_session_tree(params: dict[str, Any], context: ServiceContext) -> Any
     )
 
     session_id = params["session_id"]
-    session_graph = _resolve_session_graph(context.store, session_id)
+    session_graph = _resolve_historical_graph(context.store, session_id)
     tree = build_conversation_tree(session_graph)
     run = orchestration_run_for_entrypoint(session_graph, _parse_user_id(session_id))
     tree["selected_branch_id"] = str(run.root_session_id)
@@ -416,7 +498,7 @@ def _handle_session_events(
     """
     from coding_trajectory.ingestion.indexes import build_session_graph_index
 
-    session_graph = _resolve_session_graph(context.store, params["session_id"])
+    session_graph = _resolve_historical_graph(context.store, params["session_id"])
     session_graph = _select_session_graph(session_graph, params["session_id"])
     selected_turn_id = params.get("turn_id")
     index = build_session_graph_index(session_graph)
@@ -601,7 +683,7 @@ def _handle_session_items(
 ) -> dict[str, Any]:
     """Return bounded metadata, measurements, and processed output evidence."""
 
-    session_graph = _resolve_session_graph(context.store, params["session_id"])
+    session_graph = _resolve_historical_graph(context.store, params["session_id"])
     session_graph = _select_session_graph(session_graph, params["session_id"])
     selected_turn_id = params.get("turn_id")
     types_filter = set(params["types"]) if params.get("types") else None

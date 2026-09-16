@@ -13,10 +13,12 @@ from coding_trajectory.control_plane.fact_repository import (
     LocalPublishedFactRepository,
 )
 from coding_trajectory.control_plane.published_facts import (
+    FactIndex,
     FactRow,
     PublishedFactSet,
     compute_fact_set_digest,
     compute_row_hash,
+    session_graph_from_fact_index,
 )
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.service.handlers import dispatch
@@ -31,7 +33,6 @@ def main() -> None:
         str(ROOT / "scripts" / "qualify-cloudflare-control-plane.py")
     )
     build = qualification["build_published_fact_set"]
-    invert = qualification["session_graph_from_fact_set"]
     facts = qualification["synthetic_edge_fact_set"](
         seed="direct-published-facts", project="synthetic"
     )
@@ -49,7 +50,8 @@ def main() -> None:
         "output_evidence",
     }
     assert set(facts.kind_counts) == expected_kinds
-    replay = build(invert(facts))
+    indexed = FactIndex.from_fact_sets([facts])
+    replay = build(session_graph_from_fact_index(indexed, facts.graph_id))
     assert replay.model_dump_json(exclude_none=True) == facts.model_dump_json(
         exclude_none=True
     )
@@ -112,7 +114,9 @@ def main() -> None:
     )
     assert secret not in secret_facts.model_dump_json(exclude_none=True)
 
-    canonical = DocumentStore.from_session_graphs([invert(facts)])
+    canonical = DocumentStore.from_session_graphs(
+        [session_graph_from_fact_index(indexed, facts.graph_id)]
+    )
 
     class Client:
         def call(self, method, _params):

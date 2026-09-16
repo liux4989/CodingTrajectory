@@ -72,12 +72,13 @@ The remote Durable Object is authoritative for facts published at a workspace
 sequence. It is not authoritative for raw evidence or canonical interpretation,
 and it is rebuildable from retained local sources.
 
-The current Python query bridge reconstructs a bounded `SessionGraph` from
-validated facts so existing shared handlers retain one meaning. This is a
-transitional implementation boundary, not a claim that reconstructed canonical
-stores are the final or smallest read model. A future typed `FactIndex` may
-replace the bridge only if the same shared handlers consume it without parallel
-fact-specific or TypeScript summary semantics.
+Python repositories retain one bounded `FactIndex` over validated rows. It owns
+only kind, identity, parent, graph ownership, canonical-order, and typed-payload
+lookup. Shared handlers materialize the one selected `SessionGraph` when their
+existing semantic implementation requires it; `project.sessions` materializes
+all graphs remaining after indexed project/vendor selection. No repository
+reconstructs or caches a full `DocumentStore`, and no fact-specific or
+TypeScript summary semantics exist.
 
 ## Why the former remote was “only a copy”
 

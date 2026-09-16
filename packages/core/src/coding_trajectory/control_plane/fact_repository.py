@@ -1,10 +1,10 @@
 """One internal ``FactRepository`` contract for historical fact authorities.
 
-Local execution derives an in-memory ``PublishedFactSet`` from canonical
-session graphs; remote execution fetches selected SQL fact
-pages from the Cloudflare authority. Both reconstruct the identical bounded
-representation before the shared Python historical handlers run, so summary,
-overview, search, metrics, and display semantics are owned exactly once.
+Local execution derives validated ``PublishedFactSet`` rows from canonical
+session graphs; remote execution fetches the same rows from the Cloudflare
+authority. Both expose one indexed read view to the shared Python historical
+handlers, so summary, overview, search, metrics, and display semantics remain
+owned exactly once.
 """
 
 from __future__ import annotations
@@ -22,10 +22,10 @@ from coding_trajectory.control_plane.fact_protocol import (
     FactReadResponse,
 )
 from coding_trajectory.control_plane.published_facts import (
+    FactIndex,
     FactRow,
     PublishedFactSet,
     compute_fact_set_digest,
-    session_graph_from_fact_set,
 )
 from coding_trajectory.control_plane.remote import (
     CloudflareRpcClient,
@@ -36,7 +36,7 @@ from coding_trajectory.query import DocumentStore
 
 
 class FactRepository(Protocol):
-    """Supply handler-ready stores from one local or remote fact authority."""
+    """Supply indexed rows from one local or remote fact authority."""
 
     def pin_snapshot(self) -> int: ...
 
@@ -58,12 +58,10 @@ def published_fact_set_for_store(store: DocumentStore) -> list[PublishedFactSet]
     ]
 
 
-def document_store_from_fact_sets(fact_sets: list[PublishedFactSet]) -> DocumentStore:
-    """Rebuild the handler store from validated fact sets."""
+def fact_index_for_store(store: DocumentStore) -> FactIndex:
+    """Project a canonical store once into the bounded historical read view."""
 
-    graphs = [session_graph_from_fact_set(fact_set) for fact_set in fact_sets]
-    store = DocumentStore.from_session_graphs(graphs)
-    return store
+    return FactIndex.from_fact_sets(published_fact_set_for_store(store))
 
 
 class LocalPublishedFactRepository:
@@ -76,12 +74,15 @@ class LocalPublishedFactRepository:
         current_dir: Path,
         cache: Any,
         resolve: Callable[..., tuple[DocumentStore, str]] | None = None,
+        require_available: Callable[[bool], None] | None = None,
     ) -> None:
         self.global_scope = global_scope
         self.current_dir = current_dir
         self.cache = cache
         self._resolve = resolve
-        self._stores: dict[tuple[Any, ...], tuple[DocumentStore, str]] = {}
+        self._require_available = require_available
+        self._indexes: dict[tuple[Any, ...], tuple[FactIndex, str]] = {}
+        self._batch_key: tuple[Any, ...] | None = None
 
     def pin_snapshot(self) -> int:
         """Local sources are read live and therefore have no snapshot number."""
@@ -90,24 +91,39 @@ class LocalPublishedFactRepository:
 
     def prepare_batch(self, requests: list[dict[str, Any]]) -> None:
         ids = entrypoint_ids(requests)
-        if ids:
-            self.store_for("session.tree", {"session_ids": ids})
+        if not ids:
+            return
+        store, note = self._resolve_store(
+            "session.tree", {"session_ids": ids}, ("batch",)
+        )
+        self._check_available(bool(store.session_graphs))
+        key = fact_store_key(
+            {"session_ids": ids},
+            global_scope=self.global_scope,
+            include_descendants=True,
+        )
+        self._indexes[key] = (fact_index_for_store(store), note)
+        self._batch_key = key
 
-    def store_for(
-        self, method: str, params: dict[str, Any]
-    ) -> tuple[DocumentStore, str]:
+    def store_for(self, method: str, params: dict[str, Any]) -> tuple[FactIndex, str]:
+        if self._batch_key is not None and entrypoint_ids_from_params(params):
+            indexed = self._indexes[self._batch_key]
+            self._check_available(bool(indexed[0].graph_ids))
+            return indexed
         key = fact_store_key(
             params,
             global_scope=self.global_scope,
             include_descendants=requires_graph_scope(method),
         )
-        if key not in self._stores:
+        if key not in self._indexes:
             store, note = self._resolve_store(method, params, key)
-            self._stores[key] = (
-                document_store_from_fact_sets(published_fact_set_for_store(store)),
-                note,
-            )
-        return self._stores[key]
+            self._check_available(bool(store.session_graphs))
+            self._indexes[key] = (fact_index_for_store(store), note)
+        return self._indexes[key]
+
+    def _check_available(self, has_graphs: bool) -> None:
+        if self._require_available is not None:
+            self._require_available(has_graphs)
 
     def _resolve_store(
         self, method: str, params: dict[str, Any], key: tuple[Any, ...]
@@ -148,7 +164,7 @@ class CloudflareFactRepository:
         self._client = client
         self.workspace_id = workspace_id
         self.snapshot_sequence = snapshot_sequence
-        self._stores: dict[str, tuple[DocumentStore, str]] = {}
+        self._indexes: dict[str, tuple[FactIndex, str]] = {}
 
     def close(self) -> None:
         self._client.close()
@@ -164,19 +180,17 @@ class CloudflareFactRepository:
             )
         return self.snapshot_sequence
 
-    def store_for(
-        self, method: str, params: dict[str, Any]
-    ) -> tuple[DocumentStore, str]:
+    def store_for(self, method: str, params: dict[str, Any]) -> tuple[FactIndex, str]:
         validated = service_contract(method).validate_request(params)
         scope = fact_read_scope(validated)
         key = json.dumps(scope, sort_keys=True, default=str)
-        if key not in self._stores:
+        if key not in self._indexes:
             fact_sets = self._read_fact_sets(scope)
-            self._stores[key] = (
-                document_store_from_fact_sets(fact_sets),
+            self._indexes[key] = (
+                FactIndex.from_fact_sets(fact_sets),
                 f"remote workspace snapshot {self.snapshot_sequence}",
             )
-        return self._stores[key]
+        return self._indexes[key]
 
     def _read_fact_sets(self, scope: dict[str, Any]) -> list[PublishedFactSet]:
         rows: list[FactRow] = []
@@ -362,9 +376,9 @@ __all__ = [
     "FactRepository",
     "LocalPublishedFactRepository",
     "discovery_params",
-    "document_store_from_fact_sets",
     "entrypoint_ids",
     "entrypoint_ids_from_params",
+    "fact_index_for_store",
     "fact_store_key",
     "published_fact_set_for_store",
     "requires_graph_scope",

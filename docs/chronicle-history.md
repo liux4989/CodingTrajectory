@@ -11,9 +11,13 @@ format or a second canonical graph model.
 source records or repairs deduplication/accounting. Missing canonical coverage is
 reported as unavailable rather than replaced with zero.
 
-`session_graph_from_fact_set(PublishedFactSet)` performs the direct inverse for
-shared handlers. It validates identities, ownership, ordering, references,
-hashes, cardinality, privacy policy, and encoded bounds before reconstruction.
+`FactIndex.from_fact_sets(...)` indexes already-validated rows without deriving
+new meaning. Local projection and remote reads feed the same index. Shared
+handlers materialize only the selected graph through
+`session_graph_from_fact_index`; aggregate project inventory first applies
+indexed project/vendor selection. Validation of identities, ownership, ordering,
+references, hashes, cardinality, privacy policy, and encoded bounds remains on
+`PublishedFactSet` before indexing.
 
 Published facts retain bounded identity, topology, ordering, lifecycle,
 measurement, request/model/runtime, normalized event-envelope, and tool-evidence

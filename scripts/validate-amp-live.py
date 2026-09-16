@@ -13,7 +13,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from coding_trajectory.control_plane.fact_projection import build_published_fact_set
-from coding_trajectory.control_plane.published_facts import session_graph_from_fact_set
+from coding_trajectory.control_plane.published_facts import (
+    FactIndex,
+    session_graph_from_fact_index,
+)
 from coding_trajectory.discovery import discover_store, stabilize_session
 from coding_trajectory.ingestion.adapters.amp import AmpAdapter
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
@@ -23,7 +26,6 @@ from coding_trajectory.ingestion.incremental import (
     rebuild_affected_session_graphs_from_files,
 )
 from coding_trajectory.ingestion.models import Vendor
-from coding_trajectory.query import DocumentStore
 from coding_trajectory.service.handlers import dispatch
 from coding_trajectory.service.store import IndexCache
 
@@ -187,7 +189,9 @@ def main() -> None:
                 "body" not in row.model_dump(mode="json", exclude_none=True)["payload"]
                 for row in publication.rows
             )
-            replay = session_graph_from_fact_set(publication)
+            replay = session_graph_from_fact_index(
+                FactIndex.from_fact_sets([publication]), publication.graph_id
+            )
             assert replay.edges == graph.edges
             assert replay.sessions[0].vendor == Vendor.AMP and len(replay.edges) == 1
             # Compact ingestion preserves IDs/topology independently of content.
@@ -271,9 +275,7 @@ def main() -> None:
                 result = dispatch(
                     method,
                     params,
-                    store=DocumentStore.from_session_graphs(
-                        [session_graph_from_fact_set(publication)]
-                    ),
+                    store=FactIndex.from_fact_sets([publication]),
                     global_scope=True,
                     current_dir=directory,
                     discovery_note="",

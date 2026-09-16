@@ -9,9 +9,9 @@ from uuid import UUID, uuid4
 from coding_trajectory.control_plane.fact_protocol import FactReadResponse
 from coding_trajectory.control_plane.fact_repository import (
     _fact_sets_from_rows,
-    document_store_from_fact_sets,
     published_fact_set_for_store,
 )
+from coding_trajectory.control_plane.published_facts import FactIndex
 from coding_trajectory.ingestion.models import (
     ContextUsageObservation,
     Event,
@@ -131,7 +131,7 @@ def main() -> None:
     ) == {**normalized_cumulative, "cost_usd": "0.125"}
     assert missing_row.payload.cumulative_usage is None
 
-    local_store = document_store_from_fact_sets(fact_sets)
+    local_store = FactIndex.from_fact_sets(fact_sets)
     assert_usage(local_store, current_usage, normalized_cumulative)
 
     response = FactReadResponse(
@@ -147,7 +147,7 @@ def main() -> None:
         digests=remote_response.graph_digests,
         counts=remote_response.graph_fact_counts,
     )
-    remote_store = document_store_from_fact_sets(remote_sets)
+    remote_store = FactIndex.from_fact_sets(remote_sets)
     assert_usage(remote_store, current_usage, normalized_cumulative)
     print(
         "Chronicle cumulative usage round trip: PASS (local facts and remote response)"
@@ -155,11 +155,18 @@ def main() -> None:
 
 
 def assert_usage(
-    store: DocumentStore,
+    store: FactIndex,
     current_usage: dict[str, int | float],
     cumulative_usage: dict[str, int | float],
 ) -> None:
-    observations = next(iter(store.sessions.values())).context_usage
+    session_id = store.graph_ids[0]
+    from coding_trajectory.control_plane.published_facts import (
+        session_graph_from_fact_index,
+    )
+
+    observations = (
+        session_graph_from_fact_index(store, session_id).sessions[0].context_usage
+    )
     assert len(observations) == 2
     by_event_id = {
         observation.source_event_id: observation for observation in observations
