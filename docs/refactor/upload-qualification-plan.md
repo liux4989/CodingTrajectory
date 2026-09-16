@@ -10,6 +10,11 @@ a publication. Maximum-capacity qualification is deferred until needed.
 
 ## Current starting point
 
+Execution update: the [seven-day pilot record](../internal-pilot-2026-09-17.md)
+supersedes the original deployment starting point below. The selected current
+build is deployed and reader-verified; the reviewed export awaits the explicit
+registry decision. The user has authorized that scoped upload.
+
 - The retained Worker is `coding-trajectory-control-plane`. Its recorded source
   is `2917baea8b980b40c733e155377ab498f5fa9bd9`, deployed as version
   `df81dc0b-6906-4a18-b9c2-bb87e39d4a4a`; this is not current `main`.

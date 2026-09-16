@@ -49,6 +49,7 @@ details, the frozen Core snapshot and current source are authoritative.
 
 | Document | Role |
 | --- | --- |
+| [Internal seven-day pilot](internal-pilot-2026-09-17.md) | Current build deployed and reader verified; reviewed export awaits the explicit registry decision |
 | [Production reader and registry recovery](credential-recovery-2026-09-17.md) | Fresh baseline identity, snapshot zero and empty inventory; historical registry recovery and remaining authority gap |
 | [Legacy Datahub retirement](datahub-retirement-2026-09-17.md) | Deleted both old Workers and their dedicated Access applications; Chronicle preserved |
 | [Completed targeted reset](targeted-reset-execution-2026-09-16.md) | Deployment evidence and credential blockers; not an executable reset procedure |
@@ -60,12 +61,10 @@ credential bootstrap and upload qualification depend on their deployment
 evidence. The temporary reset/recovery runtime — reset code, operations config,
 and its qualification script — is historical only and is not part of `main`.
 
-The publication bounds in these documents describe `main`: the larger graph and
-publication limits are merged there but not production-qualified or deployed.
-The [internal rollout](refactor/upload-qualification-plan.md) distinguishes the
-deployed clean baseline from the exact candidate still to select for the pilot.
-Deployment identity and positive reader access were freshly checked in the
-[2026-09-17 recovery record](credential-recovery-2026-09-17.md) and after Datahub
-retirement. The bounded upload remains pending; maximum-capacity work is deferred.
+The publication bounds in these documents describe `main`. The larger runtime
+is now deployed for the [internal seven-day pilot](internal-pilot-2026-09-17.md),
+with the exact source/version and fresh reader checks recorded there. The
+reviewed upload remains pending the registry decision; maximum-capacity work is
+deferred. Earlier reset and retirement records describe their historical versions.
 [Benchmark guidance](../benchmarks/README.md) separates reproducible inputs from
 regenerable reports.

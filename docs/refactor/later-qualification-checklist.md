@@ -8,6 +8,10 @@ Scope update (2026-09-17): the [three-job internal rollout](upload-qualification
 is the current pilot plan. Run the additional work below when its corresponding
 capability is needed; it does not block the first bounded collection/read flow.
 
+The newer runtime is now [deployed for the internal pilot](../internal-pilot-2026-09-17.md).
+The following dated note records its earlier deployment status; maximum-capacity
+qualification remains deferred.
+
 Status note (2026-09-16 cleanup): the Q-numbers reference the original
 qualification review record, which is not retained in this tree. The "16 MiB
 compatibility ceiling" named below was the publication/request bound at the
