@@ -844,7 +844,7 @@ def main() -> None:
     checkpoint_payload_0 = {
         "kind": "ct.source_checkpoint.v1",
         "source_checkpoint": {"segments": [100]},
-        "chronicle_digest": first_a.fact_set_digest,
+        "session_digest": first_a.fact_set_digest,
     }
     checkpoint_digest_0 = hashlib.sha256(
         canonical_json(checkpoint_payload_0).encode()
@@ -1307,7 +1307,7 @@ def main() -> None:
     checkpoint_payload_1 = {
         "kind": "ct.source_checkpoint.v1",
         "source_checkpoint": {"segments": [80]},
-        "chronicle_digest": second_a.fact_set_digest,
+        "session_digest": second_a.fact_set_digest,
     }
     checkpoint_digest_1 = hashlib.sha256(
         canonical_json(checkpoint_payload_1).encode()
@@ -1597,7 +1597,7 @@ def main() -> None:
     boundary_checkpoint = {
         "kind": "ct.source_checkpoint.v1",
         "source_checkpoint": {"segments": [sum(staged_sizes)]},
-        "chronicle_digest": hashlib.sha256(
+        "session_digest": hashlib.sha256(
             "".join(fact_set.fact_set_digest for fact_set in boundary_sets).encode()
         ).hexdigest(),
     }
@@ -1795,7 +1795,7 @@ def main() -> None:
         selector_checkpoint_payload = {
             "kind": "ct.source_checkpoint.v1",
             "source_checkpoint": {"segments": [index + 1]},
-            "chronicle_digest": hashlib.sha256(
+            "session_digest": hashlib.sha256(
                 f"{tag}:selector:{index}".encode()
             ).hexdigest(),
         }
@@ -1881,7 +1881,7 @@ def main() -> None:
     overflow_checkpoint_payload = {
         "kind": "ct.source_checkpoint.v1",
         "source_checkpoint": {"segments": [513]},
-        "chronicle_digest": hashlib.sha256(
+        "session_digest": hashlib.sha256(
             f"{tag}:selector:overflow".encode()
         ).hexdigest(),
     }

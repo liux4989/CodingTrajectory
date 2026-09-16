@@ -92,7 +92,7 @@ def benchmark_scale(
         checkpoint_payload = {
             "kind": "ct.source_checkpoint.v1",
             "source_checkpoint": {"segments": [encoded_bytes]},
-            "chronicle_digest": hashlib.sha256(
+            "session_digest": hashlib.sha256(
                 "".join(fact_set.fact_set_digest for fact_set in fact_sets).encode()
             ).hexdigest(),
         }

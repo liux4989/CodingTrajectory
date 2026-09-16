@@ -117,7 +117,7 @@ class SourceCheckpoint(CollectorModel):
 class SourceCheckpointPayload(CollectorModel):
     kind: Literal["ct.source_checkpoint.v1"] = "ct.source_checkpoint.v1"
     source_checkpoint: SourceCheckpoint
-    chronicle_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    session_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ObservationRequest(CollectorModel):
