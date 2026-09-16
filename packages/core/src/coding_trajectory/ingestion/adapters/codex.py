@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import re
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
+from coding_trajectory.ingestion.adapters import (
+    codex_collab,
+    codex_context,
+    codex_native_items,
+)
 from coding_trajectory.ingestion.adapters._shared import (
     SHARED_FILE_TOOL_NAMES,
     SHARED_PLAN_TOOL_NAMES,
@@ -23,20 +25,29 @@ from coding_trajectory.ingestion.adapters._shared import (
     preview_text,
 )
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
+from coding_trajectory.ingestion.adapters.codex_context import (
+    _codex_prompt_block_name,
+    _codex_user_prompt_block_name,
+    _context_source_observation,
+    _record_context_source,
+)
 from coding_trajectory.ingestion.adapters.codex_exec_parser import (
-    StaticExecInvocation,
     extract_static_exec_invocations,
+)
+from coding_trajectory.ingestion.adapters.codex_state import (
+    CodexParseState,
+    _codex_command_activity_source,
+    _PendingExecWrapper,
+    _tool_result_status,
+    _tool_status,
 )
 from coding_trajectory.ingestion.assembly import AssemblyHooks, assemble_session
 from coding_trajectory.ingestion.common import (
     extract_exit_code,
-    infer_tool_success,
     parse_iso_timestamp,
     source_is_living,
 )
 from coding_trajectory.ingestion.models import (
-    ContextSourceObservation,
-    ContextUsageObservation,
     EventType,
     RuntimeObservation,
     Session,
@@ -58,33 +69,11 @@ from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
 from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
     parent_session_id as codex_parent_session_id,
 )
-from coding_trajectory.ingestion.vendor_mechanisms.usage_metrics import (
-    context_usage_observation,
-    normalize_codex_token_count,
-)
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
 _CODEX_PREVIEW_MAX_LEN = 96
-
-_CACHE_RELEVANT_TURN_CONTEXT_FIELDS = (
-    "cwd",
-    "workspace_roots",
-    "current_date",
-    "timezone",
-    "approval_policy",
-    "approvals_reviewer",
-    "sandbox_policy",
-    "permission_profile",
-    "active_permission_profile",
-    "file_system_sandbox_policy",
-    "personality",
-    "collaboration_mode",
-    "multi_agent_version",
-    "multi_agent_mode",
-    "realtime_active",
-)
 
 _CODEX_TOOL_TAXONOMY = ToolTaxonomy(
     plan_names=SHARED_PLAN_TOOL_NAMES,
@@ -101,59 +90,6 @@ _CODEX_TOOL_TAXONOMY = ToolTaxonomy(
         }
     ),
 )
-
-_CODEX_GROUPABLE_COMMAND_SOURCES: frozenset[str] = frozenset(
-    {"agent", "unified_exec_startup"}
-)
-
-
-@dataclass
-class _PendingExecWrapper:
-    """A static ``exec`` code cell awaiting its wrapper result."""
-
-    call_id: str
-    started_at: datetime
-    call_record: TranscriptRecord
-    invocations: list[StaticExecInvocation]
-    turn_id: str | None = None
-    matched_native_indices: set[int] = field(default_factory=set)
-    derived_records: dict[int, TranscriptRecord] = field(default_factory=dict)
-    closed: bool = False
-    completed_at: datetime | None = None
-
-
-def _native_command_text(value: Any) -> str | None:
-    """Normalize a native CommandExecution payload to its shell command text."""
-
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    if not isinstance(value, list):
-        return None
-    parts = [part for part in value if isinstance(part, str)]
-    for index, part in enumerate(parts[:-1]):
-        if part == "-lc" and parts[index + 1].strip():
-            return parts[index + 1].strip()
-    return " ".join(parts).strip() or None
-
-
-def _command_match_key(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip()
-    return normalized or None
-
-
-def _codex_command_activity_source(value: Any) -> str:
-    """Map Codex's native command origin to the shared cell authority.
-
-    Codex TUI groups only agent and unified-exec-startup commands. Historical
-    user-shell and unrecognized sources remain individual boundaries.
-    """
-
-    source = _as_non_empty_str(value)
-    if source is not None and source.lower() in _CODEX_GROUPABLE_COMMAND_SOURCES:
-        return "agent"
-    return "unknown"
 
 
 def _codex_item_kind(*, tool_name: str | None, inner_type: str) -> str:
@@ -172,100 +108,6 @@ def _parse_json_blob(raw: Any) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return raw
-
-
-def _tool_status(
-    value: Any, *, default: ToolStatus = ToolStatus.REQUESTED
-) -> ToolStatus:
-    normalized = (
-        re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value).replace("-", "_").lower()
-        if isinstance(value, str)
-        else None
-    )
-    if normalized == "completed":
-        return ToolStatus.COMPLETED
-    if normalized in {"failed", "declined"}:
-        return ToolStatus.FAILED
-    if normalized == "in_progress":
-        return ToolStatus.IN_PROGRESS
-    return default
-
-
-def _tool_result_status(
-    payload: dict[str, Any], output: Any, *, exec_wrapper: bool = False
-) -> ToolStatus:
-    if isinstance(payload.get("success"), bool):
-        return ToolStatus.COMPLETED if payload["success"] else ToolStatus.FAILED
-    status = _tool_status(payload.get("status"), default=ToolStatus.COMPLETED)
-    if status != ToolStatus.COMPLETED:
-        return status
-    # Custom ``exec`` cells often keep their own transport status as
-    # ``completed`` even when the JavaScript body failed.  This establishes
-    # only the wrapper's result—it must never be applied to a statically
-    # reconstructed nested action.
-    if exec_wrapper and _is_exec_wrapper_failure(output):
-        return ToolStatus.FAILED
-    success = infer_tool_success(output)
-    return ToolStatus.FAILED if success is False else ToolStatus.COMPLETED
-
-
-def _walk_text_values(value: Any) -> Iterator[str]:
-    """Yield text leaves from a JSON-like tool result without coercing data."""
-
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for nested in value.values():
-            yield from _walk_text_values(nested)
-    elif isinstance(value, list):
-        for nested in value:
-            yield from _walk_text_values(nested)
-
-
-def _is_exec_syntax_error(output: Any) -> bool:
-    """Return whether a failed exec wrapper could not parse before running.
-
-    A failed wrapper normally cannot establish the outcome of a nested call:
-    post-processing such as ``text(r.content)`` can fail after a native action
-    succeeded. A JavaScript syntax error is different—the body never executes,
-    so the raw ``exec`` failure must remain visible rather than becoming a
-    derived unknown action.
-    """
-
-    return any(
-        "script error" in text.lower() and "syntaxerror" in text.lower()
-        for text in _walk_text_values(output)
-    )
-
-
-def _is_exec_wrapper_failure(output: Any) -> bool:
-    """Return whether a custom exec wrapper reports its own failure."""
-
-    return any(
-        "script failed" in text.lower() or "script error:" in text.lower()
-        for text in _walk_text_values(output)
-    )
-
-
-def _has_explicit_exec_wrapper_result(output: Any) -> bool:
-    """Return whether an exec wrapper carries result content beyond its banner.
-
-    ``Script completed`` is a runtime status for the JavaScript wrapper, not
-    outcome evidence for a nested call.  A single lexically known nested call
-    can instead use its wrapper output as a historical fallback only when the
-    wrapper also persisted actual result content.
-    """
-
-    for text in _walk_text_values(output):
-        cleaned = re.sub(
-            r"^\s*script completed\s*\n(?:wall time[^\n]*\n)?output:\s*",
-            "",
-            text,
-            flags=re.IGNORECASE,
-        ).strip()
-        if cleaned:
-            return True
-    return False
 
 
 def _extract_message_text(payload: dict[str, Any]) -> str | None:
@@ -561,204 +403,14 @@ def _derive_session_status(turns: list) -> SessionStatus:
     )
 
 
-def _codex_prompt_block_name(text: str, index: int) -> str:
-    stripped = text.lstrip()
-    if stripped.startswith("<") and ">" in stripped:
-        tag = stripped[1 : stripped.index(">")].strip().split()[0]
-        if tag:
-            return tag
-    return f"developer_block_{index}"
-
-
-def _is_codex_agents_md_prompt(text: str) -> bool:
-    return text.lstrip().startswith("# AGENTS.md instructions")
-
-
-def _codex_user_prompt_block_name(text: str) -> str | None:
-    if _is_codex_agents_md_prompt(text):
-        return "agents_md"
-    return None
-
-
-_CONTEXT_SOURCE_LABELS = {
-    "base_system": "Base instructions",
-    "developer_instructions": "Developer instructions",
-    "agents_md": "AGENTS.md",
-    "skills": "Skills",
-    "mcp": "Tools / MCP",
-    "memory": "Memory",
-}
-
-
-def _codex_context_source_key(*, block: str, role: str, text: str) -> str:
-    haystack = f"{block}\n{text}".lower()
-    if block == "base_instructions":
-        return "base_system"
-    if _is_codex_agents_md_prompt(text):
-        return "agents_md"
-    if "skills_instructions" in block or "### available skills" in haystack:
-        return "skills"
-    if "plugins_instructions" in block or "### available plugins" in haystack:
-        return "mcp"
-    if (
-        "memory_summary" in haystack
-        or "memory layout" in haystack
-        or "## memory" in haystack
-    ):
-        return "memory"
-    if "mcp" in haystack or "tools are grouped" in haystack:
-        return "mcp"
-    if role == "developer":
-        return "developer_instructions"
-    return "base_system"
-
-
-def _context_source_observation(
-    *,
-    timestamp: Any,
-    block: str,
-    role: str,
-    text: str,
-) -> ContextSourceObservation:
-    key = _codex_context_source_key(block=block, role=role, text=text)
-    return ContextSourceObservation(
-        timestamp=timestamp,
-        key=key,
-        label=_CONTEXT_SOURCE_LABELS[key],
-        text=text,
-        source="codex_prompt_block",
-    )
-
-
-def _record_context_source(
-    state: Any,
-    observation: ContextSourceObservation,
-    *,
-    block: str,
-    role: str,
-) -> None:
-    """Keep one observation per (role, block_name); first emission wins.
-
-    Codex re-injects the base/developer/AGENTS.md prompt blocks after a context
-    compaction. Each re-injection shares the same (role, block_name) identity as
-    the resident prefix block, so per-block dedup collapses them. The first
-    emission is kept: the block is resident from first injection through end of
-    session (Codex re-attaches it after every compaction), so the earliest
-    timestamp is what makes the accounting attribute its per-call cost across
-    every API call that carried the block.
-    """
-    state.context_source_by_block.setdefault((role, block), observation)
-
-
-def _runtime_config_hashes(payload: dict[str, Any]) -> dict[str, str]:
-    """Hash named turn-context fields without retaining their raw values."""
-    hashes: dict[str, str] = {}
-    for key in _CACHE_RELEVANT_TURN_CONTEXT_FIELDS:
-        if key not in payload:
-            continue
-        canonical = json.dumps(
-            payload[key],
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        hashes[key] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return hashes
-
-
 class CodexAdapter(BaseAdapter):
     """Ingest Codex CLI JSONL rollout files from ~/.codex/sessions/."""
 
     vendor = Vendor.CODEX_CLI
 
-    @dataclass
-    class _ParseState:
-        session_meta: dict[str, Any] = field(default_factory=dict)
-        turn_context: dict[str, Any] = field(default_factory=dict)
-        session_id: UUID = field(default_factory=uuid4)
-        context_window_tokens: int | None = None
-        context_usage: list[ContextUsageObservation] = field(default_factory=list)
-        runtime_observations: list[RuntimeObservation] = field(default_factory=list)
-        # The first persisted user message is a display preview, never an
-        # inferred thread name. Current Codex rollouts can encode it as either
-        # a legacy user_message event or a native UserMessage item.
-        session_preview: str | None = None
-        # One canonical user request per provider lifecycle turn, regardless of
-        # whether legacy and native message records are both present.
-        projected_turn_ids: set[str] = field(default_factory=set)
-        # Most recent reasoning effort seen on a turn_context record (real
-        # string only). Drives effort_changed observation emission: a new turn
-        # whose effort differs from this baseline marks a cache-key change-point.
-        prev_effort: str | None = None
-        # Full content-free field hashes from the prior turn_context. Stable
-        # turns omit the repeated mapping from the Chronicle artifact while
-        # retaining a timestamped snapshot as an evidence-coverage marker.
-        prev_runtime_config_hashes: dict[str, str] | None = None
-        multi_agent_version: str | None = None
-        multi_agent_mode: str | None = None
-        # Last cumulative ``total_token_usage`` seen on a Codex token_count
-        # event. Codex occasionally re-emits an identical snapshot (cumulative
-        # unchanged, last_token_usage repeated) for a non-billable repeat;
-        # tracking the prior lets us drop the stale copy before accounting.
-        prev_total_token_usage: dict[str, int] | None = None
-        # One resident slot per (role, block_name); first emission wins. Codex
-        # re-injects base/developer/AGENTS.md blocks after each compaction, so
-        # per-block dedup keeps only the first (resident-from-first-injection)
-        # copy — its timestamp drives per-call cost attribution.
-        context_source_by_block: dict[tuple[str, str], ContextSourceObservation] = (
-            field(default_factory=dict)
-        )
-        # child agent_thread_id -> spawn tool-call call_id, captured from
-        # sub_agent_activity{kind:started} events. Backs the forked_from edge
-        # origin with the real spawn call instead of the parent's last tool call.
-        spawn_links: dict[str, str] = field(default_factory=dict)
-        # Open ``custom_tool_call(name=exec)`` wrapper cells that passed the
-        # strict static recognizer. Native Codex items can attach before the
-        # wrapper output arrives; older JSONL falls back to derived-static
-        # activities at wrapper completion.
-        pending_exec_wrappers: dict[str, _PendingExecWrapper] = field(
-            default_factory=dict
-        )
-        # Raw terminal identities are needed only while reconstructing legacy
-        # exec wrappers. Map each one to a token derived from an already-public
-        # tool call id so measurements retention can group polls without
-        # retaining a reversible digest of the process/session identifier.
-        background_terminal_group_tokens: dict[tuple[str, str, int], str] = field(
-            default_factory=dict
-        )
-        # Visible assistant output flushes Codex's active terminal-wait streak.
-        # Compact items discard that text, so include a content-free epoch in
-        # wait grouping markers to preserve the same boundary.
-        activity_cell_epoch: int = 0
-        # Every custom ``exec`` call, including cells whose JavaScript cannot
-        # be statically parsed. Its wrapper result can still be failed even
-        # though it gives no nested-tool outcome.
-        exec_wrapper_call_ids: set[str] = field(default_factory=set)
-        # Direct function calls sometimes receive a terminal ThreadItem whose
-        # item id is exactly the response-item call id (for example,
-        # ``spawn_agent`` -> ``SubAgentActivity``). Keep the original call as
-        # the canonical action and enrich it from that stronger terminal fact.
-        direct_function_calls: dict[str, TranscriptRecord] = field(default_factory=dict)
-        native_direct_result_records: dict[str, TranscriptRecord] = field(
-            default_factory=dict
-        )
-        native_direct_output_authoritative: set[str] = field(default_factory=set)
-        # Native CommandExecution ids already emitted from item_started. A
-        # later item_completed updates the same canonical item rather than
-        # creating a second command activity.
-        native_command_ids: set[str] = field(default_factory=set)
-        # Native CommandExecution id -> static wrapper invocation. Needed when
-        # an item_started arrives after an old wrapper's derived placeholder.
-        native_command_bindings: dict[str, tuple[_PendingExecWrapper, int]] = field(
-            default_factory=dict
-        )
-        # Native non-command item ids and their optional static-wrapper child
-        # binding. The tuple key keeps FileChange/Plan/WebSearch ids separate
-        # even if a provider reuses an identifier across item variants.
-        native_activity_ids: set[tuple[str, str]] = field(default_factory=set)
-        native_activity_bindings: dict[
-            tuple[str, str], tuple[_PendingExecWrapper, int]
-        ] = field(default_factory=dict)
+    # Compatibility spelling for the parse state owned by ``codex_state``;
+    # reconstruction modules alias it as ``_ParseState`` from there too.
+    _ParseState = CodexParseState
 
     def ingest_file(
         self,
@@ -977,7 +629,7 @@ class CodexAdapter(BaseAdapter):
             return
 
         if outer_type == "turn_context":
-            self._handle_turn_context(payload, ts, state)
+            codex_context.handle_turn_context(payload, ts, state)
             return
 
         if ts is None:
@@ -1000,9 +652,6 @@ class CodexAdapter(BaseAdapter):
         transcript: list[TranscriptRecord],
     ) -> None:
         """Project a Codex ``response_item`` record into transcript facts."""
-        # Lazy: codex_native_items imports shared helpers from this module.
-        from coding_trajectory.ingestion.adapters import codex_native_items
-
         inner_type = payload.get("type", "")
 
         if inner_type == "function_call":
@@ -1391,13 +1040,6 @@ class CodexAdapter(BaseAdapter):
         transcript: list[TranscriptRecord],
     ) -> None:
         """Project a Codex ``event_msg`` record into transcript facts."""
-        # codex_native_items/codex_collab import shared helpers from this
-        # module; the reverse edge stays lazy to keep imports acyclic.
-        from coding_trajectory.ingestion.adapters import (
-            codex_collab,
-            codex_native_items,
-        )
-
         inner_type = payload.get("type", "")
         turn_id = payload.get("turn_id") or state.turn_context.get("turn_id")
 
@@ -1552,56 +1194,9 @@ class CodexAdapter(BaseAdapter):
             )
 
         elif inner_type == "token_count":
-            info = payload.get("info")
-            # Codex occasionally re-emits a token_count snapshot whose
-            # cumulative ``total_token_usage`` is byte-identical to the
-            # prior event's (a stale re-emission, not a new model call);
-            # its ``last_token_usage`` repeats too, so counting it would
-            # double-charge the call. Drop it before any accounting.
-            total_usage = (
-                info.get("total_token_usage") if isinstance(info, dict) else None
+            codex_context.handle_token_count(
+                payload, ts, state, transcript, turn_id=turn_id
             )
-            if (
-                isinstance(total_usage, dict)
-                and total_usage == state.prev_total_token_usage
-            ):
-                return
-            if isinstance(total_usage, dict):
-                state.prev_total_token_usage = total_usage
-            normalized_metrics = normalize_codex_token_count(
-                model=state.turn_context.get("model"),
-                info=info,
-            )
-            usage_record = TranscriptRecord(
-                sequence=len(transcript),
-                timestamp=ts,
-                vendor=Vendor.CODEX_CLI,
-                role="runtime",
-                kind="usage",
-                data={
-                    "turn_id_raw": turn_id,
-                    "raw_type": "token_count",
-                    **normalized_metrics,
-                    "vendor_data": {
-                        "metrics": normalized_metrics.get("metrics"),
-                    }
-                    if normalized_metrics.get("metrics")
-                    else {},
-                },
-                fidelity="synthetic",
-            )
-            observation = context_usage_observation(
-                timestamp=ts,
-                source="codex_token_count",
-                normalized=normalized_metrics,
-                source_event_id=usage_record.record_id,
-                provider="openai",
-            )
-            if observation is not None:
-                if observation.context_window_tokens is None:
-                    observation.context_window_tokens = state.context_window_tokens
-                state.context_usage.append(observation)
-            transcript.append(usage_record)
 
         elif inner_type == "context_compacted":
             state.runtime_observations.append(
@@ -1786,59 +1381,3 @@ class CodexAdapter(BaseAdapter):
                     fidelity="synthetic",
                 )
             )
-
-    def _handle_turn_context(
-        self,
-        payload: dict,
-        ts: datetime | None,
-        state: _ParseState,
-    ) -> None:
-        """Record turn_context and detect reasoning-effort change-points.
-
-        Codex emits a fresh turn_context per turn carrying the active
-        ``effort``; a value differing from the prior turn's marks a cache-key
-        change (the warm prefix is served from a different effort-bucket cache).
-        """
-        state.turn_context = payload
-        if ts is not None:
-            runtime_config_hashes = _runtime_config_hashes(payload)
-            changed_runtime_config_hashes = (
-                runtime_config_hashes
-                if state.prev_runtime_config_hashes is None
-                or runtime_config_hashes != state.prev_runtime_config_hashes
-                else None
-            )
-            state.runtime_observations.append(
-                RuntimeObservation(
-                    timestamp=ts,
-                    kind="turn_context_snapshot",
-                    turn_id_raw=_as_non_empty_str(payload.get("turn_id")),
-                    comp_hash=_as_non_empty_str(payload.get("comp_hash")),
-                    runtime_config_hashes=changed_runtime_config_hashes,
-                )
-            )
-            state.prev_runtime_config_hashes = runtime_config_hashes
-        multi_agent_version = _as_non_empty_str(payload.get("multi_agent_version"))
-        if multi_agent_version is not None:
-            state.multi_agent_version = multi_agent_version
-        multi_agent_mode = _as_non_empty_str(payload.get("multi_agent_mode"))
-        if multi_agent_mode is not None:
-            state.multi_agent_mode = multi_agent_mode
-        effort = _as_non_empty_str(payload.get("effort"))
-        if (
-            effort is not None
-            and state.prev_effort is not None
-            and effort != state.prev_effort
-            and ts is not None
-        ):
-            state.runtime_observations.append(
-                RuntimeObservation(
-                    timestamp=ts,
-                    kind="effort_changed",
-                    turn_id_raw=_as_non_empty_str(payload.get("turn_id")),
-                    effort_from=state.prev_effort,
-                    effort_to=effort,
-                )
-            )
-        if effort is not None:
-            state.prev_effort = effort
